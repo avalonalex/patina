@@ -1,3 +1,4 @@
+use crate::Trace;
 use crate::heap::{ExternalBytes, SharedHeap};
 use crate::scope::ScopeSet;
 use crate::scope_resolve::AmbiguousReference;
@@ -11,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A binding with its associated scope set
 /// Used for scope-based hygiene lookup
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Trace)]
 pub struct ScopedBinding {
     pub scopes: ScopeSet,
     /// Internal storage uses TaggedValue for efficiency
@@ -20,6 +21,7 @@ pub struct ScopedBinding {
     /// macro-introduced parameter, true for a macro-introduced definition.
     /// `define_scoped_definition` is where that difference is decided and
     /// explained.
+    #[trace(skip, reason = "a flag")]
     pub(crate) visible_by_name: bool,
 }
 
@@ -47,7 +49,7 @@ type ScopedBindingList = SmallVec<[ScopedBinding; 1]>;
 /// there. One copy of the fact, in one place, with `insert_scoped` its only
 /// writer — two would be a way for a lookup to miss a binding a scoped
 /// resolution still finds, which is the shape of triage families 36 and 38.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Trace)]
 struct ScopedTable {
     map: FxHashMap<Rc<str>, ScopedBindingList>,
 }
@@ -87,7 +89,7 @@ impl std::ops::DerefMut for ScopedTable {
 ///
 /// Every walk reads, writes and locates a target through the three methods
 /// below, so that what an alias means is stated once.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Trace)]
 struct AliasTarget {
     env: Option<Rc<Environment>>,
     name: Rc<str>,
@@ -205,7 +207,7 @@ type IntroducedGlobals = FxHashMap<Rc<str>, FxHashMap<ScopeSet, Rc<str>>>;
 /// linearly, and the index is built only when one grows past `LINEAR_MAX`:
 /// in practice the global environment and the per-library environments, the
 /// ones where a linear scan would actually be the wrong shape.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Trace)]
 struct Bindings {
     /// The bindings in slot order: a name's slot *is* its index here. One
     /// vector rather than parallel name and value vectors, so there is no
@@ -213,6 +215,7 @@ struct Bindings {
     /// allocation when a frame outgrows its inline capacity.
     slots: SmallVec<[(Rc<str>, TaggedValue); 3]>,
     /// name → slot, present only above `LINEAR_MAX` entries.
+    #[trace(skip, reason = "name → slot number; the values are in `slots`")]
     index: Option<Box<FxHashMap<Rc<str>, u32>>>,
 }
 
@@ -411,7 +414,7 @@ pub enum IntroducedDefinition {
 /// out of line so that the environments which never do — and the tree-walker
 /// builds one per call and per `let`-bound temporary — do not carry them.
 /// `Environment::rare` has the measurement.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Trace)]
 struct RareTables {
     /// The identities of the macro-introduced top-level definitions compiled
     /// so far: for each spelling, the scope sets it was introduced at and the
@@ -431,6 +434,10 @@ struct RareTables {
     /// Only a parentless global environment ever holds entries: they are
     /// installed beside the aliases in the VM's `compile_pipeline`, which
     /// asserts that. Lookups therefore do not walk parents.
+    #[trace(
+        skip,
+        reason = "spellings, scope sets and the names of renamed globals"
+    )]
     introduced_global_names: RefCell<IntroducedGlobals>,
     /// Per slot, the [`Owner`] of the binding when that is not this
     /// environment; the slot itself then holds `TaggedValue::FORWARDED`.
@@ -446,6 +453,10 @@ struct RareTables {
     /// Reads never ask whether this table exists: a forwarded slot announces
     /// itself by its marker, so the read path pays one compare, and so does
     /// the one writer that must drop an entry — `define` over an import.
+    #[trace(
+        skip,
+        reason = "each forwarded slot's owner, also in `owners`, where `set_owner`, the one writer of a link, records it first"
+    )]
     links: RefCell<Vec<Option<Owner>>>,
     /// For each imported location something here has been *early-bound* to,
     /// the hidden names that hold it — see [`Environment::import_alias`].
@@ -454,12 +465,17 @@ struct RareTables {
     /// expansions ask. Nearly always one entry; a location imported under two
     /// names has two, because the desugarer reads a spelling back off an
     /// alias (`Desugarer::settle_early_bindings`).
+    #[trace(skip, reason = "environment ids, slot numbers and names")]
     import_aliases: RefCell<FxHashMap<(u64, u32), ImportAliases>>,
     /// For each binding the desugarer's relinking aliased here, the alias it
     /// minted — see [`Environment::relink_alias`]. One target has one alias
     /// however many expansions ask (#611), where each expansion used to mint
     /// its own: a program of `n` top-level `guard` forms held `3n` aliases to
     /// one private helper, and their symbols.
+    #[trace(
+        skip,
+        reason = "environment ids, names, scope ids and alias spellings; the binding each alias reaches is an edge of `alias_bindings`"
+    )]
     relink_aliases: RefCell<FxHashMap<RelinkKey, Rc<str>>>,
     /// The distinct environments `links` points into, for the collector. An
     /// importer of `(scheme base)` holds several hundred links into a dozen
@@ -477,6 +493,7 @@ struct RareTables {
     /// What this environment has charged the heap's external bytes for its
     /// tables, when it is a namespace ([`NamespaceCharge`]); `None` for every
     /// other environment that comes to hold one of these tables.
+    #[trace(skip, reason = "a count of bytes and a handle to the heap's account")]
     namespace: Option<NamespaceCharge>,
 }
 
@@ -675,9 +692,25 @@ fn fresh_env_id() -> u64 {
 /// table and return the wrong value silently. An environment is shared by its
 /// `Rc` and by nothing else; `gc_identity` rests on the same rule. Do not add
 /// the derive.
-#[derive(Debug)]
+///
+/// ## Its trace
+///
+/// Derived (#686): the value in each of its slots, and each environment it
+/// keeps live — the target of each macro-expansion alias and the owner of
+/// each binding it imported — but not its parent. `SlotVisitor::env` walks an
+/// environment with the chain it heads, and the collector follows the
+/// parent by reference, since nearly every environment has one: queueing it
+/// as well cost a hash lookup and a reference count per environment, about
+/// 1% of the tree-walker's chibi suite under stress 1. The sentinel test
+/// `gc_edge_tests::environment_edges` puts a value behind each edge that
+/// nothing else reaches.
+#[derive(Debug, Trace)]
 pub struct Environment {
     /// Shared heap for TaggedValue interpretation
+    #[trace(
+        skip,
+        reason = "a handle to the arenas these values live in, which the collector is already marking: not an edge into them"
+    )]
     heap: SharedHeap,
     /// Simple name-based bindings (for built-ins and top-level)
     /// Stores TaggedValue internally for memory efficiency
@@ -687,6 +720,7 @@ pub struct Environment {
     /// see `GlobalCacheEntry` in patina-vm for the cache soundness argument,
     /// and `gc_identity` for the address-based identity the GC uses to dedup
     /// *live* environments.
+    #[trace(skip, reason = "a number minted at construction")]
     env_id: u64,
     /// Scope-aware bindings (for scope sets hygiene)
     /// Each name can have multiple bindings with different scope sets
@@ -720,13 +754,22 @@ pub struct Environment {
     /// and 38 were. Both latch on and never clear: nothing removes a binding
     /// from either table, so a `true` is permanent and a stale one would only
     /// cost a borrow, never an answer.
+    #[trace(
+        skip,
+        reason = "a summary of `alias_bindings`, which is traced in full"
+    )]
     has_aliases: Cell<bool>,
+    #[trace(
+        skip,
+        reason = "a summary of `scoped_bindings`, which is traced in full"
+    )]
     has_visible_scoped: Cell<bool>,
     /// Whether this is a frame the tree-walker made for its CPS code's
     /// temporaries, a `let` temporary's or a continuation's parameter
     /// ([`Environment::for_temporaries`]), where no definition belongs: a
     /// `define` evaluated with it binds in the nearest environment above it
     /// that is not one (#680). Set at construction and never changed.
+    #[trace(skip, reason = "a flag")]
     holds_temporaries: bool,
     /// The tables only a global or a library environment ever fills
     /// ([`RareTables`]), absent until one of them is first written and one
@@ -741,6 +784,10 @@ pub struct Environment {
     /// moving both tables here took it to 224 and 4–6% *faster* than `main`.
     /// `environment_size_is_watched` holds the line.
     rare: OnceCell<Box<RareTables>>,
+    #[trace(
+        skip,
+        reason = "the parent, which `SlotVisitor::env` walks with the chain it heads: the collector follows it by reference (`GcVisitor::visit_env`)"
+    )]
     parent: Option<Rc<Environment>>,
 }
 
@@ -2769,147 +2816,6 @@ impl Environment {
     pub fn gc_identity(&self) -> usize {
         self as *const Environment as usize
     }
-
-    /// Report every edge the collector follows out of this environment: the
-    /// value in each of its slots and each environment it keeps live — the
-    /// target of each macro-expansion alias and the owner of each binding it
-    /// imported — and return the last, its parent. One level only:
-    /// `GcVisitor::visit_env` walks the environments reported, deduplicated,
-    /// without recursion, and follows the parent chain by reference, since
-    /// that is the edge nearly every environment has: queueing it as well
-    /// cost a hash lookup and a reference count per environment, about 1% of
-    /// the tree-walker's chibi suite under stress 1.
-    ///
-    /// Every field of this struct, of [`RareTables`] and of the binding
-    /// records is named below (#623), so a new field does not compile here
-    /// until it is reported or written `field: _` with the reason it holds no
-    /// edge. The sentinel test `gc_edge_tests::environment_edges`, below, puts
-    /// a value behind each edge that nothing else reaches; deleting the line
-    /// that reports an edge fails it.
-    ///
-    /// `f` runs with the binding tables borrowed, so it must not write to
-    /// this environment. The collector's visitor only marks.
-    #[must_use = "the parent is an edge too"]
-    pub(crate) fn for_each_gc_edge(
-        &self,
-        f: &mut dyn FnMut(GcEdge<'_>),
-    ) -> Option<&Rc<Environment>> {
-        let Environment {
-            // A handle to the arenas these values live in, which the collector
-            // is already marking: not an edge into them.
-            heap: _,
-            bindings,
-            // A number minted at construction.
-            env_id: _,
-            scoped_bindings,
-            alias_bindings,
-            // A summary of `alias_bindings`, which is reported in full below.
-            has_aliases: _,
-            // A summary of `scoped_bindings`, which is reported in full below.
-            has_visible_scoped: _,
-            // A flag.
-            holds_temporaries: _,
-            rare,
-            parent,
-        } = self;
-        {
-            let bindings = bindings.borrow();
-            let Bindings {
-                slots,
-                // Name → slot number; the values are in `slots`.
-                index: _,
-            } = &*bindings;
-            // Each slot is a name and its value. An imported binding's slot
-            // holds `TaggedValue::FORWARDED`, an immediate that marks nothing;
-            // its value is in its owner's slot, and the owner is reported
-            // through `owners` below.
-            for &(_, value) in slots.iter() {
-                f(GcEdge::Value(value));
-            }
-        }
-        {
-            let scoped = scoped_bindings.borrow();
-            let ScopedTable { map } = &*scoped;
-            for list in map.values() {
-                for binding in list {
-                    let ScopedBinding {
-                        // Scope ids.
-                        scopes: _,
-                        tagged_value,
-                        // A flag.
-                        visible_by_name: _,
-                    } = binding;
-                    f(GcEdge::Value(*tagged_value));
-                }
-            }
-        }
-        {
-            // Values reachable only through an alias — a library's private
-            // binding that an exported macro references — are live, but the
-            // edge is an `Rc<Environment>` here, not a value in a slot.
-            let aliases = alias_bindings.borrow();
-            for target in aliases.values() {
-                let AliasTarget {
-                    env,
-                    // The name the binding has in `env`.
-                    name: _,
-                    // Scope ids, which select the binding in `env`.
-                    scopes: _,
-                } = target;
-                // `None` is this environment, which is being reported now.
-                if let Some(env) = env {
-                    f(GcEdge::Env(env));
-                }
-            }
-        }
-        if let Some(rare) = rare.get() {
-            let RareTables {
-                // Spellings, scope sets and the names of renamed globals.
-                introduced_global_names: _,
-                // Each `Owner` here is also in `owners`: `set_owner`, the one
-                // writer of a `Some` link, records the owner there first.
-                // Pinned by `shared_binding_tests`, which share bindings
-                // through `set_owner` and check the owners the collector is
-                // shown (`the_collector_is_shown_each_owner_once` and its
-                // neighbours); `environment_edges` pins that `owners` is the
-                // edge that carries the imported value.
-                links: _,
-                // Environment ids, slot numbers and names.
-                import_aliases: _,
-                // Environment ids, names, scope ids and alias spellings; the
-                // binding each alias reaches is an edge of `alias_bindings`.
-                relink_aliases: _,
-                owners,
-                specifier,
-                // A count of bytes and a handle to the heap's account.
-                namespace: _,
-            } = &**rare;
-            // An imported binding's value is in its owner's slot. A loaded
-            // library is rooted by the registry as well, but an environment
-            // need not be a registered library's to be imported from.
-            for owner in owners.borrow().iter() {
-                f(GcEdge::Env(owner));
-            }
-            // Handed out again by `mutable_specifier`, so it lives as long
-            // as this environment is traced.
-            if let Some(specifier) = specifier.get() {
-                f(GcEdge::Value(specifier));
-            }
-        }
-        parent.as_ref()
-    }
-}
-
-/// One edge out of an [`Environment`] or a [`Library`](crate::Library), as
-/// their `for_each_gc_edge` report it to the collector (#623).
-#[derive(Clone, Copy)]
-pub(crate) enum GcEdge<'a> {
-    /// A value held in a slot.
-    Value(TaggedValue),
-    /// An environment kept live: an alias target, the owner of an imported
-    /// binding, or a library's own environment. An environment's parent is
-    /// `for_each_gc_edge`'s return value instead.
-    Env(&'a Rc<Environment>),
 }
 
 impl Default for Environment {
@@ -3466,17 +3372,26 @@ mod shared_binding_tests {
         (library, importer)
     }
 
-    /// The environments the collector is shown from `env`. None of these
-    /// tests gives an importer a parent or an alias, so these are its owners.
+    /// The environments the collector is shown from `env`, by its trace and
+    /// as its parent. None of these tests gives an importer a parent or an
+    /// alias, so these are its owners.
     fn edges_to_environments(env: &Environment) -> Vec<*const Environment> {
-        let mut envs = Vec::new();
-        let parent = env.for_each_gc_edge(&mut |edge| {
-            if let GcEdge::Env(target) = edge {
-                envs.push(Rc::as_ptr(target));
+        /// Records the environments it is given, and ignores the rest.
+        struct Envs(Vec<*const Environment>);
+        impl crate::SlotVisitor for Envs {
+            fn slot(&mut self, _: &Cell<TaggedValue>) {}
+            fn pinned(&mut self, _: TaggedValue) {}
+            fn env(&mut self, env: &Rc<Environment>) {
+                self.0.push(Rc::as_ptr(env));
             }
-        });
-        envs.extend(parent.map(Rc::as_ptr));
-        envs
+            fn continuation(&mut self, _: &Rc<crate::CpsContinuation>) {}
+            fn cont_env(&mut self, _: &crate::cont_value::ContEnv) {}
+            fn expr_literals(&mut self, _: &crate::cps_expr::CpsExpr) {}
+        }
+        let mut envs = Envs(Vec::new());
+        env.trace(&mut envs);
+        envs.0.extend(env.parent().map(Rc::as_ptr));
+        envs.0
     }
 
     #[test]

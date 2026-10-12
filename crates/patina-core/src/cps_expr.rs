@@ -42,6 +42,7 @@
 //! - **User continuations**: Captured by `call/cc` or `shift`. These are
 //!   first-class values that can be stored and invoked.
 
+use crate::Trace;
 use crate::error::SourceLocation;
 use crate::scope::ScopeSet;
 use crate::tagged_value::TaggedValue;
@@ -92,11 +93,19 @@ impl std::fmt::Display for PromptTag {
 ///
 /// This struct wraps a `CpsExprKind` with an optional source location,
 /// enabling error messages to include file/line/column information.
-#[derive(Debug, Clone)]
+///
+/// Its trace (derived, #686) reports the literals under it. Each shared
+/// child, an `Rc<CpsExpr>`, goes to the visitor's `expr_literals`, which walks
+/// a node once however many closures share it and grows the stack as it
+/// goes (#617); an application's own arguments are traced in place, a level
+/// deep. The sentinel test `expression_literals_under_every_node` reaches a
+/// literal through each.
+#[derive(Debug, Clone, Trace)]
 pub struct CpsExpr {
     /// The expression kind
     pub kind: CpsExprKind,
     /// Source location (populated in Phase 2)
+    #[trace(skip, reason = "a file position")]
     pub source: Option<SourceLocation>,
 }
 
@@ -133,139 +142,6 @@ impl CpsExpr {
     pub fn expr_kind(&self) -> &'static str {
         self.kind.expr_kind()
     }
-
-    /// Visit every heap value embedded in this expression tree
-    /// (`Literal` nodes). GC tracing hook, called by the collector's
-    /// `visit_expr_literals`: every field of every variant is named (#623),
-    /// and the sentinel test `expression_literals_under_every_node` reaches a
-    /// literal through each walk below.
-    ///
-    /// `seen` deduplicates by node address: bodies are shared via `Rc` across
-    /// closures, so the caller passes one set per collection and shared
-    /// subtrees are walked once. Recursion depth is bounded by program size,
-    /// and the desugarer bounds that ([`crate::walk::MAX_FORM_DEPTH`]).
-    pub fn for_each_literal(
-        &self,
-        seen: &mut rustc_hash::FxHashSet<usize>,
-        f: &mut dyn FnMut(TaggedValue),
-    ) {
-        if !seen.insert(self as *const Self as usize) {
-            return;
-        }
-        let CpsExpr {
-            kind,
-            // A file position.
-            source: _,
-        } = self;
-        // A collection walks every closure's body, which is as deep as the
-        // code it came from: grown as it goes (#617). A leaf goes no deeper.
-        crate::walk::ensure_sufficient_stack_if(kind.is_nested(), || match kind {
-            CpsExprKind::Literal(tv) => f(*tv),
-            CpsExprKind::Var {
-                // A name.
-                name: _,
-                // Scope ids.
-                scopes: _,
-            } => {}
-            // A continuation variable's name.
-            CpsExprKind::ContRef(_) => {}
-            CpsExprKind::Lambda {
-                // Names and scope ids.
-                params: _,
-                // A name and scope ids.
-                variadic: _,
-                // A name.
-                cont_param: _,
-                body,
-                // Scope ids.
-                binding_scopes: _,
-            } => body.for_each_literal(seen, f),
-            CpsExprKind::LetVal {
-                // A name.
-                name: _,
-                value,
-                body,
-            } => {
-                value.for_each_literal(seen, f);
-                body.for_each_literal(seen, f);
-            }
-            CpsExprKind::LetCont {
-                // A name.
-                name: _,
-                // A name.
-                param: _,
-                cont_body,
-                body,
-            } => {
-                cont_body.for_each_literal(seen, f);
-                body.for_each_literal(seen, f);
-            }
-            CpsExprKind::App {
-                func,
-                args,
-                // A name.
-                cont: _,
-            }
-            | CpsExprKind::Apply {
-                func,
-                args,
-                // A name.
-                cont: _,
-            } => {
-                func.for_each_literal(seen, f);
-                for arg in args {
-                    arg.for_each_literal(seen, f);
-                }
-            }
-            CpsExprKind::Continue {
-                // A name.
-                cont: _,
-                value,
-            } => value.for_each_literal(seen, f),
-            CpsExprKind::If {
-                test,
-                consequent,
-                alternate,
-            } => {
-                test.for_each_literal(seen, f);
-                consequent.for_each_literal(seen, f);
-                alternate.for_each_literal(seen, f);
-            }
-            CpsExprKind::Set {
-                // A name.
-                var: _,
-                // Scope ids.
-                scopes: _,
-                value,
-                cont,
-            }
-            | CpsExprKind::Define {
-                // A name.
-                name: _,
-                // Scope ids.
-                scopes: _,
-                // A flag.
-                visible_by_name: _,
-                value,
-                cont,
-            } => {
-                value.for_each_literal(seen, f);
-                cont.for_each_literal(seen, f);
-            }
-            CpsExprKind::PrimOp {
-                // Which primitive.
-                op: _,
-                args,
-                // A name.
-                cont: _,
-            } => {
-                for arg in args {
-                    arg.for_each_literal(seen, f);
-                }
-            }
-            CpsExprKind::Halt(expr) => expr.for_each_literal(seen, f),
-        })
-    }
 }
 
 impl Drop for CpsExpr {
@@ -293,7 +169,7 @@ impl std::fmt::Display for CpsExpr {
 ///   (literals, variables, lambdas). These don't need continuations.
 /// - **Serious expressions**: May have control effects (applications, if).
 ///   These take an explicit continuation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Trace)]
 pub enum CpsExprKind {
     // ==================== Trivial Expressions ====================
     // These evaluate immediately and don't invoke continuations directly.
@@ -319,8 +195,10 @@ pub enum CpsExprKind {
     /// with its result.
     Lambda {
         /// Regular parameters
+        #[trace(skip, reason = "names and scope ids")]
         params: Vec<CpsParam>,
         /// Variadic parameter (if any)
+        #[trace(skip, reason = "a name and scope ids")]
         variadic: Option<CpsParam>,
         /// Continuation parameter (always present in CPS)
         cont_param: ContVar,
@@ -330,6 +208,7 @@ pub enum CpsExprKind {
         /// [`CoreExprKind::Lambda`]'s field of the same name.
         ///
         /// [`CoreExprKind::Lambda`]: crate::core_expr::CoreExprKind::Lambda
+        #[trace(skip, reason = "scope ids")]
         binding_scopes: std::rc::Rc<crate::ScopeSet>,
     },
 
@@ -429,6 +308,7 @@ pub enum CpsExprKind {
         /// macro-introduced definition is private to its scopes (#269, #427).
         /// Recorded before the transform adds body scopes
         /// to source-written definitions, which otherwise look introduced.
+        #[trace(skip, reason = "a flag")]
         visible_by_name: bool,
         value: Rc<CpsExpr>, // Must be trivial
         cont: Rc<CpsExpr>,  // What to do after definition
@@ -445,6 +325,7 @@ pub enum CpsExprKind {
     /// Primitive operation (known at compile time)
     /// These don't need CPS transformation since they don't capture continuations.
     PrimOp {
+        #[trace(skip, reason = "which primitive")]
         op: CpsPrimitive,
         args: Vec<CpsExpr>,
         cont: ContVar,

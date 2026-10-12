@@ -233,7 +233,6 @@ pub struct ExceptionHandler {
 pub enum ContValue {
     /// A local continuation defined by LetCont
     Local {
-        #[trace(skip, reason = "a name")]
         param: Rc<str>,
         body: Rc<CpsExpr>,
         env: Rc<Environment>,

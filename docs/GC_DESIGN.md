@@ -124,21 +124,22 @@ There is no traversal API today; the tracer needs a new
 `Environment::for_each_value(&self, f: &mut dyn FnMut(TaggedValue))` that walks
 `bindings` + `scoped_bindings` + the parent chain.
 
-*As built:* `Environment::for_each_gc_edge` reports one environment's edges,
-naming every field of the struct and of its side tables (#623): the value in
-each slot, plain and scoped, and two kinds of edge that leave the parent
-chain, both an `Rc<Environment>` in a side table rather than a value in a
-slot: a macro-expansion alias into the environment the macro was defined in,
-and the owner of an imported binding, whose slot here holds only a marker —
-the value is in the slot of the library that owns the location (#406). One
-more value sits beside the slots: the environment's mutable specifier, which
-`interaction-environment` and `load` hand out again rather than allocate per
-call (#615), and which is live exactly as long as the bindings are. It
-returns the parent. `GcVisitor::visit_env` follows the parent chain by
-reference and walks the other environments from a worklist, all deduplicated
-by `gc_identity`, without recursing. Anything that gives an environment
+*As built:* an environment's derived trace (#686) reports its edges: the
+value in each slot, plain and scoped, and two kinds of edge that leave the
+parent chain, both an `Rc<Environment>` in a side table rather than a value
+in a slot: a macro-expansion alias into the environment the macro was
+defined in, and the owner of an imported binding, whose slot here holds only
+a marker — the value is in the slot of the library that owns the location
+(#406). One more value sits beside the slots: the environment's mutable
+specifier, which `interaction-environment` and `load` hand out again rather
+than allocate per call (#615), and which is live exactly as long as the
+bindings are. The trace leaves out the parent. `GcVisitor::visit_env`
+follows the parent chain by reference and walks the other environments from
+a worklist, all deduplicated by `gc_identity`, without recursing: an
+environment's trace reports to `EnvEdges`, which marks each value and queues
+each environment the walk has not seen. Anything that gives an environment
 another way to reach a value held elsewhere is a new field, which does not
-compile there until it is reported or written `field: _` with its reason.
+compile until its type has a trace or it is skipped with its reason.
 
 ### 3.4 Why moving/compacting GC is off the table
 
@@ -198,7 +199,7 @@ pub trait SlotVisitor {
     fn slot(&mut self, slot: &Cell<TaggedValue>);       // precise, updatable
     fn slots(&mut self, slots: &[Cell<TaggedValue>]);   // a register file
     fn pinned(&mut self, value: TaggedValue);           // precise, never moved
-    fn env(&mut self, env: &Environment);               // until 4b
+    fn env(&mut self, env: &Rc<Environment>);           // until 4b
     fn continuation(&mut self, k: &Rc<CpsContinuation>); // until 4f
     fn cont_env(&mut self, cont_env: &ContEnv);         // until 4f
     fn expr_literals(&mut self, expr: &CpsExpr);        // until 4f
@@ -213,17 +214,15 @@ pub struct GcVisitor<'h> { /* &mut mark bitmaps, worklist, env-dedup set */ }
 /// The trace of a Rust structure outside the heap that holds values,
 /// derived, never written by hand (#686): `#[derive(Trace)]` traces every
 /// field through its type's `Trace`, leaves one out only by
-/// `#[trace(skip, reason = "…")]`, and walks an enum's `#[trace(tail)]`
-/// `Box<Self>` chain in a loop. The leaves are the visitor's: `TaggedValue`
-/// pinned, `Cell<TaggedValue>` a slot, and an environment, a continuation, a
-/// continuation environment or code handed over whole.
+/// `#[trace(skip, reason = "…")]`, walks an enum's `#[trace(tail)]`
+/// `Box<Self>` chain in a loop, and grows the stack where a tree nests
+/// (`#[trace(grows_stack_if = method)]`). The leaves are the visitor's:
+/// `TaggedValue` pinned, `Cell<TaggedValue>` a slot, and an environment, a
+/// continuation, a continuation environment or code handed over whole.
+/// Names, scope sets and scope ids trace as nothing; integers have no trace.
 pub trait Trace {
     fn trace<V: SlotVisitor + ?Sized>(&self, v: &mut V);
 }
-
-/// A shared trace rule the derive has not reached yet, generic over the
-/// visitor, so the heap's own tracing calls it on `GcVisitor` directly.
-pub fn trace_library<V: SlotVisitor + ?Sized>(l: &Library, v: &mut V);
 
 /// Implemented by anything that owns live values (#682): registered with
 /// the heap's `RootSet` for every collection until its token drops, or lent
@@ -326,7 +325,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs:119-180`):
 | `MutableCell` | inner value |
 | `VmClosure` | each of `free_vars` + **`visit_env(globals)`** |
 | `Procedure` | captured env (`visit_env`) + **body-expression literals** (§4.4) |
-| `Macro` | `CompiledMacro`: pattern/template literal `TaggedValue`s, and `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623, though today the registry or an importer's `owners` also roots each (`trace_compiled_macro`) |
+| `Macro` | `CompiledMacro`: pattern/template literal `TaggedValue`s, and `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623, though today the registry or an importer's `owners` also roots each (`CompiledMacro`'s derived trace, #686) |
 | `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` — each record's before/after thunks and the handler stack it captured at its `dynamic-wind` call (`WindRecord`'s derived trace, the one tracing point for a record wherever it sits: a stack, a continuation, a prompt frame, or a `DynamicWindSetup`/`Jump` cont value), `exception_handlers`, `prompt_stack` — each frame's handler and the continuation below it (derived; the tag is a plain `Rc` struct), `captured_cont_env` (deduplicated worklist), `resume` (`ContValue`'s derived trace), body literals (§4.4) |
 | `EnvironmentSpecifier` | `visit_env(env)` |
 | `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id; the payload in `VmState`'s side tables is traced only for recorded ids, via the `RootProvider::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5) |
@@ -506,7 +505,7 @@ evaluates, still loads under `desugar_with_imports`' guard (§7; point C of
 
 | Root | Location | Notes |
 |------|----------|-------|
-| `LibraryRegistry.libraries[*]` | `crates/patina-runtime/src/library_registry.rs` | Each `Library` has `exports: HashMap<String, TaggedValue>` **and** `env: Rc<Environment>` — two root sets per library. **`impl RootProvider for LibraryRegistry`** lives in `patina-runtime`, so both backends share the rule, and each registers the registry it makes with its heap (`LibraryRegistry::register_roots`, #682), as a provider that holds it weakly and is not ready while a load holds it; the per-library walk is `trace_library`, which reports the exports pinned until stage 4b makes them cells |
+| `LibraryRegistry.libraries[*]` | `crates/patina-runtime/src/library_registry.rs` | Each `Library` has `exports: HashMap<String, TaggedValue>` **and** `env: Rc<Environment>` — two root sets per library. **`impl RootProvider for LibraryRegistry`** lives in `patina-runtime`, so both backends share the rule, and each registers the registry it makes with its heap (`LibraryRegistry::register_roots`, #682), as a provider that holds it weakly and is not ready while a load holds it; each `Library`'s derived trace (#686) reports the exports pinned until stage 4b makes them cells |
 | `LibraryRegistry.loading_stack[*]` | `crates/patina-runtime/src/library_registry.rs` | A library being loaded: the environment it is built in and the body forms it has not yet run, handed over by `ParsedLibrary::hand_to` and traced, pinned, by the same `impl RootProvider for LibraryRegistry` (#677) |
 | `ParsedLibrary.body` | `crates/patina-runtime/src/library_loader.rs` | Unevaluated forms between parsing and the hand-over to the load's entry, or for the whole load where nothing hands them over; covered by deferral |
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
@@ -531,8 +530,10 @@ a traced struct, or a root provider meets two rules:
    field through its type's `Trace`: a field whose type has none does not
    compile, and a field is left out only by `#[trace(skip, reason = "…")]`,
    whose reason says what it holds instead of a value. Both backends' wind,
-   prompt and handler records and `ContValue` derive it so far, and #686
-   brings the rest of `PRD/GC_PRD.md` §14's list. A trace still written by
+   prompt and handler records, `ContValue`, `CpsContinuation`, `CpsExpr`,
+   `Environment`, `Library`, `CompiledMacro` with its patterns and
+   templates, the handle table and the library registry derive it so far,
+   and #686 brings the machines' state. A trace still written by
    hand takes the struct (or variant)
    apart by name, with no `..` and no catch-all arm (`_` or a lone binding
    before `=>`, guarded or not). A field or positional payload that is
@@ -541,12 +542,9 @@ a traced struct, or a root provider meets two rules:
    saying what it holds instead of a value or which test pins the decision.
    A new field is then error E0027 until someone decides.
    `scripts/check_gc_trace_names.py` enforces both in CI's Clippy job, over
-   the functions it lists: `trace_object_children` and the functions it calls
-   (`trace_compiled_macro`, `trace_continuation_children`, `visit_env`,
-   `trace_library`) in `heap/gc.rs`; the literal walks those reach, `Pattern`'s and
-   `Template`'s `for_each_literal` and `CpsExpr::for_each_literal`;
-   `Environment::for_each_gc_edge` and
-   `Library::for_each_gc_edge`; every root provider — `VmState` with
+   the functions it lists: `trace_object_children` and the marker's walks
+   (`visit_env`, `visit_promise`) in `heap/gc.rs`; every root provider —
+   `VmState` with
    `ExecutionState` and the VM's frame, code and continuation traces,
    the tree-walker's `Evaluator`, `StepRoots` and pending escape, the library
    registry and the VM's step tracer. A new trace function joins that list,

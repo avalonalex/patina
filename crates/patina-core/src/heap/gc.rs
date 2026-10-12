@@ -66,12 +66,10 @@ pub use super::root_set::{RootSet, RootToken};
 use super::telemetry::{CollectReason, CollectionRecord, PhaseTimes};
 use super::trace::Trace;
 use super::{GC_CHECK, Heap, HeapObjectData, PromiseState, SharedHeap};
-use crate::compiled_macro::{CompiledMacro, CompiledRule};
 use crate::cont_value::ContEnv;
 use crate::continuation::CpsContinuation;
 use crate::cps_expr::CpsExpr;
-use crate::environment::{Environment, GcEdge};
-use crate::library::Library;
+use crate::environment::Environment;
 use crate::procedure::Procedure;
 use crate::tagged_value::{HeapIndex, TaggedValue};
 
@@ -262,8 +260,11 @@ pub trait SlotVisitor {
     /// a structure that becomes heap data before anything moves (4b, 4e).
     fn pinned(&mut self, value: TaggedValue);
 
-    /// An environment and every environment it keeps live.
-    fn env(&mut self, env: &Environment);
+    /// An environment and every environment it keeps live: the chain its
+    /// parents make, which its own trace leaves to the visitor, and what each
+    /// environment's trace reports. By its `Rc`, so that a visitor can queue
+    /// one rather than walk it at once.
+    fn env(&mut self, env: &Rc<Environment>);
 
     /// A tree-walker continuation held outside the heap.
     fn continuation(&mut self, k: &Rc<CpsContinuation>);
@@ -1171,8 +1172,10 @@ impl<'h> GcVisitor<'h> {
         // A host's handles are roots on the same terms, whichever backend
         // collects (`heap/handles.rs`, #605): a handle whose value was freed
         // would read the slot's next tenant. Visited, not only marked, since
-        // a handle's value can be anything.
-        heap.handles.trace_handles(&mut visitor);
+        // a handle's value can be anything. A tracked environment nothing
+        // holds any more is forgotten first.
+        heap.handles.forget_dropped_environments();
+        heap.handles.as_ref().trace(&mut visitor);
         visitor
     }
 
@@ -1236,8 +1239,9 @@ impl<'h> GcVisitor<'h> {
     /// once no matter how many closures point at it. Iterative: what one
     /// environment reaches is queued, not recursed into.
     ///
-    /// What an environment reaches is `Environment::for_each_gc_edge`'s
-    /// answer, which names every field (#623).
+    /// What an environment reaches is its derived trace's answer (#686),
+    /// which leaves out its parent: the walk follows the chain by reference,
+    /// since nearly every environment has a parent.
     pub(crate) fn visit_env(&mut self, env: &Environment) {
         let mut pending = std::mem::take(&mut self.env_worklist);
         self.visit_env_chain(env, &mut pending);
@@ -1256,15 +1260,11 @@ impl<'h> GcVisitor<'h> {
             if !self.seen_envs.insert(env.gc_identity()) {
                 break;
             }
-            let parent = env.for_each_gc_edge(&mut |edge| match edge {
-                GcEdge::Value(tv) => self.visit(tv),
-                GcEdge::Env(next) => {
-                    if !self.seen_envs.contains(&next.gc_identity()) {
-                        pending.push(Rc::clone(next));
-                    }
-                }
+            env.trace(&mut EnvEdges {
+                marker: self,
+                pending,
             });
-            current = parent.map(|parent| parent.as_ref());
+            current = env.parent().map(|parent| parent.as_ref());
         }
     }
 
@@ -1314,16 +1314,20 @@ impl<'h> GcVisitor<'h> {
         self.marks.live_closures += payload;
     }
 
-    /// Trace literals embedded in live code (`CpsExprKind::Literal` /
-    /// `Quasiquote`). Root providers need this for expression trees reachable
+    /// Trace the literals of live code, through the expression's derived
+    /// trace (#686), whose shared children come back here through
+    /// `expr_literals`. Root providers need this for expression trees reached
     /// outside the heap (e.g. a suspended `StepResult`'s current expression).
     /// Memoized per collection by node address — bodies are shared via `Rc`
-    /// across closures. Depth is bounded by program size, not data size, so
-    /// recursion is acceptable here (data tracing stays iterative).
+    /// across closures. A collection walks every closure's body, which is as
+    /// deep as the code it came from, so the stack is grown as it goes
+    /// (#617); a leaf goes no deeper, and the desugarer bounds the depth
+    /// (`walk::MAX_FORM_DEPTH`).
     pub(crate) fn visit_expr_literals(&mut self, expr: &CpsExpr) {
-        let mut seen = std::mem::take(&mut self.seen_exprs);
-        expr.for_each_literal(&mut seen, &mut |tv| self.visit(tv));
-        self.seen_exprs = seen;
+        if !self.seen_exprs.insert(expr as *const CpsExpr as usize) {
+            return;
+        }
+        crate::walk::ensure_sufficient_stack_if(expr.kind.is_nested(), || expr.trace(self));
     }
 
     /// Did marking reach a `VmContinuationRef` / `VmDelimitedContinuationRef`
@@ -1346,7 +1350,9 @@ impl<'h> GcVisitor<'h> {
             if let Some(tv) = self.worklist.pop() {
                 self.trace_children(tv);
             } else if let Some(k) = self.cont_worklist.pop() {
-                self.trace_continuation_children(&k);
+                // The continuation itself: an `Rc<CpsContinuation>`'s own
+                // trace would hand it back to this visitor, which has seen it.
+                k.as_ref().trace(self);
             } else if let Some(env) = self.cont_env_worklist.pop() {
                 // Each entry is a continuation variable's name and its value.
                 for (_, value) in env.iter() {
@@ -1501,7 +1507,7 @@ impl<'h> GcVisitor<'h> {
                     self.visit_env(env);
                 }
             },
-            HeapObjectData::Macro(m) => self.trace_compiled_macro(m),
+            HeapObjectData::Macro(m) => m.as_ref().trace(self),
             HeapObjectData::Record {
                 // An `Rc`'d descriptor: an id, a name and field names.
                 record_type: _,
@@ -1520,7 +1526,7 @@ impl<'h> GcVisitor<'h> {
                 }
             }
             HeapObjectData::Promise(state) => self.visit_promise(state),
-            HeapObjectData::Library(lib) => trace_library(lib, self),
+            HeapObjectData::Library(lib) => lib.as_ref().trace(self),
             HeapObjectData::Values(values) => {
                 for &value in values {
                     self.visit(value);
@@ -1554,100 +1560,6 @@ impl<'h> GcVisitor<'h> {
                 self.visit_continuation(k);
             }
         }
-    }
-
-    /// Trace a compiled macro: the literals in its patterns and templates,
-    /// and the environments it keeps live. Every field is named (#623);
-    /// pinned by the sentinel test `compiled_macro_fields`.
-    fn trace_compiled_macro(&mut self, m: &CompiledMacro) {
-        let CompiledMacro {
-            // A string, for diagnostics.
-            name: _,
-            rules,
-            // A count.
-            max_pvars: _,
-            // Scope ids.
-            definition_scopes: _,
-            // A handle to the heap its literals live in, which the collector
-            // is already marking (design §9.6): not an edge into it.
-            heap: _,
-            // Names.
-            template_symbols: _,
-            // Names, each with the scope sets it arrived under.
-            inherited_identifiers: _,
-            definition_env,
-            foreign_expansions,
-        } = m;
-        for rule in rules {
-            let CompiledRule {
-                pattern,
-                template,
-                // A count.
-                num_pvars: _,
-                // A depth.
-                max_level: _,
-                // Pattern-variable names, for diagnostics.
-                pvar_names: _,
-            } = rule;
-            pattern.for_each_literal(&mut |tv| self.visit(tv));
-            template.for_each_literal(&mut |tv| self.visit(tv));
-        }
-        // A live macro keeps its definition environment live: its templates
-        // may reference bindings that exist nowhere else (#38).
-        if let Some(env) = definition_env {
-            self.visit_env(env);
-        }
-        // The definition environments of the macros from another library or
-        // program whose expansions put this macro's inherited identifiers
-        // into its templates (#446). Early binding asks them only where a
-        // name's binding lives, never for a value, and today each is rooted
-        // another way as well: by the registry while its library is
-        // registered, and after a redefinition replaces the library, by the
-        // `owners` list of whatever imported the generator, which never
-        // shrinks (#614). Traced all the same, because the macro holds them by
-        // `Rc` for as long as it lives, and an environment kept alive with its
-        // values swept is #38's shape: #614's fix drops an owner once no link
-        // points into it, and this edge is then what keeps such an
-        // environment's values. Empty for a written macro, and otherwise one
-        // or two environments the walk has nearly always seen already.
-        for (_scope, env) in foreign_expansions {
-            self.visit_env(env);
-        }
-    }
-
-    /// Trace a captured continuation. Every field is named (#623); pinned by
-    /// the sentinel test `cps_continuation_fields`.
-    fn trace_continuation_children(&mut self, k: &CpsContinuation) {
-        let CpsContinuation {
-            body,
-            // A name.
-            param: _,
-            env,
-            // A prompt id.
-            boundary: _,
-            // A trampoline id.
-            trampoline: _,
-            // A flag.
-            crosses_callback: _,
-            dynamic_winds,
-            prompt_stack,
-            exception_handlers,
-            captured_cont_env,
-            resume,
-        } = k;
-        self.visit_expr_literals(body);
-        self.visit_env(env);
-        dynamic_winds.trace(self);
-        exception_handlers.trace(self);
-        prompt_stack.trace(self);
-        self.cont_env(captured_cont_env);
-        // Every reify site today stores in `resume` a wrapper it read out of
-        // `captured_cont_env`, so this trace looks redundant. That is an
-        // accident of the construction sites, not an invariant anything
-        // enforces, and it is what hid this edge untraced for 1.6 days (#47):
-        // the sentinel test puts a value here that `captured_cont_env` does
-        // not hold.
-        resume.trace(self);
     }
 }
 
@@ -2131,7 +2043,7 @@ impl SlotVisitor for GcVisitor<'_> {
         self.visit(value);
     }
 
-    fn env(&mut self, env: &Environment) {
+    fn env(&mut self, env: &Rc<Environment>) {
         self.visit_env(env);
     }
 
@@ -2157,14 +2069,43 @@ impl SlotVisitor for GcVisitor<'_> {
     }
 }
 
-/// Trace a library's two root sets: its exports, pinned until stage 4b makes
-/// them cells, and its environment (`Library::for_each_gc_edge`, which names
-/// every field).
-pub fn trace_library<V: SlotVisitor + ?Sized>(library: &Library, visitor: &mut V) {
-    library.for_each_gc_edge(&mut |edge| match edge {
-        GcEdge::Value(tv) => visitor.pinned(tv),
-        GcEdge::Env(env) => visitor.env(env),
-    });
+/// What an environment's trace reports to during `GcVisitor::visit_env`'s
+/// walk: each value is marked at once, and each environment the walk has not
+/// seen is queued, so that the walk stays a loop however the environments it
+/// reaches nest.
+struct EnvEdges<'m, 'h> {
+    marker: &'m mut GcVisitor<'h>,
+    pending: &'m mut Vec<Rc<Environment>>,
+}
+
+impl SlotVisitor for EnvEdges<'_, '_> {
+    fn slot(&mut self, slot: &Cell<TaggedValue>) {
+        self.marker.visit(slot.get());
+    }
+
+    fn pinned(&mut self, value: TaggedValue) {
+        self.marker.visit(value);
+    }
+
+    fn env(&mut self, env: &Rc<Environment>) {
+        if !self.marker.seen_envs.contains(&env.gc_identity()) {
+            self.pending.push(Rc::clone(env));
+        }
+    }
+
+    // An environment holds none of these today; one that came to would be
+    // walked as the marker walks any other.
+    fn continuation(&mut self, k: &Rc<CpsContinuation>) {
+        self.marker.visit_continuation(k);
+    }
+
+    fn cont_env(&mut self, cont_env: &ContEnv) {
+        self.marker.cont_env(cont_env);
+    }
+
+    fn expr_literals(&mut self, expr: &CpsExpr) {
+        self.marker.visit_expr_literals(expr);
+    }
 }
 
 // ============================================================================

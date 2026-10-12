@@ -46,25 +46,17 @@ from pathlib import Path
 
 # File (relative to the repository root) -> the trace functions in it.
 TRACE_FUNCTIONS = {
+    # The heap kinds' traces, until `declare_layouts!` (stage 5a), and the
+    # marker's walks.
     "crates/patina-core/src/heap/gc.rs": [
         "visit_env",
         "visit_env_chain",
         "visit_promise",
-        "trace_library",
         "drain",
         "trace_children",
         "trace_object_children",
-        "trace_compiled_macro",
-        "trace_continuation_children",
         "run_mark_phase",
     ],
-    # The hosts' handles, rooted in GcVisitor::new (#605).
-    "crates/patina-core/src/heap/handles.rs": ["trace_handles"],
-    # The literal walks under trace_compiled_macro and visit_expr_literals.
-    "crates/patina-core/src/compiled_macro.rs": ["for_each_literal"],
-    "crates/patina-core/src/cps_expr.rs": ["for_each_literal"],
-    "crates/patina-core/src/environment.rs": ["for_each_gc_edge"],
-    "crates/patina-core/src/library.rs": ["for_each_gc_edge"],
     "crates/patina-vm/src/runtime/vm_state/gc_roots.rs": [
         "trace_roots",
         "trace_weak_ids",
