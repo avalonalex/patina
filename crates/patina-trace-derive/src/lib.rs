@@ -14,14 +14,19 @@
 //!   trace with the value it points to, in a loop rather than a recursive
 //!   call, so a chain as deep as the program's recursion does not grow the
 //!   native stack (#617). A variant has one at most.
+//!
+//! And one on the type: `#[trace(grows_stack_if = method)]` runs the trace
+//! under `walk::ensure_sufficient_stack_if(Self::method(self), ...)`, as every
+//! walk of code does (#617), for a tree that recurses into itself by value,
+//! a macro's pattern or template.
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{
-    Data, DeriveInput, Field, Fields, GenericArgument, Ident, LitStr, PathArguments, Type,
-    parse_macro_input, parse_quote,
+    Attribute, Data, DeriveInput, Field, Fields, GenericArgument, Ident, LitStr, PathArguments,
+    Type, parse_macro_input, parse_quote,
 };
 
 #[proc_macro_derive(Trace, attributes(trace))]
@@ -139,6 +144,15 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
+    let body = match grows_stack_if(&input.attrs)? {
+        Some(nests) => quote! {
+            ::patina_core::walk::ensure_sufficient_stack_if(Self::#nests(self), || {
+                #body
+            })
+        },
+        None => body,
+    };
+
     let mut generics = input.generics.clone();
     for param in generics.type_params_mut() {
         param.bounds.push(parse_quote!(::patina_core::Trace));
@@ -211,6 +225,27 @@ fn shape(fields: &Fields, name: &Ident, in_enum: bool) -> syn::Result<Shape> {
         traces,
         tail,
     })
+}
+
+/// The type's `#[trace(grows_stack_if = method)]`, if it has one.
+fn grows_stack_if(attrs: &[Attribute]) -> syn::Result<Option<Ident>> {
+    let mut method: Option<Ident> = None;
+    for attr in attrs {
+        if !attr.path().is_ident("trace") {
+            continue;
+        }
+        attr.parse_nested_meta(|meta| {
+            if !meta.path.is_ident("grows_stack_if") {
+                return Err(meta.error("expected `grows_stack_if = method` on a type"));
+            }
+            let value: Ident = meta.value()?.parse()?;
+            if method.replace(value).is_some() {
+                return Err(meta.error("`grows_stack_if` given twice"));
+            }
+            Ok(())
+        })?;
+    }
+    Ok(method)
 }
 
 /// A field's `#[trace(...)]` attributes, checked.
@@ -358,6 +393,24 @@ mod tests {
         assert!(!out.contains("loop"));
         assert!(out.contains("match self { Self :: Plain (__trace_0) => {"));
         assert!(out.contains("Self :: None => { }"));
+    }
+
+    #[test]
+    fn a_tree_grows_the_stack_where_it_nests() {
+        let out = expanded(
+            r#"#[trace(grows_stack_if = is_nested)]
+            enum Tree { Leaf(TaggedValue), Node(Vec<Tree>) }"#,
+        )
+        .unwrap();
+        assert!(out.contains(
+            ":: patina_core :: walk :: ensure_sufficient_stack_if (Self :: is_nested (self) , || { \
+             match self {"
+        ));
+        let error = expanded("#[trace(skip)] struct S { value: TaggedValue }").unwrap_err();
+        assert!(
+            error.contains("expected `grows_stack_if = method` on a type"),
+            "{error}"
+        );
     }
 
     #[test]

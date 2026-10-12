@@ -11,6 +11,7 @@
 //! - `CompiledRule` - A single pattern/template rule
 //! - `CompiledMacro` - Complete compiled macro definition
 
+use crate::Trace;
 use crate::environment::Environment;
 use crate::heap::SharedHeap;
 use crate::pvref::PVRef;
@@ -27,7 +28,13 @@ use std::rc::Rc;
 ///
 /// This is compiled once at macro definition time and reused for all expansions.
 /// Based on Gauche's pattern compilation approach (macro.c:400+).
-#[derive(Clone, Debug)]
+///
+/// Its trace (derived, #686) reports its literals, growing the stack at each
+/// level that nests, as every walk of code does (#617). Pinned by the
+/// sentinel test `compiled_macro_fields`, which reaches a literal through
+/// each variant.
+#[derive(Clone, Debug, Trace)]
+#[trace(grows_stack_if = is_nested)]
 pub enum Pattern {
     /// Wildcard (_) - matches anything, binds nothing
     Wildcard,
@@ -38,7 +45,7 @@ pub enum Pattern {
     /// Pattern variable - binds to matched expression
     ///
     /// Uses PVREF (Pattern Variable Reference) for O(1) lookup.
-    Var(PVRef),
+    Var(#[trace(skip, reason = "a pattern variable's depth and index")] PVRef),
 
     /// List pattern: (p1 p2 p3)
     List(Vec<Pattern>),
@@ -62,17 +69,20 @@ pub enum Pattern {
         subpattern: Box<Pattern>,
 
         /// Ellipsis nesting level (1 for first ..., 2 for nested, etc.)
+        #[trace(skip, reason = "a depth")]
         level: u8,
 
         /// Number of items after this ellipsis (excluding final CDR)
         ///
         /// This is Gauche's optimization that avoids backtracking.
         /// Example: From (x ... y z), x ... has num_following = 2
+        #[trace(skip, reason = "a count")]
         num_following: usize,
 
         /// Pattern variables used in this subpattern
         ///
         /// Precomputed list of PVREFs for efficient matching.
+        #[trace(skip, reason = "pattern-variable references")]
         vars: Vec<PVRef>,
     },
 }
@@ -113,40 +123,6 @@ impl Pattern {
             Pattern::Var(pvref) => Some(*pvref),
             _ => None,
         }
-    }
-
-    /// Visit every heap value embedded in this pattern. GC tracing hook,
-    /// called by `trace_compiled_macro`: every field of every variant is
-    /// named (#623), and the sentinel test `compiled_macro_fields` reaches a
-    /// literal through each walk below.
-    pub fn for_each_literal(&self, f: &mut dyn FnMut(TaggedValue)) {
-        // As deep as the pattern: grown as it goes (#617).
-        crate::walk::ensure_sufficient_stack_if(self.is_nested(), || match self {
-            Pattern::Literal(tv) => f(*tv),
-            Pattern::Wildcard => {}
-            // A pattern variable's depth and index.
-            Pattern::Var(_) => {}
-            Pattern::List(patterns) | Pattern::Vector(patterns) => {
-                for pattern in patterns {
-                    pattern.for_each_literal(f);
-                }
-            }
-            Pattern::DottedList { patterns, tail } => {
-                for pattern in patterns {
-                    pattern.for_each_literal(f);
-                }
-                tail.for_each_literal(f);
-            }
-            Pattern::Ellipsis {
-                subpattern,
-                // A depth.
-                level: _,
-                // A count.
-                num_following: _,
-                // Pattern-variable references.
-                vars: _,
-            } => subpattern.for_each_literal(f),
-        })
     }
 }
 
@@ -288,18 +264,23 @@ impl std::fmt::Display for Identifier {
 ///
 /// Compiled once at macro definition time and reused for all expansions.
 /// Based on Gauche's template compilation approach.
-#[derive(Clone, Debug)]
+///
+/// Its trace (derived, #686) reports its literals, growing the stack at each
+/// level that nests, as [`Pattern`]'s does. Pinned by the sentinel test
+/// `compiled_macro_fields`.
+#[derive(Clone, Debug, Trace)]
+#[trace(grows_stack_if = is_nested)]
 pub enum Template {
     /// Literal value (inserted as-is)
     Literal(TaggedValue),
 
     /// Symbol to be inserted (hygienically renamed)
-    Symbol(Identifier),
+    Symbol(#[trace(skip, reason = "a name, a source position and scope sets")] Identifier),
 
     /// Pattern variable reference
     ///
     /// Uses PVREF for O(1) lookup from pattern match bindings.
-    Var(PVRef),
+    Var(#[trace(skip, reason = "a pattern variable's depth and index")] PVRef),
 
     /// List template: (t1 t2 t3)
     List(Vec<Template>),
@@ -321,15 +302,18 @@ pub enum Template {
         subtemplate: Box<Template>,
 
         /// Ellipsis nesting level
+        #[trace(skip, reason = "a depth")]
         level: u8,
 
         /// Number of consecutive ... in the template
         ///
         /// - 1 = normal single ellipsis: `x ...`
         /// - 2 = double ellipsis: `x ... ...` (SRFI-149)
+        #[trace(skip, reason = "a count of consecutive ellipses")]
         nesting: u8,
 
         /// Pattern variables used in this subtemplate
+        #[trace(skip, reason = "pattern-variable references")]
         vars: Vec<PVRef>,
     },
 }
@@ -370,41 +354,6 @@ impl Template {
             Template::Var(pvref) => Some(*pvref),
             _ => None,
         }
-    }
-
-    /// Visit every heap value embedded in this template. GC tracing hook,
-    /// called by `trace_compiled_macro`: every field of every variant is
-    /// named (#623), and the sentinel test `compiled_macro_fields` reaches a
-    /// literal through each walk below.
-    pub fn for_each_literal(&self, f: &mut dyn FnMut(TaggedValue)) {
-        // As deep as the template: grown as it goes (#617).
-        crate::walk::ensure_sufficient_stack_if(self.is_nested(), || match self {
-            Template::Literal(tv) => f(*tv),
-            // A name, a source position and scope sets.
-            Template::Symbol(_) => {}
-            // A pattern variable's depth and index.
-            Template::Var(_) => {}
-            Template::List(templates) | Template::Vector(templates) => {
-                for template in templates {
-                    template.for_each_literal(f);
-                }
-            }
-            Template::DottedList { templates, tail } => {
-                for template in templates {
-                    template.for_each_literal(f);
-                }
-                tail.for_each_literal(f);
-            }
-            Template::Ellipsis {
-                subtemplate,
-                // A depth.
-                level: _,
-                // A count of consecutive ellipses.
-                nesting: _,
-                // Pattern-variable references.
-                vars: _,
-            } => subtemplate.for_each_literal(f),
-        })
     }
 
     /// Visit every free identifier name in this template.
@@ -506,7 +455,7 @@ impl std::fmt::Display for Template {
 ///
 /// Contains both pattern and template in PVREF-based representation,
 /// along with metadata for efficient matching and expansion.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Trace)]
 pub struct CompiledRule {
     /// Compiled pattern
     pub pattern: Pattern,
@@ -515,19 +464,26 @@ pub struct CompiledRule {
     pub template: Template,
 
     /// Number of pattern variables in this rule
+    #[trace(skip, reason = "a count")]
     pub num_pvars: usize,
 
     /// Maximum ellipsis nesting level in this rule
+    #[trace(skip, reason = "a depth")]
     pub max_level: usize,
 
     /// Mapping from pattern variable names to their PVREFs (for debug output)
+    #[trace(skip, reason = "pattern-variable names, for diagnostics")]
     pub pvar_names: HashMap<PVRef, Rc<str>>,
 }
 
 /// Compiled macro definition
 ///
 /// Contains all rules for a syntax-rules macro in compiled form.
-#[derive(Clone, Debug)]
+///
+/// Its trace (derived, #686) reports the literals of its patterns and
+/// templates and the environments it keeps live. Pinned by the sentinel test
+/// `compiled_macro_fields`.
+#[derive(Clone, Debug, Trace)]
 pub struct CompiledMacro {
     /// Macro name (for error messages)
     pub name: Rc<str>,
@@ -536,6 +492,7 @@ pub struct CompiledMacro {
     pub rules: Vec<CompiledRule>,
 
     /// Maximum number of pattern variables in any rule
+    #[trace(skip, reason = "a count")]
     pub max_pvars: usize,
 
     /// Scope set at macro definition time (for scope-based hygiene)
@@ -547,6 +504,10 @@ pub struct CompiledMacro {
     ///
     /// This heap is allocated at compile time and must be used (or merged into) the
     /// expansion-time heap so that literal TaggedValues remain valid.
+    #[trace(
+        skip,
+        reason = "a handle to the heap its literals live in, which the collector is already marking (design §9.6): not an edge into it"
+    )]
     pub heap: SharedHeap,
 
     /// Free identifier names appearing in this macro's templates.
@@ -556,6 +517,7 @@ pub struct CompiledMacro {
     /// use site; after expansion both look alike in the output tree, so the
     /// distinction has to be recorded here, where the templates are still
     /// separable from the arguments.
+    #[trace(skip, reason = "names")]
     pub template_symbols: HashSet<Rc<str>>,
 
     /// Identifiers an enclosing expansion put into this macro's templates,
@@ -579,6 +541,7 @@ pub struct CompiledMacro {
     /// so it decides each of these separately: a mention is aliased only
     /// where it resolves to the binding the name alone reaches, and each
     /// mention that is gets an alias of its own.
+    #[trace(skip, reason = "names, each with the scope sets it arrived under")]
     pub inherited_identifiers: HashMap<Rc<str>, Vec<ScopeSet>>,
 
     /// The environment this macro was defined in, when one was available.
@@ -588,6 +551,9 @@ pub struct CompiledMacro {
     /// expansion emits a bare name that is resolved in the importing program,
     /// so a macro could only ever reference bindings its caller happened to
     /// have. Library-private helpers are the common casualty.
+    ///
+    /// Traced: a live macro keeps its definition environment live, since its
+    /// templates may reference bindings that exist nowhere else (#38).
     pub definition_env: Option<Rc<Environment>>,
 
     /// The expansions of macros from *another* program or library whose
@@ -604,13 +570,21 @@ pub struct CompiledMacro {
     /// foreign. So the record is taken when the macro is compiled — in the
     /// form that ran the generator, while it is still known — and put back
     /// for the form of each expansion (#446). Empty for a written macro.
+    ///
+    /// Traced. Early binding asks these environments only where a name's
+    /// binding lives, never for a value, and today each is rooted another
+    /// way as well: by the registry while its library is registered, and
+    /// after a redefinition replaces the library, by the `owners` list of
+    /// whatever imported the generator, which never shrinks (#614). Traced all
+    /// the same, because the macro holds them by `Rc` for as long as it lives,
+    /// and an environment kept alive with its values swept is #38's shape:
+    /// #614's fix drops an owner once no link points into it, and this edge is
+    /// then what keeps such an environment's values. Otherwise one or two
+    /// environments the walk has nearly always seen already.
     pub foreign_expansions: Vec<(ScopeId, Rc<Environment>)>,
 }
 
 impl CompiledMacro {
-    // Tracing is `GcVisitor::trace_compiled_macro` (`heap/gc.rs`), which
-    // names every field of this struct and of `CompiledRule` (#623).
-
     /// Collect the free identifier names mentioned by every rule's template.
     pub fn collect_template_symbols(rules: &[CompiledRule]) -> HashSet<Rc<str>> {
         let mut out = HashSet::new();

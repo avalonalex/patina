@@ -34,29 +34,44 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::{Rc, Weak};
 
-use super::gc::{GcVisitor, RootSet};
+use super::gc::RootSet;
+use crate::Trace;
 use crate::environment::Environment;
 use crate::tagged_value::TaggedValue;
 
 /// One heap's handles: the values and environments its hosts keep, each
 /// rooted until its handle is dropped, and the environments it traces for
 /// as long as their hosts hold them.
+///
+/// Its trace (derived, #686) is the table's part of the root set, which
+/// `GcVisitor::new` visits beside the intern tables on either backend: every
+/// value a handle holds, visited rather than only marked so that marking
+/// traces what each reaches, and every tracked environment something still
+/// holds. Pinned by the sentinel test `handle_table_fields`.
+#[derive(Trace)]
 pub struct HandleTable {
     /// The heap's number in the collector's log (`Telemetry::heap_id`), for
     /// the message when a handle meets another heap.
+    #[trace(skip, reason = "a number, for a message")]
     heap_id: u64,
     entries: RefCell<Entries>,
     /// The root providers registered with the heap (`Heap::root_set`, #682),
     /// kept with the other roots hosts keep. Not a field of `Heap`: one more
     /// there moved the allocator's hot fields, and cost the VM's
     /// continuation benchmarks 4–5% in cycles with the same instructions.
+    #[trace(
+        skip,
+        reason = "providers, which the collector traces itself, each through its own trace (#682)"
+    )]
     root_set: Rc<RootSet>,
 }
 
+#[derive(Trace)]
 struct Entries {
     /// Each handle's entry, and the free ones between them.
     list: Vec<Entry>,
     /// The free entries, reused before the list grows.
+    #[trace(skip, reason = "indices of the free entries, which hold nothing")]
     free: Vec<u32>,
     /// Environments hosts hold by their own `Rc`, traced while anything
     /// holds them ([`HandleTable::track`]), at most once each.
@@ -64,6 +79,7 @@ struct Entries {
 }
 
 /// What an entry of the table holds.
+#[derive(Trace)]
 enum Entry {
     /// Nothing: the entry is on the free list.
     Free,
@@ -182,41 +198,14 @@ impl HandleTable {
         self.entries.borrow().tracked.len()
     }
 
-    /// Visit everything a handle holds, and every tracked environment that
-    /// something still holds: the table's part of the root set. Values are
-    /// visited, not only marked, so that marking traces what each reaches.
-    /// A tracked environment nothing holds is forgotten here.
-    pub(crate) fn trace_handles(&self, visitor: &mut GcVisitor<'_>) {
-        let HandleTable {
-            // A number, for a message; no value.
-            heap_id: _,
-            entries,
-            // Providers, which the collector traces itself, each through
-            // its own trace (#682).
-            root_set: _,
-        } = self;
-        let mut entries = entries.borrow_mut();
-        let Entries {
-            list,
-            // Indices of the free entries, which hold nothing.
-            free: _,
-            tracked,
-        } = &mut *entries;
-        for entry in list.iter() {
-            match entry {
-                Entry::Value(value) => visitor.visit(*value),
-                Entry::Environment(env) => visitor.visit_env(env),
-                Entry::Free => {}
-            }
-        }
-        tracked.retain(|held| {
-            if let Some(env) = held.upgrade() {
-                visitor.visit_env(&env);
-                true
-            } else {
-                false
-            }
-        });
+    /// Forget each tracked environment nothing holds any more, as a
+    /// collection begins: what the table tracks for a host is traced for as
+    /// long as the host holds it, and no longer.
+    pub(crate) fn forget_dropped_environments(&self) {
+        self.entries
+            .borrow_mut()
+            .tracked
+            .retain(|held| held.strong_count() > 0);
     }
 
     /// Check that `claim` is one of this table's, and answer its entry.

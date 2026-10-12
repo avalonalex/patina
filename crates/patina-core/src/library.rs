@@ -3,7 +3,8 @@
 //! This module defines the core types for representing Scheme libraries.
 //! The library loading and resolution logic is in the evaluator.
 
-use crate::environment::{Environment, GcEdge};
+use crate::Trace;
+use crate::environment::Environment;
 use crate::tagged_value::TaggedValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -18,10 +19,16 @@ use std::rc::Rc;
 /// - Optional source location (for debugging)
 ///
 /// Library exports are stored as `TaggedValue` for memory efficiency.
-#[derive(Debug, Clone)]
+///
+/// Its trace (derived, #686) reports its two root sets (`docs/GC_DESIGN.md`
+/// §5.3): each export's value, pinned until stage 4b makes the exports
+/// cells, and the library's environment. Pinned by the sentinel test
+/// `gc_edge_tests::library_exports_and_environment`.
+#[derive(Debug, Clone, Trace)]
 pub struct Library {
     /// Library name as a list of strings
     /// Example: (scheme base) → vec!["scheme", "base"]
+    #[trace(skip, reason = "the library's name")]
     pub name: Vec<String>,
 
     /// Exported bindings: identifier name → TaggedValue
@@ -41,9 +48,11 @@ pub struct Library {
     /// which cannot say where it lives. An import needs that: it is the
     /// library's binding, not a copy of its value (#406), and for a renamed
     /// export the location is under the other name.
+    #[trace(skip, reason = "export name → internal name, as strings")]
     internal_names: HashMap<String, String>,
 
     /// Optional source file path (for error messages and debugging)
+    #[trace(skip, reason = "a file path")]
     pub source: Option<PathBuf>,
 }
 
@@ -145,30 +154,6 @@ impl Library {
     /// Iterate over exports as (name, TaggedValue) pairs
     pub fn exports_iter_tagged(&self) -> impl Iterator<Item = (&String, TaggedValue)> + '_ {
         self.exports.iter().map(|(k, tv)| (k, *tv))
-    }
-
-    /// Report the collector's edges out of this library: each export's value
-    /// and the library's environment, its two root sets
-    /// (`docs/GC_DESIGN.md` §5.3). `trace_library` is the caller.
-    ///
-    /// Every field is named (#623), so a new one does not compile here until
-    /// it is reported or written `field: _` with its reason. Pinned by the
-    /// sentinel test `gc_edge_tests::library_exports_and_environment`, below.
-    pub(crate) fn for_each_gc_edge(&self, f: &mut dyn FnMut(GcEdge<'_>)) {
-        let Library {
-            // Strings.
-            name: _,
-            exports,
-            env,
-            // Export name → internal name, as strings.
-            internal_names: _,
-            // A file path.
-            source: _,
-        } = self;
-        for &value in exports.values() {
-            f(GcEdge::Value(value));
-        }
-        f(GcEdge::Env(env));
     }
 }
 

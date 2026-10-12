@@ -19,7 +19,11 @@ use crate::tagged_value::TaggedValue;
 ///
 /// - **Delimited continuation** (from `shift`): Captures only up to the nearest
 ///   enclosing `reset` prompt. When invoked, can return to the caller.
-#[derive(Debug, Clone)]
+///
+/// Its trace (derived, #686) reports the body's literals, the environment, the
+/// dynamic state the continuation restores and the continuation it resumes
+/// into. Pinned by the sentinel test `cps_continuation_fields`.
+#[derive(Debug, Clone, Trace)]
 pub struct CpsContinuation {
     /// The CPS expression representing the captured computation
     /// When the continuation is invoked with a value, this expression
@@ -42,6 +46,7 @@ pub struct CpsContinuation {
     /// only in what the stacks below mean: a full continuation's are the
     /// whole stacks at capture, a composable one's are the slices *above*
     /// its prompt, appended to the invoke site's.
+    #[trace(skip, reason = "a prompt id")]
     pub boundary: Option<u64>,
 
     /// The trampoline this continuation's chain ends in.
@@ -61,6 +66,7 @@ pub struct CpsContinuation {
     /// in one top-level form and invoked from a later one resumes the rest
     /// of its own form and then falls through to the next, which is what
     /// every implementation does at the REPL.
+    #[trace(skip, reason = "a trampoline id")]
     pub trampoline: u64,
 
     /// A composable continuation whose captured region crosses a primitive's
@@ -72,6 +78,7 @@ pub struct CpsContinuation {
     /// then end whatever run it was resumed in. The tree-walker refuses it
     /// instead; the VM, whose callbacks run on the same machine, does not
     /// have the limit.
+    #[trace(skip, reason = "a flag")]
     pub crosses_callback: bool,
 
     /// Dynamic wind handlers that were active when this continuation was captured
@@ -134,6 +141,12 @@ pub struct CpsContinuation {
     /// bindings named `__dw_after__` / `__dw_wind_id__` / `__dw_original__`
     /// behind a `__dynamic_wind_cleanup__` marker body, which three separate
     /// places had to recognise and decode. Now the value is simply stored.
+    ///
+    /// Traced even though every reify site today stores here a wrapper it
+    /// read out of `captured_cont_env`, so the trace looks redundant. That is
+    /// an accident of the construction sites, not an invariant anything
+    /// enforces, and it is what hid this edge untraced for 1.6 days (#47): the
+    /// sentinel test puts a value here that `captured_cont_env` does not hold.
     pub resume: Option<ContValue>,
 }
 

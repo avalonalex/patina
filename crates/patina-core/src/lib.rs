@@ -109,7 +109,6 @@ pub use heap::gc::{
 };
 pub use heap::{
     GC_CHECK, Heap, SharedHeap, SpineEnd,
-    gc::trace_library,
     handles::{Owned, OwnedEnvironment},
     new_shared_heap,
     trace::Trace,

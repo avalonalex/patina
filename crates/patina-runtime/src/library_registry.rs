@@ -7,7 +7,7 @@
 //! - Library loading and caching
 
 use crate::library::Library;
-use patina_core::{Environment, FileSystem, TaggedValue};
+use patina_core::{Environment, FileSystem, TaggedValue, Trace};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -315,6 +315,7 @@ fn env_library_paths() -> Vec<PathBuf> {
 /// - Manage search paths for finding library files
 /// - Detect and prevent circular dependencies
 /// - Provide efficient library lookup
+#[derive(Trace)]
 pub struct LibraryRegistry {
     /// Loaded libraries: library name → Library
     /// Uses Vec<String> as key for library names like (scheme base)
@@ -322,6 +323,7 @@ pub struct LibraryRegistry {
 
     /// Search paths for finding library files (.sld)
     /// Searched in order when loading a library
+    #[trace(skip, reason = "directories")]
     search_paths: Vec<PathBuf>,
 
     /// The libraries being loaded, outermost first: for circular dependency
@@ -329,6 +331,7 @@ pub struct LibraryRegistry {
     loading_stack: Vec<LoadingEntry>,
 
     /// Virtual filesystem for file existence checks in `find_library_file`.
+    #[trace(skip, reason = "the filesystem")]
     fs: Arc<dyn FileSystem>,
 }
 
@@ -337,7 +340,9 @@ pub struct LibraryRegistry {
 /// in and the body forms not yet run, which nothing else reaches until the
 /// library is registered: `trace_roots` roots them, so a load may collect
 /// between its forms and inside them (#677).
+#[derive(Trace)]
 struct LoadingEntry {
+    #[trace(skip, reason = "a library name")]
     name: Vec<String>,
     env: Option<Rc<Environment>>,
     body: VecDeque<TaggedValue>,
@@ -627,37 +632,13 @@ impl Default for LibraryRegistry {
 /// lives with the registry rather than being restated in each backend's root
 /// provider.
 ///
-/// Every field is named (#623); pinned by the sentinel tests
+/// Its trace is derived (#686); pinned by the sentinel tests
 /// `a_registered_library_is_a_root` and `a_library_being_loaded_is_a_root`.
 impl patina_core::RootProvider for LibraryRegistry {
     /// Every value here is pinned until stage 4b makes a library's exports
     /// cells (#682): the forms a load has not yet run as well.
     fn trace_roots(&self, visitor: &mut dyn patina_core::SlotVisitor) {
-        let LibraryRegistry {
-            libraries,
-            // Directories.
-            search_paths: _,
-            loading_stack,
-            // The filesystem.
-            fs: _,
-        } = self;
-        for library in libraries.values() {
-            patina_core::trace_library(library, visitor);
-        }
-        for entry in loading_stack {
-            let LoadingEntry {
-                // A library name.
-                name: _,
-                env,
-                body,
-            } = entry;
-            if let Some(env) = env {
-                visitor.env(env);
-            }
-            for &form in body {
-                visitor.pinned(form);
-            }
-        }
+        self.trace(visitor);
     }
 }
 

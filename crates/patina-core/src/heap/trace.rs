@@ -7,9 +7,11 @@
 //! `CompiledMacro.foreign_expansions` until #623). A derived trace follows
 //! the types instead, so a field cannot go untraced silently.
 
-use std::cell::Cell;
-use std::collections::VecDeque;
-use std::rc::Rc;
+use std::cell::{Cell, OnceCell, RefCell};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::rc::{Rc, Weak};
+
+use smallvec::{Array, SmallVec};
 
 use super::gc::SlotVisitor;
 use crate::TaggedValue;
@@ -17,6 +19,7 @@ use crate::cont_value::ContEnv;
 use crate::continuation::CpsContinuation;
 use crate::cps_expr::CpsExpr;
 use crate::environment::Environment;
+use crate::scope::{ScopeId, ScopeSet};
 
 /// A structure outside the heap that holds values, which it reports to a
 /// [`SlotVisitor`] when a collection asks.
@@ -24,23 +27,34 @@ use crate::environment::Environment;
 /// Derived, never written by hand: `#[derive(Trace)]` traces every field
 /// through its type's `Trace`. A field whose type has none does not compile,
 /// and a field is left out only by `#[trace(skip, reason = "…")]`, whose
-/// reason says what it holds instead of a value. An enum variant's
-/// `#[trace(tail)]` field, a `Box<Self>`, continues the trace in a loop, so
-/// that a chain as deep as the program's recursion does not grow the native
-/// stack (#617).
+/// reason says what it holds instead of a value. Two attributes shape the
+/// walk itself, for the structures as deep as the computation or the code
+/// they stand for (#617):
+/// - an enum variant's `#[trace(tail)]` field, a `Box<Self>`, continues the
+///   trace in a loop, so that a continuation's chain, as deep as the
+///   program's recursion, does not grow the native stack;
+/// - a type's `#[trace(grows_stack_if = method)]` makes sure of the stack
+///   before each level whose `method` says it nests, as every walk of code
+///   does: a macro's patterns and templates.
 ///
 /// The leaves are the slot visitor's:
 /// - [`TaggedValue`], pinned: a copy, whose referent nothing moves before
 ///   the structure holding it becomes heap data;
-/// - `Cell<TaggedValue>`, a slot: the value where it lives;
+/// - `Cell<TaggedValue>`, a slot: the value where it lives; and
+///   `Cell<Option<TaggedValue>>`, pinned;
 /// - `Rc<Environment>`, `Rc<CpsContinuation>`, [`ContEnv`] and `Rc<CpsExpr>`,
 ///   handed over whole, for the visitor to walk once however many paths
-///   reach them;
+///   reach them; and `Weak<Environment>`, while something else holds it;
 /// - and the containers that hold them: `Option`, `Box`, slices, arrays,
-///   `Vec`, `VecDeque`, `Rc<[T]>` and pairs and triples.
+///   `Vec`, `VecDeque`, `SmallVec`, `RefCell`, `OnceCell`, `Rc<[T]>`, the
+///   keys and values of a `HashMap` and the members of a `HashSet`, and
+///   pairs and triples.
 ///
-/// Nothing that holds no value implements it, integers included, which can
-/// hold a value's bits: a field like that is skipped, with its reason.
+/// Names (`str`, `String`, `Rc<str>`), scope sets and scope ids trace as
+/// nothing: they cannot hold a value, and they sit beside values where a
+/// field cannot be skipped on its own, in a binding's slot or a map's key.
+/// Nothing else that holds no value implements it, integers included, which
+/// can hold a value's bits: a field like that is skipped, with its reason.
 ///
 /// ```
 /// use patina_core::{TaggedValue, Trace};
@@ -171,6 +185,83 @@ impl<T: Trace> Trace for Rc<[T]> {
     }
 }
 
+/// A value that may be absent, in a cell: pinned, since only a
+/// `Cell<TaggedValue>` is a slot.
+impl Trace for Cell<Option<TaggedValue>> {
+    fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
+        if let Some(value) = self.get() {
+            visitor.pinned(value);
+        }
+    }
+}
+
+/// An environment held weakly, as the handle table holds the ones hosts lend
+/// it (#620): traced for as long as something else holds it.
+impl Trace for Weak<Environment> {
+    fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
+        if let Some(env) = self.upgrade() {
+            visitor.env(&env);
+        }
+    }
+}
+
+/// Borrowed for the trace, as every hand-written trace borrowed its tables:
+/// a collection while one is borrowed mutably is a bug, and panics.
+impl<T: Trace + ?Sized> Trace for RefCell<T> {
+    fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
+        self.borrow().trace(visitor);
+    }
+}
+
+impl<T: Trace> Trace for OnceCell<T> {
+    fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
+        if let Some(value) = self.get() {
+            value.trace(visitor);
+        }
+    }
+}
+
+impl<A: Array> Trace for SmallVec<A>
+where
+    A::Item: Trace,
+{
+    fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
+        self.as_slice().trace(visitor);
+    }
+}
+
+impl<K: Trace, T: Trace, S> Trace for HashMap<K, T, S> {
+    fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
+        for (key, value) in self {
+            key.trace(visitor);
+            value.trace(visitor);
+        }
+    }
+}
+
+impl<T: Trace, S> Trace for HashSet<T, S> {
+    fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
+        for member in self {
+            member.trace(visitor);
+        }
+    }
+}
+
+/// What cannot hold a value and sits beside values, in a binding's slot or a
+/// map's key: a name, a scope set, a scope id.
+macro_rules! trace_as_nothing {
+    ($($held:ty),* $(,)?) => {
+        $(
+            impl Trace for $held {
+                #[inline]
+                fn trace<V: SlotVisitor + ?Sized>(&self, _: &mut V) {}
+            }
+        )*
+    };
+}
+
+trace_as_nothing!(str, String, Rc<str>, ScopeSet, ScopeId);
+
 impl<A: Trace, B: Trace> Trace for (A, B) {
     fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
         let (a, b) = self;
@@ -191,6 +282,7 @@ impl<A: Trace, B: Trace, C: Trace> Trace for (A, B, C) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compiled_macro::Pattern;
     use crate::cont_value::{ContValue, ExceptionHandler};
 
     /// Counts the values it is given, and is given nothing else.
@@ -204,7 +296,7 @@ mod tests {
         fn pinned(&mut self, _: TaggedValue) {
             self.0 += 1;
         }
-        fn env(&mut self, _: &Environment) {
+        fn env(&mut self, _: &Rc<Environment>) {
             unreachable!("the chain holds no environment")
         }
         fn continuation(&mut self, _: &Rc<CpsContinuation>) {
@@ -254,5 +346,29 @@ mod tests {
             .expect("the trace does not overflow the thread's stack");
         // Each link's exception and handler.
         assert_eq!(traced, 2 * LINKS);
+    }
+
+    /// A macro's pattern traces as deep as it nests, growing the stack where
+    /// it does (`#[trace(grows_stack_if = is_nested)]`, #617): one nested
+    /// 100,000 deep traces on a 128 KiB stack. This test overflows if the
+    /// attribute is taken off.
+    #[test]
+    fn a_deep_pattern_is_traced_on_a_small_stack() {
+        const DEPTH: usize = 100_000;
+        let traced = std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut pattern = Pattern::Literal(TaggedValue::fixnum(1));
+                for _ in 0..DEPTH {
+                    pattern = Pattern::List(vec![pattern]);
+                }
+                let mut count = Count::default();
+                pattern.trace(&mut count);
+                count.0
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the trace does not overflow the thread's stack");
+        assert_eq!(traced, 1);
     }
 }
