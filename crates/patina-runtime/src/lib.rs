@@ -23,6 +23,9 @@
               `thread_local!` in the crate goes on this list, which a test in \
               `reentry_lint_control.rs` holds to the crate's sources (#622)"
 )]
+// No unsafe code here: unsafe heap access is confined to `patina-core`, `patina-vm` and
+// `patina-tree-walker` (`PRD/GC_PRD.md` §11.3, #698).
+#![forbid(unsafe_code)]
 
 // Runtime-specific modules
 pub mod backend;

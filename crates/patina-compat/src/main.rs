@@ -9,6 +9,9 @@
 //!     cargo run -p patina-compat --release -- run
 //!     cargo run -p patina-compat --release -- report
 //!     cargo run -p patina-compat --release -- check-smoke
+// No unsafe code here: unsafe heap access is confined to `patina-core`, `patina-vm` and
+// `patina-tree-walker` (`PRD/GC_PRD.md` §11.3, #698).
+#![forbid(unsafe_code)]
 
 mod corpus;
 mod evidence;

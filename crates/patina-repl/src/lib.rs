@@ -8,6 +8,9 @@
 //! - **Multi-line editing** - Balanced parenthesis detection
 //! - **History** - Command history saved to ~/.patina_history
 //! - **Rich terminal** - Built on rustyline for a modern CLI experience
+// No unsafe code in the library; the binary allows its two `set_var` calls one by one
+// (`PRD/GC_PRD.md` §11.3, #698).
+#![forbid(unsafe_code)]
 
 pub mod program_stream;
 pub mod repl;

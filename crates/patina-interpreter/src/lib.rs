@@ -1,6 +1,9 @@
 // InterpreterError contains DesugarError (large)
 // Boxing would add complexity for minimal benefit in this interpreter context
 #![allow(clippy::result_large_err)]
+// No unsafe code here: unsafe heap access is confined to `patina-core`, `patina-vm` and
+// `patina-tree-walker` (`PRD/GC_PRD.md` §11.3, #698).
+#![forbid(unsafe_code)]
 
 //! Patina Interpreter - High-level interface for Scheme evaluation
 //!

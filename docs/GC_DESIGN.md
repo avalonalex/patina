@@ -1195,6 +1195,22 @@ the crate too, so the lint alone would pass a new one; a test in
 sources and fails when the statics they declare differ from the ones its
 crate root names.
 
+**Where `unsafe` code may be (#698).** Unsafe heap access is confined to
+`patina-core`, `patina-vm` and `patina-tree-walker`, the trusted island of
+`PRD/GC_PRD.md` §11.3, and later to `patina-gc` and the JIT crate. Today
+core's seven `unsafe` blocks are libc calls for OS readings, and the VM's six
+reach `VmState` through `VmApplyContext`'s raw pointer. The crates that reach
+the heap only through these carry `#![forbid(unsafe_code)]` at their roots:
+`patina-primitives`, `patina-frontend`, `patina-macros`, `patina-runtime`,
+`patina-ir`, `patina-pipeline`, `patina-interpreter` and `patina-compat`, with
+`patina-trace-derive`, whose output has none either. None of them had any.
+`patina-repl`'s library forbids it too. Its binary denies it, allowing one by
+one its two `std::env::set_var` calls: they are unsafe since edition 2024, and
+sound because argument parsing runs before any thread starts. Its
+pseudo-terminal test allows the one call into libc. Once stage 3 brands values
+(`Value<'gc>`), turning a raw word into one is a `pub unsafe fn`, so a crate
+that cannot write `unsafe` cannot do it.
+
 These checks detect violations on today's collector. The redesign replaces
 them with `NoGcScope` and the collect capability at stage 3, where a nested
 entry cannot collect by type, and stage 4e deletes the weak continuation
