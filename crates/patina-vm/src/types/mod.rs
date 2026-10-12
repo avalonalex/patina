@@ -14,6 +14,7 @@ pub use continuation::{
 };
 pub use instruction::Instruction;
 
+use patina_core::Trace;
 use patina_core::tagged_value::TaggedValue;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -37,13 +38,21 @@ pub type LabelId = usize; // instruction index (absolute within a CodeObject)
 /// `return_reg` is stored in the *callee's* frame and names the register in the
 /// *caller's* window where the return value should be written. The `Return`
 /// instruction reads this field without needing to inspect the caller's frame.
-#[derive(Debug, Clone)]
+///
+/// Its trace (derived, #686) reports its closure, a slot like a register.
+#[derive(Debug, Clone, Trace)]
 pub struct CallFrame {
     /// Program counter — index of the next instruction to execute.
+    #[trace(skip, reason = "an instruction index")]
     pub pc: usize,
     /// Offset into `ExecutionState::registers` where this frame's r0 lives.
+    #[trace(
+        skip,
+        reason = "a register index; the window is traced with the register file"
+    )]
     pub register_base: usize,
     /// Number of registers owned by this frame.
+    #[trace(skip, reason = "a count")]
     pub num_regs: u16,
     /// The closure this activation runs, a `VmClosure`, or
     /// [`CallFrame::NO_CLOSURE`] for code that runs none: top-level code
@@ -51,12 +60,17 @@ pub struct CallFrame {
     pub closure: Cell<TaggedValue>,
     /// Register in the *caller's* frame where `Return` should write its result.
     /// When there is no caller (top-level), this field is unused.
+    #[trace(skip, reason = "a register number")]
     pub return_reg: Reg,
     /// The code object this frame executes, resolved once at push time.
     /// Code objects are immutable after loading, so caching the `Rc` here is
     /// safe and lets the dispatch loop fetch instructions without a
     /// `code_store` lookup per instruction. Its id is `code.id` — the
     /// frame stores no separate copy that could drift out of sync.
+    #[trace(
+        skip,
+        reason = "its constants are traced through `code_store`, which keeps every code object a frame or a captured continuation can run (#338)"
+    )]
     pub code: Rc<CodeObject>,
 }
 

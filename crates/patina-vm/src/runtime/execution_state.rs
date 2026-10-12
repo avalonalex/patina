@@ -3,21 +3,26 @@
 //! Transfer policy (wind travel, re-entry, error routing) stays in `control`.
 
 use super::control::abort_step;
-use super::vm_state::gc_roots::trace_frames;
 use crate::error::VmError;
 use crate::types::CallFrame;
 use crate::types::code_object::CodeObject;
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use patina_core::{SlotVisitor, TaggedValue, Trace};
+use patina_core::{TaggedValue, Trace};
 use std::cell::Cell;
 use std::rc::Rc;
 
-#[derive(Default)]
+/// Its trace (derived, #686) is all five components, a root of every
+/// collection through `VmState`'s. The sentinel test
+/// `every_vm_state_root_is_traced` pins each.
+#[derive(Default, Trace)]
 pub(super) struct ExecutionState {
     /// Slots, so that the root provider reports each register where it
-    /// lives, through `&self` (#682).
+    /// lives, through `&self` (#682): the whole register file in one call
+    /// (`Trace::trace_slice`), after the safe point has retired completed
+    /// expression temporaries (#423). Continuation snapshots are retired at
+    /// capture, so they obey the same full-vector contract.
     registers: Vec<Cell<TaggedValue>>,
     frames: Vec<CallFrame>,
     prompt_stack: Vec<PromptFrame>,
@@ -26,27 +31,6 @@ pub(super) struct ExecutionState {
 }
 
 impl ExecutionState {
-    /// GC roots: all five components, every field named (#623), so a new one
-    /// does not compile here until it is traced. `VmState`'s provider calls
-    /// this; the sentinel test `every_vm_state_root_is_traced` pins each.
-    pub(super) fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
-        let ExecutionState {
-            registers,
-            frames,
-            prompt_stack,
-            dynamic_winds,
-            exception_handlers,
-        } = self;
-        // The whole register file, after the safe point has retired completed
-        // expression temporaries (#423). Continuation snapshots are retired at
-        // capture, so they obey the same full-vector contract.
-        visitor.slots(registers);
-        trace_frames(frames, visitor);
-        prompt_stack.trace(visitor);
-        dynamic_winds.trace(visitor);
-        exception_handlers.trace(visitor);
-    }
-
     /// Build a state from its five components, for tests that fill each with
     /// a value nothing else holds. A struct literal, so a new component fails
     /// to compile here too.

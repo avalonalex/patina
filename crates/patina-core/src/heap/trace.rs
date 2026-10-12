@@ -45,10 +45,11 @@ use crate::scope::{ScopeId, ScopeSet};
 /// - `Rc<Environment>`, `Rc<CpsContinuation>`, [`ContEnv`] and `Rc<CpsExpr>`,
 ///   handed over whole, for the visitor to walk once however many paths
 ///   reach them; and `Weak<Environment>`, while something else holds it;
-/// - and the containers that hold them: `Option`, `Box`, slices, arrays,
-///   `Vec`, `VecDeque`, `SmallVec`, `RefCell`, `OnceCell`, `Rc<[T]>`, the
-///   keys and values of a `HashMap` and the members of a `HashSet`, and
-///   pairs and triples.
+/// - and the containers that hold them: `Option`, `Box`, references,
+///   slices, arrays, `Vec`, `VecDeque`, `SmallVec`, `RefCell`, `OnceCell`,
+///   `Rc<[T]>`, the keys and values of a `HashMap` and the members of a
+///   `HashSet`, and pairs and triples; and an `Rc` of a structure marked
+///   [`TraceThroughRc`], traced wherever the `Rc` is reached.
 ///
 /// Names (`str`, `String`, `Rc<str>`), scope sets and scope ids trace as
 /// nothing: they cannot hold a value, and they sit beside values where a
@@ -97,6 +98,20 @@ use crate::scope::{ScopeId, ScopeSet};
 pub trait Trace {
     /// Report every value `self` holds to `visitor`.
     fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V);
+
+    /// Report a run of these, as a slice, a `Vec` or an array holds them: one
+    /// at a time, unless the type knows better. A run of slots goes to the
+    /// visitor in one call ([`SlotVisitor::slots`]), as a register file is
+    /// reported, so that a root provider's dynamic dispatch is paid once for
+    /// the run rather than once a slot.
+    fn trace_slice<V: SlotVisitor + ?Sized>(slice: &[Self], visitor: &mut V)
+    where
+        Self: Sized,
+    {
+        for item in slice {
+            item.trace(visitor);
+        }
+    }
 }
 
 impl Trace for TaggedValue {
@@ -108,6 +123,10 @@ impl Trace for TaggedValue {
 impl Trace for Cell<TaggedValue> {
     fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
         visitor.slot(self);
+    }
+
+    fn trace_slice<V: SlotVisitor + ?Sized>(slice: &[Self], visitor: &mut V) {
+        visitor.slots(slice);
     }
 }
 
@@ -151,9 +170,7 @@ impl<T: Trace + ?Sized> Trace for Box<T> {
 
 impl<T: Trace> Trace for [T] {
     fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
-        for value in self {
-            value.trace(visitor);
-        }
+        T::trace_slice(self, visitor);
     }
 }
 
@@ -171,15 +188,43 @@ impl<T: Trace> Trace for Vec<T> {
 
 impl<T: Trace> Trace for VecDeque<T> {
     fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
-        for value in self {
-            value.trace(visitor);
-        }
+        let (front, back) = self.as_slices();
+        T::trace_slice(front, visitor);
+        T::trace_slice(back, visitor);
+    }
+}
+
+/// What a reference refers to, as a root provider that borrows the state it
+/// reports holds it.
+impl<T: Trace + ?Sized> Trace for &T {
+    fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
+        (**self).trace(visitor);
     }
 }
 
 /// A slice shared through `Rc`, as a wind record's handler stack is, traced
 /// wherever it is reached, as the walk written by hand traced it.
 impl<T: Trace> Trace for Rc<[T]> {
+    fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
+        (**self).trace(visitor);
+    }
+}
+
+/// A structure an `Rc` holds whose trace runs wherever an `Rc` to it is
+/// reached, rather than going to the visitor to walk once: one traced from
+/// one place, as the VM traces each code object from its code store and its
+/// step tracer from its state. A structure many paths share goes to the
+/// visitor instead, which walks it once however it is reached: an
+/// environment, a continuation, code (`Rc<Environment>`, `Rc<CpsContinuation>`,
+/// `Rc<CpsExpr>`).
+///
+/// A marker, implemented by the structure's own crate, since no crate but
+/// this one may implement `Trace` for an `Rc`. A `RefCell` of one is one.
+pub trait TraceThroughRc: Trace {}
+
+impl<T: TraceThroughRc + ?Sized> TraceThroughRc for RefCell<T> {}
+
+impl<T: TraceThroughRc + ?Sized> Trace for Rc<T> {
     fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
         (**self).trace(visitor);
     }

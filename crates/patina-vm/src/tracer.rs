@@ -23,6 +23,7 @@ use crate::types::code_object::CodeObjectId;
 use crate::types::instruction::Instruction;
 use patina_core::heap::SharedHeap;
 use patina_core::tagged_value::TaggedValue;
+use patina_core::{Trace, TraceThroughRc};
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -258,53 +259,39 @@ impl TraceFilter {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// The main tracer. Records `TraceEvent`s and provides query/formatting methods.
+///
+/// Its trace (derived, #686) is the register snapshots it holds between the
+/// pre- and post-instruction hooks, its only values: `TraceEvent`s store
+/// pre-formatted `String`s. The snapshots are copies of registers, for
+/// display: pinned. `VmState` traces it through its `tracer`
+/// ([`TraceThroughRc`]); pinned by `every_vm_state_root_is_traced`.
+#[derive(Trace)]
 pub struct StepTracer {
     /// Recorded events.
+    #[trace(skip, reason = "pre-formatted strings")]
     pub events: Vec<TraceEvent>,
     /// Filter controlling what gets recorded.
+    #[trace(skip, reason = "code ids, register numbers and event kinds")]
     pub filter: TraceFilter,
     /// Also print events to stderr as they happen.
+    #[trace(skip, reason = "a flag")]
     pub print_live: bool,
     /// Current step counter.
+    #[trace(skip, reason = "a counter")]
     step: StepId,
     /// Register snapshot before the current instruction (for diffing).
     pre_regs: Vec<TaggedValue>,
     /// Full register array snapshot (for watchpoints).
     pre_all_regs: Vec<TaggedValue>,
     /// Code ID of the current instruction (for post-instruction).
+    #[trace(skip, reason = "a code id")]
     pre_code_id: CodeObjectId,
     /// PC of the current instruction.
+    #[trace(skip, reason = "an instruction index")]
     pre_pc: usize,
 }
 
-/// The register snapshots held between the pre- and post-instruction hooks
-/// are the tracer's only GC roots — `TraceEvent`s store pre-formatted
-/// `String`s, not `TaggedValue`s. Every field is named (#623); pinned by
-/// `every_vm_state_root_is_traced`, through `VmState::tracer`.
-impl patina_core::RootProvider for StepTracer {
-    /// Its snapshots are copies of registers, for display: pinned.
-    fn trace_roots(&self, visitor: &mut dyn patina_core::SlotVisitor) {
-        let StepTracer {
-            // Pre-formatted strings.
-            events: _,
-            // Code ids, register numbers and event kinds.
-            filter: _,
-            // A flag.
-            print_live: _,
-            // A counter.
-            step: _,
-            pre_regs,
-            pre_all_regs,
-            // A code id.
-            pre_code_id: _,
-            // An instruction index.
-            pre_pc: _,
-        } = self;
-        for &value in pre_regs.iter().chain(pre_all_regs) {
-            visitor.pinned(value);
-        }
-    }
-}
+impl TraceThroughRc for StepTracer {}
 
 impl StepTracer {
     /// A tracer between its hooks, holding these register snapshots, for

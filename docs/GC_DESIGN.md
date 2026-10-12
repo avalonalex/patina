@@ -529,12 +529,14 @@ a traced struct, or a root provider meets two rules:
    (`patina_core::Trace`, #686), which takes it apart by name and traces each
    field through its type's `Trace`: a field whose type has none does not
    compile, and a field is left out only by `#[trace(skip, reason = "…")]`,
-   whose reason says what it holds instead of a value. Both backends' wind,
-   prompt and handler records, `ContValue`, `CpsContinuation`, `CpsExpr`,
-   `Environment`, `Library`, `CompiledMacro` with its patterns and
-   templates, the handle table and the library registry derive it so far,
-   and #686 brings the machines' state. A trace still written by
-   hand takes the struct (or variant)
+   whose reason says what it holds instead of a value. Every structure a
+   root provider walks derives it (#686): both backends' wind, prompt and
+   handler records, `ContValue`, `CpsContinuation`, `CpsExpr`, `Environment`,
+   `Library`, `CompiledMacro` with its patterns and templates, the handle
+   table, the library registry, and the machines' state — `VmState` with its
+   execution state, frames, continuations, code objects and step tracer, and
+   the tree-walker's `Evaluator`, `StepResult` and `StepRoots`. A trace still
+   written by hand takes the struct (or variant)
    apart by name, with no `..` and no catch-all arm (`_` or a lone binding
    before `=>`, guarded or not). A field or positional payload that is
    deliberately not traced is written `field: _` or `Variant(_)` (or bound
@@ -543,11 +545,11 @@ a traced struct, or a root provider meets two rules:
    A new field is then error E0027 until someone decides.
    `scripts/check_gc_trace_names.py` enforces both in CI's Clippy job, over
    the functions it lists: `trace_object_children` and the marker's walks
-   (`visit_env`, `visit_promise`) in `heap/gc.rs`; every root provider —
-   `VmState` with
-   `ExecutionState` and the VM's frame, code and continuation traces,
-   the tree-walker's `Evaluator`, `StepRoots` and pending escape, the library
-   registry and the VM's step tracer. A new trace function joins that list,
+   (`visit_env`, `visit_promise`) in `heap/gc.rs`; the VM's weak
+   continuation tables (`trace_weak_ids`), until stage 4e; and each root
+   provider's `trace_roots`, a call to its derived trace — `VmState`'s, the
+   tree-walker's `Evaluator`'s and `StepRoots`', and the library
+   registry's. A new trace function joins that list,
    and an `impl RootProvider for` outside test code in a file the list does not
    name with `trace_roots` fails the script, so a new root provider cannot
    go unread.

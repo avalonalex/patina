@@ -9,6 +9,7 @@
 
 use patina_core::DynamicWindRecord;
 use patina_core::Environment;
+use patina_core::Trace;
 use patina_core::cps_expr::CpsExpr;
 use patina_core::tagged_value::TaggedValue;
 use std::cell::RefCell;
@@ -151,6 +152,11 @@ pub(super) use patina_core::cont_value::{ContEnv, ContValue, ExceptionHandler, P
 /// The CPS evaluator processes expressions one step at a time.
 /// Each step either produces a final value or indicates the
 /// next expression to evaluate.
+///
+/// Its trace (derived, #686) is the whole live machine state at a safe point,
+/// which the trampoline lends to each collection through `StepRoots`. Pinned
+/// by the sentinel test `every_step_result_field_is_traced`.
+#[derive(Trace)]
 pub(super) enum StepResult {
     /// Final value - evaluation is complete (as TaggedValue for efficient storage)
     Done(TaggedValue),
@@ -161,7 +167,8 @@ pub(super) enum StepResult {
         /// A continuation's parameter and the value delivered to it, which
         /// `eval_one_step` binds in a frame of its own, a child of `env`,
         /// before `expr` runs, as it binds a `LetVal` temporary; `env` stays
-        /// where a `define` binds (#680).
+        /// where a `define` binds (#680). Traced until then: the trampoline
+        /// polls between the invocation and the step that binds it.
         param: Option<(Rc<str>, TaggedValue)>,
         cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
@@ -197,6 +204,7 @@ pub(super) enum StepResult {
     /// expression is at hand (`StepRoots`): the primitive's call is
     /// suspended, and nothing of it is on the Rust stack.
     CollectAtCall {
+        #[trace(skip, reason = "which collection")]
         kind: patina_core::CollectKind,
         cont: ContValue,
         env: Rc<Environment>,

@@ -72,7 +72,11 @@ pub type DynamicWindRecord = patina_core::WindRecord<ExceptionHandler>;
 ///
 /// `CallFrame: Clone` is a hard requirement for this to work —
 /// see VM_DECISIONS.md §4 and VM_ISA.md §2.2.
-#[derive(Debug, Clone)]
+///
+/// Its trace (derived, #686): its registers and frames' closures are slots,
+/// as the live ones are, and its extents are pinned, as theirs are. The VM
+/// traces one only once marking has reached its ref object (`trace_weak_ids`).
+#[derive(Debug, Clone, Trace)]
 pub struct VmDelimitedContinuation {
     /// Cloned call-stack slice (prompt boundary → capture site, exclusive of
     /// the prompt frame itself).
@@ -90,6 +94,7 @@ pub struct VmDelimitedContinuation {
 
     /// The `register_base` of `frames[0]` at capture time.
     /// Used to compute the relocation offset when invoking the continuation.
+    #[trace(skip, reason = "a register index")]
     pub base_at_capture: usize,
 
     /// Register in the innermost captured frame where invoking this
@@ -105,6 +110,7 @@ pub struct VmDelimitedContinuation {
     /// its prompt, because an `abort-current-continuation` in tail position of
     /// the prompt body has already popped the body's frame. The continuation
     /// is then the identity and `(k v)` is `v`.
+    #[trace(skip, reason = "a register number")]
     pub deliver_reg: Option<Reg>,
 
     /// `ExecutionState::frames.len()` the captured slice started at — the prompt's
@@ -113,6 +119,7 @@ pub struct VmDelimitedContinuation {
     /// recorded in `prompt_stack` and `exception_handlers` below are relative
     /// to the stack at capture and have to be shifted by it, exactly as
     /// `base_at_capture` does for `CallFrame::register_base`.
+    #[trace(skip, reason = "a depth")]
     pub depth_at_capture: usize,
 
     /// `dynamic_winds.len()` and `exception_handlers.len()` the captured
@@ -122,8 +129,10 @@ pub struct VmDelimitedContinuation {
     /// `stack_depth` left the other two pointing at the invoke site's stacks:
     /// aborting to a carried prompt ran an enclosing `after` thunk early and
     /// uninstalled handlers that enclose the invoke.
+    #[trace(skip, reason = "a depth")]
     pub wind_depth_at_capture: usize,
     /// See [`Self::wind_depth_at_capture`].
+    #[trace(skip, reason = "a depth")]
     pub handler_depth_at_capture: usize,
 
     /// The prompts established *inside* the captured region — everything above
@@ -168,7 +177,9 @@ pub struct ExceptionHandler {
 /// A full (non-delimited) continuation captured by `call/cc`.
 ///
 /// Invoking it replaces the entire call stack (non-composable).
-#[derive(Debug, Clone)]
+///
+/// Its trace (derived, #686) is a delimited one's: slots and pinned extents.
+#[derive(Debug, Clone, Trace)]
 pub struct VmContinuation {
     /// Full cloned frame stack at capture time.
     pub frames: Vec<CallFrame>,
@@ -188,23 +199,27 @@ pub struct VmContinuation {
     /// Register in the top frame where the delivered value should be written
     /// when the continuation is invoked. This is the `dst` register from the
     /// `Call call/cc` instruction that captured the continuation.
+    #[trace(skip, reason = "a register number")]
     pub deliver_reg: Reg,
 
     /// `Some` for the target an `exit` travels to: arriving at it ends the
     /// process with this status instead of restoring a machine, since there is
     /// none to restore — every frame, extent, prompt and handler is empty.
+    #[trace(skip, reason = "an exit status")]
     pub exit_status: Option<i32>,
 
     /// `true` for the landing an abort travels to when it has an extent to
     /// leave (`abort_to_prompt`). Every step of that travel is a transfer,
     /// not only the first, and `ResumeWindJump` reads this to park each one as
     /// such (`VmState::pending_transfer`, #342).
+    #[trace(skip, reason = "a flag")]
     pub abort_landing: bool,
 
     /// The re-entry boundaries the machine was inside when this was captured,
     /// outermost first (`VmState::reentry`). A jump to it from inside
     /// boundaries it does not share leaves them — their Rust primitives are
     /// abandoned — whatever the frame depths say; see `step_wind_jump`.
+    #[trace(skip, reason = "re-entry boundary ids")]
     pub reentry: Rc<[u64]>,
 }
 
