@@ -116,7 +116,7 @@ impl<'a> CpsEvaluator<'a> {
         let collected = GcController::safe_point(
             &evaluator.gc,
             evaluator.global_env.heap(),
-            &evaluator.gc_pending,
+            &evaluator.mutator,
             is_outermost,
             |collect| {
                 // The machine's own state, lent to the collection; the library
@@ -145,7 +145,7 @@ impl<'a> CpsEvaluator<'a> {
     pub(crate) fn collect_if_pending(&self) {
         let evaluator = self.evaluator;
         let heap = evaluator.global_env.heap();
-        if !evaluator.gc_pending.get() || heap.borrow().gc_defer_depth() != 0 {
+        if !evaluator.mutator.gc_posted() || heap.borrow().gc_defer_depth() != 0 {
             return;
         }
         NoGcScopes::of(heap).assert_none_open();
@@ -155,7 +155,7 @@ impl<'a> CpsEvaluator<'a> {
         let collected = GcController::safe_point(
             &evaluator.gc,
             heap,
-            &evaluator.gc_pending,
+            &evaluator.mutator,
             gc_defer.is_outermost(),
             |collect| collect(&[evaluator]),
         );

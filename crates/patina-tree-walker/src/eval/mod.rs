@@ -84,11 +84,11 @@ pub struct Evaluator {
     /// differential test lanes.
     #[trace(skip, reason = "the collector's policy and statistics")]
     pub(crate) gc: RefCell<patina_core::GcController>,
-    /// The heap's collection-pending flag, cached at construction so
-    /// trampoline entry costs no heap borrow and the per-step safe point is
-    /// a single load.
-    #[trace(skip, reason = "a flag")]
-    pub(crate) gc_pending: Rc<std::cell::Cell<bool>>,
+    /// The heap's carrier (`Heap::mutator`, #699), cached at construction
+    /// so trampoline entry costs no heap borrow and the per-step safe point
+    /// is a single load of its poll word.
+    #[trace(skip, reason = "the carrier's event words: no value")]
+    pub(crate) mutator: Rc<patina_core::Mutator>,
     /// Why `(scheme base)` could not be loaded at construction, if it could
     /// not: see [`Evaluator::bootstrap_error`].
     #[trace(skip, reason = "an error report: strings and library names")]
@@ -150,7 +150,7 @@ impl Evaluator {
             .heap()
             .borrow_mut()
             .set_gc_threshold(gc.current_threshold());
-        let gc_pending = global_env.heap().borrow().gc_pending_handle();
+        let mutator = Rc::clone(global_env.heap().borrow().mutator());
 
         let mut evaluator = Evaluator {
             global_env,
@@ -162,7 +162,7 @@ impl Evaluator {
             primitive_registry,
             fs,
             gc: RefCell::new(gc),
-            gc_pending,
+            mutator,
             bootstrap_error: None,
         };
 

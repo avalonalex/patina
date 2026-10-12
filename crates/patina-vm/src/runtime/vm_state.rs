@@ -27,7 +27,8 @@ use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{
-    AssertNoGc, CollectKind, GC_CHECK, GcController, GcDeferGuard, GcMode, NoGcScopes, Trace,
+    AssertNoGc, CollectKind, GC_CHECK, GcController, GcDeferGuard, GcMode, Mutator, NoGcScopes,
+    Trace,
 };
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::HasDiagnostic;
@@ -286,11 +287,11 @@ pub struct VmState {
     /// `&VmState` as a root while mutating the collector.
     #[trace(skip, reason = "the collector's policy and statistics")]
     gc: RefCell<GcController>,
-    /// The heap's collection-pending flag, cached at construction so
+    /// The heap's carrier (`Heap::mutator`, #699), cached at construction so
     /// dispatch-loop entry costs no heap borrow and the per-instruction safe
-    /// point is a single load.
-    #[trace(skip, reason = "a flag")]
-    gc_pending: Rc<Cell<bool>>,
+    /// point is a single load of its poll word.
+    #[trace(skip, reason = "the carrier's event words: no value")]
+    mutator: Rc<Mutator>,
 }
 
 impl VmState {
@@ -314,7 +315,7 @@ impl VmState {
         let gc = GcController::new(mode);
         GcController::note_backend("vm");
         heap.borrow_mut().set_gc_threshold(gc.current_threshold());
-        let gc_pending = heap.borrow().gc_pending_handle();
+        let mutator = Rc::clone(heap.borrow().mutator());
         heap.borrow_mut().enable_gc_freed_closure_tracking();
         let parameter_set = registry.resolve_index("scheme.base/%parameter-set!");
         Self {
@@ -362,7 +363,7 @@ impl VmState {
             loader_registry: None,
             fs: Arc::new(patina_core::NativeFs),
             gc: RefCell::new(gc),
-            gc_pending,
+            mutator,
         }
     }
 
@@ -1526,7 +1527,7 @@ pub(super) fn run_loop_until_outcome(
 /// `GcController::safe_point`; this supplies only what is VM-specific.
 #[inline]
 fn maybe_collect(state: &mut VmState, is_outermost: bool) -> bool {
-    if !state.gc_pending.get() || !is_outermost {
+    if !state.mutator.poll_due() || !is_outermost {
         return false;
     }
     patina_core::census::stack_shape(
@@ -1539,7 +1540,7 @@ fn maybe_collect(state: &mut VmState, is_outermost: bool) -> bool {
     GcController::safe_point(
         &state.gc,
         &state.heap,
-        &state.gc_pending,
+        &state.mutator,
         is_outermost,
         |collect| collect(&[state]),
     )
@@ -1552,7 +1553,7 @@ fn maybe_collect(state: &mut VmState, is_outermost: bool) -> bool {
 /// where nothing defers, with no loop running and no holder's guard alive,
 /// and does nothing anywhere else.
 pub(crate) fn collect_if_pending(state: &mut VmState) {
-    if !state.gc_pending.get() || state.heap.borrow().gc_defer_depth() != 0 {
+    if !state.mutator.gc_posted() || state.heap.borrow().gc_defer_depth() != 0 {
         return;
     }
     NoGcScopes::of(&state.heap).assert_none_open();

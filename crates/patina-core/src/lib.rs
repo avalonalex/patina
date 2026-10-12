@@ -110,7 +110,9 @@ pub use heap::gc::{
 };
 pub use heap::{
     GC_CHECK, Heap, SharedHeap, SpineEnd,
+    attrs::{AllocAttrs, BarrierKind, GcAttrs, PollKind, Publication, WatermarkKind},
     handles::{Owned, OwnedEnvironment},
+    mutator::{Mutator, event},
     new_shared_heap,
     table::HeapTable,
     trace::{Trace, TraceThroughRc},

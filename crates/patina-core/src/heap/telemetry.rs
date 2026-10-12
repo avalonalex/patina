@@ -442,7 +442,7 @@ impl super::Heap {
         let counts = &self.account.shared;
         counts.open_window.set(Some(site));
         // A collection already pending waits on this window now.
-        if counts.pending.get() && counts.wait_site.get().is_none() {
+        if counts.mutator.gc_posted() && counts.wait_site.get().is_none() {
             counts.wait_site.set(Some(site));
         }
     }

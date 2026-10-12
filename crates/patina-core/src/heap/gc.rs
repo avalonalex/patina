@@ -20,12 +20,13 @@
 //! Collection never happens on its own: a backend drives it by calling
 //! [`GcController::safe_point`] at a point where every live value is
 //! reachable from the roots it supplies. Whether that collects is decided
-//! *ahead of time*, where the answer changes: `Heap::note_alloc` raises a
-//! shared pending flag when allocation crosses the [`GcMode`]-derived
-//! threshold — in bytes for the adaptive default, in allocations for stress,
-//! never for `Off` (`heap/account.rs`, #606) — `Heap::request_gc` raises it
-//! for a request posted from elsewhere, and the safe point itself is a single
-//! flag load (design §6.1).
+//! *ahead of time*, where the answer changes: `Heap::note_alloc` posts a
+//! collection to the heap's carrier, the `Mutator` (`heap/mutator.rs`, #699),
+//! when allocation crosses the [`GcMode`]-derived threshold — in bytes for
+//! the adaptive default, in allocations for stress, never for `Off`
+//! (`heap/account.rs`, #606) — `Heap::request_gc` posts one for a request
+//! from elsewhere, and the safe point itself is a single load of the
+//! carrier's poll word (design §6.1).
 //!
 //! The other way a collection starts is a primitive asking for one at its
 //! call (`(gc)`, through `patina_primitives::Step::Collect`, #639): the
@@ -62,6 +63,7 @@ use super::account::{
 };
 use super::check::SlotChecks;
 use super::handles::HandleTable;
+use super::mutator::Mutator;
 pub use super::root_set::{RootSet, RootToken};
 use super::telemetry::{CollectReason, CollectionRecord, PhaseTimes};
 use super::trace::Trace;
@@ -540,7 +542,7 @@ impl Drop for AssertNoGc {
 }
 
 /// The poll-site half of [`AssertNoGc`]: the heap's count of open scopes,
-/// taken once at loop entry like the pending flag, so a poll's check is one
+/// taken once at loop entry like the carrier, so a poll's check is one
 /// load and one compare in a check build and nothing in a plain release.
 pub struct NoGcScopes {
     open: Option<Rc<Cell<u32>>>,
@@ -828,32 +830,32 @@ impl GcController {
     /// pending flag stays raised across either, so the next safe point
     /// retries.
     ///
-    /// `pending` (the handle from `Heap::gc_pending_handle`) and
-    /// `is_outermost` are loop invariants the caller hoists out of its
-    /// dispatch loop; the fast path is one load and one branch — no `RefCell`
+    /// `mutator` (the heap's carrier, `Heap::mutator`) and `is_outermost`
+    /// are loop invariants the caller hoists out of its dispatch loop; the
+    /// fast path is one load of the poll word and one branch — no `RefCell`
     /// borrow, no mode dispatch. The collection *decision* was already made
-    /// where it becomes true, in `Heap::note_alloc` / `Heap::request_gc`
-    /// (design §6.1).
+    /// where it becomes true, in `Heap::note_alloc` / `Heap::request_gc`,
+    /// which post it to the carrier (design §6.1, #699).
     ///
     /// Returns whether a collection ran, for a backend with work to do after
-    /// one (the VM's code release, #338). It cannot tell from the pending
-    /// flag: under [`GcMode::Zeal`] the flag is raised again before the
+    /// one (the VM's code release, #338). It cannot tell from the carrier:
+    /// under [`GcMode::Zeal`] a collection is posted again before the
     /// collection returns.
     #[inline]
     pub fn safe_point(
         gc: &RefCell<Self>,
         heap: &SharedHeap,
-        pending: &Cell<bool>,
+        mutator: &Mutator,
         is_outermost: bool,
         with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn RootProvider])),
     ) -> bool {
         // A nested loop never collects — its caller holds live values in Rust
-        // locals no root provider can see. Its flag check would be dead code,
-        // but `is_outermost` is a hoisted constant, so the branch predicts.
-        if !is_outermost || !pending.get() {
+        // locals no root provider can see. Its poll would be dead code, but
+        // `is_outermost` is a hoisted constant, so the branch predicts.
+        if !is_outermost || !mutator.poll_due() {
             return false;
         }
-        Self::safe_point_cold(gc, heap, with_roots)
+        Self::safe_point_cold(gc, heap, mutator, with_roots)
     }
 
     /// The rare branch, out of line so only the fast path inlines into the
@@ -862,8 +864,14 @@ impl GcController {
     fn safe_point_cold(
         gc: &RefCell<Self>,
         heap: &SharedHeap,
+        mutator: &Mutator,
         with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn RootProvider])),
     ) -> bool {
+        // The poll is due for a collection: the only event posted today
+        // (#699). An interrupt (#701) will be serviced beside it.
+        if !mutator.gc_posted() {
+            return false;
+        }
         // A test's switch, absent from a build without `test-support`
         // (`Heap::set_skip_safe_points`, #639).
         #[cfg(feature = "test-support")]
@@ -1757,7 +1765,7 @@ impl Heap {
         // specifier's namespace, say — are not live.
         account.live = live.saturating_add(account.shared.external.get());
         self.allocs_since_gc = 0;
-        self.gc_pending.set(false);
+        self.mutator.collected();
         self.gc_collections += 1;
         self.gc_last_swept = swept.total();
         swept
@@ -2748,7 +2756,7 @@ mod tests {
     #[test]
     fn the_adaptive_trigger_counts_bytes() {
         let mut heap = Heap::new();
-        let pending = heap.gc_pending_handle();
+        let mutator = Rc::clone(heap.mutator());
         let controller = GcController::new(GcMode::On);
         heap.set_gc_threshold(controller.current_threshold());
 
@@ -2757,15 +2765,15 @@ mod tests {
         for i in 0..5000 {
             heap.alloc_pair(TaggedValue::fixnum(i), TaggedValue::NULL);
         }
-        assert!(!pending.get());
+        assert!(!mutator.gc_posted());
         // Ten 100,000-element vectors are 8 MB of elements: the eleventh
         // crosses the floor.
         for _ in 0..10 {
             heap.alloc_vector_fill(100_000, TaggedValue::fixnum(0));
         }
-        assert!(!pending.get(), "{} bytes", heap.bytes_since_gc());
+        assert!(!mutator.gc_posted(), "{} bytes", heap.bytes_since_gc());
         heap.alloc_vector_fill(100_000, TaggedValue::fixnum(0));
-        assert!(pending.get(), "{} bytes", heap.bytes_since_gc());
+        assert!(mutator.gc_posted(), "{} bytes", heap.bytes_since_gc());
     }
 
     /// Stress counts allocations, whatever their size, so its lanes' pinned
@@ -2773,15 +2781,15 @@ mod tests {
     #[test]
     fn stress_counts_allocations_not_bytes() {
         let mut heap = Heap::new();
-        let pending = heap.gc_pending_handle();
+        let mutator = Rc::clone(heap.mutator());
         let controller = GcController::new(GcMode::Stress(3));
         heap.set_gc_threshold(controller.current_threshold());
 
         heap.alloc_vector_fill(2_000_000, TaggedValue::fixnum(0));
         heap.alloc_pair(TaggedValue::NULL, TaggedValue::NULL);
-        assert!(!pending.get(), "16 MB in two allocations");
+        assert!(!mutator.gc_posted(), "16 MB in two allocations");
         heap.alloc_pair(TaggedValue::NULL, TaggedValue::NULL);
-        assert!(pending.get(), "the third allocation");
+        assert!(mutator.gc_posted(), "the third allocation");
     }
 
     /// L counts the payloads of the VM continuations a collection proves
@@ -2860,10 +2868,10 @@ mod tests {
     #[test]
     fn external_bytes_count_toward_the_trigger_and_l() {
         let mut heap = Heap::new();
-        let pending = heap.gc_pending_handle();
+        let mutator = Rc::clone(heap.mutator());
         heap.set_gc_threshold(GcThreshold::bytes(1 << 20));
         heap.charge_external_bytes(1 << 20);
-        assert!(pending.get());
+        assert!(mutator.gc_posted());
         assert_eq!(heap.external_bytes(), 1 << 20);
         assert_eq!(heap.bytes_allocated(), 1 << 20);
 
@@ -2885,7 +2893,7 @@ mod tests {
         heap.charge_external_bytes(usize::MAX);
         assert_eq!(heap.bytes_since_gc(), usize::MAX);
         assert_eq!(heap.external_bytes(), usize::MAX);
-        assert!(pending.get());
+        assert!(mutator.gc_posted());
         collector.collect(&mut heap, &[&TestRoots::default()]);
         assert_eq!(heap.bytes_allocated(), u64::MAX);
         assert_eq!(heap.live_bytes(), usize::MAX);
@@ -2939,16 +2947,16 @@ mod tests {
     fn an_external_charge_through_the_handle_raises_the_pending_flag() {
         let shared: SharedHeap = Rc::new(RefCell::new(Heap::new()));
         let handle = shared.borrow().external_bytes_handle();
-        let pending = shared.borrow().gc_pending_handle();
+        let mutator = Rc::clone(shared.borrow().mutator());
         shared
             .borrow_mut()
             .set_gc_threshold(GcThreshold::bytes(1 << 20));
         // What a definition under a heap borrow sees.
         let borrowed = shared.borrow_mut();
         handle.charge((1 << 20) - 1);
-        assert!(!pending.get());
+        assert!(!mutator.gc_posted());
         handle.charge(1);
-        assert!(pending.get());
+        assert!(mutator.gc_posted());
         assert_eq!(handle.held(), 1 << 20);
         drop(borrowed);
         assert_eq!(shared.borrow().bytes_since_gc(), 1 << 20);
@@ -3053,7 +3061,7 @@ mod tests {
         let fs = crate::vfs::MemoryFs::new();
         fs.add_text_file("/f", "hello");
         let mut heap = Heap::new();
-        let pending = heap.gc_pending_handle();
+        let mutator = Rc::clone(heap.mutator());
         heap.set_gc_threshold(GcThreshold::NEVER.with_descriptors(3));
         let open = |heap: &mut Heap| heap.alloc_port(Port::open_input_file("/f", &fs).unwrap());
         let held = |heap: &Heap| (heap.descriptors_since_gc(), heap.external_bytes());
@@ -3075,9 +3083,9 @@ mod tests {
         assert_eq!(held(&heap), (1, FILE_PORT_BYTES));
 
         open(&mut heap);
-        assert!(!pending.get());
+        assert!(!mutator.gc_posted());
         open(&mut heap);
-        assert!(pending.get(), "three open: a collection is posted");
+        assert!(mutator.gc_posted(), "three open: a collection is posted");
         assert_eq!(heap.descriptor_collections(), 1);
         open(&mut heap);
         assert_eq!(heap.descriptor_collections(), 1, "one is pending already");
@@ -3088,7 +3096,7 @@ mod tests {
             ..TestRoots::default()
         };
         collect(&mut heap, &roots);
-        assert!(!pending.get());
+        assert!(!mutator.gc_posted());
         assert_eq!(
             held(&heap),
             (0, FILE_PORT_BYTES),
@@ -3124,20 +3132,20 @@ mod tests {
     #[test]
     fn alloc_crossing_threshold_raises_pending_flag() {
         let mut heap = Heap::new();
-        let pending = heap.gc_pending_handle();
+        let mutator = Rc::clone(heap.mutator());
         heap.set_gc_threshold(GcThreshold::allocations(3));
 
         heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
         heap.alloc_pair(TaggedValue::fixnum(2), TaggedValue::NULL);
-        assert!(!pending.get());
+        assert!(!mutator.gc_posted());
 
         heap.alloc_pair(TaggedValue::fixnum(3), TaggedValue::NULL);
-        assert!(pending.get());
+        assert!(mutator.gc_posted());
 
         // Sweep is the "collection happened" boundary: it lowers the flag
         // along with the counter.
         collect(&mut heap, &TestRoots::default());
-        assert!(!pending.get());
+        assert!(!mutator.gc_posted());
         assert_eq!(heap.allocs_since_gc(), 0);
     }
 
@@ -3146,35 +3154,35 @@ mod tests {
         // A bare heap's threshold is the inert usize::MAX, so only `(gc)`
         // can raise the flag.
         let mut heap = Heap::new();
-        let pending = heap.gc_pending_handle();
+        let mutator = Rc::clone(heap.mutator());
 
         heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
-        assert!(!pending.get());
+        assert!(!mutator.gc_posted());
 
         heap.request_gc();
-        assert!(pending.get());
+        assert!(mutator.gc_posted());
 
         collect(&mut heap, &TestRoots::default());
-        assert!(!pending.get());
+        assert!(!mutator.gc_posted());
     }
 
     #[test]
     fn lowering_threshold_below_counter_raises_flag_immediately() {
         let mut heap = Heap::new();
-        let pending = heap.gc_pending_handle();
+        let mutator = Rc::clone(heap.mutator());
         for i in 0..5 {
             heap.alloc_pair(TaggedValue::fixnum(i), TaggedValue::NULL);
         }
-        assert!(!pending.get());
+        assert!(!mutator.gc_posted());
 
         heap.set_gc_threshold(GcThreshold::allocations(4));
-        assert!(pending.get());
+        assert!(mutator.gc_posted());
     }
 
     #[test]
     fn controller_collect_rearms_adaptive_threshold() {
         let mut heap = Heap::new();
-        let pending = heap.gc_pending_handle();
+        let mutator = Rc::clone(heap.mutator());
         // Simulate GcMode::On with a tiny floor so the adaptive `2·L` term
         // dominates.
         let mut controller = GcController {
@@ -3191,7 +3199,7 @@ mod tests {
             ..Default::default()
         };
         controller.collect(&mut heap, &[&roots], false);
-        assert!(!pending.get());
+        assert!(!mutator.gc_posted());
 
         // L is two pairs, so the re-armed threshold is max(1, 2·L), four
         // pairs' worth: three allocations stay quiet, the fourth raises the
@@ -3199,15 +3207,15 @@ mod tests {
         for i in 0..3 {
             heap.alloc_pair(TaggedValue::fixnum(i), TaggedValue::NULL);
         }
-        assert!(!pending.get());
+        assert!(!mutator.gc_posted());
         heap.alloc_pair(TaggedValue::fixnum(9), TaggedValue::NULL);
-        assert!(pending.get());
+        assert!(mutator.gc_posted());
     }
 
     #[test]
     fn safe_point_collects_only_when_outermost_and_pending() {
         let shared = crate::heap::new_shared_heap();
-        let pending = shared.borrow().gc_pending_handle();
+        let mutator = Rc::clone(shared.borrow().mutator());
         let gc = RefCell::new(GcController::from_env());
         let no_roots = TestRoots::default();
         // A safe point runs inside its loop's own guard, and a collection
@@ -3219,7 +3227,7 @@ mod tests {
             .alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
 
         // Flag down: nothing happens.
-        let collected = GcController::safe_point(&gc, &shared, &pending, true, |collect| {
+        let collected = GcController::safe_point(&gc, &shared, &mutator, true, |collect| {
             collect(&[&no_roots]);
         });
         assert!(!collected);
@@ -3227,26 +3235,26 @@ mod tests {
 
         // Flag up but nested: deferred, flag stays up for the outer loop.
         shared.borrow_mut().request_gc();
-        let collected = GcController::safe_point(&gc, &shared, &pending, false, |collect| {
+        let collected = GcController::safe_point(&gc, &shared, &mutator, false, |collect| {
             collect(&[&no_roots]);
         });
         assert!(!collected);
         assert_eq!(shared.borrow().gc_collections(), 0);
-        assert!(pending.get());
+        assert!(mutator.gc_posted());
 
         // Flag up, outermost, but the backend cannot supply its roots: no
         // collection, and the flag stays up for the next safe point.
-        let collected = GcController::safe_point(&gc, &shared, &pending, true, |_collect| {});
+        let collected = GcController::safe_point(&gc, &shared, &mutator, true, |_collect| {});
         assert!(!collected);
-        assert!(pending.get());
+        assert!(mutator.gc_posted());
 
         // Flag up and outermost: collects and lowers the flag.
-        let collected = GcController::safe_point(&gc, &shared, &pending, true, |collect| {
+        let collected = GcController::safe_point(&gc, &shared, &mutator, true, |collect| {
             collect(&[&no_roots]);
         });
         assert!(collected);
         assert_eq!(shared.borrow().gc_collections(), 1);
-        assert!(!pending.get());
+        assert!(!mutator.gc_posted());
     }
 
     /// A collection waits while a registered provider cannot report its
@@ -3262,20 +3270,20 @@ mod tests {
             }
         }
         let shared = crate::heap::new_shared_heap();
-        let pending = shared.borrow().gc_pending_handle();
+        let mutator = Rc::clone(shared.borrow().mutator());
         let gc = RefCell::new(GcController::from_env());
         let ready = Rc::new(Cell::new(false));
         let _token = (shared.borrow().root_set()).register(Box::new(Waiting(Rc::clone(&ready))));
         let _loop_guard = GcDeferGuard::new(&shared);
         let safe_point =
-            || GcController::safe_point(&gc, &shared, &pending, true, |collect| collect(&[]));
+            || GcController::safe_point(&gc, &shared, &mutator, true, |collect| collect(&[]));
         let at_call = || {
             GcController::collect_at_call(&gc, &shared, CollectKind::Major, |collect| collect(&[]))
         };
 
         shared.borrow_mut().request_gc();
         assert!(!safe_point());
-        assert!(pending.get());
+        assert!(mutator.gc_posted());
         assert!(!at_call());
         assert_eq!(shared.borrow().gc_collections(), 0);
         assert_eq!(shared.borrow().gc_deferred_collections(), 1);
@@ -3293,7 +3301,7 @@ mod tests {
     #[test]
     fn zeal_collects_at_every_outermost_safe_point() {
         let shared = crate::heap::new_shared_heap();
-        let pending = shared.borrow().gc_pending_handle();
+        let mutator = Rc::clone(shared.borrow().mutator());
         let gc = RefCell::new(GcController {
             mode: GcMode::Zeal,
             collector: MarkSweepCollector::new(),
@@ -3303,18 +3311,21 @@ mod tests {
 
         let threshold = gc.borrow().current_threshold();
         shared.borrow_mut().set_gc_threshold(threshold);
-        assert!(pending.get(), "installing zeal's threshold raises the flag");
+        assert!(
+            mutator.gc_posted(),
+            "installing zeal's threshold raises the flag"
+        );
 
         for n in 1..=3 {
-            let collected = GcController::safe_point(&gc, &shared, &pending, true, |collect| {
+            let collected = GcController::safe_point(&gc, &shared, &mutator, true, |collect| {
                 collect(&[&no_roots]);
             });
             assert!(collected);
             assert_eq!(shared.borrow().gc_collections(), n);
-            assert!(pending.get(), "raised again by the collection itself");
+            assert!(mutator.gc_posted(), "raised again by the collection itself");
         }
         // Nested loops still never collect.
-        let collected = GcController::safe_point(&gc, &shared, &pending, false, |collect| {
+        let collected = GcController::safe_point(&gc, &shared, &mutator, false, |collect| {
             collect(&[&no_roots]);
         });
         assert!(!collected);
@@ -3329,7 +3340,7 @@ mod tests {
     #[test]
     fn collect_at_call_collects_only_under_the_loops_own_guard() {
         let shared = crate::heap::new_shared_heap();
-        let pending = shared.borrow().gc_pending_handle();
+        let mutator = Rc::clone(shared.borrow().mutator());
         // `PATINA_GC=0`'s mode: no automatic trigger, and still a collection.
         let gc = RefCell::new(GcController::new(GcMode::Off));
         let no_roots = TestRoots::default();
@@ -3346,7 +3357,7 @@ mod tests {
             (
                 h.gc_collections(),
                 h.gc_deferred_collections(),
-                pending.get(),
+                mutator.gc_posted(),
             )
         };
         let loop_guard = GcDeferGuard::new(&shared);
@@ -3372,7 +3383,7 @@ mod tests {
         assert_eq!(counts(), (1, 3, true));
 
         // What was posted collects at the outermost loop's next safe point.
-        let collected = GcController::safe_point(&gc, &shared, &pending, true, |collect| {
+        let collected = GcController::safe_point(&gc, &shared, &mutator, true, |collect| {
             collect(&[&no_roots]);
         });
         assert!(collected);
@@ -3399,18 +3410,18 @@ mod tests {
     #[test]
     fn skipping_safe_points_leaves_the_collections_at_calls() {
         let shared = crate::heap::new_shared_heap();
-        let pending = shared.borrow().gc_pending_handle();
+        let mutator = Rc::clone(shared.borrow().mutator());
         let gc = RefCell::new(GcController::new(GcMode::Off));
         let no_roots = TestRoots::default();
         let _loop_guard = GcDeferGuard::new(&shared);
         shared.borrow_mut().set_skip_safe_points(true);
 
         shared.borrow_mut().request_gc();
-        let collected = GcController::safe_point(&gc, &shared, &pending, true, |collect| {
+        let collected = GcController::safe_point(&gc, &shared, &mutator, true, |collect| {
             collect(&[&no_roots]);
         });
         assert!(!collected);
-        assert!(pending.get());
+        assert!(mutator.gc_posted());
         assert!(GcController::collect_at_call(
             &gc,
             &shared,
@@ -3535,13 +3546,13 @@ mod tests {
         /// Raise a `(gc)` request and run a safe point that would collect,
         /// as the loop holding `loop_guard` would.
         fn safe_point_that_collects(shared: &SharedHeap, loop_guard: &GcDeferGuard) {
-            let pending = shared.borrow().gc_pending_handle();
+            let mutator = Rc::clone(shared.borrow().mutator());
             let gc = RefCell::new(GcController::from_env());
             shared.borrow_mut().request_gc();
             GcController::safe_point(
                 &gc,
                 shared,
-                &pending,
+                &mutator,
                 loop_guard.is_outermost(),
                 |collect| {
                     collect(&[&TestRoots::default()]);
