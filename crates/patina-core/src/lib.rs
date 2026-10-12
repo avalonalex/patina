@@ -65,6 +65,7 @@ pub mod scope_trace;
 pub mod source_document;
 pub mod source_map;
 pub mod tagged_value;
+pub mod thread;
 pub mod vfs;
 pub mod walk;
 
@@ -118,6 +119,7 @@ pub use heap::{
 // brings both, as serde's `Serialize` does.
 pub use patina_trace_derive::Trace;
 pub use tagged_value::TaggedValue;
+pub use thread::ThreadId;
 pub use vfs::{FileSystem, MemoryFs, NativeFs, OverlayFs};
 
 #[cfg(test)]

@@ -513,7 +513,11 @@ impl Evaluator {
         }
 
         // Check for circular dependencies, ended on every way out (#436).
-        let loading = LibraryRegistry::begin_loading_scoped(&self.library_registry, name)?;
+        let loading = LibraryRegistry::begin_loading_scoped(
+            &self.library_registry,
+            name,
+            patina_core::ThreadId::PRIMORDIAL,
+        )?;
 
         // Get search paths (copy to avoid borrow conflicts)
         let search_paths = {
@@ -669,7 +673,11 @@ impl Evaluator {
             &can_load_library,
         )?;
 
-        let loading = LibraryRegistry::begin_loading_scoped(&self.library_registry, &parsed.name)?;
+        let loading = LibraryRegistry::begin_loading_scoped(
+            &self.library_registry,
+            &parsed.name,
+            patina_core::ThreadId::PRIMORDIAL,
+        )?;
         let cps = cps_eval::CpsEvaluator::new(self);
         let result = self.evaluate_parsed_library(
             parsed,

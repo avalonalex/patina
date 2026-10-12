@@ -873,7 +873,11 @@ pub(super) fn vm_load_library(
     // failure left on the stack reads as a circular dependency to the next
     // import of the same library, which a program can make after catching the
     // first failure — `eval` of an `import` inside a `guard`, or `environment`.
-    let loading = LibraryRegistry::begin_loading_scoped(&library_registry, name)?;
+    let loading = LibraryRegistry::begin_loading_scoped(
+        &library_registry,
+        name,
+        patina_core::ThreadId::PRIMORDIAL,
+    )?;
 
     let search_paths: Vec<std::path::PathBuf> = library_registry.borrow().search_paths().to_vec();
     let heap = state.globals.heap().clone();
