@@ -3,6 +3,8 @@
 //! claims cannot be made with one.
 
 #![cfg(unix)]
+// Unsafe code only in `open_pty`, the one call into libc (#698).
+#![deny(unsafe_code)]
 
 mod common;
 
@@ -16,6 +18,7 @@ use std::time::{Duration, Instant};
 
 /// A pseudo-terminal: the side a test types into and reads the screen from,
 /// and the terminal a child is given.
+#[allow(unsafe_code)]
 fn open_pty() -> (File, OwnedFd) {
     let (mut controller, mut terminal) = (0, 0);
     // SAFETY: openpty writes two descriptors into the given integers; the

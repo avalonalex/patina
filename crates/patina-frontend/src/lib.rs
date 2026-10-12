@@ -13,6 +13,9 @@
 //! ```text
 //! Source → Lexer → Tokens → Parser → TaggedValue → Macro Expander → TaggedValue → Desugarer → CoreExpr
 //! ```
+// No unsafe code here: unsafe heap access is confined to `patina-core`, `patina-vm` and
+// `patina-tree-walker` (`PRD/GC_PRD.md` §11.3, #698).
+#![forbid(unsafe_code)]
 
 pub mod cond_expand;
 pub mod desugarer;

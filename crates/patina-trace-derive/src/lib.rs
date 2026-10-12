@@ -19,6 +19,9 @@
 //! under `walk::ensure_sufficient_stack_if(Self::method(self), ...)`, as every
 //! walk of code does (#617), for a tree that recurses into itself by value,
 //! a macro's pattern or template.
+// No unsafe code here (#698). The code the derive generates has none either; it compiles in
+// the deriving crate, under that crate's own lint.
+#![forbid(unsafe_code)]
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};

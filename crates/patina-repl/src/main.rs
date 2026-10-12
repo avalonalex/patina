@@ -1,3 +1,7 @@
+// Unsafe code only where it is allowed below: the two `set_var` calls, each with its reason
+// (`PRD/GC_PRD.md` §11.3, #698).
+#![deny(unsafe_code)]
+
 use patina_core::TaggedValue;
 use patina_interpreter::{
     Backend, HasSourceLocation, Interpreter, ProgramOutcome, TreeWalkInterpreter,
@@ -87,12 +91,15 @@ fn parse_args(args: &[String]) -> CliOptions {
             // Set before constructing either backend: bootstrap itself must
             // not resolve through a user's environment or project directory.
             // SAFETY: argument parsing runs before any threads are started.
+            #[allow(unsafe_code)]
             "--isolated-libraries" => unsafe {
                 std::env::set_var("PATINA_ISOLATED_LIBRARIES", "1")
             },
             // Sets the variable the frontend reads, rather than threading a
             // flag down to every Lexer construction site. The variable stays
             // the interface; this is the discoverable spelling of it.
+            // SAFETY: argument parsing runs before any threads are started.
+            #[allow(unsafe_code)]
             "--allow-r6rs" => unsafe { std::env::set_var("PATINA_ALLOW_R6RS", "1") },
             "--dump" | "--vm-dump" => opts.dump = true,
             "--trace" | "--vm-trace" => opts.trace = true,
