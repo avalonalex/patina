@@ -10,8 +10,9 @@ written `field: _` or `Variant(_)`, and its reason belongs beside it.
 A structure that derives `Trace` (`patina_core::Trace`, #686) is not listed:
 the derive takes it apart the same way, and a field it leaves out carries its
 reason in `#[trace(skip, reason = "…")]`. What is listed is still written by
-hand: the structures the derive has not reached yet (`PRD/GC_PRD.md` §14),
-and the heap kinds' traces until `declare_layouts!` (stage 5a).
+hand: the heap kinds' traces until `declare_layouts!` (stage 5a), the
+marker's walks, the VM's weak continuation tables until stage 4e, and each
+root provider's `trace_roots`, a call to its derived trace.
 
 For each function in TRACE_FUNCTIONS this fails on:
 - a rest pattern, `..` closing a struct, tuple or slice pattern
@@ -57,22 +58,14 @@ TRACE_FUNCTIONS = {
         "trace_object_children",
         "run_mark_phase",
     ],
+    # The VM's weak continuation tables, until stage 4e deletes them.
     "crates/patina-vm/src/runtime/vm_state/gc_roots.rs": [
         "trace_roots",
         "trace_weak_ids",
-        "trace_code",
-        "trace_frames",
-        "trace_continuation",
-        "trace_delimited_continuation",
     ],
-    "crates/patina-vm/src/runtime/execution_state.rs": ["trace_roots"],
-    "crates/patina-vm/src/tracer.rs": ["trace_roots"],
+    # The root providers, each a call to its derived trace.
     "crates/patina-runtime/src/library_registry.rs": ["trace_roots"],
-    "crates/patina-tree-walker/src/eval/cps_eval/gc_roots.rs": [
-        "trace_roots",
-        "trace_step",
-        "trace_stacks",
-    ],
+    "crates/patina-tree-walker/src/eval/cps_eval/gc_roots.rs": ["trace_roots"],
 }
 
 # `..` closing a pattern: after `{`, `(`, `[` or `,`, and before `}`, `)`,

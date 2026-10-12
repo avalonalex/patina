@@ -7,6 +7,7 @@ use patina_core::core_expr::Symbol;
 use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
+use patina_core::{Trace, TraceThroughRc};
 use std::cell::Cell;
 use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -123,16 +124,28 @@ impl Arity {
 ///
 /// A `CodeObject` is immutable after compilation and may be shared between
 /// closures that share the same code but different captured environments.
-#[derive(Debug, Clone)]
+///
+/// Its trace (derived, #686) reports its constants, every heap value its
+/// instructions can load: pinned, since a code object is shared through `Rc`
+/// and never written, until stage 4e makes its constants a descriptor's. The
+/// VM traces each loaded one from its code store ([`TraceThroughRc`]): a
+/// form's code stays there only while a frame, a captured continuation or a
+/// live closure can still run it (#338).
+#[derive(Debug, Clone, Trace)]
 pub struct CodeObject {
     /// Its slot and generation once loaded, a label before (see
     /// `CodeObjectId`).
+    #[trace(skip, reason = "a code id")]
     pub id: CodeObjectId,
 
     /// Inferred or declared name (for stack traces and error messages).
     pub name: Option<Symbol>,
 
     /// The instruction stream.
+    #[trace(
+        skip,
+        reason = "opcodes and register numbers; an immediate operand is a value that fits in the word, never a heap reference, which goes in `constants`"
+    )]
     pub instructions: Vec<Instruction>,
 
     /// Constant pool: literals too large to inline in `LoadImmediate`
@@ -140,13 +153,16 @@ pub struct CodeObject {
     pub constants: Vec<TaggedValue>,
 
     /// Total registers needed by this frame (assigned by Pass 4).
+    #[trace(skip, reason = "a count")]
     pub num_regs: u16,
 
     /// Arity (fixed or variadic).
+    #[trace(skip, reason = "argument counts")]
     pub arity: Arity,
 
     /// Maps instruction indices to source locations for error reporting.
     /// Sorted by pc; binary-search to resolve.
+    #[trace(skip, reason = "source positions")]
     pub source_map: Vec<(usize, SourceLocation)>,
 
     /// Bitsets of possible register roots before each instruction, after completed
@@ -155,6 +171,7 @@ pub struct CodeObject {
     /// The collector and continuation capture clear excluded slots before
     /// tracing; normal dispatch does no work for these maps (#423).
     /// Runtime stubs and hand-built code use `None` to retain every slot.
+    #[trace(skip, reason = "liveness bitsets")]
     pub register_roots: Option<Vec<Vec<u64>>>,
 
     /// Per-site inline caches for `LoadGlobal`/`StoreGlobal`, indexed by pc
@@ -162,6 +179,7 @@ pub struct CodeObject {
     /// as `instructions` (entries for non-global instructions stay empty),
     /// or empty when the code has no global-access instructions at all.
     /// See [`GlobalCacheEntry`] for the soundness argument.
+    #[trace(skip, reason = "environment ids and slot numbers")]
     pub global_cache: Vec<Cell<GlobalCacheEntry>>,
 
     /// How many live VM closures run this code (#338). A frame holds its code
@@ -170,8 +188,11 @@ pub struct CodeObject {
     /// `MakeClosure` makes one and down when the collector frees one. It
     /// changes through a shared code object, as `global_cache` does, and like
     /// that it has no bearing on what the code does.
+    #[trace(skip, reason = "a count")]
     pub live_closures: Cell<u32>,
 }
+
+impl TraceThroughRc for CodeObject {}
 
 /// One `LoadGlobal`/`StoreGlobal` site's resolved binding, and the canonical
 /// statement of why hits are sound:

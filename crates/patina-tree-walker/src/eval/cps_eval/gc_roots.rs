@@ -19,56 +19,27 @@
 //! by deferral, not tracing — see `GcDeferGuard` and §7.
 //!
 //! Every value is reported pinned, by copy: the tree-walker's heaps never move
-//! (`PRD/GC_PRD.md` §11.4), so no slot would ever be updated (#682).
+//! (`PRD/GC_PRD.md` §11.4), so no slot would ever be updated (#682). Each
+//! provider's trace is derived from its struct (#686).
 
 use patina_core::cps_expr::CpsExpr;
-use patina_core::{DynamicWindRecord, RootProvider, SlotVisitor, Trace};
+use patina_core::{RootProvider, SlotVisitor, Trace};
 
-use super::types::{ExceptionHandler, PromptFrame, StepResult};
+use super::types::StepResult;
 use crate::eval::Evaluator;
 
-// Every provider here takes its struct apart by name (#623), so a new field
-// does not compile until it is traced or written `field: _` with the reason it
-// holds no value. The sentinel tests in `sentinel_tests` below put a fresh
-// value in each traced field and read it back after a collection.
+// Each provider's trace is derived (#686): its struct says what each field
+// holds. The sentinel tests in `sentinel_tests` below put a fresh value in
+// each traced field and read it back after a collection.
 
 impl RootProvider for Evaluator {
     fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
-        let Evaluator {
-            global_env,
-            // Which debug stages print.
-            debug: _,
-            // A root provider of its own, registered with the heap through
-            // `library_roots` (#682).
-            library_registry: _,
-            // A registration.
-            library_roots: _,
-            pending_escape,
-            // Loaders, which hold no values.
-            loader_registry: _,
-            // Primitive functions and their names.
-            primitive_registry: _,
-            // The filesystem.
-            fs: _,
-            // The collector's policy and statistics.
-            gc: _,
-            // A flag.
-            gc_pending: _,
-            // An error report: strings and library names.
-            bootstrap_error: _,
-        } = self;
-        visitor.env(global_env);
-        // A hidden root while it is set: between `set_pending_escape` and
-        // `take_pending_escape`, the value and its continuation are reachable
-        // from nowhere else (`docs/GC_DESIGN.md` §5.1).
-        if let Some((value, k)) = pending_escape.borrow().as_ref() {
-            visitor.pinned(*value);
-            visitor.continuation(k);
-        }
+        Trace::trace(self, visitor);
     }
 }
 
 /// Transient roots: the machine state at a trampoline safe point.
+#[derive(Trace)]
 pub(super) struct StepRoots<'a> {
     /// The step about to be processed — the entire live machine state.
     pub step: &'a StepResult,
@@ -80,106 +51,8 @@ pub(super) struct StepRoots<'a> {
 
 impl RootProvider for StepRoots<'_> {
     fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
-        let StepRoots { step, expr } = self;
-        if let Some(expr) = expr {
-            visitor.expr_literals(expr);
-        }
-        trace_step(step, visitor);
+        Trace::trace(self, visitor);
     }
-}
-
-fn trace_step(step: &StepResult, visitor: &mut dyn SlotVisitor) {
-    match step {
-        StepResult::Done(value) => visitor.pinned(*value),
-
-        StepResult::Continue {
-            expr,
-            env,
-            param,
-            cont_env,
-            prompt_stack,
-            dynamic_winds,
-            exception_handlers,
-        } => {
-            visitor.expr_literals(expr);
-            visitor.env(env);
-            // Delivered to the continuation and not yet bound: the trampoline
-            // polls between the invocation and the step that binds it (#680).
-            if let Some((
-                // The parameter's name.
-                _,
-                value,
-            )) = param
-            {
-                visitor.pinned(*value);
-            }
-            visitor.cont_env(cont_env);
-            trace_stacks(prompt_stack, dynamic_winds, exception_handlers, visitor);
-        }
-
-        StepResult::InvokeContinuation {
-            cont,
-            value,
-            env,
-            cont_env,
-            prompt_stack,
-            dynamic_winds,
-            exception_handlers,
-        } => {
-            visitor.pinned(*value);
-            cont.trace(visitor);
-            visitor.env(env);
-            visitor.cont_env(cont_env);
-            trace_stacks(prompt_stack, dynamic_winds, exception_handlers, visitor);
-        }
-
-        StepResult::ApplyProc {
-            proc,
-            args,
-            cont,
-            env,
-            cont_env,
-            prompt_stack,
-            dynamic_winds,
-            exception_handlers,
-        } => {
-            visitor.pinned(*proc);
-            for &arg in args {
-                visitor.pinned(arg);
-            }
-            cont.trace(visitor);
-            visitor.env(env);
-            visitor.cont_env(cont_env);
-            trace_stacks(prompt_stack, dynamic_winds, exception_handlers, visitor);
-        }
-
-        StepResult::CollectAtCall {
-            // Which collection: no value.
-            kind: _,
-            cont,
-            env,
-            cont_env,
-            prompt_stack,
-            dynamic_winds,
-            exception_handlers,
-        } => {
-            cont.trace(visitor);
-            visitor.env(env);
-            visitor.cont_env(cont_env);
-            trace_stacks(prompt_stack, dynamic_winds, exception_handlers, visitor);
-        }
-    }
-}
-
-fn trace_stacks(
-    prompt_stack: &[PromptFrame],
-    dynamic_winds: &[DynamicWindRecord],
-    exception_handlers: &[ExceptionHandler],
-    visitor: &mut dyn SlotVisitor,
-) {
-    prompt_stack.trace(visitor);
-    dynamic_winds.trace(visitor);
-    exception_handlers.trace(visitor);
 }
 
 #[cfg(test)]

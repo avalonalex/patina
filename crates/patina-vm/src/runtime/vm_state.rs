@@ -27,7 +27,7 @@ use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{
-    AssertNoGc, CollectKind, GC_CHECK, GcController, GcDeferGuard, GcMode, NoGcScopes,
+    AssertNoGc, CollectKind, GC_CHECK, GcController, GcDeferGuard, GcMode, NoGcScopes, Trace,
 };
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::HasDiagnostic;
@@ -43,6 +43,15 @@ use std::sync::Arc;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// The complete mutable state of the VM during execution.
+///
+/// Its trace (derived, #686) is the VM's root set, which the running machine
+/// lends to each collection (#682): the register file, frames and dynamic
+/// extents, the parked escape value and the scratch arguments, every loaded
+/// code object's constants, the global environment and the ones set aside,
+/// and the step tracer's snapshots. The continuation stores are weak, traced
+/// by `trace_weak_ids` for the ids marking reached. Pinned by the sentinel
+/// test `every_vm_state_root_is_traced`.
+#[derive(Trace)]
 pub struct VmState {
     /// Coupled frame/register and dynamic-extent storage (VM_RUNTIME §5.6).
     pub(super) execution: super::execution_state::ExecutionState,
@@ -51,8 +60,13 @@ pub struct VmState {
     /// with it. A field rather than a return value because the
     /// `ApplyContext` methods return `Result<T, EvalError>` and cannot say
     /// "escaped". Mirrors the tree-walker's `set_pending_escape` /
-    /// `take_pending_escape` pair (`cps_eval/types.rs`) — same split, same
-    /// reason, and rooted for the same reason (`gc_roots.rs`).
+    /// `take_pending_escape` pair (`Evaluator`'s, in `eval/mod.rs`) — same
+    /// split, same reason, and traced for the same reason.
+    ///
+    /// Traced while it is set: between the stash in `across_reentry` and the
+    /// `take()` in `run_loop_until` the value is reachable from nowhere else.
+    /// No safe point runs inside that window today, so the trace is
+    /// future-proofing, as `scratch_args`' is.
     pub(super) pending_escape: Option<TaggedValue>,
     /// Set while an `abort-current-continuation` is travelling to the landing
     /// it built, and only then: by `abort_to_prompt`, and again by each later
@@ -82,6 +96,7 @@ pub struct VmState {
     /// landing, which is the point past which no boundary is owed the news;
     /// and `execute`, with the rest of the machine, so a form cannot leave
     /// one latched for the next.
+    #[trace(skip, reason = "a flag")]
     pub(super) pending_transfer: bool,
     /// The re-entry boundaries the machine is inside, outermost first: one id
     /// per [`across_reentry`](super::control) still on the Rust stack — a
@@ -96,8 +111,10 @@ pub struct VmState {
     /// machines (#469, #472, #474), and one captured outside at a deeper
     /// stack restores more frames than the callback's loop started with
     /// (#473).
+    #[trace(skip, reason = "re-entry boundary ids")]
     pub(super) reentry: Vec<u64>,
     /// The id the next boundary takes.
+    #[trace(skip, reason = "the next boundary id")]
     pub(super) next_reentry: u64,
     /// Set by a full continuation's arrival (`step_wind_jump`) when the
     /// continuation was captured outside some of the boundaries now on
@@ -105,62 +122,81 @@ pub struct VmState {
     /// count is left, and each dispatch loop and `across_reentry` inside one
     /// unwinds rather than resuming. Cleared by the loop that resumes into
     /// the arrival, which is inside the boundaries kept, and by `execute`.
+    #[trace(skip, reason = "a count")]
     pub(super) reentry_kept: Option<usize>,
     /// The loaded `CodeObject`s, each in the slot its `CodeObjectId` names.
     /// A slot whose code has been let go holds `empty_code` until
     /// [`VmState::load_unit`] gives it to other code.
+    ///
+    /// Traced: every loaded code object's constants. A form's code stays here
+    /// only while a frame, a captured continuation or a live closure can still
+    /// run it (#338), so the trace follows the code in use rather than
+    /// everything ever compiled, and it covers every frame's `code` too: a
+    /// frame holding a code object is itself what keeps that object here.
     code_store: Vec<Rc<CodeObject>>,
     /// What an empty slot of `code_store` holds: code with no instructions,
     /// named by a label, which no loaded code's id is. A lookup then checks
     /// only that the slot's code has the id asked for, which turns away an
     /// empty slot as well as one holding later code — a branch fewer on every
     /// closure call than an `Option` slot, and about 1% of a call-heavy loop.
+    #[trace(skip, reason = "code with no instructions and no constants")]
     empty_code: Rc<CodeObject>,
     /// The ids the next code loaded is given, one for each empty slot: the
     /// slot with the generation after the code it last held. A slot that has
     /// used every generation is left out, and stays empty (#352).
+    #[trace(skip, reason = "code ids")]
     free_code_ids: Vec<CodeObjectId>,
     /// The code each compilation loaded together, keyed by the id it runs
     /// from: a top-level form's code, with the code of the lambdas in it. A
     /// unit is kept or let go whole, since code that is not running can still
     /// make a closure of a lambda nested in it.
+    #[trace(skip, reason = "code ids")]
     code_units: FxHashMap<CodeObjectId, Vec<CodeObjectId>>,
     /// Id of the one-instruction stub each step of a continuation jump runs
     /// in (`wind_jump_stub`). Built on the first jump that has a wind thunk
     /// to run; most states never build one. The id, not the `Rc` — the code
     /// object has exactly one owner, `code_store`, and this is a note of
     /// where to find it.
+    #[trace(skip, reason = "a code id; the code is in `code_store`")]
     pub(super) wind_jump_code: Option<CodeObjectId>,
     /// Id of the six-instruction stub the *value* form of `dynamic-wind` runs
     /// in (`value_wind_stub`). Built on the first such call; a program that
     /// only ever calls `dynamic-wind` in head position never builds one.
+    #[trace(skip, reason = "a code id; the code is in `code_store`")]
     pub(super) value_wind_code: Option<CodeObjectId>,
     /// Id of the two-instruction stub the *value* form of `call-with-values`
     /// runs in (`value_cwv_stub`). Built on the first such call.
+    #[trace(skip, reason = "a code id; the code is in `code_store`")]
     pub(super) value_cwv_code: Option<CodeObjectId>,
     /// Id of the two-instruction stub an abort's prompt handler is called in
     /// (`abort_handler_stub`). Built on the first abort; a program with no
     /// prompts never builds one.
+    #[trace(skip, reason = "a code id; the code is in `code_store`")]
     pub(super) abort_handler_code: Option<CodeObjectId>,
     /// Id of the one-instruction stub each step of a composable invoke's
     /// extent re-entry runs in (`invoke_step_stub`). Built on the first
     /// invoke that has a `before` thunk to run.
+    #[trace(skip, reason = "a code id; the code is in `code_store`")]
     pub(super) invoke_step_code: Option<CodeObjectId>,
     /// Id of the three-instruction stub a raise's handler is called in
     /// (`raise_step_stub`). Built on the first raise that reaches a
     /// handler; a program that never raises never builds one.
+    #[trace(skip, reason = "a code id; the code is in `code_store`")]
     pub(super) raise_step_code: Option<CodeObjectId>,
     /// Id of the three-instruction stub a delayed promise's thunk is run in
     /// (`force_stub`). Built on the first `force` of a promise not yet done.
+    #[trace(skip, reason = "a code id; the code is in `code_store`")]
     pub(super) force_code: Option<CodeObjectId>,
     /// Ids of the three-instruction stubs a resumable primitive's call runs
     /// in (`resume_stub`), one per argument count up to
     /// `resume_step::INLINE_ARGS` and one that spreads a list for more, and
     /// of the one its collection runs in (`collect_stub`, #639). Each built
     /// on the first such call.
+    #[trace(skip, reason = "code ids; the code is in `code_store`")]
     pub(super) resume_codes: [Option<CodeObjectId>; super::control::resume_step::VARIANTS],
     /// `%parameter-set!`'s registry index, which a call `(p v)` of a
     /// parameter object runs (#478); looked up once, here, not per call.
+    #[trace(skip, reason = "a registry index")]
     parameter_set: Option<usize>,
     /// Global variable environment, shared with the library loader.
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
@@ -170,14 +206,20 @@ pub struct VmState {
     /// under a swap may collect (#677).
     saved_globals: Vec<Rc<Environment>>,
     /// The heap, shared with `patina-runtime` primitives.
+    #[trace(
+        skip,
+        reason = "a handle to the arenas, which the collector is marking"
+    )]
     heap: SharedHeap,
     /// Registry of all primitive procedures.
+    #[trace(skip, reason = "primitive functions and their names")]
     primitive_registry: Rc<PrimitiveRegistry>,
     /// Bitset over registry indices: primitives whose global binding was
     /// overwritten by a top-level `define`/`set!` after code was compiled.
     /// `CallPrimitive` sites check their bit and deoptimize to the
     /// name-lookup `Call` path when it is set, so rebinding a primitive name
     /// behaves exactly as it did before `CallPrimitive` emission.
+    #[trace(skip, reason = "a bitset over registry indices")]
     shadowed_primitives: Vec<u64>,
     /// The same for the two control forms pass 5 compiles to a sequence of
     /// their own, one bit each (`ControlForm::bit`): set when a global
@@ -185,6 +227,7 @@ pub struct VmState {
     /// which `JumpUnlessShadowed` sends every such site to an ordinary call.
     /// Separate from `shadowed_primitives` because `dynamic-wind` has no
     /// registry entry to index it by.
+    #[trace(skip, reason = "a bitset")]
     shadowed_controls: u8,
     /// Reusable argument buffer for `CallPrimitive` dispatch, taken out of
     /// the state (`mem::take`) for the duration of each call so re-entrant
@@ -194,10 +237,12 @@ pub struct VmState {
     /// call returns — never a channel for values, which travel in registers.
     ///
     /// Emptied when each call is done, before it goes back. It is traced as
-    /// a root (`gc_roots.rs`), so the arguments of the last call left in it
+    /// a root (`VmState`'s trace), so the arguments of the last call left in it
     /// would live until the next call reused it: a key passed to
     /// `make-ephemeron` kept its pair whole through a `(gc)` that a procedure
     /// value's tail call made (#639).
+    ///
+    /// Empty at every safe point, so pinned: nothing would be updated.
     pub(super) scratch_args: Vec<TaggedValue>,
     /// Side table for full (call/cc) continuations — keyed by the heap-minted
     /// id inside the `VmContinuationRef { id, .. }` handle. **Weak** (design §9.5):
@@ -206,28 +251,45 @@ pub struct VmState {
     /// `RefCell`. Ids come from the heap's counter (unique across both
     /// continuation kinds and every `VmState` on the heap, never reused), so
     /// a pruned id cannot alias another entry.
+    #[trace(
+        skip,
+        reason = "weak (design §9.5): traced by `trace_weak_ids` for the ids marking reached, and pruned by `sweep_weak`"
+    )]
     continuation_store: RefCell<FxHashMap<u64, Rc<VmContinuation>>>,
     /// Side table for delimited continuations — keyed by opaque u64 id.
     /// Weak, like `continuation_store`.
+    #[trace(skip, reason = "weak, like `continuation_store`")]
     delimited_continuation_store: RefCell<FxHashMap<u64, Rc<VmDelimitedContinuation>>>,
     /// Structured tracer for instruction-level debugging.
+    ///
+    /// Traced: the register snapshots it holds between its pre- and
+    /// post-instruction hooks. Safe points are borrow-free, so the trace's
+    /// borrow cannot conflict.
     tracer: Option<crate::tracer::TracerHandle>,
     /// Shared library registry for `load_scheme_library` in eval primitives.
     /// `None` for bare low-level states without library services.
+    #[trace(
+        skip,
+        reason = "a root provider of its own, which the backend registers with the heap (`VmBackend::library_roots`, #682)"
+    )]
     library_registry: Option<Rc<RefCell<LibraryRegistry>>>,
     /// Shared library loader registry for `load_scheme_library` in eval primitives.
     /// `None` for bare low-level states without library services.
+    #[trace(skip, reason = "loaders, which hold no values")]
     loader_registry: Option<Rc<RefCell<LibraryLoaderRegistry>>>,
     /// Virtual filesystem for all file I/O operations.
+    #[trace(skip, reason = "the filesystem")]
     fs: Arc<dyn patina_core::FileSystem>,
     /// Garbage collector policy and state (see `docs/GC_DESIGN.md`).
     /// Serviced at the dispatch-loop safe point; always adaptive outside the
     /// differential test lanes. Behind a `RefCell` so `collect` can take
     /// `&VmState` as a root while mutating the collector.
+    #[trace(skip, reason = "the collector's policy and statistics")]
     gc: RefCell<GcController>,
     /// The heap's collection-pending flag, cached at construction so
     /// dispatch-loop entry costs no heap borrow and the per-instruction safe
     /// point is a single load.
+    #[trace(skip, reason = "a flag")]
     gc_pending: Rc<Cell<bool>>,
 }
 

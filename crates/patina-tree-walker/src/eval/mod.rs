@@ -16,7 +16,7 @@ pub use patina_primitives::primitives::io::datum_writer::{
 };
 
 use debug::DebugConfig;
-use patina_core::{CpsContinuation, TaggedValue};
+use patina_core::{CpsContinuation, TaggedValue, Trace};
 use patina_runtime::HasDiagnostic;
 use patina_runtime::environment::Environment;
 use patina_runtime::library_loader::LibraryLoaderRegistry;
@@ -41,10 +41,21 @@ pub enum EvalResult {
     },
 }
 
+/// The tree-walker's evaluator. Its trace (derived, #686) is the global
+/// environment, and the escape parked between a jump and the trampoline that
+/// resumes it, which outlives any one step; the running machine lends it to
+/// each collection (#682). Pinned by the sentinel test
+/// `every_evaluator_root_is_traced`.
+#[derive(Trace)]
 pub struct Evaluator {
     pub global_env: Rc<Environment>,
+    #[trace(skip, reason = "which debug stages print")]
     pub(crate) debug: Rc<DebugConfig>,
     /// Registry of loaded libraries
+    #[trace(
+        skip,
+        reason = "a root provider of its own, registered with the heap through `library_roots` (#682)"
+    )]
     pub(crate) library_registry: Rc<RefCell<LibraryRegistry>>,
     /// The registry's registration with the heap's root set, which keeps it
     /// a root of every collection while the evaluator lives (#682).
@@ -52,6 +63,7 @@ pub struct Evaluator {
         dead_code,
         reason = "held for its drop, which unregisters the registry"
     )]
+    #[trace(skip, reason = "a registration")]
     pub(crate) library_roots: patina_core::RootToken,
     /// A continuation's value and target, parked between its jump and the
     /// trampoline that resumes it (`set_pending_escape`). Nothing else
@@ -59,21 +71,27 @@ pub struct Evaluator {
     /// traces them. A thread-local until #682.
     pub(crate) pending_escape: RefCell<Option<(TaggedValue, Rc<CpsContinuation>)>>,
     /// Registry of library loaders (Rust, Scheme, etc.)
+    #[trace(skip, reason = "loaders, which hold no values")]
     pub(crate) loader_registry: Rc<RefCell<LibraryLoaderRegistry>>,
     /// Registry of primitive procedures (shared across all backends via patina-primitives)
+    #[trace(skip, reason = "primitive functions and their names")]
     pub(crate) primitive_registry: patina_primitives::PrimitiveRegistry,
     /// Virtual filesystem for all file I/O operations
+    #[trace(skip, reason = "the filesystem")]
     pub(crate) fs: Arc<dyn patina_core::FileSystem>,
     /// Garbage collector policy and state (see `docs/GC_DESIGN.md`).
     /// Serviced at trampoline safe points; always adaptive outside the
     /// differential test lanes.
+    #[trace(skip, reason = "the collector's policy and statistics")]
     pub(crate) gc: RefCell<patina_core::GcController>,
     /// The heap's collection-pending flag, cached at construction so
     /// trampoline entry costs no heap borrow and the per-step safe point is
     /// a single load.
+    #[trace(skip, reason = "a flag")]
     pub(crate) gc_pending: Rc<std::cell::Cell<bool>>,
     /// Why `(scheme base)` could not be loaded at construction, if it could
     /// not: see [`Evaluator::bootstrap_error`].
+    #[trace(skip, reason = "an error report: strings and library names")]
     bootstrap_error: Option<patina_runtime::LibraryError>,
 }
 

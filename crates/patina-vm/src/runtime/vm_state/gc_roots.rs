@@ -39,8 +39,6 @@ use patina_core::{GC_CHECK, GcVisitor, RootProvider, SlotVisitor, Trace};
 use rustc_hash::FxHashMap;
 
 use crate::types::CallFrame;
-use crate::types::code_object::CodeObject;
-use crate::types::continuation::{VmContinuation, VmDelimitedContinuation};
 use patina_core::TaggedValue;
 use std::cell::Cell;
 
@@ -106,116 +104,9 @@ mod wrong_maps {
 use crate::test_support as wrong_maps;
 
 impl RootProvider for VmState {
-    /// Every field of `VmState` is named (#623): a new one does not compile
-    /// here until it is traced or written `field: _` with the reason it holds
-    /// no value. The sentinel test `every_vm_state_root_is_traced`
-    /// (`trace_sentinel_tests.rs`) puts a fresh value in each traced field
-    /// and reads it back after a collection.
+    /// `VmState`'s derived trace (#686), whose fields say what each holds.
     fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
-        let VmState {
-            execution,
-            pending_escape,
-            // A flag.
-            pending_transfer: _,
-            // Re-entry boundary ids.
-            reentry: _,
-            // The next boundary id.
-            next_reentry: _,
-            // A count.
-            reentry_kept: _,
-            code_store,
-            // Code with no instructions and no constants.
-            empty_code: _,
-            // Code ids.
-            free_code_ids: _,
-            // Code ids.
-            code_units: _,
-            // A code id; the code is in `code_store`.
-            wind_jump_code: _,
-            // A code id; the code is in `code_store`.
-            value_wind_code: _,
-            // A code id; the code is in `code_store`.
-            value_cwv_code: _,
-            // A code id; the code is in `code_store`.
-            abort_handler_code: _,
-            // A code id; the code is in `code_store`.
-            invoke_step_code: _,
-            // A code id; the code is in `code_store`.
-            raise_step_code: _,
-            // A code id; the code is in `code_store`.
-            force_code: _,
-            // Code ids; the code is in `code_store`.
-            resume_codes: _,
-            // A registry index.
-            parameter_set: _,
-            globals,
-            saved_globals,
-            // A handle to the arenas, which the collector is marking.
-            heap: _,
-            // Primitive functions and their names.
-            primitive_registry: _,
-            // A bitset over registry indices.
-            shadowed_primitives: _,
-            // A bitset.
-            shadowed_controls: _,
-            scratch_args,
-            // Weak (design §9.5): traced by `trace_weak_ids` below for the ids
-            // marking reached, and pruned by `sweep_weak`.
-            continuation_store: _,
-            // Weak, like `continuation_store`.
-            delimited_continuation_store: _,
-            tracer,
-            // A root provider of its own, which the backend registers with
-            // the heap (`VmBackend::library_roots`, #682).
-            library_registry: _,
-            // Loaders, which hold no values.
-            loader_registry: _,
-            // The filesystem.
-            fs: _,
-            // The collector's policy and statistics.
-            gc: _,
-            // A flag.
-            gc_pending: _,
-        } = self;
-
-        // The register file, frames and dynamic extents.
-        execution.trace_roots(visitor);
-        // Empty at every safe point, so pinned: nothing would be updated.
-        for &value in scratch_args {
-            visitor.pinned(value);
-        }
-
-        // A hidden root while it is set: between the stash in `across_reentry`
-        // and the `take()` in `run_loop_until`, the escaping continuation's
-        // value is reachable from nowhere else. No safe point runs inside that
-        // window today, so this is future-proofing on the same reasoning as
-        // `scratch_args` above — and it mirrors the tree-walker's
-        // `trace_pending_escape`, which roots the same value for the same
-        // reason.
-        if let Some(v) = pending_escape {
-            visitor.pinned(*v);
-        }
-
-        // The constants of every code object still loaded. A form's code stays
-        // in the store only while a frame, a captured continuation or a live
-        // closure can still run it (#338), so this follows the code in use
-        // rather than everything ever compiled. It covers every frame's
-        // `code` too: a frame holding a code object is itself what keeps that
-        // object in the store.
-        for code in code_store.iter() {
-            trace_code(code, visitor);
-        }
-
-        visitor.env(globals);
-        for env in saved_globals {
-            visitor.env(env);
-        }
-
-        // Register snapshots the tracer holds between its pre/post hooks.
-        // Safe points are borrow-free, so this cannot conflict.
-        if let Some(tracer) = tracer {
-            tracer.borrow().trace_roots(visitor);
-        }
+        Trace::trace(self, visitor);
     }
 
     fn trace_weak_ids(&self, ids: &[u64], visitor: &mut dyn SlotVisitor) {
@@ -226,9 +117,9 @@ impl RootProvider for VmState {
         let delims = self.delimited_continuation_store.borrow();
         for id in ids {
             if let Some(continuation) = conts.get(id) {
-                trace_continuation(continuation, visitor);
+                continuation.as_ref().trace(visitor);
             } else if let Some(continuation) = delims.get(id) {
-                trace_delimited_continuation(continuation, visitor);
+                continuation.as_ref().trace(visitor);
             }
         }
     }
@@ -253,110 +144,4 @@ fn prune_store<T>(store: &std::cell::RefCell<FxHashMap<u64, T>>, visitor: &GcVis
     if store.len() * 8 < store.capacity() {
         store.shrink_to_fit();
     }
-}
-
-/// The constants of a loaded code object: every heap value its instructions
-/// can load. Every field is named (#623). Pinned: a code object is shared
-/// through `Rc` and never written, until stage 4e makes its constants a
-/// descriptor's.
-fn trace_code(code: &CodeObject, visitor: &mut dyn SlotVisitor) {
-    let CodeObject {
-        // A code id.
-        id: _,
-        // A name.
-        name: _,
-        // Opcodes and register numbers; an immediate operand is a value that
-        // fits in the word, never a heap reference, which goes in `constants`.
-        instructions: _,
-        constants,
-        // A count.
-        num_regs: _,
-        // Argument counts.
-        arity: _,
-        // Source positions.
-        source_map: _,
-        // Liveness bitsets.
-        register_roots: _,
-        // Environment ids and slot numbers.
-        global_cache: _,
-        // A count.
-        live_closures: _,
-    } = code;
-    for &constant in constants {
-        visitor.pinned(constant);
-    }
-}
-
-/// Each frame's closure, a slot like the registers (#682).
-pub(in crate::runtime) fn trace_frames(frames: &[CallFrame], visitor: &mut dyn SlotVisitor) {
-    for frame in frames {
-        let CallFrame {
-            // An instruction index.
-            pc: _,
-            // A register index; the window is traced with the register file.
-            register_base: _,
-            // A count.
-            num_regs: _,
-            closure,
-            // A register number.
-            return_reg: _,
-            // Its constants are traced through `code_store`, which keeps every
-            // code object a frame or a captured continuation can run (#338).
-            code: _,
-        } = frame;
-        visitor.slot(closure);
-    }
-}
-
-/// A snapshot's registers and frames' closures are slots, as the live
-/// ones are; its extents are pinned, as theirs are.
-fn trace_continuation(continuation: &VmContinuation, visitor: &mut dyn SlotVisitor) {
-    let VmContinuation {
-        frames,
-        dynamic_winds,
-        prompt_stack,
-        exception_handlers,
-        registers,
-        // A register number.
-        deliver_reg: _,
-        // An exit status.
-        exit_status: _,
-        // A flag.
-        abort_landing: _,
-        // Re-entry boundary ids.
-        reentry: _,
-    } = continuation;
-    visitor.slots(registers);
-    trace_frames(frames, visitor);
-    dynamic_winds.trace(visitor);
-    prompt_stack.trace(visitor);
-    exception_handlers.trace(visitor);
-}
-
-fn trace_delimited_continuation(
-    continuation: &VmDelimitedContinuation,
-    visitor: &mut dyn SlotVisitor,
-) {
-    let VmDelimitedContinuation {
-        frames,
-        dynamic_winds,
-        registers,
-        // A register index.
-        base_at_capture: _,
-        // A register number.
-        deliver_reg: _,
-        // A depth.
-        depth_at_capture: _,
-        // A depth.
-        wind_depth_at_capture: _,
-        // A depth.
-        handler_depth_at_capture: _,
-        prompt_stack,
-        exception_handlers,
-    } = continuation;
-    visitor.slots(registers);
-    trace_frames(frames, visitor);
-    dynamic_winds.trace(visitor);
-    prompt_stack.trace(visitor);
-    exception_handlers.trace(visitor);
 }
