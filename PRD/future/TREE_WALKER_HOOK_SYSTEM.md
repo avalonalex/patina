@@ -105,12 +105,13 @@ though §5.3 shows it is noisier here than it first appears).
 `crates/patina-vm/src/tracer.rs` already implements a per-instruction observer for the
 *other* backend: a `TraceEvent` enum covering instructions, register writes, frame
 push/pop, control primitives, thunk enter/exit, cell access, exceptions, continuations
-and watchpoints; stored as `pub tracer: Option<TracerHandle>` on `VmState`
-(`runtime/vm_state.rs:85`), fired pre/post instruction (`vm_state.rs:982`, `:1942`),
-traced as a GC root through `impl RootProvider for StepTracer` (`tracer.rs:283`, called from
-`vm/runtime/gc_roots.rs:79`), attached via the inherent method `VmBackend::set_tracer`
-(`vm/backend.rs:159`), surfaced as `--trace`, documented in `docs/VM_STEPPER.md`. This
-settles three questions by precedent:
+and watchpoints; stored as `tracer: Option<TracerHandle>` on `VmState`
+(`runtime/vm_state.rs`), fired pre/post instruction (`vm_state.rs:982`, `:1942`),
+traced as a GC root through `VmState`'s derived trace (#686: `StepTracer` derives
+`Trace`, and its register snapshots are pinned with the rest of the machine's state),
+attached via the inherent method `VmBackend::set_tracer` (`vm/backend.rs:159`), surfaced
+as `--trace`, documented in `docs/VM_STEPPER.md`. This settles three questions by
+precedent:
 
 1. Observer attachment is an **inherent backend method, not a `Backend` trait method**
    (the trait keeps its associated `Error` type and three methods — `eval`,
@@ -120,7 +121,8 @@ settles three questions by precedent:
 2. `Option<Handle>` checked per step is an accepted hot-loop cost.
 3. Anything the observer retains must be a **GC root**, and the way to get there is a
    `RootProvider` that a collection reaches: one the safe point lends it, or one
-   registered with the heap's `RootSet` (§5.2; registration opened with #682).
+   registered with the heap's `RootSet` (§5.2; registration opened with #682). The VM's
+   tracer takes the first path, as a field of `VmState`, whose derived trace reaches it.
 
 The tree-walker hook is the tree-walker's `set_tracer`, grown a return value. One
 caveat the precedent does *not* cover: `StepTracer` never re-enters evaluation, so it
@@ -356,7 +358,9 @@ forward to the installed hook, the cheap fix, or `set_debug_hook` can register t
 and keep the token. Either way the hook traces what it retains, which is why
 `DebugHook: RootProvider` is a supertrait above. Without this, a watchpoint's retained
 target value or a recorded macro datum is an unrooted heap value across a collection — a
-use-after-free, not a leak.
+use-after-free, not a leak. `Evaluator`'s trace is derived (#686), and a `dyn DebugHook`
+has no `Trace`, so the `debug_hook` field is skipped (`#[trace(skip, reason = "…")]`),
+with a reason naming the path that traces the hook.
 
 **A paused hook cannot collect.** `eval_in_env` takes a `GcDeferGuard` and computes
 `is_outermost` (`cps_eval/mod.rs:162,166`) to gate its safe point; `GcController::safe_point`
