@@ -172,12 +172,7 @@ pub fn flip_scope_on_tagged<'gc>(
     scope: patina_runtime::ScopeId,
     cx: &mut Cx<'gc>,
 ) -> Value<'gc> {
-    // Early exit: if no identifiers present, return value unchanged
-    if !contains_edit_target(tv, ScopeEdit::Flip, cx) {
-        return tv;
-    }
-
-    edit_scope_on_tagged(tv, scope, ScopeEdit::Flip, cx)
+    edit_scopes(tv, scope, ScopeEdit::Flip, cx)
 }
 
 /// Add `scope` to every identifier in `tv` that already carries scopes of
@@ -199,11 +194,7 @@ pub fn add_scope_to_bound_names<'gc>(
     scope: patina_runtime::ScopeId,
     cx: &mut Cx<'gc>,
 ) -> Value<'gc> {
-    let edit = ScopeEdit::AddToBound(names);
-    if !contains_edit_target(tv, edit, cx) {
-        return tv;
-    }
-    edit_scope_on_tagged(tv, scope, edit, cx)
+    edit_scopes(tv, scope, ScopeEdit::AddToBound(names), cx)
 }
 
 pub fn add_scope_to_scoped_identifiers<'gc>(
@@ -211,10 +202,7 @@ pub fn add_scope_to_scoped_identifiers<'gc>(
     scope: patina_runtime::ScopeId,
     cx: &mut Cx<'gc>,
 ) -> Value<'gc> {
-    if !contains_edit_target(tv, ScopeEdit::AddToScoped, cx) {
-        return tv;
-    }
-    edit_scope_on_tagged(tv, scope, ScopeEdit::AddToScoped, cx)
+    edit_scopes(tv, scope, ScopeEdit::AddToScoped, cx)
 }
 
 /// What a scope walk does to each identifier it meets.
@@ -241,60 +229,24 @@ impl ScopeEdit<'_> {
     }
 }
 
-/// Check if a tree contains any Identifier nodes
-///
-/// Fast traversal that returns true as soon as an Identifier is found. The
-/// tree may be cyclic — a quoted datum with labels (`'#0=(a b . #0#)`) is a
-/// legitimate macro argument, and Larceny's `base` suite hands `test` several
-/// — so pairs and vectors are recorded once the walk is long enough to
-/// suggest a cycle and never entered twice. Cycles only come from the
-/// reader, whose data holds symbols, not identifiers, so a revisited
-/// container contributes nothing.
-fn contains_edit_target<'gc>(tv: Value<'gc>, edit: ScopeEdit<'_>, cx: &Cx<'gc>) -> bool {
-    let mut seen = std::collections::HashSet::new();
-    let mut pending = vec![tv];
-    while let Some(value) = pending.pop() {
-        if !seen.insert(value) {
-            continue;
-        }
-        if !cx.is_source_identifier(value)
-            && cx
-                .get_identifier_data(value)
-                .is_some_and(|(name, scopes)| edit.affects(&name, &scopes))
-        {
-            return true;
-        }
-        if value.is_pair() {
-            let (car, cdr) = cx.get_pair(value);
-            pending.extend([cdr, car]);
-        } else if value.is_vector() {
-            pending.extend(cx.vector_slice(value).iter().copied());
-        }
-    }
-    false
-}
-
-/// Implementation of the scope walks
-///
-/// Edit each syntax identifier once, retaining source provenance and graph
-/// sharing. The iterative copier closes cycles on the copied container and
-/// leaves unaffected data untouched, including vectors supplied to `eval`.
-fn edit_scope_on_tagged<'gc>(
+/// The scope walks: each identifier `edit` affects gets `scope` flipped or
+/// added, through [`Cx::rescope_identifiers`], which copies only what
+/// changes, shared structure and cycles included, and answers `tv` itself
+/// when nothing does.
+fn edit_scopes<'gc>(
     tv: Value<'gc>,
     scope: patina_runtime::ScopeId,
     edit: ScopeEdit<'_>,
     cx: &mut Cx<'gc>,
 ) -> Value<'gc> {
-    cx.map_syntax_identifiers(tv, |cx, value, name, scopes| {
-        if cx.is_source_identifier(value) || !edit.affects(&name, &scopes) {
-            return None;
-        }
-        let new_scopes = match edit {
+    cx.rescope_identifiers(
+        tv,
+        |name, scopes| edit.affects(name, scopes),
+        |scopes| match edit {
             ScopeEdit::Flip => scopes.flip_scope(scope),
             ScopeEdit::AddToScoped | ScopeEdit::AddToBound(_) => scopes.with_scope(scope),
-        };
-        Some(cx.alloc_identifier(name, new_scopes))
-    })
+        },
+    )
 }
 
 /// One side of a literal comparison: where a macro was defined, or where it is
