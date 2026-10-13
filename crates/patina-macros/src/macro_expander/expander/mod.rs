@@ -9,7 +9,7 @@
 //! - Uses MatchEnv tree navigation for nested ellipsis
 //! - Supports double ellipsis (SRFI-149)
 //! - Proper hygiene through Identifier renaming
-//! - Returns TaggedValue directly
+//! - Reads and allocates through the context it is given
 //!
 //! Inspired by Gauche's template expansion (macro.c:800+)
 //! Reference: https://github.com/shirok/Gauche/blob/master/src/macro.c
@@ -33,39 +33,30 @@ mod tests;
 pub use error::ExpandError;
 
 use crate::macro_expander::Template;
-use patina_core::{LiteralId, SharedHeap, TaggedValue};
+use patina_core::{Cx, LiteralId, Value};
 use patina_runtime::MatchEnv;
 
 /// Template expander for PVREF-based macro system
 ///
 /// This implements the template expansion phase of macro expansion.
 /// It takes a compiled Template and a MatchEnv with pattern variable bindings,
-/// returning the expanded output expression as TaggedValue.
+/// returning the expanded output expression.
 ///
 /// Based on Gauche's template expansion approach (macro.c:800+).
 ///
-/// ## TaggedValue Output
+/// ## Values In, Values Out
 ///
-/// The Expander returns TaggedValue directly, eliminating the need for
-/// post-expansion Value → TaggedValue conversion. This requires a SharedHeap
-/// to allocate heap objects (pairs, vectors, etc.).
-///
-/// ## MatchEnv Integration
-///
-/// The Expander retrieves TaggedValue from MatchEnv and uses them directly
-/// in the expansion. When constructing output, it allocates on the SharedHeap.
-pub struct Expander {
+/// The Expander reads the values its MatchEnv binds and allocates the
+/// expansion through the context it is given, the one the input was matched
+/// in: what it answers is a `Value<'gc>` of that context.
+pub struct Expander<'gc> {
     /// Macro scope for this expansion (Racket-style hygiene)
     /// Used to distinguish use-site vs introduced identifiers
     macro_scope: patina_runtime::ScopeId,
 
-    /// Shared heap for TaggedValue allocation (REQUIRED for TaggedValue output)
-    /// Used to allocate pairs, vectors, and other heap objects during expansion
-    shared_heap: Option<SharedHeap>,
-
     /// The macro object being expanded, which holds the literals its
     /// templates name (#718). Unset, a literal template finds none.
-    mac: TaggedValue,
+    mac: Value<'gc>,
 
     /// How deep a substituted value may nest: what is left of
     /// [`MAX_FORM_DEPTH`] below the use being expanded (#617).
@@ -74,7 +65,7 @@ pub struct Expander {
     depth_limit: usize,
 }
 
-impl Expander {
+impl<'gc> Expander<'gc> {
     /// Create a new expander with macro scope
     ///
     /// # Arguments
@@ -82,31 +73,14 @@ impl Expander {
     pub fn new(macro_scope: patina_runtime::ScopeId) -> Self {
         Self {
             macro_scope,
-            shared_heap: None,
-            mac: TaggedValue::UNSPECIFIED,
-            depth_limit: patina_core::walk::MAX_FORM_DEPTH,
-        }
-    }
-
-    /// Create a new expander with macro scope and SharedHeap
-    ///
-    /// Create a new expander with macro scope and SharedHeap for heap allocation.
-    ///
-    /// # Arguments
-    /// * `macro_scope` - Fresh scope for this macro expansion (for Racket-style hygiene)
-    /// * `shared_heap` - Shared heap for allocating expanded output
-    pub fn new_with_heap(macro_scope: patina_runtime::ScopeId, shared_heap: SharedHeap) -> Self {
-        Self {
-            macro_scope,
-            shared_heap: Some(shared_heap),
-            mac: TaggedValue::UNSPECIFIED,
+            mac: Value::UNSPECIFIED,
             depth_limit: patina_core::walk::MAX_FORM_DEPTH,
         }
     }
 
     /// Expanding the templates of the macro object `mac`, whose literals
     /// they name by index (#718).
-    pub fn for_macro(mut self, mac: TaggedValue) -> Self {
+    pub fn for_macro(mut self, mac: Value<'gc>) -> Self {
         self.mac = mac;
         self
     }
@@ -124,36 +98,23 @@ impl Expander {
     }
 
     /// The literal `id` of the macro being expanded.
-    pub(super) fn literal(&self, id: LiteralId) -> TaggedValue {
-        self.heap()
-            .borrow()
-            .macro_literal(self.mac, id)
+    pub(super) fn literal(&self, cx: &Cx<'gc>, id: LiteralId) -> Value<'gc> {
+        cx.macro_literal(self.mac, id)
             .expect("a template's literal is its macro object's")
-    }
-
-    /// Get reference to the shared heap (if available)
-    pub fn shared_heap(&self) -> Option<&SharedHeap> {
-        self.shared_heap.as_ref()
-    }
-
-    /// Get the shared heap, panicking if not available
-    ///
-    /// TaggedValue output requires a shared heap. This method is used internally
-    /// to ensure we have one when allocating.
-    fn heap(&self) -> &SharedHeap {
-        self.shared_heap
-            .as_ref()
-            .expect("Expander requires SharedHeap for TaggedValue output")
     }
 
     /// Expand a template with the given match environment
     ///
     /// This is the main entry point for template expansion.
-    /// Returns TaggedValue directly, avoiding post-expansion conversion.
     ///
     /// Inspired by Gauche's expand_template (macro.c:800+)
-    pub fn expand(&self, template: &Template, env: &MatchEnv) -> Result<TaggedValue, ExpandError> {
-        self.expand_impl(template, env, &[], false)
+    pub fn expand(
+        &self,
+        cx: &mut Cx<'gc>,
+        template: &Template,
+        env: &MatchEnv<'gc>,
+    ) -> Result<Value<'gc>, ExpandError> {
+        self.expand_impl(cx, template, env, &[], false)
     }
 
     /// Internal expansion implementation with indices
@@ -167,46 +128,47 @@ impl Expander {
     /// Based on Gauche's expand_rec (macro.c:820+)
     pub(super) fn expand_impl(
         &self,
+        cx: &mut Cx<'gc>,
         template: &Template,
-        env: &MatchEnv,
+        env: &MatchEnv<'gc>,
         indices: &[usize],
         inside_quote: bool,
-    ) -> Result<TaggedValue, ExpandError> {
+    ) -> Result<Value<'gc>, ExpandError> {
         // As deep as the template: grown as it goes (#617).
         patina_core::walk::ensure_sufficient_stack_if(template.is_nested(), || {
-            self.expand_node(template, env, indices, inside_quote)
+            self.expand_node(cx, template, env, indices, inside_quote)
         })
     }
 
     /// [`Self::expand_impl`] for one node of the template.
     fn expand_node(
         &self,
+        cx: &mut Cx<'gc>,
         template: &Template,
-        env: &MatchEnv,
+        env: &MatchEnv<'gc>,
         indices: &[usize],
         inside_quote: bool,
-    ) -> Result<TaggedValue, ExpandError> {
+    ) -> Result<Value<'gc>, ExpandError> {
         match template {
             Template::Literal(id) => {
                 // Literal values are inserted as-is, from the macro object.
-                Ok(self.literal(*id))
+                Ok(self.literal(cx, *id))
             }
 
             Template::Symbol(id) => {
                 // Symbols are renamed for hygiene
-                Ok(self.rename_identifier_tagged(id))
+                Ok(self.rename_identifier_tagged(cx, id))
             }
 
             Template::Var(pvref) => {
                 // Look up pattern variable in match environment
                 // Use indices to navigate the tree
-                // MatchEnv.get() returns Option<TaggedValue> directly!
                 match env.get(*pvref, indices) {
                     Some(tv) => {
                         if inside_quote {
                             Ok(tv)
                         } else {
-                            self.mark_substituted_tagged(tv)
+                            self.mark_substituted_tagged(cx, tv)
                         }
                     }
                     None => Err(ExpandError::UndefinedVariable {
@@ -217,17 +179,17 @@ impl Expander {
 
             Template::List(templates) => {
                 // Expand list template: (t1 t2 t3)
-                self.expand_list(templates, env, indices, inside_quote)
+                self.expand_list(cx, templates, env, indices, inside_quote)
             }
 
             Template::Vector(templates) => {
                 // Expand vector template: #(t1 t2 t3)
-                self.expand_vector(templates, env, indices, inside_quote)
+                self.expand_vector(cx, templates, env, indices, inside_quote)
             }
 
             Template::DottedList { templates, tail } => {
                 // Expand dotted list template: (t1 t2 . rest)
-                self.expand_dotted_list(templates, tail, env, indices, inside_quote)
+                self.expand_dotted_list(cx, templates, tail, env, indices, inside_quote)
             }
 
             Template::Ellipsis {
@@ -245,39 +207,28 @@ impl Expander {
                     level: *level,
                     inside_quote,
                 };
-                self.expand_ellipsis(&ctx, *nesting)
+                self.expand_ellipsis(cx, &ctx, *nesting)
             }
         }
     }
 
-    /// Convert a Scheme list (TaggedValue) to a Vec<TaggedValue>
+    /// Convert a Scheme list to a Vec
     pub(super) fn list_to_vec_tagged(
         &self,
-        tv: TaggedValue,
-    ) -> Result<Vec<TaggedValue>, ExpandError> {
+        cx: &Cx<'gc>,
+        tv: Value<'gc>,
+    ) -> Result<Vec<Value<'gc>>, ExpandError> {
         // `Heap::list_to_vec` refuses a circular list as well as an improper
         // one, where a plain walk followed a circular one forever (#459).
-        self.heap()
-            .borrow()
-            .list_to_vec(tv)
+        cx.list_to_vec(tv)
             .ok_or_else(|| ExpandError::InvalidTemplate {
                 message: "Expected proper list".to_string(),
             })
     }
-
-    /// Convert a Vec<TaggedValue> to a Scheme list (TaggedValue)
-    pub(super) fn vec_to_list_tagged(&self, values: Vec<TaggedValue>) -> TaggedValue {
-        self.heap().borrow_mut().list_from_iter(values)
-    }
 }
 
-impl Default for Expander {
+impl Default for Expander<'_> {
     fn default() -> Self {
-        Self {
-            macro_scope: patina_runtime::ScopeId::fresh(),
-            shared_heap: None,
-            mac: TaggedValue::UNSPECIFIED,
-            depth_limit: patina_core::walk::MAX_FORM_DEPTH,
-        }
+        Self::new(patina_runtime::ScopeId::fresh())
     }
 }

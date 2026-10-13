@@ -48,9 +48,8 @@ fn features(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, Eval
     // this as "a list of the feature identifiers which `cond-expand` treats as
     // true", and `cond-expand` reads the same field. Building a fresh default
     // here is how the two came to disagree about the backend identifier.
-    let sym_tvs: Vec<TaggedValue> = h
-        .features_and_close()
-        .all_features()
+    let names = h.features_and_close().all_features();
+    let sym_tvs: Vec<TaggedValue> = names
         .into_iter()
         .map(|name| h.intern_symbol(&name))
         .collect();

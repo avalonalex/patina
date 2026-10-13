@@ -571,12 +571,14 @@ impl<'a> Desugarer<'a> {
         if names.is_empty() {
             return body_tvs.to_vec();
         }
-        body_tvs
-            .iter()
-            .map(|&tv| {
-                patina_macros::add_scope_to_bound_names(tv, &names, binding_scope, shared_heap)
-            })
-            .collect()
+        crate::macro_expander::cross_all(shared_heap, body_tvs, |cx, body| {
+            body.iter()
+                .map(|&form| {
+                    patina_macros::add_scope_to_bound_names(form, &names, binding_scope, cx)
+                        .tagged()
+                })
+                .collect()
+        })
     }
 
     fn enter_binding_form(
@@ -2225,7 +2227,7 @@ impl<'a> Desugarer<'a> {
             // Save call-site source location before expansion
             let call_site_source = self.lookup_source(list, shared_heap);
 
-            let patina_macros::MacroExpansion {
+            let declarations::Expansion {
                 form: expanded_tagged,
                 scope: expansion_scope,
             } = self
@@ -3150,11 +3152,14 @@ impl<'a> Desugarer<'a> {
             // `let-syntax` the transformers are outside the form's scope and
             // are left as written.
             let transformer = if is_letrec {
-                patina_macros::add_scope_to_scoped_identifiers(
-                    binding_vec[1],
-                    let_syntax_scope,
-                    shared_heap,
-                )
+                crate::macro_expander::cross(shared_heap, [binding_vec[1]], |cx, [transformer]| {
+                    patina_macros::add_scope_to_scoped_identifiers(
+                        transformer,
+                        let_syntax_scope,
+                        cx,
+                    )
+                    .tagged()
+                })
             } else {
                 binding_vec[1]
             };
@@ -3267,12 +3272,15 @@ impl<'a> Desugarer<'a> {
         // form, and what lets the binding above tell a reference *in* the
         // body from one a transformer will introduce later. A body with no
         // such identifiers, the usual one, comes back unchanged.
-        let body_tvs: Vec<TaggedValue> = args_vec[1..]
-            .iter()
-            .map(|&tv| {
-                patina_macros::add_scope_to_scoped_identifiers(tv, let_syntax_scope, shared_heap)
-            })
-            .collect();
+        let body_tvs: Vec<TaggedValue> =
+            crate::macro_expander::cross_all(shared_heap, &args_vec[1..], |cx, body| {
+                body.iter()
+                    .map(|&form| {
+                        patina_macros::add_scope_to_scoped_identifiers(form, let_syntax_scope, cx)
+                            .tagged()
+                    })
+                    .collect()
+            });
 
         Ok((body_desugarer, body_tvs))
     }
@@ -3742,25 +3750,39 @@ impl<'a> Desugarer<'a> {
         let rules_start = literals_index + 1;
         let rules = self.parse_macro_rules_tagged(&list[rules_start..], &name, shared_heap)?;
 
-        let mut compiler = Compiler::with_env_and_scopes(
-            literals,
-            custom_ellipsis,
-            self.expansion_env(env),
-            scopes.clone(),
-            env.heap().clone(),
-        );
         let macro_name = name.clone();
-        let (mut compiled, literals) =
-            compiler.compile_macro(name, rules).map_err(|e| match e {
-                // A pattern or template nested past the limit code is held to
-                // (#617).
-                patina_macros::MacroError::NestedTooDeeply => {
-                    DesugarError::nested_too_deeply(transformer_tv, &shared_heap.borrow())
-                }
-                e => DesugarError::InvalidSyntax(format!(
-                    "Failed to compile macro {macro_name}: {e}"
-                )),
-            })?;
+        let expansion_env = self.expansion_env(env);
+        // The rules cross into a context, pattern and template in turn; the
+        // literals come back as words, for the macro object.
+        let words: Vec<TaggedValue> = rules.iter().flat_map(|&(p, t)| [p, t]).collect();
+        let compiled = crate::macro_expander::cross_all(shared_heap, &words, |cx, words| {
+            let mut compiler = Compiler::with_env_and_scopes(
+                literals,
+                custom_ellipsis,
+                expansion_env,
+                scopes.clone(),
+            );
+            let rules = words
+                .chunks_exact(2)
+                .map(|rule| (rule[0], rule[1]))
+                .collect();
+            compiler
+                .compile_macro(cx, name, rules)
+                .map(|(compiled, literals)| {
+                    (
+                        compiled,
+                        literals.into_iter().map(|l| l.tagged()).collect::<Vec<_>>(),
+                    )
+                })
+        });
+        let (mut compiled, literals) = compiled.map_err(|e| match e {
+            // A pattern or template nested past the limit code is held to
+            // (#617).
+            patina_macros::MacroError::NestedTooDeeply => {
+                DesugarError::nested_too_deeply(transformer_tv, &shared_heap.borrow())
+            }
+            e => DesugarError::InvalidSyntax(format!("Failed to compile macro {macro_name}: {e}")),
+        })?;
         // Compilation consults declarations (notably a bound `...`), but an
         // escaping transformer must retain the live environment, not its view.
         compiled.definition_env = Some(env.clone());

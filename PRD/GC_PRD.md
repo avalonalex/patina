@@ -945,9 +945,10 @@ pub type Prim = for<'gc> fn(&mut Cx<'gc>, &[Value<'gc>]) -> Result<Value<'gc>, E
 // Resumable primitives return Step<'gc>: Done | Call | Eval | Collect { kind, state }  (resumed with whether it collected)
 ```
 
-The brand is pinned by trybuild compile-fail tests (a value used after a may-collect call, a slice held across
-`load_library`, a value in a `static`, a value escaping `interp.with`) in primitives, frontend, macros, the embedding
-API and `patina-compat`. Values stored long-term outside the core crates (`CoreExpr`/`CpsExpr` literals, `Step`
+The brand is pinned by `compile_fail` doctests (a value used after a may-collect call, a slice held across
+`load_library`, a value in a `static`, a value escaping `interp.with`) in core, primitives, frontend, macros, the
+embedding API and `patina-compat`: doctests rather than trybuild, which would be a new dependency (the owner's decision
+on [#697], 2026-10-13). Values stored long-term outside the core crates (`CoreExpr`/`CpsExpr` literals, `Step`
 state) use a `pub unsafe` raw-word API under a `NoGcScope` or a traced root, or the **`CoreExpr` literal pool**, a
 traced table shared by both backends and scoped to one compilation (M2). A macro's literals are its macro object's,
 which a pattern or template names by index and a context reads through the macro's value ([#718]).
@@ -960,6 +961,13 @@ and raw slot access are `pub unsafe fn`; release-mode reservation range checks g
 `PENDING_ESCAPE` leaves `thread_local!`. **Borrowing:** reads take `&Cx`; mutation and allocation take `&mut Cx` until
 5e, `&Cx` after; bulk reads return `&[HeapSlot<'gc>]` tied to a `&Cx` borrow; no public API returns `&BigInt`,
 `&mut Vec<char>` or `&mut [Word]` into the heap.
+
+**Crossing while the codemod converts.** Stage 3 converts the safe crates bottom-up (DESIGN E.5), so for a while a
+caller that works in words calls code that takes a `Cx`: the desugarer calling the expander, `eval`'s check calling
+the desugarer, the registry calling a converted primitive. Such a caller is a host of the code it calls, and its words
+cross as an embedder's values do ([#605]): each through an `Owned` handle, read back with `Cx::held` inside the
+context, while what comes back leaves as a word. No safe crate gains `unsafe`, no safe `Word → Value` API is added,
+and each crossing goes when its caller converts ([#704]).
 
 **Across a collection**, only these hold values: resumable-primitive state (in the VM `resume_stub` frame or the
 tree-walker's `ResumePrimitive` continuation, both traced); a **`RootScope<'h>`**, which wraps the `&'h mut Heap`
@@ -1458,7 +1466,7 @@ that a lane cannot go quietly blind:
 a call-graph test of the helper table (no `Leaf` reaches a `Transfer` function, no `NoAlloc` an allocation); a host
 `Leaf` primitive that allocates, called from JIT code, leaving the heap verifier clean (§11.5); `install_code` refusing
 a body compiled against other `GcAttrs` (§14); embedded addresses limited to §11.2's four cases; no `Drop` in layout
-payloads; trybuild tests of the brand; the conformance suite (§14); the `InterruptHandle` tests; a CI check against new
+payloads; compile-fail doctests of the brand; the conformance suite (§14); the `InterruptHandle` tests; a CI check against new
 `thread_local!`, `static mut` and heap-side `Rc`/`RefCell`/`Cell` (§18.6). **Scoreboards** gate every stage: both chibi
 scripts; the matrix on both backends with `escape_from_primitive.rs` and the raise-site tests; the hygiene matrix, with
 §17.4's `def-getter` maker; `ephemerons.rs`, `finished_forms_release_code.rs`, `gc_vm.rs`, `gc_tree_walker.rs`,
@@ -1996,7 +2004,7 @@ the plan stops after it.
 | 0 | Ground truth: a `gc` mode for the benchmark runner, the GBS with `large-live`, the pause/MMU log, [K16](#k16)'s counters, the `gc-census` feature, the vendored probes; the measurement table and the off-heap holder inventory on the tracking issue (§22); the rebinding suite file with its `DIVERGENCES.tsv` rows | 3–4 | the steady-state lane and its portable runner; `resident-bytes` and `cpu-us`; the MMU ring buffer; the `def-getter` hygiene maker; the lane's resident-size form and the SS4 gate (SD1) | time-to-safepoint metric (addition C12) | the measurement table's baselines reproduced within their confidence intervals; no behaviour change; every steady-state row runs (red rows capped) | every later claim becomes measurable | [#647] (tracking), [#648], [#649], [#650], [#651], [#652], [#603]; drift: comment on [#597] |
 | 1 | Quick wins on today's collector: byte trigger, `(gc)` collects at its call, `EMFILE` collect-and-retry with descriptor pressure, the unread provenance stores deleted | 4–5 | SS1, SS2 and SS5 at forced majors (SD1); environment-specifier namespaces charged as external bytes; expansion chains of shared links, each owned by one form's expansion ([#612]; interned per document at 4c); `(gc-stats)` shows each limit beside its use | — | trigger blindness and descriptor exhaustion fixed; reclamation proofs non-vacuous; GBS ±1% | the measured blow-ups fixed now; `(gc)`'s timing independent of the poll | [#606], [#607], [#612] (part), [#615] (part), [#643] |
 | 2 | Root and boundary contract: slot visitor and the `Trace` derive for off-heap structures (§14), `CallFrame.closure` as a value, `Owned` and environment handles on the public paths that yield a value or environment, `backend()` and `evaluator()` documented as the raw layer (§11.5), heap teardown, top-level `import` and `define-library` recognized by binding, rooted loading | 6–8 (Appendix D's 5–7, plus about 1 for the derive) | `define-library` forms reach a collection point; teardown returns each dropped interpreter's memory | per-heap Rust tables behind one wrapper; loading entries record their thread (additions C3, C15) | embedder use-after-free (returned values, global reads, host environments) and teardown leak fixed; the VM evaluates in the environment it is given; no hand-written off-heap trace left; library bodies loaded through `import` collect; GBS ±1% | embedding is sound; library bodies collect; no leak; a new field cannot go untraced silently | [#604], [#605], [#610], [#614] (part), [#620] |
-| 3 | `Mutator`, the collect capability, `Cx` and the store funnel; `#![forbid(unsafe_code)]` in the safe crates (§11.3); polls at frame entry; `InterruptHandle`; `Interpreter::call` and host primitives | 10–13 | the `CoreExpr` literal pool scoped to one compilation; the embedders' external-bytes accounter | per-carrier collect capability (addition C2); reserved `Mutator` words, `GcAttrs.publication`, 128-byte alignment (C1, C10); bulk-range accessors (C4); the CI check and the first `Send`/`Sync` assertions (C9, C11); the memory model; the `threaded` feature with accessor bodies only, linted by `--all-features` clippy | ABI, trybuild, interrupt and embedding tests on both backends; `ephemerons.rs`'s three [#423] tests (§9.5); geomean ≥ 0% in instructions | the JIT ABI object exists; who may collect is a type; hosts can call Scheme and register primitives soundly; Ctrl-C stops a tight loop | — |
+| 3 | `Mutator`, the collect capability, `Cx` and the store funnel; `#![forbid(unsafe_code)]` in the safe crates (§11.3); polls at frame entry; `InterruptHandle`; `Interpreter::call` and host primitives | 10–13 | the `CoreExpr` literal pool scoped to one compilation; the embedders' external-bytes accounter | per-carrier collect capability (addition C2); reserved `Mutator` words, `GcAttrs.publication`, 128-byte alignment (C1, C10); bulk-range accessors (C4); the CI check and the first `Send`/`Sync` assertions (C9, C11); the memory model; the `threaded` feature with accessor bodies only, linted by `--all-features` clippy | ABI, compile-fail doctest, interrupt and embedding tests on both backends; `ephemerons.rs`'s three [#423] tests (§9.5); geomean ≥ 0% in instructions | the JIT ABI object exists; who may collect is a type; hosts can call Scheme and register primitives soundly; Ctrl-C stops a tight loop | — |
 | 4a | Canonical identity and ports | 4–5 | the `PortTable` registry prunes dropped heaps; the loader retries after `EMFILE` | — | `(eq? (current-output-port) (current-output-port))` ⇒ `#t`; `garbage_port_flushed_by_collection`, `descriptor_exhaustion_retries`, `one_port_one_object`, `dropped_interpreter_flushes_ports` and `exit_flushes_every_interpreter` on both backends; [#618]'s repro (two interpreters on one OS thread keep separate current ports) on both backends; I/O workloads ±1% | port semantics match the oracles; no primitive calls back for `parameterize` | [#608], [#618] |
 | 4b | Global cells and binding records (variant R) | 3–4 | namespaces own records and cells, placeholders weak; a variable alias stops being a name; introduced definitions strong with an indexed lookup; environment-specifier namespaces die with their specifier or last unit; redefined libraries released | one read-mostly namespace API (addition C6) | the rebinding tests and decision 3's rows answer as today; the global path neutral or better than `frame_globals` | no `Rc` clone, `RefCell` borrow or `FORWARDED` hop on the global path, and no environment held by closures | [#613], [#614] (part), [#615] (part) |
 | 4c | Identifiers as ids, inline provenance | 3–5 | document-owned location tables compacted while streaming; a weak (or per-form) scope-set table that reports which expansion scopes live identifiers carry | — | hygiene matrix 139/139; libload `malloc` peak ≤ 450 MiB; caret tests | the largest load-memory cost removed; syntax becomes `Drop`-free | [#612] (part) |
@@ -2035,7 +2043,7 @@ the detail):
   `DebugHook: RootProvider`).
 - **3:** AGENTS.md (the `RefCell` borrow rule becomes the `Cx` and collect-capability rule); `docs/VM_DECISIONS.md` §6
   and §8 (the primitive signature; no `SharedHeap`); `PRD/FFI_DESIGN.md` (plugins through `register_primitive`);
-  `docs/TEST_ORGANIZATION.md` (zeal-entry lane, trybuild tests); `PRD/future/TREE_WALKER_HOOK_SYSTEM.md` §5.2 and
+  `docs/TEST_ORGANIZATION.md` (zeal-entry lane, compile-fail doctests); `PRD/future/TREE_WALKER_HOOK_SYSTEM.md` §5.2 and
   §10.1 and `PRD/future/VISUAL_DEBUGGER_DESIGN.md` (`GcDeferGuard` and "no GC while paused" become `NoGcScope`,
   counted by [K16](#k16); the tier-policy flag).
 - **4a:** `docs/TEST_ORGANIZATION.md` (port-finalization tests kept outside the differential lane);
@@ -2251,4 +2259,6 @@ from them on these known points before filing it:
 [#656]: https://github.com/avalonalex/patina/issues/656
 [#686]: https://github.com/avalonalex/patina/issues/686
 [#687]: https://github.com/avalonalex/patina/issues/687
+[#697]: https://github.com/avalonalex/patina/issues/697
+[#704]: https://github.com/avalonalex/patina/issues/704
 [#718]: https://github.com/avalonalex/patina/issues/718

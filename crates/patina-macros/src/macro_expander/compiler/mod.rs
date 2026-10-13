@@ -33,7 +33,7 @@ use super::IdentifierKey;
 use super::utils::ELLIPSIS;
 use crate::error::MacroError;
 use patina_core::walk::OpenNodes;
-use patina_core::{SharedHeap, TaggedValue};
+use patina_core::{Cx, Value};
 use patina_runtime::{Environment, LiteralId, PVRef, Pattern, ScopeSet, Template};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -43,10 +43,44 @@ pub use patina_runtime::{CompiledMacro, CompiledRule};
 
 /// Pattern and template compiler
 ///
-/// Compiles Scheme S-expressions into PVREF-based Pattern2/Template2.
+/// Compiles Scheme S-expressions into PVREF-based Pattern2/Template2,
+/// reading them through the context each call is given; the literals it
+/// collects are values of that context.
 ///
 /// Based on Gauche's compile_rules (macro.c:604-683).
-pub struct Compiler {
+///
+/// ```
+/// use patina_core::{GcDriver, Instance, new_shared_heap};
+/// use patina_macros::{Compiler, Template};
+///
+/// let heap = new_shared_heap();
+/// let instance = Instance::default();
+/// let mut driver = GcDriver::acquire(&heap).unwrap();
+/// driver.mutate(&instance, |cx| {
+///     let mut compiler = Compiler::new(vec![], None);
+///     let form = cx.intern_symbol("x");
+///     let template = compiler.compile_template(cx, form, 0).unwrap();
+///     assert!(matches!(template, Template::Symbol(_)));
+/// });
+/// ```
+///
+/// Its literals are values of the context it compiles in, so a compiler
+/// cannot outlive that context: one made outside it is refused (#704).
+///
+/// ```compile_fail,E0521
+/// use patina_core::{GcDriver, Instance, new_shared_heap};
+/// use patina_macros::Compiler;
+///
+/// let heap = new_shared_heap();
+/// let instance = Instance::default();
+/// let mut driver = GcDriver::acquire(&heap).unwrap();
+/// let mut compiler = Compiler::new(vec![], None);
+/// driver.mutate(&instance, |cx| {
+///     let form = cx.intern_symbol("x");
+///     compiler.compile_template(cx, form, 0).unwrap();
+/// });
+/// ```
+pub struct Compiler<'gc> {
     /// Literals exactly as written, for identity-based membership tests.
     ///
     /// R7RS 4.3.2 decides literal membership by identifier identity, so a
@@ -114,12 +148,9 @@ pub struct Compiler {
     /// The literals the patterns and templates compiled so far name by
     /// index, each once, which become the macro object's (#718). Across all
     /// rules, as `inherited_identifiers` is.
-    pub(super) literals: Vec<TaggedValue>,
+    pub(super) literals: Vec<Value<'gc>>,
     /// Each literal's index in `literals`.
-    pub(super) literal_ids: HashMap<TaggedValue, LiteralId>,
-
-    /// The heap the forms being compiled live in.
-    pub(super) heap: SharedHeap,
+    pub(super) literal_ids: HashMap<Value<'gc>, LiteralId>,
 
     /// The pairs and vectors of the pattern or template being compiled that
     /// the compiler is inside — so that one met again inside itself, which a
@@ -140,13 +171,13 @@ fn is_declared_ellipsis(ellipsis: &Option<Rc<str>>) -> bool {
     ellipsis.as_deref().is_some_and(|e| e != ELLIPSIS)
 }
 
-impl Compiler {
+impl<'gc> Compiler<'gc> {
     /// Create a new compiler
     ///
     /// # Arguments
     /// - `literals`: List of literal identifier names
     /// - `ellipsis`: Symbol to use for ellipsis (typically "...")
-    pub fn new(literals: Vec<IdentifierKey>, ellipsis: Option<Rc<str>>, heap: SharedHeap) -> Self {
+    pub fn new(literals: Vec<IdentifierKey>, ellipsis: Option<Rc<str>>) -> Self {
         Self {
             literal_keys: literals,
             ellipsis_is_custom: is_declared_ellipsis(&ellipsis),
@@ -161,7 +192,6 @@ impl Compiler {
             inherited_identifiers: HashMap::new(),
             literals: Vec::new(),
             literal_ids: HashMap::new(),
-            heap,
             open: OpenNodes::default(),
         }
     }
@@ -176,7 +206,6 @@ impl Compiler {
         literals: Vec<IdentifierKey>,
         ellipsis: Option<Rc<str>>,
         env: Rc<Environment>,
-        heap: SharedHeap,
     ) -> Self {
         let definition_scopes = ScopeSet::new();
         Self {
@@ -193,7 +222,6 @@ impl Compiler {
             inherited_identifiers: HashMap::new(),
             literals: Vec::new(),
             literal_ids: HashMap::new(),
-            heap,
             open: OpenNodes::default(),
         }
     }
@@ -213,7 +241,6 @@ impl Compiler {
         ellipsis: Option<Rc<str>>,
         env: Rc<Environment>,
         scopes: ScopeSet,
-        heap: SharedHeap,
     ) -> Self {
         Self {
             literal_keys: literals,
@@ -229,27 +256,26 @@ impl Compiler {
             inherited_identifiers: HashMap::new(),
             literals: Vec::new(),
             literal_ids: HashMap::new(),
-            heap,
             open: OpenNodes::default(),
         }
     }
 
     /// The id of the literal `form`, which the macro object will hold: each
     /// word once, however often the rules name it.
-    fn literal_id(&mut self, form: TaggedValue) -> LiteralId {
+    fn literal_id(&mut self, form: Value<'gc>) -> LiteralId {
         *self.literal_ids.entry(form).or_insert_with(|| {
             self.literals.push(form);
             LiteralId::new(self.literals.len() - 1)
         })
     }
 
-    /// Create a literal pattern from a TaggedValue
-    pub(super) fn make_literal_pattern(&mut self, form: TaggedValue) -> Pattern {
+    /// Create a literal pattern
+    pub(super) fn make_literal_pattern(&mut self, form: Value<'gc>) -> Pattern {
         Pattern::Literal(self.literal_id(form))
     }
 
-    /// Create a literal template from a TaggedValue
-    pub(super) fn make_literal_template(&mut self, form: TaggedValue) -> Template {
+    /// Create a literal template
+    pub(super) fn make_literal_template(&mut self, form: Value<'gc>) -> Template {
         Template::Literal(self.literal_id(form))
     }
 
@@ -257,16 +283,17 @@ impl Compiler {
     ///
     /// # Arguments
     /// - `name`: Macro name
-    /// - `rules`: List of (pattern, template) pairs as TaggedValues
+    /// - `rules`: List of (pattern, template) pairs
     ///
     /// # Returns
     /// Compiled macro with all rules in PVREF form, and the literals its
     /// rules name by index, for the macro object (`Heap::alloc_macro`, #718)
     pub fn compile_macro(
         &mut self,
+        cx: &mut Cx<'gc>,
         name: Rc<str>,
-        rules: Vec<(TaggedValue, TaggedValue)>,
-    ) -> Result<(CompiledMacro, Vec<TaggedValue>), MacroError> {
+        rules: Vec<(Value<'gc>, Value<'gc>)>,
+    ) -> Result<(CompiledMacro, Vec<Value<'gc>>), MacroError> {
         let mut compiled_rules = Vec::new();
         let mut max_pvars = 0;
         // Cleared here as well as taken at the end: a rule that fails to
@@ -285,8 +312,8 @@ impl Compiler {
             // R7RS: The first element of each pattern is the macro keyword placeholder
             // and should be ignored (treated as wildcard). This is true even if the
             // symbol appears in the literals list (e.g., when _ is in literals).
-            let pattern = self.compile_rule_pattern(pat_form, 0)?;
-            let template = self.compile_template(tmpl_form, 0)?;
+            let pattern = self.compile_rule_pattern(cx, pat_form, 0)?;
+            let template = self.compile_template(cx, tmpl_form, 0)?;
 
             // Build reverse mapping: PVREF -> name (for debug output)
             let pvar_names: HashMap<PVRef, Rc<str>> = self

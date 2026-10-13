@@ -6,11 +6,11 @@
 use super::super::IdentifierKey;
 use super::Compiler;
 use crate::error::MacroError;
-use patina_core::{SpineEnd, TaggedValue};
+use patina_core::{Cx, SpineEnd, Value};
 use patina_runtime::PVRef;
 use std::rc::Rc;
 
-impl Compiler {
+impl<'gc> Compiler<'gc> {
     /// Add a pattern variable and assign it a PVREF
     ///
     /// # Arguments
@@ -51,8 +51,8 @@ impl Compiler {
     }
 
     /// The identity of an identifier-or-symbol form, or `None` for anything else.
-    pub(super) fn identifier_key(&self, form: TaggedValue) -> Option<IdentifierKey> {
-        IdentifierKey::from_heap(form, &self.heap.borrow())
+    pub(super) fn identifier_key(&self, cx: &Cx<'gc>, form: Value<'gc>) -> Option<IdentifierKey> {
+        IdentifierKey::from_cx(form, cx)
     }
 
     /// Whether an identifier is one of this macro's literals.
@@ -66,8 +66,8 @@ impl Compiler {
 
     /// The PVREF this identifier is bound to, if it is one of this rule's
     /// pattern variables.
-    pub(super) fn lookup_pvar(&self, form: TaggedValue) -> Option<PVRef> {
-        let key = self.identifier_key(form)?;
+    pub(super) fn lookup_pvar(&self, cx: &Cx<'gc>, form: Value<'gc>) -> Option<PVRef> {
+        let key = self.identifier_key(cx, form)?;
         self.pvars.get(&key).copied()
     }
 
@@ -92,7 +92,7 @@ impl Compiler {
     ///
     /// A declared ellipsis (SRFI 46) is exempt: it is a declaration, not a
     /// reference, so no binding is consulted.
-    fn default_ellipsis_is_bound_away(&self, form: TaggedValue) -> bool {
+    fn default_ellipsis_is_bound_away(&self, cx: &Cx<'gc>, form: Value<'gc>) -> bool {
         if self.ellipsis_is_custom {
             return false;
         }
@@ -108,10 +108,9 @@ impl Compiler {
         // Resolve the scopes before touching the environment: `get_with_scopes`
         // borrows the heap itself when macro debugging is on.
         let scopes = {
-            let heap = self.heap.borrow();
-            match heap
+            match cx
                 .get_identifier_data_any(form)
-                .filter(|_| !heap.is_source_identifier(form))
+                .filter(|_| !cx.is_source_identifier(form))
             {
                 // An identifier: introduced by an expansion, and its own scopes
                 // are the context it came from — empty meaning top level, where
@@ -143,42 +142,42 @@ impl Compiler {
         let Ok(Some(tv)) = env.get_with_scopes(super::super::utils::ELLIPSIS, &scopes) else {
             return false;
         };
-        let heap = self.heap.borrow();
-        heap.get_core_syntax(tv) != Some(patina_core::CoreForm::Ellipsis)
+        // The binding is a word the environment holds, which is compared by
+        // identity with the one `CoreForm::Ellipsis` marker rather than read
+        // through the context (#704).
+        cx.interned_core_syntax(patina_core::CoreForm::Ellipsis)
+            .is_none_or(|marker| marker.tagged() != tv)
     }
 
-    /// Check if a TaggedValue is the ellipsis symbol
+    /// Check if a form is the ellipsis symbol
     ///
     /// Recognizes both plain Symbol and Identifier (with marks/scopes)
     /// to support nested macro definitions where ellipsis may be wrapped.
     ///
     /// R7RS 4.3.2: "Literals have priority over ellipsis."
     /// If the ellipsis symbol is also in the literals list, return false.
-    pub(super) fn is_ellipsis(&self, form: TaggedValue) -> bool {
+    pub(super) fn is_ellipsis(&self, cx: &Cx<'gc>, form: Value<'gc>) -> bool {
         match &self.ellipsis {
             None => false, // Ellipsis disabled
             Some(ellipsis_sym) => {
-                let is_ellipsis_match = {
-                    let heap = self.heap.borrow();
-                    if let Some(s) = heap.get_symbol_name(form) {
-                        s == ellipsis_sym.as_ref()
-                    } else if let Some((name, _)) = heap.get_identifier_data_any(form) {
-                        &name == ellipsis_sym
-                    } else {
-                        false
-                    }
+                let is_ellipsis_match = if let Some(s) = cx.get_symbol_name(form) {
+                    &*s == ellipsis_sym.as_ref()
+                } else if let Some((name, _)) = cx.get_identifier_data_any(form) {
+                    &name == ellipsis_sym
+                } else {
+                    false
                 };
                 // Literals have priority over ellipsis (SRFI-46, R7RS 4.3.2).
                 // Only reached for a token actually spelled like the ellipsis,
                 // so the extra identity read is rare.
                 if is_ellipsis_match
                     && self
-                        .identifier_key(form)
+                        .identifier_key(cx, form)
                         .is_some_and(|key| self.is_literal_key(&key))
                 {
                     return false;
                 }
-                if is_ellipsis_match && self.default_ellipsis_is_bound_away(form) {
+                if is_ellipsis_match && self.default_ellipsis_is_bound_away(cx, form) {
                     return false;
                 }
                 is_ellipsis_match
@@ -186,22 +185,19 @@ impl Compiler {
         }
     }
 
-    /// Extract symbol name from any identifier type (TaggedValue)
+    /// Extract symbol name from any identifier type
     ///
     /// Returns Some(name) for Symbol or Identifier.
     /// Returns None for other value types.
-    pub(super) fn extract_symbol_name(&self, form: TaggedValue) -> Option<Rc<str>> {
-        let heap = self.heap.borrow();
-        if let Some(s) = heap.get_symbol_name(form) {
-            Some(Rc::from(s))
-        } else if let Some((name, _)) = heap.get_identifier_data_any(form) {
-            Some(name)
+    pub(super) fn extract_symbol_name(&self, cx: &Cx<'gc>, form: Value<'gc>) -> Option<Rc<str>> {
+        if let Some(s) = cx.get_symbol_name(form) {
+            Some(Rc::from(&*s))
         } else {
-            None
+            cx.get_identifier_data_any(form).map(|(name, _)| name)
         }
     }
 
-    /// Check if a TaggedValue is a SUBSTITUTED identifier from outer macro expansion.
+    /// Check if a form is a SUBSTITUTED identifier from outer macro expansion.
     ///
     /// After the flip-scope algorithm in macro expansion:
     /// - Substituted values (from pattern variables): end up with EMPTY scopes
@@ -218,8 +214,7 @@ impl Compiler {
     /// literals list, and pattern-variable identity is (name, scopes) -- which
     /// distinguishes substituted from introduced identifiers without a
     /// provenance test.
-    pub(super) fn is_substituted_from_outer_macro(&self, form: TaggedValue) -> bool {
-        let heap = self.heap.borrow();
+    pub(super) fn is_substituted_from_outer_macro(&self, cx: &Cx<'gc>, form: Value<'gc>) -> bool {
         // Program readers use distinct written identifiers for source spans.
         // They have ordinary symbol semantics here; only expansion identifiers
         // arrived from somewhere else. Their scopes are the context they came from,
@@ -233,30 +228,35 @@ impl Compiler {
         // local variable became a real binding that re-tagging was enough to
         // capture it: `def-mid`'s template `if`, expanded inside
         // `(let ((if 'shadowed)) …)`, resolved to the *variable*.
-        heap.get_identifier_data_any(form).is_some() && !heap.is_source_identifier(form)
+        cx.get_identifier_data_any(form).is_some() && !cx.is_source_identifier(form)
     }
 
-    /// Collect items from a list TaggedValue
+    /// Collect items from a list
     ///
     /// Returns (items, tail) where tail is Some(value) for improper lists. A
     /// circular list is refused: the walk used to follow one forever (#459).
     pub(super) fn collect_list_items(
         &self,
-        expr: TaggedValue,
-    ) -> Result<(Vec<TaggedValue>, Option<TaggedValue>), MacroError> {
-        let heap = self.heap.borrow();
-        match heap.spine(expr) {
+        cx: &Cx<'gc>,
+        expr: Value<'gc>,
+    ) -> Result<(Vec<Value<'gc>>, Option<Value<'gc>>), MacroError> {
+        match cx.spine(expr) {
             (items, SpineEnd::Null) => Ok((items, None)),
             (items, SpineEnd::Improper(tail)) => Ok((items, Some(tail))),
             (_, SpineEnd::Circular) => Err(MacroError::InvalidSyntax(format!(
                 "a syntax-rules pattern or template cannot be a circular list: {}",
-                patina_core::format_tagged(expr, &heap)
+                cx.format(expr)
             ))),
         }
     }
 
     /// Check if the item at the given index is followed by an ellipsis
-    pub(super) fn is_followed_by_ellipsis(&self, items: &[TaggedValue], index: usize) -> bool {
-        index + 1 < items.len() && self.is_ellipsis(items[index + 1])
+    pub(super) fn is_followed_by_ellipsis(
+        &self,
+        cx: &Cx<'gc>,
+        items: &[Value<'gc>],
+        index: usize,
+    ) -> bool {
+        index + 1 < items.len() && self.is_ellipsis(cx, items[index + 1])
     }
 }

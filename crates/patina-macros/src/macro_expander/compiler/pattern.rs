@@ -7,10 +7,10 @@ use super::Compiler;
 use crate::error::MacroError;
 use crate::macro_expander::Pattern;
 use crate::macro_expander::utils::WILDCARD;
-use patina_core::TaggedValue;
+use patina_core::{Cx, Value};
 use patina_runtime::PVRef;
 
-impl Compiler {
+impl<'gc> Compiler<'gc> {
     /// Compile a top-level syntax-rules pattern (a rule pattern)
     ///
     /// R7RS Section 4.3.2: "The first element of each clause is the keyword, which
@@ -24,11 +24,12 @@ impl Compiler {
     /// match the macro name, NOT be treated as a literal that only matches `_`.
     pub(super) fn compile_rule_pattern(
         &mut self,
-        form: TaggedValue,
+        cx: &Cx<'gc>,
+        form: Value<'gc>,
         level: usize,
     ) -> Result<Pattern, MacroError> {
         if form.is_pair() {
-            let (items, tail) = self.collect_list_items(form)?;
+            let (items, tail) = self.collect_list_items(cx, form)?;
             if items.is_empty() {
                 return Err(MacroError::InvalidSyntax(
                     "Pattern must have at least a macro keyword".to_string(),
@@ -42,8 +43,8 @@ impl Compiler {
                 // is a valid R7RS rule pattern -- so they go through the same
                 // ellipsis-aware compiler the proper-list rule path uses.
                 let mut patterns = vec![Pattern::Wildcard];
-                patterns.extend(self.compile_pattern_items(&items[1..], level)?);
-                let tail_pattern = Box::new(self.compile_pattern(tail_value, level)?);
+                patterns.extend(self.compile_pattern_items(cx, &items[1..], level)?);
+                let tail_pattern = Box::new(self.compile_pattern(cx, tail_value, level)?);
                 Ok(Pattern::DottedList {
                     patterns,
                     tail: tail_pattern,
@@ -51,7 +52,7 @@ impl Compiler {
             } else {
                 // Regular list pattern: (keyword p1 p2 ...)
                 // First element is keyword (wildcard), rest are compiled with ellipsis detection
-                self.compile_rule_list_pattern(&items, level)
+                self.compile_rule_list_pattern(cx, &items, level)
             }
         } else {
             Err(MacroError::InvalidSyntax(
@@ -65,7 +66,8 @@ impl Compiler {
     /// This is similar to compile_list_pattern but treats the first element as a wildcard.
     fn compile_rule_list_pattern(
         &mut self,
-        items: &[TaggedValue],
+        cx: &Cx<'gc>,
+        items: &[Value<'gc>],
         level: usize,
     ) -> Result<Pattern, MacroError> {
         let mut patterns = vec![Pattern::Wildcard]; // First element is always wildcard
@@ -73,11 +75,11 @@ impl Compiler {
 
         while i < items.len() {
             // Check for ellipsis
-            if i + 1 < items.len() && self.is_ellipsis(items[i + 1]) {
+            if i + 1 < items.len() && self.is_ellipsis(cx, items[i + 1]) {
                 // Found ellipsis pattern: (item ...)
                 let num_following = items.len() - i - 2;
                 let start_pvars = self.pvar_count;
-                let subpattern = self.compile_pattern(items[i], level + 1)?;
+                let subpattern = self.compile_pattern(cx, items[i], level + 1)?;
                 let end_pvars = self.pvar_count;
 
                 let mut vars = Vec::new();
@@ -96,7 +98,7 @@ impl Compiler {
 
                 i += 2; // Skip pattern and ellipsis
             } else {
-                patterns.push(self.compile_pattern(items[i], level)?);
+                patterns.push(self.compile_pattern(cx, items[i], level)?);
                 i += 1;
             }
         }
@@ -109,11 +111,12 @@ impl Compiler {
     /// Based on Gauche's compile_rule1 (macro.c:400+).
     ///
     /// # Arguments
-    /// - `form`: TaggedValue representing the pattern
+    /// - `form`: The pattern
     /// - `level`: Current ellipsis nesting level (0 = not in ellipsis)
     pub fn compile_pattern(
         &mut self,
-        form: TaggedValue,
+        cx: &Cx<'gc>,
+        form: Value<'gc>,
         level: usize,
     ) -> Result<Pattern, MacroError> {
         // A pattern met again inside itself — a datum label can write one — is
@@ -123,14 +126,14 @@ impl Compiler {
         if compound && self.open.depth() >= patina_core::walk::MAX_FORM_DEPTH {
             return Err(MacroError::NestedTooDeeply);
         }
-        if compound && !self.open.enter(form) {
+        if compound && !self.open.enter(form.tagged()) {
             return Err(MacroError::InvalidSyntax(format!(
                 "a syntax-rules pattern cannot contain itself: {}",
-                patina_core::format_tagged(form, &self.heap.borrow())
+                cx.format(form)
             )));
         }
         let compiled = patina_core::walk::ensure_sufficient_stack_if(compound, || {
-            self.compile_pattern_node(form, level)
+            self.compile_pattern_node(cx, form, level)
         });
         if compound {
             self.open.leave();
@@ -141,13 +144,14 @@ impl Compiler {
     /// [`Self::compile_pattern`] for one node, inside the ones `open` holds.
     fn compile_pattern_node(
         &mut self,
-        form: TaggedValue,
+        cx: &Cx<'gc>,
+        form: Value<'gc>,
         level: usize,
     ) -> Result<Pattern, MacroError> {
         // Handle all identifier types (Symbol, Identifier). The identity is
         // read once here and reused for both the literals test and the pattern
         // variable it may become.
-        if let Some(key) = self.identifier_key(form) {
+        if let Some(key) = self.identifier_key(cx, form) {
             // R7RS: Check literals FIRST (including _ if it's in the literals list)
             if self.is_literal_key(&key) {
                 return Ok(self.make_literal_pattern(form));
@@ -168,27 +172,23 @@ impl Compiler {
             // Check for pair
             let is_pair = form.is_pair();
             if is_pair {
-                let (items, tail) = self.collect_list_items(form)?;
+                let (items, tail) = self.collect_list_items(cx, form)?;
                 if let Some(tail_value) = tail {
                     // Dotted list pattern
-                    self.compile_dotted_pattern(&items, tail_value, level)
+                    self.compile_dotted_pattern(cx, &items, tail_value, level)
                 } else {
                     // Regular list pattern
-                    self.compile_list_pattern(&items, level)
+                    self.compile_list_pattern(cx, &items, level)
                 }
-            } else if form == TaggedValue::NULL {
+            } else if form.is_null() {
                 Ok(Pattern::List(vec![]))
             } else if form.is_vector() {
                 // Vector
-                let heap = self.heap.borrow();
-                let len = heap.vector_len(form);
-                let elements: Vec<TaggedValue> =
-                    (0..len).map(|i| heap.vector_ref(form, i)).collect();
-                drop(heap);
+                let elements = cx.vector_slice(form).to_vec();
                 // Vector patterns carry ellipses just like list ones --
                 // `#(x ...)` is valid -- so this shares the ellipsis-aware
                 // item compiler.
-                let patterns = self.compile_pattern_items(&elements, level)?;
+                let patterns = self.compile_pattern_items(cx, &elements, level)?;
                 Ok(Pattern::Vector(patterns))
             } else {
                 // Literal value (boolean, number, string, character, etc.)
@@ -200,10 +200,11 @@ impl Compiler {
     /// Compile a list pattern, detecting ellipsis
     fn compile_list_pattern(
         &mut self,
-        items: &[TaggedValue],
+        cx: &Cx<'gc>,
+        items: &[Value<'gc>],
         level: usize,
     ) -> Result<Pattern, MacroError> {
-        let patterns = self.compile_pattern_items(items, level)?;
+        let patterns = self.compile_pattern_items(cx, items, level)?;
         Ok(Pattern::List(patterns))
     }
 
@@ -211,12 +212,13 @@ impl Compiler {
     /// Also handles patterns with ellipsis: (a b ... . rest)
     fn compile_dotted_pattern(
         &mut self,
-        items: &[TaggedValue],
-        tail: TaggedValue,
+        cx: &Cx<'gc>,
+        items: &[Value<'gc>],
+        tail: Value<'gc>,
         level: usize,
     ) -> Result<Pattern, MacroError> {
-        let patterns = self.compile_pattern_items(items, level)?;
-        let tail_pattern = Box::new(self.compile_pattern(tail, level)?);
+        let patterns = self.compile_pattern_items(cx, items, level)?;
+        let tail_pattern = Box::new(self.compile_pattern(cx, tail, level)?);
 
         Ok(Pattern::DottedList {
             patterns,
@@ -227,22 +229,23 @@ impl Compiler {
     /// Compile a sequence of pattern items, handling ellipsis patterns
     fn compile_pattern_items(
         &mut self,
-        items: &[TaggedValue],
+        cx: &Cx<'gc>,
+        items: &[Value<'gc>],
         level: usize,
     ) -> Result<Vec<Pattern>, MacroError> {
         let mut patterns = Vec::new();
         let mut i = 0;
 
         while i < items.len() {
-            if self.is_followed_by_ellipsis(items, i) {
+            if self.is_followed_by_ellipsis(cx, items, i) {
                 // Found ellipsis pattern: (item ...)
                 let num_following = items.len() - i - 2;
                 let ellipsis_pattern =
-                    self.compile_ellipsis_pattern(items[i], level, num_following)?;
+                    self.compile_ellipsis_pattern(cx, items[i], level, num_following)?;
                 patterns.push(ellipsis_pattern);
                 i += 2; // Skip pattern and ellipsis
             } else {
-                patterns.push(self.compile_pattern(items[i], level)?);
+                patterns.push(self.compile_pattern(cx, items[i], level)?);
                 i += 1;
             }
         }
@@ -253,7 +256,8 @@ impl Compiler {
     /// Compile an ellipsis pattern (item ...)
     fn compile_ellipsis_pattern(
         &mut self,
-        item: TaggedValue,
+        cx: &Cx<'gc>,
+        item: Value<'gc>,
         level: usize,
         num_following: usize,
     ) -> Result<Pattern, MacroError> {
@@ -261,7 +265,7 @@ impl Compiler {
         let start_pvars = self.pvar_count;
 
         // Compile the subpattern at increased level
-        let subpattern = self.compile_pattern(item, level + 1)?;
+        let subpattern = self.compile_pattern(cx, item, level + 1)?;
 
         // Collect PVREFs for variables introduced in this subpattern
         let vars = self.collect_new_pvars(start_pvars, level + 1);

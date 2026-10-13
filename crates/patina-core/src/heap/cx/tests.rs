@@ -202,11 +202,11 @@ fn a_context_is_counted_while_it_lives() {
 #[test]
 fn a_context_carries_its_instance() {
     let heap = new_shared_heap();
-    let mut instance = Instance::default();
+    let instance = Instance::default();
     instance.set_command_line("prog".into(), vec!["arg".into()]);
     let mut driver = GcDriver::acquire(&heap).unwrap();
     driver.mutate(&instance, |cx| {
-        assert_eq!(cx.instance().command_line(), ["prog", "arg"]);
+        assert_eq!(&*cx.instance().command_line(), ["prog", "arg"]);
     });
 }
 

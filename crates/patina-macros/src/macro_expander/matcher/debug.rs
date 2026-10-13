@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 /// Print bindings from match environment
 pub fn print_bindings(
-    env: &MatchEnv,
+    env: &MatchEnv<'_>,
     num_pvars: usize,
     pvar_names: Option<&HashMap<PVRef, Rc<str>>>,
 ) {
@@ -51,7 +51,7 @@ pub fn print_bindings(
 ///
 /// Since Branch now stores an index into MatchEnv's branches storage,
 /// we need access to the env to resolve branch contents.
-pub fn match_value_to_string(mv: &MatchValue, env: &MatchEnv) -> String {
+pub fn match_value_to_string<'gc>(mv: &MatchValue<'gc>, env: &MatchEnv<'gc>) -> String {
     match mv {
         MatchValue::Leaf(tv) => format!("{:?}", tv),
         MatchValue::Branch(branch_idx) => {

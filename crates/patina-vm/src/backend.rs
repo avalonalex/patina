@@ -195,6 +195,9 @@ impl VmBackend {
         // a library body, a `.sld` declaration, a quasiquote — because a
         // missed one does not error, it silently takes the `else` branch.
         global_env.heap().borrow_mut().add_feature("patina-vm");
+        // The interpreter's file system, on its instance too (#704), for the
+        // code that reaches it through a `Cx`.
+        global_env.heap().borrow().instance().set_fs(fs.clone());
         let mut state = VmState::with_gc_mode(Rc::clone(&global_env), mode);
         // Deliberately *not* `install_primitives()` — that bound every
         // registered primitive into globals regardless of the import set

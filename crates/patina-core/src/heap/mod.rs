@@ -362,13 +362,14 @@ impl HeapObjectData {
 // Heap Arena
 // ============================================================================
 
-/// How a chain of cdrs ends: [`Heap::spine`].
+/// How a chain of cdrs ends: [`Heap::spine`], whose tail is a word, and
+/// [`Cx::spine`](crate::Cx::spine), whose tail is a `Value<'gc>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpineEnd {
+pub enum SpineEnd<V = TaggedValue> {
     /// `()`: the chain is a proper list.
     Null,
     /// Some other value, which ends an improper list.
-    Improper(TaggedValue),
+    Improper(V),
     /// The chain comes back to a pair it has already passed.
     Circular,
 }
@@ -425,37 +426,17 @@ pub struct Heap {
     /// [`CoreForm`]: crate::core_syntax::CoreForm
     core_syntax_table: std::collections::HashMap<crate::core_syntax::CoreForm, HeapIndex>,
 
-    /// Feature identifiers this interpreter advertises to `cond-expand` and to
-    /// `(features)`.
-    ///
-    /// Not heap storage, and here for a reason worth stating. A feature set is
-    /// a property of one **interpreter instance**, not of the process: both
-    /// backends exist in a single test binary, so `patina-vm` and
-    /// `patina-tree-walker` cannot be a global. It needs to reach three places
-    /// that never see each other — the desugarer's `cond-expand`, the library
-    /// parser's `cond-expand`, and the `features` primitive — and the heap is
-    /// the only per-instance thing all three already hold a `&SharedHeap` of.
-    ///
-    /// An earlier attempt threaded the identifier through each `Desugarer`
-    /// construction site instead. It missed four of them and left `(features)`
-    /// disagreeing with `cond-expand`, which R7RS §4.2.1 defines as the same
-    /// set; putting it here is what collapses those call sites to one place.
-    features: crate::features::FeatureRegistry,
-
-    /// Scheme's command line, shared by all environments of this interpreter.
-    /// Like features, this is per-instance metadata, not process-global state.
-    /// Rust strings keep it independent of Scheme mutation and GC roots.
-    command_line: Vec<String>,
-
-    /// Dynamic library catalogue for `cond-expand`, on the same per-instance
-    /// seam as features so `eval`, unquote and library bodies see it too.
-    /// This is not a Scheme value or GC root. The runtime implementation owns
-    /// only weak registry references, avoiding heap -> registry -> heap cycles.
-    library_availability: Option<Rc<dyn crate::features::LibraryAvailability>>,
-
-    /// Whether [`Heap::features_and_close`] has been called — debug-only, and
-    /// the enforcement behind [`Heap::add_feature`]'s construction-only rule.
-    features_read: bool,
+    /// The interpreter's metadata: its feature set, command line, file
+    /// system and library query (#703). Not heap storage. It needs to reach
+    /// three places that never see each other — the desugarer's
+    /// `cond-expand`, the library parser's and the `features` primitive — and
+    /// until they take a `Cx`, which carries it, the heap is the one
+    /// per-instance thing all three hold. (An earlier attempt threaded the
+    /// feature set through each `Desugarer` construction site instead,
+    /// missed four, and left `(features)` disagreeing with `cond-expand`.)
+    /// Here by `Rc`, so a boundary can make a `Cx` with it (#704), until #707
+    /// moves it to the hosts.
+    instance: Rc<crate::instance::Instance>,
 
     /// Free list for pairs (indices of freed pairs)
     free_pairs: Vec<HeapIndex>,
@@ -585,16 +566,23 @@ fn real_eqv(a: f64, b: f64) -> bool {
 }
 
 impl Heap {
+    /// The interpreter's metadata (#703), which a boundary that holds the
+    /// heap passes to the `Cx` it makes (#704). Here until #707 moves it to
+    /// the hosts; the accessors below read and write it meanwhile.
+    pub fn instance(&self) -> &Rc<crate::instance::Instance> {
+        &self.instance
+    }
+
     /// The configured program name followed by its arguments. A fresh
     /// interpreter starts with just `"patina"`, never the host process's flags.
-    pub fn command_line(&self) -> &[String] {
-        &self.command_line
+    pub fn command_line(&self) -> std::cell::Ref<'_, [String]> {
+        self.instance.command_line()
     }
 
     /// Configure `(command-line)`, keeping its required program-name element
     /// separate so even a program with no arguments has a nonempty list.
     pub fn set_command_line(&mut self, program_name: String, arguments: Vec<String>) {
-        self.command_line = std::iter::once(program_name).chain(arguments).collect();
+        self.instance.set_command_line(program_name, arguments);
     }
 
     /// Install the runtime's non-loading library query before bootstrap.
@@ -602,33 +590,28 @@ impl Heap {
         &mut self,
         availability: Rc<dyn crate::features::LibraryAvailability>,
     ) {
-        self.library_availability = Some(availability);
+        self.instance.set_library_availability(availability);
     }
 
     /// Clone the query handle, then release the heap borrow before calling it.
     pub fn library_availability(&self) -> Option<Rc<dyn crate::features::LibraryAvailability>> {
-        self.library_availability.clone()
+        self.instance.library_availability()
     }
 
     /// The feature identifiers `cond-expand` treats as true, which R7RS §4.2.1
     /// requires `(features)` to return — one list, one owner.
-    pub fn features(&self) -> &crate::features::FeatureRegistry {
-        // Interior mutability would be needed to mark this from `&self`, and
-        // the flag is debug-only bookkeeping, so the marking happens in
-        // `features_mut_marker` below, which every reader on the `&mut` path
-        // calls. Readers that only have `&self` cannot add features anyway.
-        &self.features
+    pub fn features(&self) -> std::cell::Ref<'_, crate::features::FeatureRegistry> {
+        self.instance.features()
     }
 
     /// Read the feature set and close it to further additions.
     ///
     /// The three consumers (`cond-expand` in the desugarer, `cond-expand` in
-    /// the library parser, and the `features` primitive) all reach the heap
-    /// mutably or can; calling this rather than [`Heap::features`] is what
-    /// makes [`Heap::add_feature`]'s construction-only rule enforceable.
-    pub fn features_and_close(&mut self) -> &crate::features::FeatureRegistry {
-        self.features_read = true;
-        &self.features
+    /// the library parser, and the `features` primitive) read it through this
+    /// rather than [`Heap::features`], which is what makes
+    /// [`Heap::add_feature`]'s construction-only rule enforceable.
+    pub fn features_and_close(&mut self) -> std::cell::Ref<'_, crate::features::FeatureRegistry> {
+        self.instance.features_and_close()
     }
 
     /// Advertise one more feature. Backends call this once at construction to
@@ -641,18 +624,13 @@ impl Heap {
     /// `(features)` is read at run time — so a feature added after anything has
     /// been expanded makes the two disagree for that identifier, which is the
     /// invariant this whole arrangement exists to hold. The first read marks
-    /// the set closed, and a later add trips the assertion below in debug
-    /// builds instead of producing a program whose `cond-expand` and
-    /// `(features)` describe different implementations.
+    /// the set closed, and a later add trips an assertion in debug builds
+    /// instead of producing a program whose `cond-expand` and `(features)`
+    /// describe different implementations ([`Instance::add_feature`]).
+    ///
+    /// [`Instance::add_feature`]: crate::instance::Instance::add_feature
     pub fn add_feature(&mut self, name: &str) {
-        debug_assert!(
-            !self.features_read,
-            "add_feature({name:?}) after the feature set was already read: a \
-             `cond-expand` resolved against the old set is already baked into a \
-             CoreExpr, so `(features)` would now disagree with it. Advertise \
-             features at backend construction, before anything is expanded."
-        );
-        self.features.add_feature(name);
+        self.instance.add_feature(name);
     }
 
     /// The root providers registered with this heap: register one to have
@@ -673,10 +651,7 @@ impl Heap {
         let handles = HandleTable::new(telemetry.heap_id);
         Self {
             syntax_sources: std::collections::HashMap::new(),
-            features: crate::features::FeatureRegistry::new(),
-            command_line: vec!["patina".to_owned()],
-            library_availability: None,
-            features_read: false,
+            instance: Rc::new(crate::instance::Instance::default()),
             pairs: Vec::with_capacity(pairs),
             vectors: Vec::with_capacity(vectors),
             strings: Vec::with_capacity(strings),
@@ -1262,6 +1237,15 @@ impl Heap {
             self.core_syntax_table.insert(form, tagged.heap_index());
             tagged
         }
+    }
+
+    /// The marker of `form` if one has been interned ([`Heap::core_syntax`]),
+    /// without interning it: for a comparison by identity, which no marker
+    /// not yet made can pass (#704).
+    pub fn interned_core_syntax(&self, form: crate::core_syntax::CoreForm) -> Option<TaggedValue> {
+        self.core_syntax_table
+            .get(&form)
+            .map(|&index| self.object_checks.stamp(TaggedValue::object(index)))
     }
 
     /// The form this value denotes, if it is a syntactic-keyword marker.

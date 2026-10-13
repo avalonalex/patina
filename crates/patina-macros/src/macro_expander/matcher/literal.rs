@@ -9,7 +9,7 @@
 //! enters (`enter_binding_form`).
 
 use crate::macro_expander::Site;
-use patina_core::{Heap, TaggedValue};
+use patina_core::{Cx, Value};
 use patina_runtime::{ScopeId, ScopeSet};
 
 /// Does `input` match the pattern literal `lit`?
@@ -32,26 +32,27 @@ use patina_runtime::{ScopeId, ScopeSet};
 ///
 /// `Err` is an ambiguous resolution. It is refused rather than treated as a
 /// mismatch, which would hand the reference to the next rule to decide.
-pub fn matches_literal(
-    lit: TaggedValue,
-    input: TaggedValue,
-    heap: &Heap,
+pub fn matches_literal<'gc>(
+    lit: Value<'gc>,
+    input: Value<'gc>,
+    cx: &Cx<'gc>,
     definition: Option<Site<'_>>,
     use_site: Option<Site<'_>>,
     macro_scope: Option<ScopeId>,
 ) -> Result<bool, String> {
-    let Some(lit_name) = heap.get_symbol_or_identifier_name(lit) else {
-        return Ok(heap.tagged_values_equal(lit, input));
+    let Some(lit_name) = cx.get_symbol_or_identifier_name(lit) else {
+        return Ok(cx.tagged_values_equal(lit, input));
     };
-    let Some(input_name) = heap.get_symbol_or_identifier_name(input) else {
+    let Some(input_name) = cx.get_symbol_or_identifier_name(input) else {
         return Ok(false);
     };
+    let (lit_name, input_name) = (&*lit_name, &*input_name);
     // The expansion flipped its own scope onto the input, so an input
     // identifier carrying nothing else was written at the use site. The scope
     // can stay in the set it is resolved with: it was minted after every
     // binding that exists, so no candidate carries it.
-    let lit_binding = || local_binding(lit_name, scopes_of(lit, heap), None, definition);
-    let input_binding = || local_binding(input_name, scopes_of(input, heap), macro_scope, use_site);
+    let lit_binding = || local_binding(lit_name, scopes_of(lit, cx), None, definition);
+    let input_binding = || local_binding(input_name, scopes_of(input, cx), macro_scope, use_site);
 
     if lit_name == input_name {
         let (lit_local, input_local) = (lit_binding()?, input_binding()?);
@@ -134,8 +135,8 @@ fn distinct_globals(name: &str, definition: Option<Site<'_>>, use_site: Option<S
     }
 }
 
-fn scopes_of(tv: TaggedValue, heap: &Heap) -> ScopeSet {
-    heap.get_identifier_data_any(tv)
+fn scopes_of<'gc>(tv: Value<'gc>, cx: &Cx<'gc>) -> ScopeSet {
+    cx.get_identifier_data_any(tv)
         .map(|(_, scopes)| scopes)
         .unwrap_or_default()
 }

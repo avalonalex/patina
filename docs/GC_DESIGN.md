@@ -424,7 +424,7 @@ the `current_step: StepResult` local** in `eval_in_env`'s trampoline loop
 | `Evaluator.pending_escape` | `eval/mod.rs` | Holds `(TaggedValue, Rc<CpsContinuation>)` between set and take — a genuine hidden root, traced by the evaluator's provider. The thread-local `PENDING_ESCAPE` until #682 |
 | Suspended outer `StepResult`s in nested trampolines | `run_trampoline` (`eval/cps_eval/mod.rs`), entered by `apply_from_direct_with` and the `eval` primitive | **Not rooted** — handled by deferral (§7), not by tracing. Since 2026-09-01 only Rust-primitive callbacks and parameter converters run there; a continuation jump's wind thunks are ordinary steps (`ContValue::Jump`) and are traced like any other |
 | `Parser.labels` | `crates/patina-frontend/src/parser/mod.rs:47` | Datum labels during parse; GC never runs mid-parse (deferral), listed for completeness |
-| Macro-expansion `MatchEnv` / `Matcher` / `Expander` state | `crates/patina-core/src/pvref.rs:236` etc. | Live only during expansion; covered by deferral |
+| Macro-expansion `MatchEnv` / `Matcher` / `Expander` state | `crates/patina-core/src/pvref.rs` etc. | Live only during expansion, and branded with its context (#704): a `MatchEnv<'gc>` binds `Value<'gc>`s, and it, the matcher and the expander cannot outlive the `Cx` they work through, beneath which nothing collects |
 
 ### 5.2 VM
 
@@ -1047,8 +1047,16 @@ beside today's `SharedHeap` surface until they do.
   and stores take `&mut Cx`. A bulk read is a `Ref` tied to the `&Cx` borrow,
   so holding one across an allocation is a borrow-checker error rather than a
   `BorrowMutError`. It carries the interpreter's `Instance`: the command line,
-  the features, the file system and the library query. Those still ride on
-  the heap until the conversions move them.
+  the features, the file system and the library query. Until #707 moves it to
+  the hosts, the heap holds the interpreter's `Rc<Instance>`, so a boundary
+  that holds the heap can make a context (#704).
+
+  Each method is `#[inline]`, as most of the `Heap` accessors it wraps are:
+  without it, every read a safe crate made was a call across crates. A walk
+  over a whole form, made per expansion, runs in core under one borrow
+  instead of as calls on the context: `Cx::rescope_identifiers`, the
+  expander's scope flip and the desugarer's scope additions. Converted
+  without either, the macros cost `macroprog` 3.3% in instructions (#704).
 - **`Value<'gc>`, the brand.** A `#[repr(transparent)]` word with an
   invariant lifetime, the `mutate` call's. A value cannot leave the call, since
   the closure's result cannot name `'gc`, nor reach another context.
@@ -1059,6 +1067,14 @@ beside today's `SharedHeap` surface until they do.
 
   `patina-core`'s compile-fail doctests hold all three rules: a value escaping
   `mutate`, a value used across a safe point, and a value in a `static`.
+  `patina-macros`' holds one for the state it keeps: a compiler, whose
+  literals are values, cannot outlive the context it compiles in (#704).
+- **Crossing while the codemod converts** (`PRD/GC_PRD.md` §11.3). Code that
+  still works in words calls code that takes a context: the desugarer calls
+  the macro expander (`patina_frontend::macro_expander::cross`). Its words
+  cross as an embedder's do, each through an `Owned` handle read back with
+  `Cx::held`, so no safe crate turns a word into a value. Each crossing goes
+  when its caller converts.
 - **The funnel.** `Cx::store(slot, v)` is the one way a value is written into
   a heap object: a pair's car or cdr, a vector's element, a cell, a record's
   field, a closure's free variable, a promise's box, a parameter's value.

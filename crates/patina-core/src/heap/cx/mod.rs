@@ -179,16 +179,19 @@ impl<'gc> Cx<'gc> {
     // ------------------------------------------------------------------------
 
     /// [`Heap::get_bigint`], owned: no `&BigInt` into the heap.
+    #[inline]
     pub fn get_bigint(&self, v: Value<'gc>) -> Option<BigInt> {
         self.heap.borrow().get_bigint(v.tagged()).cloned()
     }
 
     /// [`Heap::get_rational`], owned.
+    #[inline]
     pub fn get_rational(&self, v: Value<'gc>) -> Option<BigRational> {
         self.heap.borrow().get_rational(v.tagged()).cloned()
     }
 
     /// [`Heap::get_string_chars`], as a borrow tied to `&self`.
+    #[inline]
     pub fn get_string_chars(&self, s: Value<'gc>) -> Ref<'_, [char]> {
         Ref::map(self.heap.borrow(), |h| h.get_string_chars(s.tagged()))
     }
@@ -212,11 +215,13 @@ impl<'gc> Cx<'gc> {
     }
 
     /// [`Heap::get_symbol_name`], as a borrow tied to `&self`.
+    #[inline]
     pub fn get_symbol_name(&self, v: Value<'gc>) -> Option<Ref<'_, str>> {
         Ref::filter_map(self.heap.borrow(), |h| h.get_symbol_name(v.tagged())).ok()
     }
 
     /// [`Heap::get_symbol_or_identifier_name`], as a borrow tied to `&self`.
+    #[inline]
     pub fn get_symbol_or_identifier_name(&self, v: Value<'gc>) -> Option<Ref<'_, str>> {
         Ref::filter_map(self.heap.borrow(), |h| {
             h.get_symbol_or_identifier_name(v.tagged())
@@ -225,6 +230,7 @@ impl<'gc> Cx<'gc> {
     }
 
     /// [`Heap::get_values`], as values, borrowed.
+    #[inline]
     pub fn get_values(&self, v: Value<'gc>) -> Option<Ref<'_, [Value<'gc>]>> {
         Ref::filter_map(self.heap.borrow(), |h| {
             // SAFETY: the words are a live values object's, read within this
@@ -236,6 +242,7 @@ impl<'gc> Cx<'gc> {
     }
 
     /// [`Heap::vector_slice`], as values, borrowed.
+    #[inline]
     pub fn vector_slice(&self, v: Value<'gc>) -> Ref<'_, [Value<'gc>]> {
         Ref::map(self.heap.borrow(), |h| {
             // SAFETY: as for `get_values`.
@@ -255,6 +262,7 @@ impl<'gc> Cx<'gc> {
     }
 
     /// [`Heap::get_identifier_data`], owned.
+    #[inline]
     pub fn get_identifier_data(&self, v: Value<'gc>) -> Option<(Rc<str>, ScopeSet)> {
         let heap = self.heap.borrow();
         let (name, scopes) = heap.get_identifier_data(v.tagged())?;
@@ -262,6 +270,7 @@ impl<'gc> Cx<'gc> {
     }
 
     /// [`Heap::get_macro`], cloned.
+    #[inline]
     pub fn get_macro(&self, v: Value<'gc>) -> Option<Rc<CompiledMacro>> {
         self.heap.borrow().get_macro(v.tagged()).cloned()
     }
@@ -269,22 +278,26 @@ impl<'gc> Cx<'gc> {
     /// The literal `id` of the macro `mac` ([`Heap::macro_literal`]): `None`
     /// if `mac` is no macro or has no such literal. Sound because `mac` is
     /// live for `'gc`, and the object it names traces its literals (#718).
+    #[inline]
     pub fn macro_literal(&self, mac: Value<'gc>, id: LiteralId) -> Option<Value<'gc>> {
         let word = self.heap.borrow().macro_literal(mac.tagged(), id)?;
         Some(self.brand(word))
     }
 
     /// [`Heap::get_port`], cloned.
+    #[inline]
     pub fn get_port(&self, v: Value<'gc>) -> Option<Rc<Port>> {
         self.heap.borrow().get_port(v.tagged()).cloned()
     }
 
     /// [`Heap::get_record_type`], cloned.
+    #[inline]
     pub fn get_record_type(&self, v: Value<'gc>) -> Option<Rc<RecordTypeDescriptor>> {
         self.heap.borrow().get_record_type(v.tagged()).cloned()
     }
 
     /// [`Heap::get_environment_specifier`], cloned.
+    #[inline]
     pub fn get_environment_specifier(&self, v: Value<'gc>) -> Option<(Rc<Environment>, bool)> {
         self.heap
             .borrow()
@@ -293,6 +306,7 @@ impl<'gc> Cx<'gc> {
     }
 
     /// [`Heap::source`], cloned.
+    #[inline]
     pub fn source(&self, v: Value<'gc>) -> Option<SourceLocation> {
         self.heap.borrow().source(v.tagged()).cloned()
     }
@@ -300,6 +314,7 @@ impl<'gc> Cx<'gc> {
     /// [`Heap::get_object`], borrowed. Transitional: the datum writer and the
     /// parser match on the object's kind, and its words are raw. #706
     /// replaces it with a view of the kind.
+    #[inline]
     pub fn get_object(&self, v: Value<'gc>) -> Ref<'_, HeapObjectData> {
         Ref::map(self.heap.borrow(), |h| h.get_object(v.tagged()))
     }
@@ -323,6 +338,7 @@ impl<'gc> Cx<'gc> {
     }
 
     /// The type of the record `v`, or `None` if `v` is no record.
+    #[inline]
     pub fn record_type_of(&self, v: Value<'gc>) -> Option<Rc<RecordTypeDescriptor>> {
         self.heap
             .borrow()
@@ -331,6 +347,7 @@ impl<'gc> Cx<'gc> {
     }
 
     /// How many fields the record `v` has, or `None` if `v` is no record.
+    #[inline]
     pub fn record_len(&self, v: Value<'gc>) -> Option<usize> {
         self.heap
             .borrow()
@@ -341,6 +358,7 @@ impl<'gc> Cx<'gc> {
     /// Field `index` of the record `v`, or `None` if `v` is no record or has
     /// no such field. A field is written through the funnel
     /// ([`RecordField`]).
+    #[inline]
     pub fn record_ref(&self, v: Value<'gc>, index: usize) -> Option<Value<'gc>> {
         let heap = self.heap.borrow();
         let (_, fields) = heap.get_record(v.tagged())?;
@@ -363,12 +381,14 @@ impl<'gc> Cx<'gc> {
     }
 
     /// Whether `v` is a parameter object.
+    #[inline]
     pub fn is_parameter(&self, v: Value<'gc>) -> bool {
         self.heap.borrow().get_parameter(v.tagged()).is_some()
     }
 
     /// The current value of the parameter object `v`, or `None` if `v` is
     /// none. It is written through the funnel ([`ParamValue`]).
+    #[inline]
     pub fn parameter_value(&self, v: Value<'gc>) -> Option<Value<'gc>> {
         let (values, _) = self.heap.borrow().get_parameter(v.tagged())?;
         let word = values
@@ -381,6 +401,7 @@ impl<'gc> Cx<'gc> {
 
     /// The converter of the parameter object `v`: `None` if `v` is none,
     /// `Some(None)` if it has none.
+    #[inline]
     pub fn parameter_converter(&self, v: Value<'gc>) -> Option<Option<Value<'gc>>> {
         let (_, converter) = self.heap.borrow().get_parameter(v.tagged())?;
         Some(converter.map(|w| self.brand(w)))
@@ -401,6 +422,7 @@ impl<'gc> Cx<'gc> {
 
     /// The contents of the promise `v`, or `None` if `v` is none. A forced
     /// value is stored through the funnel ([`PromiseBox`]).
+    #[inline]
     pub fn promise_state(&self, v: Value<'gc>) -> Option<PromiseView<'gc>> {
         let cell = self.heap.borrow().get_promise(v.tagged())?;
         let state = *cell.borrow();
@@ -415,6 +437,7 @@ impl<'gc> Cx<'gc> {
     // ------------------------------------------------------------------------
 
     /// [`Heap::list_from_iter`], from values.
+    #[inline]
     pub fn list_from_iter<I>(&mut self, iter: I) -> Value<'gc>
     where
         I: IntoIterator<Item = Value<'gc>>,
@@ -428,6 +451,7 @@ impl<'gc> Cx<'gc> {
     }
 
     /// [`Heap::list_from_iter_with_tail`], from values.
+    #[inline]
     pub fn list_from_iter_with_tail<I>(&mut self, iter: I, tail: Value<'gc>) -> Value<'gc>
     where
         I: IntoIterator<Item = Value<'gc>>,
@@ -451,8 +475,65 @@ impl<'gc> Cx<'gc> {
     }
 
     // ------------------------------------------------------------------------
+    // Diagnostics
+    // ------------------------------------------------------------------------
+
+    /// `v` written for a diagnostic: [`format_tagged`](crate::format_tagged).
+    #[inline]
+    pub fn format(&self, v: Value<'gc>) -> String {
+        crate::format_tagged(v.tagged(), &self.heap.borrow())
+    }
+
+    /// `v` written briefly, for a diagnostic about part of a form:
+    /// [`format_tagged_brief`](crate::format_tagged_brief).
+    #[inline]
+    pub fn format_brief(&self, v: Value<'gc>) -> String {
+        crate::format_tagged_brief(v.tagged(), &self.heap.borrow())
+    }
+
+    /// `v` written with each identifier's scopes, for the macro debug log:
+    /// [`format_tagged_with_scopes`](crate::format_tagged_with_scopes).
+    #[inline]
+    pub fn format_with_scopes(&self, v: Value<'gc>) -> String {
+        crate::format_tagged_with_scopes(v.tagged(), &self.heap.borrow())
+    }
+
+    // ------------------------------------------------------------------------
     // Syntax
     // ------------------------------------------------------------------------
+
+    /// Give each syntax identifier in `root` that `picks` picks the scopes
+    /// `rescope` makes of its own: the macro expander's scope flip and the
+    /// desugarer's scope additions (#704). An identifier the reader wrote,
+    /// which has a symbol's binding behavior, is never picked, and a symbol
+    /// is no identifier.
+    ///
+    /// The walk copies only the pairs and vectors above an identifier that
+    /// changes, keeps every other part of `root` as it is, shared structure
+    /// and cycles included, and answers `root` itself when nothing changes.
+    /// It is the heap's own walk ([`Heap::map_syntax_identifiers`]) under
+    /// one borrow, since it is the hottest walk the expander makes; neither
+    /// function sees the heap.
+    pub fn rescope_identifiers(
+        &mut self,
+        root: Value<'gc>,
+        picks: impl Fn(&str, &ScopeSet) -> bool,
+        rescope: impl Fn(&ScopeSet) -> ScopeSet,
+    ) -> Value<'gc> {
+        if !picks_any_identifier(&self.heap.borrow(), root.tagged(), &picks) {
+            return root;
+        }
+        let word = self.heap.borrow_mut().map_syntax_identifiers(
+            root.tagged(),
+            |heap, value, name, scopes| {
+                if heap.is_source_identifier(value) || !picks(&name, &scopes) {
+                    return None;
+                }
+                Some(heap.alloc_identifier(name, rescope(&scopes)))
+            },
+        );
+        self.brand(word)
+    }
 
     /// [`Heap::map_syntax_identifiers`], whose `transform` takes this context.
     pub fn map_syntax_identifiers(
@@ -550,6 +631,43 @@ impl<'gc> Cx<'gc> {
         }
         mapped(root)
     }
+}
+
+/// Whether `root` holds a syntax identifier, other than one the reader
+/// wrote, that `picks` picks: [`Cx::rescope_identifiers`]' scan, which spares
+/// the copying walk when nothing would change.
+///
+/// The tree may be cyclic: a quoted datum with labels (`'#0=(a b . #0#)`) is
+/// a legitimate macro argument, and Larceny's `base` suite hands `test`
+/// several. So no pair or vector is entered twice. Cycles come only from
+/// the reader, whose data holds symbols rather than identifiers, so a
+/// revisited container contributes nothing.
+fn picks_any_identifier(
+    heap: &Heap,
+    root: TaggedValue,
+    picks: &impl Fn(&str, &ScopeSet) -> bool,
+) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut pending = vec![root];
+    while let Some(value) = pending.pop() {
+        if !seen.insert(value.raw_bits()) {
+            continue;
+        }
+        if !heap.is_source_identifier(value)
+            && heap
+                .get_identifier_data(value)
+                .is_some_and(|(name, scopes)| picks(name, scopes))
+        {
+            return true;
+        }
+        if value.is_pair() {
+            let (car, cdr) = heap.get_pair(value);
+            pending.extend([cdr, car]);
+        } else if value.is_vector() {
+            pending.extend(heap.vector_slice(value));
+        }
+    }
+    false
 }
 
 #[cfg(test)]

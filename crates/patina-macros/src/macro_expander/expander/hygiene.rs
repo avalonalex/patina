@@ -2,17 +2,16 @@
 //!
 //! This module implements Racket-style scope-based hygiene for macro expansion,
 //! including identifier renaming and marking substituted values.
-//! All methods return TaggedValue directly.
 
 use super::{ExpandError, Expander};
 use crate::macro_expander::Identifier;
+use crate::macro_expander::utils::list_to_vec_with_tail;
 use patina_core::walk::OpenNodes;
-use patina_core::{SpineEnd, TaggedValue};
+use patina_core::{Cx, Value};
 use std::rc::Rc;
 
-impl Expander {
+impl<'gc> Expander<'gc> {
     /// Rename an identifier for hygiene using Racket-style scope sets
-    /// Returns TaggedValue directly.
     ///
     /// All identifiers become `Identifier` with appropriate scopes:
     /// - Free variables: use definition scopes (for binding resolution)
@@ -25,7 +24,7 @@ impl Expander {
     /// 3. After expansion: flip macro_scope on OUTPUT
     ///    - Use-site (from pattern vars): macro_scope removed (was added, then flipped off)
     ///    - Introduced (from template): macro_scope added (wasn't there, then flipped on)
-    pub(super) fn rename_identifier_tagged(&self, id: &Identifier) -> TaggedValue {
+    pub(super) fn rename_identifier_tagged(&self, cx: &mut Cx<'gc>, id: &Identifier) -> Value<'gc> {
         let name = id.name();
 
         let scopes = if let Some(def_scopes) = id.definition_scopes() {
@@ -49,15 +48,14 @@ impl Expander {
         };
 
         // Create native Identifier with scopes (Racket-style hygiene)
-        let mut heap = self.heap().borrow_mut();
-        let value = heap.alloc_identifier(name.clone(), scopes);
+        let value = cx.alloc_identifier(name.clone(), scopes);
         if let Some(source) = &id.source {
-            heap.record_source(value, source.clone());
+            cx.record_source(value, source.clone());
         }
         value
     }
 
-    /// Mark a substituted TaggedValue from a pattern variable with the macro scope.
+    /// Mark a value substituted from a pattern variable with the macro scope.
     ///
     /// This is crucial for nested macro hygiene. When a macro generates another
     /// `define-syntax`, symbols substituted from pattern variables need to be
@@ -89,21 +87,22 @@ impl Expander {
     /// [`MAX_FORM_DEPTH`]: patina_core::walk::MAX_FORM_DEPTH
     pub(super) fn mark_substituted_tagged(
         &self,
-        tv: TaggedValue,
-    ) -> Result<TaggedValue, ExpandError> {
+        cx: &mut Cx<'gc>,
+        tv: Value<'gc>,
+    ) -> Result<Value<'gc>, ExpandError> {
         let mut open = OpenNodes::default();
         // The lists being marked, innermost last.
-        let mut lists: Vec<MarkedList> = Vec::new();
+        let mut lists: Vec<MarkedList<'gc>> = Vec::new();
         let mut next = tv;
         loop {
-            let mut marked = match self.mark_node(next) {
+            let mut marked = match self.mark_node(cx, next) {
                 Mark::Done(marked) => marked,
                 Mark::Circular => return Ok(tv),
                 Mark::List { elements, tail } => {
                     if open.depth() >= self.depth_limit {
                         return Err(ExpandError::NestedTooDeeply);
                     }
-                    if !open.enter(next) {
+                    if !open.enter(next.tagged()) {
                         return Ok(tv);
                     }
                     let list = next;
@@ -133,42 +132,31 @@ impl Expander {
                 // The tail: the list is done.
                 let list = lists.pop().expect("the list just marked");
                 open.leave();
-                marked = self.rebuild_marked(&list, marked);
+                marked = self.rebuild_marked(cx, &list, marked);
             }
         }
     }
 
     /// Mark one node, or say it is a list to walk.
-    fn mark_node(&self, tv: TaggedValue) -> Mark {
+    fn mark_node(&self, cx: &mut Cx<'gc>, tv: Value<'gc>) -> Mark<'gc> {
         // Fast path: immediate values don't need marking
         if tv.is_fixnum() || tv.is_char() || tv.is_special() {
             return Mark::Done(tv);
         }
 
-        let heap = self.heap();
-
         // Check if it's an identifier (native or boxed) - add macro_scope
-        {
-            let heap_ref = heap.borrow();
-            if let Some((name, scopes)) = heap_ref.get_identifier_data_any(tv) {
-                let new_scopes = scopes.with_scope(self.macro_scope);
-                drop(heap_ref);
-                let mut heap = heap.borrow_mut();
-                let copy = heap.alloc_identifier(name, new_scopes);
-                heap.inherit_source(tv, copy);
-                return Mark::Done(copy);
-            }
+        if let Some((name, scopes)) = cx.get_identifier_data_any(tv) {
+            let new_scopes = scopes.with_scope(self.macro_scope);
+            let copy = cx.alloc_identifier(name, new_scopes);
+            cx.inherit_source(tv, copy);
+            return Mark::Done(copy);
         }
 
         // Check if it's a symbol - convert to identifier with macro_scope
-        {
-            let heap_ref = heap.borrow();
-            if let Some(name) = heap_ref.get_symbol_name(tv) {
-                let name_rc: Rc<str> = name.into();
-                let scopes = patina_runtime::ScopeSet::new().with_scope(self.macro_scope);
-                drop(heap_ref);
-                return Mark::Done(heap.borrow_mut().alloc_identifier(name_rc, scopes));
-            }
+        let name = cx.get_symbol_name(tv).map(|name| Rc::<str>::from(&*name));
+        if let Some(name) = name {
+            let scopes = patina_runtime::ScopeSet::new().with_scope(self.macro_scope);
+            return Mark::Done(cx.alloc_identifier(name, scopes));
         }
 
         // Pairs: walk the *form*, not each tail.
@@ -181,11 +169,11 @@ impl Expander {
         // case. Flatten the spine once and decide head-ness at element 0,
         // which is what `compile_template` and `rewrite_form` already do.
         if tv.is_pair() {
-            let Some((elements, tail)) = self.spine_of(tv) else {
+            let Some((elements, tail)) = list_to_vec_with_tail(tv, cx) else {
                 return Mark::Circular;
             };
             let head = elements[0];
-            if self.is_macro_definition_tagged(head) || self.is_quote_form_tagged(head) {
+            if self.is_macro_definition_tagged(cx, head) || self.is_quote_form_tagged(cx, head) {
                 return Mark::Done(tv);
             }
             return Mark::List { elements, tail };
@@ -196,53 +184,43 @@ impl Expander {
     }
 
     /// The marked copy of `list`, from its marked elements and `tail`.
-    fn rebuild_marked(&self, list: &MarkedList, tail: TaggedValue) -> TaggedValue {
-        let mut heap = self.heap().borrow_mut();
+    fn rebuild_marked(
+        &self,
+        cx: &mut Cx<'gc>,
+        list: &MarkedList<'gc>,
+        tail: Value<'gc>,
+    ) -> Value<'gc> {
         let mut out = tail;
         for &element in list.elements.iter().rev() {
-            out = heap.alloc_pair(element, out);
+            out = cx.alloc_pair(element, out);
         }
-        heap.inherit_source(list.list, out);
+        cx.inherit_source(list.list, out);
         out
     }
 
-    /// Flatten a pair's spine into its elements and whatever ends it — `()`
-    /// for a proper list, the final atom for a dotted one — or `None` for a
-    /// circular one. Non-empty by construction: the caller has already
-    /// established `tv` is a pair.
-    fn spine_of(&self, tv: TaggedValue) -> Option<(Vec<TaggedValue>, TaggedValue)> {
-        match self.heap().borrow().spine(tv) {
-            (elems, SpineEnd::Null) => Some((elems, TaggedValue::NULL)),
-            (elems, SpineEnd::Improper(tail)) => Some((elems, tail)),
-            (_, SpineEnd::Circular) => None,
-        }
-    }
-
-    /// Check if a TaggedValue is a macro definition form
-    fn is_macro_definition_tagged(&self, tv: TaggedValue) -> bool {
-        let heap = self.heap().borrow();
+    /// Check if a value is a macro definition form's head
+    fn is_macro_definition_tagged(&self, cx: &Cx<'gc>, tv: Value<'gc>) -> bool {
         matches!(
-            heap.get_symbol_or_identifier_name(tv),
+            cx.get_symbol_or_identifier_name(tv).as_deref(),
             Some("syntax-rules" | "define-syntax" | "let-syntax" | "letrec-syntax")
         )
     }
 
-    /// Check if a TaggedValue is a quote form
-    fn is_quote_form_tagged(&self, tv: TaggedValue) -> bool {
-        let heap = self.heap().borrow();
-        heap.get_symbol_or_identifier_name(tv) == Some("quote")
+    /// Check if a value is a quote form's head
+    fn is_quote_form_tagged(&self, cx: &Cx<'gc>, tv: Value<'gc>) -> bool {
+        cx.get_symbol_or_identifier_name(tv).as_deref() == Some("quote")
     }
 }
 
 /// What marking one node found ([`Expander::mark_substituted_tagged`]).
-enum Mark {
+enum Mark<'gc> {
     /// The node's marked value: a copy, or the node itself where nothing in
     /// it is marked.
-    Done(TaggedValue),
+    Done(Value<'gc>),
     /// A list to walk: its elements and whatever ends its spine.
     List {
-        elements: Vec<TaggedValue>,
-        tail: TaggedValue,
+        elements: Vec<Value<'gc>>,
+        tail: Value<'gc>,
     },
     /// A spine that comes back on itself: the whole value goes unmarked.
     Circular,
@@ -250,9 +228,9 @@ enum Mark {
 
 /// A list being marked: its elements, the first `done` of them replaced by
 /// their marked copies, and the tail, marked after them.
-struct MarkedList {
-    list: TaggedValue,
-    elements: Vec<TaggedValue>,
+struct MarkedList<'gc> {
+    list: Value<'gc>,
+    elements: Vec<Value<'gc>>,
     done: usize,
-    tail: TaggedValue,
+    tail: Value<'gc>,
 }

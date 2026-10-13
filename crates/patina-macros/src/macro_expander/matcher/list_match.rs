@@ -6,9 +6,9 @@
 use super::error::{self, MatchError};
 use crate::macro_expander::Pattern;
 use crate::macro_expander::utils::{
-    TaggedListIter, collect_pattern_pvars, list_to_vec_tagged, list_to_vec_with_tail_tagged,
+    TaggedListIter, collect_pattern_pvars, list_to_vec_tagged, list_to_vec_with_tail,
 };
-use patina_core::{Heap, TaggedValue};
+use patina_core::{Cx, Value};
 use patina_runtime::{MatchEnv, MatchValue, PVRef};
 
 /// Count minimum required elements in a pattern list
@@ -31,24 +31,24 @@ fn count_min_required(patterns: &[Pattern]) -> usize {
     count
 }
 
-/// Match a list pattern against a TaggedValue list
-pub fn match_list_tagged<F>(
+/// Match a list pattern against a list
+pub fn match_list_tagged<'gc, F>(
     patterns: &[Pattern],
-    input: TaggedValue,
-    env: &mut MatchEnv,
+    input: Value<'gc>,
+    env: &mut MatchEnv<'gc>,
     level: usize,
     num_pvars: usize,
-    heap: &Heap,
+    cx: &Cx<'gc>,
     match_impl: F,
 ) -> Result<(), MatchError>
 where
-    F: Fn(&Pattern, TaggedValue, &mut MatchEnv, usize, &Heap) -> Result<(), MatchError>,
+    F: Fn(&Pattern, Value<'gc>, &mut MatchEnv<'gc>, usize, &Cx<'gc>) -> Result<(), MatchError>,
 {
     // Input must be a list (pair or null)
-    if !(input.is_pair() || input == TaggedValue::NULL) {
+    if !(input.is_pair() || input == Value::NULL) {
         return Err(MatchError::TypeMismatch {
             expected: "list".to_string(),
-            actual: error::described(input, heap),
+            actual: error::described(input, cx),
         });
     }
 
@@ -56,37 +56,37 @@ where
     let has_ellipsis = patterns.iter().any(|p| p.is_ellipsis());
 
     if has_ellipsis {
-        match_list_with_ellipsis_tagged(patterns, input, env, level, num_pvars, heap, match_impl)
+        match_list_with_ellipsis_tagged(patterns, input, env, level, num_pvars, cx, match_impl)
     } else {
-        match_list_simple_tagged(patterns, input, env, level, heap, match_impl)
+        match_list_simple_tagged(patterns, input, env, level, cx, match_impl)
     }
 }
 
-/// Match a list pattern without ellipsis using TaggedValue lazy iteration
-fn match_list_simple_tagged<F>(
+/// Match a list pattern without ellipsis, iterating lazily
+fn match_list_simple_tagged<'gc, F>(
     patterns: &[Pattern],
-    input: TaggedValue,
-    env: &mut MatchEnv,
+    input: Value<'gc>,
+    env: &mut MatchEnv<'gc>,
     level: usize,
-    heap: &Heap,
+    cx: &Cx<'gc>,
     match_impl: F,
 ) -> Result<(), MatchError>
 where
-    F: Fn(&Pattern, TaggedValue, &mut MatchEnv, usize, &Heap) -> Result<(), MatchError>,
+    F: Fn(&Pattern, Value<'gc>, &mut MatchEnv<'gc>, usize, &Cx<'gc>) -> Result<(), MatchError>,
 {
-    let mut iter = TaggedListIter::new(input, heap);
+    let mut iter = TaggedListIter::new(input, cx);
     let mut pattern_idx = 0;
 
     for pattern in patterns {
         match iter.next() {
             Some(Ok(elem)) => {
-                match_impl(pattern, elem, env, level, heap)?;
+                match_impl(pattern, elem, env, level, cx)?;
                 pattern_idx += 1;
             }
             Some(Err(_)) => {
                 return Err(MatchError::TypeMismatch {
                     expected: "proper list".to_string(),
-                    actual: error::described(input, heap),
+                    actual: error::described(input, cx),
                 });
             }
             None => {
@@ -105,30 +105,30 @@ where
     if iter.next().is_some() {
         return Err(MatchError::TooManyElements {
             expected: patterns.len(),
-            actual: TaggedListIter::len(input, heap).unwrap_or(patterns.len() + 1),
+            actual: TaggedListIter::len(input, cx).unwrap_or(patterns.len() + 1),
         });
     }
 
     Ok(())
 }
 
-/// Match a list pattern containing ellipsis using TaggedValue
-fn match_list_with_ellipsis_tagged<F>(
+/// Match a list pattern containing ellipsis
+fn match_list_with_ellipsis_tagged<'gc, F>(
     patterns: &[Pattern],
-    input: TaggedValue,
-    env: &mut MatchEnv,
+    input: Value<'gc>,
+    env: &mut MatchEnv<'gc>,
     level: usize,
     num_pvars: usize,
-    heap: &Heap,
+    cx: &Cx<'gc>,
     match_impl: F,
 ) -> Result<(), MatchError>
 where
-    F: Fn(&Pattern, TaggedValue, &mut MatchEnv, usize, &Heap) -> Result<(), MatchError>,
+    F: Fn(&Pattern, Value<'gc>, &mut MatchEnv<'gc>, usize, &Cx<'gc>) -> Result<(), MatchError>,
 {
     // Convert input to Vec for random access
-    let input_list = list_to_vec_tagged(input, heap).map_err(|_| MatchError::TypeMismatch {
+    let input_list = list_to_vec_tagged(input, cx).map_err(|_| MatchError::TypeMismatch {
         expected: "proper list".to_string(),
-        actual: error::described(input, heap),
+        actual: error::described(input, cx),
     })?;
 
     match_elements_with_ellipsis(
@@ -137,7 +137,7 @@ where
         env,
         level,
         num_pvars,
-        heap,
+        cx,
         match_impl,
         "list pattern",
     )
@@ -150,18 +150,18 @@ where
 /// that differed between them was how the elements were obtained -- which is
 /// the caller's job.
 #[allow(clippy::too_many_arguments)]
-fn match_elements_with_ellipsis<F>(
+fn match_elements_with_ellipsis<'gc, F>(
     patterns: &[Pattern],
-    input_list: &[TaggedValue],
-    env: &mut MatchEnv,
+    input_list: &[Value<'gc>],
+    env: &mut MatchEnv<'gc>,
     level: usize,
     num_pvars: usize,
-    heap: &Heap,
+    cx: &Cx<'gc>,
     match_impl: F,
     what: &str,
 ) -> Result<(), MatchError>
 where
-    F: Fn(&Pattern, TaggedValue, &mut MatchEnv, usize, &Heap) -> Result<(), MatchError>,
+    F: Fn(&Pattern, Value<'gc>, &mut MatchEnv<'gc>, usize, &Cx<'gc>) -> Result<(), MatchError>,
 {
     // Check if we have enough elements
     let min_required = count_min_required(patterns);
@@ -192,7 +192,7 @@ where
                 let all_vars = collect_pattern_pvars(subpattern);
 
                 // Initialize branches for ALL variables
-                let mut branches: std::collections::HashMap<PVRef, Vec<MatchValue>> = all_vars
+                let mut branches: std::collections::HashMap<PVRef, Vec<MatchValue<'gc>>> = all_vars
                     .iter()
                     .copied()
                     .map(|pvref| (pvref, Vec::new()))
@@ -204,7 +204,7 @@ where
 
                     // Create a temporary environment for this iteration
                     let mut temp_env = MatchEnv::new(num_pvars);
-                    match_impl(subpattern, elem, &mut temp_env, level + 1, heap)?;
+                    match_impl(subpattern, elem, &mut temp_env, level + 1, cx)?;
 
                     // Extract matched values for ALL variables
                     for &pvref in &all_vars {
@@ -231,7 +231,7 @@ where
                     actual: input_list.len(),
                 });
             }
-            match_impl(pattern, input_list[input_idx], env, level, heap)?;
+            match_impl(pattern, input_list[input_idx], env, level, cx)?;
             input_idx += 1;
         }
     }
@@ -239,35 +239,35 @@ where
     Ok(())
 }
 
-/// Match a vector pattern against a TaggedValue vector
-pub fn match_vector_tagged<F>(
+/// Match a vector pattern against a vector
+pub fn match_vector_tagged<'gc, F>(
     patterns: &[Pattern],
-    input: TaggedValue,
-    env: &mut MatchEnv,
+    input: Value<'gc>,
+    env: &mut MatchEnv<'gc>,
     level: usize,
     num_pvars: usize,
-    heap: &Heap,
+    cx: &Cx<'gc>,
     match_impl: F,
 ) -> Result<(), MatchError>
 where
-    F: Fn(&Pattern, TaggedValue, &mut MatchEnv, usize, &Heap) -> Result<(), MatchError>,
+    F: Fn(&Pattern, Value<'gc>, &mut MatchEnv<'gc>, usize, &Cx<'gc>) -> Result<(), MatchError>,
 {
     // Handle native vectors (primary path)
     if input.is_vector() {
-        let input_len = heap.vector_len(input);
+        let input_len = cx.vector_len(input);
 
         // `#(x ...)` is a valid pattern, so an ellipsis makes the vector length
         // variable. Defer to the same element walk the list path uses.
         if patterns.iter().any(|p| p.is_ellipsis()) {
-            let elements: Vec<TaggedValue> =
-                (0..input_len).map(|i| heap.vector_ref(input, i)).collect();
+            let elements: Vec<Value<'gc>> =
+                (0..input_len).map(|i| cx.vector_ref(input, i)).collect();
             return match_elements_with_ellipsis(
                 patterns,
                 &elements,
                 env,
                 level,
                 num_pvars,
-                heap,
+                cx,
                 match_impl,
                 "vector pattern",
             );
@@ -281,10 +281,10 @@ where
             });
         }
 
-        // Match each pattern against native vector elements (already TaggedValue)
+        // Match each pattern against the vector's elements
         for (i, pattern) in patterns.iter().enumerate() {
-            let elem = heap.vector_ref(input, i);
-            match_impl(pattern, elem, env, level, heap)?;
+            let elem = cx.vector_ref(input, i);
+            match_impl(pattern, elem, env, level, cx)?;
         }
 
         return Ok(());
@@ -293,27 +293,27 @@ where
     // Not a vector
     Err(MatchError::TypeMismatch {
         expected: "vector".to_string(),
-        actual: error::described(input, heap),
+        actual: error::described(input, cx),
     })
 }
 
-/// Match a dotted list pattern against TaggedValue: (p1 p2 . rest)
+/// Match a dotted list pattern: (p1 p2 . rest)
 ///
 /// This function tracks the original input list position to properly capture
 /// the tail portion without needing to reconstruct the list.
 #[allow(clippy::too_many_arguments)]
-pub fn match_dotted_list_tagged<F>(
+pub fn match_dotted_list_tagged<'gc, F>(
     patterns: &[Pattern],
     tail: &Pattern,
-    input: TaggedValue,
-    env: &mut MatchEnv,
+    input: Value<'gc>,
+    env: &mut MatchEnv<'gc>,
     level: usize,
     num_pvars: usize,
-    heap: &Heap,
+    cx: &Cx<'gc>,
     match_impl: F,
 ) -> Result<(), MatchError>
 where
-    F: Fn(&Pattern, TaggedValue, &mut MatchEnv, usize, &Heap) -> Result<(), MatchError>,
+    F: Fn(&Pattern, Value<'gc>, &mut MatchEnv<'gc>, usize, &Cx<'gc>) -> Result<(), MatchError>,
 {
     // Instead of deconstructing to a Vec, traverse the list directly
     // This preserves the original list structure for tail capture
@@ -325,7 +325,7 @@ where
             // For ellipsis in dotted lists, we need the Vec-based approach
             // Fall back to the original algorithm for this case
             return match_dotted_list_with_ellipsis_tagged(
-                patterns, tail, input, env, level, num_pvars, heap, match_impl,
+                patterns, tail, input, env, level, num_pvars, cx, match_impl,
             );
         }
 
@@ -338,15 +338,15 @@ where
             });
         }
 
-        let car = heap.car(current);
-        let cdr = heap.cdr(current);
+        let car = cx.car(current);
+        let cdr = cx.cdr(current);
 
-        match_impl(pattern, car, env, level, heap)?;
+        match_impl(pattern, car, env, level, cx)?;
         current = cdr;
     }
 
     // Now `current` is the tail portion - match it against the tail pattern
-    match_impl(tail, current, env, level, heap)?;
+    match_impl(tail, current, env, level, cx)?;
 
     Ok(())
 }
@@ -355,22 +355,22 @@ where
 ///
 /// This handles the more complex case where ellipsis patterns appear in the list.
 #[allow(clippy::too_many_arguments)]
-fn match_dotted_list_with_ellipsis_tagged<F>(
+fn match_dotted_list_with_ellipsis_tagged<'gc, F>(
     patterns: &[Pattern],
     tail: &Pattern,
-    input: TaggedValue,
-    env: &mut MatchEnv,
+    input: Value<'gc>,
+    env: &mut MatchEnv<'gc>,
     level: usize,
     num_pvars: usize,
-    heap: &Heap,
+    cx: &Cx<'gc>,
     match_impl: F,
 ) -> Result<(), MatchError>
 where
-    F: Fn(&Pattern, TaggedValue, &mut MatchEnv, usize, &Heap) -> Result<(), MatchError>,
+    F: Fn(&Pattern, Value<'gc>, &mut MatchEnv<'gc>, usize, &Cx<'gc>) -> Result<(), MatchError>,
 {
     // Convert the input to a vector with tail. A circular input matches no
     // pattern (#459); walking it never ended.
-    let Some((input_list, tail_value)) = list_to_vec_with_tail_tagged(input, heap) else {
+    let Some((input_list, tail_value)) = list_to_vec_with_tail(input, cx) else {
         return Err(MatchError::TypeMismatch {
             expected: "list".to_string(),
             actual: "a circular list".to_string(),
@@ -396,7 +396,7 @@ where
                 let all_vars = collect_pattern_pvars(subpattern);
 
                 // Initialize branches for ALL variables
-                let mut branches: std::collections::HashMap<PVRef, Vec<MatchValue>> =
+                let mut branches: std::collections::HashMap<PVRef, Vec<MatchValue<'gc>>> =
                     all_vars.iter().map(|pvref| (*pvref, Vec::new())).collect();
 
                 // Match subpattern against each consumed element
@@ -405,7 +405,7 @@ where
 
                     // Create a temporary environment for this iteration
                     let mut temp_env = MatchEnv::new(num_pvars);
-                    match_impl(subpattern, elem, &mut temp_env, level + 1, heap)?;
+                    match_impl(subpattern, elem, &mut temp_env, level + 1, cx)?;
 
                     // Extract matched values for ALL variables
                     for pvref in &all_vars {
@@ -432,7 +432,7 @@ where
                     actual: input_list.len(),
                 });
             }
-            match_impl(pattern, input_list[input_idx], env, level, heap)?;
+            match_impl(pattern, input_list[input_idx], env, level, cx)?;
             input_idx += 1;
         }
     }
@@ -442,7 +442,7 @@ where
     let mut remaining = input;
     for _ in 0..input_idx {
         if remaining.is_pair() {
-            remaining = heap.cdr(remaining);
+            remaining = cx.cdr(remaining);
         } else {
             remaining = tail_value;
             break;
@@ -450,7 +450,7 @@ where
     }
 
     // Match the tail against the remaining elements
-    match_impl(tail, remaining, env, level, heap)?;
+    match_impl(tail, remaining, env, level, cx)?;
 
     Ok(())
 }

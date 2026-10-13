@@ -128,6 +128,8 @@ impl Evaluator {
             .heap()
             .borrow_mut()
             .add_feature("patina-tree-walker");
+        // The interpreter's file system, on its instance too (#704).
+        global_env.heap().borrow().instance().set_fs(fs.clone());
 
         // Create primitive registry and register all primitives
         let mut primitive_registry = patina_primitives::PrimitiveRegistry::new();

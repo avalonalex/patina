@@ -3,7 +3,7 @@
 //! This module contains all the debug printing logic for macro expansion,
 //! keeping it separate from the core expansion algorithm.
 
-use patina_core::{SharedHeap, TaggedValue, format_tagged_with_scopes};
+use patina_core::{Cx, Value};
 use patina_runtime::{CompiledRule, MatchEnv, PVRef, ScopeId};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -35,20 +35,19 @@ impl DebugContext {
     }
 
     /// Log the start of macro expansion
-    pub fn log_expansion_start(
+    pub fn log_expansion_start<'gc>(
         &self,
         macro_name: &str,
         macro_scope: ScopeId,
         definition_scopes: &patina_runtime::ScopeSet,
         rules: &[CompiledRule],
-        args: TaggedValue,
-        heap: &SharedHeap,
+        args: Value<'gc>,
+        cx: &Cx<'gc>,
     ) {
         if !self.is_active() {
             return;
         }
 
-        let heap_ref = heap.borrow();
         println!("[MACRO] ========================================");
         println!("[MACRO] Expanding macro: {}", macro_name);
         println!("[MACRO]   Fresh macro scope: {}", macro_scope);
@@ -56,13 +55,10 @@ impl DebugContext {
 
         self.log_macro_rules(rules);
 
-        println!(
-            "[MACRO]   Input (normal):      {}",
-            patina_core::format_tagged(args, &heap_ref)
-        );
+        println!("[MACRO]   Input (normal):      {}", cx.format(args));
         println!(
             "[MACRO]   Input (with scopes): {}",
-            format_tagged_with_scopes(args, &heap_ref)
+            cx.format_with_scopes(args)
         );
 
         println!("[MACRO]   Trying {} rule(s):", rules.len());
@@ -86,26 +82,22 @@ impl DebugContext {
     }
 
     /// Log the result of flipping scopes on input
-    pub fn log_input_flip(
+    pub fn log_input_flip<'gc>(
         &self,
         macro_scope: ScopeId,
-        flipped_args: TaggedValue,
-        heap: &SharedHeap,
+        flipped_args: Value<'gc>,
+        cx: &Cx<'gc>,
     ) {
         if !self.debug_enabled {
             return;
         }
 
-        let heap_ref = heap.borrow();
         println!("[MACRO]   ");
         println!(
             "[MACRO]   After input flip (scope {} toggled):",
             macro_scope
         );
-        println!(
-            "[MACRO]     {}",
-            format_tagged_with_scopes(flipped_args, &heap_ref)
-        );
+        println!("[MACRO]     {}", cx.format_with_scopes(flipped_args));
     }
 
     /// Log the start of trying a rule
@@ -125,7 +117,7 @@ impl DebugContext {
     /// Log a successful match
     pub fn log_match_success(
         &self,
-        match_env: &MatchEnv,
+        match_env: &MatchEnv<'_>,
         pvar_names: &HashMap<PVRef, Rc<str>>,
         template: &Template,
     ) {
@@ -147,10 +139,10 @@ impl DebugContext {
     }
 
     /// Log pattern variable bindings
-    fn log_pattern_bindings(&self, match_env: &MatchEnv, pvar_names: &HashMap<PVRef, Rc<str>>) {
+    fn log_pattern_bindings(&self, match_env: &MatchEnv<'_>, pvar_names: &HashMap<PVRef, Rc<str>>) {
         println!("[MACRO]   === Pattern variable bindings ===");
         for (pvref, name) in pvar_names {
-            // Note: match_env.get() returns TaggedValue, show debug representation
+            // The value's debug representation
             if let Some(tv) = match_env.get(*pvref, &[]) {
                 println!("[MACRO]     {} = {:?}", name, tv);
             }
@@ -158,33 +150,28 @@ impl DebugContext {
     }
 
     /// Log the expanded result before output flip
-    pub fn log_before_output_flip(&self, expanded: TaggedValue, heap: &SharedHeap) {
+    pub fn log_before_output_flip<'gc>(&self, expanded: Value<'gc>, cx: &Cx<'gc>) {
         if !self.debug_enabled {
             return;
         }
 
-        let heap_ref = heap.borrow();
         println!("[MACRO]   ");
         println!("[MACRO]   Before output flip:");
-        println!(
-            "[MACRO]     {}",
-            format_tagged_with_scopes(expanded, &heap_ref)
-        );
+        println!("[MACRO]     {}", cx.format_with_scopes(expanded));
     }
 
     /// Log the final result after output flip
-    pub fn log_expansion_complete(
+    pub fn log_expansion_complete<'gc>(
         &self,
         macro_name: &str,
         macro_scope: ScopeId,
-        result: TaggedValue,
-        heap: &SharedHeap,
+        result: Value<'gc>,
+        cx: &Cx<'gc>,
     ) {
         if !self.is_active() {
             return;
         }
 
-        let heap_ref = heap.borrow();
         println!("[MACRO]   ");
         println!(
             "[MACRO]   After output flip (scope {} toggled):",
@@ -192,15 +179,12 @@ impl DebugContext {
         );
         println!(
             "[MACRO]     (with scopes) {}",
-            format_tagged_with_scopes(result, &heap_ref)
+            cx.format_with_scopes(result)
         );
         println!("[MACRO] ");
         println!("[MACRO] ========================================");
         println!("[MACRO] Expansion of '{}' complete!", macro_name);
-        println!(
-            "[MACRO] Result: {}",
-            patina_core::format_tagged(result, &heap_ref)
-        );
+        println!("[MACRO] Result: {}", cx.format(result));
         println!("[MACRO] ========================================");
         println!("[MACRO] ");
     }
@@ -227,13 +211,13 @@ impl DebugContext {
 }
 
 /// Helper to record an expansion step for tracing
-pub fn record_expansion_step(
+pub fn record_expansion_step<'gc>(
     should_trace: bool,
     macro_name: &Rc<str>,
     rule_idx: usize,
     num_rules: usize,
-    args: TaggedValue,
-    heap: &SharedHeap,
+    args: Value<'gc>,
+    cx: &Cx<'gc>,
 ) {
     if !should_trace {
         return;
@@ -242,11 +226,6 @@ pub fn record_expansion_step(
     use crate::error::ExpansionStep;
     use crate::tracer::MacroTracer;
 
-    let step = ExpansionStep::new(
-        macro_name.clone(),
-        rule_idx,
-        num_rules,
-        patina_core::format_tagged(args, &heap.borrow()),
-    );
+    let step = ExpansionStep::new(macro_name.clone(), rule_idx, num_rules, cx.format(args));
     MacroTracer::record_step(step);
 }
