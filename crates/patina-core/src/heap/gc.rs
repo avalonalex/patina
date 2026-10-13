@@ -450,6 +450,18 @@ impl NoGcScope {
     ) -> R {
         super::cx::enter(&self.heap, &self.mutator, instance, f)
     }
+
+    /// Run `f` in a context over `heap`, beneath a scope open for its extent,
+    /// carrying the instance the heap holds until #707: how code with no
+    /// driver to hand (a host, a primitive, the library loader) reads into
+    /// the heap until it is given a context (#704). What `f` answers cannot
+    /// name `'gc`, so no value leaves it.
+    #[track_caller]
+    pub fn with_cx<R>(heap: &SharedHeap, f: impl for<'gc> FnOnce(&mut crate::Cx<'gc>) -> R) -> R {
+        let instance = Rc::clone(heap.borrow().instance());
+        let scope = NoGcScope::enter(heap);
+        scope.mutate(&instance, f)
+    }
 }
 
 impl Drop for NoGcScope {

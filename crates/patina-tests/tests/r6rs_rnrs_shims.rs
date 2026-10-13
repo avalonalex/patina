@@ -51,10 +51,14 @@ fn exports_of(tree: &str, library: &str) -> Vec<String> {
 
     let mut parser =
         Parser::new(&source).unwrap_or_else(|e| panic!("lexing {}: {e:?}", path.display()));
-    let datum = parser
-        .parse()
-        .unwrap_or_else(|e| panic!("parsing {}: {e:?}", path.display()));
-    let definition = LibraryDefinition::from_tagged(datum, parser.heap())
+    let heap = patina_core::new_shared_heap();
+    let datum = patina_core::NoGcScope::with_cx(&heap, |cx| {
+        let datum = parser
+            .parse(cx)
+            .unwrap_or_else(|e| panic!("parsing {}: {e:?}", path.display()));
+        datum.tagged()
+    });
+    let definition = LibraryDefinition::from_tagged(datum, &heap)
         .unwrap_or_else(|e| panic!("reading the library form in {}: {e:?}", path.display()));
 
     definition

@@ -147,10 +147,10 @@ fn string_to_number(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVal
     // The reader's number syntax is the definition of what string->number
     // accepts (R7RS 6.2.7); a second parser here had drifted — no infinities,
     // no complex numbers, `#e` through a double.
-    match patina_frontend::Parser::number_from_str(&string, default_radix, heap.clone()) {
-        Some(tagged) => Ok(tagged),
-        None => Ok(TaggedValue::FALSE),
-    }
+    let number = patina_core::NoGcScope::with_cx(heap, |cx| {
+        patina_frontend::Parser::number_from_str(&string, default_radix, cx).map(|n| n.tagged())
+    });
+    Ok(number.unwrap_or(TaggedValue::FALSE))
 }
 
 // ========== Helper Functions ==========

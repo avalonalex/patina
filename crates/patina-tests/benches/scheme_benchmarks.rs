@@ -137,8 +137,8 @@ const ALLOC: &str =
 
 fn expand(interp: &BenchInterp) -> CoreExpr {
     let heap = interp.env().heap();
-    let mut parser = Parser::new_with_heap(black_box(SUM), heap.clone()).unwrap();
-    let datum = parser.parse().unwrap();
+    let mut parser = Parser::new(black_box(SUM)).unwrap();
+    let datum = patina_core::NoGcScope::with_cx(heap, |cx| parser.parse(cx).unwrap().tagged());
     Desugarer::with_env(interp.env().clone())
         .desugar_tagged(datum, heap)
         .unwrap()

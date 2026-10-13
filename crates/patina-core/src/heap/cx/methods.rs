@@ -92,6 +92,12 @@ impl<'gc> Cx<'gc> {
         self.brand(r)
     }
 
+    /// [`Heap::label_placeholder`](crate::Heap::label_placeholder) on this context's heap.
+    #[inline]
+    pub fn label_placeholder(&self, tv: Value<'gc>) -> Option<usize> {
+        self.heap.borrow().label_placeholder(tv.tagged())
+    }
+
     /// [`Heap::alloc_macro`](crate::Heap::alloc_macro) on this context's heap.
     #[inline]
     pub fn alloc_macro(

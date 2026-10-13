@@ -35,6 +35,12 @@ fn collections<B: Backend>(interp: &Interpreter<B>) -> u64 {
     interp.global_env().heap().borrow().gc_collections()
 }
 
+/// One datum of `source`, read on `heap` as the word `Backend::eval` takes.
+fn read(source: &str, heap: &patina_core::SharedHeap) -> TaggedValue {
+    let mut parser = Parser::new(source).unwrap();
+    patina_core::NoGcScope::with_cx(heap, |cx| parser.parse(cx).unwrap().tagged())
+}
+
 /// The message of the panic `f` raises.
 fn panic_message(f: impl FnOnce()) -> String {
     let payload = catch_unwind(AssertUnwindSafe(f)).expect_err("a panic");
@@ -78,13 +84,10 @@ fn a_value_bound_in_a_host_environment_survives_a_program_that_collects() {
 fn defined_across_a_collection<B: Backend>(interp: Interpreter<B>) {
     interp.eval_program_owned(PRELUDE).unwrap();
     let env = interp.new_environment();
-    let datum = Parser::new_with_heap(
+    let datum = read(
         "(define kept (list 'kept (vector 4 5 6)))",
-        interp.global_env().heap().clone(),
-    )
-    .unwrap()
-    .parse()
-    .unwrap();
+        interp.global_env().heap(),
+    );
     interp
         .backend()
         .eval(datum, &interp.raw_environment(&env))
@@ -122,10 +125,7 @@ fn evaluated_in_the_environment<B: Backend>(
     let heap = interp.global_env().heap().clone();
     let source_map = Rc::new(RefCell::new(SourceMap::new()));
     let eval = |source: &str| {
-        let datum = Parser::new_with_heap(source, heap.clone())
-            .unwrap()
-            .parse()
-            .unwrap();
+        let datum = read(source, &heap);
         let backend = interp.backend();
         let value = if with_source_map {
             backend.eval_with_source_map(datum, &raw, &source_map)

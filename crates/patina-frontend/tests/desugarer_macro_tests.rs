@@ -6,15 +6,20 @@
 //! NOTE: These are unit tests for the desugarer only. Full integration tests
 //! (including macro expansion) are in patina-tests.
 
-use patina_core::{SharedHeap, TaggedValue};
+use patina_core::{NoGcScope, SharedHeap, TaggedValue, new_shared_heap};
 use patina_frontend::{Desugarer, Parser};
 use patina_ir::CoreExprKind;
 
 /// Helper: Parse code string to TaggedValue, returning the heap for desugar_tagged
 fn parse_tv(code: &str) -> (TaggedValue, SharedHeap) {
+    let heap = new_shared_heap();
+    (read_on(code, &heap), heap)
+}
+
+/// Helper: Read code on `heap`, as the word `desugar_tagged` takes
+fn read_on(code: &str, heap: &SharedHeap) -> TaggedValue {
     let mut parser = Parser::new(code).expect("Parser creation failed");
-    let tv = parser.parse().expect("Parse failed");
-    (tv, parser.heap().clone())
+    NoGcScope::with_cx(heap, |cx| parser.parse(cx).expect("Parse failed").tagged())
 }
 
 #[test]
@@ -209,12 +214,7 @@ fn test_desugarer_returns_unspecified_for_define_syntax() {
     let env = Rc::new(Environment::new());
     patina_runtime::stdlib::seed_core_syntax(&env);
     let heap = env.heap().clone();
-    let mut parser = Parser::new_with_heap(
-        "(define-syntax foo (syntax-rules () ((foo x) x)))",
-        heap.clone(),
-    )
-    .expect("Parser creation failed");
-    let tv = parser.parse().expect("Parse failed");
+    let tv = read_on("(define-syntax foo (syntax-rules () ((foo x) x)))", &heap);
 
     let desugarer = Desugarer::with_env(env);
     let result = desugarer
@@ -239,12 +239,7 @@ fn test_desugarer_installs_macro_in_environment() {
     let env = Rc::new(Environment::new());
     patina_runtime::stdlib::seed_core_syntax(&env);
     let heap = env.heap().clone();
-    let mut parser = Parser::new_with_heap(
-        "(define-syntax foo (syntax-rules () ((foo x) x)))",
-        heap.clone(),
-    )
-    .expect("Parser creation failed");
-    let tv = parser.parse().expect("Parse failed");
+    let tv = read_on("(define-syntax foo (syntax-rules () ((foo x) x)))", &heap);
 
     let desugarer = Desugarer::with_env(env.clone());
     let _ = desugarer

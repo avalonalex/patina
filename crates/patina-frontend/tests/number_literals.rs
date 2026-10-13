@@ -2,14 +2,43 @@
 
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use patina_core::{Port, SharedHeap, TaggedValue, new_shared_heap};
-use patina_frontend::{Parser, Reader};
+use patina_core::{NoGcScope, Port, SharedHeap, TaggedValue, Value, new_shared_heap};
+use patina_frontend::{ParseError, Parser, Reader};
+
+// Each entry point reads in a context over the test's heap, and what it
+// reads leaves as a word the test reads back through the heap: nothing here
+// reaches a safe point.
 
 fn read(text: &str, heap: &SharedHeap) -> TaggedValue {
-    Parser::new_with_heap(text, heap.clone())
-        .unwrap()
-        .parse()
-        .unwrap_or_else(|e| panic!("{text:?}: {e}"))
+    NoGcScope::with_cx(heap, |cx| {
+        Parser::new(text)
+            .unwrap()
+            .parse(cx)
+            .unwrap_or_else(|e| panic!("{text:?}: {e}"))
+            .tagged()
+    })
+}
+
+fn number(text: &str, radix: u32, heap: &SharedHeap) -> Option<TaggedValue> {
+    NoGcScope::with_cx(heap, |cx| {
+        Parser::number_from_str(text, radix, cx).map(Value::tagged)
+    })
+}
+
+fn from_port(
+    port: std::rc::Rc<Port>,
+    heap: &SharedHeap,
+) -> Result<Option<TaggedValue>, ParseError> {
+    NoGcScope::with_cx(heap, |cx| {
+        Parser::read_from_port(port, cx).map(|value| value.map(Value::tagged))
+    })
+}
+
+fn next(reader: &mut Reader, heap: &SharedHeap) -> Option<Result<TaggedValue, ParseError>> {
+    NoGcScope::with_cx(heap, |cx| {
+        let value = reader.next_datum(cx, |p| p);
+        value.map(|value| value.map(Value::tagged))
+    })
 }
 
 #[test]
@@ -34,8 +63,8 @@ fn prefixes_radices_and_separators_use_the_same_grammar_in_every_entry_point() {
     ] {
         let heap = new_shared_heap();
         let direct = read(text, &heap);
-        let string = Parser::number_from_str(text, 10, heap.clone()).unwrap();
-        let port = Parser::read_from_port(Port::new_input_string(text.into()), heap.clone())
+        let string = number(text, 10, &heap).unwrap();
+        let port = from_port(Port::new_input_string(text.into()), &heap)
             .unwrap()
             .unwrap();
         let mut reader = Reader::new(false);
@@ -43,7 +72,7 @@ fn prefixes_radices_and_separators_use_the_same_grammar_in_every_entry_point() {
             reader.feed(&ch.to_string());
         }
         reader.no_more_text();
-        let streamed = reader.next_datum(&heap, |p| p).unwrap().unwrap();
+        let streamed = next(&mut reader, &heap).unwrap().unwrap();
         for value in [direct, string, port, streamed] {
             assert_eq!(value.as_fixnum(), Some(expected), "{text}");
         }
@@ -58,9 +87,7 @@ fn prefixes_radices_and_separators_use_the_same_grammar_in_every_entry_point() {
         ("#E#B10", 16, 2),
     ] {
         assert_eq!(
-            Parser::number_from_str(text, radix, new_shared_heap())
-                .unwrap()
-                .as_fixnum(),
+            number(text, radix, &new_shared_heap()).unwrap().as_fixnum(),
             Some(expected)
         );
     }
@@ -103,8 +130,10 @@ fn errors_name_the_original_character_and_locate_it_in_reader_coordinates() {
     ] {
         let program = format!("λ\r\n  {text}");
         let mut parser = Parser::new(&program).unwrap();
-        parser.parse_next().unwrap();
-        let error = parser.parse_next().unwrap_err();
+        let error = NoGcScope::with_cx(&new_shared_heap(), |cx| {
+            parser.parse_next(cx).unwrap();
+            parser.parse_next(cx).unwrap_err()
+        });
         let span = error.span().unwrap();
         assert_eq!(
             (span.start.line, span.start.column, span.start.offset),
@@ -125,23 +154,20 @@ fn errors_name_the_original_character_and_locate_it_in_reader_coordinates() {
             .nth(offset)
             .map_or_else(|| "end of number".into(), |c| format!("{c:?}"));
         assert!(message.contains(&format!("found {found}")), "{message}");
-        assert!(
-            Parser::number_from_str(text, 10, new_shared_heap()).is_none(),
-            "{text}"
-        );
+        assert!(number(text, 10, &new_shared_heap()).is_none(), "{text}");
         // Token replay and port reads must carry the same error position.
         let heap = new_shared_heap();
         let port = Port::new_input_string(program.clone());
-        Parser::read_from_port(port.clone(), heap.clone()).unwrap();
-        let port_error = Parser::read_from_port(port, heap.clone()).unwrap_err();
+        from_port(port.clone(), &heap).unwrap();
+        let port_error = from_port(port, &heap).unwrap_err();
         assert_eq!(port_error.span().unwrap().start, span.start, "{text}");
         let mut reader = Reader::new(false);
         for ch in program.chars() {
             reader.feed(&ch.to_string());
         }
         reader.no_more_text();
-        reader.next_datum(&heap, |p| p).unwrap().unwrap();
-        let replay_error = reader.next_datum(&heap, |p| p).unwrap().unwrap_err();
+        next(&mut reader, &heap).unwrap().unwrap();
+        let replay_error = next(&mut reader, &heap).unwrap().unwrap_err();
         assert_eq!(replay_error.span().unwrap().start, span.start, "{text}");
     }
 }
@@ -169,13 +195,10 @@ fn string_conversion_requires_the_entire_string_to_be_a_number() {
         "#t",
         "1\0",
     ] {
-        assert!(
-            Parser::number_from_str(text, 10, new_shared_heap()).is_none(),
-            "{text:?}"
-        );
+        assert!(number(text, 10, &new_shared_heap()).is_none(), "{text:?}");
     }
     for radix in [0, 1, 3, 36, u32::MAX] {
-        assert!(Parser::number_from_str("#d1", radix, new_shared_heap()).is_none());
+        assert!(number("#d1", radix, &new_shared_heap()).is_none());
     }
     for text in ["+inf", "+nan.0tail", "+infinity", "_1000", "+name_1"] {
         let heap = new_shared_heap();
@@ -216,10 +239,7 @@ fn exact_decimals_and_integer_limits_never_pass_through_a_float() {
         "#e1e-9223372036854775807",
         "#e1e99999999999999999999999999",
     ] {
-        assert!(
-            Parser::number_from_str(text, 10, heap.clone()).is_none(),
-            "{text}"
-        );
+        assert!(number(text, 10, &heap).is_none(), "{text}");
     }
 }
 

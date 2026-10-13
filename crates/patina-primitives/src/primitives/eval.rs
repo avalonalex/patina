@@ -728,20 +728,22 @@ fn load_forms(
             e.format_in_source(&filename, &content)
         )
     };
-    let mut parser = patina_frontend::Parser::new_program(&content, heap.clone(), &filename, false)
-        .map_err(|e| {
+    let mut parser =
+        patina_frontend::Parser::new_program(&content, &filename, false).map_err(|e| {
             EvalError::InvalidSyntax(parse_error(&e)).with_diagnostic(
                 Diagnostic::new(DiagnosticKind::Parse, e.to_string()).at_path(&filename),
             )
         })?;
     let mut forms = Vec::new();
-    let error = loop {
-        match parser.parse_next() {
-            Ok(Some(expr)) => forms.push(expr),
-            Ok(None) => break None,
-            Err(e) => break Some(parse_error(&e)),
+    let error = patina_core::NoGcScope::with_cx(heap, |cx| {
+        loop {
+            match parser.parse_next(cx) {
+                Ok(Some(expr)) => forms.push(expr.tagged()),
+                Ok(None) => break None,
+                Err(e) => break Some(parse_error(&e)),
+            }
         }
-    };
+    });
 
     let state = {
         let mut heap = heap.borrow_mut();

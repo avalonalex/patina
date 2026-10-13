@@ -423,7 +423,7 @@ the `current_step: StepResult` local** in `eval_in_env`'s trampoline loop
 | `LibraryRegistry` | `eval/mod.rs:47` | §5.3 |
 | `Evaluator.pending_escape` | `eval/mod.rs` | Holds `(TaggedValue, Rc<CpsContinuation>)` between set and take — a genuine hidden root, traced by the evaluator's provider. The thread-local `PENDING_ESCAPE` until #682 |
 | Suspended outer `StepResult`s in nested trampolines | `run_trampoline` (`eval/cps_eval/mod.rs`), entered by `apply_from_direct_with` and the `eval` primitive | **Not rooted** — handled by deferral (§7), not by tracing. Since 2026-09-01 only Rust-primitive callbacks and parameter converters run there; a continuation jump's wind thunks are ordinary steps (`ContValue::Jump`) and are traced like any other |
-| `Parser.labels` | `crates/patina-frontend/src/parser/mod.rs:47` | Datum labels during parse; GC never runs mid-parse (deferral), listed for completeness |
+| A datum's labels (`Labels<'gc>`) | `crates/patina-frontend/src/parser/mod.rs` | Live only while `Parser::parse` reads one outermost datum, and branded with its context (#704): they bind `Value<'gc>`s and cannot outlive the `Cx` the read works through, beneath which nothing collects. The parser itself holds no value between reads |
 | Macro-expansion `MatchEnv` / `Matcher` / `Expander` state | `crates/patina-core/src/pvref.rs` etc. | Live only during expansion, and branded with its context (#704): a `MatchEnv<'gc>` binds `Value<'gc>`s, and it, the matcher and the expander cannot outlive the `Cx` they work through, beneath which nothing collects |
 
 ### 5.2 VM
@@ -1073,8 +1073,10 @@ beside today's `SharedHeap` surface until they do.
   still works in words calls code that takes a context: the desugarer calls
   the macro expander (`patina_frontend::macro_expander::cross`). Its words
   cross as an embedder's do, each through an `Owned` handle read back with
-  `Cx::held`, so no safe crate turns a word into a value. Each crossing goes
-  when its caller converts.
+  `Cx::held`, so no safe crate turns a word into a value. A caller that hands
+  nothing in, as the parser's callers do, needs no handle: it opens a context
+  with `NoGcScope::with_cx`, over the instance the heap holds, and what it
+  reads leaves as words. Each crossing goes when its caller converts.
 - **The funnel.** `Cx::store(slot, v)` is the one way a value is written into
   a heap object: a pair's car or cdr, a vector's element, a cell, a record's
   field, a closure's free variable, a promise's box, a parameter's value.

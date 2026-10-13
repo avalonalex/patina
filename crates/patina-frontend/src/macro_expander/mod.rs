@@ -10,7 +10,6 @@ mod interface;
 pub use interface::TestExpander;
 
 use patina_core::{Cx, NoGcScope, SharedHeap, TaggedValue, Value};
-use std::rc::Rc;
 
 /// Run `f` in a context over `heap`, with `words` as values: how code that
 /// works in words calls the macro expander, which takes a context (#704).
@@ -32,9 +31,7 @@ pub(crate) fn cross<const N: usize, R>(
         let heap = heap.borrow();
         words.map(|word| heap.hold(word))
     };
-    let instance = Rc::clone(heap.borrow().instance());
-    let scope = NoGcScope::enter(heap);
-    scope.mutate(&instance, |cx| {
+    NoGcScope::with_cx(heap, |cx| {
         let values = handles.each_ref().map(|handle| cx.held(handle));
         f(cx, values)
     })
@@ -51,9 +48,7 @@ pub(crate) fn cross_all<R>(
         let heap = heap.borrow();
         words.iter().map(|&word| heap.hold(word)).collect()
     };
-    let instance = Rc::clone(heap.borrow().instance());
-    let scope = NoGcScope::enter(heap);
-    scope.mutate(&instance, |cx| {
+    NoGcScope::with_cx(heap, |cx| {
         let values: Vec<Value<'_>> = handles.iter().map(|handle| cx.held(handle)).collect();
         f(cx, &values)
     })

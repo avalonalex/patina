@@ -1401,6 +1401,19 @@ impl Heap {
         self.alloc_object(HeapObjectData::LabelPlaceholder(label))
     }
 
+    /// The label a placeholder stands for, if `tv` is one: the parser's
+    /// `#n#` before its `#n=` (#704).
+    #[inline]
+    pub fn label_placeholder(&self, tv: TaggedValue) -> Option<usize> {
+        if !tv.is_object() {
+            return None;
+        }
+        match self.get_object(tv) {
+            HeapObjectData::LabelPlaceholder(label) => Some(*label),
+            _ => None,
+        }
+    }
+
     /// Allocate a native EnvironmentSpecifier object
     pub fn alloc_environment_specifier(
         &mut self,

@@ -1,14 +1,14 @@
 //! Token-driven datum construction. Pending containers and prefixes live on
 //! the heap, not on the Rust call stack, including inside datum comments.
 
-use super::{ParseError, Parser};
+use super::{Labels, ParseError, Parser};
 use crate::lexer::{Lexer, Token};
-use patina_core::TaggedValue;
+use patina_core::{Cx, Value};
 
-enum Tail {
+enum Tail<'gc> {
     Elements,
     Needed,
-    Complete(TaggedValue),
+    Complete(Value<'gc>),
 }
 
 // Specialize the same grammar for syntax and ordinary Scheme data. The latter
@@ -30,14 +30,14 @@ impl SourceMode for ProgramMode {
     const TRACK: bool = true;
 }
 
-enum Frame {
+enum Frame<'gc> {
     List {
-        elements: Vec<TaggedValue>,
-        tail: Tail,
+        elements: Vec<Value<'gc>>,
+        tail: Tail<'gc>,
         at: (u32, u32),
     },
     Vector {
-        elements: Vec<TaggedValue>,
+        elements: Vec<Value<'gc>>,
         at: (u32, u32),
     },
     Bytes(Vec<u8>, (u32, u32)),
@@ -51,11 +51,11 @@ enum Frame {
     },
     // Discarded datums need their structure checked, but allocate no Scheme
     // values and neither define nor reference labels in the surrounding datum.
-    SkippedList(Tail, (u32, u32)),
+    SkippedList(Tail<'gc>, (u32, u32)),
     SkippedPrefix,
 }
 
-impl Frame {
+impl Frame<'_> {
     fn opening(&self) -> Option<(u32, u32)> {
         match self {
             Self::List { at, .. }
@@ -68,28 +68,42 @@ impl Frame {
 }
 
 impl Parser {
-    pub(super) fn parse_expr(&mut self) -> Result<TaggedValue, ParseError> {
-        self.read_datum(false)
+    pub(super) fn parse_expr<'gc>(
+        &mut self,
+        cx: &mut Cx<'gc>,
+        labels: &mut Labels<'gc>,
+    ) -> Result<Value<'gc>, ParseError> {
+        self.read_datum(cx, labels, false)
     }
 
-    pub(super) fn skip_datum(&mut self) -> Result<(), ParseError> {
-        self.read_datum(true).map(|_| ())
+    /// Read past a datum without building it: a discarded datum neither
+    /// defines nor references the labels around it.
+    pub(super) fn skip_datum(&mut self, cx: &mut Cx<'_>) -> Result<(), ParseError> {
+        self.read_datum(cx, &mut Labels::default(), true)
+            .map(|_| ())
     }
 
-    fn read_datum(&mut self, discarding: bool) -> Result<TaggedValue, ParseError> {
+    fn read_datum<'gc>(
+        &mut self,
+        cx: &mut Cx<'gc>,
+        labels: &mut Labels<'gc>,
+        discarding: bool,
+    ) -> Result<Value<'gc>, ParseError> {
         if self.source_map.is_some() {
-            self.read_datum_in::<ProgramMode>(discarding)
+            self.read_datum_in::<ProgramMode>(cx, labels, discarding)
         } else {
-            self.read_datum_in::<DatumMode>(discarding)
+            self.read_datum_in::<DatumMode>(cx, labels, discarding)
         }
     }
 
-    fn read_datum_in<M: SourceMode>(
+    fn read_datum_in<'gc, M: SourceMode>(
         &mut self,
+        cx: &mut Cx<'gc>,
+        labels: &mut Labels<'gc>,
         discarding: bool,
-    ) -> Result<TaggedValue, ParseError> {
+    ) -> Result<Value<'gc>, ParseError> {
         let mut frames = Vec::new();
-        self.read_with_frames::<M>(discarding, &mut frames)
+        self.read_with_frames::<M>(cx, labels, discarding, &mut frames)
             .map_err(|error| {
                 error
                     .at(self.current_span())
@@ -97,11 +111,13 @@ impl Parser {
             })
     }
 
-    fn read_with_frames<M: SourceMode>(
+    fn read_with_frames<'gc, M: SourceMode>(
         &mut self,
+        cx: &mut Cx<'gc>,
+        labels: &mut Labels<'gc>,
         mut discarding: bool,
-        frames: &mut Vec<Frame>,
-    ) -> Result<TaggedValue, ParseError> {
+        frames: &mut Vec<Frame<'gc>>,
+    ) -> Result<Value<'gc>, ParseError> {
         'tokens: loop {
             if self.current_token == Token::DatumComment {
                 frames.push(Frame::Comment {
@@ -138,7 +154,7 @@ impl Parser {
                         "Bytevector must contain only bytes (0-255)".to_string(),
                     ));
                 };
-                let value = self.parse_number(number)?;
+                let value = self.parse_number(cx, number)?;
                 let Some(byte) = value.as_fixnum() else {
                     return Err(ParseError::InvalidSyntax(
                         "Bytevector must contain only integer bytes (0-255)".to_string(),
@@ -200,7 +216,7 @@ impl Parser {
                     let value = match frames.pop() {
                         Some(Frame::List { elements, tail, at }) => {
                             let tail = match tail {
-                                Tail::Elements => TaggedValue::NULL,
+                                Tail::Elements => Value::NULL,
                                 Tail::Complete(tail) => tail,
                                 Tail::Needed => {
                                     return Err(ParseError::UnexpectedToken(Token::RightParen));
@@ -209,24 +225,22 @@ impl Parser {
                             if M::TRACK {
                                 location = self.source_location(at.0, at.1);
                             }
-                            self.heap
-                                .borrow_mut()
-                                .list_from_iter_with_tail(elements, tail)
+                            cx.list_from_iter_with_tail(elements, tail)
                         }
                         Some(Frame::Vector { elements, at }) => {
                             if M::TRACK {
                                 location = self.source_location(at.0, at.1);
                             }
-                            self.heap.borrow_mut().alloc_vector(elements)
+                            cx.alloc_vector(elements)
                         }
                         Some(Frame::Bytes(bytes, at)) => {
                             if M::TRACK {
                                 location = self.source_location(at.0, at.1);
                             }
-                            self.heap.borrow_mut().alloc_bytevector(bytes)
+                            cx.alloc_bytevector(bytes)
                         }
                         Some(Frame::SkippedList(Tail::Elements | Tail::Complete(_), _)) => {
-                            TaggedValue::UNSPECIFIED
+                            Value::UNSPECIFIED
                         }
                         _ => return Err(ParseError::UnexpectedToken(Token::RightParen)),
                     };
@@ -273,7 +287,7 @@ impl Parser {
                     if discarding {
                         frames.push(Frame::SkippedPrefix);
                     } else {
-                        if self.labels.contains_key(&label) {
+                        if labels.defined.contains_key(&label) {
                             return Err(ParseError::DuplicateLabel(label).at(span));
                         }
                         frames.push(Frame::Label(label));
@@ -281,31 +295,25 @@ impl Parser {
                     continue;
                 }
                 // Even numeric conversion is unnecessary when discarding.
-                _ if discarding => TaggedValue::UNSPECIFIED,
-                Token::Boolean(value) => {
-                    if value {
-                        TaggedValue::TRUE
-                    } else {
-                        TaggedValue::FALSE
-                    }
-                }
-                Token::Number(number) => match self.parse_number(&number) {
+                _ if discarding => Value::UNSPECIFIED,
+                Token::Boolean(value) => Value::boolean(value),
+                Token::Number(number) => match self.parse_number(cx, &number) {
                     Ok(value) => value,
                     Err(_) if Lexer::is_peculiar_identifier(&number) => {
                         let name = Lexer::identifier_name(number, self.current_token_fold_case);
-                        self.identifier(&name)
+                        self.identifier(cx, &name)
                     }
                     Err(error) => return Err(error),
                 },
-                Token::Character(value) => TaggedValue::character(value),
-                Token::String(value) => self.heap.borrow_mut().alloc_string(value),
-                Token::Identifier(value) => self.identifier(&value),
+                Token::Character(value) => Value::character(value),
+                Token::String(value) => cx.alloc_string(value),
+                Token::Identifier(value) => self.identifier(cx, &value),
                 Token::DatumRef(label) => {
-                    if let Some(value) = self.labels.get(&label) {
+                    if let Some(value) = labels.defined.get(&label) {
                         *value
                     } else {
-                        self.pending_refs.push((label, self.current_span()));
-                        self.heap.borrow_mut().alloc_label_placeholder(label)
+                        labels.pending.push((label, self.current_span()));
+                        cx.alloc_label_placeholder(label)
                     }
                 }
                 token => return Err(ParseError::UnexpectedToken(token)),
@@ -316,10 +324,8 @@ impl Parser {
             {
                 // A label reference is another edge to existing syntax. Keep
                 // the identifier/container's original spelling location.
-                if !matches!(self.current_token, Token::DatumRef(_))
-                    || self.heap.borrow().source(value).is_none()
-                {
-                    self.record_location(value, loc.clone());
+                if !matches!(self.current_token, Token::DatumRef(_)) || cx.source(value).is_none() {
+                    cx.record_source(value, loc.clone());
                 }
             }
             if discarding {
@@ -355,8 +361,8 @@ impl Parser {
                 }
                 match frames.pop().expect("a pending prefix") {
                     Frame::Prefix { name, at } => {
-                        let symbol = self.heap.borrow_mut().intern_symbol(name);
-                        value = self.make_list(vec![symbol, value]);
+                        let symbol = cx.intern_symbol(name);
+                        value = cx.list_from_iter([symbol, value]);
                         if M::TRACK
                             && let Some(loc) = &mut location
                         {
@@ -369,11 +375,11 @@ impl Parser {
                                     1
                                 }
                             });
-                            self.record_location(value, loc.clone());
+                            cx.record_source(value, loc.clone());
                         }
                     }
                     Frame::Label(label) => {
-                        self.labels.insert(label, value);
+                        labels.defined.insert(label, value);
                     }
                     Frame::SkippedPrefix => {}
                     Frame::Comment { was_discarding } => {

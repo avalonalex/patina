@@ -9,7 +9,7 @@
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{ToPrimitive, Zero};
-use patina_core::{Heap, SharedHeap, TaggedValue};
+use patina_core::{Cx, TaggedValue, Value};
 use std::borrow::Cow;
 
 #[derive(Debug)]
@@ -322,19 +322,19 @@ impl<'a> Scanner<'a> {
     }
 }
 
-fn integer(heap: &mut Heap, n: BigInt) -> TaggedValue {
+fn integer<'gc>(cx: &mut Cx<'gc>, n: BigInt) -> Value<'gc> {
     if let Some(n) = n.to_i64().filter(|n| TaggedValue::fits_fixnum(*n)) {
-        TaggedValue::fixnum(n)
+        Value::fixnum(n)
     } else {
-        heap.alloc_bigint(n)
+        cx.alloc_bigint(n)
     }
 }
 
-fn rational(heap: &mut Heap, value: BigRational) -> TaggedValue {
+fn rational<'gc>(cx: &mut Cx<'gc>, value: BigRational) -> Value<'gc> {
     if value.is_integer() {
-        integer(heap, value.to_integer())
+        integer(cx, value.to_integer())
     } else {
-        heap.alloc_rational(value)
+        cx.alloc_rational(value)
     }
 }
 
@@ -405,9 +405,14 @@ impl Real<'_> {
         })
     }
 
-    fn convert(&self, heap: &mut Heap, radix: u32, exactness: Option<bool>) -> Result<TaggedValue> {
+    fn convert<'gc>(
+        &self,
+        cx: &mut Cx<'gc>,
+        radix: u32,
+        exactness: Option<bool>,
+    ) -> Result<Value<'gc>> {
         let value = match &self.kind {
-            RealKind::Unit => TaggedValue::fixnum(if self.negative { -1 } else { 1 }),
+            RealKind::Unit => Value::fixnum(if self.negative { -1 } else { 1 }),
             RealKind::Infinity | RealKind::Nan => {
                 if exactness == Some(true) {
                     return Err(NumberError::new(
@@ -422,19 +427,19 @@ impl Real<'_> {
                 } else {
                     f64::INFINITY
                 };
-                heap.alloc_real(f)
+                cx.alloc_real(f)
             }
             RealKind::Integer => {
                 let digits = self.normalized();
                 if exactness == Some(false) && radix == 10 {
                     // Keep Rust's correctly rounded decimal conversion, also
                     // preserving the sign of #i-0 and overflowing integers.
-                    return Ok(heap.alloc_real(digits.parse().expect("scanned decimal integer")));
+                    return Ok(cx.alloc_real(digits.parse().expect("scanned decimal integer")));
                 }
                 match i64::from_str_radix(&digits, radix) {
-                    Ok(n) if TaggedValue::fits_fixnum(n) => TaggedValue::fixnum(n),
+                    Ok(n) if TaggedValue::fits_fixnum(n) => Value::fixnum(n),
                     _ => integer(
-                        heap,
+                        cx,
                         BigInt::parse_bytes(digits.as_bytes(), radix).expect("scanned integer"),
                     ),
                 }
@@ -449,7 +454,7 @@ impl Real<'_> {
                 }
                 let numer = numerator.integer(radix);
                 rational(
-                    heap,
+                    cx,
                     BigRational::new(if self.negative { -numer } else { numer }, denom),
                 )
             }
@@ -459,17 +464,17 @@ impl Real<'_> {
                 exponent,
             } => {
                 if exactness == Some(true) {
-                    rational(heap, self.exact_decimal(whole, fraction, exponent)?)
+                    rational(cx, self.exact_decimal(whole, fraction, exponent)?)
                 } else {
-                    heap.alloc_real(self.normalized().parse().expect("scanned decimal"))
+                    cx.alloc_real(self.normalized().parse().expect("scanned decimal"))
                 }
             }
         };
         Ok(if exactness == Some(false) {
-            if self.negative && heap.is_numeric_zero_tv(value) {
-                heap.alloc_real(-0.0)
+            if self.negative && cx.is_numeric_zero_tv(value) {
+                cx.alloc_real(-0.0)
             } else {
-                heap.to_inexact(value)
+                cx.to_inexact(value)
             }
         } else {
             value
@@ -478,47 +483,47 @@ impl Real<'_> {
 }
 
 impl Number<'_> {
-    fn convert(&self, heap: &mut Heap) -> Result<TaggedValue> {
-        let part = |r: &Real<'_>, heap: &mut Heap| r.convert(heap, self.radix, self.exactness);
+    fn convert<'gc>(&self, cx: &mut Cx<'gc>) -> Result<Value<'gc>> {
+        let part = |r: &Real<'_>, cx: &mut Cx<'gc>| r.convert(cx, self.radix, self.exactness);
         match &self.form {
-            Form::Real(real) => part(real, heap),
+            Form::Real(real) => part(real, cx),
             Form::Rectangular(real, imag) => {
                 // Preserve Patina/Chibi's exact implicit zero (#418). A #i
                 // prefix alone asks for both components to become inexact.
                 let re = match real {
-                    Some(real) => part(real, heap)?,
-                    None if self.exactness == Some(false) => heap.alloc_real(0.0),
-                    None => TaggedValue::fixnum(0),
+                    Some(real) => part(real, cx)?,
+                    None if self.exactness == Some(false) => cx.alloc_real(0.0),
+                    None => Value::fixnum(0),
                 };
-                let im = part(imag, heap)?;
-                Ok(heap.alloc_complex(re, im))
+                let im = part(imag, cx)?;
+                Ok(cx.alloc_complex(re, im))
             }
             Form::Polar(magnitude, angle) => {
                 // Test a known exact zero angle before #i coerces it, so
                 // 1@0 and #i1@0 preserve the magnitude without trigonometry.
                 let component_exactness = self.exactness.filter(|exact| *exact);
-                let r = magnitude.convert(heap, self.radix, component_exactness)?;
-                let theta = angle.convert(heap, self.radix, component_exactness)?;
-                if heap.is_exact_zero(theta) {
+                let r = magnitude.convert(cx, self.radix, component_exactness)?;
+                let theta = angle.convert(cx, self.radix, component_exactness)?;
+                if cx.is_exact_zero(theta) {
                     return Ok(if self.exactness == Some(false) {
-                        if magnitude.negative && heap.is_numeric_zero_tv(r) {
-                            heap.alloc_real(-0.0)
+                        if magnitude.negative && cx.is_numeric_zero_tv(r) {
+                            cx.alloc_real(-0.0)
                         } else {
-                            heap.to_inexact(r)
+                            cx.to_inexact(r)
                         }
                     } else {
                         r
                     });
                 }
-                let radius = heap.numeric_to_f64(r).expect("real magnitude");
-                let radians = heap.numeric_to_f64(theta).expect("real angle");
-                let re = heap.alloc_real(radius * radians.cos());
-                let im = heap.alloc_real(radius * radians.sin());
-                let value = heap.alloc_complex(re, im);
+                let radius = cx.numeric_to_f64(r).expect("real magnitude");
+                let radians = cx.numeric_to_f64(theta).expect("real angle");
+                let re = cx.alloc_real(radius * radians.cos());
+                let im = cx.alloc_real(radius * radians.sin());
+                let value = cx.alloc_complex(re, im);
                 if self.exactness == Some(true) {
                     // As with (exact (make-polar ...)), make the computed
                     // finite approximation exact; do not silently ignore #e.
-                    heap.to_exact(value).map_err(|_| {
+                    cx.to_exact(value).map_err(|_| {
                         NumberError::new(angle.offset, "polar result has no exact representation")
                     })
                 } else {
@@ -529,12 +534,12 @@ impl Number<'_> {
     }
 }
 
-pub(super) fn parse(input: &str, radix: u32, heap: &SharedHeap) -> Result<TaggedValue> {
+pub(super) fn parse<'gc>(input: &str, radix: u32, cx: &mut Cx<'gc>) -> Result<Value<'gc>> {
     let number = Scanner {
         input,
         at: 0,
         radix,
     }
     .scan()?;
-    number.convert(&mut heap.borrow_mut())
+    number.convert(cx)
 }
