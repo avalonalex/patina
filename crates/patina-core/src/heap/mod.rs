@@ -740,9 +740,17 @@ impl Heap {
     /// environment would mark its slots in this one's bits.
     fn assert_own(&self, env: &crate::environment::Environment) {
         assert!(
-            std::ptr::eq(env.heap().as_ptr(), self),
+            env.heap_id() == self.id(),
             "an environment of another heap: a handle roots only its own heap's"
         );
+    }
+
+    /// This heap's number, which its collector's log names it by
+    /// (`Telemetry::heap_id`) and its environments carry
+    /// ([`Environment::heap_id`](crate::environment::Environment::heap_id)).
+    #[inline]
+    pub fn id(&self) -> u64 {
+        self.telemetry.heap_id
     }
 
     // =========================================================================

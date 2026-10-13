@@ -202,7 +202,7 @@ mod tests {
             TaggedValue::fixnum(0),
         );
 
-        let importer = Environment::with_heap(lib.env.heap().clone());
+        let importer = Environment::new();
         assert!(lib.import_into(&importer, "count", "count"));
         assert!(lib.import_into(&importer, "c:tally", "tally"));
         assert!(!lib.import_into(&importer, "nope", "nope"));
@@ -221,7 +221,7 @@ mod tests {
         // export table is all there is, so its value is what gets installed.
         let mut lib = Library::new(vec!["bare".to_string()]);
         lib.export_tagged("v".to_string(), TaggedValue::fixnum(7));
-        let importer = Environment::with_heap(lib.env.heap().clone());
+        let importer = Environment::new();
         assert!(lib.import_into(&importer, "v", "v"));
         assert_eq!(importer.get("v"), Some(TaggedValue::fixnum(7)));
     }

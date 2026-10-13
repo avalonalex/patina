@@ -320,11 +320,22 @@ impl<'gc> Cx<'gc> {
         scopes: &ScopeSet,
     ) -> Result<(Option<Value<'gc>>, bool), Box<crate::scope_resolve::AmbiguousReference>> {
         debug_assert!(
-            std::ptr::eq::<RefCell<Heap>>(&**env.heap(), self.heap),
+            env.heap_id() == self.heap.borrow().id(),
             "Cx::resolve_with_scopes: an environment of another heap"
         );
         let (word, selected) = env.resolve_with_scopes(name, scopes)?;
         Ok((word.map(|word| self.brand(word)), selected))
+    }
+
+    /// [`Environment::scoped_macro_binding`] on this context's heap.
+    #[inline]
+    pub fn scoped_macro_binding(
+        &self,
+        env: &Rc<Environment>,
+        name: &str,
+        scopes: &ScopeSet,
+    ) -> Option<(Rc<Environment>, ScopeSet)> {
+        env.scoped_macro_binding(name, scopes, &self.heap.borrow())
     }
 
     /// [`Heap::source`], cloned.

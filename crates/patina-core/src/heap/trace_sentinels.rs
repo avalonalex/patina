@@ -51,18 +51,15 @@ pub(crate) fn collect_from(heap: &mut Heap, roots: &[TaggedValue]) {
 
 /// An environment on `heap` whose one binding holds `value`.
 pub(crate) fn env_holding(heap: &SharedHeap, value: TaggedValue) -> Rc<Environment> {
-    let env = Rc::new(Environment::with_heap(heap.clone()));
+    let env = Rc::new(Environment::with_heap(heap));
     env.define("held", value);
     env
 }
 
 /// [`env_holding`] for a test that holds the heap, `held`, borrowed: the
-/// namespace takes its account from it rather than borrowing `shared` again.
-fn env_holding_on(shared: &SharedHeap, held: &Heap, value: TaggedValue) -> Rc<Environment> {
-    let env = Rc::new(Environment::namespace(
-        shared.clone(),
-        held.external_bytes_handle(),
-    ));
+/// namespace takes its account from it rather than borrowing it again.
+fn env_holding_on(held: &Heap, value: TaggedValue) -> Rc<Environment> {
+    let env = Rc::new(Environment::namespace(held));
     env.define("held", value);
     env
 }
@@ -561,7 +558,7 @@ fn exception_irritants() {
 
 #[test]
 fn cps_lambda_body_and_environment() {
-    objects_keep_their_sentinels(|shared, heap, s| {
+    objects_keep_their_sentinels(|_shared, heap, s| {
         let body = s.pair(heap, "Procedure::CpsLambda.body");
         let env = s.vector(heap, "Procedure::CpsLambda.env");
         vec![HeapObjectData::Procedure(Rc::new(Procedure::CpsLambda {
@@ -569,7 +566,7 @@ fn cps_lambda_body_and_environment() {
             variadic: None,
             cont_param: Rc::from("k"),
             body: literal(body),
-            env: env_holding_on(shared, heap, env),
+            env: env_holding_on(heap, env),
             binding_scopes: Rc::new(ScopeSet::new()),
         }))]
     });
@@ -625,10 +622,10 @@ fn values_elements() {
 
 #[test]
 fn environment_specifier_environment() {
-    objects_keep_their_sentinels(|shared, heap, s| {
+    objects_keep_their_sentinels(|_shared, heap, s| {
         let held = s.pair(heap, "HeapObjectData::EnvironmentSpecifier.env");
         vec![HeapObjectData::EnvironmentSpecifier {
-            env: env_holding_on(shared, heap, held),
+            env: env_holding_on(heap, held),
             mutable: false,
         }]
     });
@@ -645,13 +642,13 @@ fn mutable_cell_contents() {
 
 #[test]
 fn vm_closure_free_variables_and_globals() {
-    objects_keep_their_sentinels(|shared, heap, s| {
+    objects_keep_their_sentinels(|_shared, heap, s| {
         let free_var = s.pair(heap, "HeapObjectData::VmClosure.free_vars");
         let global = s.vector(heap, "HeapObjectData::VmClosure.globals");
         vec![HeapObjectData::VmClosure {
             code_id: 0,
             free_vars: vec![free_var],
-            globals: env_holding_on(shared, heap, global),
+            globals: env_holding_on(heap, global),
         }]
     });
 }
