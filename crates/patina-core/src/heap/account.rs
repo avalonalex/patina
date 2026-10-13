@@ -106,6 +106,7 @@ use std::sync::OnceLock;
 
 use num_bigint::BigInt;
 
+use super::mutator::{Mutator, event};
 use super::{Heap, HeapObjectData};
 use crate::core_expr::ScopedParam;
 pub(crate) use crate::environment::CAPTURED_FRAME_BYTES;
@@ -392,15 +393,15 @@ pub(super) struct ByteAccount {
 }
 
 impl ByteAccount {
-    /// An empty account that raises `pending`, the heap's collection-pending
-    /// flag, when an external charge crosses the byte threshold.
-    pub(super) fn new(pending: Rc<Cell<bool>>) -> Self {
+    /// An empty account that posts a collection to `mutator`, the heap's
+    /// carrier, when an external charge crosses the byte threshold.
+    pub(super) fn new(mutator: Rc<Mutator>) -> Self {
         Self {
             shared: Rc::new(SharedCounts {
                 since_gc: Cell::new(0),
                 external: Cell::new(0),
                 threshold: Cell::new(usize::MAX),
-                pending,
+                mutator,
                 descriptors: Cell::new(0),
                 open_file_ports: Cell::new(0),
                 cycle: Cell::new(0),
@@ -434,8 +435,9 @@ pub(super) struct SharedCounts {
     /// The installed [`GcThreshold::bytes`]: `Heap::set_gc_threshold` writes
     /// it, and an external charge compares `since_gc` against it.
     pub(super) threshold: Cell<usize>,
-    /// The heap's collection-pending flag (`Heap::gc_pending`).
-    pub(super) pending: Rc<Cell<bool>>,
+    /// The heap's carrier, where a charge that crosses the threshold posts
+    /// the collection (`Heap::mutator`, #699).
+    pub(super) mutator: Rc<Mutator>,
     /// Descriptor pressure (#607): the file ports opened since the last
     /// collection and not closed since. Here rather than on the heap because
     /// a port closes by dropping, often inside a sweep, and its
@@ -463,14 +465,14 @@ pub(super) struct SharedCounts {
 }
 
 impl SharedCounts {
-    /// Raise the collection-pending flag. On its rise from down, note when
-    /// and where the collection was posted (#648): once per collection
-    /// cycle, so allocation does no new work while the flag stays up.
+    /// Post a collection to the carrier. When none was posted, note when and
+    /// where it was (#648): once per collection cycle, so allocation does no
+    /// new work while the post stands.
     #[inline]
     pub(super) fn raise_pending(&self) {
-        if !self.pending.get() {
+        if !self.mutator.gc_posted() {
             self.note_posted();
-            self.pending.set(true);
+            self.mutator.post(event::GC_MAJOR);
         }
     }
 
@@ -723,7 +725,7 @@ impl Heap {
         counts
             .open_file_ports
             .set(counts.open_file_ports.get().saturating_add(1));
-        if open >= self.gc_threshold.descriptors && !self.gc_pending.get() {
+        if open >= self.gc_threshold.descriptors && !self.mutator.gc_posted() {
             counts.raise_pending();
             self.descriptor_collections += 1;
         }

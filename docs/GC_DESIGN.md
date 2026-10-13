@@ -592,8 +592,8 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
 
 - Each `alloc_*` calls `note_alloc(bytes)`, which counts one allocation
   (`allocs_since_gc`) and **charges its bytes** (`bytes_since_gc`), and
-  **raises a collection-pending flag** (an `Rc<Cell<bool>>` shared with the
-  dispatch loops) when either count reaches `Heap.gc_threshold`, a
+  **posts a collection** to the heap's carrier, the `Mutator` (below), when
+  either count reaches `Heap.gc_threshold`, a
   `GcThreshold { allocations, bytes, descriptors }`. The threshold is the
   mode made concrete — `GcController::current_threshold`, the single owner
   of that mapping: never for Off, the collector's adaptive `max(8 MiB, 2·L)`
@@ -603,10 +603,31 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   installs it when heap and controller are paired (a bare heap defaults to
   the inert `GcThreshold::NEVER` — policy stays in the controller, mechanism
   in the heap), and `GcController::collect` re-installs it after each
-  collection — the only point the adaptive term changes. `request_gc` raises
-  the same flag for a collection posted from elsewhere, honored in every
-  mode; sweep lowers it. `(gc)` does not wait for it: it collects at its call
-  (below, and §7).
+  collection — the only point the adaptive term changes. `request_gc` posts
+  one from elsewhere, honored in every mode; sweep takes the post. `(gc)`
+  does not wait for it: it collects at its call (below, and §7).
+- **The carrier, the `Mutator` (#699; `PRD/GC_PRD.md` §12 and §14).** A post
+  goes to the heap's `Mutator` (`heap/mutator.rs`): a `#[repr(C)]`,
+  128-byte-aligned block of words, at the offsets a JIT will read. Its
+  offsets, size and alignment are asserted at compile time.
+  - **Owner posts.** The owner sets its event's bit in `pending` (`GC_MAJOR`,
+    the one today's collector uses) and zeroes `reg_limit`, the poll word.
+  - **Remote posts.** A post from elsewhere (a signal handler, from #701) sets
+    its bit in the atomic `event`, and zeroes `reg_limit` too.
+  - **Polling.** A safe point's fast path is one load of `reg_limit`. Sweep
+    takes the GC bits and restores the word through `set_limit`, whose fence
+    and re-read make a Dekker pair with a remote post (OCaml's protocol), so
+    no post is lost.
+  - **Shared by `Rc`.** The heap, its byte account and both machines share the
+    `Mutator` (`Heap::mutator`), as they shared the `Rc<Cell<bool>>` flag it
+    replaced. In `Heap` it holds that flag's place, one pointer, so the
+    allocator's hot fields keep theirs.
+  - **Reserved words.** They stay zero until a later stage uses them: the
+    allocation buffer (5a), the barrier (7), the register stack (4d), Tick
+    mode's count, and the words C1 and C10 reserve.
+  - **`GcAttrs::ARENA`** (`heap/attrs.rs`) describes today's collector to a
+    future JIT: no barrier, no inline allocation, nothing moves, and polls
+    fold into `reg_limit`.
 - **The byte account (#606, `heap/account.rs`; GC_PRD §15).** An object
   costs its slot in its arena plus its *payload*, the memory it owns outright
   outside the slot: a vector's elements, a string's characters (4 bytes
@@ -649,8 +670,8 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   while it drops the dead slots' payloads, and sweep reads the total after
   the arenas are swept, so those bytes are out of the L it sets. The
   trigger's count is shared with the handle too, beside the installed byte
-  threshold and the pending flag, so a holder can also *charge* without the
-  heap and raise the flag the moment it crosses.
+  threshold and the carrier, so a holder can also *charge* without the heap
+  and post a collection the moment it crosses.
 
   **Namespaces are the holders that charge today (#615).** An environment
   made without a parent (`Environment::with_heap`) — the global environment,
@@ -755,8 +776,9 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
 - The *decision* is therefore made at allocation time, but **collection still
   happens only at backend safe points** (§7) — inside `alloc_*` the heap is
   re-entrantly borrowed and mid-operation temporaries would be unrooted. The
-  safe point reads the flag (one load, no `RefCell` borrow) and collects when
-  it is raised. §6.1 has the measurements that forced this shape.
+  safe point reads the `Mutator`'s poll word (one load, no `RefCell` borrow)
+  and collects when a collection is posted. §6.1 has the measurements that
+  forced this shape.
 - Adaptive collection is **always on** since stage 4c (before it, Off was
   the default while the trigger still had a standing cost — see §6.1 for the
   measurements that justified the flip). The environment variables are
@@ -878,9 +900,9 @@ allocated since the last collection, found live, freed and held externally;
 slots marked and swept per arena; and the **wait** since the collection was
 posted, in bytes and time.
 
-The pending flag rises through one helper, `SharedCounts::raise_pending`,
-which on the flag's rise from down notes the time and the bytes charged:
-once per collection cycle, so a flag that stays up while a deferred region
+A collection is posted through one helper, `SharedCounts::raise_pending`,
+which, when none is posted yet, notes the time and the bytes charged: once
+per collection cycle, so a post that stands while a deferred region
 allocates costs nothing more. A **deferral window** is the extent in which a
 guard other than the running loop's own is alive — a nested loop's or a
 holder's — where nothing may collect; `GcDeferGuard::new` and `holding` take
@@ -1579,7 +1601,7 @@ visitor exists, and the stress lane is the real safety net.
    `gc-zeal.yml`, path-filtered and weekly (docs/TEST_ORGANIZATION.md, "GC
    lanes"). The
    VM learns that a collection ran from `maybe_collect`'s answer, not from the
-   pending flag, which zeal raises again before the collection returns:
+   carrier, to which zeal posts again before the collection returns:
    `finished_forms_release_code.rs` under zeal fails without it, since no
    finished form's code would be let go (#338). The positive control for the
    mode itself is `crates/patina-repl/tests/gc_zeal.rs`: a loop that

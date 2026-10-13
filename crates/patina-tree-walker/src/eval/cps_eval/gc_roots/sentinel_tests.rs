@@ -198,7 +198,7 @@ fn every_evaluator_root_is_traced() {
     let global = s.pair(&mut heap, "Evaluator.global_env");
     let escaping = s.vector(&mut heap, "Evaluator.pending_escape: the value");
     let held = s.string(&mut heap, "Evaluator.pending_escape: the continuation");
-    let gc_pending = heap.gc_pending_handle();
+    let mutator = Rc::clone(heap.mutator());
     drop(heap);
     global_env.define("global", global);
 
@@ -214,7 +214,7 @@ fn every_evaluator_root_is_traced() {
         primitive_registry: patina_primitives::PrimitiveRegistry::new(),
         fs: Arc::new(patina_core::NativeFs),
         gc: RefCell::new(GcController::from_env()),
-        gc_pending,
+        mutator,
         bootstrap_error: None,
     };
     evaluator.set_pending_escape(

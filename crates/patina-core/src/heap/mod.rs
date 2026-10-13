@@ -23,11 +23,13 @@
 //! - `gc.rs`: Mark-and-sweep garbage collection (see `docs/GC_DESIGN.md`)
 
 mod account;
+pub mod attrs;
 #[cfg(feature = "gc-census")]
 mod census;
 mod check;
 pub mod gc;
 pub mod handles;
+pub mod mutator;
 mod numeric;
 mod root_set;
 // Sentinel values for the collector's field tests (#623): patina-core's own
@@ -482,13 +484,14 @@ pub struct Heap {
     /// adaptive `2·L` term changes only there).
     gc_threshold: GcThreshold,
 
-    /// The collection-pending flag: raised by `note_alloc` on threshold
-    /// crossing and by `request_gc`; lowered by `sweep`. Lives outside the
-    /// heap's `RefCell` (shared `Cell` handles via `gc_pending_handle`) so a
-    /// backend safe point is a single load with no borrow — the whole point
-    /// of the design §6.1 trigger redesign: the safe point used to ask a
-    /// question whose answer only changes when something allocates.
-    gc_pending: Rc<Cell<bool>>,
+    /// The carrier's words (`heap/mutator.rs`, #699): `note_alloc` and
+    /// `request_gc` post a collection there, zeroing its poll word, and
+    /// `sweep` takes the post. It lives outside the heap's `RefCell`, shared
+    /// by `Rc` with the machines ([`Heap::mutator`]), so a backend safe point
+    /// is a single load with no borrow: the point of the design §6.1 trigger
+    /// redesign, since the safe point used to ask a question whose answer
+    /// only changes when something allocates.
+    mutator: Rc<mutator::Mutator>,
 
     /// The code id of each VM closure sweep reclaimed, for a VM that counts
     /// the closures naming each code object so it can drop the code of forms
@@ -521,8 +524,9 @@ pub struct Heap {
     /// Open `AssertNoGc` scopes: windows that must not reach a GC poll
     /// (`gc::AssertNoGc`, #624). Counted in check builds only
     /// (`GC_CHECK`), and asserted zero at every poll site. Shared through an
-    /// `Rc<Cell>`, like `gc_pending`, so a scope opens and closes without a
-    /// heap borrow and a dispatch loop hoists the handle out of its loop.
+    /// `Rc<Cell>`, as the carrier is through an `Rc`, so a scope opens and
+    /// closes without a heap borrow and a dispatch loop hoists the handle
+    /// out of its loop.
     no_gc_scopes: Rc<Cell<u32>>,
 
     /// Collections performed, and slots reclaimed by the last one. Recorded
@@ -668,7 +672,7 @@ impl Heap {
 
     /// Create a heap with pre-allocated capacity
     pub fn with_capacity(pairs: usize, vectors: usize, strings: usize) -> Self {
-        let gc_pending = Rc::new(Cell::new(false));
+        let mutator = Rc::new(mutator::Mutator::new());
         let telemetry = telemetry::Telemetry::new();
         let handles = HandleTable::new(telemetry.heap_id);
         Self {
@@ -692,9 +696,9 @@ impl Heap {
             string_checks: SlotChecks::new(),
             object_checks: SlotChecks::new(),
             allocs_since_gc: 0,
-            account: ByteAccount::new(Rc::clone(&gc_pending)),
+            account: ByteAccount::new(Rc::clone(&mutator)),
             gc_threshold: GcThreshold::NEVER,
-            gc_pending,
+            mutator,
             gc_freed_closure_code_ids: None,
             telemetry,
             handles,
@@ -813,11 +817,17 @@ impl Heap {
         }
     }
 
-    /// A handle to the collection-pending flag. Dispatch loops clone this
-    /// once at entry so their per-iteration safe point is a single load with
-    /// no `RefCell` borrow.
-    pub fn gc_pending_handle(&self) -> Rc<Cell<bool>> {
-        self.gc_pending.clone()
+    /// The heap's carrier (`heap/mutator.rs`, #699). A machine clones the
+    /// handle once, at its construction, so that its safe point is a single
+    /// load of the poll word with no `RefCell` borrow.
+    pub fn mutator(&self) -> &Rc<mutator::Mutator> {
+        &self.mutator
+    }
+
+    /// The collector attributes of this heap (`heap/attrs.rs`, #699), fixed
+    /// for its life.
+    pub fn gc_attrs(&self) -> attrs::GcAttrs {
+        attrs::GcAttrs::ARENA
     }
 
     /// The installed threshold: each count's limit, `usize::MAX` for one the
