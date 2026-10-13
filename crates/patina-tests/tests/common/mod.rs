@@ -703,7 +703,7 @@ pub fn assert_eval_with_scheme_char(expr: &str, expected: &str) {
 /// Backend-independent garbage-collection tests.
 ///
 /// `(gc)` records a request that the next safe point services, so these
-/// exercise the whole path — root providers, safe point, defer guards, mark,
+/// exercise the whole path — root providers, safe point, the driver, mark,
 /// and sweep — for whichever backend `$eval` drives. Invoked once per backend
 /// so both are covered in a single test lane; each backend's own file keeps
 /// only the tests that target machinery unique to it.

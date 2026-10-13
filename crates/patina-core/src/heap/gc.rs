@@ -35,21 +35,27 @@
 //! or posts the request where collection is deferred.
 //!
 //! `safe_point` and `collect_at_call` are the only ways in from outside this
-//! crate. The collector, the mark phase, `Heap::sweep` and
-//! `GcController::collect` are crate-private (#624), so no backend or host
-//! can collect without the deferral rule both enforce. The one exception is
-//! `collect_for_tests`, for tests that drive the collector against
-//! hand-built state, and it exists only under the `test-support` feature,
-//! which only `patina-vm`'s tests enable.
+//! crate, and each takes the carrier's [`GcDriver`], which only the
+//! outermost driver holds (#702). The collector, the mark phase,
+//! `Heap::sweep` and `GcController::collect` are crate-private (#624), so no
+//! backend or host can collect without the deferral rule both enforce. The
+//! one exception is `collect_for_tests`, for tests that drive the collector
+//! against hand-built state, and it exists only under the `test-support`
+//! feature, which only `patina-vm`'s tests enable.
+//!
+//! **Who may collect** (`PRD/GC_PRD.md` §11.3): the holder of the
+//! [`GcDriver`], and only at depth 0, with no [`NoGcScope`] open. Every
+//! nested entry into a loop, and every holder ([`GcDeferGuard::holding`]),
+//! opens one.
 //!
 //! The deferral protocol is asserted, not only described (#624, design §7):
-//! a collection runs only while the collecting loop's own [`GcDeferGuard`]
-//! is the only one alive; a holder's guard ([`GcDeferGuard::holding`])
-//! panics on drop if a collection ran inside its extent; and every poll site
-//! panics inside an [`AssertNoGc`] scope, a window whose soundness rests on
-//! reaching no safe point. These three are compiled into check builds
-//! ([`GC_CHECK`]) only; the defer balance
-//! (`Heap::exit_gc_defer`) is checked in every build.
+//! - every collection asserts the depth is 0;
+//! - a holder's guard panics on drop if a collection ran inside its extent;
+//! - every poll site panics inside an [`AssertNoGc`] scope, a window whose
+//!   soundness rests on reaching no safe point.
+//!
+//! These three are compiled into check builds ([`GC_CHECK`]) only. The
+//! balance of the scopes (`Mutator::exit_no_gc`) is checked in every build.
 
 use std::rc::Rc;
 use std::time::Instant;
@@ -339,130 +345,146 @@ pub(crate) trait Collector {
 }
 
 // ============================================================================
-// Deferral
+// Who may collect (#702)
 // ============================================================================
 
-/// RAII guard marking a scope that holds live values no root provider can
-/// see — a nested trampoline, or a Rust loop holding unevaluated forms across
-/// an evaluation call. Backends refuse to collect while an *outer* guard is
-/// alive (design §7).
+/// The capability to collect (`PRD/GC_PRD.md` §11.3): what
+/// [`GcController::safe_point`] and [`GcController::collect_at_call`] take,
+/// so a loop that has none cannot reach a collection (#702).
 ///
-/// Drop takes a mutable heap borrow, so a guard must not be dropped while a
-/// heap borrow is outstanding.
+/// One per carrier (addition C2): the carrier's [`Mutator`] marks it held,
+/// and [`GcDriver::acquire`] answers `None` while it is. The outermost
+/// drivers take it for their extent:
+/// - the VM's `execute` and `execute_in`, which lend it to the loop they run;
+/// - the tree-walker's run of a form, from outside any run;
+/// - the loaders where a library's load ends at the top level (point B).
 ///
-/// Owns its `SharedHeap` handle rather than borrowing one, so a guard can be
-/// stored in a struct whose lifetime *is* the deferral extent — see
-/// `ParsedLibrary`, which holds unevaluated forms and therefore defers for as
-/// long as it exists, until it hands them to a load's registry entry (#677).
-/// The `Rc` clone is paid once per guard, on paths taken per dispatch-loop
-/// entry rather than per step.
-///
-/// Two kinds, by what the guard protects (#624):
-/// - a **loop's** own guard ([`GcDeferGuard::new`]), which every dispatch
-///   loop and trampoline takes for its extent. The outermost one is the only
-///   guard that may be alive when a collection runs: `safe_point` asserts
-///   that in check builds, and `collect_at_call` collects only then.
-/// - a **holder's** guard ([`GcDeferGuard::holding`]), taken by a Rust scope
-///   or value that holds heap values across an evaluation call. No collection
-///   may run inside its extent at all, and in check builds its drop asserts
-///   that none did. Today that is guaranteed by the first kind: every loop
-///   entered under a holder is nested. A nested loop that is later allowed
-///   to collect (GC_PRD stage 4e) then fails at the holder that needed the
-///   deferral, rather than freeing what it holds.
-pub struct GcDeferGuard {
+/// Every other entry into a loop is nested: it has no driver, and runs under
+/// a [`NoGcScope`]. Not `Clone`, since the capability is unique. Until stage
+/// 5e it stands beside the `RefCell`-wrapped arena heap; then it becomes
+/// `&mut Heap`.
+pub struct GcDriver {
     heap: SharedHeap,
-    /// Defer depth observed on entry. Zero means nothing outer is deferring.
-    outer_depth: u32,
-    /// Whether this is a holder's guard ([`GcDeferGuard::holding`]), which
-    /// the heap counts apart from the depth ([`Heap::gc_defer_is_one_loop`]).
-    holder: bool,
-    /// A holder's guard, in a check build: the heap's collection count when
-    /// it was taken, which must not have moved when it drops.
+    mutator: Rc<Mutator>,
+}
+
+impl GcDriver {
+    /// The carrier's driver, or `None` if a driver entry holds it: beneath
+    /// another driver's extent the entry is nested.
+    pub fn acquire(heap: &SharedHeap) -> Option<Self> {
+        let mutator = Rc::clone(heap.borrow().mutator());
+        mutator.take_driver().then(|| Self {
+            heap: heap.clone(),
+            mutator,
+        })
+    }
+}
+
+impl Drop for GcDriver {
+    fn drop(&mut self) {
+        self.mutator.return_driver();
+    }
+}
+
+/// An extent beneath which nothing collects (`PRD/GC_PRD.md` §11.3): a
+/// nested entry into a loop, or a holder's ([`GcDeferGuard::holding`]).
+///
+/// It raises the carrier's `no_gc_depth` ([`Mutator::no_gc_depth`]), and a
+/// collection runs only at depth 0. So a poll beneath one leaves the event
+/// posted for the outermost loop's next poll, and a collection asked for at
+/// a call is posted and counted. In a check build every collection asserts
+/// the depth is 0 (#702).
+///
+/// The first scope open opens a deferral window at its site, whose bytes
+/// K16's second high-water mark measures; a collection posted while it is
+/// open names it as the window it waited on (#648).
+///
+/// Its drop takes a mutable heap borrow when it closes the last scope, so it
+/// must not be dropped while a heap borrow is outstanding.
+#[must_use = "a NoGcScope covers the extent of the binding that holds it"]
+pub struct NoGcScope {
+    heap: SharedHeap,
+    mutator: Rc<Mutator>,
+}
+
+impl NoGcScope {
+    /// Open a scope. `#[track_caller]`, so that a deferral window it opens
+    /// is named by the entry or the holder that opened it.
+    #[track_caller]
+    pub fn enter(heap: &SharedHeap) -> Self {
+        let site = std::panic::Location::caller();
+        let mutator = Rc::clone(heap.borrow().mutator());
+        if mutator.enter_no_gc() == 0 {
+            heap.borrow_mut().open_deferral_window(site);
+        }
+        Self {
+            heap: heap.clone(),
+            mutator,
+        }
+    }
+}
+
+impl Drop for NoGcScope {
+    fn drop(&mut self) {
+        if self.mutator.exit_no_gc() == 0 {
+            self.heap.borrow_mut().close_deferral_window();
+        }
+    }
+}
+
+/// A holder's extent: a Rust scope or value that keeps heap values no root
+/// provider sees across a call that can evaluate. A library's unevaluated
+/// body (`ParsedLibrary`, until it is handed to the load's registry entry,
+/// #677), a form being expanded while its imports load
+/// (`desugar_with_imports`), the tree-walker's detached `ApplyContext`.
+///
+/// A [`NoGcScope`], so nothing collects inside it. In a check build it also
+/// records how many collections the heap has run, and its drop panics if that
+/// number has changed: a collection inside the extent could have freed what
+/// the holder holds (#624). It stays until each holder's data is rooted or
+/// held by the machine (`PRD/GC_PRD.md` §19).
+///
+/// It owns its heap handle, so that a value whose life is the extent can hold
+/// it, as `ParsedLibrary` does.
+///
+/// On a machine it does not reach the values a primitive holds across
+/// `ApplyContext::apply_proc`, which takes no guard of its own there: the
+/// nested loop's [`NoGcScope`] is the only deferral. The tree-walker's
+/// detached `ApplyContext for Evaluator`, which no loop runs above, takes one
+/// of these in each of its methods instead (#622).
+pub struct GcDeferGuard {
+    scope: NoGcScope,
+    /// In a check build: the heap's collection count when the guard was
+    /// taken, which must not have moved when it drops.
     collections_at_entry: Option<u64>,
 }
 
 impl GcDeferGuard {
-    /// A dispatch loop's guard, for the loop's own extent.
-    #[track_caller]
-    pub fn new(heap: &SharedHeap) -> Self {
-        Self::enter(heap, false, std::panic::Location::caller())
-    }
-
-    /// A holder's guard: for a scope or value that keeps heap values no root
-    /// provider sees across a call that can evaluate — a library's
-    /// unevaluated body (`ParsedLibrary`, until it is handed to the load's
-    /// registry entry, #677), a form being expanded while its imports load
-    /// (`desugar_with_imports`).
-    ///
-    /// Defers like [`GcDeferGuard::new`]. In a check build it also records
-    /// how many collections the heap has run, and its drop panics if that
-    /// number has changed: a collection inside the extent could have freed
-    /// what the holder holds.
-    ///
-    /// On a machine it does not reach the values a primitive holds across
-    /// `ApplyContext::apply_proc`, which takes no guard of its own there: the
-    /// nested loop's guard is the only deferral. The tree-walker's detached
-    /// `ApplyContext for Evaluator`, which no loop runs above, takes one of
-    /// these in each of its methods instead (#622).
+    /// A holder's guard. `#[track_caller]`, so the deferral window it opens
+    /// is named by the holder.
     #[track_caller]
     pub fn holding(heap: &SharedHeap) -> Self {
-        Self::enter(heap, true, std::panic::Location::caller())
-    }
-
-    /// `site`: where the guard was taken, which names the deferral window
-    /// it opens in K16's high-water mark (`Heap::enter_gc_defer`, #648).
-    fn enter(
-        heap: &SharedHeap,
-        holder: bool,
-        site: &'static std::panic::Location<'static>,
-    ) -> Self {
-        let (outer_depth, collections) = {
-            let mut h = heap.borrow_mut();
-            let depth = h.gc_defer_depth();
-            h.enter_gc_defer(holder, site);
-            (depth, h.gc_collections())
-        };
+        let scope = NoGcScope::enter(heap);
+        let collections_at_entry = GC_CHECK.then(|| heap.borrow().gc_collections());
         Self {
-            heap: heap.clone(),
-            outer_depth,
-            holder,
-            collections_at_entry: (holder && GC_CHECK).then_some(collections),
+            scope,
+            collections_at_entry,
         }
-    }
-
-    /// Whether this guard is the outermost one — i.e. nothing else was
-    /// deferring when it was taken, so a safe point inside it may collect.
-    ///
-    /// Both backends guard every loop they run — the VM each
-    /// `run_loop_until_outcome`, the tree-walker each `run_trampoline` — so
-    /// the outermost loop runs at defer depth 1, under its own guard alone.
-    /// A loop asks this once, at entry, and hoists the answer out of its
-    /// safe point, so it is not the whole rule: a guard a callee took later
-    /// and kept past its instruction would not change it. When a collection
-    /// runs, the depth is checked as well. `safe_point` asserts it is 1 in a
-    /// check build (#624); `collect_at_call`, which runs inside an
-    /// instruction or a step and is handed no guard, requires it, with no
-    /// holder's guard among the one alive ([`Heap::gc_defer_is_one_loop`]).
-    pub fn is_outermost(&self) -> bool {
-        self.outer_depth == 0
     }
 }
 
 impl Drop for GcDeferGuard {
     fn drop(&mut self) {
-        let collections = {
-            let mut h = self.heap.borrow_mut();
-            h.exit_gc_defer(self.holder);
-            h.gc_collections()
-        };
         // Not while unwinding: a second panic would abort the process and
         // lose the first one's message.
         if GC_CHECK
             && let Some(at_entry) = self.collections_at_entry
-            && collections != at_entry
             && !std::thread::panicking()
         {
-            collected_inside_a_holder(collections - at_entry);
+            let collections = self.scope.heap.borrow().gc_collections();
+            if collections != at_entry {
+                collected_inside_a_holder(collections - at_entry);
+            }
         }
     }
 }
@@ -479,13 +501,13 @@ fn collected_inside_a_holder(collections: u64) -> ! {
     )
 }
 
-/// The panic of `safe_point`'s depth check.
+/// The panic of a collection's depth check (#702).
 #[cold]
 #[inline(never)]
-fn collected_under_another_guard(depth: u32) -> ! {
+fn collected_inside_a_no_gc_scope(depth: u32) -> ! {
     panic!(
-        "GC deferral violated: a collection ran with {depth} defer guard(s) \
-         alive; only the collecting loop's own may be (docs/GC_DESIGN.md §7)"
+        "GC deferral violated: a collection ran with {depth} NoGcScope(s) \
+         open; a collection runs only at depth 0 (docs/GC_DESIGN.md §7)"
     )
 }
 
@@ -497,13 +519,17 @@ fn collected_under_another_guard(depth: u32) -> ! {
 /// whose soundness a comment argues from where the safe points are, such as
 /// a value held only in a Rust local until the next write, or a weak-table
 /// entry and its handle not yet both reachable (#624, design §7). Every poll
-/// site asserts that no scope is open ([`NoGcScopes::assert_none_open`]), so a
-/// poll added inside a window, or a dispatch loop entered from one, panics
-/// at once, even while it is nested and cannot collect, instead of freeing a
-/// live value on the day it can.
+/// site asserts that no scope is open
+/// ([`AssertNoGcCount::assert_none_open`]), so a poll added inside a window,
+/// or a dispatch loop entered from one, panics at once, even while it is
+/// nested and cannot collect, instead of freeing a live value on the day it
+/// can.
 ///
 /// The rule it carries: a comment that argues "no safe point here" comes
 /// with an `AssertNoGc` over the same lines (AGENTS.md).
+///
+/// Not a [`NoGcScope`]: a collection posted beneath one waits for depth 0,
+/// where it runs; inside an `AssertNoGc` no poll may be reached at all.
 ///
 /// A depth counter on the heap, maintained in check builds
 /// ([`GC_CHECK`]) only: a plain release build keeps no count
@@ -524,7 +550,7 @@ impl AssertNoGc {
     #[inline]
     pub fn new(heap: &SharedHeap) -> Self {
         let open = GC_CHECK.then(|| {
-            let open = heap.borrow().no_gc_scopes.clone();
+            let open = heap.borrow().open_assert_no_gc.clone();
             open.set(open.get() + 1);
             open
         });
@@ -544,28 +570,28 @@ impl Drop for AssertNoGc {
 /// The poll-site half of [`AssertNoGc`]: the heap's count of open scopes,
 /// taken once at loop entry like the carrier, so a poll's check is one
 /// load and one compare in a check build and nothing in a plain release.
-pub struct NoGcScopes {
+pub struct AssertNoGcCount {
     open: Option<Rc<Cell<u32>>>,
 }
 
-impl NoGcScopes {
+impl AssertNoGcCount {
     pub fn of(heap: &SharedHeap) -> Self {
         Self {
-            open: GC_CHECK.then(|| heap.borrow().no_gc_scopes.clone()),
+            open: GC_CHECK.then(|| heap.borrow().open_assert_no_gc.clone()),
         }
     }
 
     /// Panic if an [`AssertNoGc`] scope is open. Call at every poll site,
     /// before its safe point, on every iteration: not inside
     /// [`GcController::safe_point`], which returns before it would get there
-    /// unless a collection is pending and the loop is outermost, so a check
-    /// there would almost never run.
+    /// unless a collection is pending and the loop holds the driver at depth
+    /// 0, so a check there would almost never run.
     #[inline(always)]
     pub fn assert_none_open(&self) {
         if GC_CHECK && let Some(open) = &self.open {
             let n = open.get();
             if n != 0 {
-                polled_inside_a_no_gc_scope(n);
+                polled_inside_an_assert_no_gc(n);
             }
         }
     }
@@ -573,7 +599,7 @@ impl NoGcScopes {
 
 #[cold]
 #[inline(never)]
-fn polled_inside_a_no_gc_scope(open: u32) -> ! {
+fn polled_inside_an_assert_no_gc(open: u32) -> ! {
     panic!(
         "GC poll inside an AssertNoGc scope ({open} open): a safe point was \
          reached in a window whose soundness assumes none (docs/GC_DESIGN.md §7)"
@@ -748,8 +774,12 @@ impl GcController {
         threshold.with_descriptors(account::descriptor_pressure_threshold())
     }
 
-    /// Collect now, with no check of the deferral rule. Crate-private (#624):
-    /// a backend collects through [`GcController::safe_point`].
+    /// Collect now. Crate-private (#624): a backend collects through
+    /// [`GcController::safe_point`] and [`GcController::collect_at_call`],
+    /// each of which takes the driver and decides by the depth. In a check
+    /// build this asserts the depth again, at every collection, so a path
+    /// that reached here beneath a [`NoGcScope`] panics rather than freeing
+    /// what the scope's holder holds (#702).
     ///
     /// `at_call`: a primitive asked for this collection at its call
     /// (`collect_at_call`); otherwise the pending flag brought it, and the
@@ -762,6 +792,12 @@ impl GcController {
         roots: &[&dyn RootProvider],
         at_call: bool,
     ) -> GcStats {
+        if GC_CHECK {
+            let depth = heap.mutator().no_gc_depth();
+            if depth != 0 {
+                collected_inside_a_no_gc_scope(depth);
+            }
+        }
         let started = Instant::now();
         let reason = if at_call {
             CollectReason::Call
@@ -816,9 +852,10 @@ impl GcController {
     /// Run a backend safe point.
     ///
     /// This owns the *rules* every backend must not restate: `(gc)` is honored
-    /// even when automatic collection is off; only the outermost guard may
-    /// collect; one `borrow_mut` spans the whole collection. Backends supply
-    /// only what is genuinely theirs — their root set.
+    /// even when automatic collection is off; only the driver collects, and
+    /// only at depth 0, with no [`NoGcScope`] open; one `borrow_mut` spans
+    /// the whole collection. Backends supply only what is genuinely theirs —
+    /// their root set.
     ///
     /// `with_roots` receives a `collect` callback and decides whether to call
     /// it. That inversion lets a backend lend roots that borrow from its own
@@ -830,12 +867,11 @@ impl GcController {
     /// pending flag stays raised across either, so the next safe point
     /// retries.
     ///
-    /// `mutator` (the heap's carrier, `Heap::mutator`) and `is_outermost`
-    /// are loop invariants the caller hoists out of its dispatch loop; the
-    /// fast path is one load of the poll word and one branch — no `RefCell`
-    /// borrow, no mode dispatch. The collection *decision* was already made
-    /// where it becomes true, in `Heap::note_alloc` / `Heap::request_gc`,
-    /// which post it to the carrier (design §6.1, #699).
+    /// The fast path is one load of the poll word, through the driver's
+    /// carrier, and one branch — no `RefCell` borrow, no mode dispatch. The
+    /// collection *decision* was already made where it becomes true, in
+    /// `Heap::note_alloc` / `Heap::request_gc`, which post it to the carrier
+    /// (design §6.1, #699).
     ///
     /// Returns whether a collection ran, for a backend with work to do after
     /// one (the VM's code release, #338). It cannot tell from the carrier:
@@ -844,18 +880,13 @@ impl GcController {
     #[inline]
     pub fn safe_point(
         gc: &RefCell<Self>,
-        heap: &SharedHeap,
-        mutator: &Mutator,
-        is_outermost: bool,
+        driver: &mut GcDriver,
         with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn RootProvider])),
     ) -> bool {
-        // A nested loop never collects — its caller holds live values in Rust
-        // locals no root provider can see. Its poll would be dead code, but
-        // `is_outermost` is a hoisted constant, so the branch predicts.
-        if !is_outermost || !mutator.poll_due() {
+        if !driver.mutator.poll_due() {
             return false;
         }
-        Self::safe_point_cold(gc, heap, mutator, with_roots)
+        Self::safe_point_cold(gc, driver, with_roots)
     }
 
     /// The rare branch, out of line so only the fast path inlines into the
@@ -863,39 +894,32 @@ impl GcController {
     #[inline(never)]
     fn safe_point_cold(
         gc: &RefCell<Self>,
-        heap: &SharedHeap,
-        mutator: &Mutator,
+        driver: &mut GcDriver,
         with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn RootProvider])),
     ) -> bool {
         // The poll is due for a collection: the only event posted today
         // (#699). An interrupt (#701) will be serviced beside it.
-        if !mutator.gc_posted() {
+        if !driver.mutator.gc_posted() {
+            return false;
+        }
+        // Beneath a `NoGcScope` — a holder's extent, a nested entry — the
+        // collection stays posted for the next poll at depth 0 (#702).
+        if driver.mutator.no_gc_depth() != 0 {
             return false;
         }
         // A test's switch, absent from a build without `test-support`
         // (`Heap::set_skip_safe_points`, #639).
         #[cfg(feature = "test-support")]
-        if heap.borrow().skips_safe_points() {
+        if driver.heap.borrow().skips_safe_points() {
             return false;
         }
         let mut collected = false;
         with_roots(&mut |roots| {
-            let mut h = heap.borrow_mut();
+            let mut h = driver.heap.borrow_mut();
             // A registered provider that cannot report its roots now, and
             // the collection waits, as when the backend's own are unavailable.
             if !h.root_set().ready() {
                 return;
-            }
-            // The outermost loop's own guard, and no other. `is_outermost`
-            // is read once, at loop entry, so a guard that a callee took and
-            // kept past its instruction would not stop the running loop from
-            // collecting under it; this does (#624).
-            if GC_CHECK {
-                let depth = h.gc_defer_depth();
-                if depth != 1 {
-                    drop(h);
-                    collected_under_another_guard(depth);
-                }
             }
             gc.borrow_mut().collect(&mut h, roots, false);
             collected = true;
@@ -912,40 +936,33 @@ impl GcController {
     /// at the top of its trampoline (`StepResult::CollectAtCall`). Returns
     /// whether a collection ran.
     ///
-    /// It collects where a safe point may (#624): with one guard alive, and
-    /// that one a loop's ([`Heap::gc_defer_is_one_loop`]: the defer depth at
-    /// 1 and no holder's guard). Every loop takes a guard at entry, so that
-    /// is the running loop's own, the outermost, which is what
-    /// [`GcDeferGuard::is_outermost`] answers at a safe point; it is asked
-    /// of the heap here because the poll runs inside an instruction or a
-    /// step, not at the top of the loop. A holder's guard alone is no
-    /// loop's: a host that holds values under one and calls this outside any
-    /// loop gets the collection posted, not run inside the holder's extent.
-    /// And with no [`AssertNoGc`] scope open, which it asserts in a check
-    /// build, as every poll site does. It collects in every mode,
-    /// `PATINA_GC=0` included, as `(gc)` always has.
+    /// It collects where a safe point may: with the driver, which only the
+    /// outermost loop has, and at depth 0, with no [`NoGcScope`] open — no
+    /// holder's extent, no nested entry. And with no [`AssertNoGc`] scope
+    /// open, which it asserts in a check build, as every poll site does. It
+    /// collects in every mode, `PATINA_GC=0` included, as `(gc)` always has.
     ///
-    /// Where collection is deferred — a nested loop, a holder's extent, a
-    /// library body loaded under one — it posts the collection for the next
-    /// safe point that may collect, as `(gc)` did everywhere before #639, and
-    /// counts it ([`Heap::defer_collection`], `(gc-stats)`'s
-    /// `deferred-collections`). So does a collection whose roots are not
-    /// all at hand, as at a safe point: a registered provider that is not
-    /// ready, as the library registry is not while a load holds it mutably,
-    /// or a `with_roots` that returns without calling `collect`.
+    /// Beneath a `NoGcScope` it posts the collection for the next safe point
+    /// that may collect, as `(gc)` did everywhere before #639, and counts it
+    /// ([`Heap::defer_collection`], `(gc-stats)`'s `deferred-collections`);
+    /// a loop with no driver does the same through
+    /// [`GcController::post_at_call`]. So does a collection whose roots are
+    /// not all at hand, as at a safe point: a registered provider that is
+    /// not ready, as the library registry is not while a load holds it
+    /// mutably, or a `with_roots` that returns without calling `collect`.
     pub fn collect_at_call(
         gc: &RefCell<Self>,
-        heap: &SharedHeap,
+        driver: &mut GcDriver,
         kind: CollectKind,
         with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn RootProvider])),
     ) -> bool {
-        NoGcScopes::of(heap).assert_none_open();
+        AssertNoGcCount::of(&driver.heap).assert_none_open();
         // The one kind there is: a full collection.
         let CollectKind::Major = kind;
         let mut collected = false;
-        if heap.borrow().gc_defer_is_one_loop() {
+        if driver.mutator.no_gc_depth() == 0 {
             with_roots(&mut |roots| {
-                let mut h = heap.borrow_mut();
+                let mut h = driver.heap.borrow_mut();
                 if !h.root_set().ready() {
                     return;
                 }
@@ -954,9 +971,20 @@ impl GcController {
             });
         }
         if !collected {
-            heap.borrow_mut().defer_collection();
+            driver.heap.borrow_mut().defer_collection();
         }
         collected
+    }
+
+    /// A collection asked for at a call in a loop with no driver: a nested
+    /// entry's, which cannot collect. Posted for the outermost loop's next
+    /// safe point, and counted, as [`GcController::collect_at_call`] posts
+    /// one beneath a [`NoGcScope`]; checked for an open [`AssertNoGc`]
+    /// scope, as every poll site is.
+    pub fn post_at_call(heap: &SharedHeap, kind: CollectKind) {
+        AssertNoGcCount::of(heap).assert_none_open();
+        let CollectKind::Major = kind;
+        heap.borrow_mut().defer_collection();
     }
 }
 
@@ -2792,21 +2820,20 @@ mod tests {
         assert!(mutator.gc_posted(), "the third allocation");
     }
 
-    /// L counts the payloads of the VM continuations a collection proves
-    /// live, so a program that keeps its captures raises its interval with
-    /// them instead of collecting every 8 MiB of capture; a capture that
     /// K16's two high-water marks (#648): the bytes allocated inside one
     /// deferral window, and between a collection being posted and the
-    /// collection, each named by the guard that opened the window.
+    /// collection, each named by the scope that opened the window.
     #[test]
     fn deferral_windows_and_waits_report_their_guard() {
         let shared = crate::new_shared_heap();
         let mut controller = GcController::new(GcMode::Off);
-        let loop_guard = GcDeferGuard::new(&shared);
-        // The loop's own guard defers nothing.
+        // The driver defers nothing.
+        let driver = GcDriver::acquire(&shared).expect("the carrier's driver is free");
         assert_eq!(shared.borrow().deferral_high_water().bytes, 0);
         let line = line!() + 1;
         let holder = GcDeferGuard::holding(&shared);
+        // A nested entry beneath the holder opens no window of its own.
+        let nested = NoGcScope::enter(&shared);
         shared.borrow_mut().request_gc();
         let before = shared.borrow().bytes_allocated();
         for i in 0..1000 {
@@ -2815,6 +2842,7 @@ mod tests {
                 .alloc_pair(TaggedValue::fixnum(i), TaggedValue::NULL);
         }
         let inside = shared.borrow().bytes_allocated() - before;
+        drop(nested);
         drop(holder);
         let deferral = shared.borrow().deferral_high_water();
         assert!(deferral.bytes >= inside, "{deferral:?}");
@@ -2834,9 +2862,12 @@ mod tests {
         // A collection at a call waited for nothing.
         controller.collect(&mut shared.borrow_mut(), &[&roots], true);
         assert_eq!(shared.borrow().wait_high_water(), wait);
-        drop(loop_guard);
+        drop(driver);
     }
 
+    /// L counts the payloads of the VM continuations a collection proves
+    /// live, so a program that keeps its captures raises its interval with
+    /// them instead of collecting every 8 MiB of capture; a capture that
     /// dies is reclaimed with its handle.
     #[test]
     fn live_continuation_snapshots_count_in_l() {
@@ -3213,43 +3244,44 @@ mod tests {
     }
 
     #[test]
-    fn safe_point_collects_only_when_outermost_and_pending() {
+    fn safe_point_collects_only_with_the_driver_at_depth_zero() {
         let shared = crate::heap::new_shared_heap();
         let mutator = Rc::clone(shared.borrow().mutator());
         let gc = RefCell::new(GcController::from_env());
         let no_roots = TestRoots::default();
-        // A safe point runs inside its loop's own guard, and a collection
-        // asserts it is the only one alive.
-        let _loop_guard = GcDeferGuard::new(&shared);
+        let mut driver = GcDriver::acquire(&shared).expect("the carrier's driver is free");
 
         shared
             .borrow_mut()
             .alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
 
         // Flag down: nothing happens.
-        let collected = GcController::safe_point(&gc, &shared, &mutator, true, |collect| {
+        let collected = GcController::safe_point(&gc, &mut driver, |collect| {
             collect(&[&no_roots]);
         });
         assert!(!collected);
         assert_eq!(shared.borrow().gc_collections(), 0);
 
-        // Flag up but nested: deferred, flag stays up for the outer loop.
+        // Flag up beneath a nested entry's scope: deferred, and the flag
+        // stays up for the outermost loop.
         shared.borrow_mut().request_gc();
-        let collected = GcController::safe_point(&gc, &shared, &mutator, false, |collect| {
+        let nested = NoGcScope::enter(&shared);
+        let collected = GcController::safe_point(&gc, &mut driver, |collect| {
             collect(&[&no_roots]);
         });
         assert!(!collected);
+        drop(nested);
         assert_eq!(shared.borrow().gc_collections(), 0);
         assert!(mutator.gc_posted());
 
-        // Flag up, outermost, but the backend cannot supply its roots: no
+        // Flag up at depth 0, but the backend cannot supply its roots: no
         // collection, and the flag stays up for the next safe point.
-        let collected = GcController::safe_point(&gc, &shared, &mutator, true, |_collect| {});
+        let collected = GcController::safe_point(&gc, &mut driver, |_collect| {});
         assert!(!collected);
         assert!(mutator.gc_posted());
 
-        // Flag up and outermost: collects and lowers the flag.
-        let collected = GcController::safe_point(&gc, &shared, &mutator, true, |collect| {
+        // Flag up at depth 0: collects and lowers the flag.
+        let collected = GcController::safe_point(&gc, &mut driver, |collect| {
             collect(&[&no_roots]);
         });
         assert!(collected);
@@ -3274,32 +3306,32 @@ mod tests {
         let gc = RefCell::new(GcController::from_env());
         let ready = Rc::new(Cell::new(false));
         let _token = (shared.borrow().root_set()).register(Box::new(Waiting(Rc::clone(&ready))));
-        let _loop_guard = GcDeferGuard::new(&shared);
+        let mut driver = GcDriver::acquire(&shared).expect("the carrier's driver is free");
         let safe_point =
-            || GcController::safe_point(&gc, &shared, &mutator, true, |collect| collect(&[]));
-        let at_call = || {
-            GcController::collect_at_call(&gc, &shared, CollectKind::Major, |collect| collect(&[]))
+            |driver: &mut GcDriver| GcController::safe_point(&gc, driver, |collect| collect(&[]));
+        let at_call = |driver: &mut GcDriver| {
+            GcController::collect_at_call(&gc, driver, CollectKind::Major, |collect| collect(&[]))
         };
 
         shared.borrow_mut().request_gc();
-        assert!(!safe_point());
+        assert!(!safe_point(&mut driver));
         assert!(mutator.gc_posted());
-        assert!(!at_call());
+        assert!(!at_call(&mut driver));
         assert_eq!(shared.borrow().gc_collections(), 0);
         assert_eq!(shared.borrow().gc_deferred_collections(), 1);
 
         ready.set(true);
-        assert!(safe_point());
-        assert!(at_call());
+        assert!(safe_point(&mut driver));
+        assert!(at_call(&mut driver));
         assert_eq!(shared.borrow().gc_collections(), 2);
     }
 
     /// Zeal (#625): the collection that lowers the pending flag re-installs a
-    /// threshold of 0, which raises it again, so every outermost safe point
-    /// collects whether or not anything was allocated, and `safe_point` says
-    /// that it did, since the flag cannot.
+    /// threshold of 0, which raises it again, so every safe point with the
+    /// driver at depth 0 collects whether or not anything was allocated, and
+    /// `safe_point` says that it did, since the flag cannot.
     #[test]
-    fn zeal_collects_at_every_outermost_safe_point() {
+    fn zeal_collects_at_every_safe_point_that_may() {
         let shared = crate::heap::new_shared_heap();
         let mutator = Rc::clone(shared.borrow().mutator());
         let gc = RefCell::new(GcController {
@@ -3307,7 +3339,7 @@ mod tests {
             collector: MarkSweepCollector::new(),
         });
         let no_roots = TestRoots::default();
-        let _loop_guard = GcDeferGuard::new(&shared);
+        let mut driver = GcDriver::acquire(&shared).expect("the carrier's driver is free");
 
         let threshold = gc.borrow().current_threshold();
         shared.borrow_mut().set_gc_threshold(threshold);
@@ -3317,36 +3349,38 @@ mod tests {
         );
 
         for n in 1..=3 {
-            let collected = GcController::safe_point(&gc, &shared, &mutator, true, |collect| {
+            let collected = GcController::safe_point(&gc, &mut driver, |collect| {
                 collect(&[&no_roots]);
             });
             assert!(collected);
             assert_eq!(shared.borrow().gc_collections(), n);
             assert!(mutator.gc_posted(), "raised again by the collection itself");
         }
-        // Nested loops still never collect.
-        let collected = GcController::safe_point(&gc, &shared, &mutator, false, |collect| {
+        // Beneath a nested entry's scope it still never collects.
+        let nested = NoGcScope::enter(&shared);
+        let collected = GcController::safe_point(&gc, &mut driver, |collect| {
             collect(&[&no_roots]);
         });
+        drop(nested);
         assert!(!collected);
         assert_eq!(shared.borrow().gc_collections(), 3);
     }
 
-    /// A collection a primitive asks for at its call (#639): under the
-    /// running loop's own guard alone it collects, in every mode; where
-    /// collection is deferred, or the backend cannot supply its roots, or no
-    /// loop is running — a holder's guard alone, or none — it is posted for
-    /// the next safe point that may collect, and counted.
+    /// A collection a primitive asks for at its call (#639): with the driver
+    /// at depth 0 it collects, in every mode; beneath a `NoGcScope` (a nested
+    /// entry's, a holder's), where the backend cannot supply its roots, or in
+    /// a loop with no driver, it is posted for the next safe point that may
+    /// collect, and counted.
     #[test]
-    fn collect_at_call_collects_only_under_the_loops_own_guard() {
+    fn collect_at_call_collects_only_with_the_driver_at_depth_zero() {
         let shared = crate::heap::new_shared_heap();
         let mutator = Rc::clone(shared.borrow().mutator());
         // `PATINA_GC=0`'s mode: no automatic trigger, and still a collection.
         let gc = RefCell::new(GcController::new(GcMode::Off));
         let no_roots = TestRoots::default();
         // `roots` as the backend supplies them, or `None` where it cannot.
-        let collect_at_call = |roots: Option<&TestRoots>| {
-            GcController::collect_at_call(&gc, &shared, CollectKind::Major, |collect| {
+        let collect_at_call = |driver: &mut GcDriver, roots: Option<&TestRoots>| {
+            GcController::collect_at_call(&gc, driver, CollectKind::Major, |collect| {
                 if let Some(roots) = roots {
                     collect(&[roots]);
                 }
@@ -3360,9 +3394,9 @@ mod tests {
                 mutator.gc_posted(),
             )
         };
-        let loop_guard = GcDeferGuard::new(&shared);
+        let mut driver = GcDriver::acquire(&shared).expect("the carrier's driver is free");
 
-        assert!(collect_at_call(Some(&no_roots)));
+        assert!(collect_at_call(&mut driver, Some(&no_roots)));
         assert_eq!(
             counts(),
             (1, 0, false),
@@ -3370,38 +3404,30 @@ mod tests {
         );
 
         // A library load holding the registry: no roots, so no collection.
-        assert!(!collect_at_call(None));
+        assert!(!collect_at_call(&mut driver, None));
         assert_eq!(counts(), (1, 1, true), "posted and counted");
 
-        // A nested loop, and a holder's extent: deferred whatever the roots.
-        let nested = GcDeferGuard::new(&shared);
-        assert!(!collect_at_call(Some(&no_roots)));
+        // Beneath a nested entry's scope, and a holder's: deferred whatever
+        // the roots.
+        let nested = NoGcScope::enter(&shared);
+        assert!(!collect_at_call(&mut driver, Some(&no_roots)));
         drop(nested);
         let holder = GcDeferGuard::holding(&shared);
-        assert!(!collect_at_call(Some(&no_roots)));
+        assert!(!collect_at_call(&mut driver, Some(&no_roots)));
         drop(holder);
         assert_eq!(counts(), (1, 3, true));
 
-        // What was posted collects at the outermost loop's next safe point.
-        let collected = GcController::safe_point(&gc, &shared, &mutator, true, |collect| {
+        // What was posted collects at the driver's next safe point.
+        let collected = GcController::safe_point(&gc, &mut driver, |collect| {
             collect(&[&no_roots]);
         });
         assert!(collected);
         assert_eq!(counts(), (2, 3, false));
-        drop(loop_guard);
+        drop(driver);
 
-        // A host outside any loop, holding values under a holder's guard:
-        // the one guard alive is no loop's, so the depth of 1 does not let it
-        // collect inside the holder's extent (a check build's holder would
-        // panic on its drop if it had).
-        let holder = GcDeferGuard::holding(&shared);
-        assert_eq!(shared.borrow().gc_defer_depth(), 1);
-        assert!(!collect_at_call(Some(&no_roots)));
-        drop(holder);
+        // A loop with no driver, a nested entry's, can only post.
+        GcController::post_at_call(&shared, CollectKind::Major);
         assert_eq!(counts(), (2, 4, true));
-        // Nor with no guard at all: no loop is running.
-        assert!(!collect_at_call(Some(&no_roots)));
-        assert_eq!(counts(), (2, 5, true));
     }
 
     /// The test switch (#639): with it on, no safe point collects, however
@@ -3413,18 +3439,18 @@ mod tests {
         let mutator = Rc::clone(shared.borrow().mutator());
         let gc = RefCell::new(GcController::new(GcMode::Off));
         let no_roots = TestRoots::default();
-        let _loop_guard = GcDeferGuard::new(&shared);
+        let mut driver = GcDriver::acquire(&shared).expect("the carrier's driver is free");
         shared.borrow_mut().set_skip_safe_points(true);
 
         shared.borrow_mut().request_gc();
-        let collected = GcController::safe_point(&gc, &shared, &mutator, true, |collect| {
+        let collected = GcController::safe_point(&gc, &mut driver, |collect| {
             collect(&[&no_roots]);
         });
         assert!(!collected);
         assert!(mutator.gc_posted());
         assert!(GcController::collect_at_call(
             &gc,
-            &shared,
+            &mut driver,
             CollectKind::Major,
             |collect| collect(&[&no_roots])
         ));
@@ -3531,7 +3557,7 @@ mod tests {
         assert_eq!(heap.car(field_val), TaggedValue::fixnum(7));
     }
 
-    /// The deferral protocol and the no-collection windows (#624).
+    /// The deferral protocol and the no-collection windows (#624, #702).
     ///
     /// The `#[should_panic]` tests are positive controls: each makes the
     /// mistake its check exists for and expects that check's panic. The
@@ -3544,58 +3570,62 @@ mod tests {
         use crate::heap::new_shared_heap;
 
         /// Raise a `(gc)` request and run a safe point that would collect,
-        /// as the loop holding `loop_guard` would.
-        fn safe_point_that_collects(shared: &SharedHeap, loop_guard: &GcDeferGuard) {
-            let mutator = Rc::clone(shared.borrow().mutator());
+        /// as the loop holding `driver` would.
+        fn safe_point_that_collects(shared: &SharedHeap, driver: &mut GcDriver) -> bool {
             let gc = RefCell::new(GcController::from_env());
             shared.borrow_mut().request_gc();
-            GcController::safe_point(
-                &gc,
-                shared,
-                &mutator,
-                loop_guard.is_outermost(),
-                |collect| {
-                    collect(&[&TestRoots::default()]);
-                },
-            );
+            GcController::safe_point(&gc, driver, |collect| {
+                collect(&[&TestRoots::default()]);
+            })
         }
 
         #[test]
-        fn the_outermost_loop_collects_under_its_own_guard_alone() {
+        fn the_driver_collects_at_depth_zero() {
             let shared = new_shared_heap();
-            let loop_guard = GcDeferGuard::new(&shared);
-            safe_point_that_collects(&shared, &loop_guard);
+            let mut driver = GcDriver::acquire(&shared).expect("the carrier's driver is free");
+            assert!(safe_point_that_collects(&shared, &mut driver));
             assert_eq!(shared.borrow().gc_collections(), 1);
         }
 
-        /// A guard a callee took and kept past its instruction: the running
-        /// loop read `is_outermost` at entry, so nothing but the depth check
-        /// stops it collecting under the second guard.
+        /// One driver per carrier (C2): while a driver entry holds it, an
+        /// entry beneath it gets none, and is nested.
+        #[test]
+        fn the_carrier_lends_one_driver_at_a_time() {
+            let shared = new_shared_heap();
+            let driver = GcDriver::acquire(&shared).expect("the carrier's driver is free");
+            assert!(GcDriver::acquire(&shared).is_none());
+            drop(driver);
+            assert!(GcDriver::acquire(&shared).is_some());
+        }
+
+        /// What a path that skipped the depth check would do: a collection
+        /// with a scope open. The collection itself is direct here, because a
+        /// safe point checks the depth first.
         #[test]
         #[cfg_attr(
             not(any(debug_assertions, feature = "gc-check")),
             ignore = "needs a check build"
         )]
-        #[should_panic(expected = "a collection ran with 2 defer guard(s) alive")]
-        fn a_collection_while_a_second_guard_is_alive_panics() {
+        #[should_panic(expected = "a collection ran with 1 NoGcScope(s) open")]
+        fn a_collection_beneath_a_no_gc_scope_panics() {
             let shared = new_shared_heap();
-            let loop_guard = GcDeferGuard::new(&shared);
-            let _kept = GcDeferGuard::new(&shared);
-            safe_point_that_collects(&shared, &loop_guard);
+            let _nested = NoGcScope::enter(&shared);
+            let mut gc = GcController::from_env();
+            gc.collect(&mut shared.borrow_mut(), &[&TestRoots::default()], false);
         }
 
         #[test]
         fn a_holding_extent_with_no_collection_drops_quietly() {
             let shared = new_shared_heap();
             let holder = GcDeferGuard::holding(&shared);
-            // A loop entered under a holder is nested, and does not collect.
-            let loop_guard = GcDeferGuard::new(&shared);
-            assert!(!loop_guard.is_outermost());
-            safe_point_that_collects(&shared, &loop_guard);
-            drop(loop_guard);
+            // A driver taken beneath a holder does not collect: the holder's
+            // scope is open.
+            let mut driver = GcDriver::acquire(&shared).expect("the carrier's driver is free");
+            assert!(!safe_point_that_collects(&shared, &mut driver));
+            drop(driver);
             drop(holder);
             assert_eq!(shared.borrow().gc_collections(), 0);
-            assert_eq!(shared.borrow().gc_defer_depth(), 0);
+            assert_eq!(shared.borrow().mutator().no_gc_depth(), 0);
         }
 
         /// What a nested loop allowed to collect (GC_PRD stage 4e) would do
@@ -3614,15 +3644,29 @@ mod tests {
             drop(holder);
         }
 
-        /// A loop's guard does not check its extent: the outermost loop
-        /// collects inside its own.
+        /// Scopes nest: the depth counts each, the first one opens the
+        /// deferral window, and the window closes with the last.
         #[test]
-        fn a_loop_guard_allows_a_collection_inside_its_extent() {
+        fn no_gc_scopes_nest_and_share_one_window() {
             let shared = new_shared_heap();
-            let loop_guard = GcDeferGuard::new(&shared);
-            collect(&mut shared.borrow_mut(), &TestRoots::default());
-            drop(loop_guard);
-            assert_eq!(shared.borrow().gc_collections(), 1);
+            let depth = || shared.borrow().mutator().no_gc_depth();
+            let line = line!() + 1;
+            let outer = NoGcScope::enter(&shared);
+            let inner = NoGcScope::enter(&shared);
+            assert_eq!(depth(), 2);
+            for i in 0..100 {
+                shared
+                    .borrow_mut()
+                    .alloc_pair(TaggedValue::fixnum(i), TaggedValue::NULL);
+            }
+            drop(inner);
+            assert_eq!(depth(), 1);
+            assert_eq!(shared.borrow().deferral_high_water().bytes, 0, "still open");
+            drop(outer);
+            assert_eq!(depth(), 0);
+            let window = shared.borrow().deferral_high_water();
+            assert!(window.bytes > 0, "{window:?}");
+            assert_eq!(window.site.map(|s| s.line()), Some(line));
         }
 
         /// Runs in every build: the balance check is an `assert!`, where an
@@ -3631,7 +3675,7 @@ mod tests {
         #[test]
         #[should_panic(expected = "unbalanced GC defer: exit without a matching enter")]
         fn an_unbalanced_defer_exit_panics() {
-            Heap::new().exit_gc_defer(false);
+            Mutator::new().exit_no_gc();
         }
 
         #[test]
@@ -3640,37 +3684,50 @@ mod tests {
             ignore = "needs a check build"
         )]
         #[should_panic(expected = "GC poll inside an AssertNoGc scope (1 open)")]
-        fn a_poll_inside_a_no_gc_scope_panics() {
+        fn a_poll_inside_an_assert_no_gc_panics() {
             let shared = new_shared_heap();
-            let polls = NoGcScopes::of(&shared);
+            let polls = AssertNoGcCount::of(&shared);
             let _window = AssertNoGc::new(&shared);
             polls.assert_none_open();
         }
 
         /// A collection at a call is a poll site too (#639): it checks for an
-        /// open window before it decides whether it may collect, so a nested
-        /// one, which only posts, panics as well.
+        /// open window before it decides whether it may collect, so one
+        /// beneath a nested entry's scope, which only posts, panics as well.
         #[test]
         #[cfg_attr(
             not(any(debug_assertions, feature = "gc-check")),
             ignore = "needs a check build"
         )]
         #[should_panic(expected = "GC poll inside an AssertNoGc scope (1 open)")]
-        fn a_collection_at_a_call_inside_a_no_gc_scope_panics() {
+        fn a_collection_at_a_call_inside_an_assert_no_gc_panics() {
             let shared = new_shared_heap();
             let gc = RefCell::new(GcController::from_env());
-            let _loop_guard = GcDeferGuard::new(&shared);
-            let _nested = GcDeferGuard::new(&shared);
+            let mut driver = GcDriver::acquire(&shared).expect("the carrier's driver is free");
+            let _nested = NoGcScope::enter(&shared);
             let _window = AssertNoGc::new(&shared);
-            GcController::collect_at_call(&gc, &shared, CollectKind::Major, |collect| {
+            GcController::collect_at_call(&gc, &mut driver, CollectKind::Major, |collect| {
                 collect(&[&TestRoots::default()]);
             });
         }
 
+        /// And so is the post of a loop with no driver.
         #[test]
-        fn no_gc_scopes_nest_and_close() {
+        #[cfg_attr(
+            not(any(debug_assertions, feature = "gc-check")),
+            ignore = "needs a check build"
+        )]
+        #[should_panic(expected = "GC poll inside an AssertNoGc scope (1 open)")]
+        fn a_post_at_a_call_inside_an_assert_no_gc_panics() {
             let shared = new_shared_heap();
-            let polls = NoGcScopes::of(&shared);
+            let _window = AssertNoGc::new(&shared);
+            GcController::post_at_call(&shared, CollectKind::Major);
+        }
+
+        #[test]
+        fn assert_no_gc_scopes_nest_and_close() {
+            let shared = new_shared_heap();
+            let polls = AssertNoGcCount::of(&shared);
             {
                 let _outer = AssertNoGc::new(&shared);
                 let inner = AssertNoGc::new(&shared);

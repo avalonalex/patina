@@ -103,10 +103,10 @@ pub use debug_format::{
 // The collector itself — `Collector`, `MarkSweepCollector`, `run_mark_phase`,
 // `Heap::sweep`, `GcController::collect` — is crate-private (#624): code
 // outside this crate collects only through `GcController::safe_point` and
-// `GcController::collect_at_call`.
+// `GcController::collect_at_call`, each with the carrier's `GcDriver`.
 pub use heap::gc::{
-    ArenaCounts, AssertNoGc, CollectKind, GcController, GcDeferGuard, GcMode, GcStats, GcVisitor,
-    MarkBits, NoGcScopes, RootProvider, RootSet, RootToken, SlotVisitor,
+    ArenaCounts, AssertNoGc, AssertNoGcCount, CollectKind, GcController, GcDeferGuard, GcDriver,
+    GcMode, GcStats, GcVisitor, MarkBits, NoGcScope, RootProvider, RootSet, RootToken, SlotVisitor,
 };
 pub use heap::{
     GC_CHECK, Heap, SharedHeap, SpineEnd,

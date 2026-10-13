@@ -25,12 +25,14 @@
 //!   collection at its call (`Step::Collect`), at the `CollectAtCall` of the
 //!   stub frame they push, an instruction of its own (#639). Rust argument
 //!   vectors, capture copies,
-//!   and globals-swap temporaries are not roots. Every driver loop holds a
-//!   `GcDeferGuard`; nested loops cannot collect while those temporaries live.
-//!   A compiled driver must use the same guard/safe-point discipline and the
-//!   existing `VmState` root provider, and publish all live Scheme values before
-//!   servicing a safe point. Hold an additional defer guard for temporaries
-//!   across entry to a loop when there is no enclosing driver guard.
+//!   and globals-swap temporaries are not roots. Only the loop a driver entry
+//!   runs holds the carrier's `GcDriver`; a nested loop has none and runs
+//!   under a `NoGcScope`, so it cannot collect while those temporaries live
+//!   (#702). A compiled driver must use the same driver/safe-point discipline
+//!   and the existing `VmState` root provider, and publish all live Scheme
+//!   values before servicing a safe point. Hold a holder's guard
+//!   (`GcDeferGuard::holding`) for temporaries held across a call that can
+//!   run Scheme.
 //! - Continuation side tables are weak. Carry the heap continuation *handle*
 //!   in a rooted register across thunk execution, not just an `Rc` payload.
 //!   Stub code is installed in `code_store` before its frame is made runnable.
@@ -2456,10 +2458,10 @@ impl patina_primitives::ApplyContext for VmApplyContext {
         reason = "holds `args` until the call returns: a closure callee gets them copied into \
                   its frame, but a primitive callee reads them from this frame \
                   (`call_primitive_proc` on the borrowed slice), across any callback it makes in \
-                  turn. Deferred: the loop this starts is nested under the dispatching loop's \
-                  GcDeferGuard and cannot collect, which PRD/GC_PRD.md §11.3 keeps \
-                  (`NoGcScope`). The primitive calling back holds its own values, each with its \
-                  reason at its call"
+                  turn. Deferred: the loop this starts is a nested entry, with no driver and \
+                  under a `NoGcScope`, so it cannot collect, as PRD/GC_PRD.md §11.3 keeps it. \
+                  The primitive calling back holds its own values, each with its reason at its \
+                  call"
     )]
     fn apply_proc(
         &self,
@@ -2498,9 +2500,9 @@ impl patina_primitives::ApplyContext for VmApplyContext {
 
     #[expect(
         clippy::disallowed_methods,
-        reason = "holds nothing: the library comes back by value. The load runs nested under the \
-                  dispatching loop's GcDeferGuard, and a library's body while its `ParsedLibrary` \
-                  holds `GcDeferGuard::holding`"
+        reason = "holds nothing: the library comes back by value. The load runs nested inside the \
+                  dispatching loop, under a `NoGcScope`, and a library's body while its \
+                  `ParsedLibrary` holds `GcDeferGuard::holding`"
     )]
     fn load_scheme_library(
         &self,
@@ -2545,7 +2547,7 @@ impl patina_primitives::ApplyContext for VmApplyContext {
     clippy::disallowed_methods,
     reason = "the state is in the machine: `call_any` put `proc`'s arguments in its frame, which \
               the machine roots, and this frame holds nothing. The loop is nested inside a \
-              dispatching loop and defers"
+              dispatching loop, with no driver, and never collects"
 )]
 fn run_apply_proc(
     state: &mut VmState,
@@ -2567,8 +2569,9 @@ fn run_apply_proc(
     // floor means the callback delivered its value — a continuation captured
     // and invoked *inside* it does exactly that — and the one case where it
     // does not is a transfer, which `across_reentry` catches for every
-    // boundary at once.
-    run_loop_until(state, depth_before)
+    // boundary at once. A nested entry: no driver, so it never collects
+    // (#702).
+    run_loop_until(state, depth_before, None)
 }
 
 /// Recognized VM-intercepted control primitives.

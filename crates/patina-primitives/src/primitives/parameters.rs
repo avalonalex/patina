@@ -265,8 +265,8 @@ fn read_parameter(ctx: &dyn ApplyContext, param: TaggedValue) -> Result<TaggedVa
             reason = "holds `param`, and `parameterize_swap` above it holds the parameter and \
                       value lists and the old values read so far (`params`, `vals`, `olds`), \
                       across the call of a parameter-like procedure that is not a parameter \
-                      object. Deferred: under a machine, by the GcDeferGuard of the loop that \
-                      dispatched `%parameterize-swap!`, whose nested run cannot collect; on the \
+                      object. Deferred: under a machine, by the `NoGcScope` of the nested run \
+                      the call starts, which has no driver and cannot collect; on the \
                       tree-walker's detached `ApplyContext for Evaluator`, by that context's \
                       `GcDeferGuard::holding`. Stage 4a ends this call (PRD/GC_PRD.md §11.3)"
         )]
@@ -299,8 +299,8 @@ fn install_parameter(
                       call of a parameter-like procedure that is not a parameter object, which \
                       validates the value by being set; once an earlier `install` has \
                       overwritten a parameter object's top, `olds` holds the only reference to \
-                      its old value. Deferred: under a machine, by the GcDeferGuard of the loop \
-                      that dispatched `%parameterize-swap!`, whose nested run cannot collect; on \
+                      its old value. Deferred: under a machine, by the `NoGcScope` of the nested \
+                      run the call starts, which has no driver and cannot collect; on \
                       the tree-walker's detached `ApplyContext for Evaluator`, by that context's \
                       `GcDeferGuard::holding`. Stage 4a ends this call (PRD/GC_PRD.md §11.3)"
         )]

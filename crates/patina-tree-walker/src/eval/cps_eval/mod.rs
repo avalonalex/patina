@@ -78,7 +78,7 @@ use crate::eval::error::EvalError;
 use patina_core::Environment;
 use patina_core::TaggedValue;
 use patina_core::cps_expr::CpsExpr;
-use patina_core::{GcController, GcDeferGuard, NoGcScopes};
+use patina_core::{AssertNoGcCount, GcController, GcDriver, NoGcScope};
 use patina_runtime::HasDiagnostic;
 use std::rc::Rc;
 use tracing::debug;
@@ -106,26 +106,21 @@ impl<'a> CpsEvaluator<'a> {
 
     /// GC safe point: the tree-walker's root set, handed to the shared driver.
     ///
-    /// Called at the top of the trampoline loop, where the entire live machine
-    /// state is reachable from `step` + `expr` and no heap borrow is
-    /// outstanding (`docs/GC_DESIGN.md` §7). The protocol itself lives in
-    /// `GcController::safe_point`; this supplies only the roots.
+    /// Called at the top of the trampoline loop that holds the carrier's
+    /// driver, where the entire live machine state is reachable from `step` +
+    /// `expr` and no heap borrow is outstanding (`docs/GC_DESIGN.md` §7). The
+    /// protocol itself lives in `GcController::safe_point`; this supplies
+    /// only the roots.
     #[inline]
-    fn maybe_collect(&self, is_outermost: bool, step: &StepResult, expr: Option<&CpsExpr>) {
+    fn maybe_collect(&self, driver: &mut GcDriver, step: &StepResult, expr: Option<&CpsExpr>) {
         let evaluator = self.evaluator;
-        let collected = GcController::safe_point(
-            &evaluator.gc,
-            evaluator.global_env.heap(),
-            &evaluator.mutator,
-            is_outermost,
-            |collect| {
-                // The machine's own state, lent to the collection; the library
-                // registry is registered with the heap, which waits while a
-                // load holds it (#682).
-                let step_roots = gc_roots::StepRoots { step, expr };
-                collect(&[evaluator, &step_roots]);
-            },
-        );
+        let collected = GcController::safe_point(&evaluator.gc, driver, |collect| {
+            // The machine's own state, lent to the collection; the library
+            // registry is registered with the heap, which waits while a
+            // load holds it (#682).
+            let step_roots = gc_roots::StepRoots { step, expr };
+            collect(&[evaluator, &step_roots]);
+        });
         if collected {
             // Nothing to do after a collection here: its pause is complete
             // (#648).
@@ -140,25 +135,21 @@ impl<'a> CpsEvaluator<'a> {
     /// Point B (#677): the safe point outside any trampoline, where a
     /// library's load ends at the top level. The same root set as
     /// [`Self::maybe_collect`]'s, less a step, since none is running. It
-    /// collects only where nothing defers, with no trampoline running and no
-    /// holder's guard alive, and does nothing anywhere else.
+    /// takes the carrier's driver, so it collects only where no trampoline
+    /// holds it and no `NoGcScope` is open (#702), and does nothing anywhere
+    /// else.
     pub(crate) fn collect_if_pending(&self) {
         let evaluator = self.evaluator;
         let heap = evaluator.global_env.heap();
-        if !evaluator.mutator.gc_posted() || heap.borrow().gc_defer_depth() != 0 {
+        if !evaluator.mutator.gc_posted() || evaluator.mutator.no_gc_depth() != 0 {
             return;
         }
-        NoGcScopes::of(heap).assert_none_open();
-        // A loop's guard, as a trampoline takes for its extent, so that the
-        // collection finds the defer depth a safe point requires.
-        let gc_defer = GcDeferGuard::new(heap);
-        let collected = GcController::safe_point(
-            &evaluator.gc,
-            heap,
-            &evaluator.mutator,
-            gc_defer.is_outermost(),
-            |collect| collect(&[evaluator]),
-        );
+        let Some(mut driver) = GcDriver::acquire(heap) else {
+            return;
+        };
+        AssertNoGcCount::of(heap).assert_none_open();
+        let collected =
+            GcController::safe_point(&evaluator.gc, &mut driver, |collect| collect(&[evaluator]));
         if collected {
             heap.borrow_mut()
                 .finish_collection(std::time::Duration::ZERO);
@@ -169,28 +160,30 @@ impl<'a> CpsEvaluator<'a> {
     /// (`StepResult::CollectAtCall`, #639): the same root set as
     /// [`Self::maybe_collect`]'s, with `step` — the suspended call, its
     /// primitive's `ResumePrimitive` continuation and the step's stacks —
-    /// as the whole machine, handed to `GcController::collect_at_call`. It
-    /// collects only on the outermost trampoline with no other guard alive,
-    /// and otherwise posts the collection for the outermost trampoline's
-    /// next safe point and counts it. Returns whether a collection ran.
+    /// as the whole machine, handed with the trampoline's driver to
+    /// `GcController::collect_at_call`. It collects only on the trampoline
+    /// that holds the carrier's driver, at depth 0, and otherwise posts the
+    /// collection for that trampoline's next safe point and counts it: a
+    /// nested trampoline has no driver (#702). Returns whether a collection
+    /// ran.
     fn collect_at_call(
         &self,
+        driver: Option<&mut GcDriver>,
         kind: patina_core::CollectKind,
         step: &StepResult,
         expr: Option<&CpsExpr>,
     ) -> bool {
         let evaluator = self.evaluator;
-        let collected = GcController::collect_at_call(
-            &evaluator.gc,
-            evaluator.global_env.heap(),
-            kind,
-            |collect| {
-                // As at a safe point: the registered registry posts the
-                // collection while a load holds it (#682).
-                let step_roots = gc_roots::StepRoots { step, expr };
-                collect(&[evaluator, &step_roots]);
-            },
-        );
+        let Some(driver) = driver else {
+            GcController::post_at_call(evaluator.global_env.heap(), kind);
+            return false;
+        };
+        let collected = GcController::collect_at_call(&evaluator.gc, driver, kind, |collect| {
+            // As at a safe point: the registered registry posts the
+            // collection while a load holds it (#682).
+            let step_roots = gc_roots::StepRoots { step, expr };
+            collect(&[evaluator, &step_roots]);
+        });
         if collected {
             evaluator
                 .global_env
@@ -288,22 +281,27 @@ impl<'a> CpsEvaluator<'a> {
     /// then delivered as the program's value.
     ///
     /// `expr` is the expression an outermost run was entered with, rooted at
-    /// the safe point for its literals; a callback run has none. Every
-    /// trampoline defers collection for its own extent and only the outermost
-    /// one reaches its safe point un-deferred — a nested trampoline's caller
-    /// holds live values in Rust locals that no root provider can see
-    /// (`docs/GC_DESIGN.md` §7).
+    /// the safe point for its literals; a callback run has none.
+    ///
+    /// Only the run that holds the carrier's driver collects (#702): a
+    /// form's, entered from outside any run, takes it. Every other run is
+    /// nested — a callback's always, a form's beneath another run — and runs
+    /// under a `NoGcScope`, because its caller holds live values in Rust
+    /// locals that no root provider can see (`docs/GC_DESIGN.md` §7).
     fn run_trampoline(
         &self,
         initial: StepResult,
         expr: Option<&CpsExpr>,
         kind: types::TrampolineKind,
     ) -> Result<TaggedValue, EvalError> {
-        let gc_defer = GcDeferGuard::new(self.evaluator.global_env.heap());
-        // Loop invariant, hoisted out of the safe point (see maybe_collect).
-        let is_outermost = gc_defer.is_outermost();
+        let heap = self.evaluator.global_env.heap();
+        let mut driver = match kind {
+            types::TrampolineKind::Form => GcDriver::acquire(heap),
+            types::TrampolineKind::Callback => None,
+        };
+        let _nested = driver.is_none().then(|| NoGcScope::enter(heap));
         // The open `AssertNoGc` windows, checked at every poll (#624).
-        let no_gc_scopes = NoGcScopes::of(self.evaluator.global_env.heap());
+        let assert_no_gc = AssertNoGcCount::of(heap);
         let trampoline = types::TrampolineGuard::enter(kind);
 
         let mut current_step = initial;
@@ -316,9 +314,12 @@ impl<'a> CpsEvaluator<'a> {
             // The poll asserts first that no `AssertNoGc` window is open, on
             // every step of every trampoline, nested or not: the shared safe
             // point returns at once unless a collection is pending and this
-            // run is outermost, so a check inside it would almost never run.
-            no_gc_scopes.assert_none_open();
-            self.maybe_collect(is_outermost, &current_step, expr);
+            // run holds the driver, so a check inside it would almost never
+            // run.
+            assert_no_gc.assert_none_open();
+            if let Some(driver) = driver.as_mut() {
+                self.maybe_collect(driver, &current_step, expr);
+            }
 
             step_count += 1;
             if step_count <= 30 {
@@ -402,7 +403,8 @@ impl<'a> CpsEvaluator<'a> {
                 // like the safe point above, and collects only where that
                 // one may (#639).
                 StepResult::CollectAtCall { kind, .. } => {
-                    let collected = self.collect_at_call(kind, &current_step, expr);
+                    let collected =
+                        self.collect_at_call(driver.as_mut(), kind, &current_step, expr);
                     let StepResult::CollectAtCall {
                         kind: _,
                         cont,

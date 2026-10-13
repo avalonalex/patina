@@ -1318,6 +1318,8 @@ after the spike.
 | 0x60 | `fenced_ap` | `usize`, reserved | §18 rule 4's standalone-fence variant, if stage 6 chooses it |
 | 0x68 | `quiesce_epoch` | `u64`, reserved | deferred code-memory reuse under N carriers |
 | 0x70 | `handshake` | `AtomicU32`, reserved | the stop-the-world handshake under N carriers |
+| 0x74 | `no_gc_depth` | `Cell<u32>`, Rust only | the poll slow path: the open `NoGcScope`s (§11.3) |
+| 0x78 | `driver_out` | `Cell<bool>`, Rust only | driver entries: whether the carrier's `GcDriver` is held (C2) |
 
 ```rust
 #[repr(C)] #[derive(Clone, Copy)]

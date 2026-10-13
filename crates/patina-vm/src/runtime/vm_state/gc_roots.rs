@@ -32,7 +32,7 @@
 //!
 //! Rust-stack temporaries (continuation-capture register clones, `mem::take`n
 //! buffers, primitive argument vectors) are handled by deferral rather than
-//! tracing — see `GcDeferGuard` and §7. The environments `with_globals` sets
+//! tracing — see `NoGcScope` and §7. The environments `with_globals` sets
 //! aside were too, until they moved onto the traced `saved_globals` (#677).
 
 use patina_core::{GC_CHECK, GcVisitor, RootProvider, SlotVisitor, Trace};

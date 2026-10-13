@@ -265,8 +265,8 @@ impl<'a> CpsEvaluator<'a> {
     /// The run has its own trampoline id, so a continuation captured in the
     /// callback returns here, an outer continuation invoked in the callback
     /// escapes through the primitive, and the primitive is abandoned by the
-    /// `?` on the step that made the call. Its `GcDeferGuard` is the loop's
-    /// (`run_trampoline`): every nested trampoline defers for its extent.
+    /// `?` on the step that made the call. A callback's run is nested: it has
+    /// no driver and runs under a `NoGcScope` (`run_trampoline`, #702).
     #[expect(
         clippy::disallowed_methods,
         reason = "holds nothing: `proc`, `args` and the stacks move into the first step, which the \

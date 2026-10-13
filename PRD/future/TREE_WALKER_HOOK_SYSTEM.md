@@ -362,17 +362,18 @@ use-after-free, not a leak. `Evaluator`'s trace is derived (#686), and a `dyn De
 has no `Trace`, so the `debug_hook` field is skipped (`#[trace(skip, reason = "…")]`),
 with a reason naming the path that traces the hook.
 
-**A paused hook cannot collect.** `eval_in_env` takes a `GcDeferGuard` and computes
-`is_outermost` (`cps_eval/mod.rs:162,166`) to gate its safe point; `GcController::safe_point`
-returns early when not outermost (`patina-core/src/heap/gc.rs:381`). A re-entrant
-`eval_in_env` called from inside a hook runs under the outer trampoline's still-live
-guard, so **no collection happens for the duration of a pause**. Every `p <expr>`,
+**A paused hook cannot collect.** Only the run that holds the carrier's `GcDriver`
+collects (`PRD/GC_PRD.md` §11.3, #702): a form's run takes it in `run_trampoline`, and
+`GcController::safe_point` cannot be called without it. A re-entrant `eval_in_env` called
+from inside a hook finds the driver held by the paused run, so it is nested: it runs under
+a `NoGcScope`, which K16 counts as a deferral window, and **no collection happens for the
+duration of a pause**. Every `p <expr>`,
 every conditional-breakpoint predicate, and any fuel/parking client allocates without
 collecting until the program resumes. For interactive use this is usually fine (a pause
 is short and human-paced); for a client that evaluates in a loop while paused it is a
-heap-growth bug. Fixing it properly means letting the debugger's re-entrant eval opt
-into being its own outermost extent — worth designing only if a client needs it, but it
-must not be described as free.
+heap-growth bug. Fixing it properly means letting the debugger's re-entrant eval become a
+driver entry of its own, with what the paused run holds rooted — worth designing only if a
+client needs it, but it must not be described as free.
 
 Attachment mirrors the VM tracer:
 
@@ -571,8 +572,8 @@ hook API should not foreclose the future, and the general practice is settled.
   JVM suspends at GC safepoints, CPython via the eval-breaker flag, Go at preemption
   points. **Patina already owns this mechanism** — the GC safe point at the top of every
   driver iteration. A threaded patina would park threads for the debugger the way it
-  parks them for a collection: one flag, two clients. (The `is_outermost` interaction of
-  §5.2 would need revisiting at the same time.)
+  parks them for a collection: one flag, two clients. (The driver interaction of §5.2,
+  a paused run's evaluation under a `NoGcScope`, would need revisiting at the same time.)
 - **Threads are what kill the blocking-console model.** `pdb`-in-the-callback works with
   one thread; with several, the paused thread's hook cannot own the terminal while
   others print and hit breakpoints. This is the force that pushed real debuggers to the

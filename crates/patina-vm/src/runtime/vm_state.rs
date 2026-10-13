@@ -27,8 +27,8 @@ use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{
-    AssertNoGc, CollectKind, GC_CHECK, GcController, GcDeferGuard, GcMode, Mutator, NoGcScopes,
-    Trace,
+    AssertNoGc, AssertNoGcCount, CollectKind, GC_CHECK, GcController, GcDriver, GcMode, Mutator,
+    NoGcScope, Trace,
 };
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::HasDiagnostic;
@@ -292,13 +292,14 @@ pub struct VmState {
     /// a transfer's return, #700) is a single load of its poll word.
     #[trace(skip, reason = "the carrier's event words: no value")]
     mutator: Rc<Mutator>,
-    /// Whether the dispatch loop running now may collect at its polls: the
-    /// outermost loop's answer, which each loop sets at its entry and puts
-    /// back at its exit (`run_loop_until_outcome`, #700). A field, so the
-    /// polls read it only when a collection is posted, rather than each
-    /// dispatch being handed it.
-    #[trace(skip, reason = "a flag")]
-    loop_collects: bool,
+    /// The carrier's driver, the capability to collect (#702), lent by the
+    /// driver entry (`execute`, `execute_in`) to the loop it runs, for that
+    /// loop's polls: `None` in a nested loop, which hides the driver for its
+    /// extent and runs under a `NoGcScope` (`run_loop_until_outcome`). A
+    /// field, so the polls reach it only when something is posted, rather
+    /// than each dispatch being handed it (#700).
+    #[trace(skip, reason = "the capability to collect: no value")]
+    driver: Option<GcDriver>,
 }
 
 impl VmState {
@@ -371,7 +372,7 @@ impl VmState {
             fs: Arc::new(patina_core::NativeFs),
             gc: RefCell::new(gc),
             mutator,
-            loop_collects: false,
+            driver: None,
         }
     }
 
@@ -1274,12 +1275,15 @@ pub fn execute_in(
 /// Run the frame [`execute`] or [`execute_in`] pushed until the stack is
 /// empty, and clear what the run leaves behind.
 fn run_top_frame(state: &mut VmState) -> Result<TaggedValue, VmError> {
+    // The driver entry (#702): the run takes the carrier's driver and may
+    // collect, unless a run further out holds it, beneath which it is nested.
+    let driver = GcDriver::acquire(&state.heap);
     #[expect(
         clippy::disallowed_methods,
         reason = "the state is in the machine: the frame the caller pushed is the run's root, and \
                   this frame holds nothing"
     )]
-    let result = run_loop_until(state, 0);
+    let result = run_loop_until(state, 0, driver);
     // Nothing is left to resume: an escape that reached depth 0 *is* this
     // form's value, and a loop re-parks one on the way out for the boundary
     // it may have crossed. Dropped with the transfer flag so neither is
@@ -1329,7 +1333,8 @@ pub(super) fn execute_nested(
 
     state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0);
 
-    run_loop_until(state, depth_before)
+    // A nested entry: no driver, so the run never collects (#702).
+    run_loop_until(state, depth_before, None)
 }
 
 /// How a dispatch loop ended.
@@ -1364,8 +1369,9 @@ impl LoopExit {
 pub(super) fn run_loop_until(
     state: &mut VmState,
     exit_depth: usize,
+    driver: Option<GcDriver>,
 ) -> Result<TaggedValue, VmError> {
-    run_loop_until_outcome(state, exit_depth).map(LoopExit::value)
+    run_loop_until_outcome(state, exit_depth, driver).map(LoopExit::value)
 }
 
 /// The main dispatch loop. Runs until `state.execution.frames().len() == exit_depth`.
@@ -1381,30 +1387,35 @@ pub(super) fn run_loop_until(
 /// (`VmState::reentry_kept`). Every
 /// synchronous boundary below reports the invocation as
 /// [`VmError::ContinuationEscape`] and lets the decision happen here once.
+///
+/// `driver` is the carrier's driver, the capability to collect (#702), which
+/// only a driver entry has (`execute`, `execute_in`). Every other entry is
+/// nested and passes `None`: its loop never collects.
 pub(super) fn run_loop_until_outcome(
     state: &mut VmState,
     exit_depth: usize,
+    driver: Option<GcDriver>,
 ) -> Result<LoopExit, VmError> {
-    // Every dispatch loop defers collection for its own extent; only the
-    // outermost one reaches its safe point un-deferred. A nested loop's
-    // caller has live values in Rust locals — capture-time register clones,
-    // `mem::take`n buffers, primitive argument vectors — that no root
-    // provider can see. See `docs/GC_DESIGN.md` §7.
-    let gc_defer = GcDeferGuard::new(&state.heap);
-    // Whether this loop may service a posted collection, for its polls to
-    // read (`VmState::loop_collects`), and put back for the loop it runs in.
-    let outer = std::mem::replace(&mut state.loop_collects, gc_defer.is_outermost());
+    // A nested entry's caller has live values in Rust locals — capture-time
+    // register clones, `mem::take`n buffers, primitive argument vectors —
+    // that no root provider can see. So its loop runs under a `NoGcScope`,
+    // with the driver of the loop it runs in hidden for its extent. See
+    // `docs/GC_DESIGN.md` §7.
+    let scope = driver.is_none().then(|| NoGcScope::enter(&state.heap));
+    // The driver, for the polls to take (`VmState::driver`); the outer
+    // loop's goes back when this one ends, and a driver entry's own goes back
+    // to the carrier.
+    let outer = std::mem::replace(&mut state.driver, driver);
     let exit = dispatch_loop(state, exit_depth);
-    state.loop_collects = outer;
-    drop(gc_defer);
+    drop(std::mem::replace(&mut state.driver, outer));
+    drop(scope);
     exit
 }
 
-/// [`run_loop_until_outcome`]'s loop, run with `VmState::loop_collects` set
-/// for it.
+/// [`run_loop_until_outcome`]'s loop, run with `VmState::driver` set for it.
 fn dispatch_loop(state: &mut VmState, exit_depth: usize) -> Result<LoopExit, VmError> {
     // The open `AssertNoGc` windows, checked at every poll (#624).
-    let no_gc_scopes = NoGcScopes::of(&state.heap);
+    let assert_no_gc = AssertNoGcCount::of(&state.heap);
 
     // Loop-resident copy of the top frame's code object: dispatch borrows it
     // instead of cloning the `Rc` out of the frame on every instruction (two
@@ -1467,7 +1478,7 @@ fn dispatch_loop(state: &mut VmState, exit_depth: usize) -> Result<LoopExit, VmE
         // the loop: a check build asserts it on every iteration of every
         // loop, nested or not, rather than only at the polls, which an
         // outermost loop's frame entries alone would reach (#624).
-        no_gc_scopes.assert_none_open();
+        assert_no_gc.assert_none_open();
 
         patina_core::census::vm_instruction();
         match dispatch_one_instruction(state, &mut cur_code, exit_depth) {
@@ -1547,12 +1558,14 @@ fn dispatch_loop(state: &mut VmState, exit_depth: usize) -> Result<LoopExit, VmE
 /// GC safe point: the VM's root set, handed to the shared driver. Returns
 /// whether a collection ran.
 ///
-/// The protocol — `(gc)` honored in every mode, only the outermost guard
-/// collects, one borrow spans the collection — lives in
-/// `GcController::safe_point`; this supplies only what is VM-specific.
+/// The protocol — `(gc)` honored in every mode, only the driver collects and
+/// only at depth 0, one borrow spans the collection — lives in
+/// `GcController::safe_point`; this supplies only what is VM-specific. It
+/// asks the depth first as well, so that it retires registers only for a
+/// collection that will run (#702).
 #[inline]
-fn maybe_collect(state: &mut VmState, is_outermost: bool) -> bool {
-    if !state.mutator.poll_due() || !is_outermost {
+fn maybe_collect(state: &mut VmState, driver: &mut GcDriver) -> bool {
+    if !state.mutator.poll_due() || state.mutator.no_gc_depth() != 0 {
         return false;
     }
     patina_core::census::stack_shape(
@@ -1562,13 +1575,7 @@ fn maybe_collect(state: &mut VmState, is_outermost: bool) -> bool {
     state.execution.retire_registers();
     // The machine's own state, lent to the collection; the library registry
     // is registered with the heap, which waits while a load holds it (#682).
-    GcController::safe_point(
-        &state.gc,
-        &state.heap,
-        &state.mutator,
-        is_outermost,
-        |collect| collect(&[state]),
-    )
+    GcController::safe_point(&state.gc, driver, |collect| collect(&[state]))
 }
 
 /// A poll site (`PRD/GC_PRD.md` §12, #700):
@@ -1580,8 +1587,8 @@ fn maybe_collect(state: &mut VmState, is_outermost: bool) -> bool {
 /// - a loop's escape landing, and its start.
 ///
 /// A load of the poll word, and the rest only when something is posted: then
-/// a posted collection runs if the running loop may collect, with every frame
-/// at the pc it resumes from.
+/// a posted collection runs if the running loop holds the driver at depth 0,
+/// with every frame at the pc it resumes from.
 #[inline]
 pub(super) fn poll(state: &mut VmState) {
     if state.mutator.poll_due() {
@@ -1589,12 +1596,17 @@ pub(super) fn poll(state: &mut VmState) {
     }
 }
 
-/// Service a posted collection where the running loop may collect
-/// (`VmState::loop_collects`).
+/// Service a posted collection where the running loop holds the driver
+/// (`VmState::driver`): a nested loop has none, and collects nothing (#702).
 #[cold]
 #[inline(never)]
 fn poll_slow(state: &mut VmState) {
-    if maybe_collect(state, state.loop_collects) {
+    let Some(mut driver) = state.driver.take() else {
+        return;
+    };
+    let collected = maybe_collect(state, &mut driver);
+    state.driver = Some(driver);
+    if collected {
         state.after_collection();
     }
 }
@@ -1602,39 +1614,43 @@ fn poll_slow(state: &mut VmState) {
 /// Point B (#677): where a library's load ends at the top level, a pending
 /// collection runs here rather than waiting for the next form that runs
 /// code, which a run of `define-library` forms never reaches (#614). The
-/// same safe point a dispatch loop polls, outside any loop: it collects only
-/// where nothing defers, with no loop running and no holder's guard alive,
-/// and does nothing anywhere else.
+/// same safe point a dispatch loop polls, outside any loop: it takes the
+/// carrier's driver, so it collects only where no driver entry is running
+/// and no `NoGcScope` is open (#702), and does nothing anywhere else.
 pub(crate) fn collect_if_pending(state: &mut VmState) {
-    if !state.mutator.gc_posted() || state.heap.borrow().gc_defer_depth() != 0 {
+    if !state.mutator.gc_posted() || state.mutator.no_gc_depth() != 0 {
         return;
     }
-    NoGcScopes::of(&state.heap).assert_none_open();
-    // A loop's guard, as a dispatch loop takes for its extent, so that the
-    // collection finds the defer depth a safe point requires.
-    let gc_defer = GcDeferGuard::new(&state.heap);
-    if maybe_collect(state, gc_defer.is_outermost()) {
+    let Some(mut driver) = GcDriver::acquire(&state.heap) else {
+        return;
+    };
+    AssertNoGcCount::of(&state.heap).assert_none_open();
+    if maybe_collect(state, &mut driver) {
         state.after_collection();
     }
 }
 
 /// A collection a resumable primitive asked for at its call (`Step::Collect`,
 /// #639), run by `CollectAtCall` in `resume_stub`'s frame with the caller
-/// suspended beneath it: the VM's root set, handed to
-/// `GcController::collect_at_call`, which collects under the running loop's
-/// own guard alone and otherwise posts the collection and counts it. Returns
+/// suspended beneath it: the VM's root set, handed with the running loop's
+/// driver to `GcController::collect_at_call`, which collects at depth 0 and
+/// otherwise posts the collection and counts it. A nested loop has no
+/// driver, and posts it (`GcController::post_at_call`, #702). Returns
 /// whether a collection ran.
 ///
 /// The poll is inside an instruction, where nothing is held in Rust: the
 /// stub frame has just been entered, so every value the call needs is in its
 /// registers or the caller's, and `cur_code` (the stub's) is in the code
 /// store. Registers are retired first, as `maybe_collect` retires them, but
-/// only where the collection can run (`Heap::gc_defer_is_one_loop`, what
-/// `GcController::collect_at_call` decides by): in a nested loop the frames
-/// below are suspended in the middle of an instruction, which may read its
-/// operands again when it resumes.
+/// only where the collection can run, with the driver at depth 0. A nested
+/// loop never gets that far: the frames below it are suspended in the middle
+/// of an instruction, which may read its operands again when it resumes.
 fn collect_at_call(state: &mut VmState, kind: CollectKind) -> bool {
-    if state.heap.borrow().gc_defer_is_one_loop() {
+    let Some(mut driver) = state.driver.take() else {
+        GcController::post_at_call(&state.heap, kind);
+        return false;
+    };
+    if state.mutator.no_gc_depth() == 0 {
         patina_core::census::stack_shape(
             state.execution.frames().len(),
             state.execution.registers().len(),
@@ -1644,7 +1660,8 @@ fn collect_at_call(state: &mut VmState, kind: CollectKind) -> bool {
     // As at a safe point: the registered registry makes the collection wait
     // while a load holds it, which posts it (#682).
     let collected =
-        GcController::collect_at_call(&state.gc, &state.heap, kind, |collect| collect(&[&*state]));
+        GcController::collect_at_call(&state.gc, &mut driver, kind, |collect| collect(&[&*state]));
+    state.driver = Some(driver);
     if collected {
         state.after_collection();
     }
