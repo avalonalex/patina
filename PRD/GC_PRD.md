@@ -1320,6 +1320,7 @@ after the spike.
 | 0x70 | `handshake` | `AtomicU32`, reserved | the stop-the-world handshake under N carriers |
 | 0x74 | `no_gc_depth` | `Cell<u32>`, Rust only | the poll slow path: the open `NoGcScope`s (§11.3) |
 | 0x78 | `driver_out` | `Cell<bool>`, Rust only | driver entries: whether the carrier's `GcDriver` is held (C2) |
+| 0x7C | `live_cx` | `Cell<u32>`, Rust only | check builds: the live `Cx`s, which every collection asserts are none (§11.3) |
 
 ```rust
 #[repr(C)] #[derive(Clone, Copy)]

@@ -217,6 +217,7 @@ if let Some(v) = heap.borrow_mut().method() { heap.borrow()... }
 let v = heap.borrow_mut().method();
 if let Some(v) = v { heap.borrow()... }
 ```
+Code written against `Cx<'gc>` (`patina_core::Cx`, #703), which the safe crates move onto in #704, #706 and #707, has no such dance: it borrows the heap for each call, reads take `&Cx` and allocation `&mut Cx`, so the borrow checker refuses an interior borrow held across an allocation. A value written into a heap object goes through the store funnel (`Cx::store`), never through a cloned `Rc` payload.
 
 **`SourceLocation::source` is `Arc<str>`** (not `Rc`) — required by `Backend::Error: Send + Sync + 'static`.
 

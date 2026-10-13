@@ -1034,6 +1034,54 @@ placement + deferral:
    a partial root set is a use-after-free. Parsing needs no guard — safe
    points exist only inside the trampoline, so GC cannot fire mid-parse.
 
+**Mutation: `Cx`, the brand and the funnel** (#703, `PRD/GC_PRD.md` §10 and
+§11.3). The API the crates outside core move onto in #704, #706 and #707,
+beside today's `SharedHeap` surface until they do.
+
+- **`Cx<'gc>`, the mutation and allocation context.** No method on it can
+  collect. It is made in two ways:
+  - by `GcDriver::mutate`, whose `&mut` borrow keeps the driver from reaching
+    a safe point while the context lives;
+  - by `NoGcScope::mutate`, beneath which nothing collects.
+
+  It borrows the heap's `RefCell` for each call. Reads take `&Cx`; allocation
+  and stores take `&mut Cx`. A bulk read is a `Ref` tied to the `&Cx` borrow,
+  so holding one across an allocation is a borrow-checker error rather than a
+  `BorrowMutError`. It carries the interpreter's `Instance`: the command line,
+  the features, the file system and the library query. Those still ride on
+  the heap until the conversions move them.
+- **`Value<'gc>`, the brand.** A `#[repr(transparent)]` word with an
+  invariant lifetime, the `mutate` call's. A value cannot leave the call, since
+  the closure's result cannot name `'gc`, nor reach another context.
+  - Immediates are made without a context.
+  - A heap word becomes a value only through `Value::from_tagged`, which is
+    `unsafe`, for the machines.
+  - A value is neither `Send` nor `Sync`, so none sits in a `static`.
+
+  `patina-core`'s compile-fail doctests hold all three rules: a value escaping
+  `mutate`, a value used across a safe point, and a value in a `static`.
+- **The funnel.** `Cx::store(slot, v)` is the one way a value is written into
+  a heap object: a pair's car or cdr, a vector's element, a cell, a record's
+  field, a closure's free variable, a promise's box, a parameter's value.
+  `store_range` and `fill_range` write a run of a vector's elements (C4), and
+  `Fresh` takes the initializing stores into an object just made. The arena
+  heap has no barrier (`BarrierKind::None`), so the funnel checks the holder
+  and stores, as `Heap`'s mutators do. Stage 7's barrier and, under
+  `threaded`, publication will go here, and #708 routes every store through
+  it.
+- **Coverage.** `Cx` has a method for each `Heap` method that the crates
+  outside the machines call, 194 at #703, under the same name where its shape
+  holds:
+  - reads that handed out a reference into the heap answer owned
+    (`get_bigint`, `get_exception`, `get_port`) or borrowed
+    (`get_string_chars`, `vector_slice`, `get_symbol_name`);
+  - records, parameters and promises are read and written as values, not
+    through their `Rc` payloads;
+  - `get_string_chars_mut` gives way to `string_fill` and `string_copy_chars`.
+- **Checked.** Debug and `gc-check` builds count the live contexts on the
+  carrier (`Mutator::live_cx`), and `GcController::collect` asserts that none
+  is live.
+
 **Collections at a call (#639).** A collection at a call is the second way
 in. A primitive that needs a collection at its own call — `(gc)`, and an
 open that ran out of descriptors and collects before it tries again

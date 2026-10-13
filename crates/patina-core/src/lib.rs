@@ -52,6 +52,7 @@ pub mod environment;
 pub mod error;
 pub mod features;
 pub mod heap;
+pub mod instance;
 pub mod library;
 pub mod macro_debug;
 pub mod numeric;
@@ -66,6 +67,7 @@ pub mod source_document;
 pub mod source_map;
 pub mod tagged_value;
 pub mod thread;
+pub mod value;
 pub mod vfs;
 pub mod walk;
 
@@ -85,6 +87,11 @@ pub use environment::{
 };
 pub use error::{ErrorDetail, ErrorKind, ExceptionKind, ExceptionObject, SourceLocation};
 pub use heap::PromiseState;
+pub use heap::cx::{
+    CellValue, ClosureFree, Cx, Fresh, PairCar, PairCdr, ParamValue, PromiseBox, PromiseView,
+    RecordField, Slot, VectorElem,
+};
+pub use instance::Instance;
 pub use library::Library;
 pub use port::{Port, PortData, PortDirection, PortKind, StdioKind, StringPortData};
 pub use procedure::{Arity, Procedure};
@@ -122,6 +129,7 @@ pub use heap::{
 pub use patina_trace_derive::Trace;
 pub use tagged_value::TaggedValue;
 pub use thread::ThreadId;
+pub use value::Value;
 pub use vfs::{FileSystem, MemoryFs, NativeFs, OverlayFs};
 
 #[cfg(test)]
