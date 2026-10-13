@@ -27,6 +27,7 @@ pub mod attrs;
 #[cfg(feature = "gc-census")]
 mod census;
 mod check;
+pub mod cx;
 pub mod gc;
 pub mod handles;
 pub mod mutator;

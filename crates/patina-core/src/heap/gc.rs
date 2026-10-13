@@ -380,6 +380,20 @@ impl GcDriver {
     }
 }
 
+impl GcDriver {
+    /// Run `f` with a mutation context over the driver's heap, carrying
+    /// `instance` (#703). The `&mut` borrow keeps the driver from reaching a
+    /// collection while the context lives: the borrow checker refuses a safe
+    /// point inside `f` (the [`Cx`](crate::Cx) docs show it).
+    pub fn mutate<R>(
+        &mut self,
+        instance: &crate::Instance,
+        f: impl for<'gc> FnOnce(&mut crate::Cx<'gc>) -> R,
+    ) -> R {
+        super::cx::enter(&self.heap, &self.mutator, instance, f)
+    }
+}
+
 impl Drop for GcDriver {
     fn drop(&mut self) {
         self.mutator.return_driver();
@@ -421,6 +435,20 @@ impl NoGcScope {
             heap: heap.clone(),
             mutator,
         }
+    }
+}
+
+impl NoGcScope {
+    /// Run `f` with a mutation context over the scope's heap, carrying
+    /// `instance` (#703): where no driver is to hand, a nested entry's. No
+    /// collection runs while the scope is open, so none runs while the
+    /// context lives.
+    pub fn mutate<R>(
+        &self,
+        instance: &crate::Instance,
+        f: impl for<'gc> FnOnce(&mut crate::Cx<'gc>) -> R,
+    ) -> R {
+        super::cx::enter(&self.heap, &self.mutator, instance, f)
     }
 }
 
@@ -498,6 +526,16 @@ fn collected_inside_a_holder(collections: u64) -> ! {
         "GC deferral violated: {collections} collection(s) ran inside a \
          GcDeferGuard::holding extent, whose holder keeps heap values no root \
          provider sees (docs/GC_DESIGN.md §7)"
+    )
+}
+
+/// The panic of a collection's live-context check (#703).
+#[cold]
+#[inline(never)]
+fn collected_with_a_live_cx(live: u32) -> ! {
+    panic!(
+        "GC deferral violated: a collection ran with {live} Cx live, whose \
+         values it could free (docs/GC_DESIGN.md §7)"
     )
 }
 
@@ -796,6 +834,10 @@ impl GcController {
             let depth = heap.mutator().no_gc_depth();
             if depth != 0 {
                 collected_inside_a_no_gc_scope(depth);
+            }
+            let live = heap.mutator().live_cx();
+            if live != 0 {
+                collected_with_a_live_cx(live);
             }
         }
         let started = Instant::now();
@@ -3612,6 +3654,26 @@ mod tests {
             let _nested = NoGcScope::enter(&shared);
             let mut gc = GcController::from_env();
             gc.collect(&mut shared.borrow_mut(), &[&TestRoots::default()], false);
+        }
+
+        /// A collection while a context lives: what a path that reached the
+        /// collector from inside one would do (#703). Direct here, because a
+        /// safe point cannot be reached while the context borrows the driver.
+        #[test]
+        #[cfg_attr(
+            not(any(debug_assertions, feature = "gc-check")),
+            ignore = "needs a check build"
+        )]
+        #[should_panic(expected = "a collection ran with 1 Cx live")]
+        fn a_collection_while_a_context_lives_panics() {
+            let shared = new_shared_heap();
+            let instance = crate::Instance::default();
+            let mut driver = GcDriver::acquire(&shared).expect("the carrier's driver is free");
+            let heap = shared.clone();
+            driver.mutate(&instance, |_cx| {
+                let mut gc = GcController::from_env();
+                gc.collect(&mut heap.borrow_mut(), &[&TestRoots::default()], false);
+            });
         }
 
         #[test]

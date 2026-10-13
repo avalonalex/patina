@@ -13,12 +13,14 @@
 //! - `event`, the events posted from anywhere else: signal handlers, timers,
 //!   profilers, and later other carriers.
 //!
-//! **Rust's words.** Two words in the line's spare bytes are read by Rust
-//! alone, never by generated code (#702):
+//! **Rust's words.** Three words in the line's spare bytes are read by Rust
+//! alone, never by generated code:
 //! - `no_gc_depth`, the open [`NoGcScope`](crate::NoGcScope)s: nested
-//!   entries and holders, beneath which nothing collects;
+//!   entries and holders, beneath which nothing collects (#702);
 //! - `driver_out`, whether the carrier's [`GcDriver`](crate::GcDriver), the
-//!   capability to collect, is held.
+//!   capability to collect, is held (#702);
+//! - `live_cx`, the live [`Cx`](crate::Cx)s, counted in check builds, where
+//!   every collection asserts there are none (#703).
 //!
 //! **Reserved words.** The rest stay zero until the stage that needs each:
 //! - the allocation buffer, `ap` and `alloc_limit`, at 5a;
@@ -130,6 +132,9 @@ pub struct Mutator {
     /// 0x78. Whether the carrier's [`GcDriver`](crate::GcDriver) is held:
     /// one per carrier (C2). Rust's alone.
     driver_out: Cell<bool>,
+    /// 0x7C. The live [`Cx`](crate::Cx)s, counted in check builds only
+    /// ([`GC_CHECK`](crate::GC_CHECK)). Rust's alone.
+    live_cx: Cell<u32>,
 }
 
 // The ABI (§14): each offset, the size and the alignment, checked as the
@@ -156,6 +161,7 @@ const _: () = {
     assert!(offset_of!(Mutator, handshake) == 0x70);
     assert!(offset_of!(Mutator, no_gc_depth) == 0x74);
     assert!(offset_of!(Mutator, driver_out) == 0x78);
+    assert!(offset_of!(Mutator, live_cx) == 0x7C);
     assert!(size_of::<Mutator>() == 0x80);
     assert!(align_of::<Mutator>() == 128);
 };
@@ -192,6 +198,7 @@ impl Mutator {
             handshake: AtomicU32::new(0),
             no_gc_depth: Cell::new(0),
             driver_out: Cell::new(false),
+            live_cx: Cell::new(0),
         }
     }
 
@@ -279,6 +286,28 @@ impl Mutator {
     /// Give the carrier's driver back.
     pub(crate) fn return_driver(&self) {
         self.driver_out.set(false);
+    }
+
+    /// The live [`Cx`](crate::Cx)s, in a check build; zero otherwise.
+    #[inline]
+    pub fn live_cx(&self) -> u32 {
+        self.live_cx.get()
+    }
+
+    /// A `Cx` was made, in a check build.
+    #[inline]
+    pub(crate) fn enter_cx(&self) {
+        if crate::GC_CHECK {
+            self.live_cx.set(self.live_cx.get() + 1);
+        }
+    }
+
+    /// A `Cx` was dropped, in a check build.
+    #[inline]
+    pub(crate) fn exit_cx(&self) {
+        if crate::GC_CHECK {
+            self.live_cx.set(self.live_cx.get() - 1);
+        }
     }
 }
 
