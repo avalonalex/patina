@@ -134,9 +134,10 @@ machinery, so this is port substitution, not an evaluator change.
 session's own evaluator against the paused environment. Two constraints from the hook
 layer: firing is suppressed while inside the hook by the dispatcher's `try_borrow_mut`
 guard (hook doc §5.2), so the debugger cannot recurse into its own breakpoints; and no
-GC runs for the duration of a pause, because the re-entrant `eval_in_env` is not the
-outermost extent (hook doc §5.2). A pause that evaluates a few expressions is fine; a
-client that evaluates in a loop while paused would grow the heap.
+GC runs for the duration of a pause, because the re-entrant `eval_in_env` is nested: it
+has no `GcDriver` and runs under a `NoGcScope`, which K16 counts as a deferral window
+(hook doc §5.2). A pause that evaluates a few expressions is fine; a client that evaluates
+in a loop while paused would grow the heap.
 
 **Backend portability guardrail** (hook doc §10): the session and everything above it
 consume events at the *semantic* level — statement/call/return/mutation/raise — and

@@ -456,7 +456,7 @@ pub(super) struct SharedCounts {
     /// then (#648): the start of the wait that K16's first high-water mark
     /// and the time to safepoint measure. Taken by the collection.
     pub(super) posted: Cell<Option<(usize, std::time::Instant)>>,
-    /// The site of the deferral window open now (`Heap::enter_gc_defer`),
+    /// The site of the deferral window open now (`NoGcScope::enter`),
     /// mirrored here so that a post with no heap to hand sees it.
     pub(super) open_window: Cell<Option<&'static std::panic::Location<'static>>>,
     /// The first deferral window that held the collection pending now:

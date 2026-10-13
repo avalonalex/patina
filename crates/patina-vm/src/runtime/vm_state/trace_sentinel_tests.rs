@@ -175,7 +175,7 @@ fn every_vm_state_root_is_traced() {
         fs: Arc::new(patina_core::NativeFs),
         gc: RefCell::new(GcController::from_env()),
         mutator,
-        loop_collects: false,
+        driver: None,
     };
 
     collect(&state);

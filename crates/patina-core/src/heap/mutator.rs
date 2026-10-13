@@ -13,6 +13,13 @@
 //! - `event`, the events posted from anywhere else: signal handlers, timers,
 //!   profilers, and later other carriers.
 //!
+//! **Rust's words.** Two words in the line's spare bytes are read by Rust
+//! alone, never by generated code (#702):
+//! - `no_gc_depth`, the open [`NoGcScope`](crate::NoGcScope)s: nested
+//!   entries and holders, beneath which nothing collects;
+//! - `driver_out`, whether the carrier's [`GcDriver`](crate::GcDriver), the
+//!   capability to collect, is held.
+//!
 //! **Reserved words.** The rest stay zero until the stage that needs each:
 //! - the allocation buffer, `ap` and `alloc_limit`, at 5a;
 //! - the barrier's words, `meta_bias`, `remset_cur` and `remset_soft`, at 7;
@@ -117,6 +124,12 @@ pub struct Mutator {
     quiesce_epoch: u64,
     /// 0x70. Reserved (C10): the stop-the-world handshake under N carriers.
     handshake: AtomicU32,
+    /// 0x74. The open [`NoGcScope`](crate::NoGcScope)s. A collection runs
+    /// only at depth 0 (`PRD/GC_PRD.md` §11.3). Rust's alone.
+    no_gc_depth: Cell<u32>,
+    /// 0x78. Whether the carrier's [`GcDriver`](crate::GcDriver) is held:
+    /// one per carrier (C2). Rust's alone.
+    driver_out: Cell<bool>,
 }
 
 // The ABI (§14): each offset, the size and the alignment, checked as the
@@ -141,6 +154,8 @@ const _: () = {
     assert!(offset_of!(Mutator, fenced_ap) == 0x60);
     assert!(offset_of!(Mutator, quiesce_epoch) == 0x68);
     assert!(offset_of!(Mutator, handshake) == 0x70);
+    assert!(offset_of!(Mutator, no_gc_depth) == 0x74);
+    assert!(offset_of!(Mutator, driver_out) == 0x78);
     assert!(size_of::<Mutator>() == 0x80);
     assert!(align_of::<Mutator>() == 128);
 };
@@ -175,6 +190,8 @@ impl Mutator {
             fenced_ap: 0,
             quiesce_epoch: 0,
             handshake: AtomicU32::new(0),
+            no_gc_depth: Cell::new(0),
+            driver_out: Cell::new(false),
         }
     }
 
@@ -224,6 +241,44 @@ impl Mutator {
     pub(crate) fn collected(&self) {
         self.pending.set(self.pending.get() & !event::GC);
         self.set_limit(Self::NO_LIMIT);
+    }
+
+    /// The open [`NoGcScope`](crate::NoGcScope)s: zero where a collection
+    /// may run.
+    #[inline]
+    pub fn no_gc_depth(&self) -> u32 {
+        self.no_gc_depth.get()
+    }
+
+    /// A `NoGcScope` opened: the depth before it.
+    pub(crate) fn enter_no_gc(&self) -> u32 {
+        let depth = self.no_gc_depth.get();
+        self.no_gc_depth.set(depth + 1);
+        depth
+    }
+
+    /// A `NoGcScope` closed: the depth after it. Checked in every build, not
+    /// only in check builds: it runs once per scope, off every hot path, and
+    /// a release build that underflowed here would wrap to `u32::MAX` and
+    /// never collect again, with no report.
+    pub(crate) fn exit_no_gc(&self) -> u32 {
+        let depth = self.no_gc_depth.get();
+        assert!(
+            depth > 0,
+            "unbalanced GC defer: exit without a matching enter"
+        );
+        self.no_gc_depth.set(depth - 1);
+        depth - 1
+    }
+
+    /// Take the carrier's [`GcDriver`](crate::GcDriver): whether it was free.
+    pub(crate) fn take_driver(&self) -> bool {
+        !self.driver_out.replace(true)
+    }
+
+    /// Give the carrier's driver back.
+    pub(crate) fn return_driver(&self) {
+        self.driver_out.set(false);
     }
 }
 

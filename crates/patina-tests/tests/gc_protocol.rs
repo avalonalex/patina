@@ -14,6 +14,10 @@
 //! check reports them ignored. The core-level controls for the rest of the
 //! protocol (the depth at collection, a holder's extent, the defer balance)
 //! are `patina-core`'s `heap::gc::tests::protocol`.
+//!
+//! The last test here is no control but the collect capability's rule at a
+//! backend's entry (#702): a run beneath the carrier's driver, held further
+//! out, is nested and never collects.
 
 // The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
 #![allow(deprecated)]
@@ -21,7 +25,7 @@
 mod common;
 
 use common::{tree_walker_interpreter, vm_interpreter};
-use patina_core::AssertNoGc;
+use patina_core::{AssertNoGc, GcDriver};
 use patina_interpreter::Interpreter;
 use patina_runtime::Backend;
 
@@ -68,6 +72,35 @@ fn a_poll_after_the_window_closes_passes() {
         drop(AssertNoGc::new(env.heap()));
         let value = interp.eval_program("(+ 1 2)").expect("evaluate");
         assert_eq!(value, patina_core::TaggedValue::fixnum(3));
+    }
+    run(vm_interpreter());
+    run(tree_walker_interpreter());
+}
+
+/// The collect capability (#702): only the run that holds the carrier's
+/// driver collects. With the driver held further out, as an outer driver
+/// entry holds it, a run is nested: its `(gc)` is posted and counted, not
+/// run. The first run after the driver goes back collects.
+#[test]
+fn a_run_beneath_a_held_driver_never_collects() {
+    fn run<B: Backend>(interp: Interpreter<B>) {
+        let heap = interp.global_env().heap().clone();
+        let counts = || {
+            let h = heap.borrow();
+            (h.gc_collections(), h.gc_deferred_collections())
+        };
+        interp
+            .eval_program_owned("(import (scheme base) (patina debug))")
+            .expect("import");
+        let driver = GcDriver::acquire(&heap).expect("free between evaluations");
+        let (collections, deferred) = counts();
+        interp.eval_program_owned("(gc)").expect("evaluate");
+        assert_eq!(counts(), (collections, deferred + 1), "posted and counted");
+        drop(driver);
+        interp.eval_program_owned("(gc)").expect("evaluate");
+        let (after, deferred_after) = counts();
+        assert!(after > collections, "collected once the driver went back");
+        assert_eq!(deferred_after, deferred + 1, "nothing more deferred");
     }
     run(vm_interpreter());
     run(tree_walker_interpreter());

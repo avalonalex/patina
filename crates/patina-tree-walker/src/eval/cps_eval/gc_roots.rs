@@ -16,7 +16,7 @@
 //!
 //! Everything else the tree-walker keeps on the Rust stack (suspended outer
 //! `StepResult`s in nested trampolines, primitive argument vectors) is handled
-//! by deferral, not tracing — see `GcDeferGuard` and §7.
+//! by deferral, not tracing — see `NoGcScope` and §7.
 //!
 //! Every value is reported pinned, by copy: the tree-walker's heaps never move
 //! (`PRD/GC_PRD.md` §11.4), so no slot would ever be updated (#682). Each

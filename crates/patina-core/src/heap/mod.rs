@@ -510,24 +510,13 @@ pub struct Heap {
     /// `GcVisitor::new`, beside the intern tables.
     handles: Rc<HandleTable>,
 
-    /// Nesting depth of scopes that hold live values unreachable from any
-    /// registered root (nested trampolines, library-body loops). Collection
-    /// is only legal at the outermost level — see `docs/GC_DESIGN.md` §7.
-    gc_defer_depth: u32,
-
-    /// How many of those scopes are holders' (`GcDeferGuard::holding`)
-    /// rather than loops' (`GcDeferGuard::new`), so that a collection at a
-    /// call can tell the one guard of the outermost loop from a holder's
-    /// alone ([`Heap::gc_defer_is_one_loop`]).
-    gc_defer_holders: u32,
-
     /// Open `AssertNoGc` scopes: windows that must not reach a GC poll
     /// (`gc::AssertNoGc`, #624). Counted in check builds only
     /// (`GC_CHECK`), and asserted zero at every poll site. Shared through an
     /// `Rc<Cell>`, as the carrier is through an `Rc`, so a scope opens and
     /// closes without a heap borrow and a dispatch loop hoists the handle
     /// out of its loop.
-    no_gc_scopes: Rc<Cell<u32>>,
+    open_assert_no_gc: Rc<Cell<u32>>,
 
     /// Collections performed, and slots reclaimed by the last one. Recorded
     /// by `sweep` so `(gc-stats)` can report real collector activity without
@@ -702,9 +691,7 @@ impl Heap {
             gc_freed_closure_code_ids: None,
             telemetry,
             handles,
-            gc_defer_depth: 0,
-            gc_defer_holders: 0,
-            no_gc_scopes: Rc::new(Cell::new(0)),
+            open_assert_no_gc: Rc::new(Cell::new(0)),
             gc_collections: 0,
             gc_last_swept: 0,
             gc_deferred_collections: 0,
@@ -884,61 +871,6 @@ impl Heap {
             .as_mut()
             .map(std::mem::take)
             .unwrap_or_default()
-    }
-
-    /// Depth of active GC-deferring scopes. A backend safe point may only
-    /// collect when this is at its own baseline — see `docs/GC_DESIGN.md` §7
-    /// and [`GcDeferGuard`](crate::GcDeferGuard).
-    pub fn gc_defer_depth(&self) -> u32 {
-        self.gc_defer_depth
-    }
-
-    /// Whether the one GC-deferring scope alive is a loop's own guard: the
-    /// defer depth is 1, and that guard is no holder's. Every dispatch loop
-    /// and trampoline takes a guard at entry, so this is the outermost loop
-    /// polling with nothing deferring under it, where a collection at a call
-    /// may run (`GcController::collect_at_call`, #639).
-    pub fn gc_defer_is_one_loop(&self) -> bool {
-        self.gc_defer_depth == 1 && self.gc_defer_holders == 0
-    }
-
-    /// `site`: where the guard was taken. A guard that makes the heap defer
-    /// where it did not — one other than the running loop's own — opens a
-    /// deferral window, whose bytes K16's second high-water mark measures
-    /// (#648).
-    pub(crate) fn enter_gc_defer(
-        &mut self,
-        holder: bool,
-        site: &'static std::panic::Location<'static>,
-    ) {
-        let deferred = self.defers_collection();
-        self.gc_defer_depth += 1;
-        self.gc_defer_holders += u32::from(holder);
-        if !deferred && self.defers_collection() {
-            self.open_deferral_window(site);
-        }
-    }
-
-    /// Whether a guard other than the running loop's own is alive: a nested
-    /// loop, or a holder's guard. Neither lets a collection run.
-    fn defers_collection(&self) -> bool {
-        self.gc_defer_depth >= 2 || self.gc_defer_holders > 0
-    }
-
-    /// Checked in every build, not only check builds: it runs once per guard
-    /// drop, off every hot path, and a release build that underflowed here
-    /// would wrap to `u32::MAX` and never collect again, with no report.
-    pub(crate) fn exit_gc_defer(&mut self, holder: bool) {
-        assert!(
-            self.gc_defer_depth > 0,
-            "unbalanced GC defer: exit without a matching enter"
-        );
-        let deferred = self.defers_collection();
-        self.gc_defer_depth -= 1;
-        self.gc_defer_holders -= u32::from(holder);
-        if deferred && !self.defers_collection() {
-            self.close_deferral_window();
-        }
     }
 
     /// Collections performed against this heap.

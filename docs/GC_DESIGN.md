@@ -469,9 +469,10 @@ in `VmApplyContext` callbacks): **not rooted — handled by safe-point
 placement + deferral (§7).** The environments `with_globals` sets aside were
 one, until #677 moved them onto the traced `saved_globals`.
 
-**Implementation note (stage 3):** every dispatch loop takes a
-`GcDeferGuard`, so any nested `run_loop_until` — reached via `execute_nested`,
-a re-entrant primitive, or `eval` — is deferred by construction. `with_globals`
+**Implementation note (stage 3):** every nested dispatch loop runs with no
+driver, under a `NoGcScope` (§7, #702), so any nested `run_loop_until` —
+reached via `execute_nested`, a re-entrant primitive, or `eval` — is deferred
+by construction. `with_globals`
 restores the original environment on every returned result, including
 transfer errors; it deferred across each substitution until #677 traced the
 environments it sets aside.
@@ -480,8 +481,9 @@ Library loading is the case that needed more. The predicate is **"does this
 Rust frame hold heap values that must survive across an evaluation call?"** —
 *not* which entry point it uses. `execute` versus `execute_nested` is a red
 herring: `vm_evaluate_parsed_library` calls `execute_nested` and still needed
-deferral, because `run_loop_until` guards unconditionally, so a nested call
-reached from outside any dispatch loop is equally "outermost".
+deferral, because a loop then decided by the guards alive whether it was
+outermost, so a nested call reached from outside any dispatch loop was
+equally "outermost". Since #702 a nested entry never is: it has no driver.
 
 Three code paths evaluate a `ParsedLibrary` (VM backend, VM state,
 tree-walker), each a near-copy of the others, and when the guard lived at the
@@ -905,15 +907,15 @@ A collection is posted through one helper, `SharedCounts::raise_pending`,
 which, when none is posted yet, notes the time and the bytes charged: once
 per collection cycle, so a post that stands while a deferred region
 allocates costs nothing more. A **deferral window** is the extent in which a
-guard other than the running loop's own is alive — a nested loop's or a
-holder's — where nothing may collect; `GcDeferGuard::new` and `holding` take
-their caller's location (`#[track_caller]`), and the window keeps the
-location of the guard that opened it. From these `(gc-stats)` reports
+`NoGcScope` is open — a nested entry's or a holder's — where nothing may
+collect (§7); `NoGcScope::enter` and `GcDeferGuard::holding` take their
+caller's location (`#[track_caller]`), and the window keeps the location of
+the scope that opened it. From these `(gc-stats)` reports
 `last-pause-us`, `pause-max-us`, `pause-total-us` and `mmu-10ms`; K16's two
 high-water marks (`PRD/GC_PRD.md` §20): `wait-max-bytes`, the most bytes
 allocated between a collection being posted and its start, with
 `wait-site`, the first window that held it, and `deferral-max-bytes`, the
-most bytes allocated inside one window, with `deferral-site`, its guard;
+most bytes allocated inside one window, with `deferral-site`, its opener;
 `wait-max-us`, the time to safepoint (C12); and the process's
 `resident-bytes` and `cpu-us`. The MMU is kept for windows of 1–100 ms from
 every pause, evaluating the windows that end at a pause's end and those that
@@ -990,33 +992,33 @@ placement + deferral:
      2026-09-10). The entire machine state is `current_step`, which the
      safe point passes as a transient root along with the `expr` the
      trampoline was entered with (its literals stay live for the call).
-2. **`gc_defer_depth` counter** on the shared heap, managed by the
-   `GcDeferGuard` RAII type so early returns and `?` propagation cannot leak
-   an increment.
+2. **Who may collect** (#702, `PRD/GC_PRD.md` §11.3): the holder of the
+   carrier's `GcDriver`, and only at depth 0, with no `NoGcScope` open.
+   - **The driver.** `GcController::safe_point` and `collect_at_call` take a
+     `GcDriver`, so a loop without one cannot reach a collection. There is
+     one per carrier (C2): the `Mutator` marks it held, and
+     `GcDriver::acquire` answers `None` while it is. The driver entries take
+     it: the VM's `execute` and `execute_in`, which lend it to the loop they
+     run (`VmState::driver`); the tree-walker's run of a form, which keeps it
+     in a local; and both loaders' point B (`collect_if_pending`). An entry
+     that finds it held runs beneath another driver, and is nested.
+   - **`NoGcScope`.** Every other entry into a loop is nested and passes no
+     driver: the VM's `execute_nested` and `run_apply_proc`, the
+     tree-walker's callback runs, and a form's run beneath another run. A
+     nested entry runs under a `NoGcScope`, a guard that raises the
+     `Mutator`'s `no_gc_depth` for its extent and opens K16's deferral window
+     (§6); a VM nested loop also hides the driver of the loop it runs in. A
+     collection runs only at depth 0, so a scope stops even the driver from
+     collecting beneath it.
+   - **By construction.** A nested trampoline or dispatch loop defers
+     whatever route reached it — a higher-order primitive, `eval`,
+     quasiquote — rather than relying on someone having remembered to guard
+     that route.
 
-   The tree-walker takes a guard **on every trampoline entry** (`run_trampoline`,
-   whether entered for a form or for a primitive's callback) rather than
-   instrumenting each re-entrant call site. This inverts the failure mode: a nested trampoline is deferred
-   *by construction* (whatever route reached it — a higher-order primitive,
-   `eval`, quasiquote), instead of relying on someone having remembered to
-   guard that route.
-
-   The VM does the same: every dispatch loop, outermost or nested, takes a
-   guard at entry (`run_loop_until_outcome`). So on both backends the
-   outermost loop runs at defer depth 1, under its own guard alone.
-
-   A safe point asks **its own guard** — `GcDeferGuard::is_outermost()`, true
-   when nothing was deferring at the moment it was taken — once, at loop
-   entry, and hoists the answer out of the loop. That is not the whole rule:
-   a guard that a callee takes later and keeps past its instruction does not
-   change a hoisted answer. So the depth is checked as well when a collection
-   runs. `GcController::safe_point` asserts it is 1 in check builds (#624),
-   and a collection at a call (below), which runs inside an instruction or a
-   step and is handed no guard, requires it.
-
-   Additional guards cover Rust-side scopes that hold values across an
-   evaluation call. These are holders' guards (`GcDeferGuard::holding`),
-   which the heap counts apart from the depth:
+   Holders' guards cover Rust-side scopes that hold values across an
+   evaluation call. A holder's guard (`GcDeferGuard::holding`) is a
+   `NoGcScope` that also checks, in check builds, that no collection ran
+   inside it:
    - library loading's `ParsedLibrary`, which holds a library's unevaluated
      body (`patina-runtime/src/library_loader.rs`) until it hands the body to
      the load's registry entry (#677). Its forms are TaggedValues no root
@@ -1026,9 +1028,6 @@ placement + deferral:
      being loaded by the backend outside it; and each method of the
      tree-walker's detached `ApplyContext for Evaluator`. The VM's globals-swap window (`VmState::with_globals`) was
      one until #677 traced what it sets aside.
-
-   The nested runs themselves (`execute_nested`, a primitive's callback) are
-   loops, and take a loop's guard.
 
    The tree-walker safe point additionally refuses to collect when
    `library_registry` is already mutably borrowed: rooting must walk it, and
@@ -1056,19 +1055,14 @@ instruction:
   the top of its loop with that step and the run's entry expression as roots
   (`StepRoots`), then invokes the continuation with whether it collected.
 
-Both go through `GcController::collect_at_call`, a poll site like a safe
-point. It asserts that no `AssertNoGc` scope is open. It collects only when
-the one guard alive is a loop's (`Heap::gc_defer_is_one_loop`: the defer
-depth at 1, and no holder's guard). Since every loop takes a guard, that is
-the running loop's own guard, the outermost. This is what `is_outermost`
-answers at a safe point, asked of the heap because this poll runs inside an
-instruction or a step. A host that holds values under a holder's guard alone,
-outside any loop, gets the collection posted rather than run inside the
-holder's extent. It collects in every mode, `PATINA_GC=0` included. Anywhere
-else it posts the collection (`Heap::defer_collection`), which the next safe
-point that may collect runs, and counts it in `deferred-collections`; so does
-a collection whose roots are unavailable (a library load holding the
-registry).
+Both go through `GcController::collect_at_call` with the running loop's
+driver, a poll site like a safe point. It asserts that no `AssertNoGc` scope
+is open, and collects only at depth 0, in every mode, `PATINA_GC=0` included.
+A nested loop has no driver, and posts through `GcController::post_at_call`.
+Anywhere else it posts the collection (`Heap::defer_collection`), which the
+next safe point that may collect runs, and counts it in
+`deferred-collections`; so does a collection whose roots are unavailable (a
+library load holding the registry).
 
 `ephemerons.rs` breaks a dead key right after `(gc)` on both backends:
 
@@ -1096,42 +1090,41 @@ The mitigation path (stage 5+) is to root the re-entrancy boundary explicitly
 collect; the `RootProvider` trait already accommodates this (lent providers).
 
 **Backend coexistence:** both backends share one `SharedHeap` in mixed
-scenarios. The deferral rule generalizes: whichever backend is *outermost*
-owns the safe point; any nested execution (either backend) runs at
-`gc_defer_depth > 0` and never collects. This replaces P6's blunter
-"GC runs only from the VM driver" rule.
+scenarios. The rule generalizes: the run that holds the carrier's driver
+owns the safe point; any nested execution (either backend) runs under a
+`NoGcScope` and never collects. This replaces P6's blunter "GC runs only from
+the VM driver" rule.
 
 **Asserted, not only argued (#624).** Until #624 the protocol above was held
 by comments. Each part is now checked in check builds (`heap::GC_CHECK`:
 debug, or release with `gc-check`). A plain release build compiles none of
 these checks except the defer balance, which every build checks.
 
-- *A collection runs under exactly one guard.* `GcController::safe_point`
-  asserts that the defer depth is 1 when it collects: the collecting loop's
-  own guard and no other. A loop reads `is_outermost` once, at entry, so
-  without this a guard that a callee took and kept past its instruction would
-  not stop the running loop from collecting under it.
+- *A collection runs at depth 0.* `GcController::collect`, which every
+  collection passes through, asserts that no `NoGcScope` is open (#702).
+  Every path into it asks the depth first; the assertion catches one that
+  does not, and zeal reaches it at every poll site.
 - *A holder sees no collection.* A Rust scope or value that keeps heap values
-  across a call that can evaluate takes `GcDeferGuard::holding` instead of
-  `new`: `ParsedLibrary` (whose constructor now requires the heap, so it
-  cannot be built without its guard) and `Desugarer::desugar_with_imports`;
+  across a call that can evaluate takes `GcDeferGuard::holding`:
+  `ParsedLibrary` (whose constructor now requires the heap, so it cannot be
+  built without its guard) and `Desugarer::desugar_with_imports`;
   `VmState::with_globals` too, until #677. The guard records the heap's
-  collection count, and
-  its drop panics if the count moved. Every loop entered under a holder is
-  nested today, so it cannot fire yet; once stage 4e lets nested loops
-  collect, the first that does under a holder fails at the holder rather than
-  freeing what it holds. It does not reach the values a primitive holds
-  across `ApplyContext::apply_proc`, which takes no guard of its own.
-- *The defer balance* (`Heap::exit_gc_defer`) is an `assert!` in **every**
+  collection count, and its drop panics if the count moved. Its scope keeps
+  every collection out of its extent, so it cannot fire yet; once stage 4e
+  lets nested loops collect, the first that does under a holder fails at the
+  holder rather than freeing what it holds. It does not reach the values a
+  primitive holds across `ApplyContext::apply_proc`, which takes no guard of
+  its own.
+- *The scopes' balance* (`Mutator::exit_no_gc`) is an `assert!` in **every**
   build: in release an underflow would wrap the depth and end collection with
   no report.
 - *No-collection windows.* A stretch whose soundness rests on reaching no safe
   point, rather than on a root, is covered by an `AssertNoGc` scope: a depth
   counter on the heap. Every dispatch loop and trampoline checks at its poll
-  that no scope is open (`NoGcScopes::assert_none_open`), before
+  that no scope is open (`AssertNoGcCount::assert_none_open`), before
   `maybe_collect` and on every iteration, nested or not. Inside `safe_point`
   the check would almost never run, since it returns at once unless a
-  collection is pending and the loop is outermost. The VM's windows:
+  collection is pending and the loop holds the driver. The VM's windows:
   - a continuation's capture to its weak-store entry
     (`alloc_vm_continuation`, `alloc_vm_delimited_continuation`), under the
     weak-table rule in `gc_roots.rs`, and on to the write of its handle
@@ -1282,10 +1275,11 @@ pseudo-terminal test allows the one call into libc. Once stage 3 brands values
 (`Value<'gc>`), turning a raw word into one is a `pub unsafe fn`, so a crate
 that cannot write `unsafe` cannot do it.
 
-These checks detect violations on today's collector. The redesign replaces
-them with `NoGcScope` and the collect capability at stage 3, where a nested
-entry cannot collect by type, and stage 4e deletes the weak continuation
-tables and with them the first two VM windows (`PRD/GC_PRD.md`).
+These checks detect violations on today's collector. Stage 3 brought the
+collect capability and `NoGcScope` (#702): a nested entry has no driver, so it
+cannot reach a collection, and the depth backs that at run time. Stage 4e
+deletes the weak continuation tables, and with them the first two VM windows
+(`PRD/GC_PRD.md`).
 
 ---
 

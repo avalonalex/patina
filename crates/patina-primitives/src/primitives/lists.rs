@@ -440,8 +440,8 @@ pub(super) fn member(
             #[expect(
                 clippy::disallowed_methods,
                 reason = "holds `obj`, `compare_proc` and the list cursor across each comparator \
-                          call. Deferred: under a machine, by the dispatching loop's \
-                          GcDeferGuard, whose nested run cannot collect; on the tree-walker's \
+                          call. Deferred: under a machine, by the nested run's `NoGcScope`, \
+                          which has no driver and cannot collect; on the tree-walker's \
                           detached `ApplyContext for Evaluator`, by that context's \
                           `GcDeferGuard::holding`. Reached only by importing `(patina internal \
                           lists)`: the `(scheme base)` `member` calls its comparator as a frame \
@@ -596,8 +596,8 @@ pub(super) fn assoc(
                 #[expect(
                     clippy::disallowed_methods,
                     reason = "holds `obj`, `compare_proc` and the alist cursor across each \
-                              comparator call. Deferred: under a machine, by the dispatching \
-                              loop's GcDeferGuard, whose nested run cannot collect; on the \
+                              comparator call. Deferred: under a machine, by the nested run's \
+                              `NoGcScope`, which has no driver and cannot collect; on the \
                               tree-walker's detached `ApplyContext for Evaluator`, by that \
                               context's `GcDeferGuard::holding`. Reached only by importing \
                               `(patina internal lists)`: the `(scheme base)` `assoc` calls its \

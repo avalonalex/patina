@@ -435,7 +435,8 @@ pub fn cpu_micros() -> Option<u64> {
 }
 
 impl super::Heap {
-    /// A guard other than the running loop's own was taken at `site`.
+    /// The first [`NoGcScope`](crate::NoGcScope) opened, at `site`: a
+    /// nested entry's or a holder's.
     pub(super) fn open_deferral_window(&mut self, site: &'static Location<'static>) {
         let allocated = self.bytes_allocated();
         self.telemetry.open_window(allocated, site);
@@ -447,7 +448,7 @@ impl super::Heap {
         }
     }
 
-    /// The last such guard dropped.
+    /// The last `NoGcScope` closed.
     pub(super) fn close_deferral_window(&mut self) {
         let allocated = self.bytes_allocated();
         self.telemetry.close_window(allocated);

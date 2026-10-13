@@ -35,8 +35,8 @@ disallowed-methods = [
 
     # patina-vm: the driver loop, the re-entry boundary and library loading
     { path = "patina_vm::runtime::control::across_reentry", reason = "re-enters the VM; give what the caller holds across it in an `expect` (#622)" },
-    { path = "patina_vm::runtime::vm_state::execute", reason = "runs the VM's dispatch loop, outermost when nothing else runs, so it may collect; give the reason in an `expect` (#622)" },
-    { path = "patina_vm::runtime::vm_state::execute_in", reason = "runs the VM's dispatch loop, outermost when nothing else runs, so it may collect; give the reason in an `expect` (#622)" },
+    { path = "patina_vm::runtime::vm_state::execute", reason = "runs the VM's dispatch loop, with the carrier's driver unless another run holds it, so it may collect (#702); give the reason in an `expect` (#622)" },
+    { path = "patina_vm::runtime::vm_state::execute_in", reason = "runs the VM's dispatch loop, with the carrier's driver unless another run holds it, so it may collect (#702); give the reason in an `expect` (#622)" },
     { path = "patina_vm::runtime::vm_state::execute_nested", reason = "runs the VM's dispatch loop; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_vm::runtime::vm_state::run_loop_until", reason = "runs the VM's dispatch loop; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_vm::runtime::vm_state::run_loop_until_outcome", reason = "runs the VM's dispatch loop; give what the caller holds across it in an `expect` (#622)" },
