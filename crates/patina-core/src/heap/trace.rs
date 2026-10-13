@@ -35,7 +35,7 @@ use crate::scope::{ScopeId, ScopeSet};
 ///   program's recursion, does not grow the native stack;
 /// - a type's `#[trace(grows_stack_if = method)]` makes sure of the stack
 ///   before each level whose `method` says it nests, as every walk of code
-///   does: a macro's patterns and templates.
+///   does, for a tree that recurses into itself by value.
 ///
 /// The leaves are the slot visitor's:
 /// - [`TaggedValue`], pinned: a copy, whose referent nothing moves before
@@ -334,7 +334,6 @@ impl<A: Trace, B: Trace, C: Trace> Trace for (A, B, C) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiled_macro::Pattern;
     use crate::cont_value::{ContValue, ExceptionHandler};
 
     /// Counts the values it is given, and is given nothing else.
@@ -400,22 +399,46 @@ mod tests {
         assert_eq!(traced, 2 * LINKS);
     }
 
-    /// A macro's pattern traces as deep as it nests, growing the stack where
-    /// it does (`#[trace(grows_stack_if = is_nested)]`, #617): one nested
-    /// 100,000 deep traces on a 128 KiB stack. This test overflows if the
-    /// attribute is taken off.
+    /// A tree that recurses into itself by value, as a macro's patterns and
+    /// templates did until their literals moved to the macro object (#718).
+    #[derive(patina_trace_derive::Trace)]
+    #[trace(grows_stack_if = is_nested)]
+    enum Tree {
+        Leaf(TaggedValue),
+        Node(Vec<Tree>),
+    }
+
+    impl Tree {
+        fn is_nested(&self) -> bool {
+            matches!(self, Tree::Node(_))
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            // A level at a time, as `Pattern`'s (#617).
+            if self.is_nested() && !crate::walk::has_stack_room() {
+                crate::walk::drop_deep(std::mem::replace(self, Tree::Leaf(TaggedValue::NULL)));
+            }
+        }
+    }
+
+    /// A tree traces as deep as it nests, growing the stack where it does
+    /// (`#[trace(grows_stack_if = is_nested)]`, #617): one nested 100,000
+    /// deep traces on a 128 KiB stack. This test overflows if the attribute
+    /// is taken off.
     #[test]
-    fn a_deep_pattern_is_traced_on_a_small_stack() {
+    fn a_deep_tree_is_traced_on_a_small_stack() {
         const DEPTH: usize = 100_000;
         let traced = std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let mut pattern = Pattern::Literal(TaggedValue::fixnum(1));
+                let mut tree = Tree::Leaf(TaggedValue::fixnum(1));
                 for _ in 0..DEPTH {
-                    pattern = Pattern::List(vec![pattern]);
+                    tree = Tree::Node(vec![tree]);
                 }
                 let mut count = Count::default();
-                pattern.trace(&mut count);
+                tree.trace(&mut count);
                 count.0
             })
             .expect("the thread starts")

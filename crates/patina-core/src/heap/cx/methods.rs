@@ -84,8 +84,15 @@ impl<'gc> Cx<'gc> {
     }
 
     /// [`Heap::alloc_macro`](crate::Heap::alloc_macro) on this context's heap.
-    pub fn alloc_macro(&mut self, mac: Rc<crate::compiled_macro::CompiledMacro>) -> Value<'gc> {
-        let r = self.heap.borrow_mut().alloc_macro(mac);
+    pub fn alloc_macro(
+        &mut self,
+        body: Rc<crate::compiled_macro::CompiledMacro>,
+        literals: Vec<Value<'gc>>,
+    ) -> Value<'gc> {
+        let r = self
+            .heap
+            .borrow_mut()
+            .alloc_macro(body, literals.into_iter().map(Value::tagged).collect());
         self.brand(r)
     }
 

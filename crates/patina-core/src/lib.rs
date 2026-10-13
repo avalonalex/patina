@@ -72,7 +72,7 @@ pub mod vfs;
 pub mod walk;
 
 // Re-export main types for convenience
-pub use compiled_macro::{CompiledMacro, CompiledRule, Identifier, Pattern, Template};
+pub use compiled_macro::{CompiledMacro, CompiledRule, Identifier, LiteralId, Pattern, Template};
 pub use continuation::{
     CpsContinuation, DynamicWindRecord, WindRecord, next_dynamic_wind_id, next_prompt_id,
 };

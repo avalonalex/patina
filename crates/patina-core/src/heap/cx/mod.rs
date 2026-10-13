@@ -89,7 +89,7 @@ use num_rational::BigRational;
 
 use super::mutator::Mutator;
 use super::{Heap, HeapObjectData, PromiseState};
-use crate::compiled_macro::CompiledMacro;
+use crate::compiled_macro::{CompiledMacro, LiteralId};
 use crate::environment::Environment;
 use crate::error::{ExceptionKind, SourceLocation};
 use crate::instance::Instance;
@@ -264,6 +264,14 @@ impl<'gc> Cx<'gc> {
     /// [`Heap::get_macro`], cloned.
     pub fn get_macro(&self, v: Value<'gc>) -> Option<Rc<CompiledMacro>> {
         self.heap.borrow().get_macro(v.tagged()).cloned()
+    }
+
+    /// The literal `id` of the macro `mac` ([`Heap::macro_literal`]): `None`
+    /// if `mac` is no macro or has no such literal. Sound because `mac` is
+    /// live for `'gc`, and the object it names traces its literals (#718).
+    pub fn macro_literal(&self, mac: Value<'gc>, id: LiteralId) -> Option<Value<'gc>> {
+        let word = self.heap.borrow().macro_literal(mac.tagged(), id)?;
+        Some(self.brand(word))
     }
 
     /// [`Heap::get_port`], cloned.

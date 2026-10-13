@@ -57,7 +57,7 @@ fn test_pattern_ellipsis() {
 
 #[test]
 fn test_template_literal() {
-    let tmpl = Template::Literal(patina_core::TaggedValue::fixnum(42));
+    let tmpl = Template::Literal(patina_core::LiteralId::new(0));
     assert!(tmpl.is_literal());
     assert!(format!("{}", tmpl).contains("literal"));
 }

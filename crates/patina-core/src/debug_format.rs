@@ -502,7 +502,7 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, printer: &
             }
         }
         HeapObjectData::Port(p) => write!(buf, "{}", p).unwrap(),
-        HeapObjectData::Macro(m) => write!(buf, "#<macro:{}>", m.name).unwrap(),
+        HeapObjectData::Macro { body, .. } => write!(buf, "#<macro:{}>", body.name).unwrap(),
         // Reachable from macro-debug output and from the residual cases in
         // `patina-tests/tests/syntax_as_a_value.rs` — a marker no longer
         // survives an ordinary variable reference. Prints its canonical

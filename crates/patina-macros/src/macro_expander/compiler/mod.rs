@@ -34,7 +34,7 @@ use super::utils::ELLIPSIS;
 use crate::error::MacroError;
 use patina_core::walk::OpenNodes;
 use patina_core::{SharedHeap, TaggedValue};
-use patina_runtime::{Environment, PVRef, Pattern, ScopeSet, Template};
+use patina_runtime::{Environment, LiteralId, PVRef, Pattern, ScopeSet, Template};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -111,7 +111,14 @@ pub struct Compiler {
     /// rules, unlike the per-rule context above.
     pub(super) inherited_identifiers: HashMap<Rc<str>, Vec<ScopeSet>>,
 
-    /// Shared heap for converting Value literals to TaggedValue at compile time
+    /// The literals the patterns and templates compiled so far name by
+    /// index, each once, which become the macro object's (#718). Across all
+    /// rules, as `inherited_identifiers` is.
+    pub(super) literals: Vec<TaggedValue>,
+    /// Each literal's index in `literals`.
+    pub(super) literal_ids: HashMap<TaggedValue, LiteralId>,
+
+    /// The heap the forms being compiled live in.
     pub(super) heap: SharedHeap,
 
     /// The pairs and vectors of the pattern or template being compiled that
@@ -152,6 +159,8 @@ impl Compiler {
             max_level: 0,
             quasiquote_depth: 0,
             inherited_identifiers: HashMap::new(),
+            literals: Vec::new(),
+            literal_ids: HashMap::new(),
             heap,
             open: OpenNodes::default(),
         }
@@ -182,6 +191,8 @@ impl Compiler {
             max_level: 0,
             quasiquote_depth: 0,
             inherited_identifiers: HashMap::new(),
+            literals: Vec::new(),
+            literal_ids: HashMap::new(),
             heap,
             open: OpenNodes::default(),
         }
@@ -216,19 +227,30 @@ impl Compiler {
             max_level: 0,
             quasiquote_depth: 0,
             inherited_identifiers: HashMap::new(),
+            literals: Vec::new(),
+            literal_ids: HashMap::new(),
             heap,
             open: OpenNodes::default(),
         }
     }
 
+    /// The id of the literal `form`, which the macro object will hold: each
+    /// word once, however often the rules name it.
+    fn literal_id(&mut self, form: TaggedValue) -> LiteralId {
+        *self.literal_ids.entry(form).or_insert_with(|| {
+            self.literals.push(form);
+            LiteralId::new(self.literals.len() - 1)
+        })
+    }
+
     /// Create a literal pattern from a TaggedValue
-    pub(super) fn make_literal_pattern(&self, form: TaggedValue) -> Pattern {
-        Pattern::Literal(form)
+    pub(super) fn make_literal_pattern(&mut self, form: TaggedValue) -> Pattern {
+        Pattern::Literal(self.literal_id(form))
     }
 
     /// Create a literal template from a TaggedValue
-    pub(super) fn make_literal_template(&self, form: TaggedValue) -> Template {
-        Template::Literal(form)
+    pub(super) fn make_literal_template(&mut self, form: TaggedValue) -> Template {
+        Template::Literal(self.literal_id(form))
     }
 
     /// Compile a complete macro definition
@@ -238,18 +260,21 @@ impl Compiler {
     /// - `rules`: List of (pattern, template) pairs as TaggedValues
     ///
     /// # Returns
-    /// Compiled macro with all rules in PVREF form
+    /// Compiled macro with all rules in PVREF form, and the literals its
+    /// rules name by index, for the macro object (`Heap::alloc_macro`, #718)
     pub fn compile_macro(
         &mut self,
         name: Rc<str>,
         rules: Vec<(TaggedValue, TaggedValue)>,
-    ) -> Result<CompiledMacro, MacroError> {
+    ) -> Result<(CompiledMacro, Vec<TaggedValue>), MacroError> {
         let mut compiled_rules = Vec::new();
         let mut max_pvars = 0;
         // Cleared here as well as taken at the end: a rule that fails to
         // compile returns early, and what its templates had recorded by then
         // would otherwise become the next macro's.
         self.inherited_identifiers.clear();
+        self.literals.clear();
+        self.literal_ids.clear();
 
         for (pat_form, tmpl_form) in rules {
             // Reset per-rule context
@@ -292,14 +317,14 @@ impl Compiler {
         }
 
         let template_symbols = CompiledMacro::collect_template_symbols(&compiled_rules);
-        Ok(CompiledMacro {
+        self.literal_ids.clear();
+        let compiled = CompiledMacro {
             name,
             template_symbols,
             inherited_identifiers: std::mem::take(&mut self.inherited_identifiers),
             rules: compiled_rules,
             max_pvars,
             definition_scopes: self.definition_scopes.clone(),
-            heap: self.heap.clone(),
             // Carry the definition environment so a template's free identifiers
             // can be resolved where the macro was written rather than where it
             // is used. Previously `env` was consulted only as a yes/no predicate
@@ -308,6 +333,7 @@ impl Compiler {
             // Filled in by the desugarer, which knows which expansions are
             // foreign; the compiler does not.
             foreign_expansions: Vec::new(),
-        })
+        };
+        Ok((compiled, std::mem::take(&mut self.literals)))
     }
 }

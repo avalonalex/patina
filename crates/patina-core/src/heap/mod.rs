@@ -231,7 +231,13 @@ pub enum HeapObjectData {
     },
     Procedure(Rc<crate::procedure::Procedure>),
     Port(Rc<crate::port::Port>),
-    Macro(Rc<crate::compiled_macro::CompiledMacro>),
+    /// A `syntax-rules` transformer: its compiled rules, and the literals
+    /// they name by index (`LiteralId`), which this object holds and traces
+    /// so that no `CompiledMacro` holds a word (#718).
+    Macro {
+        body: Rc<crate::compiled_macro::CompiledMacro>,
+        literals: Box<[TaggedValue]>,
+    },
     RecordType(Rc<crate::record_type::RecordTypeDescriptor>),
     Record {
         record_type: Rc<crate::record_type::RecordTypeDescriptor>,
@@ -327,7 +333,7 @@ impl HeapObjectData {
             HeapObjectData::Exception { .. } => HeapObjectType::Exception,
             HeapObjectData::Procedure(_) => HeapObjectType::Procedure,
             HeapObjectData::Port(_) => HeapObjectType::Port,
-            HeapObjectData::Macro(_) => HeapObjectType::Macro,
+            HeapObjectData::Macro { .. } => HeapObjectType::Macro,
             HeapObjectData::RecordType(_) => HeapObjectType::RecordType,
             HeapObjectData::Record { .. } => HeapObjectType::Record,
             HeapObjectData::Identifier { .. } => HeapObjectType::Identifier,
@@ -1175,9 +1181,20 @@ impl Heap {
         self.alloc_object(HeapObjectData::Port(port))
     }
 
-    /// Allocate a native compiled macro
-    pub fn alloc_macro(&mut self, mac: Rc<crate::compiled_macro::CompiledMacro>) -> TaggedValue {
-        self.alloc_object(HeapObjectData::Macro(mac))
+    /// Allocate a macro object: `body`, and the `literals` its patterns and
+    /// templates name by index (#718).
+    pub fn alloc_macro(
+        &mut self,
+        body: Rc<crate::compiled_macro::CompiledMacro>,
+        literals: Vec<TaggedValue>,
+    ) -> TaggedValue {
+        if GC_CHECK {
+            literals.iter().for_each(|&l| check_storable(l, "macro"));
+        }
+        self.alloc_object(HeapObjectData::Macro {
+            body,
+            literals: literals.into_boxed_slice(),
+        })
     }
 
     /// Allocate a native record type descriptor
@@ -1918,7 +1935,7 @@ impl Heap {
     /// Check if value is a macro
     #[inline]
     pub fn is_macro(&self, tv: TaggedValue) -> bool {
-        tv.is_object() && matches!(self.get_object(tv), HeapObjectData::Macro(_))
+        tv.is_object() && matches!(self.get_object(tv), HeapObjectData::Macro { .. })
     }
 
     /// Check if value is a port
@@ -2056,7 +2073,24 @@ impl Heap {
             return None;
         }
         match self.get_object(tv) {
-            HeapObjectData::Macro(m) => Some(m),
+            HeapObjectData::Macro { body, .. } => Some(body),
+            _ => None,
+        }
+    }
+
+    /// The literal `id` of the macro object `mac`: `None` if `mac` is no
+    /// macro or has no such literal (#718).
+    #[inline]
+    pub fn macro_literal(
+        &self,
+        mac: TaggedValue,
+        id: crate::compiled_macro::LiteralId,
+    ) -> Option<TaggedValue> {
+        if !mac.is_object() {
+            return None;
+        }
+        match self.get_object(mac) {
+            HeapObjectData::Macro { literals, .. } => literals.get(id.index()).copied(),
             _ => None,
         }
     }
@@ -2246,7 +2280,7 @@ impl Heap {
                 HeapObjectData::Procedure(_) => "procedure",
                 HeapObjectData::Port(_) => "port",
                 HeapObjectData::Ephemeron(_) => "ephemeron",
-                HeapObjectData::Macro(_) => "macro",
+                HeapObjectData::Macro { .. } => "macro",
                 HeapObjectData::CoreSyntax(_) => "syntax",
                 HeapObjectData::RecordType(_) => "record-type",
                 HeapObjectData::Record { .. } => "record",

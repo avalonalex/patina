@@ -1585,7 +1585,12 @@ impl<'h> GcVisitor<'h> {
                     self.visit_env(env);
                 }
             },
-            HeapObjectData::Macro(m) => m.as_ref().trace(self),
+            HeapObjectData::Macro { body, literals } => {
+                body.as_ref().trace(self);
+                for &literal in literals.iter() {
+                    self.visit(literal);
+                }
+            }
             HeapObjectData::Record {
                 // An `Rc`'d descriptor: an id, a name and field names.
                 record_type: _,

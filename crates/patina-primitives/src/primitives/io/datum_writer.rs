@@ -386,7 +386,7 @@ fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mu
         // Opaque, see the `HeapObjectData::Ephemeron` doc.
         HeapObjectData::Ephemeron(_) => out.push_str("#<ephemeron>"),
         HeapObjectData::Promise(_) => out.push_str("#<promise>"),
-        HeapObjectData::Macro(_) => out.push_str("#<macro>"),
+        HeapObjectData::Macro { .. } => out.push_str("#<macro>"),
         // Syntactic keyword. Not dead, though it is hard to reach: a variable
         // reference to syntax is refused at desugar time, so this formats the
         // residual cases pinned in `patina-tests/tests/syntax_as_a_value.rs`

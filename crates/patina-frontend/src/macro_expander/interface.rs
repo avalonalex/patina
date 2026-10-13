@@ -7,6 +7,7 @@
 //! and provides convenient methods for testing macro behavior.
 
 use crate::error::FrontendError;
+use patina_core::{Owned, SharedHeap};
 use patina_runtime::Environment;
 use std::rc::Rc;
 
@@ -15,7 +16,9 @@ use std::rc::Rc;
 /// This is available in all builds to support testing in downstream crates.
 /// Uses `patina_macros` for the underlying macro compilation and expansion.
 pub struct TestExpander {
-    compiled: patina_macros::CompiledMacro,
+    heap: SharedHeap,
+    /// The macro object, rooted for as long as the expander lives.
+    mac: Owned,
 }
 
 impl TestExpander {
@@ -51,18 +54,18 @@ impl TestExpander {
             parsed.literals,
             parsed.custom_ellipsis,
             test_env,
-            heap,
+            heap.clone(),
         );
-        let compiled = compiler
+        let (compiled, literals) = compiler
             .compile_macro(name.into(), parsed.rules)
             .map_err(|e| FrontendError::InvalidSyntax(e.to_string()))?;
+        let mac = {
+            let mut h = heap.borrow_mut();
+            let mac = h.alloc_macro(Rc::new(compiled), literals);
+            h.hold(mac)
+        };
 
-        Ok(Self { compiled })
-    }
-
-    /// Create a test expander from a compiled macro
-    pub fn from_compiled(compiled: patina_macros::CompiledMacro) -> Self {
-        Self { compiled }
+        Ok(Self { heap, mac })
     }
 
     /// Assert that the given input expands to the expected output
@@ -77,7 +80,8 @@ impl TestExpander {
     pub fn assert_expands_to(&self, input: &str, expected: &str) -> Result<(), String> {
         use crate::parser::Parser;
 
-        let heap = &self.compiled.heap;
+        let heap = &self.heap;
+        let mac = heap.borrow().held(&self.mac);
 
         // Parse input directly to TaggedValue on the macro's heap
         let mut parser = Parser::new_with_heap(input, heap.clone())
@@ -94,10 +98,9 @@ impl TestExpander {
             .map_err(|e| format!("Failed to parse expected: {}", e))?;
 
         // Expand using production TaggedValue path
-        let expanded_tv =
-            patina_macros::expand_macro_with_scope(&self.compiled, input_tv, heap, None)
-                .map_err(|e| format!("Expansion failed: {}", e))?
-                .form;
+        let expanded_tv = patina_macros::expand_macro_with_scope(mac, input_tv, heap, None)
+            .map_err(|e| format!("Expansion failed: {}", e))?
+            .form;
 
         // Compare TaggedValues directly (ignoring gensym/hygiene differences)
         if patina_macros::TestExpander::tagged_forms_equal_ignoring_gensym(
@@ -121,7 +124,8 @@ impl TestExpander {
     pub fn expand_to_string(&self, input: &str) -> Result<String, String> {
         use crate::parser::Parser;
 
-        let heap = &self.compiled.heap;
+        let heap = &self.heap;
+        let mac = heap.borrow().held(&self.mac);
 
         // Parse input directly to TaggedValue on the macro's heap
         let mut parser = Parser::new_with_heap(input, heap.clone())
@@ -129,10 +133,9 @@ impl TestExpander {
         let input_tv = parser.parse().map_err(|e| format!("Parse error: {}", e))?;
 
         // Expand using production TaggedValue path
-        let expanded_tv =
-            patina_macros::expand_macro_with_scope(&self.compiled, input_tv, heap, None)
-                .map_err(|e| format!("Expansion error: {}", e))?
-                .form;
+        let expanded_tv = patina_macros::expand_macro_with_scope(mac, input_tv, heap, None)
+            .map_err(|e| format!("Expansion error: {}", e))?
+            .form;
 
         // Format TaggedValue directly for display
         Ok(patina_core::format_tagged(expanded_tv, &heap.borrow()))

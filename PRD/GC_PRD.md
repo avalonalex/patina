@@ -947,9 +947,10 @@ pub type Prim = for<'gc> fn(&mut Cx<'gc>, &[Value<'gc>]) -> Result<Value<'gc>, E
 
 The brand is pinned by trybuild compile-fail tests (a value used after a may-collect call, a slice held across
 `load_library`, a value in a `static`, a value escaping `interp.with`) in primitives, frontend, macros, the embedding
-API and `patina-compat`. Values stored long-term outside the core crates (`CoreExpr`/`CpsExpr` literals, macro
-literals, `Step` state) use a `pub unsafe` raw-word API under a `NoGcScope` or a traced root, or the **`CoreExpr`
-literal pool**, a traced table shared by both backends and scoped to one compilation (M2).
+API and `patina-compat`. Values stored long-term outside the core crates (`CoreExpr`/`CpsExpr` literals, `Step`
+state) use a `pub unsafe` raw-word API under a `NoGcScope` or a traced root, or the **`CoreExpr` literal pool**, a
+traced table shared by both backends and scoped to one compilation (M2). A macro's literals are its macro object's,
+which a pattern or template names by index and a context reads through the macro's value ([#718]).
 
 **The unsafe boundary.** `#![forbid(unsafe_code)]` in `patina-primitives`, `patina-frontend`, `patina-macros`,
 `patina-runtime`, `patina-ir`, `patina-pipeline`, `patina-interpreter` and `patina-compat` (none uses `unsafe` for heap
@@ -2250,3 +2251,4 @@ from them on these known points before filing it:
 [#656]: https://github.com/avalonalex/patina/issues/656
 [#686]: https://github.com/avalonalex/patina/issues/686
 [#687]: https://github.com/avalonalex/patina/issues/687
+[#718]: https://github.com/avalonalex/patina/issues/718

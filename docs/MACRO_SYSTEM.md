@@ -91,9 +91,9 @@ Source: (define-syntax my-macro (syntax-rules (lit) ...))
                             ↓
                     [Compiler] compile_syntax_rules()
                             ↓
-            CompiledMacro { patterns, templates, literals }
+      a macro object: CompiledMacro { rules, ... } + its literals
                             ↓
-                    Stored in Environment as Value::Macro
+                    Bound in the environment
                             ↓
 Use: (my-macro arg1 arg2)
                             ↓
@@ -129,7 +129,8 @@ Use: (my-macro arg1 arg2)
 ```rust
 pub enum Pattern {
     Wildcard,                    // _ (matches anything)
-    Literal(Value),              // Exact match required
+    Literal(LiteralId),          // Exact match required: one of the
+                                 // macro object's literals (#718)
     Var(PVRef),                  // Pattern variable
     List(Vec<Pattern>),          // (p1 p2 p3)
     Vector(Vec<Pattern>),        // #(p1 p2 p3)
@@ -150,7 +151,7 @@ pub enum Pattern {
 
 ```rust
 pub enum Template {
-    Literal(Value),              // Self-evaluating constant
+    Literal(LiteralId),          // Self-evaluating constant, likewise
     Symbol(Identifier),          // Identifier (may need renaming)
     Var(PVRef),                  // Pattern variable substitution
     List(Vec<Template>),         // (t1 t2 t3)
