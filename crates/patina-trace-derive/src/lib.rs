@@ -17,8 +17,7 @@
 //!
 //! And one on the type: `#[trace(grows_stack_if = method)]` runs the trace
 //! under `walk::ensure_sufficient_stack_if(Self::method(self), ...)`, as every
-//! walk of code does (#617), for a tree that recurses into itself by value,
-//! a macro's pattern or template.
+//! walk of code does (#617), for a tree that recurses into itself by value.
 // No unsafe code here (#698). The code the derive generates has none either; it compiles in
 // the deriving crate, under that crate's own lint.
 #![forbid(unsafe_code)]

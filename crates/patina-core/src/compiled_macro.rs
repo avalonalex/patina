@@ -10,15 +10,50 @@
 //! - `Identifier` - Hygienic identifier with scope information
 //! - `CompiledRule` - A single pattern/template rule
 //! - `CompiledMacro` - Complete compiled macro definition
+//! - `LiteralId` - A literal of a macro's patterns or templates, by index
+//!
+//! None of them holds a value. The literals of a macro's patterns and
+//! templates are its macro object's (`HeapObjectData::Macro`), which traces
+//! them, and a pattern or template names one by index (#718).
 
 use crate::Trace;
 use crate::environment::Environment;
-use crate::heap::SharedHeap;
 use crate::pvref::PVRef;
 use crate::scope::{ScopeId, ScopeSet};
-use crate::tagged_value::TaggedValue;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+
+// ============================================================================
+// LiteralId
+// ============================================================================
+
+/// A literal of a macro's patterns or templates: its index among the
+/// literals the macro object holds (`HeapObjectData::Macro`, #718).
+///
+/// The object traces its literals, and one is read through the macro's
+/// value (`Heap::macro_literal`, `Cx::macro_literal`). So no pattern or
+/// template holds a word, and a `CompiledMacro` held anywhere, cloned or
+/// outliving its object, names nothing a collection can free.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LiteralId(u32);
+
+impl LiteralId {
+    /// The literal at `index` among its macro object's.
+    pub fn new(index: usize) -> Self {
+        Self(u32::try_from(index).expect("fewer than 2^32 literals in one macro"))
+    }
+
+    /// Its index among its macro object's literals.
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl std::fmt::Display for LiteralId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "#{}", self.0)
+    }
+}
 
 // ============================================================================
 // Pattern
@@ -29,23 +64,21 @@ use std::rc::Rc;
 /// This is compiled once at macro definition time and reused for all expansions.
 /// Based on Gauche's pattern compilation approach (macro.c:400+).
 ///
-/// Its trace (derived, #686) reports its literals, growing the stack at each
-/// level that nests, as every walk of code does (#617). Pinned by the
-/// sentinel test `compiled_macro_fields`, which reaches a literal through
-/// each variant.
-#[derive(Clone, Debug, Trace)]
-#[trace(grows_stack_if = is_nested)]
+/// It holds no value, so it has no trace: its literals are its macro
+/// object's ([`LiteralId`], #718).
+#[derive(Clone, Debug)]
 pub enum Pattern {
     /// Wildcard (_) - matches anything, binds nothing
     Wildcard,
 
-    /// Literal value that must match exactly
-    Literal(TaggedValue),
+    /// Literal value that must match exactly: one of the macro object's
+    /// literals.
+    Literal(LiteralId),
 
     /// Pattern variable - binds to matched expression
     ///
     /// Uses PVREF (Pattern Variable Reference) for O(1) lookup.
-    Var(#[trace(skip, reason = "a pattern variable's depth and index")] PVRef),
+    Var(PVRef),
 
     /// List pattern: (p1 p2 p3)
     List(Vec<Pattern>),
@@ -69,20 +102,17 @@ pub enum Pattern {
         subpattern: Box<Pattern>,
 
         /// Ellipsis nesting level (1 for first ..., 2 for nested, etc.)
-        #[trace(skip, reason = "a depth")]
         level: u8,
 
         /// Number of items after this ellipsis (excluding final CDR)
         ///
         /// This is Gauche's optimization that avoids backtracking.
         /// Example: From (x ... y z), x ... has num_following = 2
-        #[trace(skip, reason = "a count")]
         num_following: usize,
 
         /// Pattern variables used in this subpattern
         ///
         /// Precomputed list of PVREFs for efficient matching.
-        #[trace(skip, reason = "pattern-variable references")]
         vars: Vec<PVRef>,
     },
 }
@@ -139,7 +169,7 @@ impl std::fmt::Display for Pattern {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Pattern::Wildcard => write!(f, "_"),
-            Pattern::Literal(tv) => write!(f, "<literal {:?}>", tv),
+            Pattern::Literal(id) => write!(f, "<literal {id}>"),
             Pattern::Var(pvref) => write!(f, "?{}", pvref),
             Pattern::List(patterns) => {
                 write!(f, "(")?;
@@ -265,22 +295,20 @@ impl std::fmt::Display for Identifier {
 /// Compiled once at macro definition time and reused for all expansions.
 /// Based on Gauche's template compilation approach.
 ///
-/// Its trace (derived, #686) reports its literals, growing the stack at each
-/// level that nests, as [`Pattern`]'s does. Pinned by the sentinel test
-/// `compiled_macro_fields`.
-#[derive(Clone, Debug, Trace)]
-#[trace(grows_stack_if = is_nested)]
+/// It holds no value, so it has no trace: its literals are its macro
+/// object's ([`LiteralId`], #718).
+#[derive(Clone, Debug)]
 pub enum Template {
-    /// Literal value (inserted as-is)
-    Literal(TaggedValue),
+    /// Literal value (inserted as-is): one of the macro object's literals.
+    Literal(LiteralId),
 
     /// Symbol to be inserted (hygienically renamed)
-    Symbol(#[trace(skip, reason = "a name, a source position and scope sets")] Identifier),
+    Symbol(Identifier),
 
     /// Pattern variable reference
     ///
     /// Uses PVREF for O(1) lookup from pattern match bindings.
-    Var(#[trace(skip, reason = "a pattern variable's depth and index")] PVRef),
+    Var(PVRef),
 
     /// List template: (t1 t2 t3)
     List(Vec<Template>),
@@ -302,18 +330,15 @@ pub enum Template {
         subtemplate: Box<Template>,
 
         /// Ellipsis nesting level
-        #[trace(skip, reason = "a depth")]
         level: u8,
 
         /// Number of consecutive ... in the template
         ///
         /// - 1 = normal single ellipsis: `x ...`
         /// - 2 = double ellipsis: `x ... ...` (SRFI-149)
-        #[trace(skip, reason = "a count of consecutive ellipses")]
         nesting: u8,
 
         /// Pattern variables used in this subtemplate
-        #[trace(skip, reason = "pattern-variable references")]
         vars: Vec<PVRef>,
     },
 }
@@ -385,7 +410,7 @@ impl Drop for Template {
     fn drop(&mut self) {
         // As `CoreExpr`'s, a level of the template at a time (#617).
         if self.is_nested() && !crate::walk::has_stack_room() {
-            let placeholder = Template::Literal(TaggedValue::UNSPECIFIED);
+            let placeholder = Template::Var(PVRef::new(0, 0));
             crate::walk::drop_deep(std::mem::replace(self, placeholder));
         }
     }
@@ -394,7 +419,7 @@ impl Drop for Template {
 impl std::fmt::Display for Template {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Template::Literal(tv) => write!(f, "<literal {:?}>", tv),
+            Template::Literal(id) => write!(f, "<literal {id}>"),
             Template::Symbol(id) => write!(f, "{}", id),
             Template::Var(pvref) => write!(f, "${}", pvref),
             Template::List(templates) => {
@@ -454,8 +479,9 @@ impl std::fmt::Display for Template {
 /// Compiled macro rule
 ///
 /// Contains both pattern and template in PVREF-based representation,
-/// along with metadata for efficient matching and expansion.
-#[derive(Clone, Debug, Trace)]
+/// along with metadata for efficient matching and expansion. It holds no
+/// value, as neither do they.
+#[derive(Clone, Debug)]
 pub struct CompiledRule {
     /// Compiled pattern
     pub pattern: Pattern,
@@ -464,24 +490,23 @@ pub struct CompiledRule {
     pub template: Template,
 
     /// Number of pattern variables in this rule
-    #[trace(skip, reason = "a count")]
     pub num_pvars: usize,
 
     /// Maximum ellipsis nesting level in this rule
-    #[trace(skip, reason = "a depth")]
     pub max_level: usize,
 
     /// Mapping from pattern variable names to their PVREFs (for debug output)
-    #[trace(skip, reason = "pattern-variable names, for diagnostics")]
     pub pvar_names: HashMap<PVRef, Rc<str>>,
 }
 
 /// Compiled macro definition
 ///
-/// Contains all rules for a syntax-rules macro in compiled form.
+/// Contains all rules for a syntax-rules macro in compiled form: the body
+/// of a macro object, which holds the literals its rules name
+/// (`HeapObjectData::Macro`, #718).
 ///
-/// Its trace (derived, #686) reports the literals of its patterns and
-/// templates and the environments it keeps live. Pinned by the sentinel test
+/// Its trace (derived, #686) reports the environments it keeps live; the
+/// object traces the literals. Pinned by the sentinel test
 /// `compiled_macro_fields`.
 #[derive(Clone, Debug, Trace)]
 pub struct CompiledMacro {
@@ -489,6 +514,10 @@ pub struct CompiledMacro {
     pub name: Rc<str>,
 
     /// Compiled rules (tried in order, first-match-wins)
+    #[trace(
+        skip,
+        reason = "patterns and templates, which hold no value: they name their literals by index, and the macro object traces those (#718)"
+    )]
     pub rules: Vec<CompiledRule>,
 
     /// Maximum number of pattern variables in any rule
@@ -499,16 +528,6 @@ pub struct CompiledMacro {
     ///
     /// Free variables in templates will carry this scope set.
     pub definition_scopes: ScopeSet,
-
-    /// Shared heap that stores TaggedValue literals from Pattern::Literal and Template::Literal.
-    ///
-    /// This heap is allocated at compile time and must be used (or merged into) the
-    /// expansion-time heap so that literal TaggedValues remain valid.
-    #[trace(
-        skip,
-        reason = "a handle to the heap its literals live in, which the collector is already marking (design §9.6): not an edge into it"
-    )]
-    pub heap: SharedHeap,
 
     /// Free identifier names appearing in this macro's templates.
     ///
@@ -619,9 +638,9 @@ mod tests {
 
     #[test]
     fn test_template_literal() {
-        let tmpl = Template::Literal(TaggedValue::fixnum(42));
+        let tmpl = Template::Literal(LiteralId::new(3));
         assert!(tmpl.is_literal());
-        assert!(format!("{}", tmpl).contains("literal"));
+        assert_eq!(format!("{}", tmpl), "<literal #3>");
     }
 
     #[test]

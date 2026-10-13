@@ -151,12 +151,11 @@ have to be taught about:
    locations by `tv.raw_bits()` (`heap/source.rs`, `source_map.rs`).
 3. `eq?`/`eqv?`/hashing compare raw bits (`heap/mod.rs:1474,1507,1593,1719`).
 4. `CodeObject.constants: Vec<TaggedValue>` in every compiled code object.
-5. `CompiledMacro` captures literal `TaggedValue`s at macro-compile time
-   (`crates/patina-core/src/compiled_macro.rs:461-465`).
-6. Environment binding maps reachable only through `Rc` graphs.
+5. Environment binding maps reachable only through `Rc` graphs.
 
-`CallFrame.closure` was a seventh, a bare object-arena index, until it became
-a value (#682).
+`CallFrame.closure` was another, a bare object-arena index, until it became
+a value (#682); so were a `CompiledMacro`'s literals, until they moved into
+its macro object (#718, §9.6).
 
 Non-moving is therefore a hard constraint, and the `Collector` trait should
 assume it (future implementations may be generational or incremental, but not
@@ -336,7 +335,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs:119-180`):
 | `MutableCell` | inner value |
 | `VmClosure` | each of `free_vars` + **`visit_env(globals)`** |
 | `Procedure` | captured env (`visit_env`) + **body-expression literals** (§4.4) |
-| `Macro` | `CompiledMacro`: pattern/template literal `TaggedValue`s, and `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623, though today the registry or an importer's `owners` also roots each (`CompiledMacro`'s derived trace, #686) |
+| `Macro` | each of its `literals`, which its patterns and templates name by index (#718, §9.6); and its body, `CompiledMacro`: `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623, though today the registry or an importer's `owners` also roots each (`CompiledMacro`'s derived trace, #686) |
 | `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` — each record's before/after thunks and the handler stack it captured at its `dynamic-wind` call (`WindRecord`'s derived trace, the one tracing point for a record wherever it sits: a stack, a continuation, a prompt frame, or a `DynamicWindSetup`/`Jump` cont value), `exception_handlers`, `prompt_stack` — each frame's handler and the continuation below it (derived; the tag is a plain `Rc` struct), `captured_cont_env` (deduplicated worklist), `resume` (`ContValue`'s derived trace), body literals (§4.4) |
 | `EnvironmentSpecifier` | `visit_env(env)` |
 | `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id; the payload in `VmState`'s side tables is traced only for recorded ids, via the `RootProvider::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5) |
@@ -524,7 +523,7 @@ evaluates, still loads under `desugar_with_imports`' guard (§7; point C of
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
 | `Heap.handles` | `heap/handles.rs` | What hosts keep across evaluations, each rooted until its handle is dropped: an `Owned` handle's value (#605) — what the `eval_*_owned` methods and `Interpreter::lookup` answer, and the last value of a program the interpreter is running — and an `OwnedEnvironment`'s environment (#620), traced by `visit_env` with everything bound in it. Also the environments hosts hold by their own `Rc` and lend to the legacy pipeline, kept weakly and traced while anything holds them. Visited in `GcVisitor::new` beside the intern tables, so every collection on either backend traces them; visited, not only marked, since a handle's value can be anything. A handle holds its table weakly and keeps nothing alive |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
-| `CompiledMacro` literals and environments | `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: pattern and template literals, `definition_env`, and each `foreign_expansions` environment (§4.3) |
+| Macro literals and environments | `heap/mod.rs`, `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: the literals the object holds (§9.6), and its body's `definition_env` and each `foreign_expansions` environment (§4.3) |
 | In-flight `ExceptionObject.irritants` | `crates/patina-core/src/error.rs:44` | Lives in a propagating `Err` on the Rust stack; covered by deferral (GC never runs during unwinding — safe points are at loop tops, not in error paths) |
 
 ### 5.4 A new field, variant or root provider (#623)
@@ -545,7 +544,7 @@ a traced struct, or a root provider meets two rules:
    whose reason says what it holds instead of a value. Every structure a
    root provider walks derives it (#686): both backends' wind, prompt and
    handler records, `ContValue`, `CpsContinuation`, `CpsExpr`, `Environment`,
-   `Library`, `CompiledMacro` with its patterns and templates, the handle
+   `Library`, `CompiledMacro`, the handle
    table, the library registry, and the machines' state — `VmState` with its
    execution state, frames, continuations, code objects and step tracer, and
    the tree-walker's `Evaluator`, `StepResult` and `StepRoots`. A trace still
@@ -576,8 +575,8 @@ a traced struct, or a root provider meets two rules:
    cannot judge it (`resume: _ // aliased` compiles); the sentinel is what
    judges it. A walk that recurses gets a sentinel down each of its
    branches, not only one. The tests live beside the code:
-   `heap/trace_sentinels.rs` for heap kinds, `CompiledMacro` with each
-   branch of its pattern and template walks, `CpsContinuation`, `ContValue`
+   `heap/trace_sentinels.rs` for heap kinds, the macro object with each
+   of its literals and its body's environments, `CpsContinuation`, `ContValue`
    and each branch of the expression-literal walk; the
    `gc_edge_tests` modules of `environment.rs` and `library.rs`;
    `vm_state/trace_sentinel_tests.rs` for the VM's records, on the VM;
@@ -1373,9 +1372,8 @@ Deferring payload drop to slot reuse would keep env cycles alive indefinitely
 on quiet arenas.
 
 **At the end of a heap's life the heap is in the cycle itself.** An environment
-holds the heap it allocates in (`Environment.heap`, a `SharedHeap`), as does a
-compiled macro (`CompiledMacro.heap`, §9.6), so every heap → env edge above
-also closes a loop through the heap's own `Rc`. While the interpreter runs,
+holds the heap it allocates in (`Environment.heap`, a `SharedHeap`), so every
+heap → env edge above also closes a loop through the heap's own `Rc`. While the interpreter runs,
 its owner keeps the heap alive anyway; once the interpreter is dropped,
 nothing would collect again, and the heap stayed alive with everything in it,
 an unclosed file port's unwritten output among it (#604). So each heap's
@@ -1568,13 +1566,18 @@ payload unreachable (this is the `is_outermost` care the plan called for).
 Measured after: `ctak` runs CPU-bound at flat ~220 MB RSS, and 20 000 dead
 captures leave single-digit net live objects.
 
-### 9.6 `CompiledMacro.heap`
+### 9.6 Macro literals
 
-Compiled macros hold a `SharedHeap` clone for their literal values
-(`compiled_macro.rs:461-465`). As long as it is the same heap instance
-(the field comment already requires this), the `Macro` trace rule covers the
-literals. A debug assertion that `Rc::ptr_eq(macro.heap, heap)` at trace time
-would catch violations.
+A macro object holds the literals of its patterns and templates
+(`HeapObjectData::Macro { body, literals }`) and traces them as any value
+field; a pattern or template names one by index (`LiteralId`), and the
+matcher and expander read it through the macro's value
+(`Heap::macro_literal`, `Cx::macro_literal`, #718). Until then the
+patterns and templates held the literals as words, and the compiled macro
+held a `SharedHeap` clone for them. Now no `CompiledMacro` holds a word or a
+heap, so one held anywhere, cloned or outliving its object, names nothing a
+collection can free, and a context can read a literal as a `Value` without
+the raw-word API.
 
 ---
 

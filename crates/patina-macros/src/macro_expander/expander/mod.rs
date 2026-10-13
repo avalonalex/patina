@@ -33,7 +33,7 @@ mod tests;
 pub use error::ExpandError;
 
 use crate::macro_expander::Template;
-use patina_core::{SharedHeap, TaggedValue};
+use patina_core::{LiteralId, SharedHeap, TaggedValue};
 use patina_runtime::MatchEnv;
 
 /// Template expander for PVREF-based macro system
@@ -63,6 +63,10 @@ pub struct Expander {
     /// Used to allocate pairs, vectors, and other heap objects during expansion
     shared_heap: Option<SharedHeap>,
 
+    /// The macro object being expanded, which holds the literals its
+    /// templates name (#718). Unset, a literal template finds none.
+    mac: TaggedValue,
+
     /// How deep a substituted value may nest: what is left of
     /// [`MAX_FORM_DEPTH`] below the use being expanded (#617).
     ///
@@ -79,6 +83,7 @@ impl Expander {
         Self {
             macro_scope,
             shared_heap: None,
+            mac: TaggedValue::UNSPECIFIED,
             depth_limit: patina_core::walk::MAX_FORM_DEPTH,
         }
     }
@@ -94,8 +99,16 @@ impl Expander {
         Self {
             macro_scope,
             shared_heap: Some(shared_heap),
+            mac: TaggedValue::UNSPECIFIED,
             depth_limit: patina_core::walk::MAX_FORM_DEPTH,
         }
+    }
+
+    /// Expanding the templates of the macro object `mac`, whose literals
+    /// they name by index (#718).
+    pub fn for_macro(mut self, mac: TaggedValue) -> Self {
+        self.mac = mac;
+        self
     }
 
     /// Expanding a use `depth` forms deep: a value substituted into the
@@ -108,6 +121,14 @@ impl Expander {
     pub fn at_depth(mut self, depth: usize) -> Self {
         self.depth_limit = patina_core::walk::MAX_FORM_DEPTH.saturating_sub(depth);
         self
+    }
+
+    /// The literal `id` of the macro being expanded.
+    pub(super) fn literal(&self, id: LiteralId) -> TaggedValue {
+        self.heap()
+            .borrow()
+            .macro_literal(self.mac, id)
+            .expect("a template's literal is its macro object's")
     }
 
     /// Get reference to the shared heap (if available)
@@ -166,9 +187,9 @@ impl Expander {
         inside_quote: bool,
     ) -> Result<TaggedValue, ExpandError> {
         match template {
-            Template::Literal(tv) => {
-                // Literal values are inserted as-is (already TaggedValue from compilation)
-                Ok(*tv)
+            Template::Literal(id) => {
+                // Literal values are inserted as-is, from the macro object.
+                Ok(self.literal(*id))
             }
 
             Template::Symbol(id) => {
@@ -255,6 +276,7 @@ impl Default for Expander {
         Self {
             macro_scope: patina_runtime::ScopeId::fresh(),
             shared_heap: None,
+            mac: TaggedValue::UNSPECIFIED,
             depth_limit: patina_core::walk::MAX_FORM_DEPTH,
         }
     }

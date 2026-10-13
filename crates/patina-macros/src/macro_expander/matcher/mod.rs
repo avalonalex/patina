@@ -63,6 +63,10 @@ pub struct Matcher<'a> {
     /// matched carries it, so an input identifier carrying nothing else was
     /// written at the use site and stands in the use site's scopes.
     macro_scope: Option<patina_runtime::ScopeId>,
+
+    /// The macro object whose patterns are matched, which holds the literals
+    /// they name (#718). Unset, a literal pattern finds none.
+    mac: TaggedValue,
 }
 
 impl<'a> Matcher<'a> {
@@ -78,6 +82,7 @@ impl<'a> Matcher<'a> {
             definition: None,
             use_site: None,
             macro_scope: None,
+            mac: TaggedValue::UNSPECIFIED,
         }
     }
 
@@ -94,6 +99,7 @@ impl<'a> Matcher<'a> {
             definition: None,
             use_site: None,
             macro_scope: None,
+            mac: TaggedValue::UNSPECIFIED,
         }
     }
 
@@ -118,6 +124,7 @@ impl<'a> Matcher<'a> {
             definition: None,
             use_site: None,
             macro_scope: None,
+            mac: TaggedValue::UNSPECIFIED,
         }
     }
 
@@ -133,6 +140,13 @@ impl<'a> Matcher<'a> {
     /// Tell the matcher which scope this expansion flipped onto its input.
     pub fn with_macro_scope(mut self, macro_scope: patina_runtime::ScopeId) -> Self {
         self.macro_scope = Some(macro_scope);
+        self
+    }
+
+    /// Matching the patterns of the macro object `mac`, whose literals they
+    /// name by index (#718).
+    pub fn for_macro(mut self, mac: TaggedValue) -> Self {
+        self.mac = mac;
         self
     }
 
@@ -222,9 +236,12 @@ impl<'a> Matcher<'a> {
                 Ok(())
             }
 
-            Pattern::Literal(lit) => {
+            Pattern::Literal(id) => {
+                let lit = heap
+                    .macro_literal(self.mac, *id)
+                    .expect("a pattern's literal is its macro object's");
                 let matched = literal::matches_literal(
-                    *lit,
+                    lit,
                     input,
                     heap,
                     self.definition,
@@ -315,8 +332,16 @@ mod tests {
             definition: None,
             use_site: None,
             macro_scope: None,
+            mac: TaggedValue::UNSPECIFIED,
         };
         (matcher, heap)
+    }
+
+    /// [`make_test_matcher`]'s, for patterns whose one literal is `42`.
+    fn make_literal_matcher() -> Matcher<'static> {
+        let (matcher, heap) = make_test_matcher(0);
+        let mac = crate::macro_expander::test_macro_object(&heap, vec![TaggedValue::fixnum(42)]);
+        matcher.for_macro(mac)
     }
 
     /// Helper to build a proper list from a Vec<TaggedValue> on the heap
@@ -341,8 +366,8 @@ mod tests {
 
     #[test]
     fn test_match_literal_success() {
-        let (matcher, _heap) = make_test_matcher(0);
-        let pattern = Pattern::Literal(TaggedValue::fixnum(42));
+        let matcher = make_literal_matcher();
+        let pattern = Pattern::Literal(patina_core::LiteralId::new(0));
         let input = TaggedValue::fixnum(42);
 
         let result = matcher.match_pattern_tagged(&pattern, input);
@@ -351,8 +376,8 @@ mod tests {
 
     #[test]
     fn test_match_literal_failure() {
-        let (matcher, _heap) = make_test_matcher(0);
-        let pattern = Pattern::Literal(TaggedValue::fixnum(42));
+        let matcher = make_literal_matcher();
+        let pattern = Pattern::Literal(patina_core::LiteralId::new(0));
         let input = TaggedValue::fixnum(43);
 
         let result = matcher.match_pattern_tagged(&pattern, input);

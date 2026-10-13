@@ -37,8 +37,10 @@ fn sym(name: &str, heap: &SharedHeap) -> TaggedValue {
 
 #[test]
 fn test_expand_literal() {
-    let (expander, _heap) = make_test_expander();
-    let template = Template::Literal(TaggedValue::fixnum(42));
+    let (expander, heap) = make_test_expander();
+    let mac = crate::macro_expander::test_macro_object(&heap, vec![TaggedValue::fixnum(42)]);
+    let expander = expander.for_macro(mac);
+    let template = Template::Literal(patina_core::LiteralId::new(0));
     let env = MatchEnv::new(0);
 
     let result = expander.expand(&template, &env);
@@ -147,6 +149,8 @@ fn test_expand_ellipsis_simple() {
 #[test]
 fn test_expand_ellipsis_with_constant() {
     let (expander, heap) = make_test_expander();
+    let mac = crate::macro_expander::test_macro_object(&heap, vec![fixnum(1)]);
+    let expander = expander.for_macro(mac);
     let x = PVRef::new(1, 0);
 
     // Template: ((+ x 1) ...)
@@ -154,7 +158,7 @@ fn test_expand_ellipsis_with_constant() {
         subtemplate: Box::new(Template::List(vec![
             Template::Symbol(Identifier::new("+")),
             Template::Var(x),
-            Template::Literal(TaggedValue::fixnum(1)),
+            Template::Literal(patina_core::LiteralId::new(0)),
         ])),
         level: 1,
         nesting: 1,

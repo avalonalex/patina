@@ -92,9 +92,9 @@ impl Expander {
         if templates.len() >= 2 {
             match &templates[0] {
                 Template::Symbol(id) => id.name().as_ref() == "quote",
-                Template::Literal(tv) => {
-                    let heap = self.heap().borrow();
-                    heap.get_symbol_name(*tv) == Some("quote")
+                Template::Literal(id) => {
+                    let literal = self.literal(*id);
+                    self.heap().borrow().get_symbol_name(literal) == Some("quote")
                 }
                 _ => false,
             }

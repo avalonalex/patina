@@ -276,7 +276,9 @@ const APPLY: &str = "apply";
 /// decides. Head position acts on both variants, the other two refuse both.
 enum SyntaxRef {
     CoreSyntax(CoreForm),
-    Macro(Rc<patina_core::CompiledMacro>),
+    /// A macro: its object, which holds the literals its rules name (#718),
+    /// and the object's body.
+    Macro(TaggedValue, Rc<patina_core::CompiledMacro>),
 }
 
 impl SyntaxRef {
@@ -284,7 +286,7 @@ impl SyntaxRef {
     fn describe(&self) -> &'static str {
         match self {
             SyntaxRef::CoreSyntax(_) => "a syntactic keyword",
-            SyntaxRef::Macro(_) => "a macro",
+            SyntaxRef::Macro(..) => "a macro",
         }
     }
 }
@@ -850,8 +852,8 @@ impl<'a> Desugarer<'a> {
                     self.collect_produced_names(form, shared_heap, out, depth, open);
                 }
             }
-            Some(SyntaxRef::Macro(compiled_macro)) => {
-                let Ok(expansion) = self.expand_macro(&compiled_macro, tv, shared_heap) else {
+            Some(SyntaxRef::Macro(mac, compiled_macro)) => {
+                let Ok(expansion) = self.expand_macro(mac, &compiled_macro, tv, shared_heap) else {
                     return;
                 };
                 let expanded = self.link_definition_env_refs(
@@ -1056,7 +1058,12 @@ impl<'a> Desugarer<'a> {
         if let Some(form) = heap.get_core_syntax(tv) {
             return Ok((Some(SyntaxRef::CoreSyntax(form)), by_name));
         }
-        Ok((heap.get_macro(tv).cloned().map(SyntaxRef::Macro), by_name))
+        Ok((
+            heap.get_macro(tv)
+                .cloned()
+                .map(|body| SyntaxRef::Macro(tv, body)),
+            by_name,
+        ))
     }
 
     /// Reject a reference to syntax where a value is expected.
@@ -2204,7 +2211,7 @@ impl<'a> Desugarer<'a> {
         // which is what lets a definition shadow a keyword.
         let (macro_to_expand, core_form) = match &name {
             Some(sym) => match self.resolve_syntax(sym, &head_scopes)? {
-                Some(SyntaxRef::Macro(m)) => (Some(m), None),
+                Some(SyntaxRef::Macro(mac, m)) => (Some((mac, m)), None),
                 Some(SyntaxRef::CoreSyntax(form)) => (None, Some(form)),
                 None => (None, None),
             },
@@ -2214,7 +2221,7 @@ impl<'a> Desugarer<'a> {
         // Handle macro expansion. `expand_macro_with_scope` takes and returns
         // TaggedValues directly, and also hands back the scope this expansion
         // minted, which the relinker below needs.
-        if let Some(compiled_macro) = macro_to_expand {
+        if let Some((mac, compiled_macro)) = macro_to_expand {
             // Save call-site source location before expansion
             let call_site_source = self.lookup_source(list, shared_heap);
 
@@ -2222,7 +2229,7 @@ impl<'a> Desugarer<'a> {
                 form: expanded_tagged,
                 scope: expansion_scope,
             } = self
-                .expand_macro(&compiled_macro, list, shared_heap)
+                .expand_macro(mac, &compiled_macro, list, shared_heap)
                 .map_err(|e| match e {
                     // Refused as every resolution the rule does not determine is,
                     // not reported as a failed expansion.
@@ -2460,7 +2467,7 @@ impl<'a> Desugarer<'a> {
 
             if let Some((macro_name, binder_scopes, transformer_tv)) = define_syntax_info {
                 // Compile the macro immediately
-                let compiled_macro = self.compile_syntax_rules_tagged(
+                let (compiled_macro, literals) = self.compile_syntax_rules_tagged(
                     transformer_tv,
                     shared_heap,
                     macro_name.clone(),
@@ -2482,7 +2489,7 @@ impl<'a> Desugarer<'a> {
                 let tv = new_env
                     .heap()
                     .borrow_mut()
-                    .alloc_macro(Rc::new(compiled_macro));
+                    .alloc_macro(Rc::new(compiled_macro), literals);
                 current_desugarer.define_syntax_binding(&new_env, macro_name, binder_scopes, tv);
 
                 current_env = new_env.clone();
@@ -2917,7 +2924,7 @@ impl<'a> Desugarer<'a> {
         // Compile macro immediately and install in environment
         let env = &self.env;
 
-        let compiled_macro = self.compile_syntax_rules_tagged(
+        let (compiled_macro, literals) = self.compile_syntax_rules_tagged(
             args_vec[1],
             shared_heap,
             name.clone(),
@@ -2926,7 +2933,10 @@ impl<'a> Desugarer<'a> {
         )?;
 
         // Install in environment
-        let tv = env.heap().borrow_mut().alloc_macro(Rc::new(compiled_macro));
+        let tv = env
+            .heap()
+            .borrow_mut()
+            .alloc_macro(Rc::new(compiled_macro), literals);
         self.define_syntax_binding(env, name, binder_scopes, tv);
 
         Ok(CoreExpr::new(CoreExprKind::Literal(
@@ -3189,11 +3199,11 @@ impl<'a> Desugarer<'a> {
         } else {
             Rc::new(Environment::with_parent(env.clone()))
         };
-        for (name, binder_scopes, compiled_macro) in macro_bindings {
+        for (name, binder_scopes, (compiled_macro, literals)) in macro_bindings {
             let tv = body_env
                 .heap()
                 .borrow_mut()
-                .alloc_macro(Rc::new(compiled_macro));
+                .alloc_macro(Rc::new(compiled_macro), literals);
             // Bound at the binder's scopes *as written* plus this form's —
             // Racket's rule for a binder — where a binder written in source
             // carries none of its own and stands in the scopes accumulated
@@ -3658,7 +3668,9 @@ impl<'a> Desugarer<'a> {
     // Shared helpers
     // =========================================================================
 
-    /// Compile a syntax-rules transformer from TaggedValue with scope-based hygiene
+    /// Compile a syntax-rules transformer from TaggedValue with scope-based
+    /// hygiene: its body, and the literals its rules name by index, which
+    /// its macro object holds (`Heap::alloc_macro`, #718).
     fn compile_syntax_rules_tagged(
         &self,
         transformer_tv: TaggedValue,
@@ -3666,7 +3678,7 @@ impl<'a> Desugarer<'a> {
         name: Rc<str>,
         env: &Rc<Environment>,
         scopes: &ScopeSet,
-    ) -> Result<patina_macros::CompiledMacro> {
+    ) -> Result<(patina_macros::CompiledMacro, Vec<TaggedValue>)> {
         use patina_macros::Compiler;
 
         let list = utils::list_to_vec_tagged(transformer_tv, shared_heap)?;
@@ -3738,19 +3750,22 @@ impl<'a> Desugarer<'a> {
             env.heap().clone(),
         );
         let macro_name = name.clone();
-        let mut compiled = compiler.compile_macro(name, rules).map_err(|e| match e {
-            // A pattern or template nested past the limit code is held to
-            // (#617).
-            patina_macros::MacroError::NestedTooDeeply => {
-                DesugarError::nested_too_deeply(transformer_tv, &shared_heap.borrow())
-            }
-            e => DesugarError::InvalidSyntax(format!("Failed to compile macro {macro_name}: {e}")),
-        })?;
+        let (mut compiled, literals) =
+            compiler.compile_macro(name, rules).map_err(|e| match e {
+                // A pattern or template nested past the limit code is held to
+                // (#617).
+                patina_macros::MacroError::NestedTooDeeply => {
+                    DesugarError::nested_too_deeply(transformer_tv, &shared_heap.borrow())
+                }
+                e => DesugarError::InvalidSyntax(format!(
+                    "Failed to compile macro {macro_name}: {e}"
+                )),
+            })?;
         // Compilation consults declarations (notably a bound `...`), but an
         // escaping transformer must retain the live environment, not its view.
         compiled.definition_env = Some(env.clone());
         compiled.foreign_expansions = self.foreign_expansions_carried_by(&compiled);
-        Ok(compiled)
+        Ok((compiled, literals))
     }
 
     /// The foreign expansions (`EarlyBinding::foreign`) whose scopes the

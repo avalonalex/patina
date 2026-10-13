@@ -15,7 +15,7 @@ use super::gc::{Collector, MarkSweepCollector, RootProvider, SlotVisitor};
 use super::sentinels::Sentinels;
 use super::trace::Trace;
 use super::{Heap, HeapObjectData, PromiseState, SharedHeap, new_shared_heap};
-use crate::compiled_macro::{CompiledMacro, CompiledRule, Pattern, Template};
+use crate::compiled_macro::{CompiledMacro, CompiledRule, LiteralId, Pattern, Template};
 use crate::cont_value::{ContEnv, ContValue, ExceptionHandler, PromptFrame};
 use crate::continuation::{CpsContinuation, WindRecord};
 use crate::cps_expr::{CpsExpr, CpsExprKind, CpsParam, CpsPrimitive};
@@ -67,29 +67,21 @@ fn env_holding_on(shared: &SharedHeap, held: &Heap, value: TaggedValue) -> Rc<En
     env
 }
 
-/// `CompiledMacro`, every edge: a literal through each walk of
-/// `Pattern::for_each_literal` and `Template::for_each_literal` (a list's and
-/// a vector's elements, a dotted list's elements and its tail, an ellipsis's
-/// body), the pattern and template of a second rule, `definition_env` (#38)
-/// and each of two `foreign_expansions` environments (#462).
+/// A macro object, every edge: each literal of the vector its patterns and
+/// templates name by index (#718), its body's `definition_env` (#38) and
+/// each of two `foreign_expansions` environments (#462).
 #[test]
 fn compiled_macro_fields() {
     let shared = new_shared_heap();
     let mut heap = shared.borrow_mut();
     let mut s = Sentinels::new(&mut heap);
     let h = &mut *heap;
-    let p_list = s.pair(h, "CompiledRule.pattern: Pattern::List");
-    let p_vector = s.vector(h, "CompiledRule.pattern: Pattern::Vector");
-    let p_dotted = s.string(h, "CompiledRule.pattern: Pattern::DottedList.patterns");
-    let p_tail = s.object(h, "CompiledRule.pattern: Pattern::DottedList.tail");
-    let p_ellipsis = s.pair(h, "CompiledRule.pattern: Pattern::Ellipsis.subpattern");
-    let t_list = s.vector(h, "CompiledRule.template: Template::List");
-    let t_vector = s.string(h, "CompiledRule.template: Template::Vector");
-    let t_dotted = s.object(h, "CompiledRule.template: Template::DottedList.templates");
-    let t_tail = s.pair(h, "CompiledRule.template: Template::DottedList.tail");
-    let t_ellipsis = s.vector(h, "CompiledRule.template: Template::Ellipsis.subtemplate");
-    let second_pattern = s.string(h, "CompiledMacro.rules[1]: CompiledRule.pattern");
-    let second_template = s.object(h, "CompiledMacro.rules[1]: CompiledRule.template");
+    let literals = vec![
+        s.pair(h, "HeapObjectData::Macro.literals[0]: a pattern's"),
+        s.vector(h, "HeapObjectData::Macro.literals[1]: a template's"),
+        s.string(h, "HeapObjectData::Macro.literals[2]: rule 2's pattern's"),
+        s.object(h, "HeapObjectData::Macro.literals[3]: rule 2's template's"),
+    ];
     let definition_value = s.pair(h, "CompiledMacro.definition_env");
     let foreign_first = s.vector(h, "CompiledMacro.foreign_expansions[0]");
     let foreign_second = s.string(h, "CompiledMacro.foreign_expansions[1]");
@@ -106,43 +98,16 @@ fn compiled_macro_fields() {
         name: Rc::from("m"),
         rules: vec![
             rule(
-                Pattern::List(vec![
-                    Pattern::Literal(p_list),
-                    Pattern::Vector(vec![Pattern::Literal(p_vector)]),
-                    Pattern::DottedList {
-                        patterns: vec![Pattern::Literal(p_dotted)],
-                        tail: Box::new(Pattern::Literal(p_tail)),
-                    },
-                    Pattern::Ellipsis {
-                        subpattern: Box::new(Pattern::Literal(p_ellipsis)),
-                        level: 1,
-                        num_following: 0,
-                        vars: vec![],
-                    },
-                ]),
-                Template::List(vec![
-                    Template::Literal(t_list),
-                    Template::Vector(vec![Template::Literal(t_vector)]),
-                    Template::DottedList {
-                        templates: vec![Template::Literal(t_dotted)],
-                        tail: Box::new(Template::Literal(t_tail)),
-                    },
-                    Template::Ellipsis {
-                        subtemplate: Box::new(Template::Literal(t_ellipsis)),
-                        level: 1,
-                        nesting: 1,
-                        vars: vec![],
-                    },
-                ]),
+                Pattern::List(vec![Pattern::Literal(LiteralId::new(0))]),
+                Template::List(vec![Template::Literal(LiteralId::new(1))]),
             ),
             rule(
-                Pattern::Literal(second_pattern),
-                Template::Literal(second_template),
+                Pattern::Literal(LiteralId::new(2)),
+                Template::Literal(LiteralId::new(3)),
             ),
         ],
         max_pvars: 0,
         definition_scopes: ScopeSet::new(),
-        heap: shared.clone(),
         template_symbols: HashSet::new(),
         inherited_identifiers: HashMap::new(),
         definition_env: Some(env_holding(&shared, definition_value)),
@@ -153,7 +118,7 @@ fn compiled_macro_fields() {
     };
 
     let mut heap = shared.borrow_mut();
-    let root = heap.alloc_macro(Rc::new(compiled));
+    let root = heap.alloc_macro(Rc::new(compiled), literals);
     collect_from(&mut heap, &[root]);
     s.assert_survived(&heap);
 }
@@ -175,7 +140,6 @@ fn a_foreign_expansion_environment_dies_with_its_macro() {
         rules: vec![],
         max_pvars: 0,
         definition_scopes: ScopeSet::new(),
-        heap: shared.clone(),
         template_symbols: HashSet::new(),
         inherited_identifiers: HashMap::new(),
         definition_env: None,
@@ -183,7 +147,7 @@ fn a_foreign_expansion_environment_dies_with_its_macro() {
     };
 
     let mut heap = shared.borrow_mut();
-    let root = heap.alloc_macro(Rc::new(compiled));
+    let root = heap.alloc_macro(Rc::new(compiled), vec![]);
     collect_from(&mut heap, &[root]);
     assert!(
         weak.upgrade().is_some(),

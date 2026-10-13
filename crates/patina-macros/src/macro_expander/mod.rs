@@ -48,6 +48,7 @@ pub use utils::{
 ///
 /// # Arguments
 /// * `compiled_macro` - The compiled macro definition
+/// * `mac` - The macro object it is the body of, which holds its literals
 /// * `flipped_args` - TaggedValue arguments with macro_scope already flipped
 /// * `macro_scope` - The fresh scope for this expansion
 /// * `original_args` - Original unflipped TaggedValue args (for debug logging)
@@ -60,6 +61,7 @@ pub use utils::{
 )]
 fn expand_macro_core_tagged(
     compiled_macro: &CompiledMacro,
+    mac: patina_core::TaggedValue,
     flipped_args: patina_core::TaggedValue,
     macro_scope: patina_runtime::ScopeId,
     original_args: patina_core::TaggedValue,
@@ -88,7 +90,9 @@ fn expand_macro_core_tagged(
     debug_ctx.log_input_flip(macro_scope, flipped_args, shared_heap);
 
     // Create expander with macro scope for hygiene
-    let expander = Expander::new_with_heap(macro_scope, shared_heap.clone()).at_depth(depth);
+    let expander = Expander::new_with_heap(macro_scope, shared_heap.clone())
+        .for_macro(mac)
+        .at_depth(depth);
 
     // Try each rule until we find a match
     for (rule_idx, rule) in compiled_macro.rules.iter().enumerate() {
@@ -98,7 +102,8 @@ fn expand_macro_core_tagged(
         let matcher =
             Matcher::new_with_heap(rule.num_pvars, rule.pvar_names.clone(), shared_heap.clone())
                 .with_sites(definition, use_site)
-                .with_macro_scope(macro_scope);
+                .with_macro_scope(macro_scope)
+                .for_macro(mac);
 
         // Try to match against the pattern
         match matcher.match_pattern_tagged(&rule.pattern, flipped_args) {
@@ -341,23 +346,40 @@ pub struct MacroExpansion {
 /// two differ.
 ///
 /// # Arguments
-/// * `compiled_macro` - The compiled macro definition
+/// * `mac` - The macro object: its compiled body, and the literals it names
 /// * `args` - The macro call arguments as TaggedValue
 /// * `shared_heap` - Shared heap for conversions (Rc<RefCell<Heap>>)
 /// * `use_site` - Where the macro is being used, which is where an input
 ///   identifier resolves when it is compared with a literal (R7RS §4.3.2).
 ///   `None` for the direct-API paths, where literals compare by spelling
+///
+/// # Panics
+///
+/// If `mac` is no macro object.
 pub fn expand_macro_with_scope(
-    compiled_macro: &CompiledMacro,
+    mac: patina_core::TaggedValue,
     args: patina_core::TaggedValue,
     shared_heap: &patina_core::SharedHeap,
     use_site: Option<Site<'_>>,
 ) -> Result<MacroExpansion, crate::error::MacroError> {
+    let compiled_macro = macro_body(mac, shared_heap);
     let definition = compiled_macro.definition_env.as_ref().map(|env| Site {
         env,
         scopes: &compiled_macro.definition_scopes,
     });
-    expand_macro_at_sites(compiled_macro, args, shared_heap, definition, use_site, 0)
+    expand_macro_at_sites(mac, args, shared_heap, definition, use_site, 0)
+}
+
+/// The compiled body of the macro object `mac`.
+fn macro_body(
+    mac: patina_core::TaggedValue,
+    shared_heap: &patina_core::SharedHeap,
+) -> std::rc::Rc<CompiledMacro> {
+    shared_heap
+        .borrow()
+        .get_macro(mac)
+        .cloned()
+        .expect("a macro is expanded through its macro object")
 }
 
 /// Expand using explicit lookup sites. The frontend supplies transient views of
@@ -367,8 +389,12 @@ pub fn expand_macro_with_scope(
 /// `depth` is how many forms deep the use is, counting expansions, which
 /// limits how deep a value it substitutes may nest ([`Expander::at_depth`],
 /// #617).
+///
+/// # Panics
+///
+/// If `mac` is no macro object.
 pub fn expand_macro_at_sites(
-    compiled_macro: &CompiledMacro,
+    mac: patina_core::TaggedValue,
     args: patina_core::TaggedValue,
     shared_heap: &patina_core::SharedHeap,
     definition: Option<Site<'_>>,
@@ -376,6 +402,8 @@ pub fn expand_macro_at_sites(
     depth: usize,
 ) -> Result<MacroExpansion, crate::error::MacroError> {
     use crate::tracer::MacroTracer;
+
+    let compiled_macro = macro_body(mac, shared_heap);
 
     // Enter macro expansion (for depth tracking)
     MacroTracer::enter_expansion();
@@ -390,7 +418,8 @@ pub fn expand_macro_at_sites(
     // Pattern matching works directly on TaggedValue
     // Template expansion now produces TaggedValue directly!
     let expanded_tagged = expand_macro_core_tagged(
-        compiled_macro,
+        &compiled_macro,
+        mac,
         flipped_args,
         macro_scope,
         args, // original args for debug logging
@@ -413,6 +442,28 @@ pub fn expand_macro_at_sites(
         form: result,
         scope: macro_scope,
     })
+}
+
+/// A macro object with no rules, holding `literals`: what a test of the
+/// expander or the matcher reads a literal template or pattern through
+/// (#718).
+#[cfg(test)]
+pub(crate) fn test_macro_object(
+    heap: &patina_core::SharedHeap,
+    literals: Vec<patina_core::TaggedValue>,
+) -> patina_core::TaggedValue {
+    let body = CompiledMacro {
+        name: "test".into(),
+        rules: vec![],
+        max_pvars: 0,
+        definition_scopes: patina_runtime::ScopeSet::new(),
+        template_symbols: Default::default(),
+        inherited_identifiers: Default::default(),
+        definition_env: None,
+        foreign_expansions: vec![],
+    };
+    heap.borrow_mut()
+        .alloc_macro(std::rc::Rc::new(body), literals)
 }
 
 /// A literal comparison the set-of-scopes rule cannot decide stops the
@@ -452,9 +503,10 @@ mod ambiguous_literal_tests {
             definition_env.clone(),
             heap.clone(),
         );
-        let compiled = compiler
+        let (compiled, literals) = compiler
             .compile_macro("m".into(), parsed.rules)
             .expect("compiled");
+        let mac = heap.borrow_mut().alloc_macro(Rc::new(compiled), literals);
 
         #[expect(
             clippy::disallowed_methods,
@@ -474,7 +526,7 @@ mod ambiguous_literal_tests {
         };
         let use_site_scopes = ScopeSet::new();
         let expansion = expand_macro_with_scope(
-            &compiled,
+            mac,
             args,
             &heap,
             Some(Site {

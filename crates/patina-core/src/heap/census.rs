@@ -29,7 +29,7 @@ pub(super) fn object_info(data: &HeapObjectData) -> (Variant, usize, u64) {
         }
         H::Procedure(_) => (7, 0, 16),
         H::Port(_) => (8, 0, 16),
-        H::Macro(_) => (9, 0, 16),
+        H::Macro { literals, .. } => (9, literals.len(), 16 + 8 * literals.len() as u64),
         H::RecordType(_) => (10, 0, 16),
         H::Record { fields, .. } => {
             let n = fields.borrow().len();

@@ -125,8 +125,11 @@ impl Desugarer<'_> {
         }
     }
 
+    /// Expand `form`, a use of the macro object `mac`, whose body is
+    /// `compiled`.
     pub(super) fn expand_macro(
         &self,
+        mac: TaggedValue,
         compiled: &patina_core::CompiledMacro,
         form: TaggedValue,
         heap: &SharedHeap,
@@ -137,7 +140,7 @@ impl Desugarer<'_> {
             .as_ref()
             .map(|env| self.expansion_env(env));
         patina_macros::macro_expander::expand_macro_at_sites(
-            compiled,
+            mac,
             form,
             heap,
             definition_env.as_ref().map(|env| patina_macros::Site {

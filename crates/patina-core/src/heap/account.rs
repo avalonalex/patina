@@ -290,6 +290,8 @@ impl HeapObjectData {
                 free_vars,
                 globals: _,
             } => free_vars.capacity() * VALUE_BYTES,
+            // The literals are the object's own; the body is a shared `Rc`.
+            HeapObjectData::Macro { body: _, literals } => literals.len() * VALUE_BYTES,
             HeapObjectData::VmContinuationRef { id: _, bytes }
             | HeapObjectData::VmDelimitedContinuationRef { id: _, bytes } => *bytes,
             // Nothing outside the slot.
@@ -306,7 +308,6 @@ impl HeapObjectData {
             // (`procedure_payload`), which keeps this match a leaf.
             HeapObjectData::Procedure(_)
             | HeapObjectData::Port(_)
-            | HeapObjectData::Macro(_)
             | HeapObjectData::RecordType(_)
             | HeapObjectData::Continuation(_)
             | HeapObjectData::Parameter { .. }

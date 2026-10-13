@@ -7,7 +7,7 @@
 //! calling `expand_macro_with_scope` (the production TaggedValue path).
 
 use crate::error::MacroError;
-use patina_core::TaggedValue;
+use patina_core::{Owned, SharedHeap, TaggedValue};
 
 /// Test helper for creating macro expanders and testing expansions
 ///
@@ -15,7 +15,9 @@ use patina_core::TaggedValue;
 /// The implementation and tests are only compiled in test mode.
 #[allow(dead_code)]
 pub struct TestExpander {
-    compiled: super::CompiledMacro,
+    heap: SharedHeap,
+    /// The macro object, rooted for as long as the expander lives.
+    mac: Owned,
 }
 
 impl TestExpander {
@@ -55,11 +57,20 @@ impl TestExpander {
             .map_err(|e| MacroError::InvalidSyntax(e.0))?;
 
         // Rules are already Vec<(TaggedValue, TaggedValue)> — pass directly to compiler
-        let mut compiler =
-            super::Compiler::with_env(parsed.literals, parsed.custom_ellipsis, test_env, heap);
-        let compiled = compiler.compile_macro(name.into(), parsed.rules)?;
+        let mut compiler = super::Compiler::with_env(
+            parsed.literals,
+            parsed.custom_ellipsis,
+            test_env,
+            heap.clone(),
+        );
+        let (compiled, literals) = compiler.compile_macro(name.into(), parsed.rules)?;
+        let mac = {
+            let mut h = heap.borrow_mut();
+            let mac = h.alloc_macro(Rc::new(compiled), literals);
+            h.hold(mac)
+        };
 
-        Ok(Self { compiled })
+        Ok(Self { heap, mac })
     }
 
     /// Stub for non-test builds
@@ -69,11 +80,6 @@ impl TestExpander {
         Err(MacroError::InvalidSyntax(
             "TestExpander::from_definition is only available in test builds".to_string(),
         ))
-    }
-
-    /// Create a test expander from a compiled macro
-    pub fn from_compiled(compiled: super::CompiledMacro) -> Self {
-        Self { compiled }
     }
 
     /// Assert that the given input expands to the expected output
@@ -89,7 +95,8 @@ impl TestExpander {
     pub fn assert_expands_to(&self, input: &str, expected: &str) -> Result<(), String> {
         use patina_frontend::parser::Parser;
 
-        let heap = &self.compiled.heap;
+        let heap = &self.heap;
+        let mac = heap.borrow().held(&self.mac);
 
         // Parse input directly to TaggedValue on the macro's heap
         let mut parser = Parser::new_with_heap(input, heap.clone())
@@ -106,7 +113,7 @@ impl TestExpander {
             .map_err(|e| format!("Failed to parse expected: {}", e))?;
 
         // Expand using production TaggedValue path
-        let expanded_tv = super::expand_macro_with_scope(&self.compiled, input_tv, heap, None)
+        let expanded_tv = super::expand_macro_with_scope(mac, input_tv, heap, None)
             .map_err(|e| format!("Expansion failed: {}", e))?
             .form;
 
@@ -135,7 +142,8 @@ impl TestExpander {
     pub fn expand_to_string(&self, input: &str) -> Result<String, String> {
         use patina_frontend::parser::Parser;
 
-        let heap = &self.compiled.heap;
+        let heap = &self.heap;
+        let mac = heap.borrow().held(&self.mac);
 
         // Parse input directly to TaggedValue on the macro's heap
         let mut parser = Parser::new_with_heap(input, heap.clone())
@@ -143,7 +151,7 @@ impl TestExpander {
         let input_tv = parser.parse().map_err(|e| format!("Parse error: {}", e))?;
 
         // Expand using production TaggedValue path
-        let expanded_tv = super::expand_macro_with_scope(&self.compiled, input_tv, heap, None)
+        let expanded_tv = super::expand_macro_with_scope(mac, input_tv, heap, None)
             .map_err(|e| format!("Expansion error: {}", e))?
             .form;
 

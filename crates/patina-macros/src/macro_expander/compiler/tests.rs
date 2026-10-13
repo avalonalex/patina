@@ -3,7 +3,7 @@
 use crate::macro_expander::compiler::Compiler;
 use crate::macro_expander::utils::WILDCARD;
 use crate::macro_expander::{Pattern, Template};
-use patina_core::{SharedHeap, TaggedValue};
+use patina_core::{LiteralId, SharedHeap, TaggedValue};
 
 fn test_heap() -> SharedHeap {
     patina_core::new_shared_heap()
@@ -252,7 +252,7 @@ fn test_compile_full_macro() {
         ],
     );
 
-    let compiled = compiler
+    let (compiled, _) = compiler
         .compile_macro("when".into(), vec![(pattern, template)])
         .unwrap();
 
@@ -390,13 +390,15 @@ fn test_identifiers_from_an_outer_expansion_are_recorded() {
     // looks once an outer expansion has produced it: `helper` and `v` are
     // identifiers carrying that expansion's scope, `written` a plain symbol.
     let v = ident("v");
+    let helper = ident("helper");
     let pattern = list(&heap, vec![sym(&heap, "m"), v]);
-    let template = list(&heap, vec![ident("helper"), v, sym(&heap, "written")]);
+    let template = list(&heap, vec![helper, v, sym(&heap, "written")]);
 
     let mut compiler = Compiler::new(vec![], None, heap.clone());
-    let compiled = compiler
+    let (compiled, literals) = compiler
         .compile_macro("m".into(), vec![(pattern, template)])
         .unwrap();
+    assert_eq!(literals, [helper], "the inherited `helper` is a literal");
 
     assert_eq!(
         compiled.inherited_identifiers.get("helper"),
@@ -414,10 +416,14 @@ fn test_identifiers_from_an_outer_expansion_are_recorded() {
     // A second macro from the same compiler starts clean.
     let pattern = list(&heap, vec![sym(&heap, "n")]);
     let template = list(&heap, vec![sym(&heap, "written")]);
-    let second = compiler
+    let (second, literals) = compiler
         .compile_macro("n".into(), vec![(pattern, template)])
         .unwrap();
     assert!(second.inherited_identifiers.is_empty());
+    assert!(
+        literals.is_empty(),
+        "nor does the first's literal carry over"
+    );
 
     // So does one that follows a macro that failed to compile, after its
     // template had already recorded something: `(helper (written ...))` has
@@ -430,8 +436,36 @@ fn test_identifiers_from_an_outer_expansion_are_recorded() {
             .compile_macro("bad".into(), vec![(pattern, bad)])
             .is_err()
     );
-    let third = compiler
+    let (third, literals) = compiler
         .compile_macro("n".into(), vec![(pattern, template)])
         .unwrap();
     assert!(third.inherited_identifiers.is_empty());
+    assert!(literals.is_empty(), "nor the failed one's literal");
+}
+
+/// A literal the rules name more than once is one entry of the macro
+/// object's literals (#718): `(m 1)` matches a literal `1`, and the template
+/// `(list 1 1)` names it twice more.
+#[test]
+fn each_literal_is_collected_once() {
+    let heap = test_heap();
+    let one = TaggedValue::fixnum(1);
+    let pattern = list(&heap, vec![sym(&heap, "m"), one]);
+    let template = list(&heap, vec![sym(&heap, "list"), one, one]);
+    let mut compiler = Compiler::new(vec![], None, heap.clone());
+    let (compiled, literals) = compiler
+        .compile_macro("m".into(), vec![(pattern, template)])
+        .unwrap();
+    assert_eq!(literals, [one]);
+    let rule = &compiled.rules[0];
+    let Pattern::List(patterns) = &rule.pattern else {
+        panic!("a list pattern: {}", rule.pattern);
+    };
+    let Template::List(templates) = &rule.template else {
+        panic!("a list template: {}", rule.template);
+    };
+    let first = LiteralId::new(0);
+    assert!(matches!(patterns[1], Pattern::Literal(id) if id == first));
+    assert!(matches!(templates[1], Template::Literal(id) if id == first));
+    assert!(matches!(templates[2], Template::Literal(id) if id == first));
 }

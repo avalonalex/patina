@@ -209,7 +209,7 @@ use crate::macro_expander::Pattern;
 pub fn pattern_to_string_with_names(pattern: &Pattern, names: &HashMap<PVRef, Rc<str>>) -> String {
     match pattern {
         Pattern::Wildcard => WILDCARD.to_string(),
-        Pattern::Literal(tv) => format!("{:?}", tv),
+        Pattern::Literal(id) => format!("<literal {id}>"),
         Pattern::Var(pv) => names
             .get(pv)
             .map(|n| n.to_string())
@@ -253,7 +253,7 @@ pub fn pattern_to_string_with_names(pattern: &Pattern, names: &HashMap<PVRef, Rc
 pub fn pattern_to_string(pattern: &Pattern) -> String {
     match pattern {
         Pattern::Wildcard => WILDCARD.to_string(),
-        Pattern::Literal(tv) => format!("{:?}", tv),
+        Pattern::Literal(id) => format!("<literal {id}>"),
         Pattern::Var(_pv) => "var".to_string(),
         Pattern::List(patterns) => {
             let inner = patterns
@@ -291,7 +291,7 @@ pub fn template_to_string_with_names(
     names: &HashMap<PVRef, Rc<str>>,
 ) -> String {
     match template {
-        Template::Literal(tv) => format!("{:?}", tv),
+        Template::Literal(id) => format!("<literal {id}>"),
         Template::Symbol(id) => id.name().to_string(),
         Template::Var(pv) => names
             .get(pv)
