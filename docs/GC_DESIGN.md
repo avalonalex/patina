@@ -510,8 +510,8 @@ desugarer (`patina_frontend::top_level_import_sets`, #677), so the libraries
 it loads collect the same way, which is what brought #658's 25 imports from
 one 276 MiB window to windows of at most one form's expansion. An `import`
 met inside a form, a `begin`'s or a macro's or one `eval` or `load`
-evaluates, still loads under `desugar_with_imports`' guard (§7; point C of
-`PRD/GC_PRD.md` §11.3).
+evaluates, still loads during the form's expansion, beneath the context the
+expansion runs in (§7; point C of `PRD/GC_PRD.md` §11.3).
 
 ### 5.3 Shared (both backends)
 
@@ -1022,11 +1022,14 @@ placement + deferral:
      body (`patina-runtime/src/library_loader.rs`) until it hands the body to
      the load's registry entry (#677). Its forms are TaggedValues no root
      provider can see until then.
-   - a form being expanded while its imports load (`desugar_with_imports`):
-     since #677 only an `import` met inside a form, a bare top-level one
-     being loaded by the backend outside it; and each method of the
-     tree-walker's detached `ApplyContext for Evaluator`. The VM's globals-swap window (`VmState::with_globals`) was
-     one until #677 traced what it sets aside.
+   - each method of the tree-walker's detached `ApplyContext for Evaluator`.
+     The VM's globals-swap window (`VmState::with_globals`) was one until
+     #677 traced what it sets aside, and a form being expanded while its
+     imports load (`desugar_with_imports`) until #704: its forms are now
+     values of the context the backend opens for the expansion
+     (`NoGcScope::cross`), beneath which nothing collects. Since #677 only
+     an `import` met inside a form loads there, a bare top-level one being
+     loaded by the backend outside it.
 
    The tree-walker safe point additionally refuses to collect when
    `library_registry` is already mutably borrowed: rooting must walk it, and
@@ -1070,13 +1073,18 @@ beside today's `SharedHeap` surface until they do.
   `patina-macros`' holds one for the state it keeps: a compiler, whose
   literals are values, cannot outlive the context it compiles in (#704).
 - **Crossing while the codemod converts** (`PRD/GC_PRD.md` §11.3). Code that
-  still works in words calls code that takes a context: the desugarer calls
-  the macro expander (`patina_frontend::macro_expander::cross`). Its words
-  cross as an embedder's do, each through an `Owned` handle read back with
-  `Cx::held`, so no safe crate turns a word into a value. A caller that hands
-  nothing in, as the parser's callers do, needs no handle: it opens a context
-  with `NoGcScope::with_cx`, over the instance the heap holds, and what it
-  reads leaves as words. Each crossing goes when its caller converts.
+  still works in words calls code that takes a context: the backends and
+  `eval`'s check call the desugarer, and the library loader the library
+  parser. Their words cross as an embedder's do, each through an `Owned`
+  handle read back with `Cx::held` (`NoGcScope::cross`), so no safe crate
+  turns a word into a value. A caller that hands nothing in, as the parser's
+  callers do, needs no handle: it opens a context with `NoGcScope::with_cx`,
+  over the instance the heap holds, and what it reads leaves as words. Each
+  crossing goes when its caller converts: the desugarer's into the macro
+  expander went when it took a context (#704). Converted code reads a
+  binding, a macro object among them, through the context
+  (`Cx::resolve_with_scopes`), as it reads a heap object's field: an
+  environment is traced with its bindings.
 - **The funnel.** `Cx::store(slot, v)` is the one way a value is written into
   a heap object: a pair's car or cdr, a vector's element, a cell, a record's
   field, a closure's free variable, a promise's box, a parameter's value.
@@ -1172,8 +1180,10 @@ these checks except the defer balance, which every build checks.
 - *A holder sees no collection.* A Rust scope or value that keeps heap values
   across a call that can evaluate takes `GcDeferGuard::holding`:
   `ParsedLibrary` (whose constructor now requires the heap, so it cannot be
-  built without its guard) and `Desugarer::desugar_with_imports`;
-  `VmState::with_globals` too, until #677. The guard records the heap's
+  built without its guard); `VmState::with_globals` too, until #677, and
+  `Desugarer::desugar_with_imports` until #704, whose expansion's values are
+  now a context's, which no collection may see either: a collection with a
+  context live panics in check builds (#703). The guard records the heap's
   collection count, and its drop panics if the count moved. Its scope keeps
   every collection out of its extent, so it cannot fire yet; once stage 4e
   lets nested loops collect, the first that does under a holder fails at the
@@ -1269,8 +1279,9 @@ that is safe:
 - a root reaches what it holds: a library being loaded is rooted by its
   registry entry, and the environments `with_globals` sets aside by the VM's
   `saved_globals` (#677);
-- a guard on the data defers collection: `ParsedLibrary` and
-  `desugar_with_imports` hold `GcDeferGuard::holding`;
+- a guard on the data defers collection: `ParsedLibrary` holds
+  `GcDeferGuard::holding`, and an expansion's data are values of the context
+  it runs in (`NoGcScope::cross`);
 - the state is in the machine: a frame it pushed, `Step::Call` and
   `resume_stub`;
 - the call runs on a nested loop that defers: every `apply_proc` a primitive
@@ -1434,7 +1445,8 @@ interned symbol as an occurrence key. Scope edits preserve
 provenance; stripping syntax identifiers into quoted data preserves graph
 sharing and cycles, using the same iterative graph copier. A memo shared by all
 quotes in one form preserves sharing across separate insertions of a macro
-argument; it is cleared when desugaring that form ends, before GC can reuse slots.
+argument; it lives in the form's context (`FormCx`) and is dropped with it, so
+it outlives no form and sees no collection (#704).
 
 This table is **not a root**. Before reclaiming slots, sweep retains only entries
 whose values are marked, then shrinks excess table capacity. This visits annotated

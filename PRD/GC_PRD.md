@@ -963,12 +963,12 @@ and raw slot access are `pub unsafe fn`; release-mode reservation range checks g
 `&mut Vec<char>` or `&mut [Word]` into the heap.
 
 **Crossing while the codemod converts.** Stage 3 converts the safe crates bottom-up (DESIGN E.5), so for a while a
-caller that works in words calls code that takes a `Cx`: the desugarer calling the expander, `eval`'s check calling
-the desugarer, the registry calling a converted primitive. Such a caller is a host of the code it calls, and its words
-cross as an embedder's values do ([#605]): each through an `Owned` handle, read back with `Cx::held` inside the
-context, while what comes back leaves as a word. A caller that passes no value in, as the parser's do, opens a context
-with no handle and takes words back out. No safe crate gains `unsafe`, no safe `Word → Value` API is added, and each
-crossing goes when its caller converts ([#704]).
+caller that works in words calls code that takes a `Cx`: the desugarer calling the expander (until it took a context
+in #704), the backends and `eval`'s check calling the desugarer, the registry calling a converted primitive. Such a
+caller is a host of the code it calls, and its words cross as an embedder's values do ([#605]): each through an `Owned`
+handle, read back with `Cx::held` inside the context, while what comes back leaves as a word. A caller that passes no
+value in, as the parser's do, opens a context with no handle and takes words back out. No safe crate gains `unsafe`, no
+safe `Word → Value` API is added, and each crossing goes when its caller converts ([#704]).
 
 **Across a collection**, only these hold values: resumable-primitive state (in the VM `resume_stub` frame or the
 tree-walker's `ResumePrimitive` continuation, both traced); a **`RootScope<'h>`**, which wraps the `&'h mut Heap`
