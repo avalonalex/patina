@@ -26,7 +26,7 @@
 
 use crate::lexer::{LexError, Lexer, ReaderState, Spanned, Token};
 use crate::parser::{ParseError, Parser};
-use patina_core::{SharedHeap, TaggedValue};
+use patina_core::{Cx, Value};
 use std::collections::VecDeque;
 
 /// What a prefix waiting for a datum does with it.
@@ -209,18 +209,18 @@ impl Reader {
         self.tokens.get(finished).map(|token| token.start)
     }
 
-    /// The next datum that has finished, parsed into `heap`, or `None` when
+    /// The next datum that has finished, parsed through `cx`, or `None` when
     /// none has and more text is needed.
     ///
     /// `configure` is handed the parser of that datum's own tokens, for a
     /// caller that records source positions ([`Parser::recording_into`]).
     /// A lexical error met while reading ahead is reported here, after the
     /// data that were finished before it.
-    pub fn next_datum(
+    pub fn next_datum<'gc>(
         &mut self,
-        heap: &SharedHeap,
+        cx: &mut Cx<'gc>,
         configure: impl Fn(Parser) -> Parser,
-    ) -> Option<Result<TaggedValue, ParseError>> {
+    ) -> Option<Result<Value<'gc>, ParseError>> {
         loop {
             let Some(end) = self.datum_ends.pop_front() else {
                 if let Some(error) = self.error.take() {
@@ -243,12 +243,12 @@ impl Reader {
             if let Some(last) = tokens.last() {
                 self.consumed = last.end;
             }
-            let parser = match Parser::from_tokens(tokens, heap.clone(), at) {
+            let parser = match Parser::from_tokens(tokens, at) {
                 Ok(parser) => configure(parser),
                 Err(error) => return Some(Err(error)),
             };
             let mut parser = parser;
-            match parser.parse_next() {
+            match parser.parse_next(cx) {
                 Ok(Some(value)) => return Some(Ok(value)),
                 // Only comments: a `#;` that dropped what followed it, or the
                 // text ending in them. Read on.
@@ -352,25 +352,30 @@ impl Reader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use patina_core::debug_format::format_tagged;
+
+    /// Run `f` in a context over a fresh heap.
+    fn with_cx<R>(f: impl for<'gc> FnOnce(&mut Cx<'gc>) -> R) -> R {
+        patina_core::NoGcScope::with_cx(&patina_core::new_shared_heap(), f)
+    }
 
     /// Every datum a reader finds in `pieces`, fed one at a time, written out;
     /// an error is `error`, and what is still unfinished at the end of the
     /// last piece is left unread.
     fn read(pieces: &[&str]) -> Vec<String> {
-        let heap = patina_core::new_shared_heap();
-        let mut reader = Reader::new(false);
-        let mut data = Vec::new();
-        for piece in pieces {
-            reader.feed(piece);
-            while let Some(result) = reader.next_datum(&heap, |parser| parser) {
-                data.push(match result {
-                    Ok(value) => format_tagged(value, &heap.borrow()),
-                    Err(_) => "error".to_string(),
-                });
+        with_cx(|cx| {
+            let mut reader = Reader::new(false);
+            let mut data = Vec::new();
+            for piece in pieces {
+                reader.feed(piece);
+                while let Some(result) = reader.next_datum(cx, |parser| parser) {
+                    data.push(match result {
+                        Ok(value) => cx.format(value),
+                        Err(_) => "error".to_string(),
+                    });
+                }
             }
-        }
-        data
+            data
+        })
     }
 
     /// A datum is read as soon as the text that finishes it has arrived, and
@@ -452,48 +457,49 @@ mod tests {
             .flat_map(|text| ["\n", "\r\n", "\r"].map(|ending| text.replace('\n', ending)))
         {
             let text = text.as_str();
-            let whole = (|| {
+            let whole = with_cx(|cx| {
                 let mut parser = Parser::new(text)?;
-                while parser.parse_next()?.is_some() {}
+                while parser.parse_next(cx)?.is_some() {}
                 Ok::<(), ParseError>(())
-            })()
+            })
             .unwrap_err();
             for piece in 1..=4 {
-                let heap = patina_core::new_shared_heap();
-                let mut reader = Reader::new(false);
-                let take = |reader: &mut Reader| {
-                    while let Some(result) = reader.next_datum(&heap, |p| p) {
-                        if let Err(error) = result {
-                            return Some(error);
+                with_cx(|cx| {
+                    let mut reader = Reader::new(false);
+                    let mut take = |reader: &mut Reader| {
+                        while let Some(result) = reader.next_datum(cx, |p| p) {
+                            if let Err(error) = result {
+                                return Some(error);
+                            }
+                            // Exercise compaction as the stdin runner does.
+                            reader.take_consumed();
                         }
-                        // Exercise compaction as the stdin runner does.
-                        reader.take_consumed();
+                        None
+                    };
+                    let mut error = None;
+                    let chars: Vec<char> = text.chars().collect();
+                    for chunk in chars.chunks(piece) {
+                        reader.feed(&chunk.iter().collect::<String>());
+                        error = take(&mut reader);
+                        if error.is_some() {
+                            break;
+                        }
                     }
-                    None
-                };
-                let mut error = None;
-                let chars: Vec<char> = text.chars().collect();
-                for chunk in chars.chunks(piece) {
-                    reader.feed(&chunk.iter().collect::<String>());
-                    error = take(&mut reader);
-                    if error.is_some() {
-                        break;
+                    if error.is_none() {
+                        reader.no_more_text();
+                        error = take(&mut reader);
                     }
-                }
-                if error.is_none() {
-                    reader.no_more_text();
-                    error = take(&mut reader);
-                }
-                let error = error.expect("malformed input must fail");
-                // Offsets restart when consumed input is discarded, but
-                // source coordinates and rendered diagnostics must not.
-                assert_eq!(
-                    error.format_in_source("test.scm", text),
-                    whole.format_in_source("test.scm", text),
-                    "{text:?}, {piece} characters per feed"
-                );
-                assert_eq!(error.is_incomplete(), whole.is_incomplete());
-                assert!(error.span().is_some());
+                    let error = error.expect("malformed input must fail");
+                    // Offsets restart when consumed input is discarded, but
+                    // source coordinates and rendered diagnostics must not.
+                    assert_eq!(
+                        error.format_in_source("test.scm", text),
+                        whole.format_in_source("test.scm", text),
+                        "{text:?}, {piece} characters per feed"
+                    );
+                    assert_eq!(error.is_incomplete(), whole.is_incomplete());
+                    assert!(error.span().is_some());
+                });
             }
         }
     }
@@ -501,20 +507,18 @@ mod tests {
     /// The end of the text finishes the last datum, or reports it unfinished.
     #[test]
     fn the_end_of_the_text_finishes_or_reports_what_is_left() {
-        let heap = patina_core::new_shared_heap();
-        let mut reader = Reader::new(false);
-        reader.feed("(a) (b");
-        assert!(reader.next_datum(&heap, |p| p).is_some(), "(a) is read");
-        assert!(
-            reader.next_datum(&heap, |p| p).is_none(),
-            "(b is unfinished"
-        );
-        assert!(reader.inside_datum());
-        reader.no_more_text();
-        assert!(
-            matches!(reader.next_datum(&heap, |p| p), Some(Err(error)) if error.is_incomplete()),
-            "the unfinished datum is reported, not waited for"
-        );
+        with_cx(|cx| {
+            let mut reader = Reader::new(false);
+            reader.feed("(a) (b");
+            assert!(reader.next_datum(cx, |p| p).is_some(), "(a) is read");
+            assert!(reader.next_datum(cx, |p| p).is_none(), "(b is unfinished");
+            assert!(reader.inside_datum());
+            reader.no_more_text();
+            assert!(
+                matches!(reader.next_datum(cx, |p| p), Some(Err(error)) if error.is_incomplete()),
+                "the unfinished datum is reported, not waited for"
+            );
+        });
     }
 
     /// A reader fed text in pieces reads what a parser handed the whole text
@@ -567,44 +571,44 @@ mod tests {
             "(unfinished",
         ];
         for text in texts {
-            let whole = {
-                let heap = patina_core::new_shared_heap();
-                let mut parser = Parser::new_with_heap(text, heap.clone()).expect("a parser");
+            let whole = with_cx(|cx| {
+                let mut parser = Parser::new(text).expect("a parser");
                 let mut data = Vec::new();
-                while let Ok(Some(value)) = parser.parse_next() {
-                    data.push(format_tagged(value, &heap.borrow()));
+                while let Ok(Some(value)) = parser.parse_next(cx) {
+                    data.push(cx.format(value));
                 }
                 data
-            };
+            });
             for piece in 1..=4 {
-                let heap = patina_core::new_shared_heap();
-                let mut reader = Reader::new(false);
-                let mut data = Vec::new();
-                let mut stopped = false;
-                // Stopping at the first error, as the whole-text read above
-                // does, so the two are compared on the same data.
-                let take = |reader: &mut Reader, data: &mut Vec<String>| {
-                    while let Some(result) = reader.next_datum(&heap, |parser| parser) {
-                        match result {
-                            Ok(value) => data.push(format_tagged(value, &heap.borrow())),
-                            Err(_) => return true,
+                with_cx(|cx| {
+                    let mut reader = Reader::new(false);
+                    let mut data = Vec::new();
+                    let mut stopped = false;
+                    // Stopping at the first error, as the whole-text read above
+                    // does, so the two are compared on the same data.
+                    let mut take = |reader: &mut Reader, data: &mut Vec<String>| {
+                        while let Some(result) = reader.next_datum(cx, |parser| parser) {
+                            match result {
+                                Ok(value) => data.push(cx.format(value)),
+                                Err(_) => return true,
+                            }
+                        }
+                        false
+                    };
+                    let characters: Vec<char> = text.chars().collect();
+                    for chunk in characters.chunks(piece) {
+                        reader.feed(&chunk.iter().collect::<String>());
+                        stopped = take(&mut reader, &mut data);
+                        if stopped {
+                            break;
                         }
                     }
-                    false
-                };
-                let characters: Vec<char> = text.chars().collect();
-                for chunk in characters.chunks(piece) {
-                    reader.feed(&chunk.iter().collect::<String>());
-                    stopped = take(&mut reader, &mut data);
-                    if stopped {
-                        break;
+                    if !stopped {
+                        reader.no_more_text();
+                        take(&mut reader, &mut data);
                     }
-                }
-                if !stopped {
-                    reader.no_more_text();
-                    take(&mut reader, &mut data);
-                }
-                assert_eq!(data, whole, "{text:?}, fed {piece} characters at a time");
+                    assert_eq!(data, whole, "{text:?}, fed {piece} characters at a time");
+                });
             }
         }
     }
@@ -613,31 +617,32 @@ mod tests {
     /// own positions, and keeps a `#!fold-case` read before it.
     #[test]
     fn a_resuming_reader_keeps_the_source_s_positions_and_directives() {
-        let heap = patina_core::new_shared_heap();
-        let source_map =
-            std::rc::Rc::new(std::cell::RefCell::new(crate::source_map::SourceMap::new()));
-        let at = ReaderState {
-            offset: 0,
-            line: 7,
-            column: 5,
-            after_cr: false,
-            fold_case: true,
-        };
-        let mut reader = Reader::resuming(false, at);
-        reader.feed("(A b)\n");
-        let value = reader
-            .next_datum(&heap, |parser| {
-                parser.recording_into(std::rc::Rc::from("<stdin>"), source_map.clone())
-            })
-            .expect("a datum has finished")
-            .expect("it reads");
-        let at = heap.borrow().source(value).map(|l| (l.line, l.column));
-        assert_eq!(at, Some((7, 5)), "the position is the source's own");
-        assert_eq!(
-            format_tagged(value, &heap.borrow()),
-            "(a b)",
-            "the directive read before it still holds"
-        );
+        with_cx(|cx| {
+            let source_map =
+                std::rc::Rc::new(std::cell::RefCell::new(crate::source_map::SourceMap::new()));
+            let at = ReaderState {
+                offset: 0,
+                line: 7,
+                column: 5,
+                after_cr: false,
+                fold_case: true,
+            };
+            let mut reader = Reader::resuming(false, at);
+            reader.feed("(A b)\n");
+            let value = reader
+                .next_datum(cx, |parser| {
+                    parser.recording_into(std::rc::Rc::from("<stdin>"), source_map.clone())
+                })
+                .expect("a datum has finished")
+                .expect("it reads");
+            let at = cx.source(value).map(|l| (l.line, l.column));
+            assert_eq!(at, Some((7, 5)), "the position is the source's own");
+            assert_eq!(
+                cx.format(value),
+                "(a b)",
+                "the directive read before it still holds"
+            );
+        });
     }
 
     /// The first text of a source may begin with a byte order mark, which is
@@ -647,14 +652,15 @@ mod tests {
     fn only_the_start_of_a_source_drops_a_byte_order_mark() {
         assert_eq!(read(&["\u{feff}42 "]), vec!["42"]);
 
-        let heap = patina_core::new_shared_heap();
-        let mut reader = Reader::resuming(false, ReaderState::START);
-        reader.feed("\u{feff}42 ");
-        let value = reader
-            .next_datum(&heap, |parser| parser)
-            .expect("a datum has finished")
-            .expect("it reads");
-        assert_ne!(format_tagged(value, &heap.borrow()), "42");
+        with_cx(|cx| {
+            let mut reader = Reader::resuming(false, ReaderState::START);
+            reader.feed("\u{feff}42 ");
+            let value = reader
+                .next_datum(cx, |parser| parser)
+                .expect("a datum has finished")
+                .expect("it reads");
+            assert_ne!(cx.format(value), "42");
+        });
     }
 
     /// A directive read in one piece of text holds for the text after it.
@@ -686,28 +692,29 @@ mod tests {
     #[test]
     fn directive_state_follows_consumed_data_and_reaches_the_eof_tail() {
         let text = "A #!fold-case B #!no-fold-case C #!fold-case #;D";
-        let heap = patina_core::new_shared_heap();
-        let mut parser = Parser::new_with_heap(text, heap.clone()).unwrap();
-        let mut reader = Reader::new(false);
-        reader.feed(text);
-        // The validator's trial read must not commit the trailing directive.
-        reader.inside_datum();
-        assert!(!reader.position().fold_case);
-        reader.no_more_text();
-        for (expected, fold_case) in [("A", false), ("b", true), ("C", false)] {
-            let whole = parser.parse_next().unwrap().unwrap();
-            let fed = reader.next_datum(&heap, |p| p).unwrap().unwrap();
-            assert_eq!(format_tagged(whole, &heap.borrow()), expected);
-            assert_eq!(format_tagged(fed, &heap.borrow()), expected);
-            assert_eq!(parser.read_state().fold_case, fold_case);
-            assert_eq!(reader.position().fold_case, fold_case);
-        }
-        assert!(parser.parse_next().unwrap().is_none());
-        assert!(reader.next_datum(&heap, |p| p).is_none());
-        assert!(parser.read_state().fold_case);
-        assert!(reader.position().fold_case);
-        assert_eq!(parser.read_state().offset, text.chars().count());
-        assert_eq!(reader.position().offset, text.chars().count());
+        with_cx(|cx| {
+            let mut parser = Parser::new(text).unwrap();
+            let mut reader = Reader::new(false);
+            reader.feed(text);
+            // The validator's trial read must not commit the trailing directive.
+            reader.inside_datum();
+            assert!(!reader.position().fold_case);
+            reader.no_more_text();
+            for (expected, fold_case) in [("A", false), ("b", true), ("C", false)] {
+                let whole = parser.parse_next(cx).unwrap().unwrap();
+                let fed = reader.next_datum(cx, |p| p).unwrap().unwrap();
+                assert_eq!(cx.format(whole), expected);
+                assert_eq!(cx.format(fed), expected);
+                assert_eq!(parser.read_state().fold_case, fold_case);
+                assert_eq!(reader.position().fold_case, fold_case);
+            }
+            assert!(parser.parse_next(cx).unwrap().is_none());
+            assert!(reader.next_datum(cx, |p| p).is_none());
+            assert!(parser.read_state().fold_case);
+            assert!(reader.position().fold_case);
+            assert_eq!(parser.read_state().offset, text.chars().count());
+            assert_eq!(reader.position().offset, text.chars().count());
+        });
     }
 
     #[test]
@@ -719,7 +726,7 @@ mod tests {
             "(A #!fold-case \"unfinished",
         ] {
             let mut parser = Parser::new(text).unwrap();
-            assert!(parser.parse_next().is_err(), "{text}");
+            assert!(with_cx(|cx| parser.parse_next(cx).is_err()), "{text}");
             assert!(parser.read_state().fold_case, "{text}");
         }
     }

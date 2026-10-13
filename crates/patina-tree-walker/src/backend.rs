@@ -248,9 +248,10 @@ mod tests {
     /// Helper: parse a string and evaluate it via the Backend trait
     fn eval_str(backend: &TreeWalker, code: &str) -> Result<TaggedValue, EvalError> {
         let heap = backend.global_env().heap();
-        let mut parser = patina_frontend::Parser::new_with_heap(code, heap.clone()).unwrap();
-        let expr = parser.parse().unwrap();
-        drop(parser);
+        let expr = patina_core::NoGcScope::with_cx(heap, |cx| {
+            let mut parser = patina_frontend::Parser::new(code).unwrap();
+            parser.parse(cx).unwrap().tagged()
+        });
         backend.eval_global(expr)
     }
 
@@ -290,9 +291,10 @@ mod tests {
 
         // Parse and evaluate x in custom env
         let heap = backend.global_env().heap();
-        let mut parser = patina_frontend::Parser::new_with_heap("x", heap.clone()).unwrap();
-        let expr = parser.parse().unwrap();
-        drop(parser);
+        let expr = patina_core::NoGcScope::with_cx(heap, |cx| {
+            let mut parser = patina_frontend::Parser::new("x").unwrap();
+            parser.parse(cx).unwrap().tagged()
+        });
         let result = backend.eval(expr, &custom_env).unwrap();
 
         assert_eq!(result.as_fixnum(), Some(99));

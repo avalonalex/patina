@@ -140,20 +140,20 @@ fn every_boundary_in_representative_data() {
 
 #[test]
 fn label_aliases_resolve_to_data_or_raise_read_errors() {
-    use patina_core::{Port, new_shared_heap};
+    use patina_core::{NoGcScope, Port, new_shared_heap};
     use patina_frontend::Parser;
 
     // The first input is the six-byte libFuzzer reduction (#565). Chibi and
     // Gauche reject it and the mutually recursive form too.
     for text in ["#0=#0#", "(#0=#1# #1=#0#)", "#(#0=#1=#0#)"] {
         check_reader(text, &[0]);
-        let mut parser = Parser::new(text).unwrap();
-        let err = parser.parse_next().unwrap_err();
-        assert!(err.to_string().contains("without a datum"), "{err}");
-        assert!(err.span().is_some());
-        assert!(
-            Parser::read_from_port(Port::new_input_string(text.into()), new_shared_heap()).is_err()
-        );
+        NoGcScope::with_cx(&new_shared_heap(), |cx| {
+            let mut parser = Parser::new(text).unwrap();
+            let err = parser.parse_next(cx).unwrap_err();
+            assert!(err.to_string().contains("without a datum"), "{err}");
+            assert!(err.span().is_some());
+            assert!(Parser::read_from_port(Port::new_input_string(text.into()), cx).is_err());
+        });
     }
 
     // Forward references are an existing Patina extension. Every alias must
@@ -161,28 +161,25 @@ fn label_aliases_resolve_to_data_or_raise_read_errors() {
     for tail in ["(x)", "#(x)", "(x . #0#)", "#(#0#)"] {
         let text = format!("#(#0=#1# #1=#2# #2={tail})");
         check_reader(&text, &[0, 2, 7]);
-        let heap = new_shared_heap();
-        let value = Parser::new_with_heap(&text, heap.clone())
-            .unwrap()
-            .parse()
-            .unwrap();
-        let h = heap.borrow();
-        let first = h.vector_ref(value, 0);
-        assert!(first.is_pair() || first.is_vector());
-        assert_eq!(first, h.vector_ref(value, 1));
-        assert_eq!(first, h.vector_ref(value, 2));
-        if tail == "(x . #0#)" {
-            assert_eq!(h.cdr(first), first);
-        }
-        if tail == "#(#0#)" {
-            assert_eq!(h.vector_ref(first, 0), first);
-        }
+        NoGcScope::with_cx(&new_shared_heap(), |cx| {
+            let value = Parser::new(&text).unwrap().parse(cx).unwrap();
+            let first = cx.vector_ref(value, 0);
+            assert!(first.is_pair() || first.is_vector());
+            assert_eq!(first, cx.vector_ref(value, 1));
+            assert_eq!(first, cx.vector_ref(value, 2));
+            if tail == "(x . #0#)" {
+                assert_eq!(cx.cdr(first), first);
+            }
+            if tail == "#(#0#)" {
+                assert_eq!(cx.vector_ref(first, 0), first);
+            }
+        });
     }
 }
 
 #[test]
 fn long_forward_alias_chain_is_fully_resolved() {
-    use patina_core::new_shared_heap;
+    use patina_core::{NoGcScope, new_shared_heap};
     use patina_frontend::Parser;
     use std::fmt::Write;
 
@@ -191,13 +188,10 @@ fn long_forward_alias_chain_is_fully_resolved() {
         write!(text, "#{label}=#{}# ", label + 1).unwrap();
     }
     text.push_str("#20000=(x))");
-    let heap = new_shared_heap();
-    let value = Parser::new_with_heap(&text, heap.clone())
-        .unwrap()
-        .parse()
-        .unwrap();
-    let h = heap.borrow();
-    let first = h.vector_ref(value, 0);
-    assert!(first.is_pair());
-    assert!(h.vector_slice(value).iter().all(|&v| v == first));
+    NoGcScope::with_cx(&new_shared_heap(), |cx| {
+        let value = Parser::new(&text).unwrap().parse(cx).unwrap();
+        let first = cx.vector_ref(value, 0);
+        assert!(first.is_pair());
+        assert!(cx.vector_slice(value).iter().all(|&v| v == first));
+    });
 }

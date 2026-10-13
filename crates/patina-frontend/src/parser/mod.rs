@@ -6,8 +6,7 @@ pub use error::ParseError;
 use crate::lexer::{LexError, Lexer, ReadSpan, ReaderState, Spanned, Token};
 use crate::source_map::SourceMap;
 use patina_core::error::SourceLocation;
-use patina_core::heap::HeapObjectData;
-use patina_core::{SharedHeap, TaggedValue};
+use patina_core::{Cx, Value};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -76,15 +75,6 @@ pub struct Parser {
     current_token_end: ReaderState,
     /// The folding mode after lexing this token, also carried by token replay.
     current_token_fold_case: bool,
-    /// Shared heap for allocating pairs, vectors, strings, etc.
-    heap: SharedHeap,
-    /// Datum labels for shared/cyclic structure support (R7RS Section 2.4)
-    /// Maps label number to the labelled value
-    labels: HashMap<usize, TaggedValue>,
-    /// Labels referenced by `#n#` before (or without) their `#n=`. Checked
-    /// once the outermost datum is complete: one still undefined then is an
-    /// error, not a placeholder left in the datum.
-    pending_refs: Vec<(usize, ReadSpan)>,
     /// Optional source map for recording source positions of parsed forms
     source_map: Option<Rc<RefCell<SourceMap>>>,
     /// Name of the source being parsed (e.g., file path, "<repl>", "<eval>")
@@ -103,45 +93,51 @@ pub struct Parser {
     port_boundary: Option<ReaderState>,
 }
 
+/// The datum labels of the outermost datum being read (R7RS 2.4), which is
+/// their scope: made for each such datum and dropped with it, so a parser
+/// holds no value between reads (#704).
+#[derive(Default)]
+struct Labels<'gc> {
+    /// Maps label number to the labelled value
+    defined: HashMap<usize, Value<'gc>>,
+    /// Labels referenced by `#n#` before (or without) their `#n=`. Checked
+    /// once the outermost datum is complete: one still undefined then is an
+    /// error, not a placeholder left in the datum.
+    pending: Vec<(usize, ReadSpan)>,
+}
+
 impl Parser {
-    /// Create a new parser with the given heap.
-    /// This is the preferred constructor when a heap is available.
-    pub fn new_with_heap(input: &str, heap: SharedHeap) -> Result<Self, ParseError> {
-        Self::from_lexer(Lexer::new(input), heap)
+    /// Create a new parser over `input`. It reads into the heap of the
+    /// context each read is given, and holds no value between reads.
+    pub fn new(input: &str) -> Result<Self, ParseError> {
+        Self::from_lexer(Lexer::new(input))
     }
 
     /// Parse one datum directly from the port's persistent input cursor.
     /// No tokens or Scheme values are cached between calls.
-    pub fn read_from_port(
+    pub fn read_from_port<'gc>(
         port: Rc<patina_core::Port>,
-        heap: SharedHeap,
-    ) -> Result<Option<TaggedValue>, ParseError> {
-        Self::from_lexer(Lexer::from_port(port)?, heap)?.parse_next()
+        cx: &mut Cx<'gc>,
+    ) -> Result<Option<Value<'gc>>, ParseError> {
+        Self::from_lexer(Lexer::from_port(port)?)?.parse_next(cx)
     }
 
-    fn from_lexer(lexer: Lexer, heap: SharedHeap) -> Result<Self, ParseError> {
-        Self::from_source(TokenSource::Lexing(lexer), heap)
+    fn from_lexer(lexer: Lexer) -> Result<Self, ParseError> {
+        Self::from_source(TokenSource::Lexing(lexer))
     }
 
     /// A parser over `tokens`, already lexed, the first of them beginning at
     /// `at`: how a [`crate::reader::Reader`] reads a datum whose tokens it
     /// holds. See [`TokenSource`].
-    pub fn from_tokens(
-        tokens: Vec<Spanned>,
-        heap: SharedHeap,
-        at: ReaderState,
-    ) -> Result<Self, ParseError> {
-        Self::from_source(
-            TokenSource::Replay {
-                tokens: tokens.into_iter(),
-                prev_end: at,
-                last_end: at,
-            },
-            heap,
-        )
+    pub fn from_tokens(tokens: Vec<Spanned>, at: ReaderState) -> Result<Self, ParseError> {
+        Self::from_source(TokenSource::Replay {
+            tokens: tokens.into_iter(),
+            prev_end: at,
+            last_end: at,
+        })
     }
 
-    fn from_source(mut source: TokenSource, heap: SharedHeap) -> Result<Self, ParseError> {
+    fn from_source(mut source: TokenSource) -> Result<Self, ParseError> {
         let spanned = source.next_token()?;
         Ok(Parser {
             source,
@@ -152,9 +148,6 @@ impl Parser {
             current_token_end: spanned.end,
             current_token_fold_case: spanned.end.fold_case,
             datum_start: spanned.start,
-            heap,
-            labels: HashMap::new(),
-            pending_refs: Vec::new(),
             source_map: None,
             source_name: Rc::from("<unknown>"),
             nesting: 0,
@@ -164,31 +157,22 @@ impl Parser {
         })
     }
 
-    /// Create a new parser with a fresh heap.
-    /// This is provided for backward compatibility and testing.
-    pub fn new(input: &str) -> Result<Self, ParseError> {
-        let heap = patina_core::new_shared_heap();
-        Self::new_with_heap(input, heap)
-    }
-
     /// Create a new parser with source map tracking.
     ///
     /// Program identifiers have distinct syntax identities and complete
     /// spans. Container slots retain immediate-datum spans as well. Ordinary
-    /// datum callers should use `new_with_heap` or `read_from_port`.
+    /// datum callers should use `new` or `read_from_port`.
     pub fn new_with_source_map(
         input: &str,
-        heap: SharedHeap,
         source_name: Rc<str>,
         source_map: Rc<RefCell<SourceMap>>,
     ) -> Result<Self, ParseError> {
-        Self::new_with_source_map_and_fold_case(input, heap, source_name, source_map, false)
+        Self::new_with_source_map_and_fold_case(input, source_name, source_map, false)
     }
 
     /// Source-mapped input continuing an interactive session's directive mode.
     pub fn new_with_source_map_and_fold_case(
         input: &str,
-        heap: SharedHeap,
         source_name: Rc<str>,
         source_map: Rc<RefCell<SourceMap>>,
         fold_case: bool,
@@ -202,7 +186,7 @@ impl Parser {
         }
         let mut lexer = Lexer::new(input);
         lexer.set_initial_fold_case(fold_case);
-        let mut parser = Self::from_lexer(lexer, heap)?;
+        let mut parser = Self::from_lexer(lexer)?;
         parser.source_map = Some(source_map);
         parser.source_name = source_name;
         Ok(parser)
@@ -222,26 +206,12 @@ impl Parser {
         self
     }
 
-    /// Create a parser with case-folding enabled and the given heap.
+    /// Create a parser with case-folding enabled.
     ///
     /// Used by `include-ci` to read files in case-insensitive mode.
     /// Identifiers and character names fold as if by string-foldcase.
-    pub fn new_case_insensitive_with_heap(
-        input: &str,
-        heap: SharedHeap,
-    ) -> Result<Self, ParseError> {
-        Self::from_lexer(Lexer::new_case_insensitive(input), heap)
-    }
-
-    /// Create a parser with case-folding enabled and a fresh heap.
     pub fn new_case_insensitive(input: &str) -> Result<Self, ParseError> {
-        let heap = patina_core::new_shared_heap();
-        Self::new_case_insensitive_with_heap(input, heap)
-    }
-
-    /// Get a reference to the parser's heap
-    pub fn heap(&self) -> &SharedHeap {
-        &self.heap
+        Self::from_lexer(Lexer::new_case_insensitive(input))
     }
 
     /// Char offset just past the last token consumed by the most recent
@@ -274,33 +244,22 @@ impl Parser {
         })
     }
 
-    fn record_location(&self, tv: TaggedValue, loc: SourceLocation) {
-        self.heap.borrow_mut().record_source(tv, loc);
-    }
-
     /// Program syntax has distinct identifiers; datum readers continue to
     /// return interned symbols without allocating syntax metadata.
-    fn identifier(&self, name: &str) -> TaggedValue {
+    fn identifier<'gc>(&self, cx: &mut Cx<'gc>, name: &str) -> Value<'gc> {
         if self.source_map.is_some() {
-            self.heap
-                .borrow_mut()
-                .alloc_source_identifier(Rc::from(name))
+            cx.alloc_source_identifier(Rc::from(name))
         } else {
-            self.heap.borrow_mut().intern_symbol(name)
+            cx.intern_symbol(name)
         }
     }
 
     /// Parse program text with retained source, for loaders that do not own
     /// an interactive source map. Compiled expressions retain the document.
-    pub fn new_program(
-        input: &str,
-        heap: SharedHeap,
-        name: &str,
-        fold_case: bool,
-    ) -> Result<Self, ParseError> {
+    pub fn new_program(input: &str, name: &str, fold_case: bool) -> Result<Self, ParseError> {
         let mut lexer = Lexer::new(input);
         lexer.set_initial_fold_case(fold_case);
-        let mut parser = Self::from_lexer(lexer, heap)?;
+        let mut parser = Self::from_lexer(lexer)?;
         let mut map = SourceMap::new();
         map.set_source_text(input.to_owned());
         map.set_primary_source(name);
@@ -368,10 +327,10 @@ impl Parser {
     /// `IncompleteDatum` error, as required of the Scheme `read` procedure
     /// — so is an incomplete datum comment — and a caller reading forms
     /// until the end of the input must treat only `Ok(None)` as that end.
-    pub fn parse_next(&mut self) -> Result<Option<TaggedValue>, ParseError> {
-        let result = self.at_datum().and_then(|present| {
+    pub fn parse_next<'gc>(&mut self, cx: &mut Cx<'gc>) -> Result<Option<Value<'gc>>, ParseError> {
+        let result = self.at_datum(cx).and_then(|present| {
             if present {
-                self.parse().map(Some)
+                self.parse(cx).map(Some)
             } else {
                 Ok(None)
             }
@@ -408,7 +367,7 @@ impl Parser {
     /// is reported against the second `#;` rather than the first. A *nested*
     /// run — `#; #;` — is one construct, and like an unfinished nested list
     /// is reported against where that construct starts.
-    fn at_datum(&mut self) -> Result<bool, ParseError> {
+    fn at_datum(&mut self, cx: &mut Cx<'_>) -> Result<bool, ParseError> {
         if self.port_boundary.take().is_some() {
             self.advance()?;
         }
@@ -421,7 +380,7 @@ impl Parser {
                 return Ok(self.current_token != Token::Eof);
             }
             self.advance()?; // consume #;
-            self.skip_datum()?; // skip the commented datum
+            self.skip_datum(cx)?; // skip the commented datum
         }
     }
 
@@ -434,46 +393,45 @@ impl Parser {
     /// Parse one datum, which must be there: `UnexpectedEof` when only
     /// whitespace and comments remain. Use `parse_next` to read up to the
     /// end of the input.
-    pub fn parse(&mut self) -> Result<TaggedValue, ParseError> {
+    pub fn parse<'gc>(&mut self, cx: &mut Cx<'gc>) -> Result<Value<'gc>, ParseError> {
         self.nesting = 0;
-        let result = self.parse_one_datum();
         // A label's scope is its outermost datum (R7RS 2.4): the table is
-        // cleared for the next one — also after a failed datum, so one bad
-        // form cannot poison the next with "Duplicate datum label". Every
-        // exit of `parse_one_datum` passes through here, which is why it is
-        // a separate function rather than three copies of these two lines.
-        self.labels.clear();
-        self.pending_refs.clear();
-        result
-    }
-
-    fn parse_one_datum(&mut self) -> Result<TaggedValue, ParseError> {
-        if !self.at_datum()? {
+        // made for this one and dropped with it, also after a failed datum,
+        // so one bad form cannot poison the next with "Duplicate datum
+        // label".
+        let mut labels = Labels::default();
+        if !self.at_datum(cx)? {
             return Err(ParseError::UnexpectedEof.at(self.current_span()));
         }
-        self.parse_expr().and_then(|tv| self.finish_datum(tv))
+        let tv = self.parse_expr(cx, &mut labels)?;
+        self.finish_datum(cx, &mut labels, tv)
     }
 
     /// Resolve the placeholders of a complete outermost datum, and reject a
     /// `#n#` whose `#n=` never came: R7RS 2.4 scopes labels to the datum,
     /// so nothing later can define it, and a placeholder object left in the
     /// data would be garbage to every consumer.
-    fn finish_datum(&mut self, tv: TaggedValue) -> Result<TaggedValue, ParseError> {
+    fn finish_datum<'gc>(
+        &mut self,
+        cx: &mut Cx<'gc>,
+        labels: &mut Labels<'gc>,
+        tv: Value<'gc>,
+    ) -> Result<Value<'gc>, ParseError> {
         // Without a forward or self-reference, no placeholder was allocated.
         // Walking ordinary data here is needless work and used to overflow
         // the Rust stack on a long, flat list (#355).
-        if self.pending_refs.is_empty() {
+        if labels.pending.is_empty() {
             return Ok(tv);
         }
-        if let Some(&(n, span)) = self
-            .pending_refs
+        if let Some(&(n, span)) = labels
+            .pending
             .iter()
-            .find(|(n, _)| !self.labels.contains_key(n))
+            .find(|(n, _)| !labels.defined.contains_key(n))
         {
             return Err(ParseError::UndefinedLabel(n).at(span));
         }
-        self.resolve_label_aliases()?;
-        Ok(self.resolve_labels(tv))
+        Self::resolve_label_aliases(cx, labels)?;
+        Ok(Self::resolve_labels(cx, labels, tv))
     }
 
     /// Collapse aliases before patching containers (#565). A chain of labels
@@ -481,12 +439,14 @@ impl Parser {
     /// cycles such as `#0=(a . #0#)` end in a pair here and are patched below.
     /// Memoizing every traversed label makes long forward chains linear, and
     /// the explicit path avoids consuming the Rust stack.
-    fn resolve_label_aliases(&mut self) -> Result<(), ParseError> {
+    fn resolve_label_aliases<'gc>(
+        cx: &Cx<'gc>,
+        labels: &mut Labels<'gc>,
+    ) -> Result<(), ParseError> {
         // None marks a label on the current path; Some is its final value.
-        let mut resolved: HashMap<usize, Option<TaggedValue>> = HashMap::new();
+        let mut resolved: HashMap<usize, Option<Value<'gc>>> = HashMap::new();
         let mut path = Vec::new();
-        let heap = self.heap.borrow();
-        for &(start, span) in &self.pending_refs {
+        for &(start, span) in &labels.pending {
             let mut label = start;
             let value = loop {
                 match resolved.get(&label) {
@@ -501,18 +461,16 @@ impl Parser {
                 }
                 resolved.insert(label, None);
                 path.push(label);
-                let value = self.labels[&label];
-                if value.is_object()
-                    && let HeapObjectData::LabelPlaceholder(next) = heap.get_object(value)
-                {
-                    label = *next;
+                let value = labels.defined[&label];
+                if let Some(next) = cx.label_placeholder(value) {
+                    label = next;
                 } else {
                     break value;
                 }
             };
             for alias in path.drain(..) {
                 resolved.insert(alias, Some(value));
-                self.labels.insert(alias, value);
+                labels.defined.insert(alias, value);
             }
         }
         Ok(())
@@ -524,9 +482,9 @@ impl Parser {
     /// Ends after trailing whitespace and comments — a datum comment
     /// included — and fails with `IncompleteDatum` if the input ends inside
     /// a datum, so a file cut short is never read as a shorter whole one.
-    pub fn parse_all(&mut self) -> Result<Vec<TaggedValue>, ParseError> {
+    pub fn parse_all<'gc>(&mut self, cx: &mut Cx<'gc>) -> Result<Vec<Value<'gc>>, ParseError> {
         let mut exprs = Vec::new();
-        while let Some(expr) = self.parse_next()? {
+        while let Some(expr) = self.parse_next(cx)? {
             exprs.push(expr);
         }
         Ok(exprs)
@@ -540,16 +498,16 @@ impl Parser {
     /// unnoticed. Reading the remainder with `parse_next` would answer the
     /// same question, but would allocate every discarded datum on the
     /// caller's heap for the garbage collector to find later.
-    pub fn skip_rest(&mut self) -> Result<(), ParseError> {
-        while self.at_datum()? {
-            self.skip_datum()?;
+    pub fn skip_rest(&mut self, cx: &mut Cx<'_>) -> Result<(), ParseError> {
+        while self.at_datum(cx)? {
+            self.skip_datum(cx)?;
         }
         Ok(())
     }
 
     /// Scan the complete number before converting its validated parts.
-    fn parse_number(&self, input: &str) -> Result<TaggedValue, ParseError> {
-        number::parse(input, 10, &self.heap).map_err(|error| {
+    fn parse_number<'gc>(&self, cx: &mut Cx<'gc>, input: &str) -> Result<Value<'gc>, ParseError> {
+        number::parse(input, 10, cx).map_err(|error| {
             let mut at = self.current_token_start;
             for ch in input[..error.offset].chars() {
                 at.advance(ch);
@@ -562,15 +520,11 @@ impl Parser {
     /// A radix in the string overrides the optional argument (R7RS 6.2.7).
     /// Scanning the string directly avoids token copies, synthetic prefixes,
     /// and the lexer's whitespace/comment/directive handling.
-    pub fn number_from_str(s: &str, radix: u32, heap: SharedHeap) -> Option<TaggedValue> {
+    pub fn number_from_str<'gc>(s: &str, radix: u32, cx: &mut Cx<'gc>) -> Option<Value<'gc>> {
         if !matches!(radix, 2 | 8 | 10 | 16) {
             return None;
         }
-        number::parse(s, radix, &heap).ok()
-    }
-
-    fn make_list(&self, elements: Vec<TaggedValue>) -> TaggedValue {
-        self.heap.borrow_mut().list_from_iter(elements)
+        number::parse(s, radix, cx).ok()
     }
 
     /// Resolve all LabelPlaceholder values in a parsed datum.
@@ -582,51 +536,42 @@ impl Parser {
     ///
     /// For cyclic structures, this mutates pairs/vectors in place to create
     /// actual cycles (rather than copies).
-    fn resolve_labels(&self, tv: TaggedValue) -> TaggedValue {
+    fn resolve_labels<'gc>(cx: &mut Cx<'gc>, labels: &Labels<'gc>, tv: Value<'gc>) -> Value<'gc> {
         use std::collections::HashSet;
 
-        let resolve = |value: TaggedValue, heap: &patina_core::Heap| {
-            if value.is_object()
-                && let HeapObjectData::LabelPlaceholder(label) = heap.get_object(value)
-            {
-                // finish_datum checked definitions and collapsed aliases.
-                self.labels[label]
-            } else {
-                value
-            }
+        // finish_datum checked definitions and collapsed aliases.
+        let resolve = |value: Value<'gc>, cx: &Cx<'gc>| {
+            cx.label_placeholder(value)
+                .map_or(value, |label| labels.defined[&label])
         };
 
-        // Only heap accessors below: no Scheme allocation, callback or GC
-        // safe point occurs while this borrow and the worklist are live.
         // Patch existing containers in place to preserve sharing and cycles.
-        let mut heap = self.heap.borrow_mut();
-        let tv = resolve(tv, &heap);
+        let tv = resolve(tv, cx);
         let mut pending = vec![tv];
         let mut visited = HashSet::new();
         while let Some(container) = pending.pop() {
-            if !(container.is_pair() || container.is_vector()) || !visited.insert(container.raw()) {
+            if !(container.is_pair() || container.is_vector()) || !visited.insert(container) {
                 continue;
             }
             if container.is_pair() {
-                let car = heap.car(container);
-                let cdr = heap.cdr(container);
-                let new_car = resolve(car, &heap);
-                let new_cdr = resolve(cdr, &heap);
+                let (car, cdr) = cx.get_pair(container);
+                let new_car = resolve(car, cx);
+                let new_cdr = resolve(cdr, cx);
                 if new_car != car {
-                    heap.set_car(container, new_car);
+                    cx.set_car(container, new_car);
                 }
                 if new_cdr != cdr {
-                    heap.set_cdr(container, new_cdr);
+                    cx.set_cdr(container, new_cdr);
                 }
                 // Visit the car first, leaving just the next cdr pending
                 // for a flat list, regardless of the length of its spine.
                 pending.extend([new_cdr, new_car]);
             } else {
-                for i in 0..heap.vector_len(container) {
-                    let element = heap.vector_ref(container, i);
-                    let resolved = resolve(element, &heap);
+                for i in 0..cx.vector_len(container) {
+                    let element = cx.vector_ref(container, i);
+                    let resolved = resolve(element, cx);
                     if resolved != element {
-                        heap.vector_set(container, i, resolved);
+                        cx.vector_set(container, i, resolved);
                     }
                     if resolved.is_pair() || resolved.is_vector() {
                         pending.push(resolved);
@@ -649,130 +594,159 @@ mod tests {
     use super::*;
     use num_traits::ToPrimitive;
 
+    /// Run `f` in a context over a fresh cx.
+    fn with_cx<R>(f: impl for<'gc> FnOnce(&mut Cx<'gc>) -> R) -> R {
+        patina_core::NoGcScope::with_cx(&patina_core::new_shared_heap(), f)
+    }
+
     #[test]
     fn ambiguous_numeric_tokens_follow_the_identifier_folding_mode() {
-        for name in ["+INC", "-INDEX", "+NaN.0abc", "+INF.0tail"] {
-            let mut parser = Parser::new_case_insensitive(name).unwrap();
-            let value = parser.parse().unwrap();
-            assert_eq!(
-                parser.heap.borrow().get_symbol_name(value),
-                Some(name.to_lowercase().as_str()),
-                "{name}"
-            );
-        }
+        with_cx(|cx| {
+            for name in ["+INC", "-INDEX", "+NaN.0abc", "+INF.0tail"] {
+                let mut parser = Parser::new_case_insensitive(name).unwrap();
+                let value = parser.parse(cx).unwrap();
+                assert_eq!(
+                    cx.get_symbol_name(value).as_deref(),
+                    Some(name.to_lowercase().as_str()),
+                    "{name}"
+                );
+            }
+        });
     }
 
     #[test]
     fn identifier_fallback_does_not_accept_malformed_numbers_or_bytes() {
-        for text in [
-            "12abc",
-            "+12abc",
-            "-.5abc",
-            "#d+id",
-            "#e+nan.0abc",
-            "+id#oops",
-            "+inf.0{tail",
-            "#u8(+id)",
-            "#u8(+inf.0)",
-        ] {
-            let mut parser = Parser::new(text).unwrap();
-            assert!(parser.parse_next().is_err(), "{text}");
-        }
+        with_cx(|cx| {
+            for text in [
+                "12abc",
+                "+12abc",
+                "-.5abc",
+                "#d+id",
+                "#e+nan.0abc",
+                "+id#oops",
+                "+inf.0{tail",
+                "#u8(+id)",
+                "#u8(+inf.0)",
+            ] {
+                let mut parser = Parser::new(text).unwrap();
+                assert!(parser.parse_next(cx).is_err(), "{text}");
+            }
+        });
     }
 
     #[test]
     fn test_parse_next_distinguishes_clean_and_incomplete_eof() {
-        for input in [
-            "",
-            " \n",
-            "; comment",
-            "#| comment |#",
-            "#; (1 2)",
-            "#; #; 1 2",
-        ] {
-            let mut parser = Parser::new(input).unwrap();
-            assert!(parser.parse_next().unwrap().is_none(), "{input:?}");
-        }
-        for input in [
-            "(", "#(", "#u8(", "'", "`", ",", ",@", "(1 .", "#1=", "#;", "#; (",
-        ] {
-            let mut parser = Parser::new(input).unwrap();
-            assert!(
-                matches!(
-                    parser.parse_next().as_ref().map_err(ParseError::kind),
-                    Err(ParseError::IncompleteDatum { .. })
-                ),
-                "{input:?}"
-            );
-        }
+        with_cx(|cx| {
+            for input in [
+                "",
+                " \n",
+                "; comment",
+                "#| comment |#",
+                "#; (1 2)",
+                "#; #; 1 2",
+            ] {
+                let mut parser = Parser::new(input).unwrap();
+                assert!(parser.parse_next(cx).unwrap().is_none(), "{input:?}");
+            }
+            for input in [
+                "(", "#(", "#u8(", "'", "`", ",", ",@", "(1 .", "#1=", "#;", "#; (",
+            ] {
+                let mut parser = Parser::new(input).unwrap();
+                assert!(
+                    matches!(
+                        parser.parse_next(cx).as_ref().map_err(ParseError::kind),
+                        Err(ParseError::IncompleteDatum { .. })
+                    ),
+                    "{input:?}"
+                );
+            }
+        });
     }
 
     #[test]
     fn test_parse_next_after_a_complete_datum() {
-        let mut parser = Parser::new("1 #; (2 3)").unwrap();
-        assert_eq!(
-            parser.parse_next().unwrap().unwrap().as_fixnum_unchecked(),
-            1
-        );
-        assert!(parser.parse_next().unwrap().is_none());
-        let mut parser = Parser::new("1 (").unwrap();
-        assert_eq!(
-            parser.parse_next().unwrap().unwrap().as_fixnum_unchecked(),
-            1
-        );
-        assert!(matches!(
-            parser.parse_next().as_ref().map_err(ParseError::kind),
-            Err(ParseError::IncompleteDatum { line: 1, column: 3 })
-        ));
+        with_cx(|cx| {
+            let mut parser = Parser::new("1 #; (2 3)").unwrap();
+            assert_eq!(
+                parser
+                    .parse_next(cx)
+                    .unwrap()
+                    .unwrap()
+                    .as_fixnum_unchecked(),
+                1
+            );
+            assert!(parser.parse_next(cx).unwrap().is_none());
+            let mut parser = Parser::new("1 (").unwrap();
+            assert_eq!(
+                parser
+                    .parse_next(cx)
+                    .unwrap()
+                    .unwrap()
+                    .as_fixnum_unchecked(),
+                1
+            );
+            assert!(matches!(
+                parser.parse_next(cx).as_ref().map_err(ParseError::kind),
+                Err(ParseError::IncompleteDatum { line: 1, column: 3 })
+            ));
+        });
     }
 
     #[test]
     fn test_incomplete_datum_names_where_the_datum_began() {
-        for (input, line, column) in [
-            ("(", 1, 1),
-            ("42\n  (1 (2", 2, 3),
-            ("'", 1, 1),
-            ("#(1 #(2", 1, 1),
-            ("#u8(1", 1, 1),
-            ("(1 .", 1, 1),
-            ("#1=(a", 1, 1),
-            ("1 2 #;", 1, 5),
-            ("1 #;(2) #;", 1, 9),
-        ] {
-            let mut parser = Parser::new(input).unwrap();
-            let err = loop {
-                match parser.parse_next() {
-                    Ok(Some(_)) => continue,
-                    Ok(None) => panic!("{input:?} ended cleanly"),
-                    Err(e) => break e,
-                }
-            };
-            assert!(
-                matches!(err.kind(), ParseError::IncompleteDatum { line: l, column: c } if (*l, *c) == (line, column)),
-                "{input:?}: {err}"
-            );
-        }
+        with_cx(|cx| {
+            for (input, line, column) in [
+                ("(", 1, 1),
+                ("42\n  (1 (2", 2, 3),
+                ("'", 1, 1),
+                ("#(1 #(2", 1, 1),
+                ("#u8(1", 1, 1),
+                ("(1 .", 1, 1),
+                ("#1=(a", 1, 1),
+                ("1 2 #;", 1, 5),
+                ("1 #;(2) #;", 1, 9),
+            ] {
+                let mut parser = Parser::new(input).unwrap();
+                let err = loop {
+                    match parser.parse_next(cx) {
+                        Ok(Some(_)) => continue,
+                        Ok(None) => panic!("{input:?} ended cleanly"),
+                        Err(e) => break e,
+                    }
+                };
+                assert!(
+                    matches!(err.kind(), ParseError::IncompleteDatum { line: l, column: c } if (*l, *c) == (line, column)),
+                    "{input:?}: {err}"
+                );
+            }
+        });
     }
 
     #[test]
     fn test_parse_requires_a_datum_where_parse_next_ends_cleanly() {
-        for input in ["", "   ", "; a comment", "#|block|#", "#;(1) ", "#; #; 1 2"] {
-            assert!(
-                matches!(
+        with_cx(|cx| {
+            for input in ["", "   ", "; a comment", "#|block|#", "#;(1) ", "#; #; 1 2"] {
+                assert!(
+                    matches!(
+                        Parser::new(input)
+                            .unwrap()
+                            .parse(cx)
+                            .as_ref()
+                            .map_err(ParseError::kind),
+                        Err(ParseError::UnexpectedEof)
+                    ),
+                    "{input:?}"
+                );
+                assert!(
                     Parser::new(input)
                         .unwrap()
-                        .parse()
-                        .as_ref()
-                        .map_err(ParseError::kind),
-                    Err(ParseError::UnexpectedEof)
-                ),
-                "{input:?}"
-            );
-            assert!(
-                Parser::new(input).unwrap().parse_next().unwrap().is_none(),
-                "{input:?}"
-            );
-        }
+                        .parse_next(cx)
+                        .unwrap()
+                        .is_none(),
+                    "{input:?}"
+                );
+            }
+        });
     }
 
     /// Shapes that used to leave the `IncompleteDatum` contract by another
@@ -781,61 +755,69 @@ mod tests {
     /// missing element for not being a byte.
     #[test]
     fn test_running_out_after_a_dotted_tail_or_a_byte_is_an_incomplete_datum() {
-        for input in [
-            "(1 . 2",
-            "'(a . b",
-            "(1 . (2",
-            "#;(1 . 2",
-            "#u8(1 #;2",
-            "#u8(#;1",
-        ] {
-            let err = Parser::new(input).unwrap().parse_next().unwrap_err();
-            assert!(
-                matches!(err.kind(), ParseError::IncompleteDatum { .. }),
-                "{input:?}: {err}"
-            );
-        }
+        with_cx(|cx| {
+            for input in [
+                "(1 . 2",
+                "'(a . b",
+                "(1 . (2",
+                "#;(1 . 2",
+                "#u8(1 #;2",
+                "#u8(#;1",
+            ] {
+                let err = Parser::new(input).unwrap().parse_next(cx).unwrap_err();
+                assert!(
+                    matches!(err.kind(), ParseError::IncompleteDatum { .. }),
+                    "{input:?}: {err}"
+                );
+            }
+        });
     }
 
     /// Skipping a commented-out datum must accept everything parsing one
     /// does, a datum comment before the closer included.
     #[test]
     fn test_a_datum_comment_may_sit_before_the_closer_of_a_skipped_list() {
-        for input in [
-            "#;(a #;b) 42",
-            "#;(a #;(b c)) 42",
-            "#;#(a #;b) 42",
-            "#;(a b #;c) 42",
-        ] {
-            let tv = Parser::new(input)
-                .unwrap()
-                .parse_next()
-                .unwrap_or_else(|e| panic!("{input:?}: {e}"))
-                .unwrap_or_else(|| panic!("{input:?}: no datum"));
-            assert_eq!(tv.as_fixnum(), Some(42), "{input:?}");
-        }
+        with_cx(|cx| {
+            for input in [
+                "#;(a #;b) 42",
+                "#;(a #;(b c)) 42",
+                "#;#(a #;b) 42",
+                "#;(a b #;c) 42",
+            ] {
+                let tv = Parser::new(input)
+                    .unwrap()
+                    .parse_next(cx)
+                    .unwrap_or_else(|e| panic!("{input:?}: {e}"))
+                    .unwrap_or_else(|| panic!("{input:?}: no datum"));
+                assert_eq!(tv.as_fixnum(), Some(42), "{input:?}");
+            }
+        });
     }
 
     #[test]
     fn test_parse_all_ends_after_a_trailing_datum_comment() {
-        let all = Parser::new("1 2 #;(3)").unwrap().parse_all().unwrap();
-        assert_eq!(all.len(), 2);
-        let all = Parser::new("#;(0) 1 #;2 #|c|# ; c\n")
-            .unwrap()
-            .parse_all()
-            .unwrap();
-        assert_eq!(all.len(), 1);
+        with_cx(|cx| {
+            let all = Parser::new("1 2 #;(3)").unwrap().parse_all(cx).unwrap();
+            assert_eq!(all.len(), 2);
+            let all = Parser::new("#;(0) 1 #;2 #|c|# ; c\n")
+                .unwrap()
+                .parse_all(cx)
+                .unwrap();
+            assert_eq!(all.len(), 1);
+        });
     }
 
     #[test]
     fn test_parse_all_rejects_input_cut_short_inside_a_datum() {
-        for (input, line, column) in [("1 2 (3", 1, 5), ("(1)\n(2\n", 2, 1), ("1 #;", 1, 3)] {
-            let err = Parser::new(input).unwrap().parse_all().unwrap_err();
-            assert!(
-                matches!(err.kind(), ParseError::IncompleteDatum { line: l, column: c } if (*l, *c) == (line, column)),
-                "{input:?}: {err}"
-            );
-        }
+        with_cx(|cx| {
+            for (input, line, column) in [("1 2 (3", 1, 5), ("(1)\n(2\n", 2, 1), ("1 #;", 1, 3)] {
+                let err = Parser::new(input).unwrap().parse_all(cx).unwrap_err();
+                assert!(
+                    matches!(err.kind(), ParseError::IncompleteDatum { line: l, column: c } if (*l, *c) == (line, column)),
+                    "{input:?}: {err}"
+                );
+            }
+        });
     }
 
     /// A parser reading a source from its start drops a byte order mark.
@@ -843,427 +825,456 @@ mod tests {
     /// that half.
     #[test]
     fn the_start_of_a_source_drops_a_byte_order_mark() {
-        let heap = patina_core::new_shared_heap();
-        let from_start = Parser::new_with_heap("\u{feff}42", heap)
-            .unwrap()
-            .parse_next();
-        assert!(matches!(from_start, Ok(Some(v)) if v.as_fixnum() == Some(42)));
+        with_cx(|cx| {
+            let from_start = Parser::new("\u{feff}42").unwrap().parse_next(cx);
+            assert!(matches!(from_start, Ok(Some(v)) if v.as_fixnum() == Some(42)));
+        });
     }
 
     /// A lexical error in the token after a complete datum belongs to what
     /// follows: the datum is read, and the error comes with the next read.
     #[test]
     fn a_bad_token_after_a_datum_is_reported_by_the_next_read() {
-        for (text, rest) in [
-            ("(display 1)\n#\\bogus", "#\\bogus"),
-            ("'a {", "{"),
-            ("#(1) #u9", "#u9"),
-            ("42 \"unterminated", "\"unterminated"),
-        ] {
-            let mut parser = Parser::new(text).unwrap();
-            assert!(parser.parse_next().unwrap().is_some(), "{text:?}");
-            let unread: String = text.chars().skip(parser.consumed_end()).collect();
-            assert_eq!(unread.trim_start(), rest, "{text:?}");
-            assert!(parser.parse_next().is_err(), "{text:?}");
-        }
-        // Inside a datum the error is the datum's own.
-        assert!(Parser::new("(a #\\bogus)").unwrap().parse_next().is_err());
-        // A string cut short after a datum is still input that ran out.
-        let mut parser = Parser::new("(a) \"abc").unwrap();
-        parser.parse_next().unwrap();
-        assert!(parser.parse_next().unwrap_err().is_incomplete());
+        with_cx(|cx| {
+            for (text, rest) in [
+                ("(display 1)\n#\\bogus", "#\\bogus"),
+                ("'a {", "{"),
+                ("#(1) #u9", "#u9"),
+                ("42 \"unterminated", "\"unterminated"),
+            ] {
+                let mut parser = Parser::new(text).unwrap();
+                assert!(parser.parse_next(cx).unwrap().is_some(), "{text:?}");
+                let unread: String = text.chars().skip(parser.consumed_end()).collect();
+                assert_eq!(unread.trim_start(), rest, "{text:?}");
+                assert!(parser.parse_next(cx).is_err(), "{text:?}");
+            }
+            // Inside a datum the error is the datum's own.
+            assert!(Parser::new("(a #\\bogus)").unwrap().parse_next(cx).is_err());
+            // A string cut short after a datum is still input that ran out.
+            let mut parser = Parser::new("(a) \"abc").unwrap();
+            parser.parse_next(cx).unwrap();
+            assert!(parser.parse_next(cx).unwrap_err().is_incomplete());
+        });
     }
 
     #[test]
     fn test_parse_atom() {
-        let mut parser = Parser::new("42").unwrap();
-        let result = parser.parse().unwrap();
-        // Should be a fixnum
-        assert!(result.is_fixnum());
-        assert_eq!(result.as_fixnum_unchecked(), 42);
+        with_cx(|cx| {
+            let mut parser = Parser::new("42").unwrap();
+            let result = parser.parse(cx).unwrap();
+            // Should be a fixnum
+            assert!(result.is_fixnum());
+            assert_eq!(result.as_fixnum_unchecked(), 42);
+        });
     }
 
     #[test]
     fn test_parse_list() {
-        let mut parser = Parser::new("(+ 1 2)").unwrap();
-        let result = parser.parse().unwrap();
-        // Should be a pair
-        assert!(result.is_pair());
+        with_cx(|cx| {
+            let mut parser = Parser::new("(+ 1 2)").unwrap();
+            let result = parser.parse(cx).unwrap();
+            // Should be a pair
+            assert!(result.is_pair());
+        });
     }
 
     #[test]
     fn test_consumed_end_after_atom() {
-        // "5 40": parsing one datum consumes exactly the "5"; the space
-        // and the "40" remain unconsumed
-        let mut parser = Parser::new("5 40").unwrap();
-        let result = parser.parse().unwrap();
-        assert_eq!(result.as_fixnum_unchecked(), 5);
-        assert_eq!(parser.consumed_end(), 1);
+        with_cx(|cx| {
+            // "5 40": parsing one datum consumes exactly the "5"; the space
+            // and the "40" remain unconsumed
+            let mut parser = Parser::new("5 40").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert_eq!(result.as_fixnum_unchecked(), 5);
+            assert_eq!(parser.consumed_end(), 1);
 
-        // A second parse from the same parser picks up the next datum
-        let result = parser.parse().unwrap();
-        assert_eq!(result.as_fixnum_unchecked(), 40);
-        assert_eq!(parser.consumed_end(), 4);
+            // A second parse from the same parser picks up the next datum
+            let result = parser.parse(cx).unwrap();
+            assert_eq!(result.as_fixnum_unchecked(), 40);
+            assert_eq!(parser.consumed_end(), 4);
+        });
     }
 
     #[test]
     fn test_consumed_end_after_list() {
-        let mut parser = Parser::new("(a b) (c)").unwrap();
-        let result = parser.parse().unwrap();
-        assert!(result.is_pair());
-        assert_eq!(parser.consumed_end(), 5); // just past the closing paren
+        with_cx(|cx| {
+            let mut parser = Parser::new("(a b) (c)").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert!(result.is_pair());
+            assert_eq!(parser.consumed_end(), 5); // just past the closing paren
+        });
     }
 
     #[test]
     fn test_consumed_end_with_leading_whitespace_and_comments() {
-        let mut parser = Parser::new("  ; note\n  7 8").unwrap();
-        let result = parser.parse().unwrap();
-        assert_eq!(result.as_fixnum_unchecked(), 7);
-        assert_eq!(parser.consumed_end(), 12); // just past the "7"
+        with_cx(|cx| {
+            let mut parser = Parser::new("  ; note\n  7 8").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert_eq!(result.as_fixnum_unchecked(), 7);
+            assert_eq!(parser.consumed_end(), 12); // just past the "7"
+        });
     }
 
     #[test]
     fn test_parse_small_integer() {
-        // Small integers should parse as fixnum
-        let mut parser = Parser::new("42").unwrap();
-        let result = parser.parse().unwrap();
-        assert!(result.is_fixnum());
-        assert_eq!(result.as_fixnum_unchecked(), 42);
+        with_cx(|cx| {
+            // Small integers should parse as fixnum
+            let mut parser = Parser::new("42").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert!(result.is_fixnum());
+            assert_eq!(result.as_fixnum_unchecked(), 42);
+        });
     }
 
     #[test]
     fn test_parse_i64_max() {
-        // i64::MAX is larger than fixnum range, should be BigInteger
-        let mut parser = Parser::new("9223372036854775807").unwrap();
-        let result = parser.parse().unwrap();
-        // This is larger than fixnum range, so it's a BigInteger on heap
-        assert!(result.is_object());
+        with_cx(|cx| {
+            // i64::MAX is larger than fixnum range, should be BigInteger
+            let mut parser = Parser::new("9223372036854775807").unwrap();
+            let result = parser.parse(cx).unwrap();
+            // This is larger than fixnum range, so it's a BigInteger on heap
+            assert!(result.is_object());
+        });
     }
 
     #[test]
     fn test_parse_i64_min() {
-        // i64::MIN is larger magnitude than fixnum range
-        let mut parser = Parser::new("-9223372036854775808").unwrap();
-        let result = parser.parse().unwrap();
-        // This is outside fixnum range, so it's a BigInteger on heap
-        assert!(result.is_object());
+        with_cx(|cx| {
+            // i64::MIN is larger magnitude than fixnum range
+            let mut parser = Parser::new("-9223372036854775808").unwrap();
+            let result = parser.parse(cx).unwrap();
+            // This is outside fixnum range, so it's a BigInteger on heap
+            assert!(result.is_object());
+        });
     }
 
     #[test]
     fn test_parse_beyond_i64_max() {
-        // i64::MAX + 1 should parse as BigInteger on heap
-        let mut parser = Parser::new("9223372036854775808").unwrap();
-        let result = parser.parse().unwrap();
-        assert!(result.is_object());
-        // Check it's a BigInt
-        assert!(parser.heap().borrow().is_bigint(result));
+        with_cx(|cx| {
+            // i64::MAX + 1 should parse as BigInteger on heap
+            let mut parser = Parser::new("9223372036854775808").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert!(result.is_object());
+            // Check it's a BigInt
+            assert!(cx.is_bigint(result));
+        });
     }
 
     #[test]
     fn test_parse_large_bigint() {
-        // Very large number should parse as BigInteger
-        let mut parser = Parser::new("10000000000000000000").unwrap();
-        let result = parser.parse().unwrap();
-        assert!(result.is_object());
-        assert!(parser.heap().borrow().is_bigint(result));
+        with_cx(|cx| {
+            // Very large number should parse as BigInteger
+            let mut parser = Parser::new("10000000000000000000").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert!(result.is_object());
+            assert!(cx.is_bigint(result));
+        });
     }
 
     #[test]
     fn test_parse_huge_bigint() {
-        // Astronomically large number (2^100) should parse as BigInteger
-        let mut parser = Parser::new("1267650600228229401496703205376").unwrap();
-        let result = parser.parse().unwrap();
-        assert!(result.is_object());
-        assert!(parser.heap().borrow().is_bigint(result));
+        with_cx(|cx| {
+            // Astronomically large number (2^100) should parse as BigInteger
+            let mut parser = Parser::new("1267650600228229401496703205376").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert!(result.is_object());
+            assert!(cx.is_bigint(result));
+        });
     }
 
     #[test]
     fn test_parse_negative_beyond_i64_min() {
-        // i64::MIN - 1 should parse as BigInteger
-        let mut parser = Parser::new("-9223372036854775809").unwrap();
-        let result = parser.parse().unwrap();
-        assert!(result.is_object());
-        assert!(parser.heap().borrow().is_bigint(result));
+        with_cx(|cx| {
+            // i64::MIN - 1 should parse as BigInteger
+            let mut parser = Parser::new("-9223372036854775809").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert!(result.is_object());
+            assert!(cx.is_bigint(result));
+        });
     }
 
     #[test]
     fn test_parse_bigint_in_expression() {
-        // Large integers in expressions should parse as BigInteger
-        let mut parser = Parser::new("(+ 10000000000000000000 1)").unwrap();
-        let result = parser.parse().unwrap();
+        with_cx(|cx| {
+            // Large integers in expressions should parse as BigInteger
+            let mut parser = Parser::new("(+ 10000000000000000000 1)").unwrap();
+            let result = parser.parse(cx).unwrap();
 
-        // The result should be a list (pair chain)
-        assert!(result.is_pair());
-        let heap = parser.heap();
-        let heap_ref = heap.borrow();
-        let car = heap_ref.car(result);
-        let cdr = heap_ref.cdr(result);
-        assert!(heap_ref.get_symbol_name(car).is_some()); // The '+'
+            // The result should be a list (pair chain)
+            assert!(result.is_pair());
+            let car = cx.car(result);
+            let cdr = cx.cdr(result);
+            assert!(cx.get_symbol_name(car).is_some()); // The '+'
 
-        assert!(cdr.is_pair());
-        let arg1 = heap_ref.car(cdr);
-        // The first argument should be BigInteger
-        let bigint = heap_ref
-            .get_bigint(arg1)
-            .expect("Expected BigInteger for first arg");
-        assert_eq!(bigint.to_string(), "10000000000000000000");
+            assert!(cdr.is_pair());
+            let arg1 = cx.car(cdr);
+            // The first argument should be BigInteger
+            let bigint = cx
+                .get_bigint(arg1)
+                .expect("Expected BigInteger for first arg");
+            assert_eq!(bigint.to_string(), "10000000000000000000");
+        });
     }
 
     #[test]
     fn test_parse_positive_infinity() {
-        let mut parser = Parser::new("+inf.0").unwrap();
-        let result = parser.parse().unwrap();
-        let f = parser
-            .heap()
-            .borrow()
-            .get_real(result)
-            .expect("Expected Real");
-        assert!(f.is_infinite() && f.is_sign_positive());
+        with_cx(|cx| {
+            let mut parser = Parser::new("+inf.0").unwrap();
+            let result = parser.parse(cx).unwrap();
+            let f = cx.get_real(result).expect("Expected Real");
+            assert!(f.is_infinite() && f.is_sign_positive());
+        });
     }
 
     #[test]
     fn test_parse_negative_infinity() {
-        let mut parser = Parser::new("-inf.0").unwrap();
-        let result = parser.parse().unwrap();
-        let f = parser
-            .heap()
-            .borrow()
-            .get_real(result)
-            .expect("Expected Real");
-        assert!(f.is_infinite() && f.is_sign_negative());
+        with_cx(|cx| {
+            let mut parser = Parser::new("-inf.0").unwrap();
+            let result = parser.parse(cx).unwrap();
+            let f = cx.get_real(result).expect("Expected Real");
+            assert!(f.is_infinite() && f.is_sign_negative());
+        });
     }
 
     #[test]
     fn test_parse_nan() {
-        let mut parser = Parser::new("+nan.0").unwrap();
-        let result = parser.parse().unwrap();
-        let f = parser
-            .heap()
-            .borrow()
-            .get_real(result)
-            .expect("Expected Real");
-        assert!(f.is_nan());
+        with_cx(|cx| {
+            let mut parser = Parser::new("+nan.0").unwrap();
+            let result = parser.parse(cx).unwrap();
+            let f = cx.get_real(result).expect("Expected Real");
+            assert!(f.is_nan());
+        });
     }
 
     #[test]
     fn test_parse_special_floats_case_insensitive() {
-        // Test case-insensitive parsing of inf.0 and nan.0
-        let test_cases = [
-            ("+INF.0", f64::INFINITY),
-            ("+Inf.0", f64::INFINITY),
-            ("+iNf.0", f64::INFINITY),
-            ("-INF.0", f64::NEG_INFINITY),
-            ("-Inf.0", f64::NEG_INFINITY),
-        ];
+        with_cx(|cx| {
+            // Test case-insensitive parsing of inf.0 and nan.0
+            let test_cases = [
+                ("+INF.0", f64::INFINITY),
+                ("+Inf.0", f64::INFINITY),
+                ("+iNf.0", f64::INFINITY),
+                ("-INF.0", f64::NEG_INFINITY),
+                ("-Inf.0", f64::NEG_INFINITY),
+            ];
 
-        for (input, expected) in test_cases {
-            let mut parser = Parser::new(input).unwrap();
-            let result = parser.parse().unwrap();
-            let f = parser
-                .heap()
-                .borrow()
-                .get_real(result)
-                .unwrap_or_else(|| panic!("For input '{}': expected Real", input));
-            assert_eq!(
-                f.is_infinite(),
-                expected.is_infinite(),
-                "For input '{}': expected infinite",
-                input
-            );
-            assert_eq!(
-                f.is_sign_positive(),
-                expected.is_sign_positive(),
-                "For input '{}': sign mismatch",
-                input
-            );
-        }
+            for (input, expected) in test_cases {
+                let mut parser = Parser::new(input).unwrap();
+                let result = parser.parse(cx).unwrap();
+                let f = cx
+                    .get_real(result)
+                    .unwrap_or_else(|| panic!("For input '{}': expected Real", input));
+                assert_eq!(
+                    f.is_infinite(),
+                    expected.is_infinite(),
+                    "For input '{}': expected infinite",
+                    input
+                );
+                assert_eq!(
+                    f.is_sign_positive(),
+                    expected.is_sign_positive(),
+                    "For input '{}': sign mismatch",
+                    input
+                );
+            }
 
-        // Test NaN separately (can't use == for NaN)
-        let nan_cases = ["+NAN.0", "+Nan.0", "+nAn.0", "-NAN.0", "-nan.0"];
-        for input in nan_cases {
-            let mut parser = Parser::new(input).unwrap();
-            let result = parser.parse().unwrap();
-            let f = parser
-                .heap()
-                .borrow()
-                .get_real(result)
-                .unwrap_or_else(|| panic!("For input '{}': expected Real (NaN)", input));
-            assert!(f.is_nan(), "For input '{}': expected NaN, got {}", input, f);
-        }
+            // Test NaN separately (can't use == for NaN)
+            let nan_cases = ["+NAN.0", "+Nan.0", "+nAn.0", "-NAN.0", "-nan.0"];
+            for input in nan_cases {
+                let mut parser = Parser::new(input).unwrap();
+                let result = parser.parse(cx).unwrap();
+                let f = cx
+                    .get_real(result)
+                    .unwrap_or_else(|| panic!("For input '{}': expected Real (NaN)", input));
+                assert!(f.is_nan(), "For input '{}': expected NaN, got {}", input, f);
+            }
+        });
     }
 
     #[test]
     fn test_parse_infinity_in_expression() {
-        let mut parser = Parser::new("(+ +inf.0 1)").unwrap();
-        let result = parser.parse().unwrap();
+        with_cx(|cx| {
+            let mut parser = Parser::new("(+ +inf.0 1)").unwrap();
+            let result = parser.parse(cx).unwrap();
 
-        assert!(result.is_pair());
-        let heap = parser.heap();
-        let heap_ref = heap.borrow();
-        let car = heap_ref.car(result);
-        let cdr = heap_ref.cdr(result);
-        assert!(heap_ref.get_symbol_name(car).is_some()); // The '+'
+            assert!(result.is_pair());
+            let car = cx.car(result);
+            let cdr = cx.cdr(result);
+            assert!(cx.get_symbol_name(car).is_some()); // The '+'
 
-        assert!(cdr.is_pair());
-        let arg1 = heap_ref.car(cdr);
-        let f = heap_ref
-            .get_real(arg1)
-            .expect("Expected Real for first arg");
-        assert!(f.is_infinite() && f.is_sign_positive());
+            assert!(cdr.is_pair());
+            let arg1 = cx.car(cdr);
+            let f = cx.get_real(arg1).expect("Expected Real for first arg");
+            assert!(f.is_infinite() && f.is_sign_positive());
+        });
     }
 
     // ========== Datum Comment Tests ==========
 
     #[test]
     fn test_datum_comment_simple() {
-        // #; abc def -> def
-        let mut parser = Parser::new("#; abc def").unwrap();
-        let result = parser.parse().unwrap();
-        let heap_ref = parser.heap().borrow();
-        assert_eq!(heap_ref.get_symbol_name(result), Some("def"));
+        with_cx(|cx| {
+            // #; abc def -> def
+            let mut parser = Parser::new("#; abc def").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert_eq!(cx.get_symbol_name(result).as_deref(), Some("def"));
+        });
     }
 
     #[test]
     fn test_datum_comment_in_list() {
-        // (#;sqrt abs -16) -> (abs -16)
-        let mut parser = Parser::new("(#;sqrt abs -16)").unwrap();
-        let result = parser.parse().unwrap();
+        with_cx(|cx| {
+            // (#;sqrt abs -16) -> (abs -16)
+            let mut parser = Parser::new("(#;sqrt abs -16)").unwrap();
+            let result = parser.parse(cx).unwrap();
 
-        // Should be a list with two elements: abs and -16
-        assert!(result.is_pair());
-        let heap_ref = parser.heap().borrow();
-        let car = heap_ref.car(result);
-        assert_eq!(heap_ref.get_symbol_name(car), Some("abs"));
+            // Should be a list with two elements: abs and -16
+            assert!(result.is_pair());
+            let car = cx.car(result);
+            assert_eq!(cx.get_symbol_name(car).as_deref(), Some("abs"));
+        });
     }
 
     #[test]
     fn test_datum_comment_multiple() {
-        // (a #; #;b c d) -> (a d)
-        // First #; skips b, second #; skips c
-        let mut parser = Parser::new("(a #; #;b c d)").unwrap();
-        let result = parser.parse().unwrap();
+        with_cx(|cx| {
+            // (a #; #;b c d) -> (a d)
+            // First #; skips b, second #; skips c
+            let mut parser = Parser::new("(a #; #;b c d)").unwrap();
+            let result = parser.parse(cx).unwrap();
 
-        // Should be a list (a d)
-        assert!(result.is_pair());
-        let heap_ref = parser.heap().borrow();
-        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(result)), Some("a"));
+            // Should be a list (a d)
+            assert!(result.is_pair());
+            assert_eq!(cx.get_symbol_name(cx.car(result)).as_deref(), Some("a"));
 
-        let cdr = heap_ref.cdr(result);
-        assert!(cdr.is_pair());
-        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(cdr)), Some("d"));
-        assert!(heap_ref.cdr(cdr).is_null());
+            let cdr = cx.cdr(result);
+            assert!(cdr.is_pair());
+            assert_eq!(cx.get_symbol_name(cx.car(cdr)).as_deref(), Some("d"));
+            assert!(cx.cdr(cdr).is_null());
+        });
     }
 
     #[test]
     fn test_datum_comment_before_closing_paren() {
-        // (a b #;c) -> (a b) — found by the compat corpus: srfi-14's
-        // reference implementation comments out a trailing argument, which
-        // transitively blocked 19 vendored packages.
-        let mut parser = Parser::new("(a b #;c)").unwrap();
-        let result = parser.parse().unwrap();
-
-        let heap_ref = parser.heap().borrow();
-        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(result)), Some("a"));
-        let cdr = heap_ref.cdr(result);
-        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(cdr)), Some("b"));
-        assert!(heap_ref.cdr(cdr).is_null());
+        with_cx(|cx| {
+            // (a b #;c) -> (a b) — found by the compat corpus: srfi-14's
+            // reference implementation comments out a trailing argument, which
+            // transitively blocked 19 vendored packages.
+            let mut parser = Parser::new("(a b #;c)").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert_eq!(cx.get_symbol_name(cx.car(result)).as_deref(), Some("a"));
+            let cdr = cx.cdr(result);
+            assert_eq!(cx.get_symbol_name(cx.car(cdr)).as_deref(), Some("b"));
+            assert!(cx.cdr(cdr).is_null());
+        });
     }
 
     #[test]
     fn test_datum_comment_only_list_is_empty() {
-        // (#;a) -> ()
-        let mut parser = Parser::new("(#;a)").unwrap();
-        let result = parser.parse().unwrap();
-        assert!(result.is_null());
+        with_cx(|cx| {
+            // (#;a) -> ()
+            let mut parser = Parser::new("(#;a)").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert!(result.is_null());
+        });
     }
 
     #[test]
     fn test_datum_comment_before_vector_close() {
-        // #(1 #;2) -> #(1)
-        let mut parser = Parser::new("#(1 #;2)").unwrap();
-        let result = parser.parse().unwrap();
-        let heap_ref = parser.heap().borrow();
-        assert_eq!(heap_ref.vector_len(result), 1);
+        with_cx(|cx| {
+            // #(1 #;2) -> #(1)
+            let mut parser = Parser::new("#(1 #;2)").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert_eq!(cx.vector_len(result), 1);
+        });
     }
 
     #[test]
     fn test_datum_comment_in_bytevector() {
-        // #u8(1 #;2 3) -> #u8(1 3)
-        let mut parser = Parser::new("#u8(1 #;2 3)").unwrap();
-        let result = parser.parse().unwrap();
-        let heap_ref = parser.heap().borrow();
-        let bytes = heap_ref.get_bytevector(result).unwrap();
-        assert_eq!(bytes, &[1, 3]);
+        with_cx(|cx| {
+            // #u8(1 #;2 3) -> #u8(1 3)
+            let mut parser = Parser::new("#u8(1 #;2 3)").unwrap();
+            let result = parser.parse(cx).unwrap();
+            let bytes = cx.get_bytevector_bytes(result).unwrap();
+            assert_eq!(bytes, &[1, 3]);
+        });
     }
 
     #[test]
     fn test_datum_comment_nested_list() {
-        // (a #;(b #;c d) e) -> (a e)
-        let mut parser = Parser::new("(a #;(b #;c d) e)").unwrap();
-        let result = parser.parse().unwrap();
+        with_cx(|cx| {
+            // (a #;(b #;c d) e) -> (a e)
+            let mut parser = Parser::new("(a #;(b #;c d) e)").unwrap();
+            let result = parser.parse(cx).unwrap();
 
-        assert!(result.is_pair());
-        let heap_ref = parser.heap().borrow();
-        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(result)), Some("a"));
+            assert!(result.is_pair());
+            assert_eq!(cx.get_symbol_name(cx.car(result)).as_deref(), Some("a"));
 
-        let cdr = heap_ref.cdr(result);
-        assert!(cdr.is_pair());
-        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(cdr)), Some("e"));
-        assert!(heap_ref.cdr(cdr).is_null());
+            let cdr = cx.cdr(result);
+            assert!(cdr.is_pair());
+            assert_eq!(cx.get_symbol_name(cx.car(cdr)).as_deref(), Some("e"));
+            assert!(cx.cdr(cdr).is_null());
+        });
     }
 
     #[test]
     fn test_datum_comment_dotted_list() {
-        // (a . #;b c) -> (a . c)
-        let mut parser = Parser::new("(a . #;b c)").unwrap();
-        let result = parser.parse().unwrap();
+        with_cx(|cx| {
+            // (a . #;b c) -> (a . c)
+            let mut parser = Parser::new("(a . #;b c)").unwrap();
+            let result = parser.parse(cx).unwrap();
 
-        assert!(result.is_pair());
-        let heap_ref = parser.heap().borrow();
-        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(result)), Some("a"));
-        assert_eq!(heap_ref.get_symbol_name(heap_ref.cdr(result)), Some("c"));
+            assert!(result.is_pair());
+            assert_eq!(cx.get_symbol_name(cx.car(result)).as_deref(), Some("a"));
+            assert_eq!(cx.get_symbol_name(cx.cdr(result)).as_deref(), Some("c"));
+        });
     }
 
     #[test]
     fn test_datum_comment_before_tail() {
-        // (a . b #;c) -> This should skip c after the dotted tail
-        // According to tests: this should return (a . b) with c skipped
-        let mut parser = Parser::new("(a . b #;c)").unwrap();
-        let result = parser.parse().unwrap();
+        with_cx(|cx| {
+            // (a . b #;c) -> This should skip c after the dotted tail
+            // According to tests: this should return (a . b) with c skipped
+            let mut parser = Parser::new("(a . b #;c)").unwrap();
+            let result = parser.parse(cx).unwrap();
 
-        assert!(result.is_pair());
-        let heap_ref = parser.heap().borrow();
-        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(result)), Some("a"));
-        assert_eq!(heap_ref.get_symbol_name(heap_ref.cdr(result)), Some("b"));
+            assert!(result.is_pair());
+            assert_eq!(cx.get_symbol_name(cx.car(result)).as_deref(), Some("a"));
+            assert_eq!(cx.get_symbol_name(cx.cdr(result)).as_deref(), Some("b"));
+        });
     }
 
     #[test]
     fn test_datum_comment_with_line_comment() {
-        // #; ; comment\n def ghi -> ghi
-        // The #; comments out the first datum after it, which is 'def'
-        // (the ; comment is just a line comment consumed as whitespace)
-        let mut parser = Parser::new("#; ; comment\n def ghi").unwrap();
-        let result = parser.parse().unwrap();
-        let heap_ref = parser.heap().borrow();
-        assert_eq!(heap_ref.get_symbol_name(result), Some("ghi"));
+        with_cx(|cx| {
+            // #; ; comment\n def ghi -> ghi
+            // The #; comments out the first datum after it, which is 'def'
+            // (the ; comment is just a line comment consumed as whitespace)
+            let mut parser = Parser::new("#; ; comment\n def ghi").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert_eq!(cx.get_symbol_name(result).as_deref(), Some("ghi"));
+        });
     }
 
     #[test]
     fn test_datum_comment_vector() {
-        // #;#(1 2 3) 42 -> 42
-        let mut parser = Parser::new("#;#(1 2 3) 42").unwrap();
-        let result = parser.parse().unwrap();
-        assert!(result.is_fixnum());
-        assert_eq!(result.as_fixnum_unchecked(), 42);
+        with_cx(|cx| {
+            // #;#(1 2 3) 42 -> 42
+            let mut parser = Parser::new("#;#(1 2 3) 42").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert!(result.is_fixnum());
+            assert_eq!(result.as_fixnum_unchecked(), 42);
+        });
     }
 
     #[test]
     fn test_datum_comment_quoted() {
-        // #;'foo bar -> bar
-        let mut parser = Parser::new("#;'foo bar").unwrap();
-        let result = parser.parse().unwrap();
-        let heap_ref = parser.heap().borrow();
-        assert_eq!(heap_ref.get_symbol_name(result), Some("bar"));
+        with_cx(|cx| {
+            // #;'foo bar -> bar
+            let mut parser = Parser::new("#;'foo bar").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert_eq!(cx.get_symbol_name(result).as_deref(), Some("bar"));
+        });
     }
 
     // ========== Datum Comment Error Cases ==========
@@ -1272,652 +1283,690 @@ mod tests {
 
     #[test]
     fn test_datum_comment_error_dotted_head() {
-        // (#;a . b) -> error: no datum before dot
-        let mut parser = Parser::new("(#;a . b)").unwrap();
-        let result = parser.parse();
-        assert!(
-            result.is_err(),
-            "Expected error for (#;a . b), got {:?}",
-            result
-        );
+        with_cx(|cx| {
+            // (#;a . b) -> error: no datum before dot
+            let mut parser = Parser::new("(#;a . b)").unwrap();
+            let result = parser.parse(cx);
+            assert!(
+                result.is_err(),
+                "Expected error for (#;a . b), got {:?}",
+                result
+            );
+        });
     }
 
     #[test]
     fn test_datum_comment_error_dotted_tail() {
-        // (a . #;b) -> error: no datum after dot
-        let mut parser = Parser::new("(a . #;b)").unwrap();
-        let result = parser.parse();
-        assert!(
-            result.is_err(),
-            "Expected error for (a . #;b), got {:?}",
-            result
-        );
+        with_cx(|cx| {
+            // (a . #;b) -> error: no datum after dot
+            let mut parser = Parser::new("(a . #;b)").unwrap();
+            let result = parser.parse(cx);
+            assert!(
+                result.is_err(),
+                "Expected error for (a . #;b), got {:?}",
+                result
+            );
+        });
     }
 
     #[test]
     fn test_datum_comment_error_commenting_dot() {
-        // (a #;. b) -> error: dot is not a datum
-        let mut parser = Parser::new("(a #;. b)").unwrap();
-        let result = parser.parse();
-        assert!(
-            result.is_err(),
-            "Expected error for (a #;. b), got {:?}",
-            result
-        );
+        with_cx(|cx| {
+            // (a #;. b) -> error: dot is not a datum
+            let mut parser = Parser::new("(a #;. b)").unwrap();
+            let result = parser.parse(cx);
+            assert!(
+                result.is_err(),
+                "Expected error for (a #;. b), got {:?}",
+                result
+            );
+        });
     }
 
     #[test]
     fn test_datum_comment_error_multiple_before_dot() {
-        // (#;x #;y . z) -> error: no datum before dot
-        let mut parser = Parser::new("(#;x #;y . z)").unwrap();
-        let result = parser.parse();
-        assert!(
-            result.is_err(),
-            "Expected error for (#;x #;y . z), got {:?}",
-            result
-        );
+        with_cx(|cx| {
+            // (#;x #;y . z) -> error: no datum before dot
+            let mut parser = Parser::new("(#;x #;y . z)").unwrap();
+            let result = parser.parse(cx);
+            assert!(
+                result.is_err(),
+                "Expected error for (#;x #;y . z), got {:?}",
+                result
+            );
+        });
     }
 
     #[test]
     fn test_datum_comment_error_nested_before_dot() {
-        // (#; #;x #;y . z) -> error: no datum before dot
-        let mut parser = Parser::new("(#; #;x #;y . z)").unwrap();
-        let result = parser.parse();
-        assert!(
-            result.is_err(),
-            "Expected error for (#; #;x #;y . z), got {:?}",
-            result
-        );
+        with_cx(|cx| {
+            // (#; #;x #;y . z) -> error: no datum before dot
+            let mut parser = Parser::new("(#; #;x #;y . z)").unwrap();
+            let result = parser.parse(cx);
+            assert!(
+                result.is_err(),
+                "Expected error for (#; #;x #;y . z), got {:?}",
+                result
+            );
+        });
     }
 
     #[test]
     fn test_datum_comment_error_nested_dotted() {
-        // (#; #;x . z) -> error: missing datum after nested #;
-        let mut parser = Parser::new("(#; #;x . z)").unwrap();
-        let result = parser.parse();
-        assert!(
-            result.is_err(),
-            "Expected error for (#; #;x . z), got {:?}",
-            result
-        );
+        with_cx(|cx| {
+            // (#; #;x . z) -> error: missing datum after nested #;
+            let mut parser = Parser::new("(#; #;x . z)").unwrap();
+            let result = parser.parse(cx);
+            assert!(
+                result.is_err(),
+                "Expected error for (#; #;x . z), got {:?}",
+                result
+            );
+        });
     }
 
     // ========== Alternate Exponent Marker Tests ==========
 
     #[test]
     fn test_alternate_exponent_markers() {
-        // R7RS allows s, f, d, l as exponent markers (all treated as f64)
-        let test_cases = [
-            ("1s2", 100.0),
-            ("1S2", 100.0),
-            ("1f2", 100.0),
-            ("1F2", 100.0),
-            ("1d2", 100.0),
-            ("1D2", 100.0),
-            ("1l2", 100.0),
-            ("1L2", 100.0),
-            ("1.5s1", 15.0),
-            ("2.5f-1", 0.25),
-        ];
+        with_cx(|cx| {
+            // R7RS allows s, f, d, l as exponent markers (all treated as f64)
+            let test_cases = [
+                ("1s2", 100.0),
+                ("1S2", 100.0),
+                ("1f2", 100.0),
+                ("1F2", 100.0),
+                ("1d2", 100.0),
+                ("1D2", 100.0),
+                ("1l2", 100.0),
+                ("1L2", 100.0),
+                ("1.5s1", 15.0),
+                ("2.5f-1", 0.25),
+            ];
 
-        for (input, expected) in test_cases {
-            let mut parser = Parser::new(input).unwrap();
-            let result = parser.parse().unwrap();
-            let f = parser
-                .heap()
-                .borrow()
-                .get_real(result)
-                .unwrap_or_else(|| panic!("For input '{}': expected Real", input));
-            assert!(
-                (f - expected).abs() < 1e-10,
-                "For input '{}': expected {}, got {}",
-                input,
-                expected,
-                f
-            );
-        }
+            for (input, expected) in test_cases {
+                let mut parser = Parser::new(input).unwrap();
+                let result = parser.parse(cx).unwrap();
+                let f = cx
+                    .get_real(result)
+                    .unwrap_or_else(|| panic!("For input '{}': expected Real", input));
+                assert!(
+                    (f - expected).abs() < 1e-10,
+                    "For input '{}': expected {}, got {}",
+                    input,
+                    expected,
+                    f
+                );
+            }
+        });
     }
 
     #[test]
     fn test_standard_exponent_still_works() {
-        // Make sure we didn't break standard 'e' exponent
-        let mut parser = Parser::new("1e2").unwrap();
-        let result = parser.parse().unwrap();
-        let f = parser
-            .heap()
-            .borrow()
-            .get_real(result)
-            .expect("Expected Real");
-        assert!((f - 100.0).abs() < 1e-10);
+        with_cx(|cx| {
+            // Make sure we didn't break standard 'e' exponent
+            let mut parser = Parser::new("1e2").unwrap();
+            let result = parser.parse(cx).unwrap();
+            let f = cx.get_real(result).expect("Expected Real");
+            assert!((f - 100.0).abs() < 1e-10);
+        });
     }
 
     // ========== Non-Decimal Radix Rational Tests ==========
 
     #[test]
     fn test_hex_rational() {
-        // #x1/10 = 1/16 in decimal
-        let mut parser = Parser::new("#x1/10").unwrap();
-        let result = parser.parse().unwrap();
-        let heap_ref = parser.heap().borrow();
-        let r = heap_ref.get_rational(result).expect("Expected Rational");
-        assert_eq!(r.numer().to_i64(), Some(1));
-        assert_eq!(r.denom().to_i64(), Some(16));
+        with_cx(|cx| {
+            // #x1/10 = 1/16 in decimal
+            let mut parser = Parser::new("#x1/10").unwrap();
+            let result = parser.parse(cx).unwrap();
+            let r = cx.get_rational(result).expect("Expected Rational");
+            assert_eq!(r.numer().to_i64(), Some(1));
+            assert_eq!(r.denom().to_i64(), Some(16));
+        });
     }
 
     #[test]
     fn test_hex_rational_simplifies_to_integer() {
-        // #x10/2 = 16/2 = 8
-        let mut parser = Parser::new("#x10/2").unwrap();
-        let result = parser.parse().unwrap();
-        assert!(result.is_fixnum());
-        assert_eq!(result.as_fixnum_unchecked(), 8);
+        with_cx(|cx| {
+            // #x10/2 = 16/2 = 8
+            let mut parser = Parser::new("#x10/2").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert!(result.is_fixnum());
+            assert_eq!(result.as_fixnum_unchecked(), 8);
+        });
     }
 
     #[test]
     fn test_hex_rational_simplifies() {
-        // #x11/2 = 17/2
-        let mut parser = Parser::new("#x11/2").unwrap();
-        let result = parser.parse().unwrap();
-        let heap_ref = parser.heap().borrow();
-        let r = heap_ref.get_rational(result).expect("Expected Rational");
-        assert_eq!(r.numer().to_i64(), Some(17));
-        assert_eq!(r.denom().to_i64(), Some(2));
+        with_cx(|cx| {
+            // #x11/2 = 17/2
+            let mut parser = Parser::new("#x11/2").unwrap();
+            let result = parser.parse(cx).unwrap();
+            let r = cx.get_rational(result).expect("Expected Rational");
+            assert_eq!(r.numer().to_i64(), Some(17));
+            assert_eq!(r.denom().to_i64(), Some(2));
+        });
     }
 
     #[test]
     fn test_octal_rational() {
-        // #o11/2 = 9/2 in decimal
-        let mut parser = Parser::new("#o11/2").unwrap();
-        let result = parser.parse().unwrap();
-        let heap_ref = parser.heap().borrow();
-        let r = heap_ref.get_rational(result).expect("Expected Rational");
-        assert_eq!(r.numer().to_i64(), Some(9));
-        assert_eq!(r.denom().to_i64(), Some(2));
+        with_cx(|cx| {
+            // #o11/2 = 9/2 in decimal
+            let mut parser = Parser::new("#o11/2").unwrap();
+            let result = parser.parse(cx).unwrap();
+            let r = cx.get_rational(result).expect("Expected Rational");
+            assert_eq!(r.numer().to_i64(), Some(9));
+            assert_eq!(r.denom().to_i64(), Some(2));
+        });
     }
 
     #[test]
     fn test_binary_rational() {
-        // #b11/10 = 3/2 in decimal
-        let mut parser = Parser::new("#b11/10").unwrap();
-        let result = parser.parse().unwrap();
-        let heap_ref = parser.heap().borrow();
-        let r = heap_ref.get_rational(result).expect("Expected Rational");
-        assert_eq!(r.numer().to_i64(), Some(3));
-        assert_eq!(r.denom().to_i64(), Some(2));
+        with_cx(|cx| {
+            // #b11/10 = 3/2 in decimal
+            let mut parser = Parser::new("#b11/10").unwrap();
+            let result = parser.parse(cx).unwrap();
+            let r = cx.get_rational(result).expect("Expected Rational");
+            assert_eq!(r.numer().to_i64(), Some(3));
+            assert_eq!(r.denom().to_i64(), Some(2));
+        });
     }
 
     #[test]
     fn test_hex_rational_with_letters() {
-        // #xa/b = 10/11
-        let mut parser = Parser::new("#xa/b").unwrap();
-        let result = parser.parse().unwrap();
-        let heap_ref = parser.heap().borrow();
-        let r = heap_ref.get_rational(result).expect("Expected Rational");
-        assert_eq!(r.numer().to_i64(), Some(10));
-        assert_eq!(r.denom().to_i64(), Some(11));
+        with_cx(|cx| {
+            // #xa/b = 10/11
+            let mut parser = Parser::new("#xa/b").unwrap();
+            let result = parser.parse(cx).unwrap();
+            let r = cx.get_rational(result).expect("Expected Rational");
+            assert_eq!(r.numer().to_i64(), Some(10));
+            assert_eq!(r.denom().to_i64(), Some(11));
+        });
     }
 
     #[test]
     fn test_hex_rational_zero_denominator_error() {
-        // #x1/0 should error
-        let mut parser = Parser::new("#x1/0").unwrap();
-        let result = parser.parse();
-        assert!(result.is_err());
+        with_cx(|cx| {
+            // #x1/0 should error
+            let mut parser = Parser::new("#x1/0").unwrap();
+            let result = parser.parse(cx);
+            assert!(result.is_err());
+        });
     }
 
     // ========== Complex Numbers with Alternate Exponent Markers ==========
 
     #[test]
     fn test_complex_with_short_exponent_marker() {
-        // 1s2+1.0i = 100.0+1.0i
-        let mut parser = Parser::new("1s2+1.0i").unwrap();
-        let result = parser.parse().unwrap();
-        let heap_ref = parser.heap().borrow();
-        let (real_tv, imag_tv) = heap_ref.get_complex(result).expect("Expected Complex");
-        let real = heap_ref.get_real(real_tv).expect("Expected real part");
-        let imag = heap_ref.get_real(imag_tv).expect("Expected imag part");
-        assert!(
-            (real - 100.0).abs() < 1e-10,
-            "Expected real 100.0, got {}",
-            real
-        );
-        assert!(
-            (imag - 1.0).abs() < 1e-10,
-            "Expected imag 1.0, got {}",
-            imag
-        );
+        with_cx(|cx| {
+            // 1s2+1.0i = 100.0+1.0i
+            let mut parser = Parser::new("1s2+1.0i").unwrap();
+            let result = parser.parse(cx).unwrap();
+            let (real_tv, imag_tv) = cx.get_complex(result).expect("Expected Complex");
+            let real = cx.get_real(real_tv).expect("Expected real part");
+            let imag = cx.get_real(imag_tv).expect("Expected imag part");
+            assert!(
+                (real - 100.0).abs() < 1e-10,
+                "Expected real 100.0, got {}",
+                real
+            );
+            assert!(
+                (imag - 1.0).abs() < 1e-10,
+                "Expected imag 1.0, got {}",
+                imag
+            );
+        });
     }
 
     #[test]
     fn test_complex_with_exponent_in_imag() {
-        // 1.0+1s2i = 1.0+100.0i
-        let mut parser = Parser::new("1.0+1s2i").unwrap();
-        let result = parser.parse().unwrap();
-        let heap_ref = parser.heap().borrow();
-        let (real_tv, imag_tv) = heap_ref.get_complex(result).expect("Expected Complex");
-        let real = heap_ref.get_real(real_tv).expect("Expected real part");
-        let imag = heap_ref.get_real(imag_tv).expect("Expected imag part");
-        assert!(
-            (real - 1.0).abs() < 1e-10,
-            "Expected real 1.0, got {}",
-            real
-        );
-        assert!(
-            (imag - 100.0).abs() < 1e-10,
-            "Expected imag 100.0, got {}",
-            imag
-        );
+        with_cx(|cx| {
+            // 1.0+1s2i = 1.0+100.0i
+            let mut parser = Parser::new("1.0+1s2i").unwrap();
+            let result = parser.parse(cx).unwrap();
+            let (real_tv, imag_tv) = cx.get_complex(result).expect("Expected Complex");
+            let real = cx.get_real(real_tv).expect("Expected real part");
+            let imag = cx.get_real(imag_tv).expect("Expected imag part");
+            assert!(
+                (real - 1.0).abs() < 1e-10,
+                "Expected real 1.0, got {}",
+                real
+            );
+            assert!(
+                (imag - 100.0).abs() < 1e-10,
+                "Expected imag 100.0, got {}",
+                imag
+            );
+        });
     }
 
     #[test]
     fn test_complex_with_double_exponent_marker() {
-        // 1d2+1.0i = 100.0+1.0i (double precision marker)
-        let mut parser = Parser::new("1d2+1.0i").unwrap();
-        let result = parser.parse().unwrap();
-        let heap_ref = parser.heap().borrow();
-        let (real_tv, imag_tv) = heap_ref.get_complex(result).expect("Expected Complex");
-        let real = heap_ref.get_real(real_tv).expect("Expected real part");
-        let imag = heap_ref.get_real(imag_tv).expect("Expected imag part");
-        assert!(
-            (real - 100.0).abs() < 1e-10,
-            "Expected real 100.0, got {}",
-            real
-        );
-        assert!(
-            (imag - 1.0).abs() < 1e-10,
-            "Expected imag 1.0, got {}",
-            imag
-        );
+        with_cx(|cx| {
+            // 1d2+1.0i = 100.0+1.0i (double precision marker)
+            let mut parser = Parser::new("1d2+1.0i").unwrap();
+            let result = parser.parse(cx).unwrap();
+            let (real_tv, imag_tv) = cx.get_complex(result).expect("Expected Complex");
+            let real = cx.get_real(real_tv).expect("Expected real part");
+            let imag = cx.get_real(imag_tv).expect("Expected imag part");
+            assert!(
+                (real - 100.0).abs() < 1e-10,
+                "Expected real 100.0, got {}",
+                real
+            );
+            assert!(
+                (imag - 1.0).abs() < 1e-10,
+                "Expected imag 1.0, got {}",
+                imag
+            );
+        });
     }
 
     #[test]
     fn test_complex_with_long_exponent_marker() {
-        // 1l2+3.0i = 100.0+3.0i (long precision marker)
-        let mut parser = Parser::new("1l2+3.0i").unwrap();
-        let result = parser.parse().unwrap();
-        let heap_ref = parser.heap().borrow();
-        let (real_tv, imag_tv) = heap_ref.get_complex(result).expect("Expected Complex");
-        let real = heap_ref.get_real(real_tv).expect("Expected real part");
-        let imag = heap_ref.get_real(imag_tv).expect("Expected imag part");
-        assert!(
-            (real - 100.0).abs() < 1e-10,
-            "Expected real 100.0, got {}",
-            real
-        );
-        assert!(
-            (imag - 3.0).abs() < 1e-10,
-            "Expected imag 3.0, got {}",
-            imag
-        );
+        with_cx(|cx| {
+            // 1l2+3.0i = 100.0+3.0i (long precision marker)
+            let mut parser = Parser::new("1l2+3.0i").unwrap();
+            let result = parser.parse(cx).unwrap();
+            let (real_tv, imag_tv) = cx.get_complex(result).expect("Expected Complex");
+            let real = cx.get_real(real_tv).expect("Expected real part");
+            let imag = cx.get_real(imag_tv).expect("Expected imag part");
+            assert!(
+                (real - 100.0).abs() < 1e-10,
+                "Expected real 100.0, got {}",
+                real
+            );
+            assert!(
+                (imag - 3.0).abs() < 1e-10,
+                "Expected imag 3.0, got {}",
+                imag
+            );
+        });
     }
 
     #[test]
     fn test_polar_with_exponent_marker() {
-        // An exact zero angle preserves the magnitude, including inexactness.
-        let mut parser = Parser::new("1s2@0").unwrap();
-        let result = parser.parse().unwrap();
-        assert_eq!(parser.heap().borrow().get_real(result), Some(100.0));
+        with_cx(|cx| {
+            // An exact zero angle preserves the magnitude, including inexactness.
+            let mut parser = Parser::new("1s2@0").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert_eq!(cx.get_real(result), Some(100.0));
+        });
     }
 
     // ========== Datum Label Tests (R7RS Section 2.4) ==========
 
     #[test]
     fn test_datum_label_simple() {
-        // #0=42 -> just returns 42, label is stored but not needed
-        let mut parser = Parser::new("#0=42").unwrap();
-        let result = parser.parse().unwrap();
-        assert!(result.is_fixnum());
-        assert_eq!(result.as_fixnum_unchecked(), 42);
+        with_cx(|cx| {
+            // #0=42 -> just returns 42, label is stored but not needed
+            let mut parser = Parser::new("#0=42").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert!(result.is_fixnum());
+            assert_eq!(result.as_fixnum_unchecked(), 42);
+        });
     }
 
     #[test]
     fn test_datum_label_shared_structure() {
-        // (#0=(a b) #0#) -> two references to the same list
-        let mut parser = Parser::new("(#0=(a b) #0#)").unwrap();
-        let result = parser.parse().unwrap();
+        with_cx(|cx| {
+            // (#0=(a b) #0#) -> two references to the same list
+            let mut parser = Parser::new("(#0=(a b) #0#)").unwrap();
+            let result = parser.parse(cx).unwrap();
 
-        // HeapPair structure - shared structure via same TaggedValue (raw pointer)
-        assert!(result.is_pair());
-        let heap = parser.heap();
-        let heap_ref = heap.borrow();
-        let first = heap_ref.car(result);
-        let second_cell = heap_ref.cdr(result);
+            // HeapPair structure - shared structure via same TaggedValue (raw pointer)
+            assert!(result.is_pair());
+            let first = cx.car(result);
+            let second_cell = cx.cdr(result);
 
-        // First element should be (a b)
-        assert!(first.is_pair());
-        assert_eq!(heap_ref.get_symbol_name(heap_ref.car(first)), Some("a"));
+            // First element should be (a b)
+            assert!(first.is_pair());
+            assert_eq!(cx.get_symbol_name(cx.car(first)).as_deref(), Some("a"));
 
-        // Second element of outer list should also be the same (a b)
-        assert!(second_cell.is_pair());
-        let second = heap_ref.car(second_cell);
-        assert!(second.is_pair());
+            // Second element of outer list should also be the same (a b)
+            assert!(second_cell.is_pair());
+            let second = cx.car(second_cell);
+            assert!(second.is_pair());
 
-        // Check pointer equality - both should be the same TaggedValue
-        assert_eq!(
-            first.raw(),
-            second.raw(),
-            "Shared structure should use same heap pointer"
-        );
+            // Check pointer equality - both should be the same TaggedValue
+            assert_eq!(
+                first.raw(),
+                second.raw(),
+                "Shared structure should use same heap pointer"
+            );
+        });
     }
 
     #[test]
     fn test_datum_label_cyclic() {
-        // #0=(1 . #0#) -> creates a cycle
-        let mut parser = Parser::new("#0=(1 . #0#)").unwrap();
-        let result = parser.parse().unwrap();
+        with_cx(|cx| {
+            // #0=(1 . #0#) -> creates a cycle
+            let mut parser = Parser::new("#0=(1 . #0#)").unwrap();
+            let result = parser.parse(cx).unwrap();
 
-        assert!(result.is_pair());
-        let heap = parser.heap();
-        let heap_ref = heap.borrow();
-        let car = heap_ref.car(result);
-        let cdr = heap_ref.cdr(result);
+            assert!(result.is_pair());
+            let car = cx.car(result);
+            let cdr = cx.cdr(result);
 
-        assert!(car.is_fixnum());
-        assert_eq!(car.as_fixnum_unchecked(), 1);
+            assert!(car.is_fixnum());
+            assert_eq!(car.as_fixnum_unchecked(), 1);
 
-        // The cdr should be eq? to the pair itself (cycle)
-        assert!(cdr.is_pair());
-        assert_eq!(
-            result.raw(),
-            cdr.raw(),
-            "Cyclic structure: cdr should point to self"
-        );
+            // The cdr should be eq? to the pair itself (cycle)
+            assert!(cdr.is_pair());
+            assert_eq!(
+                result.raw(),
+                cdr.raw(),
+                "Cyclic structure: cdr should point to self"
+            );
+        });
     }
 
     #[test]
     fn test_datum_label_forward_reference() {
-        // (#0# #0=(a b)) -> forward reference resolved
-        let mut parser = Parser::new("(#0# #0=(a b))").unwrap();
-        let result = parser.parse().unwrap();
+        with_cx(|cx| {
+            // (#0# #0=(a b)) -> forward reference resolved
+            let mut parser = Parser::new("(#0# #0=(a b))").unwrap();
+            let result = parser.parse(cx).unwrap();
 
-        assert!(result.is_pair());
-        let heap = parser.heap();
-        let heap_ref = heap.borrow();
-        let first = heap_ref.car(result);
-        let rest = heap_ref.cdr(result);
+            assert!(result.is_pair());
+            let first = cx.car(result);
+            let rest = cx.cdr(result);
 
-        // Both elements should be the same (a b) list
-        assert!(first.is_pair());
-        assert!(rest.is_pair());
-        let second = heap_ref.car(rest);
-        assert!(second.is_pair());
+            // Both elements should be the same (a b) list
+            assert!(first.is_pair());
+            assert!(rest.is_pair());
+            let second = cx.car(rest);
+            assert!(second.is_pair());
 
-        assert_eq!(
-            first.raw(),
-            second.raw(),
-            "Forward reference should resolve to same object"
-        );
+            assert_eq!(
+                first.raw(),
+                second.raw(),
+                "Forward reference should resolve to same object"
+            );
+        });
     }
 
     #[test]
     fn label_patching_preserves_a_shared_pair_vector_cycle() {
-        // Exercise a placeholder in every kind of slot, with sharing that
-        // reaches the same containers along several paths through the worklist.
-        let mut parser = Parser::new("(#0# . #0=#(#1# #1=(x . #0#)))").unwrap();
-        let root = parser.parse().unwrap();
-        let heap = parser.heap().borrow();
-        let vector = heap.car(root);
-        assert!(vector.is_vector());
-        assert_eq!(heap.cdr(root), vector);
-        let pair = heap.vector_ref(vector, 0);
-        assert!(pair.is_pair());
-        assert_eq!(heap.vector_ref(vector, 1), pair);
-        assert_eq!(heap.get_symbol_name(heap.car(pair)), Some("x"));
-        assert_eq!(heap.cdr(pair), vector);
+        with_cx(|cx| {
+            // Exercise a placeholder in every kind of slot, with sharing that
+            // reaches the same containers along several paths through the worklist.
+            let mut parser = Parser::new("(#0# . #0=#(#1# #1=(x . #0#)))").unwrap();
+            let root = parser.parse(cx).unwrap();
+            let vector = cx.car(root);
+            assert!(vector.is_vector());
+            assert_eq!(cx.cdr(root), vector);
+            let pair = cx.vector_ref(vector, 0);
+            assert!(pair.is_pair());
+            assert_eq!(cx.vector_ref(vector, 1), pair);
+            assert_eq!(cx.get_symbol_name(cx.car(pair)).as_deref(), Some("x"));
+            assert_eq!(cx.cdr(pair), vector);
+        });
     }
 
     #[test]
     fn test_datum_label_multiple() {
-        // (#0=a #1=b #0# #1#) -> (a b a b)
-        let mut parser = Parser::new("(#0=a #1=b #0# #1#)").unwrap();
-        let result = parser.parse().unwrap();
+        with_cx(|cx| {
+            // (#0=a #1=b #0# #1#) -> (a b a b)
+            let mut parser = Parser::new("(#0=a #1=b #0# #1#)").unwrap();
+            let result = parser.parse(cx).unwrap();
 
-        // Collect all symbols from the list
-        let heap = parser.heap();
-        let heap_ref = heap.borrow();
-        let mut symbols = Vec::new();
-        let mut current = result;
-        while current.is_pair() {
-            if let Some(name) = heap_ref.get_symbol_name(heap_ref.car(current)) {
-                symbols.push(name.to_string());
+            // Collect all symbols from the list
+            let mut symbols = Vec::new();
+            let mut current = result;
+            while current.is_pair() {
+                if let Some(name) = cx.get_symbol_name(cx.car(current)).as_deref() {
+                    symbols.push(name.to_string());
+                }
+                current = cx.cdr(current);
             }
-            current = heap_ref.cdr(current);
-        }
 
-        assert_eq!(symbols, vec!["a", "b", "a", "b"]);
+            assert_eq!(symbols, vec!["a", "b", "a", "b"]);
+        });
     }
 
     #[test]
     fn test_datum_label_duplicate_error() {
-        // #0=a #0=b -> error: duplicate label
-        let mut parser = Parser::new("(#0=a #0=b)").unwrap();
-        let result = parser.parse();
-        assert!(
-            matches!(
-                result.as_ref().map_err(ParseError::kind),
-                Err(ParseError::DuplicateLabel(0))
-            ),
-            "Expected DuplicateLabel error, got {:?}",
-            result
-        );
+        with_cx(|cx| {
+            // #0=a #0=b -> error: duplicate label
+            let mut parser = Parser::new("(#0=a #0=b)").unwrap();
+            let result = parser.parse(cx);
+            assert!(
+                matches!(
+                    result.as_ref().map_err(ParseError::kind),
+                    Err(ParseError::DuplicateLabel(0))
+                ),
+                "Expected DuplicateLabel error, got {:?}",
+                result
+            );
+        });
     }
 
     #[test]
     fn test_datum_label_undefined() {
-        // #99# with no #99= anywhere in the datum: R7RS 2.4 scopes a label to
-        // its outermost datum, so nothing later can define it, and a
-        // placeholder object left in the data would be garbage to every
-        // consumer. It is an error at the end of the datum.
-        let mut parser = Parser::new("(a #99# b)").unwrap();
-        match parser.parse().as_ref().map_err(ParseError::kind) {
-            Err(ParseError::UndefinedLabel(99)) => {}
-            other => panic!("expected UndefinedLabel(99), got {other:?}"),
-        }
-        // A label defined *after* its first reference in the same datum is
-        // fine — that is what placeholders are for.
-        let mut parser = Parser::new("(#0# . #0=(x))").unwrap();
-        assert!(parser.parse().is_ok());
+        with_cx(|cx| {
+            // #99# with no #99= anywhere in the datum: R7RS 2.4 scopes a label to
+            // its outermost datum, so nothing later can define it, and a
+            // placeholder object left in the data would be garbage to every
+            // consumer. It is an error at the end of the datum.
+            let mut parser = Parser::new("(a #99# b)").unwrap();
+            match parser.parse(cx).as_ref().map_err(ParseError::kind) {
+                Err(ParseError::UndefinedLabel(99)) => {}
+                other => panic!("expected UndefinedLabel(99), got {other:?}"),
+            }
+            // A label defined *after* its first reference in the same datum is
+            // fine — that is what placeholders are for.
+            let mut parser = Parser::new("(#0# . #0=(x))").unwrap();
+            assert!(parser.parse(cx).is_ok());
+        });
     }
 
     #[test]
     fn test_datum_label_in_vector() {
-        // #(#0=1 #0# #0#) -> vector with shared elements
-        let mut parser = Parser::new("#(#0=1 #0# #0#)").unwrap();
-        let result = parser.parse().unwrap();
+        with_cx(|cx| {
+            // #(#0=1 #0# #0#) -> vector with shared elements
+            let mut parser = Parser::new("#(#0=1 #0# #0#)").unwrap();
+            let result = parser.parse(cx).unwrap();
 
-        assert!(result.is_vector());
-        let heap_ref = parser.heap().borrow();
-        let len = heap_ref.vector_len(result);
-        assert_eq!(len, 3);
-        for i in 0..len {
-            let elem = heap_ref.vector_ref(result, i);
-            assert!(elem.is_fixnum());
-            assert_eq!(elem.as_fixnum_unchecked(), 1);
-        }
+            assert!(result.is_vector());
+            let len = cx.vector_len(result);
+            assert_eq!(len, 3);
+            for i in 0..len {
+                let elem = cx.vector_ref(result, i);
+                assert!(elem.is_fixnum());
+                assert_eq!(elem.as_fixnum_unchecked(), 1);
+            }
+        });
     }
 
     #[test]
     fn test_datum_label_nested() {
-        // #0=(a #1=(b c) #1#) -> nested shared structure
-        let mut parser = Parser::new("#0=(a #1=(b c) #1#)").unwrap();
-        let result = parser.parse().unwrap();
+        with_cx(|cx| {
+            // #0=(a #1=(b c) #1#) -> nested shared structure
+            let mut parser = Parser::new("#0=(a #1=(b c) #1#)").unwrap();
+            let result = parser.parse(cx).unwrap();
 
-        // Verify the nested list (b c) is shared
-        assert!(result.is_pair());
-        let heap = parser.heap();
-        let heap_ref = heap.borrow();
-        let rest1 = heap_ref.cdr(result);
+            // Verify the nested list (b c) is shared
+            assert!(result.is_pair());
+            let rest1 = cx.cdr(result);
 
-        // Get second element (should be (b c))
-        assert!(rest1.is_pair());
-        let inner1 = heap_ref.car(rest1);
-        assert!(inner1.is_pair());
+            // Get second element (should be (b c))
+            assert!(rest1.is_pair());
+            let inner1 = cx.car(rest1);
+            assert!(inner1.is_pair());
 
-        // Get third element (should also be (b c))
-        let rest2 = heap_ref.cdr(rest1);
-        assert!(rest2.is_pair());
-        let inner2 = heap_ref.car(rest2);
-        assert!(inner2.is_pair());
+            // Get third element (should also be (b c))
+            let rest2 = cx.cdr(rest1);
+            assert!(rest2.is_pair());
+            let inner2 = cx.car(rest2);
+            assert!(inner2.is_pair());
 
-        assert_eq!(
-            inner1.raw(),
-            inner2.raw(),
-            "Nested shared structure should use same heap pointer"
-        );
+            assert_eq!(
+                inner1.raw(),
+                inner2.raw(),
+                "Nested shared structure should use same heap pointer"
+            );
+        });
     }
 
     #[test]
     fn comments_inside_prefixes_do_not_define_or_reference_live_labels() {
-        let mut parser =
-            Parser::new("#(#0=#;#0=ignored '#;#99# (a . #;discard b) #0# #u8(1 #;#0# 255))")
-                .unwrap();
-        let value = parser.parse().unwrap();
-        let heap = parser.heap().borrow();
-        let quoted = heap.vector_ref(value, 0);
-        assert_eq!(heap.vector_ref(value, 1), quoted);
-        assert_eq!(heap.get_symbol_name(heap.car(quoted)), Some("quote"));
-        let pair = heap.car(heap.cdr(quoted));
-        assert_eq!(heap.get_symbol_name(heap.car(pair)), Some("a"));
-        assert_eq!(heap.get_symbol_name(heap.cdr(pair)), Some("b"));
-        assert!(heap.is_bytevector(heap.vector_ref(value, 2)));
+        with_cx(|cx| {
+            let mut parser =
+                Parser::new("#(#0=#;#0=ignored '#;#99# (a . #;discard b) #0# #u8(1 #;#0# 255))")
+                    .unwrap();
+            let value = parser.parse(cx).unwrap();
+            let quoted = cx.vector_ref(value, 0);
+            assert_eq!(cx.vector_ref(value, 1), quoted);
+            assert_eq!(cx.get_symbol_name(cx.car(quoted)).as_deref(), Some("quote"));
+            let pair = cx.car(cx.cdr(quoted));
+            assert_eq!(cx.get_symbol_name(cx.car(pair)).as_deref(), Some("a"));
+            assert_eq!(cx.get_symbol_name(cx.cdr(pair)).as_deref(), Some("b"));
+            assert!(cx.is_bytevector(cx.vector_ref(value, 2)));
+        });
     }
 
     #[test]
     fn every_pending_prefix_requires_a_datum_before_a_closer() {
-        for source in [
-            "(')",
-            "(`)",
-            "(,)",
-            "(,@)",
-            "(#0=)",
-            "(#;)",
-            "(1 . #;2)",
-            "#(1 . 2)",
-        ] {
-            let mut parser = Parser::new(source).unwrap();
-            assert!(
-                matches!(
-                    parser.parse().as_ref().map_err(ParseError::kind),
-                    Err(ParseError::UnexpectedToken(_))
-                ),
-                "{source}"
-            );
-        }
+        with_cx(|cx| {
+            for source in [
+                "(')",
+                "(`)",
+                "(,)",
+                "(,@)",
+                "(#0=)",
+                "(#;)",
+                "(1 . #;2)",
+                "#(1 . 2)",
+            ] {
+                let mut parser = Parser::new(source).unwrap();
+                assert!(
+                    matches!(
+                        parser.parse(cx).as_ref().map_err(ParseError::kind),
+                        Err(ParseError::UnexpectedToken(_))
+                    ),
+                    "{source}"
+                );
+            }
+        });
     }
 
     #[test]
     fn skipped_nested_data_leaves_the_next_datum_unconsumed() {
-        let source = format!("#;{}a{} 42", "'(#(".repeat(10_000), "))".repeat(10_000));
-        let mut parser = Parser::new(&source).unwrap();
-        assert_eq!(parser.parse().unwrap().as_fixnum(), Some(42));
-        assert!(parser.parse_next().unwrap().is_none());
-        let mut parser = Parser::new(&source).unwrap();
-        parser.skip_rest().unwrap();
-        assert!(parser.parse_next().unwrap().is_none());
+        with_cx(|cx| {
+            let source = format!("#;{}a{} 42", "'(#(".repeat(10_000), "))".repeat(10_000));
+            let mut parser = Parser::new(&source).unwrap();
+            assert_eq!(parser.parse(cx).unwrap().as_fixnum(), Some(42));
+            assert!(parser.parse_next(cx).unwrap().is_none());
+            let mut parser = Parser::new(&source).unwrap();
+            parser.skip_rest(cx).unwrap();
+            assert!(parser.parse_next(cx).unwrap().is_none());
+        });
     }
 
     #[test]
     fn test_source_map_list() {
-        let heap = patina_core::new_shared_heap();
-        let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
-        let mut parser =
-            Parser::new_with_source_map("(+ 1 2)", heap.clone(), Rc::from("test.scm"), sm.clone())
-                .unwrap();
-        let result = parser.parse().unwrap();
-        let loc = heap.borrow().source(result).cloned();
-        assert!(loc.is_some(), "list form should have source location");
-        let loc = loc.unwrap();
-        assert_eq!(loc.line, 1);
-        assert_eq!(loc.column, 1);
-        assert_eq!(&*loc.source, "test.scm");
+        with_cx(|cx| {
+            let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
+            let mut parser =
+                Parser::new_with_source_map("(+ 1 2)", Rc::from("test.scm"), sm.clone()).unwrap();
+            let result = parser.parse(cx).unwrap();
+            let loc = cx.source(result);
+            assert!(loc.is_some(), "list form should have source location");
+            let loc = loc.unwrap();
+            assert_eq!(loc.line, 1);
+            assert_eq!(loc.column, 1);
+            assert_eq!(&*loc.source, "test.scm");
+        });
     }
 
     #[test]
     fn test_source_map_nested_lists() {
-        let heap = patina_core::new_shared_heap();
-        let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
-        let mut parser = Parser::new_with_source_map(
-            "(define (f x) (+ x 1))",
-            heap.clone(),
-            Rc::from("test.scm"),
-            sm.clone(),
-        )
-        .unwrap();
-        let result = parser.parse().unwrap();
-        // Outer list starts at column 1
-        let loc = heap.borrow().source(result).cloned().unwrap();
-        assert_eq!(loc.line, 1);
-        assert_eq!(loc.column, 1);
+        with_cx(|cx| {
+            let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
+            let mut parser = Parser::new_with_source_map(
+                "(define (f x) (+ x 1))",
+                Rc::from("test.scm"),
+                sm.clone(),
+            )
+            .unwrap();
+            let result = parser.parse(cx).unwrap();
+            // Outer list starts at column 1
+            let loc = cx.source(result).unwrap();
+            assert_eq!(loc.line, 1);
+            assert_eq!(loc.column, 1);
 
-        // Find inner (+ x 1) — it's the third element: (define (f x) (+ x 1))
-        let heap_ref = heap.borrow();
-        let cdr1 = heap_ref.cdr(result); // ((f x) (+ x 1))
-        let cdr2 = heap_ref.cdr(cdr1); // ((+ x 1))
-        let inner = heap_ref.car(cdr2); // (+ x 1)
-        drop(heap_ref);
-        let inner_loc = heap.borrow().source(inner).cloned().unwrap();
-        assert_eq!(inner_loc.line, 1);
-        assert_eq!(inner_loc.column, 15); // position of `(` in `(+ x 1)`
+            // Find inner (+ x 1) — it's the third element: (define (f x) (+ x 1))
+            let cdr1 = cx.cdr(result); // ((f x) (+ x 1))
+            let cdr2 = cx.cdr(cdr1); // ((+ x 1))
+            let inner = cx.car(cdr2); // (+ x 1)
+            let inner_loc = cx.source(inner).unwrap();
+            assert_eq!(inner_loc.line, 1);
+            assert_eq!(inner_loc.column, 15); // position of `(` in `(+ x 1)`
+        });
     }
 
     #[test]
     fn test_source_map_quote_abbreviation() {
-        let heap = patina_core::new_shared_heap();
-        let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
-        let mut parser =
-            Parser::new_with_source_map("'(1 2 3)", heap.clone(), Rc::from("test.scm"), sm.clone())
-                .unwrap();
-        let result = parser.parse().unwrap();
-        // The quote abbreviation should record position of the `'`
-        let loc = heap.borrow().source(result).cloned();
-        assert!(loc.is_some(), "quote form should have source location");
-        let loc = loc.unwrap();
-        assert_eq!(loc.line, 1);
-        assert_eq!(loc.column, 1);
+        with_cx(|cx| {
+            let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
+            let mut parser =
+                Parser::new_with_source_map("'(1 2 3)", Rc::from("test.scm"), sm.clone()).unwrap();
+            let result = parser.parse(cx).unwrap();
+            // The quote abbreviation should record position of the `'`
+            let loc = cx.source(result);
+            assert!(loc.is_some(), "quote form should have source location");
+            let loc = loc.unwrap();
+            assert_eq!(loc.line, 1);
+            assert_eq!(loc.column, 1);
+        });
     }
 
     #[test]
     fn test_source_map_vector() {
-        let heap = patina_core::new_shared_heap();
-        let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
-        let mut parser =
-            Parser::new_with_source_map("#(1 2 3)", heap.clone(), Rc::from("test.scm"), sm.clone())
-                .unwrap();
-        let result = parser.parse().unwrap();
-        let loc = heap.borrow().source(result).cloned();
-        assert!(loc.is_some(), "vector should have source location");
-        let loc = loc.unwrap();
-        assert_eq!(loc.line, 1);
-        assert_eq!(loc.column, 1);
+        with_cx(|cx| {
+            let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
+            let mut parser =
+                Parser::new_with_source_map("#(1 2 3)", Rc::from("test.scm"), sm.clone()).unwrap();
+            let result = parser.parse(cx).unwrap();
+            let loc = cx.source(result);
+            assert!(loc.is_some(), "vector should have source location");
+            let loc = loc.unwrap();
+            assert_eq!(loc.line, 1);
+            assert_eq!(loc.column, 1);
+        });
     }
 
     #[test]
     fn test_source_map_multiline() {
-        let heap = patina_core::new_shared_heap();
-        let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
-        let mut parser = Parser::new_with_source_map(
-            "(define x 1)\n(+ x 2)",
-            heap.clone(),
-            Rc::from("test.scm"),
-            sm.clone(),
-        )
-        .unwrap();
-        let expr1 = parser.parse().unwrap();
-        let expr2 = parser.parse().unwrap();
-        let loc1 = heap.borrow().source(expr1).cloned().unwrap();
-        let loc2 = heap.borrow().source(expr2).cloned().unwrap();
-        assert_eq!(loc1.line, 1);
-        assert_eq!(loc1.column, 1);
-        assert_eq!(loc2.line, 2);
-        assert_eq!(loc2.column, 1);
+        with_cx(|cx| {
+            let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
+            let mut parser = Parser::new_with_source_map(
+                "(define x 1)\n(+ x 2)",
+                Rc::from("test.scm"),
+                sm.clone(),
+            )
+            .unwrap();
+            let expr1 = parser.parse(cx).unwrap();
+            let expr2 = parser.parse(cx).unwrap();
+            let loc1 = cx.source(expr1).unwrap();
+            let loc2 = cx.source(expr2).unwrap();
+            assert_eq!(loc1.line, 1);
+            assert_eq!(loc1.column, 1);
+            assert_eq!(loc2.line, 2);
+            assert_eq!(loc2.column, 1);
+        });
     }
 
     #[test]
     fn test_no_source_map_backward_compat() {
-        // Without source map, everything still works
-        let mut parser = Parser::new("(+ 1 2)").unwrap();
-        let result = parser.parse().unwrap();
-        assert!(result.is_pair());
+        with_cx(|cx| {
+            // Without source map, everything still works
+            let mut parser = Parser::new("(+ 1 2)").unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert!(result.is_pair());
+        });
     }
 }
 
@@ -1925,29 +1974,31 @@ mod tests {
 mod occurrence_span_tests {
     use super::*;
 
+    /// Run `f` in a context over a fresh cx.
+    fn with_cx<R>(f: impl for<'gc> FnOnce(&mut Cx<'gc>) -> R) -> R {
+        patina_core::NoGcScope::with_cx(&patina_core::new_shared_heap(), f)
+    }
+
     #[test]
     fn program_identifiers_are_occurrences() {
-        let heap = patina_core::new_shared_heap();
-        let mut parser =
-            Parser::new_program("(same 42 same) next", heap.clone(), "test.scm", false).unwrap();
-        let form = parser.parse().unwrap();
-        let h = heap.borrow();
-        let first = h.car(form);
-        let rest = h.cdr(form);
-        let last = h.car(h.cdr(rest));
-        assert_ne!(first, last);
-        assert_eq!(h.get_identifier_data(first).unwrap().0.as_ref(), "same");
-        assert_eq!(h.source(first).unwrap().column, 2);
-        assert_eq!(h.source(last).unwrap().column, 10);
-        assert_eq!(h.source(last).unwrap().length, Some(4));
-        let outer = h.source(form).unwrap();
-        assert_eq!(outer.span.as_ref().unwrap().end_column, 15);
-        drop(h);
-        let mut datum_reader = Parser::new_with_heap("(same same)", heap.clone()).unwrap();
-        let datum = datum_reader.parse().unwrap();
-        let h = heap.borrow();
-        assert_eq!(h.car(datum), h.car(h.cdr(datum)));
-        assert_eq!(h.get_symbol_name(h.car(datum)), Some("same"));
-        assert!(h.source(datum).is_none());
+        with_cx(|cx| {
+            let mut parser = Parser::new_program("(same 42 same) next", "test.scm", false).unwrap();
+            let form = parser.parse(cx).unwrap();
+            let first = cx.car(form);
+            let rest = cx.cdr(form);
+            let last = cx.car(cx.cdr(rest));
+            assert_ne!(first, last);
+            assert_eq!(cx.get_identifier_data(first).unwrap().0.as_ref(), "same");
+            assert_eq!(cx.source(first).unwrap().column, 2);
+            assert_eq!(cx.source(last).unwrap().column, 10);
+            assert_eq!(cx.source(last).unwrap().length, Some(4));
+            let outer = cx.source(form).unwrap();
+            assert_eq!(outer.span.as_ref().unwrap().end_column, 15);
+            let mut datum_reader = Parser::new("(same same)").unwrap();
+            let datum = datum_reader.parse(cx).unwrap();
+            assert_eq!(cx.car(datum), cx.car(cx.cdr(datum)));
+            assert_eq!(cx.get_symbol_name(cx.car(datum)).as_deref(), Some("same"));
+            assert!(cx.source(datum).is_none());
+        });
     }
 }

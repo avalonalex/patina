@@ -142,9 +142,14 @@ where
         loop {
             let source_name = self.source_name.clone();
             let source_map = self.source_map.clone();
-            let Some(datum) = self.reader.next_datum(self.heap, move |parser| {
-                parser.recording_into(source_name.clone(), source_map.clone())
-            }) else {
+            let reader = &mut self.reader;
+            let datum = patina_core::NoGcScope::with_cx(self.heap, |cx| {
+                let datum = reader.next_datum(cx, move |parser| {
+                    parser.recording_into(source_name.clone(), source_map.clone())
+                });
+                datum.map(|datum| datum.map(|d| d.tagged()))
+            });
+            let Some(datum) = datum else {
                 self.consume_what_was_read();
                 return None;
             };

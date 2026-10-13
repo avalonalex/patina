@@ -1,7 +1,7 @@
 //! Shared by the ordinary property tests and the libFuzzer target. No writer
 //! is used here: formatting arbitrary-depth parsed data can itself recurse.
 
-use patina_core::{Heap, Port, SharedHeap, TaggedValue, new_shared_heap};
+use patina_core::{Heap, NoGcScope, Port, SharedHeap, TaggedValue, Value, new_shared_heap};
 use patina_frontend::{Parser, Reader, dialect};
 use std::collections::HashSet;
 
@@ -62,7 +62,12 @@ fn drain(reader: &mut Reader, heap: &SharedHeap, result: &mut Outcome) {
     if result.rejected {
         return;
     }
-    while let Some(value) = reader.next_datum(heap, |parser| parser) {
+    // Each datum leaves the context as a word, which `compare` reads back
+    // through the heap; nothing here reaches a safe point.
+    while let Some(value) = NoGcScope::with_cx(heap, |cx| {
+        let value = reader.next_datum(cx, |parser| parser);
+        value.map(|value| value.map(Value::tagged))
+    }) {
         match value {
             Ok(value) => result.values.push(value),
             Err(_) => {
@@ -81,21 +86,28 @@ fn drain(reader: &mut Reader, heap: &SharedHeap, result: &mut Outcome) {
 pub fn check_reader(text: &str, chunks: &[u8]) {
     let heap = new_shared_heap();
     let mut whole = Outcome::default();
-    match Parser::new_with_heap(text, heap.clone()) {
-        Ok(mut parser) => loop {
-            match parser.parse_next() {
-                Ok(Some(value)) => whole.values.push(value),
-                Ok(None) => break,
-                Err(_) => {
-                    whole.rejected = true;
-                    break;
+    match Parser::new(text) {
+        Ok(mut parser) => NoGcScope::with_cx(&heap, |cx| {
+            loop {
+                match parser.parse_next(cx) {
+                    Ok(Some(value)) => whole.values.push(value.tagged()),
+                    Ok(None) => break,
+                    Err(_) => {
+                        whole.rejected = true;
+                        break;
+                    }
                 }
             }
-        },
+        }),
         Err(_) => whole.rejected = true,
     }
 
-    let all = Parser::new_with_heap(text, heap.clone()).and_then(|mut p| p.parse_all());
+    let all = Parser::new(text).and_then(|mut p| {
+        NoGcScope::with_cx(&heap, |cx| {
+            let values = p.parse_all(cx)?;
+            Ok(values.into_iter().map(Value::tagged).collect())
+        })
+    });
     assert_eq!(
         all.is_err(),
         whole.rejected,
@@ -146,7 +158,10 @@ pub fn check_reader(text: &str, chunks: &[u8]) {
     let port = Port::new_input_string(text.to_owned());
     let mut pulled = Outcome::default();
     loop {
-        match Parser::read_from_port(port.clone(), heap.clone()) {
+        let value = NoGcScope::with_cx(&heap, |cx| {
+            Parser::read_from_port(port.clone(), cx).map(|value| value.map(Value::tagged))
+        });
+        match value {
             Ok(Some(value)) => pulled.values.push(value),
             Ok(None) => break,
             Err(_) => {

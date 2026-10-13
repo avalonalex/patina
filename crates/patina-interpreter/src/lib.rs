@@ -428,16 +428,17 @@ impl<B: Backend> Interpreter<B> {
     ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
         let heap = self.backend.global_env().heap();
         let source_map = Rc::new(RefCell::new(SourceMap::new()));
-        let mut parser = match Parser::new_with_source_map(
-            input,
-            heap.clone(),
-            Rc::from(source_name),
-            source_map.clone(),
-        ) {
-            Ok(p) => p,
-            Err(e) => return (Err(e.into()), source_map),
-        };
-        let expr = match parser.parse().and_then(|e| parser.skip_rest().map(|()| e)) {
+        let mut parser =
+            match Parser::new_with_source_map(input, Rc::from(source_name), source_map.clone()) {
+                Ok(p) => p,
+                Err(e) => return (Err(e.into()), source_map),
+            };
+        let expr = patina_core::NoGcScope::with_cx(heap, |cx| {
+            let expr = parser.parse(cx)?;
+            parser.skip_rest(cx)?;
+            Ok::<_, ParseError>(expr.tagged())
+        });
+        let expr = match expr {
             Ok(e) => e,
             Err(e) => return (Err(e.into()), source_map),
         };
@@ -772,7 +773,6 @@ impl<B: Backend> Interpreter<B> {
         let source_map = Rc::new(RefCell::new(SourceMap::new()));
         let mut parser = match Parser::new_with_source_map_and_fold_case(
             input,
-            heap.clone(),
             Rc::from(source_name),
             source_map.clone(),
             *fold_case,
@@ -786,14 +786,17 @@ impl<B: Backend> Interpreter<B> {
             }
         };
         loop {
-            let datum = parser.parse_next();
+            let datum = patina_core::NoGcScope::with_cx(heap, |cx| {
+                parser.parse_next(cx).map(|datum| datum.map(|d| d.tagged()))
+            });
             *fold_case = parser.read_state().fold_case;
             match datum {
                 #[expect(
                     clippy::disallowed_methods,
                     reason = "the outermost entry, so the backend's loop may collect. The parser \
-                              holds no heap value between data (it clears its labels after each), \
-                              and the heap's provenance is not a root, pruned by sweep. `value`, \
+                              holds no heap value between data (a datum's labels live only while \
+                              it is read), and the heap's provenance is not a root, pruned by \
+                              sweep. `value`, \
                               the last result, is held across the form by a handle, which roots \
                               it (#605)"
                 )]
@@ -1300,9 +1303,8 @@ mod tests {
         let heap = backend.global_env().heap().clone();
         let sm = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
         let source_name: std::rc::Rc<str> = std::rc::Rc::from("test.scm");
-        let mut parser =
-            Parser::new_with_source_map("(+ 1 2)", heap.clone(), source_name, sm.clone()).unwrap();
-        let expr = parser.parse().unwrap();
+        let mut parser = Parser::new_with_source_map("(+ 1 2)", source_name, sm.clone()).unwrap();
+        let expr = patina_core::NoGcScope::with_cx(&heap, |cx| parser.parse(cx).unwrap().tagged());
         drop(parser);
 
         // Desugar with source map
@@ -1353,9 +1355,8 @@ mod tests {
         let sm = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
         let source_name: std::rc::Rc<str> = std::rc::Rc::from("<eval>");
         let input = "(+ 1 bad-var)";
-        let mut parser =
-            Parser::new_with_source_map(input, heap.clone(), source_name, sm.clone()).unwrap();
-        let expr = parser.parse().unwrap();
+        let mut parser = Parser::new_with_source_map(input, source_name, sm.clone()).unwrap();
+        let expr = patina_core::NoGcScope::with_cx(heap, |cx| parser.parse(cx).unwrap().tagged());
         drop(parser);
         let global = interp.evaluator().global_env.clone();
         let result = interp.backend().eval_with_source_map(expr, &global, &sm);
@@ -1391,9 +1392,8 @@ mod tests {
         let sm = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
         let source_name: std::rc::Rc<str> = std::rc::Rc::from("test.scm");
         let input = "(let ((x 1)) (+ x y))";
-        let mut parser =
-            Parser::new_with_source_map(input, heap.clone(), source_name, sm.clone()).unwrap();
-        let expr = parser.parse().unwrap();
+        let mut parser = Parser::new_with_source_map(input, source_name, sm.clone()).unwrap();
+        let expr = patina_core::NoGcScope::with_cx(heap, |cx| parser.parse(cx).unwrap().tagged());
         drop(parser);
         let global = interp.backend().global_env().clone();
         let result = interp.backend().eval_with_source_map(expr, &global, &sm);
@@ -1415,9 +1415,8 @@ mod tests {
         let sm = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
         let source_name: std::rc::Rc<str> = std::rc::Rc::from("test.scm");
         let input = "(cond (#t (+ 0 y)))";
-        let mut parser =
-            Parser::new_with_source_map(input, heap.clone(), source_name, sm.clone()).unwrap();
-        let expr = parser.parse().unwrap();
+        let mut parser = Parser::new_with_source_map(input, source_name, sm.clone()).unwrap();
+        let expr = patina_core::NoGcScope::with_cx(heap, |cx| parser.parse(cx).unwrap().tagged());
         drop(parser);
         let global = interp.backend().global_env().clone();
         let result = interp.backend().eval_with_source_map(expr, &global, &sm);
@@ -1443,9 +1442,8 @@ mod tests {
         let sm = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
         let source_name: std::rc::Rc<str> = std::rc::Rc::from("test.scm");
         let input = "(+ 1 undefined-var)";
-        let mut parser =
-            Parser::new_with_source_map(input, heap.clone(), source_name, sm.clone()).unwrap();
-        let expr = parser.parse().unwrap();
+        let mut parser = Parser::new_with_source_map(input, source_name, sm.clone()).unwrap();
+        let expr = patina_core::NoGcScope::with_cx(heap, |cx| parser.parse(cx).unwrap().tagged());
         drop(parser);
         let global = interp.backend().global_env().clone();
         let result = interp.backend().eval_with_source_map(expr, &global, &sm);

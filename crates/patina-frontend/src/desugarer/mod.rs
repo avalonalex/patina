@@ -3573,28 +3573,31 @@ impl<'a> Desugarer<'a> {
             })?;
 
             // Parse the file contents
-            let mut parser = crate::Parser::new_program(
-                &content,
-                shared_heap.clone(),
-                &path.display().to_string(),
-                case_insensitive,
-            )
-            .map_err(|e| {
-                DesugarError::InvalidSyntax(format!(
-                    "include: parse error in '{}': {}",
-                    path.display(),
-                    e.format_in_source(&path.display().to_string(), &content)
-                ))
-                .with_diagnostic(
-                    patina_runtime::Diagnostic::new(
-                        patina_runtime::DiagnosticKind::Parse,
-                        e.to_string(),
-                    )
-                    .at_path(path.display().to_string()),
-                )
-            })?;
+            let mut parser =
+                crate::Parser::new_program(&content, &path.display().to_string(), case_insensitive)
+                    .map_err(|e| {
+                        DesugarError::InvalidSyntax(format!(
+                            "include: parse error in '{}': {}",
+                            path.display(),
+                            e.format_in_source(&path.display().to_string(), &content)
+                        ))
+                        .with_diagnostic(
+                            patina_runtime::Diagnostic::new(
+                                patina_runtime::DiagnosticKind::Parse,
+                                e.to_string(),
+                            )
+                            .at_path(path.display().to_string()),
+                        )
+                    })?;
 
-            let parsed_exprs = parser.parse_all().map_err(|e| {
+            let parsed_exprs = patina_core::NoGcScope::with_cx(shared_heap, |cx| {
+                let data = parser.parse_all(cx)?;
+                Ok(data
+                    .into_iter()
+                    .map(patina_core::Value::tagged)
+                    .collect::<Vec<_>>())
+            })
+            .map_err(|e: crate::ParseError| {
                 DesugarError::InvalidSyntax(format!(
                     "include: parse error in '{}': {}",
                     path.display(),

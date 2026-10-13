@@ -6,24 +6,21 @@
 //! 3. Vector patterns with ellipsis
 //! 4. Zero-element ellipsis matching in complex contexts
 
-use patina_core::TaggedValue;
-
 /// Helper to test that a macro definition can be parsed
 /// (Doesn't test expansion, just that the syntax is valid)
 #[cfg(test)]
 fn test_macro_parses(macro_def: &str) -> Result<(), String> {
-    use patina_frontend::parser::Parser;
-    let mut parser = Parser::new(macro_def).map_err(|e| format!("{}", e))?;
-    let _ast = parser.parse().map_err(|e| format!("{}", e))?;
-    Ok(())
+    parse(macro_def)
 }
 
 /// Helper to parse Scheme code
 #[cfg(test)]
-fn parse(code: &str) -> Result<TaggedValue, String> {
+fn parse(code: &str) -> Result<(), String> {
     use patina_frontend::parser::Parser;
     let mut parser = Parser::new(code).map_err(|e| format!("{}", e))?;
-    parser.parse().map_err(|e| format!("{}", e))
+    patina_core::NoGcScope::with_cx(&patina_core::new_shared_heap(), |cx| {
+        parser.parse(cx).map(drop).map_err(|e| format!("{}", e))
+    })
 }
 
 // ============================================================================

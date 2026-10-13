@@ -8,10 +8,11 @@ use patina_core::{SharedHeap, TaggedValue};
 
 /// Parse every top-level form in `source`.
 pub fn parse_all(source: &str, heap: &SharedHeap) -> Result<Vec<TaggedValue>, String> {
-    patina_frontend::Parser::new_with_heap(source, heap.clone())
-        .map_err(|e| e.to_string())?
-        .parse_all()
-        .map_err(|e| e.to_string())
+    let mut parser = patina_frontend::Parser::new(source).map_err(|e| e.to_string())?;
+    patina_core::NoGcScope::with_cx(heap, |cx| {
+        let forms = parser.parse_all(cx).map_err(|e| e.to_string())?;
+        Ok(forms.into_iter().map(patina_core::Value::tagged).collect())
+    })
 }
 
 /// A proper list's elements, or None for any other value.

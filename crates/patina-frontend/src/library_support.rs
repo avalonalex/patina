@@ -7,7 +7,10 @@
 //! import resolution and evaluation, eliminating the need for circular references.
 
 use crate::{BodyElement, LibraryDefinition, ParseError};
-use patina_core::{CoreForm, Environment, FileSystem, ScopeSet, SharedHeap, SpineEnd, TaggedValue};
+use patina_core::{
+    CoreForm, Environment, FileSystem, NoGcScope, ScopeSet, SharedHeap, SpineEnd, TaggedValue,
+    Value,
+};
 use patina_runtime::library_loader::{
     EvaluatingLibraryLoader, ExportSpec, ImportSet, ParsedLibrary,
 };
@@ -275,23 +278,25 @@ impl SchemeLibraryLoader {
         })?;
 
         // Parse the .sld header directly as TaggedValue on the shared heap
-        let mut parser =
-            crate::Parser::new_program(&content, heap.clone(), &path.display().to_string(), false)
-                .map_err(|e| LibraryError::ParseError {
-                    file: path.display().to_string(),
-                    message: e.format_in_source(&path.display().to_string(), &content),
-                })?;
-
-        let parse_error = |e: crate::ParseError| LibraryError::ParseError {
+        let mut parser = crate::Parser::new_program(&content, &path.display().to_string(), false)
+            .map_err(|e| LibraryError::ParseError {
             file: path.display().to_string(),
             message: e.format_in_source(&path.display().to_string(), &content),
-        };
-        let lib_form = parser.parse().map_err(parse_error)?;
-        // The file is its `define-library` form, so nothing should follow;
-        // read on anyway, so that a file cut short after the form — inside
-        // a datum the loader would otherwise never look at — is reported
-        // rather than loaded as if it were whole.
-        parser.skip_rest().map_err(parse_error)?;
+        })?;
+
+        let lib_form = NoGcScope::with_cx(&heap, |cx| {
+            let form = parser.parse(cx)?;
+            // The file is its `define-library` form, so nothing should
+            // follow; read on anyway, so that a file cut short after the
+            // form — inside a datum the loader would otherwise never look
+            // at — is reported rather than loaded as if it were whole.
+            parser.skip_rest(cx)?;
+            Ok(form.tagged())
+        })
+        .map_err(|e: crate::ParseError| LibraryError::ParseError {
+            file: path.display().to_string(),
+            message: e.format_in_source(&path.display().to_string(), &content),
+        })?;
 
         // Parse the define-library form into structured data with library checker
         let lib_def =
@@ -462,17 +467,17 @@ impl SchemeLibraryLoader {
         })?;
 
         // Parse all expressions directly as TaggedValues on the shared heap
-        let mut parser =
-            crate::Parser::new_program(&content, heap.clone(), &path.display().to_string(), false)
-                .map_err(|e| LibraryError::ParseError {
-                    file: path.display().to_string(),
-                    message: e.format_in_source(&path.display().to_string(), &content),
-                })?;
-
-        let declarations = parser.parse_all().map_err(|e| LibraryError::ParseError {
+        let mut parser = crate::Parser::new_program(&content, &path.display().to_string(), false)
+            .map_err(|e| LibraryError::ParseError {
             file: path.display().to_string(),
             message: e.format_in_source(&path.display().to_string(), &content),
         })?;
+
+        let declarations =
+            Self::parse_all_words(&mut parser, heap).map_err(|e| LibraryError::ParseError {
+                file: path.display().to_string(),
+                message: e.format_in_source(&path.display().to_string(), &content),
+            })?;
 
         // Parse each declaration using LibraryDefinition's parsing logic
         for decl in &declarations {
@@ -597,20 +602,28 @@ impl SchemeLibraryLoader {
         })?;
 
         // Create parser with shared heap — TaggedValues go directly on global heap
-        let mut parser = crate::Parser::new_program(
-            &content,
-            heap.clone(),
-            &path.display().to_string(),
-            case_insensitive,
-        )
-        .map_err(|e| LibraryError::ParseError {
-            file: path.display().to_string(),
-            message: e.format_in_source(&path.display().to_string(), &content),
-        })?;
+        let mut parser =
+            crate::Parser::new_program(&content, &path.display().to_string(), case_insensitive)
+                .map_err(|e| LibraryError::ParseError {
+                    file: path.display().to_string(),
+                    message: e.format_in_source(&path.display().to_string(), &content),
+                })?;
 
-        parser.parse_all().map_err(|e| LibraryError::ParseError {
+        Self::parse_all_words(&mut parser, heap).map_err(|e| LibraryError::ParseError {
             file: path.display().to_string(),
             message: e.format_in_source(&path.display().to_string(), &content),
+        })
+    }
+
+    /// Read every datum left in `parser` into `heap`, as words: the loader
+    /// works in words until it takes a context (#704).
+    fn parse_all_words(
+        parser: &mut crate::Parser,
+        heap: &SharedHeap,
+    ) -> Result<Vec<TaggedValue>, crate::ParseError> {
+        NoGcScope::with_cx(heap, |cx| {
+            let data = parser.parse_all(cx)?;
+            Ok(data.into_iter().map(Value::tagged).collect())
         })
     }
 }
@@ -690,9 +703,11 @@ mod tests {
         if let Some(name) = fixnum {
             env.define(name, TaggedValue::fixnum(1));
         }
-        let form = Parser::new_with_heap(source, env.heap().clone())
-            .and_then(|mut parser| parser.parse_all())
-            .expect("the form reads")[0];
+        let form = NoGcScope::with_cx(env.heap(), |cx| {
+            let mut parser = Parser::new(source)?;
+            Ok::<_, crate::ParseError>(parser.parse_all(cx)?[0].tagged())
+        })
+        .expect("the form reads");
         let sets = top_level_import_sets(form, &env)?;
         Some(
             sets.iter()

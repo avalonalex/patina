@@ -413,20 +413,13 @@ mod ambiguous_literal_tests {
 
         let definition_env = Rc::new(Environment::new());
         let heap = definition_env.heap().clone();
-        let form = Parser::new_with_heap(
-            "(syntax-rules (else) ((_ else) 'literal) ((_ x) 'fallback))",
-            heap.clone(),
-        )
-        .expect("parser")
-        .parse()
-        .expect("syntax-rules form");
-        // The parser answers a word: it crosses into the context through a
-        // handle, as the desugarer's do.
-        let form = heap.borrow().hold(form);
         let instance = Rc::clone(heap.borrow().instance());
         let mut driver = patina_core::GcDriver::acquire(&heap).expect("the driver is free");
         driver.mutate(&instance, |cx| {
-            let form = cx.held(&form);
+            let form = Parser::new("(syntax-rules (else) ((_ else) 'literal) ((_ x) 'fallback))")
+                .expect("parser")
+                .parse(cx)
+                .expect("syntax-rules form");
             let parsed = parse_syntax_rules(form, cx).expect("syntax-rules");
             let mut compiler = Compiler::with_env(
                 parsed.literals,

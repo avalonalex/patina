@@ -18,16 +18,17 @@
 //! `keywords_are_not_recognized_without_a_binding` is the regression guard for
 //! that, and it is the test that would have failed at any point before stage 2.
 
-use patina_core::{ALL_CORE_FORMS, SharedHeap, TaggedValue};
+use patina_core::{ALL_CORE_FORMS, NoGcScope, SharedHeap, TaggedValue, new_shared_heap};
 use patina_frontend::{Desugarer, Parser};
 use patina_ir::CoreExprKind;
 use patina_runtime::Environment;
 use std::rc::Rc;
 
 fn parse_tv(code: &str) -> (TaggedValue, SharedHeap) {
+    let heap = new_shared_heap();
     let mut parser = Parser::new(code).expect("parser creation failed");
-    let tv = parser.parse().expect("parse failed");
-    (tv, parser.heap().clone())
+    let tv = NoGcScope::with_cx(&heap, |cx| parser.parse(cx).expect("parse failed").tagged());
+    (tv, heap)
 }
 
 /// How `(<name> a b)` desugars.

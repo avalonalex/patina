@@ -1154,16 +1154,22 @@ mod tests {
             format_write_shared_tagged,
         ] {
             let text = writer(symbol, &heap);
-            let mut parser = Parser::new_with_heap(&text, heap.clone()).unwrap();
-            let value = parser.parse_next().unwrap_or_else(|e| {
-                panic!("symbol {name:?} written as {text:?} failed to read: {e}")
+            let mut parser = Parser::new(&text).unwrap();
+            patina_core::NoGcScope::with_cx(&heap, |cx| {
+                let value = parser.parse_next(cx).unwrap_or_else(|e| {
+                    panic!("symbol {name:?} written as {text:?} failed to read: {e}")
+                });
+                assert_eq!(
+                    value.map(|v| v.tagged()),
+                    Some(symbol),
+                    "symbol {name:?} written as {text:?}"
+                );
+                assert_eq!(
+                    parser.parse_next(cx).unwrap(),
+                    None,
+                    "extra datum in {text:?}"
+                );
             });
-            assert_eq!(value, Some(symbol), "symbol {name:?} written as {text:?}");
-            assert_eq!(
-                parser.parse_next().unwrap(),
-                None,
-                "extra datum in {text:?}"
-            );
         }
     }
 

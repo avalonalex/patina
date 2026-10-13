@@ -7,7 +7,7 @@
 //! and provides convenient methods for testing macro behavior.
 
 use crate::error::FrontendError;
-use patina_core::{Owned, SharedHeap};
+use patina_core::{NoGcScope, Owned, SharedHeap};
 use patina_runtime::Environment;
 use std::rc::Rc;
 
@@ -41,13 +41,10 @@ impl TestExpander {
         let test_env = Rc::new(Environment::new());
         let heap = test_env.heap().clone();
 
-        // Parse the syntax-rules form on the macro's heap
-        let mut parser = Parser::new_with_heap(syntax_rules, heap.clone())?;
-        let form_tv = parser.parse()?;
-
-        // The form crosses into a context (`super::cross`); the macro object
-        // comes back out as a handle.
-        let mac = super::cross(&heap, [form_tv], |cx, [form]| {
+        // Read the syntax-rules form on the macro's heap; the macro object
+        // comes back out of the context as a handle.
+        let mac = NoGcScope::with_cx(&heap, |cx| {
+            let form = Parser::new(syntax_rules)?.parse(cx)?;
             let parsed = patina_macros::parse_syntax_rules(form, cx)
                 .map_err(|e| FrontendError::InvalidSyntax(e.0))?;
             let mut compiler = patina_macros::Compiler::with_env(
@@ -77,60 +74,45 @@ impl TestExpander {
     pub fn assert_expands_to(&self, input: &str, expected: &str) -> Result<(), String> {
         use crate::parser::Parser;
 
-        let heap = &self.heap;
-        let mac = heap.borrow().held(&self.mac);
+        NoGcScope::with_cx(&self.heap, |cx| {
+            let mac = cx.held(&self.mac);
+            // Read the input and the expected form on the macro's heap
+            let input = Parser::new(input)
+                .and_then(|mut parser| parser.parse(cx))
+                .map_err(|e| format!("Failed to parse input: {}", e))?;
+            let expected = Parser::new(expected)
+                .and_then(|mut parser| parser.parse(cx))
+                .map_err(|e| format!("Failed to parse expected: {}", e))?;
 
-        // Parse input on the macro's heap
-        let mut parser = Parser::new_with_heap(input, heap.clone())
-            .map_err(|e| format!("Failed to parse input: {}", e))?;
-        let input_tv = parser
-            .parse()
-            .map_err(|e| format!("Failed to parse input: {}", e))?;
+            let expanded = patina_macros::expand_macro_with_scope(mac, input, cx, None)
+                .map_err(|e| format!("Expansion failed: {}", e))?
+                .form;
 
-        // Parse expected on the macro's heap
-        let mut parser = Parser::new_with_heap(expected, heap.clone())
-            .map_err(|e| format!("Failed to parse expected: {}", e))?;
-        let expected_tv = parser
-            .parse()
-            .map_err(|e| format!("Failed to parse expected: {}", e))?;
-
-        super::cross(
-            heap,
-            [mac, input_tv, expected_tv],
-            |cx, [mac, input, expected]| {
-                let expanded = patina_macros::expand_macro_with_scope(mac, input, cx, None)
-                    .map_err(|e| format!("Expansion failed: {}", e))?
-                    .form;
-
-                // Compare the forms (ignoring gensym/hygiene differences)
-                if patina_macros::TestExpander::tagged_forms_equal_ignoring_gensym(
-                    expanded, expected, cx,
-                ) {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "Expansion mismatch:\nExpected: {}\nGot:      {}",
-                        cx.format(expected),
-                        cx.format(expanded)
-                    ))
-                }
-            },
-        )
+            // Compare the forms (ignoring gensym/hygiene differences)
+            if patina_macros::TestExpander::tagged_forms_equal_ignoring_gensym(
+                expanded, expected, cx,
+            ) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Expansion mismatch:\nExpected: {}\nGot:      {}",
+                    cx.format(expected),
+                    cx.format(expanded)
+                ))
+            }
+        })
     }
 
     /// Expand an input string and return the result as a string
     pub fn expand_to_string(&self, input: &str) -> Result<String, String> {
         use crate::parser::Parser;
 
-        let heap = &self.heap;
-        let mac = heap.borrow().held(&self.mac);
-
-        // Parse input on the macro's heap
-        let mut parser = Parser::new_with_heap(input, heap.clone())
-            .map_err(|e| format!("Parse error: {}", e))?;
-        let input_tv = parser.parse().map_err(|e| format!("Parse error: {}", e))?;
-
-        super::cross(heap, [mac, input_tv], |cx, [mac, input]| {
+        NoGcScope::with_cx(&self.heap, |cx| {
+            let mac = cx.held(&self.mac);
+            // Read the input on the macro's heap
+            let input = Parser::new(input)
+                .and_then(|mut parser| parser.parse(cx))
+                .map_err(|e| format!("Parse error: {}", e))?;
             let expanded = patina_macros::expand_macro_with_scope(mac, input, cx, None)
                 .map_err(|e| format!("Expansion error: {}", e))?
                 .form;

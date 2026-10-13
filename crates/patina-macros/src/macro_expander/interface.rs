@@ -9,6 +9,12 @@
 use crate::error::MacroError;
 use patina_core::{Cx, Owned, SharedHeap, Value};
 
+/// Read one datum of `text` through `cx`.
+#[cfg(test)]
+fn read<'gc>(cx: &mut Cx<'gc>, text: &str) -> Result<Value<'gc>, patina_frontend::ParseError> {
+    patina_frontend::parser::Parser::new(text).and_then(|mut parser| parser.parse(cx))
+}
+
 /// Test helper for creating macro expanders and testing expansions
 ///
 /// This is available in all builds to support testing in downstream crates.
@@ -37,7 +43,6 @@ impl TestExpander {
     /// This method is only available in test builds (requires patina-frontend as dev-dependency).
     #[cfg(test)]
     pub fn from_definition(name: &str, syntax_rules: &str) -> Result<Self, MacroError> {
-        use patina_frontend::parser::Parser;
         use patina_runtime::Environment;
         use std::rc::Rc;
 
@@ -45,20 +50,13 @@ impl TestExpander {
         let test_env = Rc::new(Environment::new());
         let heap = test_env.heap().clone();
 
-        // Parse the syntax-rules form on the macro's heap
-        let mut parser = Parser::new_with_heap(syntax_rules, heap.clone())
-            .map_err(|e| MacroError::InvalidSyntax(format!("Parse error: {}", e)))?;
-        let form = parser
-            .parse()
-            .map_err(|e| MacroError::InvalidSyntax(format!("Parse error: {}", e)))?;
-
-        // The parser answers a word, which crosses into a context through a
-        // handle (#704); the macro object comes back out as one.
-        let form = heap.borrow().hold(form);
+        // The syntax-rules form is read on the macro's heap, in the context
+        // that compiles it; the macro object comes back out as a handle.
         let instance = Rc::clone(heap.borrow().instance());
         let mut driver = patina_core::GcDriver::acquire(&heap).expect("the driver is free");
         let mac = driver.mutate(&instance, |cx| {
-            let form = cx.held(&form);
+            let form = read(cx, syntax_rules)
+                .map_err(|e| MacroError::InvalidSyntax(format!("Parse error: {}", e)))?;
             let parsed = super::syntax_rules_parser::parse_syntax_rules(form, cx)
                 .map_err(|e| MacroError::InvalidSyntax(e.0))?;
             let mut compiler =
@@ -72,22 +70,14 @@ impl TestExpander {
         Ok(Self { heap, mac })
     }
 
-    /// Run `f` in a context over the expander's heap, with its macro object
-    /// and `words` as values: what the parser read, which crosses into the
-    /// context through handles until the parser takes one (#704).
+    /// Run `f` in a context over the expander's heap, with its macro object.
     #[cfg(test)]
-    fn in_cx<R>(
-        &self,
-        words: &[patina_core::TaggedValue],
-        f: impl for<'gc> FnOnce(&mut Cx<'gc>, Value<'gc>, &[Value<'gc>]) -> R,
-    ) -> R {
-        let handles: Vec<Owned> = words.iter().map(|&w| self.heap.borrow().hold(w)).collect();
+    fn in_cx<R>(&self, f: impl for<'gc> FnOnce(&mut Cx<'gc>, Value<'gc>) -> R) -> R {
         let instance = std::rc::Rc::clone(self.heap.borrow().instance());
         let mut driver = patina_core::GcDriver::acquire(&self.heap).expect("the driver is free");
         driver.mutate(&instance, |cx| {
             let mac = cx.held(&self.mac);
-            let values: Vec<Value<'_>> = handles.iter().map(|h| cx.held(h)).collect();
-            f(cx, mac, &values)
+            f(cx, mac)
         })
     }
 
@@ -111,26 +101,11 @@ impl TestExpander {
     /// ```
     #[cfg(test)]
     pub fn assert_expands_to(&self, input: &str, expected: &str) -> Result<(), String> {
-        use patina_frontend::parser::Parser;
-
-        let heap = &self.heap;
-
-        // Parse input on the macro's heap
-        let mut parser = Parser::new_with_heap(input, heap.clone())
-            .map_err(|e| format!("Failed to parse input: {}", e))?;
-        let input_tv = parser
-            .parse()
-            .map_err(|e| format!("Failed to parse input: {}", e))?;
-
-        // Parse expected on the macro's heap
-        let mut parser = Parser::new_with_heap(expected, heap.clone())
-            .map_err(|e| format!("Failed to parse expected: {}", e))?;
-        let expected_tv = parser
-            .parse()
-            .map_err(|e| format!("Failed to parse expected: {}", e))?;
-
-        self.in_cx(&[input_tv, expected_tv], |cx, mac, values| {
-            let (input, expected) = (values[0], values[1]);
+        self.in_cx(|cx, mac| {
+            // Read the input and the expected form on the macro's heap
+            let input = read(cx, input).map_err(|e| format!("Failed to parse input: {}", e))?;
+            let expected =
+                read(cx, expected).map_err(|e| format!("Failed to parse expected: {}", e))?;
             let expanded = super::expand_macro_with_scope(mac, input, cx, None)
                 .map_err(|e| format!("Expansion failed: {}", e))?
                 .form;
@@ -158,17 +133,10 @@ impl TestExpander {
     /// Expand an input string and return the result as a string
     #[cfg(test)]
     pub fn expand_to_string(&self, input: &str) -> Result<String, String> {
-        use patina_frontend::parser::Parser;
-
-        let heap = &self.heap;
-
-        // Parse input on the macro's heap
-        let mut parser = Parser::new_with_heap(input, heap.clone())
-            .map_err(|e| format!("Parse error: {}", e))?;
-        let input_tv = parser.parse().map_err(|e| format!("Parse error: {}", e))?;
-
-        self.in_cx(&[input_tv], |cx, mac, values| {
-            let expanded = super::expand_macro_with_scope(mac, values[0], cx, None)
+        self.in_cx(|cx, mac| {
+            // Read the input on the macro's heap
+            let input = read(cx, input).map_err(|e| format!("Parse error: {}", e))?;
+            let expanded = super::expand_macro_with_scope(mac, input, cx, None)
                 .map_err(|e| format!("Expansion error: {}", e))?
                 .form;
             Ok(cx.format(expanded))

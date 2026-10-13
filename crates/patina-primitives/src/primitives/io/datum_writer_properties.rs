@@ -180,16 +180,19 @@ fn data() -> impl Strategy<Value = Datum> {
 }
 
 fn read_back(value: TaggedValue, text: &str, heap: &SharedHeap) -> TaggedValue {
-    let mut parser = Parser::new_with_heap(text, heap.clone()).unwrap();
-    let result = parser
-        .parse_next()
-        .unwrap_or_else(|e| panic!("reading {text:?}: {e}"))
-        .expect("writer produced no datum");
-    assert_eq!(
-        parser.parse_next().unwrap(),
-        None,
-        "extra datum in {text:?}"
-    );
+    let mut parser = Parser::new(text).unwrap();
+    let result = patina_core::NoGcScope::with_cx(heap, |cx| {
+        let result = parser
+            .parse_next(cx)
+            .unwrap_or_else(|e| panic!("reading {text:?}: {e}"))
+            .expect("writer produced no datum");
+        assert_eq!(
+            parser.parse_next(cx).unwrap(),
+            None,
+            "extra datum in {text:?}"
+        );
+        result.tagged()
+    });
     assert!(
         heap.borrow().tagged_values_equal(value, result),
         "round trip changed {text:?}"

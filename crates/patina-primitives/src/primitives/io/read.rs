@@ -26,9 +26,11 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
     };
 
     let name = port.input_name();
-    Parser::read_from_port(port.clone(), heap.clone())
-        .map(|datum| datum.unwrap_or(TaggedValue::EOF))
-        .map_err(|e| read_error(&e, &name, &port))
+    patina_core::NoGcScope::with_cx(heap, |cx| {
+        Parser::read_from_port(port.clone(), cx).map(|datum| datum.map(|d| d.tagged()))
+    })
+    .map(|datum| datum.unwrap_or(TaggedValue::EOF))
+    .map_err(|e| read_error(&e, &name, &port))
 }
 
 /// Report the data source's coordinates, not coordinates in an unread slice

@@ -564,9 +564,16 @@ impl VmBackend {
         use patina_frontend::Parser;
 
         let heap = self.global_env.heap().clone();
-        let parsed = Parser::new_with_heap(source, heap.clone())
-            .map_err(|e| VmBackendError::Compile(e.to_string()).with_diagnostic(e.diagnostic()))?
-            .parse_all()
+        let parsed = Parser::new(source)
+            .and_then(|mut parser| {
+                patina_core::NoGcScope::with_cx(&heap, |cx| {
+                    let forms = parser.parse_all(cx)?;
+                    Ok(forms
+                        .into_iter()
+                        .map(patina_core::Value::tagged)
+                        .collect::<Vec<_>>())
+                })
+            })
             .map_err(|e| VmBackendError::Compile(e.to_string()).with_diagnostic(e.diagnostic()))?;
 
         let desugarer = Desugarer::with_env(Rc::clone(&self.global_env))
