@@ -5,10 +5,11 @@
 # allocation or not, on both backends.
 #
 # Stress collects only once allocations cross its interval, so a stretch of
-# instructions that allocates nothing never collects under it, and most pcs
-# never have their liveness maps checked. Zeal collects before every
-# instruction (VM) and every trampoline step (tree-walker) that a collection
-# may run at. Run it against a check build, where retirement fills each
+# instructions that allocates nothing never collects under it, and most poll
+# sites never have their liveness maps checked. Zeal collects at every poll a
+# collection may run at: on the VM every frame's entry and generic call's
+# return (#700), on the tree-walker every trampoline step. Run it against a
+# check build, where retirement fills each
 # register a map calls dead with DEAD_SLOT and the VM panics on reading one:
 # a debug build, or release built with `--features patina-core/gc-check`.
 # CI's zeal job runs the release check build.
@@ -16,9 +17,10 @@
 # Zeal costs about 7x stress 1, so it runs on a subset, never the whole chibi
 # suite (882-920 s on the VM alone, measured 2026-10-01): the files of
 # crates/patina-tests/tests/scheme/control/ except tail-recursion.scm, whose
-# long loops that allocate little collect at nearly every instruction (277 s on
-# the VM and 627 s on the tree-walker by itself, against 176 s and 275 s for
-# the other ten files together).
+# long loops that allocate little collect on every iteration (277 s on the VM
+# and 627 s on the tree-walker by itself, against 176 s and 275 s for the
+# other ten files together, measured while the VM still polled before every
+# instruction).
 #
 # Before the lane, a probe checks that the binary honours zeal at all: the
 # loop of `crates/patina-repl/tests/gc_zeal.rs`, 1000 iterations that

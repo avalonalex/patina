@@ -469,9 +469,10 @@ fn expect_error(which: Which, code: &str, mode: Mode) {
 ///
 /// The switch is on the interpreter's heap (`Heap::set_skip_safe_points`, a
 /// `test-support` hook), so the only collections are the ones a primitive
-/// runs at its call: what shows that `(gc)` collects there (#639), since the
-/// safe point before every instruction would otherwise collect what it posts
-/// before anything after the call could look.
+/// runs at its call: what shows that `(gc)` collects there (#639), since a
+/// safe point after the call (the tree-walker's next step, a VM poll site)
+/// could otherwise collect what it posts before anything after the call
+/// could look.
 fn without_safe_points<B: Backend>(interp: Interpreter<B>) -> Interpreter<B> {
     interp
         .backend()

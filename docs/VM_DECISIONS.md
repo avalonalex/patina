@@ -116,9 +116,10 @@ scan can reach: the continuation side tables (the heap holds only an opaque
 frame's registers; until #682 it was a bare object index, with a visitor method of its own.
 
 **On by default** since stage 4c (`PATINA_GC=0` opts out), at zero standing
-cost since stage 4a's trigger redesign (the safe point reads one pending
-flag; the decision is made in `alloc_*`) — see `docs/GC_DESIGN.md` for the
-design, root inventory, safe-point protocol, and staging.
+cost since stage 4a's trigger redesign (the decision is made in `alloc_*`;
+a safe point reads one word, the `Mutator`'s poll word since #699, and only
+at frame entries and transfer returns since #700) — see `docs/GC_DESIGN.md`
+for the design, root inventory, safe-point protocol, and staging.
 
 ---
 

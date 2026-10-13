@@ -21,8 +21,8 @@ use common::{BOTH_BACKENDS, patina_command};
 use tempfile::TempDir;
 
 /// Iterations of a loop that allocates nothing: fixnum arithmetic and a self
-/// tail call. Each iteration runs several instructions, or trampoline steps,
-/// and so passes several safe points.
+/// tail call. Each iteration passes at least one safe point: on the VM the
+/// tail call's entry (#700), on the tree-walker each of its several steps.
 const ITERATIONS: u64 = 1000;
 
 /// Write the collections the loop ran through, measured by `gc-stats` before
