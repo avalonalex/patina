@@ -6,9 +6,9 @@
 use super::Compiler;
 use crate::error::MacroError;
 use crate::macro_expander::Template;
-use patina_core::TaggedValue;
+use patina_core::{Cx, Value};
 
-impl Compiler {
+impl<'gc> Compiler<'gc> {
     /// Compile a template with the ellipsis temporarily disabled
     ///
     /// Used for ellipsis escape: `(... template)`
@@ -18,7 +18,8 @@ impl Compiler {
     /// can recognize it as its own ellipsis.
     pub(super) fn compile_with_escaped_ellipsis(
         &mut self,
-        form: TaggedValue,
+        cx: &mut Cx<'gc>,
+        form: Value<'gc>,
         level: usize,
     ) -> Result<Template, MacroError> {
         // Disable the ellipsis and record the spelling it had, then compile
@@ -38,7 +39,7 @@ impl Compiler {
         let saved_escaped = self.escaped_ellipsis.take();
         self.escaped_ellipsis = saved_ellipsis.clone();
 
-        let result = self.compile_template(form, level);
+        let result = self.compile_template(cx, form, level);
 
         self.ellipsis = saved_ellipsis;
         self.escaped_ellipsis = saved_escaped;
@@ -53,7 +54,8 @@ impl Compiler {
     /// Pattern variables are still expanded normally.
     pub(super) fn compile_quote_template_escaped(
         &mut self,
-        form: TaggedValue,
+        cx: &Cx<'gc>,
+        form: Value<'gc>,
         level: usize,
     ) -> Result<Template, MacroError> {
         // Held to what `compile_template` holds a template to: no cycle
@@ -62,14 +64,14 @@ impl Compiler {
         if compound && self.open.depth() >= patina_core::walk::MAX_FORM_DEPTH {
             return Err(MacroError::NestedTooDeeply);
         }
-        if compound && !self.open.enter(form) {
+        if compound && !self.open.enter(form.tagged()) {
             return Err(MacroError::InvalidSyntax(format!(
                 "a syntax-rules template cannot contain itself: {}",
-                patina_core::format_tagged(form, &self.heap.borrow())
+                cx.format(form)
             )));
         }
         let compiled = patina_core::walk::ensure_sufficient_stack_if(compound, || {
-            self.compile_quote_template_escaped_node(form, level)
+            self.compile_quote_template_escaped_node(cx, form, level)
         });
         if compound {
             self.open.leave();
@@ -81,13 +83,14 @@ impl Compiler {
     /// `open` holds.
     fn compile_quote_template_escaped_node(
         &mut self,
-        form: TaggedValue,
+        cx: &Cx<'gc>,
+        form: Value<'gc>,
         _level: usize,
     ) -> Result<Template, MacroError> {
         // Check for symbol
-        if self.extract_symbol_name(form).is_some() {
+        if self.extract_symbol_name(cx, form).is_some() {
             // Check if it's a pattern variable
-            if let Some(pvref) = self.lookup_pvar(form) {
+            if let Some(pvref) = self.lookup_pvar(cx, form) {
                 Ok(Template::Var(pvref))
             } else {
                 // Non-pvar symbol: produce literal Symbol value
@@ -96,7 +99,7 @@ impl Compiler {
         } else {
             let is_pair = form.is_pair();
             if is_pair {
-                let (items, tail) = self.collect_list_items(form)?;
+                let (items, tail) = self.collect_list_items(cx, form)?;
                 if tail.is_some() {
                     return Err(MacroError::InvalidSyntax(
                         "Dotted list in ellipsis-escaped quote not supported".to_string(),
@@ -105,16 +108,16 @@ impl Compiler {
                 // Compile each item recursively
                 let mut templates = Vec::new();
                 for item in items {
-                    templates.push(self.compile_quote_template_escaped(item, _level)?);
+                    templates.push(self.compile_quote_template_escaped(cx, item, _level)?);
                 }
                 Ok(Template::List(templates))
-            } else if form == TaggedValue::NULL {
+            } else if form.is_null() {
                 Ok(Template::List(vec![]))
             } else if form.is_vector() {
-                let elements = self.heap.borrow().vector_slice(form).to_vec();
+                let elements = cx.vector_slice(form).to_vec();
                 let mut templates = Vec::new();
                 for item in elements {
-                    templates.push(self.compile_quote_template_escaped(item, _level)?);
+                    templates.push(self.compile_quote_template_escaped(cx, item, _level)?);
                 }
                 Ok(Template::Vector(templates))
             } else {

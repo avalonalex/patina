@@ -7,17 +7,18 @@ use super::Compiler;
 use crate::error::MacroError;
 use crate::macro_expander::utils::collect_template_vars_at_level;
 use crate::macro_expander::{Identifier, Template};
-use patina_core::TaggedValue;
 use patina_core::source_document::ExpansionChain;
+use patina_core::{Cx, Value};
 use patina_runtime::{PVRef, ScopeSet};
 
-impl Compiler {
+impl<'gc> Compiler<'gc> {
     /// Compile a template at the given ellipsis level
     ///
     /// Based on Gauche's template compilation (macro.c:400+).
     pub fn compile_template(
         &mut self,
-        form: TaggedValue,
+        cx: &mut Cx<'gc>,
+        form: Value<'gc>,
         level: usize,
     ) -> Result<Template, MacroError> {
         // A template met again inside itself — a datum label can write one — is
@@ -27,21 +28,21 @@ impl Compiler {
         if compound && self.open.depth() >= patina_core::walk::MAX_FORM_DEPTH {
             return Err(MacroError::NestedTooDeeply);
         }
-        if compound && !self.open.enter(form) {
+        if compound && !self.open.enter(form.tagged()) {
             return Err(MacroError::InvalidSyntax(format!(
                 "a syntax-rules template cannot contain itself: {}",
-                patina_core::format_tagged(form, &self.heap.borrow())
+                cx.format(form)
             )));
         }
         let compiled = patina_core::walk::ensure_sufficient_stack_if(compound, || {
-            self.compile_template_node(form, level)
+            self.compile_template_node(cx, form, level)
         })
         .map(|mut template| {
             if let Template::Symbol(identifier) = &mut template {
                 // Every use introduces the identifier with this location,
                 // and extends its expansion chain, whichever form it is in
                 // (`ExpansionChain::for_template`, #612).
-                identifier.source = self.heap.borrow().source(form).cloned().map(|mut loc| {
+                identifier.source = cx.source(form).map(|mut loc| {
                     if let Some(span) = &mut loc.span {
                         span.expansion_chain = span
                             .expansion_chain
@@ -62,9 +63,8 @@ impl Compiler {
     /// Mark the expansion chain on `form`'s location as this template's
     /// (`ExpansionChain::for_template`), so that every use, in whichever
     /// form, extends it.
-    fn hold_chain_for_template(&self, form: TaggedValue) {
-        let mut heap = self.heap.borrow_mut();
-        let Some(mut loc) = heap.source(form).cloned() else {
+    fn hold_chain_for_template(&self, cx: &mut Cx<'gc>, form: Value<'gc>) {
+        let Some(mut loc) = cx.source(form) else {
             return;
         };
         let Some(span) = &mut loc.span else {
@@ -74,18 +74,19 @@ impl Compiler {
             return;
         };
         span.expansion_chain = Some(chain.for_template());
-        heap.record_source(form, loc);
+        cx.record_source(form, loc);
     }
 
     /// [`Self::compile_template`] for one node, inside the ones `open` holds.
     fn compile_template_node(
         &mut self,
-        form: TaggedValue,
+        cx: &mut Cx<'gc>,
+        form: Value<'gc>,
         level: usize,
     ) -> Result<Template, MacroError> {
         // Handle all identifier types (Symbol, Identifier). Every leaf of every
         // template reaches here, so the identity is read once and reused.
-        if let Some(key) = self.identifier_key(form) {
+        if let Some(key) = self.identifier_key(cx, form) {
             let s = key.name.clone();
 
             // The spelling an enclosing `(... template)` suspended. It
@@ -102,10 +103,7 @@ impl Compiler {
             // Checked before the pattern-variable case, as the escape's own
             // walker did.
             if self.escaped_ellipsis.as_ref() == Some(&s) {
-                let stamped = {
-                    let mut heap = self.heap.borrow_mut();
-                    heap.alloc_identifier(s.clone(), self.definition_scopes.clone())
-                };
+                let stamped = cx.alloc_identifier(s.clone(), self.definition_scopes.clone());
                 return Ok(self.make_literal_template(stamped));
             }
 
@@ -147,7 +145,7 @@ impl Compiler {
             // it, needs this: verbatim, the reference carried nothing of the
             // `letrec-syntax`'s scope and could only ever be found by the
             // by-name fallback the desugarer no longer has.
-            if self.is_substituted_from_outer_macro(form) {
+            if self.is_substituted_from_outer_macro(cx, form) {
                 if key.scopes.is_empty() && !self.definition_scopes.is_empty() {
                     let scopes = self.definition_scopes.clone();
                     return Ok(Template::Symbol(Identifier::with_scopes(s, scopes)));
@@ -164,7 +162,7 @@ impl Compiler {
                 // Each use introduces a copy of it, which inherits its
                 // location and so its expansion chain: the chain is this
                 // template's from now on, for every use to extend (#612).
-                self.hold_chain_for_template(form);
+                self.hold_chain_for_template(cx, form);
                 return Ok(self.make_literal_template(form));
             }
 
@@ -204,7 +202,7 @@ impl Compiler {
         // Check for pair
         let is_pair = form.is_pair();
         if is_pair {
-            let (items, tail) = self.collect_list_items(form)?;
+            let (items, tail) = self.collect_list_items(cx, form)?;
 
             // An ellipsis escape written inside a quote: `'(... template)`.
             //
@@ -218,7 +216,7 @@ impl Compiler {
             if self.quasiquote_depth == 0
                 && items.len() == 2
                 && self
-                    .extract_symbol_name(items[0])
+                    .extract_symbol_name(cx, items[0])
                     .map(|s| s.as_ref() == "quote")
                     .unwrap_or(false)
                 && tail.is_none()
@@ -226,16 +224,16 @@ impl Compiler {
                 // Check for ellipsis escape inside quote: '(... template)
                 let is_inner_pair = items[1].is_pair();
                 if is_inner_pair {
-                    let inner_result = self.collect_list_items(items[1]);
+                    let inner_result = self.collect_list_items(cx, items[1]);
                     if let Ok((inner_items, None)) = &inner_result
                         && inner_items.len() == 2
-                        && self.is_ellipsis(inner_items[0])
+                        && self.is_ellipsis(cx, inner_items[0])
                     {
                         // Ellipsis escape inside quote
                         let inner_template =
-                            self.compile_quote_template_escaped(inner_items[1], level)?;
+                            self.compile_quote_template_escaped(cx, inner_items[1], level)?;
 
-                        let head = self.compile_template(items[0], level)?;
+                        let head = self.compile_template(cx, items[0], level)?;
                         return Ok(Template::List(vec![head, inner_template]));
                     }
                 }
@@ -254,9 +252,9 @@ impl Compiler {
             }
 
             // Check for ellipsis escape: (... template)
-            if items.len() == 2 && self.is_ellipsis(items[0]) {
+            if items.len() == 2 && self.is_ellipsis(cx, items[0]) {
                 // Ellipsis escape - compile inner template with ellipsis disabled
-                return self.compile_with_escaped_ellipsis(items[1], level);
+                return self.compile_with_escaped_ellipsis(cx, items[1], level);
             }
 
             // Track quasiquote nesting for the quote check above. The old
@@ -264,24 +262,24 @@ impl Compiler {
             // a delta, and the result is bound before it is put back, so no
             // path out of the arms can leave the depth raised.
             let saved_depth = self.quasiquote_depth;
-            self.quasiquote_depth = self.quasiquote_depth_inside(&items, tail);
+            self.quasiquote_depth = self.quasiquote_depth_inside(cx, &items, tail);
             let compiled = if let Some(tail_value) = tail {
                 // Dotted list template
-                self.compile_dotted_template(&items, tail_value, level)
+                self.compile_dotted_template(cx, &items, tail_value, level)
             } else {
                 // Regular list template
-                self.compile_list_template(&items, level)
+                self.compile_list_template(cx, &items, level)
             };
             self.quasiquote_depth = saved_depth;
             compiled
-        } else if form == TaggedValue::NULL {
+        } else if form.is_null() {
             Ok(Template::List(vec![]))
         } else if form.is_vector() {
             // Vector
-            let elements = self.heap.borrow().vector_slice(form).to_vec();
+            let elements = cx.vector_slice(form).to_vec();
             // Vector templates carry ellipses just like list ones -- `#(x ...)`
             // is valid -- so this shares the ellipsis-aware item compiler.
-            let templates = self.compile_template_items(&elements, level)?;
+            let templates = self.compile_template_items(cx, &elements, level)?;
             Ok(Template::Vector(templates))
         } else {
             // Literal value
@@ -294,15 +292,19 @@ impl Compiler {
     /// `unquote` or `unquote-splicing` (never below zero), otherwise the
     /// depth this list stands at.
     ///
-    /// The head name is read inside the heap borrow, so a two-element list
-    /// that is neither costs no allocation.
-    fn quasiquote_depth_inside(&self, items: &[TaggedValue], tail: Option<TaggedValue>) -> u32 {
+    /// The head name is read as a borrow, so a two-element list that is
+    /// neither costs no allocation.
+    fn quasiquote_depth_inside(
+        &self,
+        cx: &Cx<'gc>,
+        items: &[Value<'gc>],
+        tail: Option<Value<'gc>>,
+    ) -> u32 {
         let depth = self.quasiquote_depth;
         if items.len() != 2 || tail.is_some() {
             return depth;
         }
-        let heap = self.heap.borrow();
-        match heap.get_symbol_or_identifier_name(items[0]) {
+        match cx.get_symbol_or_identifier_name(items[0]).as_deref() {
             Some("quasiquote") => depth + 1,
             Some("unquote") | Some("unquote-splicing") => depth.saturating_sub(1),
             _ => depth,
@@ -312,18 +314,20 @@ impl Compiler {
     /// Compile a list template, detecting ellipsis and double ellipsis
     pub(super) fn compile_list_template(
         &mut self,
-        items: &[TaggedValue],
+        cx: &mut Cx<'gc>,
+        items: &[Value<'gc>],
         level: usize,
     ) -> Result<Template, MacroError> {
-        let templates = self.compile_template_items(items, level)?;
+        let templates = self.compile_template_items(cx, items, level)?;
         Ok(Template::List(templates))
     }
 
     /// Compile a dotted list template: (a b . rest)
     pub(super) fn compile_dotted_template(
         &mut self,
-        items: &[TaggedValue],
-        tail: TaggedValue,
+        cx: &mut Cx<'gc>,
+        items: &[Value<'gc>],
+        tail: Value<'gc>,
         level: usize,
     ) -> Result<Template, MacroError> {
         // The items before the dot can themselves carry ellipses: `(x ... . tail)`
@@ -331,9 +335,9 @@ impl Compiler {
         // same ellipsis-aware path as the proper-list case. Compiling each item
         // directly at `level` instead would report any ellipsis variable as
         // "level 1 used at level 0".
-        let templates = self.compile_template_items(items, level)?;
+        let templates = self.compile_template_items(cx, items, level)?;
 
-        let tail_template = Box::new(self.compile_template(tail, level)?);
+        let tail_template = Box::new(self.compile_template(cx, tail, level)?);
 
         Ok(Template::DottedList {
             templates,
@@ -344,21 +348,22 @@ impl Compiler {
     /// Compile a sequence of template items, handling ellipsis and double ellipsis
     pub(super) fn compile_template_items(
         &mut self,
-        items: &[TaggedValue],
+        cx: &mut Cx<'gc>,
+        items: &[Value<'gc>],
         level: usize,
     ) -> Result<Vec<Template>, MacroError> {
         let mut templates = Vec::new();
         let mut i = 0;
 
         while i < items.len() {
-            if self.is_followed_by_ellipsis(items, i) {
+            if self.is_followed_by_ellipsis(cx, items, i) {
                 // Found ellipsis in template - check for consecutive ellipses
                 let (ellipsis_template, skip_count) =
-                    self.compile_ellipsis_template(items[i], &items[i + 1..], level)?;
+                    self.compile_ellipsis_template(cx, items[i], &items[i + 1..], level)?;
                 templates.push(ellipsis_template);
                 i += 1 + skip_count; // Skip item and ellipses
             } else {
-                templates.push(self.compile_template(items[i], level)?);
+                templates.push(self.compile_template(cx, items[i], level)?);
                 i += 1;
             }
         }
@@ -371,15 +376,16 @@ impl Compiler {
     /// Returns the compiled template and the number of ellipses consumed.
     pub(super) fn compile_ellipsis_template(
         &mut self,
-        item: TaggedValue,
-        rest: &[TaggedValue],
+        cx: &mut Cx<'gc>,
+        item: Value<'gc>,
+        rest: &[Value<'gc>],
         level: usize,
     ) -> Result<(Template, usize), MacroError> {
         // Count consecutive ellipses for double ellipsis support (SRFI-149)
-        let nesting = self.count_consecutive_ellipses(rest);
+        let nesting = self.count_consecutive_ellipses(cx, rest);
 
         // Compile the base template at deepest level
-        let subtemplate = self.compile_template(item, level + nesting as usize)?;
+        let subtemplate = self.compile_template(cx, item, level + nesting as usize)?;
 
         // Collect variables that should iterate
         let vars = collect_template_vars_at_level(&subtemplate, level + 1);
@@ -404,10 +410,10 @@ impl Compiler {
     }
 
     /// Count consecutive ellipses starting from the beginning of items
-    pub(super) fn count_consecutive_ellipses(&self, items: &[TaggedValue]) -> u8 {
+    pub(super) fn count_consecutive_ellipses(&self, cx: &Cx<'gc>, items: &[Value<'gc>]) -> u8 {
         let mut count = 0u8;
         for item in items {
-            if self.is_ellipsis(*item) {
+            if self.is_ellipsis(cx, *item) {
                 count += 1;
             } else {
                 break;

@@ -3,7 +3,7 @@
 //! This module provides common constants, helpers, and utility functions
 //! used across the macro compiler, matcher, and expander.
 
-use patina_core::{Heap, SpineEnd, TaggedValue};
+use patina_core::{Cx, Heap, SpineEnd, TaggedValue, Value};
 use patina_runtime::PVRef;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -28,7 +28,7 @@ pub const MACRO_DEFINITION_FORMS: &[&str] = &[
 ];
 
 // ============================================================================
-// TaggedValue List/Vector Conversion Utilities
+// List/Vector Conversion Utilities
 // ============================================================================
 
 /// Error indicating an improper list was encountered during iteration
@@ -43,96 +43,96 @@ impl std::fmt::Display for ImproperListError {
 
 impl std::error::Error for ImproperListError {}
 
-/// Iterator over a Scheme list represented as TaggedValue
-///
-/// This iterator traverses a Scheme list stored on the heap, yielding each
-/// element as a TaggedValue. Works directly with TaggedValue and requires
-/// a heap reference.
-pub struct TaggedListIter<'a> {
-    current: TaggedValue,
-    heap: &'a Heap,
+/// Iterator over a Scheme list, yielding each element, read through a
+/// context.
+pub struct TaggedListIter<'a, 'gc> {
+    current: Value<'gc>,
+    cx: &'a Cx<'gc>,
 }
 
-impl<'a> TaggedListIter<'a> {
-    /// Create a new iterator over a TaggedValue list
-    pub fn new(list: TaggedValue, heap: &'a Heap) -> Self {
-        Self {
-            current: list,
-            heap,
-        }
+impl<'a, 'gc> TaggedListIter<'a, 'gc> {
+    /// Create a new iterator over a list
+    pub fn new(list: Value<'gc>, cx: &'a Cx<'gc>) -> Self {
+        Self { current: list, cx }
     }
 
-    /// Count the length of a TaggedValue list without collecting
+    /// Count the length of a list without collecting
     ///
     /// Returns None if not a proper list — improper, or circular (#459).
-    pub fn len(list: TaggedValue, heap: &Heap) -> Option<usize> {
-        if heap.spine_is_circular(list) {
+    pub fn len(list: Value<'gc>, cx: &Cx<'gc>) -> Option<usize> {
+        if cx.spine_is_circular(list) {
             return None;
         }
         let mut count = 0;
         let mut current = list;
         loop {
-            if current == TaggedValue::NULL {
+            if current.is_null() {
                 return Some(count);
             } else if current.is_pair() {
                 count += 1;
-                current = heap.cdr(current);
+                current = cx.cdr(current);
             } else {
                 return None;
             }
         }
     }
 
-    /// Check if a TaggedValue is a proper list (ends with Null)
-    pub fn is_proper_list(list: TaggedValue, heap: &Heap) -> bool {
-        Self::len(list, heap).is_some()
+    /// Check if a value is a proper list (ends with Null)
+    pub fn is_proper_list(list: Value<'gc>, cx: &Cx<'gc>) -> bool {
+        Self::len(list, cx).is_some()
     }
 }
 
-impl<'a> Iterator for TaggedListIter<'a> {
-    type Item = Result<TaggedValue, ImproperListError>;
+impl<'gc> Iterator for TaggedListIter<'_, 'gc> {
+    type Item = Result<Value<'gc>, ImproperListError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current == TaggedValue::NULL {
+        if self.current.is_null() {
             None
         } else if self.current.is_pair() {
-            let car = self.heap.car(self.current);
-            let cdr = self.heap.cdr(self.current);
+            let (car, cdr) = self.cx.get_pair(self.current);
             self.current = cdr;
             Some(Ok(car))
         } else {
             // Improper list - return error and stop
-            let err = ImproperListError;
-            self.current = TaggedValue::NULL;
-            Some(Err(err))
+            self.current = Value::NULL;
+            Some(Err(ImproperListError))
         }
     }
 }
 
-/// Convert a TaggedValue proper list to a Vec
+/// Convert a proper list to a Vec
 ///
 /// Returns an error message if the value is not a proper list: improper, or
 /// circular, which the walk used to follow forever (#459).
-pub fn list_to_vec_tagged(value: TaggedValue, heap: &Heap) -> Result<Vec<TaggedValue>, String> {
-    match heap.spine(value) {
+pub fn list_to_vec_tagged<'gc>(value: Value<'gc>, cx: &Cx<'gc>) -> Result<Vec<Value<'gc>>, String> {
+    match cx.spine(value) {
         (elements, SpineEnd::Null) => Ok(elements),
         (_, SpineEnd::Improper(tail)) => Err(format!(
             "Expected proper list, got one ending with {}",
-            patina_core::format_tagged(tail, heap)
+            cx.format(tail)
         )),
         (_, SpineEnd::Circular) => Err("Expected proper list, got a circular one".to_string()),
     }
 }
 
-/// Convert a Vec to a TaggedValue proper list
-pub fn vec_to_list_tagged(values: Vec<TaggedValue>, heap: &mut Heap) -> TaggedValue {
-    heap.list_from_iter(values)
-}
-
-/// Convert a TaggedValue list to a Vec, allowing improper lists
+/// Convert a list to a Vec, allowing improper lists
 ///
 /// Returns (elements, tail) where tail is the final cdr (NULL for proper
 /// lists), or `None` when the cdrs come back on themselves (#459).
+pub fn list_to_vec_with_tail<'gc>(
+    value: Value<'gc>,
+    cx: &Cx<'gc>,
+) -> Option<(Vec<Value<'gc>>, Value<'gc>)> {
+    match cx.spine(value) {
+        (elements, SpineEnd::Null) => Some((elements, Value::NULL)),
+        (elements, SpineEnd::Improper(tail)) => Some((elements, tail)),
+        (_, SpineEnd::Circular) => None,
+    }
+}
+
+/// [`list_to_vec_with_tail`] in words, on the heap: the desugarer's, which
+/// works in words until it takes a context (#704).
 pub fn list_to_vec_with_tail_tagged(
     value: TaggedValue,
     heap: &Heap,
@@ -145,32 +145,15 @@ pub fn list_to_vec_with_tail_tagged(
 }
 
 // ============================================================================
-// TaggedValue Symbol/Identifier Name Extraction
+// Symbol/Identifier Name Extraction
 // ============================================================================
 
-/// Extract the name from a TaggedValue Symbol or Identifier
+/// Extract the name from a Symbol or Identifier
 ///
 /// Returns None for non-identifier values.
-/// Uses Heap's built-in method for efficiency.
-pub fn get_identifier_name_tagged(tv: TaggedValue, heap: &Heap) -> Option<Rc<str>> {
-    heap.get_symbol_or_identifier_name(tv).map(Rc::from)
-}
-
-/// Check if a TaggedValue is a specific named symbol or identifier
-///
-/// Uses Heap's built-in method for efficiency.
-pub fn is_named_tagged(tv: TaggedValue, name: &str, heap: &Heap) -> bool {
-    heap.is_named(tv, name)
-}
-
-/// Check if a TaggedValue is the ellipsis symbol (...)
-pub fn is_ellipsis_tagged(tv: TaggedValue, heap: &Heap) -> bool {
-    is_named_tagged(tv, ELLIPSIS, heap)
-}
-
-/// Check if a TaggedValue is the wildcard/underscore symbol (_)
-pub fn is_wildcard_tagged(tv: TaggedValue, heap: &Heap) -> bool {
-    is_named_tagged(tv, WILDCARD, heap)
+pub fn get_identifier_name_tagged<'gc>(tv: Value<'gc>, cx: &Cx<'gc>) -> Option<Rc<str>> {
+    cx.get_symbol_or_identifier_name(tv)
+        .map(|name| Rc::from(&*name))
 }
 
 /// Check if a TaggedValue is a pair (list node)

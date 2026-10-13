@@ -233,6 +233,12 @@ impl<'gc> Cx<'gc> {
         self.brand(r)
     }
 
+    /// [`Heap::interned_core_syntax`](crate::Heap::interned_core_syntax) on this context's heap.
+    pub fn interned_core_syntax(&self, form: crate::core_syntax::CoreForm) -> Option<Value<'gc>> {
+        let r = self.heap.borrow().interned_core_syntax(form)?;
+        Some(self.brand(r))
+    }
+
     /// [`Heap::defer_collection`](crate::Heap::defer_collection) on this context's heap.
     pub fn defer_collection(&mut self) {
         self.heap.borrow_mut().defer_collection()
@@ -931,10 +937,16 @@ impl<'gc> Cx<'gc> {
         self.heap.borrow().set_held(handle, value.tagged())
     }
 
-    /// [`Heap::spine`](crate::Heap::spine) on this context's heap.
-    pub fn spine(&self, tv: Value<'gc>) -> (Vec<Value<'gc>>, SpineEnd) {
-        let r = self.heap.borrow().spine(tv.tagged());
-        (self.brand_vec(r.0), r.1)
+    /// [`Heap::spine`](crate::Heap::spine) on this context's heap, with the
+    /// tail of an improper list as a value.
+    pub fn spine(&self, tv: Value<'gc>) -> (Vec<Value<'gc>>, SpineEnd<Value<'gc>>) {
+        let (elements, end) = self.heap.borrow().spine(tv.tagged());
+        let end = match end {
+            SpineEnd::Null => SpineEnd::Null,
+            SpineEnd::Improper(tail) => SpineEnd::Improper(self.brand(tail)),
+            SpineEnd::Circular => SpineEnd::Circular,
+        };
+        (self.brand_vec(elements), end)
     }
 
     /// [`Heap::spine_is_circular`](crate::Heap::spine_is_circular) on this context's heap.

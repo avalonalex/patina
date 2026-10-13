@@ -25,6 +25,8 @@ mod pattern_template_tests;
 // Re-export core types from patina-runtime
 pub use patina_runtime::{Identifier, Pattern, Template};
 
+use patina_core::{Cx, Value};
+
 // Re-export macro system types
 pub use compiler::{CompiledMacro, CompiledRule, Compiler};
 pub use expander::{ExpandError, Expander};
@@ -41,35 +43,35 @@ pub use utils::{
     template_to_string_with_names,
 };
 
-/// Core macro expansion with TaggedValue input and output
+/// Core macro expansion, in a context: values in, values out
 ///
-/// Matches directly on TaggedValue input using `match_pattern_tagged`
-/// and produces TaggedValue output via the expander.
+/// Matches the input with `match_pattern_tagged` and produces the expansion
+/// with the expander, both through `cx`.
 ///
 /// # Arguments
+/// * `cx` - The context the input lives in and the expansion is allocated in
 /// * `compiled_macro` - The compiled macro definition
 /// * `mac` - The macro object it is the body of, which holds its literals
-/// * `flipped_args` - TaggedValue arguments with macro_scope already flipped
+/// * `flipped_args` - Arguments with macro_scope already flipped
 /// * `macro_scope` - The fresh scope for this expansion
-/// * `original_args` - Original unflipped TaggedValue args (for debug logging)
-/// * `shared_heap` - Shared heap for TaggedValue operations
+/// * `original_args` - Original unflipped args (for debug logging)
 /// * `use_site` - Where an input identifier resolves when it meets a literal
 /// * `depth` - How many forms deep the use is ([`Expander::at_depth`])
 #[expect(
     clippy::too_many_arguments,
     reason = "each is one fact about the expansion, and the one caller passes them through"
 )]
-fn expand_macro_core_tagged(
+fn expand_macro_core_tagged<'gc>(
+    cx: &mut Cx<'gc>,
     compiled_macro: &CompiledMacro,
-    mac: patina_core::TaggedValue,
-    flipped_args: patina_core::TaggedValue,
+    mac: Value<'gc>,
+    flipped_args: Value<'gc>,
     macro_scope: patina_runtime::ScopeId,
-    original_args: patina_core::TaggedValue,
-    shared_heap: &patina_core::SharedHeap,
+    original_args: Value<'gc>,
     definition: Option<Site<'_>>,
     use_site: Option<Site<'_>>,
     depth: usize,
-) -> Result<patina_core::TaggedValue, crate::error::MacroError> {
+) -> Result<Value<'gc>, crate::error::MacroError> {
     use debug::{DebugContext, record_expansion_step};
 
     // Set up debug context
@@ -78,43 +80,39 @@ fn expand_macro_core_tagged(
         crate::tracer::MacroTracer::should_trace(&compiled_macro.name),
     );
 
-    // Log expansion start (debug functions handle TaggedValue directly)
+    // Log expansion start (debug functions handle values directly)
     debug_ctx.log_expansion_start(
         &compiled_macro.name,
         macro_scope,
         &compiled_macro.definition_scopes,
         &compiled_macro.rules,
         original_args,
-        shared_heap,
+        cx,
     );
-    debug_ctx.log_input_flip(macro_scope, flipped_args, shared_heap);
+    debug_ctx.log_input_flip(macro_scope, flipped_args, cx);
 
     // Create expander with macro scope for hygiene
-    let expander = Expander::new_with_heap(macro_scope, shared_heap.clone())
-        .for_macro(mac)
-        .at_depth(depth);
+    let expander = Expander::new(macro_scope).for_macro(mac).at_depth(depth);
 
     // Try each rule until we find a match
     for (rule_idx, rule) in compiled_macro.rules.iter().enumerate() {
         debug_ctx.log_trying_rule(rule_idx, rule);
 
-        // Create matcher for this rule with hygiene support and shared heap
-        let matcher =
-            Matcher::new_with_heap(rule.num_pvars, rule.pvar_names.clone(), shared_heap.clone())
-                .with_sites(definition, use_site)
-                .with_macro_scope(macro_scope)
-                .for_macro(mac);
+        // Create matcher for this rule with hygiene support
+        let matcher = Matcher::new_with_names(rule.num_pvars, rule.pvar_names.clone())
+            .with_sites(definition, use_site)
+            .with_macro_scope(macro_scope)
+            .for_macro(mac);
 
         // Try to match against the pattern
-        match matcher.match_pattern_tagged(&rule.pattern, flipped_args) {
+        match matcher.match_pattern_tagged(cx, &rule.pattern, flipped_args) {
             Ok(match_env) => {
                 // Pattern matched! Expand the template
                 debug_ctx.log_match_success(&match_env, &rule.pvar_names, &rule.template);
 
-                // Expand the template into a TaggedValue
-                let expanded_tagged =
+                let expanded =
                     expander
-                        .expand(&rule.template, &match_env)
+                        .expand(cx, &rule.template, &match_env)
                         .map_err(|e| match e {
                             ExpandError::NestedTooDeeply => {
                                 crate::error::MacroError::NestedTooDeeply
@@ -122,14 +120,8 @@ fn expand_macro_core_tagged(
                             e => crate::error::MacroError::InvalidSyntax(e.to_string()),
                         })?;
 
-                // Debug logging (functions handle TaggedValue directly)
-                debug_ctx.log_before_output_flip(expanded_tagged, shared_heap);
-                debug_ctx.log_expansion_complete(
-                    &compiled_macro.name,
-                    macro_scope,
-                    expanded_tagged,
-                    shared_heap,
-                );
+                debug_ctx.log_before_output_flip(expanded, cx);
+                debug_ctx.log_expansion_complete(&compiled_macro.name, macro_scope, expanded, cx);
 
                 // Record expansion step for tracing
                 record_expansion_step(
@@ -138,11 +130,10 @@ fn expand_macro_core_tagged(
                     rule_idx,
                     compiled_macro.rules.len(),
                     original_args,
-                    shared_heap,
+                    cx,
                 );
 
-                // Return TaggedValue directly (no conversion needed!)
-                return Ok(expanded_tagged);
+                return Ok(expanded);
             }
             // Not a failed match: the literal comparison has no answer, and
             // trying the next rule would give it one by rule order.
@@ -165,7 +156,7 @@ fn expand_macro_core_tagged(
     ))
 }
 
-/// Flip a scope on all identifiers in a TaggedValue tree (Racket-style hygiene)
+/// Flip a scope on all identifiers in a tree (Racket-style hygiene)
 ///
 /// Traverses the heap structure (pairs, vectors, identifiers) and toggles
 /// the given scope on every identifier found.
@@ -173,20 +164,20 @@ fn expand_macro_core_tagged(
 /// Only allocates new heap objects when scopes actually change.
 ///
 /// # Arguments
-/// * `tv` - The TaggedValue tree to flip scopes on
+/// * `tv` - The tree to flip scopes on
 /// * `scope` - The scope to flip (add if absent, remove if present)
-/// * `shared_heap` - Shared heap for reading and allocating values
-pub fn flip_scope_on_tagged(
-    tv: patina_core::TaggedValue,
+/// * `cx` - The context it is read and allocated through
+pub fn flip_scope_on_tagged<'gc>(
+    tv: Value<'gc>,
     scope: patina_runtime::ScopeId,
-    shared_heap: &patina_core::SharedHeap,
-) -> patina_core::TaggedValue {
+    cx: &mut Cx<'gc>,
+) -> Value<'gc> {
     // Early exit: if no identifiers present, return value unchanged
-    if !contains_edit_target(tv, ScopeEdit::Flip, shared_heap) {
+    if !contains_edit_target(tv, ScopeEdit::Flip, cx) {
         return tv;
     }
 
-    edit_scope_on_tagged(tv, scope, ScopeEdit::Flip, shared_heap)
+    edit_scope_on_tagged(tv, scope, ScopeEdit::Flip, cx)
 }
 
 /// Add `scope` to every identifier in `tv` that already carries scopes of
@@ -202,28 +193,28 @@ pub fn flip_scope_on_tagged(
 /// it is a macro-introduced identifier, which carries its own scopes and
 /// nothing of where it now sits: the `(n z)` in chibi's `(m k)`, whose
 /// binder `n` came from the same template.
-pub fn add_scope_to_bound_names(
-    tv: patina_core::TaggedValue,
+pub fn add_scope_to_bound_names<'gc>(
+    tv: Value<'gc>,
     names: &std::collections::HashSet<std::rc::Rc<str>>,
     scope: patina_runtime::ScopeId,
-    shared_heap: &patina_core::SharedHeap,
-) -> patina_core::TaggedValue {
+    cx: &mut Cx<'gc>,
+) -> Value<'gc> {
     let edit = ScopeEdit::AddToBound(names);
-    if !contains_edit_target(tv, edit, shared_heap) {
+    if !contains_edit_target(tv, edit, cx) {
         return tv;
     }
-    edit_scope_on_tagged(tv, scope, edit, shared_heap)
+    edit_scope_on_tagged(tv, scope, edit, cx)
 }
 
-pub fn add_scope_to_scoped_identifiers(
-    tv: patina_core::TaggedValue,
+pub fn add_scope_to_scoped_identifiers<'gc>(
+    tv: Value<'gc>,
     scope: patina_runtime::ScopeId,
-    shared_heap: &patina_core::SharedHeap,
-) -> patina_core::TaggedValue {
-    if !contains_edit_target(tv, ScopeEdit::AddToScoped, shared_heap) {
+    cx: &mut Cx<'gc>,
+) -> Value<'gc> {
+    if !contains_edit_target(tv, ScopeEdit::AddToScoped, cx) {
         return tv;
     }
-    edit_scope_on_tagged(tv, scope, ScopeEdit::AddToScoped, shared_heap)
+    edit_scope_on_tagged(tv, scope, ScopeEdit::AddToScoped, cx)
 }
 
 /// What a scope walk does to each identifier it meets.
@@ -250,7 +241,7 @@ impl ScopeEdit<'_> {
     }
 }
 
-/// Check if a TaggedValue tree contains any Identifier nodes
+/// Check if a tree contains any Identifier nodes
 ///
 /// Fast traversal that returns true as soon as an Identifier is found. The
 /// tree may be cyclic — a quoted datum with labels (`'#0=(a b . #0#)`) is a
@@ -259,58 +250,51 @@ impl ScopeEdit<'_> {
 /// suggest a cycle and never entered twice. Cycles only come from the
 /// reader, whose data holds symbols, not identifiers, so a revisited
 /// container contributes nothing.
-fn contains_edit_target(
-    tv: patina_core::TaggedValue,
-    edit: ScopeEdit<'_>,
-    shared_heap: &patina_core::SharedHeap,
-) -> bool {
-    let heap = shared_heap.borrow();
+fn contains_edit_target<'gc>(tv: Value<'gc>, edit: ScopeEdit<'_>, cx: &Cx<'gc>) -> bool {
     let mut seen = std::collections::HashSet::new();
     let mut pending = vec![tv];
     while let Some(value) = pending.pop() {
-        if !seen.insert(value.raw_bits()) {
+        if !seen.insert(value) {
             continue;
         }
-        if !heap.is_source_identifier(value)
-            && heap
+        if !cx.is_source_identifier(value)
+            && cx
                 .get_identifier_data(value)
-                .is_some_and(|(name, scopes)| edit.affects(name, scopes))
+                .is_some_and(|(name, scopes)| edit.affects(&name, &scopes))
         {
             return true;
         }
         if value.is_pair() {
-            let (car, cdr) = heap.get_pair(value);
+            let (car, cdr) = cx.get_pair(value);
             pending.extend([cdr, car]);
         } else if value.is_vector() {
-            pending.extend(heap.vector_slice(value));
+            pending.extend(cx.vector_slice(value).iter().copied());
         }
     }
     false
 }
 
-/// Implementation of the scope walks for TaggedValue
+/// Implementation of the scope walks
 ///
 /// Edit each syntax identifier once, retaining source provenance and graph
-/// sharing. The heap's iterative copier closes cycles on the copied container
-/// and leaves unaffected data untouched, including vectors supplied to `eval`.
-fn edit_scope_on_tagged(
-    tv: patina_core::TaggedValue,
+/// sharing. The iterative copier closes cycles on the copied container and
+/// leaves unaffected data untouched, including vectors supplied to `eval`.
+fn edit_scope_on_tagged<'gc>(
+    tv: Value<'gc>,
     scope: patina_runtime::ScopeId,
     edit: ScopeEdit<'_>,
-    shared_heap: &patina_core::SharedHeap,
-) -> patina_core::TaggedValue {
-    shared_heap
-        .borrow_mut()
-        .map_syntax_identifiers(tv, |heap, value, name, scopes| {
-            if heap.is_source_identifier(value) || !edit.affects(&name, &scopes) {
-                return None;
-            }
-            let new_scopes = match edit {
-                ScopeEdit::Flip => scopes.flip_scope(scope),
-                ScopeEdit::AddToScoped | ScopeEdit::AddToBound(_) => scopes.with_scope(scope),
-            };
-            Some(heap.alloc_identifier(name, new_scopes))
-        })
+    cx: &mut Cx<'gc>,
+) -> Value<'gc> {
+    cx.map_syntax_identifiers(tv, |cx, value, name, scopes| {
+        if cx.is_source_identifier(value) || !edit.affects(&name, &scopes) {
+            return None;
+        }
+        let new_scopes = match edit {
+            ScopeEdit::Flip => scopes.flip_scope(scope),
+            ScopeEdit::AddToScoped | ScopeEdit::AddToBound(_) => scopes.with_scope(scope),
+        };
+        Some(cx.alloc_identifier(name, new_scopes))
+    })
 }
 
 /// One side of a literal comparison: where a macro was defined, or where it is
@@ -324,10 +308,10 @@ pub struct Site<'a> {
     pub scopes: &'a patina_runtime::ScopeSet,
 }
 
-/// What one expansion produced.
-pub struct MacroExpansion {
+/// What one expansion produced, in the context it was expanded in.
+pub struct MacroExpansion<'gc> {
     /// The expanded form.
-    pub form: patina_core::TaggedValue,
+    pub form: Value<'gc>,
     /// The scope minted for this expansion. After the output flip it is on
     /// every identifier the template *introduced* and on nothing that came
     /// in through a pattern variable — the input flip put it there and the
@@ -347,8 +331,8 @@ pub struct MacroExpansion {
 ///
 /// # Arguments
 /// * `mac` - The macro object: its compiled body, and the literals it names
-/// * `args` - The macro call arguments as TaggedValue
-/// * `shared_heap` - Shared heap for conversions (Rc<RefCell<Heap>>)
+/// * `args` - The macro call
+/// * `cx` - The context the call lives in and the expansion is allocated in
 /// * `use_site` - Where the macro is being used, which is where an input
 ///   identifier resolves when it is compared with a literal (R7RS §4.3.2).
 ///   `None` for the direct-API paths, where literals compare by spelling
@@ -356,29 +340,23 @@ pub struct MacroExpansion {
 /// # Panics
 ///
 /// If `mac` is no macro object.
-pub fn expand_macro_with_scope(
-    mac: patina_core::TaggedValue,
-    args: patina_core::TaggedValue,
-    shared_heap: &patina_core::SharedHeap,
+pub fn expand_macro_with_scope<'gc>(
+    mac: Value<'gc>,
+    args: Value<'gc>,
+    cx: &mut Cx<'gc>,
     use_site: Option<Site<'_>>,
-) -> Result<MacroExpansion, crate::error::MacroError> {
-    let compiled_macro = macro_body(mac, shared_heap);
+) -> Result<MacroExpansion<'gc>, crate::error::MacroError> {
+    let compiled_macro = macro_body(mac, cx);
     let definition = compiled_macro.definition_env.as_ref().map(|env| Site {
         env,
         scopes: &compiled_macro.definition_scopes,
     });
-    expand_macro_at_sites(mac, args, shared_heap, definition, use_site, 0)
+    expand_macro_at_sites(mac, args, cx, definition, use_site, 0)
 }
 
 /// The compiled body of the macro object `mac`.
-fn macro_body(
-    mac: patina_core::TaggedValue,
-    shared_heap: &patina_core::SharedHeap,
-) -> std::rc::Rc<CompiledMacro> {
-    shared_heap
-        .borrow()
-        .get_macro(mac)
-        .cloned()
+fn macro_body<'gc>(mac: Value<'gc>, cx: &Cx<'gc>) -> std::rc::Rc<CompiledMacro> {
+    cx.get_macro(mac)
         .expect("a macro is expanded through its macro object")
 }
 
@@ -393,17 +371,17 @@ fn macro_body(
 /// # Panics
 ///
 /// If `mac` is no macro object.
-pub fn expand_macro_at_sites(
-    mac: patina_core::TaggedValue,
-    args: patina_core::TaggedValue,
-    shared_heap: &patina_core::SharedHeap,
+pub fn expand_macro_at_sites<'gc>(
+    mac: Value<'gc>,
+    args: Value<'gc>,
+    cx: &mut Cx<'gc>,
     definition: Option<Site<'_>>,
     use_site: Option<Site<'_>>,
     depth: usize,
-) -> Result<MacroExpansion, crate::error::MacroError> {
+) -> Result<MacroExpansion<'gc>, crate::error::MacroError> {
     use crate::tracer::MacroTracer;
 
-    let compiled_macro = macro_body(mac, shared_heap);
+    let compiled_macro = macro_body(mac, cx);
 
     // Enter macro expansion (for depth tracking)
     MacroTracer::enter_expansion();
@@ -411,19 +389,17 @@ pub fn expand_macro_at_sites(
     // Create a fresh macro scope for this expansion (Racket-style hygiene)
     let macro_scope = patina_runtime::ScopeId::fresh();
 
-    // Step 1: Flip input scopes on TaggedValue (avoids Value allocation for flip)
-    let flipped_args = flip_scope_on_tagged(args, macro_scope, shared_heap);
+    // Step 1: Flip input scopes
+    let flipped_args = flip_scope_on_tagged(args, macro_scope, cx);
 
-    // Step 2-3: Call core expansion with TaggedValue input and output (no conversion!)
-    // Pattern matching works directly on TaggedValue
-    // Template expansion now produces TaggedValue directly!
-    let expanded_tagged = expand_macro_core_tagged(
+    // Step 2-3: match and expand, values in and out
+    let expanded = expand_macro_core_tagged(
+        cx,
         &compiled_macro,
         mac,
         flipped_args,
         macro_scope,
         args, // original args for debug logging
-        shared_heap,
         definition,
         use_site,
         depth,
@@ -433,10 +409,10 @@ pub fn expand_macro_at_sites(
     // recovers from a failed expansion, as the desugarer's body pre-pass does,
     // would otherwise leave the tracer one level deeper for each failure.
     MacroTracer::exit_expansion();
-    let expanded_tagged = expanded_tagged?;
+    let expanded = expanded?;
 
     // Step 4: Flip output scopes on expanded result
-    let result = flip_scope_on_tagged(expanded_tagged, macro_scope, shared_heap);
+    let result = flip_scope_on_tagged(expanded, macro_scope, cx);
 
     Ok(MacroExpansion {
         form: result,
@@ -448,10 +424,7 @@ pub fn expand_macro_at_sites(
 /// expander or the matcher reads a literal template or pattern through
 /// (#718).
 #[cfg(test)]
-pub(crate) fn test_macro_object(
-    heap: &patina_core::SharedHeap,
-    literals: Vec<patina_core::TaggedValue>,
-) -> patina_core::TaggedValue {
+pub(crate) fn test_macro_object<'gc>(cx: &mut Cx<'gc>, literals: Vec<Value<'gc>>) -> Value<'gc> {
     let body = CompiledMacro {
         name: "test".into(),
         rules: vec![],
@@ -462,8 +435,7 @@ pub(crate) fn test_macro_object(
         definition_env: None,
         foreign_expansions: vec![],
     };
-    heap.borrow_mut()
-        .alloc_macro(std::rc::Rc::new(body), literals)
+    cx.alloc_macro(std::rc::Rc::new(body), literals)
 }
 
 /// A literal comparison the set-of-scopes rule cannot decide stops the
@@ -496,45 +468,49 @@ mod ambiguous_literal_tests {
         .expect("parser")
         .parse()
         .expect("syntax-rules form");
-        let parsed = parse_syntax_rules(form, &heap.borrow()).expect("syntax-rules");
-        let mut compiler = Compiler::with_env(
-            parsed.literals,
-            parsed.custom_ellipsis,
-            definition_env.clone(),
-            heap.clone(),
-        );
-        let (compiled, literals) = compiler
-            .compile_macro("m".into(), parsed.rules)
-            .expect("compiled");
-        let mac = heap.borrow_mut().alloc_macro(Rc::new(compiled), literals);
+        // The parser answers a word: it crosses into the context through a
+        // handle, as the desugarer's do.
+        let form = heap.borrow().hold(form);
+        let instance = Rc::clone(heap.borrow().instance());
+        let mut driver = patina_core::GcDriver::acquire(&heap).expect("the driver is free");
+        driver.mutate(&instance, |cx| {
+            let form = cx.held(&form);
+            let parsed = parse_syntax_rules(form, cx).expect("syntax-rules");
+            let mut compiler = Compiler::with_env(
+                parsed.literals,
+                parsed.custom_ellipsis,
+                definition_env.clone(),
+            );
+            let (compiled, literals) = compiler
+                .compile_macro(cx, "m".into(), parsed.rules)
+                .expect("compiled");
+            let mac = cx.alloc_macro(Rc::new(compiled), literals);
 
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "a test's use-site environment, binding only `UNSPECIFIED`; the test \
-                      evaluates nothing"
-        )]
-        let use_site_env = Rc::new(Environment::with_parent(definition_env));
-        for scopes in bindings {
-            use_site_env.define_with_scopes("else", scopes.clone(), TaggedValue::UNSPECIFIED);
-        }
-        let args = {
-            let mut h = heap.borrow_mut();
-            let input = h.alloc_identifier(Rc::from("else"), reference);
-            let tail = h.alloc_pair(input, TaggedValue::NULL);
-            let head = h.intern_symbol("m");
-            h.alloc_pair(head, tail)
-        };
-        let use_site_scopes = ScopeSet::new();
-        let expansion = expand_macro_with_scope(
-            mac,
-            args,
-            &heap,
-            Some(Site {
-                env: &use_site_env,
-                scopes: &use_site_scopes,
-            }),
-        )?;
-        Ok(patina_core::format_tagged(expansion.form, &heap.borrow()))
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "a test's use-site environment, binding only `UNSPECIFIED`; the test \
+                          evaluates nothing"
+            )]
+            let use_site_env = Rc::new(Environment::with_parent(definition_env));
+            for scopes in bindings {
+                use_site_env.define_with_scopes("else", scopes.clone(), TaggedValue::UNSPECIFIED);
+            }
+            let input = cx.alloc_identifier(Rc::from("else"), reference);
+            let tail = cx.alloc_pair(input, Value::NULL);
+            let head = cx.intern_symbol("m");
+            let args = cx.alloc_pair(head, tail);
+            let use_site_scopes = ScopeSet::new();
+            let expansion = expand_macro_with_scope(
+                mac,
+                args,
+                cx,
+                Some(Site {
+                    env: &use_site_env,
+                    scopes: &use_site_scopes,
+                }),
+            )?;
+            Ok(cx.format(expansion.form))
+        })
     }
 
     #[test]

@@ -362,13 +362,14 @@ impl HeapObjectData {
 // Heap Arena
 // ============================================================================
 
-/// How a chain of cdrs ends: [`Heap::spine`].
+/// How a chain of cdrs ends: [`Heap::spine`], whose tail is a word, and
+/// [`Cx::spine`](crate::Cx::spine), whose tail is a `Value<'gc>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpineEnd {
+pub enum SpineEnd<V = TaggedValue> {
     /// `()`: the chain is a proper list.
     Null,
     /// Some other value, which ends an improper list.
-    Improper(TaggedValue),
+    Improper(V),
     /// The chain comes back to a pair it has already passed.
     Circular,
 }
@@ -1236,6 +1237,15 @@ impl Heap {
             self.core_syntax_table.insert(form, tagged.heap_index());
             tagged
         }
+    }
+
+    /// The marker of `form` if one has been interned ([`Heap::core_syntax`]),
+    /// without interning it: for a comparison by identity, which no marker
+    /// not yet made can pass (#704).
+    pub fn interned_core_syntax(&self, form: crate::core_syntax::CoreForm) -> Option<TaggedValue> {
+        self.core_syntax_table
+            .get(&form)
+            .map(|&index| self.object_checks.stamp(TaggedValue::object(index)))
     }
 
     /// The form this value denotes, if it is a syntactic-keyword marker.

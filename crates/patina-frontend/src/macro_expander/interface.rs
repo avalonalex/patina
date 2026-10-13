@@ -41,29 +41,26 @@ impl TestExpander {
         let test_env = Rc::new(Environment::new());
         let heap = test_env.heap().clone();
 
-        // Parse the syntax-rules form directly to TaggedValue on the macro's heap
+        // Parse the syntax-rules form on the macro's heap
         let mut parser = Parser::new_with_heap(syntax_rules, heap.clone())?;
         let form_tv = parser.parse()?;
 
-        // Parse the syntax-rules structure using shared parser from patina_macros
-        let parsed = patina_macros::parse_syntax_rules(form_tv, &heap.borrow())
-            .map_err(|e| FrontendError::InvalidSyntax(e.0))?;
-
-        // Rules are already Vec<(TaggedValue, TaggedValue)> — pass directly to compiler
-        let mut compiler = patina_macros::Compiler::with_env(
-            parsed.literals,
-            parsed.custom_ellipsis,
-            test_env,
-            heap.clone(),
-        );
-        let (compiled, literals) = compiler
-            .compile_macro(name.into(), parsed.rules)
-            .map_err(|e| FrontendError::InvalidSyntax(e.to_string()))?;
-        let mac = {
-            let mut h = heap.borrow_mut();
-            let mac = h.alloc_macro(Rc::new(compiled), literals);
-            h.hold(mac)
-        };
+        // The form crosses into a context (`super::cross`); the macro object
+        // comes back out as a handle.
+        let mac = super::cross(&heap, [form_tv], |cx, [form]| {
+            let parsed = patina_macros::parse_syntax_rules(form, cx)
+                .map_err(|e| FrontendError::InvalidSyntax(e.0))?;
+            let mut compiler = patina_macros::Compiler::with_env(
+                parsed.literals,
+                parsed.custom_ellipsis,
+                test_env,
+            );
+            let (compiled, literals) = compiler
+                .compile_macro(cx, name.into(), parsed.rules)
+                .map_err(|e| FrontendError::InvalidSyntax(e.to_string()))?;
+            let mac = cx.alloc_macro(Rc::new(compiled), literals);
+            Ok::<_, FrontendError>(cx.hold(mac))
+        })?;
 
         Ok(Self { heap, mac })
     }
@@ -83,41 +80,42 @@ impl TestExpander {
         let heap = &self.heap;
         let mac = heap.borrow().held(&self.mac);
 
-        // Parse input directly to TaggedValue on the macro's heap
+        // Parse input on the macro's heap
         let mut parser = Parser::new_with_heap(input, heap.clone())
             .map_err(|e| format!("Failed to parse input: {}", e))?;
         let input_tv = parser
             .parse()
             .map_err(|e| format!("Failed to parse input: {}", e))?;
 
-        // Parse expected directly to TaggedValue on the macro's heap
+        // Parse expected on the macro's heap
         let mut parser = Parser::new_with_heap(expected, heap.clone())
             .map_err(|e| format!("Failed to parse expected: {}", e))?;
         let expected_tv = parser
             .parse()
             .map_err(|e| format!("Failed to parse expected: {}", e))?;
 
-        // Expand using production TaggedValue path
-        let expanded_tv = patina_macros::expand_macro_with_scope(mac, input_tv, heap, None)
-            .map_err(|e| format!("Expansion failed: {}", e))?
-            .form;
+        super::cross(
+            heap,
+            [mac, input_tv, expected_tv],
+            |cx, [mac, input, expected]| {
+                let expanded = patina_macros::expand_macro_with_scope(mac, input, cx, None)
+                    .map_err(|e| format!("Expansion failed: {}", e))?
+                    .form;
 
-        // Compare TaggedValues directly (ignoring gensym/hygiene differences)
-        if patina_macros::TestExpander::tagged_forms_equal_ignoring_gensym(
-            expanded_tv,
-            expected_tv,
-            &heap.borrow(),
-        ) {
-            Ok(())
-        } else {
-            // Format TaggedValues directly for error message
-            let expanded = patina_core::format_tagged(expanded_tv, &heap.borrow());
-            let expected = patina_core::format_tagged(expected_tv, &heap.borrow());
-            Err(format!(
-                "Expansion mismatch:\nExpected: {}\nGot:      {}",
-                expected, expanded
-            ))
-        }
+                // Compare the forms (ignoring gensym/hygiene differences)
+                if patina_macros::TestExpander::tagged_forms_equal_ignoring_gensym(
+                    expanded, expected, cx,
+                ) {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "Expansion mismatch:\nExpected: {}\nGot:      {}",
+                        cx.format(expected),
+                        cx.format(expanded)
+                    ))
+                }
+            },
+        )
     }
 
     /// Expand an input string and return the result as a string
@@ -127,18 +125,17 @@ impl TestExpander {
         let heap = &self.heap;
         let mac = heap.borrow().held(&self.mac);
 
-        // Parse input directly to TaggedValue on the macro's heap
+        // Parse input on the macro's heap
         let mut parser = Parser::new_with_heap(input, heap.clone())
             .map_err(|e| format!("Parse error: {}", e))?;
         let input_tv = parser.parse().map_err(|e| format!("Parse error: {}", e))?;
 
-        // Expand using production TaggedValue path
-        let expanded_tv = patina_macros::expand_macro_with_scope(mac, input_tv, heap, None)
-            .map_err(|e| format!("Expansion error: {}", e))?
-            .form;
-
-        // Format TaggedValue directly for display
-        Ok(patina_core::format_tagged(expanded_tv, &heap.borrow()))
+        super::cross(heap, [mac, input_tv], |cx, [mac, input]| {
+            let expanded = patina_macros::expand_macro_with_scope(mac, input, cx, None)
+                .map_err(|e| format!("Expansion error: {}", e))?
+                .form;
+            Ok(cx.format(expanded))
+        })
     }
 }
 

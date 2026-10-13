@@ -2,23 +2,22 @@
 //!
 //! This module handles the complex ellipsis expansion logic, including
 //! single ellipsis (`x ...`) and double ellipsis (`x ... ...`) from SRFI-149.
-//! All methods return TaggedValue directly.
 
 use super::Expander;
 use super::error::ExpandError;
 use crate::macro_expander::Template;
-use patina_core::TaggedValue;
+use patina_core::{Cx, Value};
 use patina_runtime::{MatchEnv, MatchValue, PVRef};
 
 /// Context for ellipsis expansion operations
 ///
 /// This struct consolidates the parameters needed for ellipsis expansion,
 /// reducing the number of arguments passed to helper functions.
-pub(super) struct EllipsisContext<'a> {
+pub(super) struct EllipsisContext<'a, 'gc> {
     /// The template to expand repeatedly
     pub subtemplate: &'a Template,
     /// The match environment containing bound values
-    pub env: &'a MatchEnv,
+    pub env: &'a MatchEnv<'gc>,
     /// Current indices into nested branches for outer ellipsis levels
     pub indices: &'a [usize],
     /// Pattern variables in the subtemplate that drive iteration
@@ -29,7 +28,7 @@ pub(super) struct EllipsisContext<'a> {
     pub inside_quote: bool,
 }
 
-impl Expander {
+impl<'gc> Expander<'gc> {
     /// Expand an ellipsis template
     ///
     /// This is the most complex case, handling iteration over pattern variable bindings.
@@ -56,17 +55,18 @@ impl Expander {
     /// - `nesting >= 3`: Not supported
     pub(super) fn expand_ellipsis(
         &self,
-        ctx: &EllipsisContext<'_>,
+        cx: &mut Cx<'gc>,
+        ctx: &EllipsisContext<'_, 'gc>,
         nesting: u8,
-    ) -> Result<TaggedValue, ExpandError> {
+    ) -> Result<Value<'gc>, ExpandError> {
         if nesting == 1 {
             // Single ellipsis - standard iteration
-            self.expand_single_ellipsis(ctx)
+            self.expand_single_ellipsis(cx, ctx)
         } else if nesting == 2 {
             // Double ellipsis (SRFI-149)
             // Template: x ... ...
             // This expands x at each level, then flattens one level
-            self.expand_double_ellipsis(ctx)
+            self.expand_double_ellipsis(cx, ctx)
         } else {
             // Triple+ ellipsis not supported
             Err(ExpandError::InvalidTemplate {
@@ -78,8 +78,9 @@ impl Expander {
     /// Expand a single ellipsis template (nesting = 1)
     fn expand_single_ellipsis(
         &self,
-        ctx: &EllipsisContext<'_>,
-    ) -> Result<TaggedValue, ExpandError> {
+        cx: &mut Cx<'gc>,
+        ctx: &EllipsisContext<'_, 'gc>,
+    ) -> Result<Value<'gc>, ExpandError> {
         // Determine iteration count from the first variable
         // Note: For nested ellipsis patterns like ((item ...) ...), the variable
         // may be at a deeper level than this ellipsis. We use get_iteration_count_at_level
@@ -115,12 +116,12 @@ impl Expander {
             new_indices[ctx.level as usize] = i;
 
             let value =
-                self.expand_impl(ctx.subtemplate, ctx.env, &new_indices, ctx.inside_quote)?;
+                self.expand_impl(cx, ctx.subtemplate, ctx.env, &new_indices, ctx.inside_quote)?;
             result.push(value);
         }
 
-        // Convert result vec to Scheme list (TaggedValue)
-        Ok(self.vec_to_list_tagged(result))
+        // Convert result vec to Scheme list
+        Ok(cx.list_from_iter(result))
     }
 
     /// Expand a double ellipsis template (nesting = 2)
@@ -158,17 +159,18 @@ impl Expander {
     /// Output: (loop (+ i 1) j)
     fn expand_double_ellipsis(
         &self,
-        ctx: &EllipsisContext<'_>,
-    ) -> Result<TaggedValue, ExpandError> {
+        cx: &mut Cx<'gc>,
+        ctx: &EllipsisContext<'_, 'gc>,
+    ) -> Result<Value<'gc>, ExpandError> {
         self.validate_double_ellipsis_level(ctx.level)?;
 
         let outer_count =
             self.get_outer_iteration_count(ctx.vars, ctx.env, ctx.indices, ctx.level)?;
         let max_var_level = self.get_max_var_level(ctx.vars);
 
-        let all_results = self.expand_nested_iterations(ctx, outer_count, max_var_level)?;
+        let all_results = self.expand_nested_iterations(cx, ctx, outer_count, max_var_level)?;
 
-        Ok(self.vec_to_list_tagged(all_results))
+        Ok(cx.list_from_iter(all_results))
     }
 
     /// Validate that level is appropriate for double ellipsis
@@ -185,7 +187,7 @@ impl Expander {
     fn get_outer_iteration_count(
         &self,
         vars: &[PVRef],
-        env: &MatchEnv,
+        env: &MatchEnv<'gc>,
         indices: &[usize],
         level: u8,
     ) -> Result<usize, ExpandError> {
@@ -208,16 +210,17 @@ impl Expander {
     /// Iterates through outer and inner levels, collecting all expanded values.
     fn expand_nested_iterations(
         &self,
-        ctx: &EllipsisContext<'_>,
+        cx: &mut Cx<'gc>,
+        ctx: &EllipsisContext<'_, 'gc>,
         outer_count: usize,
         max_var_level: usize,
-    ) -> Result<Vec<TaggedValue>, ExpandError> {
+    ) -> Result<Vec<Value<'gc>>, ExpandError> {
         let mut all_results = Vec::new();
 
         for outer_idx in 0..outer_count {
             let outer_indices =
                 self.build_outer_indices(ctx.indices, ctx.level, outer_idx, max_var_level);
-            let inner_results = self.expand_inner_iterations(ctx, &outer_indices)?;
+            let inner_results = self.expand_inner_iterations(cx, ctx, &outer_indices)?;
             all_results.extend(inner_results);
         }
 
@@ -245,9 +248,10 @@ impl Expander {
     /// Expand all inner iterations for a given outer index
     fn expand_inner_iterations(
         &self,
-        ctx: &EllipsisContext<'_>,
+        cx: &mut Cx<'gc>,
+        ctx: &EllipsisContext<'_, 'gc>,
         outer_indices: &[usize],
-    ) -> Result<Vec<TaggedValue>, ExpandError> {
+    ) -> Result<Vec<Value<'gc>>, ExpandError> {
         let inner_count = self.get_inner_iteration_count(ctx.vars, ctx.env, outer_indices)?;
         let var_level = self.get_inner_var_level(ctx.vars, ctx.level);
         let max_var_level = self.get_max_var_level(ctx.vars);
@@ -256,8 +260,13 @@ impl Expander {
         for inner_idx in 0..inner_count {
             let inner_indices =
                 self.build_inner_indices(outer_indices, inner_idx, var_level, max_var_level);
-            let value =
-                self.expand_impl(ctx.subtemplate, ctx.env, &inner_indices, ctx.inside_quote)?;
+            let value = self.expand_impl(
+                cx,
+                ctx.subtemplate,
+                ctx.env,
+                &inner_indices,
+                ctx.inside_quote,
+            )?;
             results.push(value);
         }
 
@@ -268,7 +277,7 @@ impl Expander {
     fn get_inner_iteration_count(
         &self,
         vars: &[PVRef],
-        env: &MatchEnv,
+        env: &MatchEnv<'gc>,
         outer_indices: &[usize],
     ) -> Result<usize, ExpandError> {
         match vars.first() {
@@ -305,7 +314,7 @@ impl Expander {
     /// Get iteration count at a specific level
     pub(super) fn get_iteration_count_at_level(
         &self,
-        env: &MatchEnv,
+        env: &MatchEnv<'gc>,
         pvref: PVRef,
         indices: &[usize],
         target_level: usize,
@@ -369,7 +378,7 @@ impl Expander {
     /// we need to iterate at this level.
     pub(super) fn get_iteration_count(
         &self,
-        env: &MatchEnv,
+        env: &MatchEnv<'gc>,
         pvref: PVRef,
         indices: &[usize],
     ) -> Result<usize, ExpandError> {

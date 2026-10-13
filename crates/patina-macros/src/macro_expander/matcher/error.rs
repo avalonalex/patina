@@ -2,7 +2,7 @@
 //!
 //! This module defines the error types returned when pattern matching fails.
 
-use patina_core::{Heap, TaggedValue};
+use patina_core::{Cx, Value};
 
 /// How a mismatch names the input it refused, for the macro debug log, the
 /// one reader of a failed attempt at a rule (`DebugContext::log_match_failure`):
@@ -13,9 +13,9 @@ use patina_core::{Heap, TaggedValue};
 /// deep as the input: what a `cond` clause is matched against can be the rest
 /// of a program nested thousands deep, and writing it out overflowed the
 /// stack.
-pub(super) fn described(input: TaggedValue, heap: &Heap) -> String {
+pub(super) fn described<'gc>(input: Value<'gc>, cx: &Cx<'gc>) -> String {
     if patina_runtime::macro_debug::is_enabled() {
-        patina_core::format_tagged_brief(input, heap)
+        cx.format_brief(input)
     } else {
         String::new()
     }

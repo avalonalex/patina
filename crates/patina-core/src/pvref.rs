@@ -12,8 +12,12 @@
 //! - PVREF definition: macro.c:297-300, macroP.h:133-139
 //! - MatchVar structure: macro.c:709-726
 //! - Tree navigation: macro.c:730-750
+//!
+//! A match environment is branded with the context it was matched in
+//! (#704): the values it binds are `Value<'gc>`s, which an expansion reads
+//! back within the same context, and it cannot outlive that context.
 
-use crate::tagged_value::TaggedValue;
+use crate::value::Value;
 
 /// Pattern Variable Reference (PVREF) - compact encoding of pattern variable location
 ///
@@ -121,9 +125,9 @@ impl std::fmt::Display for PVRef {
 ///              Branch([Branch([Leaf(9)]), Branch([Leaf(11), Leaf(12)])])])
 /// ```
 #[derive(Clone, Debug, Copy)]
-pub enum MatchValue {
-    /// Single value (level 0) - stores TaggedValue directly
-    Leaf(TaggedValue),
+pub enum MatchValue<'gc> {
+    /// Single value (level 0)
+    Leaf(Value<'gc>),
 
     /// List of matched values (level > 0)
     ///
@@ -137,11 +141,11 @@ pub enum MatchValue {
 
 /// Storage for MatchValue branches, kept separate to allow MatchValue to be Copy
 #[derive(Clone, Debug, Default)]
-pub struct MatchBranches {
-    branches: Vec<Vec<MatchValue>>,
+pub struct MatchBranches<'gc> {
+    branches: Vec<Vec<MatchValue<'gc>>>,
 }
 
-impl MatchBranches {
+impl<'gc> MatchBranches<'gc> {
     /// Create new empty branch storage
     pub fn new() -> Self {
         Self {
@@ -150,31 +154,31 @@ impl MatchBranches {
     }
 
     /// Allocate a new branch, returning its index
-    pub fn alloc(&mut self, children: Vec<MatchValue>) -> u32 {
+    pub fn alloc(&mut self, children: Vec<MatchValue<'gc>>) -> u32 {
         let index = self.branches.len() as u32;
         self.branches.push(children);
         index
     }
 
     /// Get a branch by index
-    pub fn get(&self, index: u32) -> Option<&Vec<MatchValue>> {
+    pub fn get(&self, index: u32) -> Option<&Vec<MatchValue<'gc>>> {
         self.branches.get(index as usize)
     }
 }
 
-impl MatchValue {
-    /// Create a leaf value from TaggedValue
-    pub fn leaf(value: TaggedValue) -> Self {
+impl<'gc> MatchValue<'gc> {
+    /// Create a leaf value
+    pub fn leaf(value: Value<'gc>) -> Self {
         MatchValue::Leaf(value)
     }
 
     /// Create a branch with given children (requires branch storage)
-    pub fn branch(children: Vec<MatchValue>, branches: &mut MatchBranches) -> Self {
+    pub fn branch(children: Vec<MatchValue<'gc>>, branches: &mut MatchBranches<'gc>) -> Self {
         MatchValue::Branch(branches.alloc(children))
     }
 
     /// Create an empty branch (for zero-match ellipsis)
-    pub fn empty_branch(branches: &mut MatchBranches) -> Self {
+    pub fn empty_branch(branches: &mut MatchBranches<'gc>) -> Self {
         MatchValue::Branch(branches.alloc(Vec::new()))
     }
 
@@ -188,8 +192,8 @@ impl MatchValue {
         matches!(self, MatchValue::Branch(_))
     }
 
-    /// Get the TaggedValue if this is a leaf
-    pub fn as_leaf(&self) -> Option<TaggedValue> {
+    /// Get the value if this is a leaf
+    pub fn as_leaf(&self) -> Option<Value<'gc>> {
         match self {
             MatchValue::Leaf(v) => Some(*v),
             _ => None,
@@ -205,7 +209,10 @@ impl MatchValue {
     }
 
     /// Get as branch children (requires branch storage)
-    pub fn as_branch<'a>(&self, branches: &'a MatchBranches) -> Option<&'a Vec<MatchValue>> {
+    pub fn as_branch<'a>(
+        &self,
+        branches: &'a MatchBranches<'gc>,
+    ) -> Option<&'a Vec<MatchValue<'gc>>> {
         match self {
             MatchValue::Branch(idx) => branches.get(*idx),
             _ => None,
@@ -213,7 +220,7 @@ impl MatchValue {
     }
 }
 
-impl std::fmt::Display for MatchValue {
+impl std::fmt::Display for MatchValue<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MatchValue::Leaf(v) => write!(f, "Leaf({:?})", v),
@@ -229,30 +236,31 @@ impl std::fmt::Display for MatchValue {
 /// Uses a Vec indexed by PVREF (Pattern Variable Reference) index for O(1) lookups.
 /// Each entry is a MatchValue tree representing the variable's bindings.
 ///
-/// ## TaggedValue Storage
+/// ## Value Storage
 ///
-/// MatchEnv stores TaggedValue directly in MatchValue::Leaf variants.
-/// Branch structures are stored separately in MatchBranches to keep MatchValue small (Copy).
-pub struct MatchEnv {
+/// MatchEnv stores values directly in MatchValue::Leaf variants, branded
+/// with the context they were matched in. Branch structures are stored
+/// separately in MatchBranches to keep MatchValue small (Copy).
+pub struct MatchEnv<'gc> {
     /// Array of match values, indexed by PVREF.index
-    vars: Vec<MatchValue>,
+    vars: Vec<MatchValue<'gc>>,
     /// Storage for branch structures (nested ellipsis)
-    branches: MatchBranches,
+    branches: MatchBranches<'gc>,
 }
 
-impl MatchEnv {
+impl<'gc> MatchEnv<'gc> {
     /// Create a new match environment with space for `num_vars` variables
     pub fn new(num_vars: usize) -> Self {
         Self {
-            vars: vec![MatchValue::Leaf(TaggedValue::NULL); num_vars],
+            vars: vec![MatchValue::Leaf(Value::NULL); num_vars],
             branches: MatchBranches::new(),
         }
     }
 
-    /// Insert a TaggedValue for a pattern variable
+    /// Insert a value for a pattern variable
     ///
     /// Used for level-0 variables (not in any ellipsis)
-    pub fn insert(&mut self, pvref: PVRef, value: TaggedValue) {
+    pub fn insert(&mut self, pvref: PVRef, value: Value<'gc>) {
         if pvref.index() < self.vars.len() {
             self.vars[pvref.index()] = MatchValue::Leaf(value);
         }
@@ -261,23 +269,23 @@ impl MatchEnv {
     /// Insert a branch (list of values) for a pattern variable
     ///
     /// Used for level > 0 variables (inside ellipsis)
-    pub fn insert_branch(&mut self, pvref: PVRef, values: Vec<MatchValue>) {
+    pub fn insert_branch(&mut self, pvref: PVRef, values: Vec<MatchValue<'gc>>) {
         if pvref.index() < self.vars.len() {
             self.vars[pvref.index()] = MatchValue::branch(values, &mut self.branches);
         }
     }
 
     /// Get reference to branches storage
-    pub fn branches(&self) -> &MatchBranches {
+    pub fn branches(&self) -> &MatchBranches<'gc> {
         &self.branches
     }
 
     /// Get mutable reference to branches storage
-    pub fn branches_mut(&mut self) -> &mut MatchBranches {
+    pub fn branches_mut(&mut self) -> &mut MatchBranches<'gc> {
         &mut self.branches
     }
 
-    /// Get TaggedValue at given PVREF location by navigating the match tree
+    /// Get the value at given PVREF location by navigating the match tree
     ///
     /// Based on Gauche's get_pvref_value (macro.c:730-750).
     ///
@@ -288,9 +296,9 @@ impl MatchEnv {
     ///   - `indices[1..=level]` are used to navigate the tree
     ///
     /// # Returns
-    /// - `Some(TaggedValue)` if the value exists at the given indices
+    /// - `Some(value)` if the value exists at the given indices
     /// - `None` if the indices are exhausted (iteration complete)
-    pub fn get(&self, pvref: PVRef, indices: &[usize]) -> Option<TaggedValue> {
+    pub fn get(&self, pvref: PVRef, indices: &[usize]) -> Option<Value<'gc>> {
         if pvref.index() >= self.vars.len() {
             return None;
         }
@@ -320,7 +328,7 @@ impl MatchEnv {
     }
 
     /// Get the raw MatchValue for a variable (for debugging)
-    pub fn get_raw(&self, pvref: PVRef) -> Option<MatchValue> {
+    pub fn get_raw(&self, pvref: PVRef) -> Option<MatchValue<'gc>> {
         self.vars.get(pvref.index()).copied()
     }
 
@@ -330,7 +338,7 @@ impl MatchEnv {
     }
 
     /// Get all match values (for iteration)
-    pub fn all_values(&self) -> &[MatchValue] {
+    pub fn all_values(&self) -> &[MatchValue<'gc>] {
         &self.vars
     }
 
@@ -351,16 +359,16 @@ impl MatchEnv {
     /// A new MatchValue with branch indices pointing to this env's branches
     pub fn copy_match_value_from(
         &mut self,
-        src_value: MatchValue,
-        src_env: &MatchEnv,
-    ) -> MatchValue {
+        src_value: MatchValue<'gc>,
+        src_env: &MatchEnv<'gc>,
+    ) -> MatchValue<'gc> {
         match src_value {
             MatchValue::Leaf(tv) => MatchValue::Leaf(tv),
             MatchValue::Branch(src_idx) => {
                 // Get the branch contents from source
                 if let Some(src_children) = src_env.branches.get(src_idx) {
                     // Recursively copy children, reindexing any nested branches
-                    let copied_children: Vec<MatchValue> = src_children
+                    let copied_children: Vec<MatchValue<'gc>> = src_children
                         .iter()
                         .map(|child| self.copy_match_value_from(*child, src_env))
                         .collect();
@@ -375,7 +383,7 @@ impl MatchEnv {
     }
 }
 
-impl std::fmt::Debug for MatchEnv {
+impl std::fmt::Debug for MatchEnv<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MatchEnv")
             .field("num_vars", &self.vars.len())
@@ -388,13 +396,13 @@ impl std::fmt::Debug for MatchEnv {
 mod tests {
     use super::*;
 
-    /// Helper to create a fixnum TaggedValue for tests
-    fn fixnum(n: i64) -> TaggedValue {
-        TaggedValue::fixnum(n)
+    /// Helper to create a fixnum value for tests
+    fn fixnum(n: i64) -> Value<'static> {
+        Value::fixnum(n)
     }
 
-    /// Helper to assert TaggedValue equality
-    fn assert_tv_eq(actual: Option<TaggedValue>, expected: Option<TaggedValue>) {
+    /// Helper to assert value equality
+    fn assert_tv_eq(actual: Option<Value<'static>>, expected: Option<Value<'static>>) {
         assert_eq!(actual, expected);
     }
 

@@ -424,7 +424,7 @@ the `current_step: StepResult` local** in `eval_in_env`'s trampoline loop
 | `Evaluator.pending_escape` | `eval/mod.rs` | Holds `(TaggedValue, Rc<CpsContinuation>)` between set and take — a genuine hidden root, traced by the evaluator's provider. The thread-local `PENDING_ESCAPE` until #682 |
 | Suspended outer `StepResult`s in nested trampolines | `run_trampoline` (`eval/cps_eval/mod.rs`), entered by `apply_from_direct_with` and the `eval` primitive | **Not rooted** — handled by deferral (§7), not by tracing. Since 2026-09-01 only Rust-primitive callbacks and parameter converters run there; a continuation jump's wind thunks are ordinary steps (`ContValue::Jump`) and are traced like any other |
 | `Parser.labels` | `crates/patina-frontend/src/parser/mod.rs:47` | Datum labels during parse; GC never runs mid-parse (deferral), listed for completeness |
-| Macro-expansion `MatchEnv` / `Matcher` / `Expander` state | `crates/patina-core/src/pvref.rs:236` etc. | Live only during expansion; covered by deferral |
+| Macro-expansion `MatchEnv` / `Matcher` / `Expander` state | `crates/patina-core/src/pvref.rs` etc. | Live only during expansion, and branded with its context (#704): a `MatchEnv<'gc>` binds `Value<'gc>`s, and it, the matcher and the expander cannot outlive the `Cx` they work through, beneath which nothing collects |
 
 ### 5.2 VM
 

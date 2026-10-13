@@ -451,6 +451,27 @@ impl<'gc> Cx<'gc> {
     }
 
     // ------------------------------------------------------------------------
+    // Diagnostics
+    // ------------------------------------------------------------------------
+
+    /// `v` written for a diagnostic: [`format_tagged`](crate::format_tagged).
+    pub fn format(&self, v: Value<'gc>) -> String {
+        crate::format_tagged(v.tagged(), &self.heap.borrow())
+    }
+
+    /// `v` written briefly, for a diagnostic about part of a form:
+    /// [`format_tagged_brief`](crate::format_tagged_brief).
+    pub fn format_brief(&self, v: Value<'gc>) -> String {
+        crate::format_tagged_brief(v.tagged(), &self.heap.borrow())
+    }
+
+    /// `v` written with each identifier's scopes, for the macro debug log:
+    /// [`format_tagged_with_scopes`](crate::format_tagged_with_scopes).
+    pub fn format_with_scopes(&self, v: Value<'gc>) -> String {
+        crate::format_tagged_with_scopes(v.tagged(), &self.heap.borrow())
+    }
+
+    // ------------------------------------------------------------------------
     // Syntax
     // ------------------------------------------------------------------------
 
