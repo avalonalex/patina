@@ -877,9 +877,10 @@ medians, round-to-round spread 1–3%):
 
 The on/off convergence is the acceptance-relevant result: enabling collection
 no longer has a standing per-instruction cost, only the pauses themselves.
-The remaining ~1% vs control is the flag load and branch, removable only by
-specializing the dispatch loop — noted as a stage-5 option, not pursued while
-it sits at the edge of the noise band.
+The remaining ~1% vs control was the flag load and branch before every
+instruction, which #700 removed: the VM polls at frame entries and transfer
+returns instead (§7), as `PRD/GC_PRD.md` §12 places them. #700 has the
+re-measurement.
 
 ---
 
@@ -931,11 +932,59 @@ windows, primitive argument vectors; tree-walker nested trampolines). Rather
 than shadow-stack rooting every such site (invasive, error-prone), v1 uses
 placement + deferral:
 
-1. **Safe point = top of the driver loop iteration**:
-   - VM: top of `run_loop_until` (`vm_state.rs:685`) before
-     `dispatch_one_instruction`. At that point all state is in `VmState`
-     fields; capture temporaries are dead; `value_buffer`/`scratch_args` are
-     restored.
+1. **Safe points are the poll sites**:
+   - VM (#700; `PRD/GC_PRD.md` §12): no longer every instruction. It polls
+     at four kinds of site:
+     - **A closure's entry.** The call, tail-call and self-tail-call paths
+       (`call_closure_from_regs`, `tail_call_closure_resolved`,
+       `self_tail_call`) poll once the callee's frame is complete. The frame
+       is still at its pc 0, whose map lists the arguments. Stub frames,
+       and the thunks they run, need no entry poll of their own, since a
+       loop's back edge is a call that polls (below).
+     - **A generic call's return:** a continuation reinstated, a parameter
+       or a control primitive answered, and a shadowed primitive's
+       deoptimized call.
+     - **A loop's escape landing.**
+     - **The driver's entry.** Each loop polls once at its start, so a
+       top-level form runs a collection posted before it, however few calls
+       the form makes. `PRD/GC_PRD.md` §12's return to the driver is served
+       here, so a collection posted in a form's last returns waits through
+       the next form's reading and expansion.
+
+     **What a poll costs.** A poll is a load of the `Mutator`'s poll word,
+     made only at these sites; no other instruction pays for it. The
+     alternative measured worse: testing every dispatched pc for 0 caught
+     every frame entry by construction, and saved the instructions but not
+     the cycles. A branch taken on almost every instruction cost the
+     dispatcher's indirect jump some prediction (#700).
+
+     **Why every loop passes one.** The compiler's jumps only go forward,
+     which debug builds assert, so a loop's back edge is a call of a
+     procedure, and each such call polls: at a closure callee's entry, or on
+     a generic call's return. A primitive that calls a procedure does so
+     inside the generic call that dispatched it (a control primitive),
+     through a `Call` in a stub's code (a resumable primitive, `force`, the
+     raise stub), or on a nested loop, which polls at its start.
+
+     **State at a poll.** All state is in `VmState` fields, capture
+     temporaries are dead, and `value_buffer`/`scratch_args` are restored.
+     Retirement reads each frame's map at the pc it resumes from.
+
+     **Returns are not poll sites**, as in Chez. A collection posted during
+     a long run of returns waits for the next poll: a deep recursion's
+     ascent, which in `deeprec` and `deep-unwind` conses at every level.
+     - **The wait.** That is about 15 MiB of allocation at depth 10⁶ (K16's
+       first high-water mark, up from almost none), below K16's line, the
+       larger of 64 MiB and a quarter of the pacing target. The time to
+       safepoint (C12) is the ascent's: 11 ms in `deeprec` and 52 ms in
+       `deep-unwind`. Before #700 they were 5.5 and 1.7 ms, the time to
+       retire the deep stack's registers, which the clock includes.
+     - **The trade.** The collection then runs with the stack shallow, so
+       `deeprec`'s largest pause fell from 17.6 to 5.5 ms, and
+       `deep-unwind`'s from 13.9 to 7.1 ms, with its peak RSS 329 → 309 MiB
+       (#700).
+     - **The limit.** The wait grows with depth times the allocation per
+       level, so K16 watches it.
    - Tree-walker (**stage 2, implemented**): top of the trampoline loop in
      `run_trampoline` (`cps_eval/mod.rs`, the one loop every run shares since
      2026-09-10). The entire machine state is `current_step`, which the

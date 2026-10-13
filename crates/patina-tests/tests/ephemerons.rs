@@ -268,10 +268,11 @@ fn the_accessors_reject_a_non_ephemeron() {
 //
 // Each test drops the only other path to a key just before `(gc)` and asks
 // whether the pair broke right after it, in the same frame. A `(gc)` that
-// only posted a request would leave that to the next safe point, which today
-// comes before the next instruction anyway; GC_PRD's stage 3 removes that
-// poll. So each position runs twice, the second time with every safe point's
-// collection turned off, where only a collection at the call can break it.
+// only posted a request would leave that to the next safe point: on the VM,
+// since #700, the next frame entry or generic call's return, which need not
+// come before the check; on the tree-walker, the next step. So each position
+// runs twice, the second time with every safe point's collection turned off,
+// where only a collection at the call can break it.
 
 /// The globals every position test starts from: one key, and its pair.
 const ONE_KEY: &str = "(import (scheme base) (scheme ephemeron) (patina debug))

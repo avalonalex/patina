@@ -288,10 +288,17 @@ pub struct VmState {
     #[trace(skip, reason = "the collector's policy and statistics")]
     gc: RefCell<GcController>,
     /// The heap's carrier (`Heap::mutator`, #699), cached at construction so
-    /// dispatch-loop entry costs no heap borrow and the per-instruction safe
-    /// point is a single load of its poll word.
+    /// dispatch-loop entry costs no heap borrow and a poll (a frame's entry,
+    /// a transfer's return, #700) is a single load of its poll word.
     #[trace(skip, reason = "the carrier's event words: no value")]
     mutator: Rc<Mutator>,
+    /// Whether the dispatch loop running now may collect at its polls: the
+    /// outermost loop's answer, which each loop sets at its entry and puts
+    /// back at its exit (`run_loop_until_outcome`, #700). A field, so the
+    /// polls read it only when a collection is posted, rather than each
+    /// dispatch being handed it.
+    #[trace(skip, reason = "a flag")]
+    loop_collects: bool,
 }
 
 impl VmState {
@@ -364,6 +371,7 @@ impl VmState {
             fs: Arc::new(patina_core::NativeFs),
             gc: RefCell::new(gc),
             mutator,
+            loop_collects: false,
         }
     }
 
@@ -1383,9 +1391,18 @@ pub(super) fn run_loop_until_outcome(
     // `mem::take`n buffers, primitive argument vectors — that no root
     // provider can see. See `docs/GC_DESIGN.md` §7.
     let gc_defer = GcDeferGuard::new(&state.heap);
-    // Loop invariant, hoisted out of the safe point. The cached pending-flag
-    // handle makes the per-instruction check a single load — no borrow.
-    let is_outermost = gc_defer.is_outermost();
+    // Whether this loop may service a posted collection, for its polls to
+    // read (`VmState::loop_collects`), and put back for the loop it runs in.
+    let outer = std::mem::replace(&mut state.loop_collects, gc_defer.is_outermost());
+    let exit = dispatch_loop(state, exit_depth);
+    state.loop_collects = outer;
+    drop(gc_defer);
+    exit
+}
+
+/// [`run_loop_until_outcome`]'s loop, run with `VmState::loop_collects` set
+/// for it.
+fn dispatch_loop(state: &mut VmState, exit_depth: usize) -> Result<LoopExit, VmError> {
     // The open `AssertNoGc` windows, checked at every poll (#624).
     let no_gc_scopes = NoGcScopes::of(&state.heap);
 
@@ -1429,23 +1446,28 @@ pub(super) fn run_loop_until_outcome(
     // however many frames it restored (`VmState::reentry_kept`).
     let reentry_level = state.reentry.len();
 
+    // The driver's entry: a poll site (§12, #700). A top-level form's run
+    // starts here, with its frame complete at pc 0, and a collection posted
+    // where none could run (a nested loop's, the previous form's last
+    // stretch of returns) runs before the form's first instruction, however
+    // few calls the form makes.
+    poll(state);
+
     loop {
-        // GC safe point: all live state is on `VmState`, capture temporaries
-        // are dead, buffers are restored, and no heap borrow is outstanding.
-        // `maybe_collect` says whether a collection ran. The pending flag
-        // cannot: under zeal the collection raises it again before it
-        // returns, so "pending before and lowered after" would never see one
-        // and the code a collection frees would never be let go (#625).
+        // No poll here (#700): the machine polls where `PRD/GC_PRD.md` §12
+        // puts the poll sites, not before every instruction:
+        // - at a closure's entry (the call paths in `control.rs`);
+        // - on a generic call's return (`dispatch_one_instruction`);
+        // - where an escape lands (below);
+        // - at the loop's start (above).
+        // Every loop the compiler emits passes one, since its jumps only go
+        // forward.
         //
-        // The poll asserts first that no `AssertNoGc` window is open, on
-        // every iteration of every loop, nested or not: `maybe_collect`
-        // returns before the shared safe point unless a collection is
-        // pending and this loop is outermost, so a check placed there would
-        // almost never run (#624).
+        // No `AssertNoGc` window may be open between instructions, whatever
+        // the loop: a check build asserts it on every iteration of every
+        // loop, nested or not, rather than only at the polls, which an
+        // outermost loop's frame entries alone would reach (#624).
         no_gc_scopes.assert_none_open();
-        if maybe_collect(state, is_outermost) {
-            state.after_collection();
-        }
 
         patina_core::census::vm_instruction();
         match dispatch_one_instruction(state, &mut cur_code, exit_depth) {
@@ -1480,6 +1502,9 @@ pub(super) fn run_loop_until_outcome(
                     state.pending_transfer = false;
                     state.reentry_kept = None;
                     cur_code = state.current_code()?;
+                    // A continuation reinstated: a poll site (§12), since the
+                    // frame it landed in resumes at a pc no entry poll sees.
+                    poll(state);
                     continue;
                 }
 
@@ -1544,6 +1569,34 @@ fn maybe_collect(state: &mut VmState, is_outermost: bool) -> bool {
         is_outermost,
         |collect| collect(&[state]),
     )
+}
+
+/// A poll site (`PRD/GC_PRD.md` §12, #700):
+/// - a closure's entry, once the call paths have completed the callee's
+///   frame, still at its pc 0;
+/// - a generic call's return, where a continuation was reinstated, or a
+///   parameter or a control primitive answered;
+/// - a shadowed primitive's deoptimized call (`exec_call_primitive`);
+/// - a loop's escape landing, and its start.
+///
+/// A load of the poll word, and the rest only when something is posted: then
+/// a posted collection runs if the running loop may collect, with every frame
+/// at the pc it resumes from.
+#[inline]
+pub(super) fn poll(state: &mut VmState) {
+    if state.mutator.poll_due() {
+        poll_slow(state);
+    }
+}
+
+/// Service a posted collection where the running loop may collect
+/// (`VmState::loop_collects`).
+#[cold]
+#[inline(never)]
+fn poll_slow(state: &mut VmState) {
+    if maybe_collect(state, state.loop_collects) {
+        state.after_collection();
+    }
 }
 
 /// Point B (#677): where a library's load ends at the top level, a pending
@@ -1839,11 +1892,21 @@ fn dispatch_one_instruction(
         }
 
         // ── Control Flow ────────────────────────────────────────────────
+        // Every jump goes forward, so every loop passes a call or a tail
+        // call, and with it a poll at the callee's entry (§12, #700).
         Instruction::Jump { target } => {
+            debug_assert!(
+                target > pc,
+                "a backward jump at pc {pc} would loop without a poll"
+            );
             state.execution.set_pc(target);
         }
 
         Instruction::JumpIf { cond, target } => {
+            debug_assert!(
+                target > pc,
+                "a backward jump at pc {pc} would loop without a poll"
+            );
             let val = state.reg_at(base, cond);
             if val != TaggedValue::FALSE {
                 state.execution.set_pc(target);
@@ -1851,6 +1914,10 @@ fn dispatch_one_instruction(
         }
 
         Instruction::JumpUnless { cond, target } => {
+            debug_assert!(
+                target > pc,
+                "a backward jump at pc {pc} would loop without a poll"
+            );
             let val = state.reg_at(base, cond);
             if val == TaggedValue::FALSE {
                 state.execution.set_pc(target);
@@ -1858,6 +1925,10 @@ fn dispatch_one_instruction(
         }
 
         Instruction::JumpUnlessShadowed { form, target } => {
+            debug_assert!(
+                target > pc,
+                "a backward jump at pc {pc} would loop without a poll"
+            );
             if !state.is_control_shadowed(form) {
                 state.execution.set_pc(target);
             }
@@ -1882,6 +1953,9 @@ fn dispatch_one_instruction(
                 let arg_vals: Vec<TaggedValue> =
                     args.iter().map(|&r| state.reg_at(base, r)).collect();
                 call_value_with_probe(state, func_val, None, &arg_vals, dst)?;
+                // A generic call's return: a poll site (§12). A closure's
+                // frame polls at its entry instead.
+                poll(state);
             }
         }
 
@@ -1923,6 +1997,7 @@ fn dispatch_one_instruction(
                 {
                     return Ok(Some(exit_val));
                 }
+                poll(state);
             }
         }
 
@@ -1937,6 +2012,7 @@ fn dispatch_one_instruction(
             // callee a direct call accepts — continuations and VM-intercepted
             // control primitives included.
             call_value(state, func_val, &arg_vals, dst)?;
+            poll(state);
         }
 
         Instruction::TailApply { func, ref args } => {
@@ -1949,6 +2025,7 @@ fn dispatch_one_instruction(
             if let Some(exit_val) = tail_call_value(state, func_val, &arg_vals, exit_depth)? {
                 return Ok(Some(exit_val));
             }
+            poll(state);
         }
 
         Instruction::Return { val } => {
@@ -1976,6 +2053,7 @@ fn dispatch_one_instruction(
             if let Some(result) = call_any(state, consumer_val, &produced_vals, dst)? {
                 state.set_reg(dst, result);
             }
+            poll(state);
         }
 
         Instruction::TailCallWithValues {
@@ -1998,6 +2076,7 @@ fn dispatch_one_instruction(
             {
                 return Ok(Some(exit_val));
             }
+            poll(state);
         }
 
         // ── dynamic-wind (instruction-level) ──────────────────────────
@@ -2533,6 +2612,10 @@ fn dispatch_one_instruction(
                     // when the test is false, over the kept `JumpUnless`
                     // otherwise.
                     state.set_reg_at(base, dst, TaggedValue::boolean(truthy));
+                    debug_assert!(
+                        target > pc,
+                        "a backward jump at pc {pc} would loop without a poll"
+                    );
                     state.execution.set_pc(if truthy { pc + 2 } else { target });
                 }
                 None => {

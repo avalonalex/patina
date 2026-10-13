@@ -202,10 +202,18 @@ fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue,
 
 Runs `dispatch_one_instruction()` in a loop until `frames.len() == exit_depth`.
 Catchable errors are routed through exception handlers via `vm_raise_value()`.
-The top of each iteration is a GC safe point, under the loop's own
-`GcDeferGuard` (`docs/GC_DESIGN.md` §7). The one collection that runs inside
-dispatch is `CollectAtCall`'s, a resumable primitive's collection at its call
-(§4.5).
+The loop does not poll before every instruction (#700). Its GC safe points
+are the poll sites of `PRD/GC_PRD.md` §12, each under the loop's own
+`GcDeferGuard` (`docs/GC_DESIGN.md` §7):
+- a closure's entry, polled by the call paths once the callee's frame is
+  complete;
+- a generic call's return;
+- an escape's landing in a frame the loop owns;
+- the loop's own start.
+
+Collections that run inside dispatch:
+- the polls themselves, at a closure's entry and a generic call's return;
+- `CollectAtCall`'s, a resumable primitive's collection at its call (§4.5).
 
 ### 3.3 Instruction Dispatch
 

@@ -570,8 +570,9 @@ pub enum Instruction {
     /// next safe point that may, counting it as deferred; and it leaves
     /// whether a collection ran in the frame's `RESULT` register for
     /// `ResumePrimitive`. So `(gc)` collects before its caller's next
-    /// instruction whether or not a safe point comes between (GC_PRD
-    /// stage 3 removes the one before every instruction).
+    /// instruction whether or not a safe point comes between: since #700
+    /// one rarely does, the VM polling at frame entries and transfer returns
+    /// rather than before every instruction.
     CollectAtCall { kind: CollectKind },
 
     // ── Global Definitions ────────────────────────────────────────────────────

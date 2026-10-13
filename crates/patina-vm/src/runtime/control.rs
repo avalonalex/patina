@@ -203,6 +203,9 @@ pub(super) fn call_closure_from_regs(
             state.execution.registers()[base + i].set(value);
         }
     }
+    // The callee's entry: a poll site (§12, #700), with its frame complete
+    // and still at pc 0, whose map lists the arguments.
+    super::vm_state::poll(state);
 
     Ok(())
 }
@@ -3664,6 +3667,8 @@ pub(super) fn tail_call_closure_resolved(
     let arity = new_code.arity;
     let base = state.execution.tail_replace(new_code, func_val);
     store_args_in_window(state, base, arity, arg_vals);
+    // The callee's entry, in the reused window (§12, #700).
+    super::vm_state::poll(state);
     Ok(())
 }
 
@@ -3688,6 +3693,8 @@ pub(super) fn self_tail_call(
     check_arity(arity, arg_vals.len())?;
     store_args_in_window(state, base, arity, arg_vals);
     state.execution.restart_closure(func_val);
+    // The frame's entry again: the poll every loop passes (§12, #700).
+    super::vm_state::poll(state);
     Ok(())
 }
 
@@ -3734,10 +3741,18 @@ pub(super) fn exec_call_primitive(
             frame.code.instructions.get(frame.pc),
             Some(Instruction::Return { val }) if *val == dst
         );
+        // Either call is a generic call, so its return is a poll site (§12,
+        // #700): a continuation the name was rebound to lands at a pc no
+        // entry poll sees.
         if is_tail_site {
-            return tail_call_value(state, func_val, arg_vals, exit_depth);
+            let exit = tail_call_value(state, func_val, arg_vals, exit_depth)?;
+            if exit.is_none() {
+                super::vm_state::poll(state);
+            }
+            return Ok(exit);
         }
         call_value(state, func_val, arg_vals, dst)?;
+        super::vm_state::poll(state);
         return Ok(None);
     }
     exec_call_primitive_direct(state, base, func_id, arg_vals, dst)
