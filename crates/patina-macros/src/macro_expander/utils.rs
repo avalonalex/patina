@@ -3,7 +3,7 @@
 //! This module provides common constants, helpers, and utility functions
 //! used across the macro compiler, matcher, and expander.
 
-use patina_core::{Cx, Heap, SpineEnd, TaggedValue, Value};
+use patina_core::{Cx, SpineEnd, TaggedValue, Value};
 use patina_runtime::PVRef;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -126,19 +126,6 @@ pub fn list_to_vec_with_tail<'gc>(
 ) -> Option<(Vec<Value<'gc>>, Value<'gc>)> {
     match cx.spine(value) {
         (elements, SpineEnd::Null) => Some((elements, Value::NULL)),
-        (elements, SpineEnd::Improper(tail)) => Some((elements, tail)),
-        (_, SpineEnd::Circular) => None,
-    }
-}
-
-/// [`list_to_vec_with_tail`] in words, on the heap: the desugarer's, which
-/// works in words until it takes a context (#704).
-pub fn list_to_vec_with_tail_tagged(
-    value: TaggedValue,
-    heap: &Heap,
-) -> Option<(Vec<TaggedValue>, TaggedValue)> {
-    match heap.spine(value) {
-        (elements, SpineEnd::Null) => Some((elements, TaggedValue::NULL)),
         (elements, SpineEnd::Improper(tail)) => Some((elements, tail)),
         (_, SpineEnd::Circular) => None,
     }

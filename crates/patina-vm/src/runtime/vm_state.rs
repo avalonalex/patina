@@ -902,8 +902,10 @@ pub(super) fn vm_load_library(
         lib
     } else {
         // Try evaluating (Scheme .sld) loaders
-        let can_load_library =
-            |lib_name: &[String]| patina_frontend::cond_expand::library_available(&heap, lib_name);
+        let instance = Rc::clone(heap.borrow().instance());
+        let can_load_library = |lib_name: &[String]| {
+            patina_frontend::cond_expand::library_available(&instance, lib_name)
+        };
 
         let parsed = {
             let loaders = loader_registry.borrow();
@@ -984,22 +986,24 @@ fn vm_evaluate_parsed_library(
         for tv in &parsed.body {
             #[expect(
                 clippy::disallowed_methods,
-                reason = "the import callback loads libraries during the expansion: guarded by \
-                          `desugar_with_imports`' and `parsed`'s `GcDeferGuard::holding`"
+                reason = "the import callback loads libraries during the expansion: guarded by the \
+                          context the expansion runs in and `parsed`'s `GcDeferGuard::holding`"
             )]
-            let core_expr = desugarer.desugar_with_imports(
-                *tv,
-                &shared_heap,
-                |set, env| vm_process_import_set(state, set, env),
-                |e| {
-                    patina_runtime::LibraryError::processing(
-                        parsed.source.as_deref(),
-                        format!("desugar error: {e}"),
-                        e.diagnostic(),
-                    )
-                    .at_opt(e.source_location().cloned())
-                },
-            )?;
+            let core_expr = patina_core::NoGcScope::cross(&shared_heap, [*tv], |cx, [form]| {
+                desugarer.desugar_with_imports(
+                    form,
+                    cx,
+                    |set, env| vm_process_import_set(state, set, env),
+                    |e| {
+                        patina_runtime::LibraryError::processing(
+                            parsed.source.as_deref(),
+                            format!("desugar error: {e}"),
+                            e.diagnostic(),
+                        )
+                        .at_opt(e.source_location().cloned())
+                    },
+                )
+            })?;
 
             let (top, nested) = compile_with_qq_resolving(
                 &core_expr,
@@ -1127,29 +1131,31 @@ fn compile_for_eval(
     #[expect(
         clippy::disallowed_methods,
         reason = "the import callback loads libraries during the expansion, which holds the datum \
-                  and the partial expansion: guarded by `desugar_with_imports`' \
-                  `GcDeferGuard::holding`"
+                  and the partial expansion: values of the context the expansion runs in \
+                  (`NoGcScope::cross`), beneath which nothing collects"
     )]
-    let core_expr = desugarer.desugar_with_imports(
-        expr,
-        &heap,
-        |set, env| {
-            vm_process_import_set(state, set, env).map_err(|e| {
+    let core_expr = patina_core::NoGcScope::cross(&heap, [expr], |cx, [form]| {
+        desugarer.desugar_with_imports(
+            form,
+            cx,
+            |set, env| {
+                vm_process_import_set(state, set, env).map_err(|e| {
+                    VmError::Runtime {
+                        message: e.to_string(),
+                    }
+                    .with_diagnostic(e.diagnostic())
+                    .at_opt(e.source_location().cloned())
+                })
+            },
+            |e| {
                 VmError::Runtime {
-                    message: e.to_string(),
+                    message: format!("eval: desugar error: {e}"),
                 }
                 .with_diagnostic(e.diagnostic())
                 .at_opt(e.source_location().cloned())
-            })
-        },
-        |e| {
-            VmError::Runtime {
-                message: format!("eval: desugar error: {e}"),
-            }
-            .with_diagnostic(e.diagnostic())
-            .at_opt(e.source_location().cloned())
-        },
-    )?;
+            },
+        )
+    })?;
 
     compile_with_qq_resolving(&core_expr, &heap, env, &state.primitive_registry).map_err(|e| {
         VmError::Runtime {

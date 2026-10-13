@@ -18,8 +18,8 @@
 //! before either backend lowers anything, is what makes them agree by
 //! construction rather than by keeping two files in step.
 
-use super::{DesugarError, Desugarer, Result};
-use patina_core::{QuasiConstructor, QuasiTemplate, SharedHeap, TaggedValue};
+use super::{DesugarError, Desugarer, FormCx, Result};
+use patina_core::{Cx, QuasiConstructor, QuasiTemplate, TaggedValue, Value};
 use rustc_hash::FxHashSet;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -27,17 +27,16 @@ use std::rc::Rc;
 impl Desugarer<'_> {
     /// The structure `template` builds, with its unquoted expressions
     /// desugared here.
-    pub(super) fn derive_quasi_template(
+    pub(super) fn derive_quasi_template<'gc>(
         &self,
-        template: TaggedValue,
-        shared_heap: &SharedHeap,
+        template: Value<'gc>,
+        cx: &mut FormCx<'_, 'gc>,
     ) -> Result<QuasiTemplate> {
         Derivation {
             desugarer: self,
-            heap: shared_heap,
             active: RefCell::default(),
         }
-        .template(template, 0)
+        .template(template, 0, cx)
     }
 }
 
@@ -45,7 +44,6 @@ impl Desugarer<'_> {
 struct Derivation<'a> {
     /// For the unquoted sub-expressions, which are ordinary code.
     desugarer: &'a Desugarer<'a>,
-    heap: &'a SharedHeap,
     /// The pairs and vectors being derived, innermost last — so that one
     /// reached again inside itself is refused (`within`).
     active: RefCell<FxHashSet<u64>>,
@@ -54,53 +52,55 @@ struct Derivation<'a> {
 impl Derivation<'_> {
     /// Derive a template at quasiquotation `depth`: zero at the outermost
     /// level, where an `unquote` is evaluated.
-    fn template(&self, template: TaggedValue, depth: i32) -> Result<QuasiTemplate> {
-        let heap = self.heap;
-
+    fn template<'gc>(
+        &self,
+        template: Value<'gc>,
+        depth: i32,
+        cx: &mut FormCx<'_, 'gc>,
+    ) -> Result<QuasiTemplate> {
         // Self-evaluating atoms
         if template.is_fixnum() || template.is_boolean() || template.is_char() || template.is_null()
         {
-            return Ok(QuasiTemplate::Datum(template));
+            return Ok(QuasiTemplate::Datum(template.tagged()));
         }
 
         // Symbols → quote as-is
-        if heap.borrow().is_symbol(template) {
-            return Ok(QuasiTemplate::Datum(template));
+        if cx.is_symbol(template) {
+            return Ok(QuasiTemplate::Datum(template.tagged()));
         }
 
         // Identifiers → convert to plain symbol (strip scope marks), as
         // `quote` does. Without this, identifiers inside quasiquote templates
         // retain hygiene marks and won't be `eq?` to the same-named symbol
         // from a quote.
-        if heap.borrow().is_identifier(template) {
-            let name: Option<String> = heap
-                .borrow()
+        if cx.is_identifier(template) {
+            let name: Option<String> = cx
                 .get_symbol_or_identifier_name(template)
-                .map(String::from);
+                .map(|name| String::from(&*name));
             if let Some(name) = name {
-                let sym = heap.borrow_mut().intern_symbol(&name);
-                return Ok(QuasiTemplate::Datum(sym));
+                let sym = cx.intern_symbol(&name);
+                return Ok(QuasiTemplate::Datum(sym.tagged()));
             }
-            return Ok(QuasiTemplate::Datum(template));
+            return Ok(QuasiTemplate::Datum(template.tagged()));
         }
 
         // Strings, bytevectors → quote
-        if template.is_string() || heap.borrow().is_bytevector(template) {
-            return Ok(QuasiTemplate::Datum(template));
+        if template.is_string() || cx.is_bytevector(template) {
+            return Ok(QuasiTemplate::Datum(template.tagged()));
         }
 
         // Vectors: expand elements, use list->vector
         if template.is_vector() {
-            return self.within(template, || self.vector_template(template, depth));
+            return self.within(template, cx, |cx| self.vector_template(template, depth, cx));
         }
 
         // Pairs: the interesting case
         if template.is_pair() {
-            return self.within(template, || self.form_template(template, depth));
+            return self.within(template, cx, |cx| self.form_template(template, depth, cx));
         }
 
         // Other types: quote as-is
-        Ok(QuasiTemplate::Datum(template))
+        Ok(QuasiTemplate::Datum(template.tagged()))
     }
 
     /// Derive the compound `node` — a pair or a vector — with `derive`,
@@ -117,55 +117,57 @@ impl Derivation<'_> {
     /// (#617).
     ///
     /// [`MAX_FORM_DEPTH`]: patina_core::walk::MAX_FORM_DEPTH
-    fn within(
+    fn within<'a, 'gc>(
         &self,
-        node: TaggedValue,
-        derive: impl FnOnce() -> Result<QuasiTemplate>,
+        node: Value<'gc>,
+        cx: &mut FormCx<'a, 'gc>,
+        derive: impl FnOnce(&mut FormCx<'a, 'gc>) -> Result<QuasiTemplate>,
     ) -> Result<QuasiTemplate> {
         if self.active.borrow().len() >= patina_core::walk::MAX_FORM_DEPTH {
-            return Err(DesugarError::nested_too_deeply(node, &self.heap.borrow()));
+            return Err(DesugarError::nested_too_deeply(node, cx));
         }
         if !self.active.borrow_mut().insert(node.raw_bits()) {
             return Err(circular());
         }
-        let derived = patina_core::walk::ensure_sufficient_stack(derive);
+        let derived = patina_core::walk::ensure_sufficient_stack(|| derive(cx));
         self.active.borrow_mut().remove(&node.raw_bits());
         derived
     }
 
     /// Derive a pair: a nested template, an unquotation, or a list.
-    fn form_template(&self, template: TaggedValue, depth: i32) -> Result<QuasiTemplate> {
-        let heap = self.heap;
-        let (car, cdr) = {
-            let h = heap.borrow();
-            (h.car(template), h.cdr(template))
-        };
+    fn form_template<'gc>(
+        &self,
+        template: Value<'gc>,
+        depth: i32,
+        cx: &mut FormCx<'_, 'gc>,
+    ) -> Result<QuasiTemplate> {
+        let (car, cdr) = cx.get_pair(template);
 
         // Compared under the one borrow rather than copied out as a `String`:
         // this runs for every pair of every template.
-        let keyword = heap
-            .borrow()
-            .get_symbol_or_identifier_name(car)
-            .and_then(|name| {
-                ["quasiquote", "unquote", "unquote-splicing"]
-                    .into_iter()
-                    .find(|keyword| *keyword == name)
-            });
+        let keyword = cx.get_symbol_or_identifier_name(car).and_then(|name| {
+            ["quasiquote", "unquote", "unquote-splicing"]
+                .into_iter()
+                .find(|keyword| *keyword == &*name)
+        });
 
         match keyword {
             Some("quasiquote") => {
                 // Nested quasiquote: increment depth. One operand, like the
                 // outermost one: the rest used to be dropped, so that
                 // `(quasiquote 2 3)` came back as `(quasiquote 2)`.
-                let inner = self.single_operand(cdr, "quasiquote", |n| {
+                let inner = self.single_operand(cdr, cx, "quasiquote", |n| {
                     format!("quasiquote: a nested template takes one expression, not {n}")
                 })?;
-                let derived = self.template(inner, depth + 1)?;
+                let derived = self.template(inner, depth + 1, cx)?;
                 // Reconstruct (quasiquote <derived>) using a plain symbol
                 // (car may be an identifier with scope marks; we need a bare
                 // symbol)
-                let qq_sym = heap.borrow_mut().intern_symbol("quasiquote");
-                Ok(list_of(vec![QuasiTemplate::Datum(qq_sym), derived]))
+                let qq_sym = cx.intern_symbol("quasiquote");
+                Ok(list_of(vec![
+                    QuasiTemplate::Datum(qq_sym.tagged()),
+                    derived,
+                ]))
             }
 
             Some("unquote") if depth == 0 => {
@@ -180,13 +182,13 @@ impl Derivation<'_> {
                 // unquote existed, and once every other position inserts all
                 // of them, accepting a form here and discarding half of it is
                 // the one answer that teaches the reader something false.
-                let inner = self.single_operand(cdr, "unquote", |n| {
+                let inner = self.single_operand(cdr, cx, "unquote", |n| {
                     format!(
                         "unquote: a template that is itself an unquote takes one expression, \
                          not {n}; several can only be spliced into a list or vector template"
                     )
                 })?;
-                self.unquoted(inner)
+                self.unquoted(inner, cx)
             }
 
             Some("unquote-splicing") if depth == 0 => {
@@ -196,14 +198,14 @@ impl Derivation<'_> {
                 // always done and what the register records against both
                 // oracles. Extra operands are refused, for the reason the
                 // `unquote` arm gives: taking the first dropped the rest.
-                let inner = self.single_operand(cdr, "unquote-splicing", |n| {
+                let inner = self.single_operand(cdr, cx, "unquote-splicing", |n| {
                     format!(
                         "unquote-splicing: a template that is itself a splice takes one \
                          expression, not {n}; several can only be spliced into a list or \
                          vector template"
                     )
                 })?;
-                self.unquoted(inner)
+                self.unquoted(inner, cx)
             }
 
             // Inside a nested quasiquote the form is rebuilt as data, so the
@@ -211,11 +213,11 @@ impl Derivation<'_> {
             // shallower, as the list template it is. Rebuilding a fixed two
             // elements dropped every operand after the first, which is what
             // made ``(foo ,,@q) lose its splice.
-            Some(keyword) => self.rebuild_unquotation(cdr, depth, keyword),
+            Some(keyword) => self.rebuild_unquotation(cdr, depth, keyword, cx),
 
             // Regular pair: derive car and cdr, handling unquote-splicing in
             // list context
-            None => self.pair_template(template, depth),
+            None => self.pair_template(template, depth, cx),
         }
     }
 
@@ -225,13 +227,14 @@ impl Derivation<'_> {
     /// Refused rather than read as far as it goes: reading the first operand
     /// and ignoring the rest is how a nested `quasiquote` and a template that
     /// is itself a splice came to discard what the program wrote.
-    fn single_operand(
+    fn single_operand<'gc>(
         &self,
-        operands: TaggedValue,
+        operands: Value<'gc>,
+        cx: &Cx<'gc>,
         keyword: &str,
         refuse: impl FnOnce(usize) -> String,
-    ) -> Result<TaggedValue> {
-        let operands = operand_list(operands, self.heap).ok_or_else(|| {
+    ) -> Result<Value<'gc>> {
+        let operands = operand_list(operands, cx).ok_or_else(|| {
             invalid(&format!(
                 "{keyword}: operands must be a proper, finite list"
             ))
@@ -251,24 +254,25 @@ impl Derivation<'_> {
     /// ``(foo ,,@q) rebuilds as `(foo (unquote <the elements of q>)) — and
     /// then the keyword is consed on. `append` rather than a cons because the
     /// constructor set deliberately has none; see `QuasiConstructor`.
-    fn rebuild_unquotation(
+    fn rebuild_unquotation<'gc>(
         &self,
-        operands: TaggedValue,
+        operands: Value<'gc>,
         depth: i32,
         keyword: &str,
+        cx: &mut FormCx<'_, 'gc>,
     ) -> Result<QuasiTemplate> {
         // Checked here as well as in element position, so that whether a
         // form is well-formed does not depend on how deeply it is nested:
         // `(unquote . x)` was refused at depth 0 and quietly rebuilt at depth
         // 1, because `pair_template` reads an improper tail as a dotted list.
-        if operand_list(operands, self.heap).is_none() {
+        if operand_list(operands, cx).is_none() {
             return Err(invalid(&format!(
                 "{keyword}: operands must be a proper, finite list"
             )));
         }
-        let derived_operands = self.pair_template(operands, depth - 1)?;
-        let sym = self.heap.borrow_mut().intern_symbol(keyword);
-        let head = list_of(vec![QuasiTemplate::Datum(sym)]);
+        let derived_operands = self.pair_template(operands, depth - 1, cx)?;
+        let sym = cx.intern_symbol(keyword);
+        let head = list_of(vec![QuasiTemplate::Datum(sym.tagged())]);
         Ok(QuasiTemplate::Build(
             QuasiConstructor::Append,
             vec![head, derived_operands],
@@ -277,8 +281,12 @@ impl Derivation<'_> {
 
     /// Derive a pair/list template, handling unquote-splicing in list
     /// elements.
-    fn pair_template(&self, template: TaggedValue, depth: i32) -> Result<QuasiTemplate> {
-        let heap = self.heap;
+    fn pair_template<'gc>(
+        &self,
+        template: Value<'gc>,
+        depth: i32,
+        cx: &mut FormCx<'_, 'gc>,
+    ) -> Result<QuasiTemplate> {
         // Collect segments: each segment is either a list of normal elements
         // or a splice expression. This lets us generate efficient code:
         //   `(a b ,@xs c d) → (append (list 'a 'b) xs (list 'c 'd))
@@ -300,7 +308,7 @@ impl Derivation<'_> {
 
             if !current.is_pair() {
                 // Improper list tail
-                tail = Some(self.template(current, depth)?);
+                tail = Some(self.template(current, depth, cx)?);
                 break;
             }
 
@@ -308,7 +316,7 @@ impl Derivation<'_> {
             // by one pair, so `steps` is its index.
             if steps > 0 {
                 if steps.is_multiple_of(2) {
-                    slow = heap.borrow().cdr(slow);
+                    slow = cx.cdr(slow);
                 }
                 if current == slow {
                     return Err(circular());
@@ -316,19 +324,16 @@ impl Derivation<'_> {
             }
             steps += 1;
 
-            let (car, cdr) = {
-                let h = heap.borrow();
-                (h.car(current), h.cdr(current))
-            };
+            let (car, cdr) = cx.get_pair(current);
 
             // Check for tail unquote: current IS (unquote expr) — from dotted
             // pair after splice
-            if depth == 0 && heap.borrow().is_named(car, "unquote") {
-                let operand = heap.borrow().try_pair(cdr);
+            if depth == 0 && cx.is_named(car, "unquote") {
+                let operand = cx.try_pair(cdr);
                 if let Some((uq_expr, rest)) = operand
                     && rest.is_null()
                 {
-                    tail = Some(self.unquoted(uq_expr)?);
+                    tail = Some(self.unquoted(uq_expr, cx)?);
                     break;
                 }
             }
@@ -348,17 +353,11 @@ impl Derivation<'_> {
             // an `append` of three segments — the shape family 34's review
             // measured at +40% when it was routed through segments.
             if depth == 0 && car.is_pair() {
-                let (inner_car, inner_cdr) = {
-                    let h = heap.borrow();
-                    (h.car(car), h.cdr(car))
-                };
-                let (splicing, unquoting) = {
-                    let h = heap.borrow();
-                    (
-                        h.is_named(inner_car, "unquote-splicing"),
-                        h.is_named(inner_car, "unquote"),
-                    )
-                };
+                let (inner_car, inner_cdr) = cx.get_pair(car);
+                let (splicing, unquoting) = (
+                    cx.is_named(inner_car, "unquote-splicing"),
+                    cx.is_named(inner_car, "unquote"),
+                );
 
                 if splicing || unquoting {
                     let keyword = if splicing {
@@ -366,13 +365,13 @@ impl Derivation<'_> {
                     } else {
                         "unquote"
                     };
-                    let operands = operand_list(inner_cdr, heap).ok_or_else(|| {
+                    let operands = operand_list(inner_cdr, cx).ok_or_else(|| {
                         invalid(&format!(
                             "{keyword}: operands must be a proper, finite list"
                         ))
                     })?;
                     for operand in operands {
-                        let derived = self.unquoted(operand)?;
+                        let derived = self.unquoted(operand, cx)?;
                         if splicing {
                             // A splice ends the run of plain elements before it.
                             if !current_elems.is_empty() {
@@ -390,26 +389,23 @@ impl Derivation<'_> {
 
             // Check for dotted-pair unquote: (a b . ,x)
             if depth == 0 && cdr.is_pair() {
-                let (cdr_car, cdr_cdr) = {
-                    let h = heap.borrow();
-                    (h.car(cdr), h.cdr(cdr))
-                };
+                let (cdr_car, cdr_cdr) = cx.get_pair(cdr);
 
-                let is_unquote = heap.borrow().is_named(cdr_car, "unquote");
-                let operand = heap.borrow().try_pair(cdr_cdr);
+                let is_unquote = cx.is_named(cdr_car, "unquote");
+                let operand = cx.try_pair(cdr_cdr);
                 if is_unquote
                     && let Some((unquote_expr, rest)) = operand
                     && rest.is_null()
                 {
                     // This is (... car . ,expr)
-                    current_elems.push(self.template(car, depth)?);
-                    tail = Some(self.unquoted(unquote_expr)?);
+                    current_elems.push(self.template(car, depth, cx)?);
+                    tail = Some(self.unquoted(unquote_expr, cx)?);
                     break;
                 }
             }
 
             // Regular element
-            current_elems.push(self.template(car, depth)?);
+            current_elems.push(self.template(car, depth, cx)?);
             current = cdr;
         }
 
@@ -432,17 +428,22 @@ impl Derivation<'_> {
 
     /// Derive a vector template: convert to list, derive with pair logic
     /// (handles splicing), then convert back with list->vector.
-    fn vector_template(&self, template: TaggedValue, depth: i32) -> Result<QuasiTemplate> {
+    fn vector_template<'gc>(
+        &self,
+        template: Value<'gc>,
+        depth: i32,
+        cx: &mut FormCx<'_, 'gc>,
+    ) -> Result<QuasiTemplate> {
         // Convert vector to a proper list on the heap, then use pair
         // derivation which handles unquote-splicing correctly.
-        let elements = self.heap.borrow().vector_slice(template).to_vec();
-        let list = self.heap.borrow_mut().list_from_iter(elements);
+        let elements = cx.vector_slice(template).to_vec();
+        let list = cx.list_from_iter(elements);
 
         // Derive as a list (handles splicing, unquote, etc.)
         let list_template = if list.is_null() {
             QuasiTemplate::Datum(TaggedValue::NULL)
         } else {
-            self.pair_template(list, depth)?
+            self.pair_template(list, depth, cx)?
         };
 
         // (list->vector <list>)
@@ -455,8 +456,8 @@ impl Derivation<'_> {
     /// An unquoted expression, desugared by the desugarer standing in the
     /// form — the whole of #445. A nested template inside it is desugared
     /// into a `Quasiquote` of its own on the way.
-    fn unquoted(&self, expr: TaggedValue) -> Result<QuasiTemplate> {
-        let expr = self.desugarer.desugar_expression(expr, self.heap)?;
+    fn unquoted<'gc>(&self, expr: Value<'gc>, cx: &mut FormCx<'_, 'gc>) -> Result<QuasiTemplate> {
+        let expr = self.desugarer.desugar_expression(expr, cx)?;
         Ok(QuasiTemplate::Unquoted(Rc::new(expr)))
     }
 }
@@ -512,6 +513,6 @@ fn circular() -> DesugarError {
 /// allocated until the process died on exactly that. `None` covers both
 /// refusals, an improper list and a circular one, which is what the caller
 /// wants: no reading of either report accepts either.
-fn operand_list(cdr: TaggedValue, heap: &SharedHeap) -> Option<Vec<TaggedValue>> {
-    heap.borrow().list_to_vec(cdr)
+fn operand_list<'gc>(cdr: Value<'gc>, cx: &Cx<'gc>) -> Option<Vec<Value<'gc>>> {
+    cx.list_to_vec(cdr)
 }

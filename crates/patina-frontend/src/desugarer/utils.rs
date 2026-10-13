@@ -4,75 +4,53 @@
 //! Utility functions for desugaring
 
 use super::error::{DesugarError, Result};
-use patina_core::debug_format::format_tagged;
-use patina_core::{Heap, SharedHeap, SpineEnd, TaggedValue};
+use patina_core::{Cx, SpineEnd, Value};
 use patina_ir::{Formals, ScopedParam, Symbol};
 use patina_runtime::ScopeSet;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 // ============================================================================
-// TaggedValue Utilities
+// List and identifier utilities
 // ============================================================================
 
-/// Convert a TaggedValue list to a Vec<TaggedValue>
-///
-/// This is the TaggedValue equivalent of `list_to_vec`.
-/// Takes SharedHeap for heap operations.
-pub fn list_to_vec_tagged(
-    value: TaggedValue,
-    shared_heap: &SharedHeap,
-) -> Result<Vec<TaggedValue>> {
-    let heap = shared_heap.borrow();
-    match heap.spine(value) {
+/// A proper list's elements; an improper or circular one is an error.
+pub fn list_to_vec_tagged<'gc>(value: Value<'gc>, cx: &Cx<'gc>) -> Result<Vec<Value<'gc>>> {
+    match cx.spine(value) {
         (elements, SpineEnd::Null) => Ok(elements),
         // The tail as Scheme writes it (#457): its `{:?}` was
         // `TaggedValue::fixnum(3)`.
         (_, SpineEnd::Improper(tail)) => Err(DesugarError::ExpectedProperList(format!(
             "got an improper list ending with {}",
-            format_tagged(tail, &heap)
+            cx.format(tail)
         ))),
         // Walked, this collected elements until memory ran out (#459).
         (_, SpineEnd::Circular) => Err(DesugarError::ExpectedProperList(format!(
             "got a circular list: {}",
-            format_tagged(value, &heap)
+            cx.format(value)
         ))),
     }
 }
 
-/// Convert Scheme formals (TaggedValue) to Formals enum
-///
-/// This is the TaggedValue equivalent of `convert_formals`.
-/// Takes SharedHeap for heap operations.
-pub fn convert_formals_tagged(formals: TaggedValue, shared_heap: &SharedHeap) -> Result<Formals> {
+/// Convert Scheme formals to Formals enum
+pub fn convert_formals_tagged<'gc>(formals: Value<'gc>, cx: &Cx<'gc>) -> Result<Formals> {
     // Fixed arity: ()
-    if formals == TaggedValue::NULL {
+    if formals == Value::NULL {
         return Ok(Formals::Fixed(vec![]));
     }
 
     // Walked below, a circular list collected parameters until memory ran
     // out (#459).
-    if shared_heap.borrow().spine_is_circular(formals) {
+    if cx.spine_is_circular(formals) {
         return Err(DesugarError::InvalidFormals(format!(
             "a parameter list cannot be circular: {}",
-            format_tagged(formals, &shared_heap.borrow())
+            cx.format(formals)
         )));
     }
 
-    // Check for single symbol (variadic) or identifier
-    {
-        let heap = shared_heap.borrow();
-        // Variadic: single symbol (args)
-        if let Some(name) = heap.get_symbol_name(formals) {
-            return Ok(Formals::Variadic(ScopedParam::simple(Rc::from(name))));
-        }
-
-        // Variadic with identifier - preserve scopes
-        if heap.is_identifier(formals)
-            && let Some(id) = get_identifier_info(formals, &heap)
-        {
-            return Ok(Formals::Variadic(ScopedParam::with_scopes(id.0, id.1)));
-        }
+    // Variadic: single symbol (args), or an identifier, whose scopes are kept
+    if let Some((name, scopes)) = symbol_or_identifier(formals, cx) {
+        return Ok(Formals::Variadic(ScopedParam::with_scopes(name, scopes)));
     }
 
     // Either proper list (fixed) or improper list (mixed)
@@ -81,7 +59,7 @@ pub fn convert_formals_tagged(formals: TaggedValue, shared_heap: &SharedHeap) ->
         let mut current = formals;
 
         loop {
-            if current == TaggedValue::NULL {
+            if current == Value::NULL {
                 // Proper list - fixed arity
                 check_no_duplicates_scoped(&params, "lambda")?;
                 return Ok(Formals::Fixed(params));
@@ -89,120 +67,84 @@ pub fn convert_formals_tagged(formals: TaggedValue, shared_heap: &SharedHeap) ->
 
             // Fast path: native pair
             if current.is_pair() {
-                let heap = shared_heap.borrow();
-                let (car, cdr) = heap.get_pair(current);
-
-                if let Some(name) = heap.get_symbol_name(car) {
-                    params.push(ScopedParam::simple(Rc::from(name)));
-                } else if let Some(id) = get_identifier_info(car, &heap) {
-                    params.push(ScopedParam::with_scopes(id.0, id.1));
-                } else {
+                let (car, cdr) = cx.get_pair(current);
+                let Some((name, scopes)) = symbol_or_identifier(car, cx) else {
                     return Err(DesugarError::InvalidFormals(format!(
                         "Parameter must be a symbol, got {}",
-                        format_tagged(car, &heap)
+                        cx.format(car)
                     )));
-                }
+                };
+                params.push(ScopedParam::with_scopes(name, scopes));
                 current = cdr;
                 continue;
             }
 
-            // Improper list terminator (not a pair)
-            {
-                let heap = shared_heap.borrow();
-                if let Some(rest_name) = heap.get_symbol_name(current) {
-                    // Improper list with symbol - mixed arity: (x y . rest)
-                    check_no_duplicates_scoped(&params, "lambda")?;
-                    let rest_param = ScopedParam::simple(Rc::from(rest_name));
-                    if binds_identifier(&params, rest_name, &rest_param.scopes) {
-                        return Err(DesugarError::DuplicateParameter {
-                            name: rest_name.to_string(),
-                            context: "lambda".to_string(),
-                        });
-                    }
-                    return Ok(Formals::Mixed {
-                        fixed: params,
-                        rest: rest_param,
-                    });
-                } else if let Some(id) = get_identifier_info(current, &heap) {
-                    // Improper list with identifier - mixed arity: (x y . rest)
-                    check_no_duplicates_scoped(&params, "lambda")?;
-                    if binds_identifier(&params, &id.0, &id.1) {
-                        return Err(DesugarError::DuplicateParameter {
-                            name: id.0.to_string(),
-                            context: "lambda".to_string(),
-                        });
-                    }
-                    let rest_param = ScopedParam::with_scopes(id.0, id.1);
-                    return Ok(Formals::Mixed {
-                        fixed: params,
-                        rest: rest_param,
-                    });
-                } else {
-                    return Err(DesugarError::InvalidFormals(format!(
-                        "a rest parameter must be a symbol, got {}",
-                        format_tagged(current, &heap)
-                    )));
-                }
+            // Improper list terminator (not a pair): a symbol or an
+            // identifier, mixed arity: (x y . rest)
+            let Some((rest_name, rest_scopes)) = symbol_or_identifier(current, cx) else {
+                return Err(DesugarError::InvalidFormals(format!(
+                    "a rest parameter must be a symbol, got {}",
+                    cx.format(current)
+                )));
+            };
+            check_no_duplicates_scoped(&params, "lambda")?;
+            if binds_identifier(&params, &rest_name, &rest_scopes) {
+                return Err(DesugarError::DuplicateParameter {
+                    name: rest_name.to_string(),
+                    context: "lambda".to_string(),
+                });
             }
+            return Ok(Formals::Mixed {
+                fixed: params,
+                rest: ScopedParam::with_scopes(rest_name, rest_scopes),
+            });
         }
     }
 
     Err(DesugarError::InvalidFormals(format!(
         "expected a symbol or a list of symbols, got {}",
-        format_tagged(formals, &shared_heap.borrow())
+        cx.format(formals)
     )))
 }
 
-/// Get identifier name and scopes from a TaggedValue
-///
-/// Returns Some((name, scopes)) if the value is an identifier, None otherwise.
-pub fn get_identifier_info(tv: TaggedValue, heap: &Heap) -> Option<(Rc<str>, ScopeSet)> {
-    heap.get_identifier_data_any(tv)
-}
-
-/// Strip identifiers from a TaggedValue tree, replacing them with plain symbols.
+/// Strip identifiers from a datum, replacing them with plain symbols.
 ///
 /// In quoted data, identifiers from macro expansion should become plain symbols.
 /// Identifier scopes are only needed during desugaring for binding resolution,
 /// not in quoted output data.
-pub fn strip_identifiers_tagged(
-    tv: TaggedValue,
-    shared_heap: &SharedHeap,
-    memo: &mut HashMap<u64, TaggedValue>,
-) -> TaggedValue {
-    shared_heap
-        .borrow_mut()
-        .map_syntax_identifiers_memo(tv, memo, |heap, _, name, _| Some(heap.intern_symbol(&name)))
+pub fn strip_identifiers_tagged<'gc>(
+    tv: Value<'gc>,
+    cx: &mut Cx<'gc>,
+    memo: &mut HashMap<Value<'gc>, Value<'gc>>,
+) -> Value<'gc> {
+    cx.map_syntax_identifiers_memo(tv, memo, |cx, _, name, _| Some(cx.intern_symbol(&name)))
 }
 
-/// Parse define function syntax from TaggedValue
-///
-/// Returns (name, name_scopes, formals_tagged) where formals is the rest of the list.
-/// Takes SharedHeap for heap operations.
 /// A symbol or a scoped identifier as `(name, scopes)`.
 ///
 /// The one answer to "what is this identifier called and what scopes does it
-/// carry" — `Desugarer::identifier_of` is this function with the borrow taken
-/// for you. Worth having exactly one: a copy of it that dropped the scopes is
-/// what let a recursive macro's per-expansion definitions collapse onto a
-/// single binding.
-pub fn symbol_or_identifier(tv: TaggedValue, heap: &Heap) -> Option<(Symbol, ScopeSet)> {
-    if let Some(s) = heap.get_symbol_name(tv) {
-        return Some((Rc::from(s), ScopeSet::new()));
+/// carry" — `Desugarer::identifier_of` is this function. Worth having exactly
+/// one: a copy of it that dropped the scopes is what let a recursive macro's
+/// per-expansion definitions collapse onto a single binding.
+pub fn symbol_or_identifier<'gc>(tv: Value<'gc>, cx: &Cx<'gc>) -> Option<(Symbol, ScopeSet)> {
+    if let Some(s) = cx.get_symbol_name(tv) {
+        return Some((Rc::from(&*s), ScopeSet::new()));
     }
-    get_identifier_info(tv, heap)
+    cx.get_identifier_data_any(tv)
 }
 
-pub fn parse_define_function_tagged(
-    pattern: TaggedValue,
-    shared_heap: &SharedHeap,
-) -> Result<(Symbol, ScopeSet, TaggedValue)> {
+/// Parse define function syntax: `(name formals...)`.
+///
+/// Returns (name, name_scopes, formals) where formals is the rest of the list.
+pub fn parse_define_function_tagged<'gc>(
+    pattern: Value<'gc>,
+    cx: &Cx<'gc>,
+) -> Result<(Symbol, ScopeSet, Value<'gc>)> {
     // Fast path: native pair
     if pattern.is_pair() {
-        let heap = shared_heap.borrow();
-        let (car, cdr) = heap.get_pair(pattern);
+        let (car, cdr) = cx.get_pair(pattern);
 
-        let (name, scopes) = symbol_or_identifier(car, &heap).ok_or_else(|| {
+        let (name, scopes) = symbol_or_identifier(car, cx).ok_or_else(|| {
             DesugarError::InvalidSyntax("define function name must be a symbol".to_string())
         })?;
 
@@ -274,68 +216,64 @@ pub fn formals_to_binders(formals: &Formals) -> Vec<(Rc<str>, ScopeSet)> {
 mod tests {
     use super::*;
 
+    /// Run `f` in a context over a fresh heap.
+    fn with_cx<R>(f: impl for<'gc> FnOnce(&mut Cx<'gc>) -> R) -> R {
+        patina_core::NoGcScope::with_cx(&patina_core::new_shared_heap(), f)
+    }
+
     #[test]
     fn stripping_quoted_identifiers_copies_only_changed_pairs() {
-        let heap = patina_core::new_shared_heap();
-        let (original, identifier, unchanged_tail) = {
-            let mut heap = heap.borrow_mut();
-            let identifier = heap.alloc_identifier(Rc::from("x"), ScopeSet::new());
-            let unchanged_tail = heap.alloc_pair(TaggedValue::fixnum(2), TaggedValue::NULL);
-            let changed = heap.alloc_pair(identifier, unchanged_tail);
-            let original = heap.alloc_pair(TaggedValue::fixnum(1), changed);
-            (original, identifier, unchanged_tail)
-        };
-        let stripped = strip_identifiers_tagged(original, &heap, &mut HashMap::new());
-        let heap = heap.borrow();
-        assert_ne!(stripped, original);
-        assert_eq!(heap.car(stripped), TaggedValue::fixnum(1));
-        let changed = heap.cdr(stripped);
-        assert_eq!(heap.get_symbol_name(heap.car(changed)), Some("x"));
-        assert_eq!(heap.cdr(changed), unchanged_tail);
-        assert_eq!(heap.car(heap.cdr(original)), identifier);
+        with_cx(|cx| {
+            let identifier = cx.alloc_identifier(Rc::from("x"), ScopeSet::new());
+            let unchanged_tail = cx.alloc_pair(Value::fixnum(2), Value::NULL);
+            let changed = cx.alloc_pair(identifier, unchanged_tail);
+            let original = cx.alloc_pair(Value::fixnum(1), changed);
+            let stripped = strip_identifiers_tagged(original, cx, &mut HashMap::new());
+            assert_ne!(stripped, original);
+            assert_eq!(cx.car(stripped), Value::fixnum(1));
+            let changed = cx.cdr(stripped);
+            let head = cx.car(changed);
+            assert_eq!(cx.get_symbol_name(head).as_deref(), Some("x"));
+            assert_eq!(cx.cdr(changed), unchanged_tail);
+            let original_rest = cx.cdr(original);
+            assert_eq!(cx.car(original_rest), identifier);
+        });
     }
 
     #[test]
     fn stripping_a_quoted_improper_tail_converts_its_identifier() {
-        let heap = patina_core::new_shared_heap();
-        let (original, identifier) = {
-            let mut heap = heap.borrow_mut();
-            let identifier = heap.alloc_identifier(Rc::from("tail"), ScopeSet::new());
-            (
-                heap.alloc_pair(TaggedValue::fixnum(1), identifier),
-                identifier,
-            )
-        };
-        let stripped = strip_identifiers_tagged(original, &heap, &mut HashMap::new());
-        let heap = heap.borrow();
-        assert_eq!(heap.get_symbol_name(heap.cdr(stripped)), Some("tail"));
-        assert_eq!(heap.cdr(original), identifier);
+        with_cx(|cx| {
+            let identifier = cx.alloc_identifier(Rc::from("tail"), ScopeSet::new());
+            let original = cx.alloc_pair(Value::fixnum(1), identifier);
+            let stripped = strip_identifiers_tagged(original, cx, &mut HashMap::new());
+            let tail = cx.cdr(stripped);
+            assert_eq!(cx.get_symbol_name(tail).as_deref(), Some("tail"));
+            assert_eq!(cx.cdr(original), identifier);
+        });
     }
 
     #[test]
     fn stripping_nested_pairs_and_vectors_preserves_unchanged_cycles() {
-        let heap = patina_core::new_shared_heap();
-        let (original, cycle, identifier) = {
-            let mut heap = heap.borrow_mut();
-            let identifier = heap.alloc_identifier(Rc::from("nested"), ScopeSet::new());
-            let cycle = heap.alloc_pair(TaggedValue::fixnum(7), TaggedValue::NULL);
-            heap.set_cdr(cycle, cycle);
-            let pair = heap.alloc_pair(identifier, cycle);
-            let vector = heap.alloc_vector(vec![pair, cycle]);
-            (heap.alloc_pair(vector, cycle), cycle, identifier)
-        };
-        let stripped = strip_identifiers_tagged(original, &heap, &mut HashMap::new());
-        let heap = heap.borrow();
-        let vector = heap.car(stripped);
-        assert_ne!(vector, heap.car(original));
-        assert_eq!(
-            heap.get_symbol_name(heap.car(heap.vector_ref(vector, 0))),
-            Some("nested")
-        );
-        assert_eq!(heap.cdr(heap.vector_ref(vector, 0)), cycle);
-        assert_eq!(heap.vector_ref(vector, 1), cycle);
-        assert_eq!(heap.cdr(stripped), cycle);
-        assert_eq!(heap.cdr(cycle), cycle);
-        assert_eq!(heap.car(heap.vector_ref(heap.car(original), 0)), identifier);
+        with_cx(|cx| {
+            let identifier = cx.alloc_identifier(Rc::from("nested"), ScopeSet::new());
+            let cycle = cx.alloc_pair(Value::fixnum(7), Value::NULL);
+            cx.set_cdr(cycle, cycle);
+            let pair = cx.alloc_pair(identifier, cycle);
+            let vector = cx.alloc_vector(vec![pair, cycle]);
+            let original = cx.alloc_pair(vector, cycle);
+            let stripped = strip_identifiers_tagged(original, cx, &mut HashMap::new());
+            let vector = cx.car(stripped);
+            assert_ne!(vector, cx.car(original));
+            let copied = cx.vector_ref(vector, 0);
+            let head = cx.car(copied);
+            assert_eq!(cx.get_symbol_name(head).as_deref(), Some("nested"));
+            assert_eq!(cx.cdr(copied), cycle);
+            assert_eq!(cx.vector_ref(vector, 1), cycle);
+            assert_eq!(cx.cdr(stripped), cycle);
+            assert_eq!(cx.cdr(cycle), cycle);
+            let original_vector = cx.car(original);
+            let original_pair = cx.vector_ref(original_vector, 0);
+            assert_eq!(cx.car(original_pair), identifier);
+        });
     }
 }

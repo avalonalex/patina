@@ -101,9 +101,11 @@ pub fn top_level_import_sets(tv: TaggedValue, env: &Environment) -> Option<Vec<I
             _ => return None,
         }
     };
-    sets.into_iter()
-        .map(|set| LibraryDefinition::parse_import_set_tagged(set, env.heap()).ok())
-        .collect()
+    NoGcScope::cross_all(env.heap(), &sets, |cx, sets| {
+        sets.iter()
+            .map(|&set| LibraryDefinition::parse_import_set_tagged(set, cx).ok())
+            .collect()
+    })
 }
 
 /// The name at the head of the top-level form `tv`, and what it is bound to
@@ -144,11 +146,10 @@ impl SchemeLibraryLoader {
         heap: SharedHeap,
         can_load_library: &dyn Fn(&[String]) -> bool,
     ) -> Result<ParsedLibrary, LibraryError> {
-        let lib_def =
-            LibraryDefinition::from_tagged_with_library_checker(lib_form, &heap, can_load_library)
-                .map_err(|e| {
-                    Self::library_error_from_parse(Path::new(INLINE_SOURCE_LABEL), "", e)
-                })?;
+        let lib_def = NoGcScope::cross(&heap, [lib_form], |cx, [lib_form]| {
+            LibraryDefinition::from_tagged_with_library_checker(lib_form, cx, can_load_library)
+        })
+        .map_err(|e| Self::library_error_from_parse(Path::new(INLINE_SOURCE_LABEL), "", e))?;
         self.resolve_definition(lib_def, base_dir, None, heap)
     }
 
@@ -284,24 +285,25 @@ impl SchemeLibraryLoader {
             message: e.format_in_source(&path.display().to_string(), &content),
         })?;
 
-        let lib_form = NoGcScope::with_cx(&heap, |cx| {
-            let form = parser.parse(cx)?;
-            // The file is its `define-library` form, so nothing should
-            // follow; read on anyway, so that a file cut short after the
-            // form — inside a datum the loader would otherwise never look
-            // at — is reported rather than loaded as if it were whole.
-            parser.skip_rest(cx)?;
-            Ok(form.tagged())
-        })
-        .map_err(|e: crate::ParseError| LibraryError::ParseError {
-            file: path.display().to_string(),
-            message: e.format_in_source(&path.display().to_string(), &content),
+        let lib_def = NoGcScope::with_cx(&heap, |cx| {
+            let read = parser.parse(cx).and_then(|form| {
+                // The file is its `define-library` form, so nothing should
+                // follow; read on anyway, so that a file cut short after the
+                // form — inside a datum the loader would otherwise never
+                // look at — is reported rather than loaded as if it were
+                // whole.
+                parser.skip_rest(cx)?;
+                Ok(form)
+            });
+            let lib_form = read.map_err(|e| LibraryError::ParseError {
+                file: path.display().to_string(),
+                message: e.format_in_source(&path.display().to_string(), &content),
+            })?;
+            // Parse the define-library form into structured data with
+            // library checker
+            LibraryDefinition::from_tagged_with_library_checker(lib_form, cx, can_load_library)
+                .map_err(|e| Self::library_error_from_parse(&path, "", e))
         })?;
-
-        // Parse the define-library form into structured data with library checker
-        let lib_def =
-            LibraryDefinition::from_tagged_with_library_checker(lib_form, &heap, can_load_library)
-                .map_err(|e| Self::library_error_from_parse(&path, "", e))?;
 
         // Verify the library name matches
         if lib_def.name != name {
@@ -503,7 +505,7 @@ impl SchemeLibraryLoader {
         Ok(())
     }
 
-    /// Parse a single library declaration from a TaggedValue.
+    /// Parse a single library declaration.
     ///
     /// Returns (exports, imports, body_elements) for the declaration.
     fn parse_single_declaration(
@@ -513,19 +515,15 @@ impl SchemeLibraryLoader {
     ) -> Result<ParsedDeclaration, LibraryError> {
         use crate::ExportSpec as FrontendExportSpec;
 
-        // Build a dummy (define-library (temp) <decl>) wrapper on the heap
-        let dummy_lib = {
-            let mut h = heap.borrow_mut();
-            let define_library_sym = h.intern_symbol("define-library");
-            let temp_sym = h.intern_symbol("temp");
-            let temp_name = h.alloc_pair(temp_sym, TaggedValue::NULL);
-            // Build list: (define-library (temp) <decl>)
-            let tail = h.alloc_pair(tv, TaggedValue::NULL);
-            let with_name = h.alloc_pair(temp_name, tail);
-            h.alloc_pair(define_library_sym, with_name)
-        };
-
-        let lib_def = LibraryDefinition::from_tagged(dummy_lib, heap).map_err(|e| {
+        let lib_def = NoGcScope::cross(heap, [tv], |cx, [decl]| {
+            // Build a dummy (define-library (temp) <decl>) wrapper
+            let define_library_sym = cx.intern_symbol("define-library");
+            let temp_sym = cx.intern_symbol("temp");
+            let temp_name = cx.list_from_iter([temp_sym]);
+            let dummy_lib = cx.list_from_iter([define_library_sym, temp_name, decl]);
+            LibraryDefinition::from_tagged(dummy_lib, cx)
+        })
+        .map_err(|e| {
             Self::library_error_from_parse(source_file, "Invalid library declaration: ", e)
         })?;
 

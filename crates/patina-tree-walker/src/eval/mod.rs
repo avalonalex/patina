@@ -544,8 +544,9 @@ impl Evaluator {
         } else {
             // Try evaluating loaders (Scheme .sld files)
             // Create a library availability checker for cond-expand
+            let instance = Rc::clone(self.global_env.heap().borrow().instance());
             let can_load_library = |lib_name: &[String]| {
-                patina_frontend::cond_expand::library_available(self.global_env.heap(), lib_name)
+                patina_frontend::cond_expand::library_available(&instance, lib_name)
             };
 
             let parsed = {
@@ -664,8 +665,9 @@ impl Evaluator {
     ) -> Result<(), patina_runtime::LibraryError> {
         use patina_frontend::SchemeLibraryLoader;
 
+        let instance = Rc::clone(self.global_env.heap().borrow().instance());
         let can_load_library = |lib_name: &[String]| {
-            patina_frontend::cond_expand::library_available(self.global_env.heap(), lib_name)
+            patina_frontend::cond_expand::library_available(&instance, lib_name)
         };
         let loader = SchemeLibraryLoader::new(self.fs.clone());
         let parsed = loader.parse_inline_form(
@@ -747,22 +749,24 @@ impl Evaluator {
             #[expect(
                 clippy::disallowed_methods,
                 reason = "the import callback loads libraries during the expansion, which holds \
-                          the form and the partial expansion: guarded by `desugar_with_imports`' \
-                          `GcDeferGuard::holding`"
+                          the form and the partial expansion: values of the context the expansion \
+                          runs in (`NoGcScope::cross`), beneath which nothing collects"
             )]
-            let core_expr = desugarer.desugar_with_imports(
-                form,
-                &shared_heap,
-                |set, env| self.process_import_set(set, env, context),
-                |e| {
-                    patina_runtime::LibraryError::processing(
-                        source,
-                        format!("Failed to desugar expression: {e}"),
-                        e.diagnostic(),
-                    )
-                    .at_opt(e.source_location().cloned())
-                },
-            )?;
+            let core_expr = patina_core::NoGcScope::cross(&shared_heap, [form], |cx, [form]| {
+                desugarer.desugar_with_imports(
+                    form,
+                    cx,
+                    |set, env| self.process_import_set(set, env, context),
+                    |e| {
+                        patina_runtime::LibraryError::processing(
+                            source,
+                            format!("Failed to desugar expression: {e}"),
+                            e.diagnostic(),
+                        )
+                        .at_opt(e.source_location().cloned())
+                    },
+                )
+            })?;
 
             // Initialization runs under the importing program's dynamic
             // context. A guard can leave the load here: preserve that escape

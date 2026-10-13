@@ -61,7 +61,10 @@ fn primitive_environment(
         .into_iter()
         .map(|arg| {
             check_import_datum(arg, &heap.borrow())?;
-            LibraryDefinition::parse_import_set_tagged(arg, heap).map_err(|e| {
+            patina_core::NoGcScope::cross(heap, [arg], |cx, [arg]| {
+                LibraryDefinition::parse_import_set_tagged(arg, cx)
+            })
+            .map_err(|e| {
                 EvalError::InvalidSyntax(format!("environment: {e}"))
                     .with_diagnostic(e.diagnostic())
             })
@@ -163,7 +166,10 @@ fn primitive_eval(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
     // (#435), and expanding twice can also install a transformer twice.
     if !mutable {
         let desugarer = Desugarer::with_env(env.clone()).with_fs(ctx.fs().clone());
-        let core_expr = desugarer.desugar_tagged(args[0], heap).map_err(|e| {
+        let core_expr = patina_core::NoGcScope::cross(heap, [args[0]], |cx, [form]| {
+            desugarer.desugar_tagged(form, cx)
+        })
+        .map_err(|e| {
             EvalError::InvalidSyntax(format!("eval: failed to desugar expression: {e}"))
                 .with_diagnostic(e.diagnostic())
         })?;

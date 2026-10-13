@@ -1304,14 +1304,14 @@ mod tests {
         let sm = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
         let source_name: std::rc::Rc<str> = std::rc::Rc::from("test.scm");
         let mut parser = Parser::new_with_source_map("(+ 1 2)", source_name, sm.clone()).unwrap();
-        let expr = patina_core::NoGcScope::with_cx(&heap, |cx| parser.parse(cx).unwrap().tagged());
-        drop(parser);
-
-        // Desugar with source map
         let env = backend.global_env().clone();
         let desugarer = Desugarer::with_env_and_source_map(env, sm);
-        let internal_heap = backend.global_env().heap();
-        let core_expr = desugarer.desugar_tagged(expr, internal_heap).unwrap();
+
+        // Read, and desugar with source map
+        let core_expr = patina_core::NoGcScope::with_cx(&heap, |cx| {
+            let expr = parser.parse(cx).unwrap();
+            desugarer.desugar_tagged(expr, cx).unwrap()
+        });
 
         // The CoreExpr should have source info from the list form
         assert!(
