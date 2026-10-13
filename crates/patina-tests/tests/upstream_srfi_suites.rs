@@ -85,7 +85,7 @@ fn counts_on<B: Backend>(interp: &Interpreter<B>, label: &str, program: &str) ->
     let value = interp
         .eval_program(program)
         .unwrap_or_else(|e| panic!("[{label}] failed to run: {e}"));
-    let text = format_display_tagged(value, interp.backend().global_env().heap());
+    let text = format_display_tagged(value, interp.heap());
     let mut parts = text.split_whitespace();
     let mut next_int = || {
         parts

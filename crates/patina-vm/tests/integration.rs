@@ -10,7 +10,6 @@
 )]
 
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
-use patina_core::environment::Environment;
 use patina_core::scope::ScopeSet;
 use patina_core::tagged_value::TaggedValue;
 use patina_vm::compiler::compile;
@@ -23,7 +22,7 @@ use std::rc::Rc;
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn fresh_state() -> VmState {
-    let mut state = VmState::new(Rc::new(Environment::new()));
+    let mut state = VmState::on_a_fresh_heap();
     state.install_primitives();
     state
 }

@@ -411,8 +411,8 @@ mod ambiguous_literal_tests {
     ) -> Result<String, crate::error::MacroError> {
         use patina_frontend::parser::Parser;
 
-        let definition_env = Rc::new(Environment::new());
-        let heap = definition_env.heap().clone();
+        let heap = patina_core::new_shared_heap();
+        let definition_env = Rc::new(Environment::with_heap(&heap));
         let instance = Rc::clone(heap.borrow().instance());
         let mut driver = patina_core::GcDriver::acquire(&heap).expect("the driver is free");
         driver.mutate(&instance, |cx| {

@@ -26,7 +26,10 @@ use std::rc::{Rc, Weak};
 /// - SchemeLibraryLoader: Parses and evaluates .sld files
 /// - MixedLibraryLoader: Combines both approaches
 pub trait LibraryLoader {
-    /// Load a library with the given name
+    /// Load a library with the given name, its values on `heap`: the heap
+    /// of the global environment, so that importing its exports needs no
+    /// conversion. An environment keeps no handle to its heap (#704), so a
+    /// load is always given the one it allocates on.
     ///
     /// Returns the loaded Library or an error if loading fails.
     /// The loader is responsible for:
@@ -34,23 +37,12 @@ pub trait LibraryLoader {
     /// - Creating the library environment
     /// - Populating exports
     /// - Handling dependencies (imports)
-    fn load(&self, name: &[String], search_paths: &[PathBuf]) -> Result<Library, LibraryError>;
-
-    /// Load a library with a shared heap for TaggedValue compatibility
-    ///
-    /// When provided, the library environment should use this heap so that
-    /// TaggedValues are allocated on the same heap as the global environment.
-    /// This prevents heap index mismatches when importing library exports.
-    ///
-    /// Default implementation ignores the heap and calls load().
     fn load_with_heap(
         &self,
         name: &[String],
         search_paths: &[PathBuf],
-        _heap: SharedHeap,
-    ) -> Result<Library, LibraryError> {
-        self.load(name, search_paths)
-    }
+        heap: SharedHeap,
+    ) -> Result<Library, LibraryError>;
 
     /// Check if this loader can handle the given library name
     ///
@@ -478,29 +470,12 @@ impl LibraryLoaderRegistry {
         self.evaluating_loaders.push(loader);
     }
 
-    /// Try to load a library using simple loaders
+    /// Try to load a library using simple loaders, on `heap`
     ///
     /// Returns Ok(Some(lib)) if a loader successfully loaded the library.
     /// Returns Ok(None) if no loader can handle this library.
-    /// Returns Err if a loader tried but failed.
-    pub fn try_simple_load(
-        &self,
-        name: &[String],
-        search_paths: &[PathBuf],
-    ) -> Result<Option<Library>, LibraryError> {
-        for loader in &self.simple_loaders {
-            if loader.can_load(name) {
-                return loader.load(name, search_paths).map(Some);
-            }
-        }
-        Ok(None)
-    }
-
-    /// Try to load a library using simple loaders with a shared heap
-    ///
-    /// Like try_simple_load, but passes a heap to loaders for TaggedValue compatibility.
-    /// This ensures that library environments use the same heap as the global environment,
-    /// preventing heap index mismatches when importing exports.
+    /// Returns Err if a loader tried but failed. The heap is the global
+    /// environment's, so that importing the exports needs no conversion.
     pub fn try_simple_load_with_heap(
         &self,
         name: &[String],
@@ -549,23 +524,6 @@ impl LibraryLoaderRegistry {
             }
         }
         Ok(None)
-    }
-
-    /// Load a library using the first matching loader (legacy method)
-    ///
-    /// This method only tries simple loaders and is kept for backward compatibility.
-    /// New code should use try_simple_load() and try_parse() separately.
-    ///
-    /// Tries each loader in order until one succeeds.
-    /// Returns NotFound if no loader can handle the library.
-    pub fn load(&self, name: &[String], search_paths: &[PathBuf]) -> Result<Library, LibraryError> {
-        for loader in &self.simple_loaders {
-            if loader.can_load(name) {
-                return loader.load(name, search_paths);
-            }
-        }
-
-        Err(LibraryError::not_found(name))
     }
 
     /// Check if any loader can potentially load the given library.
@@ -655,11 +613,12 @@ impl Default for LibraryLoaderRegistry {
 ///     vec!["+".to_string(), "-".to_string(), ...]
 /// }
 /// ```
-pub type RustLibraryBuilder = fn(Vec<String>, Rc<Environment>) -> Vec<String>;
+pub type RustLibraryBuilder = fn(Vec<String>, Rc<Environment>, &SharedHeap) -> Vec<String>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use patina_core::heap::new_shared_heap;
 
     #[test]
     fn availability_handles_do_not_retain_registries() {
@@ -689,10 +648,11 @@ mod tests {
     }
 
     impl LibraryLoader for MockLoader {
-        fn load(
+        fn load_with_heap(
             &self,
             name: &[String],
             _search_paths: &[PathBuf],
+            _heap: SharedHeap,
         ) -> Result<Library, LibraryError> {
             if self.can_load(name) {
                 Ok(Library::new(name.to_vec()))
@@ -709,8 +669,9 @@ mod tests {
     #[test]
     fn test_registry_empty() {
         let registry = LibraryLoaderRegistry::new();
-        let result = registry.load(&["test".to_string()], &[]);
-        assert!(matches!(result, Err(LibraryError::NotFound { .. })));
+        let result =
+            registry.try_simple_load_with_heap(&["test".to_string()], &[], new_shared_heap());
+        assert!(matches!(result, Ok(None)));
     }
 
     #[test]
@@ -721,8 +682,9 @@ mod tests {
         };
         registry.add_loader(Box::new(loader));
 
-        let result = registry.load(&["test".to_string()], &[]);
-        assert!(result.is_ok());
+        let result =
+            registry.try_simple_load_with_heap(&["test".to_string()], &[], new_shared_heap());
+        assert!(matches!(result, Ok(Some(_))));
     }
 
     #[test]
@@ -745,7 +707,7 @@ mod tests {
         // Should find foo with first loader
         assert!(
             registry
-                .try_simple_load(&["foo".to_string()], &[])
+                .try_simple_load_with_heap(&["foo".to_string()], &[], new_shared_heap())
                 .unwrap()
                 .is_some()
         );
@@ -753,7 +715,7 @@ mod tests {
         // Should find bar with second loader
         assert!(
             registry
-                .try_simple_load(&["bar".to_string()], &[])
+                .try_simple_load_with_heap(&["bar".to_string()], &[], new_shared_heap())
                 .unwrap()
                 .is_some()
         );
@@ -761,7 +723,7 @@ mod tests {
         // Should not find baz
         assert!(
             registry
-                .try_simple_load(&["baz".to_string()], &[])
+                .try_simple_load_with_heap(&["baz".to_string()], &[], new_shared_heap())
                 .unwrap()
                 .is_none()
         );

@@ -38,8 +38,8 @@ impl TestExpander {
         use crate::parser::Parser;
 
         // Create test environment for compilation (captures bindings for hygiene)
-        let test_env = Rc::new(Environment::new());
-        let heap = test_env.heap().clone();
+        let heap = patina_core::new_shared_heap();
+        let test_env = Rc::new(Environment::with_heap(&heap));
 
         // Read the syntax-rules form on the macro's heap; the macro object
         // comes back out of the context as a handle.

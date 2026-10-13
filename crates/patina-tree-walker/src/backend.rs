@@ -116,11 +116,11 @@ impl TreeWalker {
         // A form starts with no interrupted `exit` noted; see
         // `patina_runtime::exit_status`.
         patina_runtime::exit_status::forget_interrupted_exit();
-        let internal_heap = self.evaluator.global_env.heap();
+        let internal_heap = &self.evaluator.heap;
 
         // An inline (define-library ...) is a library definition, not an
         // expression — route it to the library loader before desugaring.
-        if patina_frontend::is_define_library_form(expr, env) {
+        if patina_frontend::is_define_library_form(expr, env, internal_heap) {
             #[expect(
                 clippy::disallowed_methods,
                 reason = "the backend's top level, so the load may collect (#677). Holds the \
@@ -140,7 +140,8 @@ impl TreeWalker {
         // A bare `import` loads its libraries here rather than inside the
         // expansion's guard, so that each load collects at its points: inside
         // its body forms and where it ends (#677, #658).
-        if let Some(import_sets) = patina_frontend::top_level_import_sets(expr, env) {
+        if let Some(import_sets) = patina_frontend::top_level_import_sets(expr, env, internal_heap)
+        {
             for import_set in &import_sets {
                 #[expect(
                     clippy::disallowed_methods,
@@ -227,6 +228,10 @@ impl Backend for TreeWalker {
         &self.evaluator.global_env
     }
 
+    fn heap(&self) -> &patina_core::SharedHeap {
+        &self.evaluator.heap
+    }
+
     /// The source map's positions are attached to CoreExpr nodes during
     /// desugaring.
     fn eval_with_source_map(
@@ -249,7 +254,7 @@ mod tests {
 
     /// Helper: parse a string and evaluate it via the Backend trait
     fn eval_str(backend: &TreeWalker, code: &str) -> Result<TaggedValue, EvalError> {
-        let heap = backend.global_env().heap();
+        let heap = Backend::heap(backend);
         let expr = patina_core::NoGcScope::with_cx(heap, |cx| {
             let mut parser = patina_frontend::Parser::new(code).unwrap();
             parser.parse(cx).unwrap().tagged()
@@ -292,7 +297,7 @@ mod tests {
         custom_env.define("x".to_string(), TaggedValue::fixnum(99));
 
         // Parse and evaluate x in custom env
-        let heap = backend.global_env().heap();
+        let heap = Backend::heap(&backend);
         let expr = patina_core::NoGcScope::with_cx(heap, |cx| {
             let mut parser = patina_frontend::Parser::new("x").unwrap();
             parser.parse(cx).unwrap().tagged()

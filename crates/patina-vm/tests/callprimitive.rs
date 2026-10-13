@@ -5,7 +5,6 @@
 //! environment — and keeps the generic `Call` path everywhere else.
 
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
-use patina_core::environment::Environment;
 use patina_core::procedure::Arity;
 use patina_core::tagged_value::TaggedValue;
 use patina_vm::compiler::compile_with_qq_resolving;
@@ -48,7 +47,7 @@ fn lambda(params: Vec<&str>, body: Vec<CoreExpr>) -> CoreExpr {
 /// from the top-level and nested code objects.
 fn compile_all_in(state: &VmState, expr: &CoreExpr) -> Vec<Instruction> {
     let env = state.global_env().clone();
-    let heap = env.heap().clone();
+    let heap = state.heap().clone();
     let (top, nested) = compile_with_qq_resolving(expr, &heap, &env, state.primitive_registry())
         .expect("compile error");
     let mut instrs = top.instructions;
@@ -60,7 +59,7 @@ fn compile_all_in(state: &VmState, expr: &CoreExpr) -> Vec<Instruction> {
 
 /// Compile `expr` against a fresh VM's globals (primitives installed).
 fn compile_all_instructions(expr: &CoreExpr) -> Vec<Instruction> {
-    let mut state = VmState::new(Rc::new(Environment::new()));
+    let mut state = VmState::on_a_fresh_heap();
     state.install_primitives();
     compile_all_in(&state, expr)
 }
@@ -69,9 +68,11 @@ fn compile_all_instructions(expr: &CoreExpr) -> Vec<Instruction> {
 /// a `Procedure::Primitive` whose qualified name comes from `library`, not
 /// from the registry entry.
 fn state_with_library_binding(name: &'static str, arity: Arity, library: &[&str]) -> VmState {
-    let mut state = VmState::new(Rc::new(Environment::new()));
+    let mut state = VmState::on_a_fresh_heap();
     state.install_primitives();
+    let heap = state.heap().clone();
     state.global_env().define_primitive(
+        &heap,
         name,
         arity,
         library.iter().map(|s| s.to_string()).collect(),
@@ -483,6 +484,7 @@ fn state_with_control_forms() -> VmState {
         &["patina", "internal", "control"],
     );
     state.global_env().define_primitive(
+        state.heap(),
         "dynamic-wind",
         Arity::Exact(3),
         vec!["patina".into(), "internal".into(), "control".into()],

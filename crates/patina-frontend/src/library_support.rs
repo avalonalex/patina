@@ -68,9 +68,9 @@ impl SchemeLibraryLoader {
 /// chibi and Gauche do and as Patina did everywhere but the top level, where
 /// the spelling claimed it first. Whether an R6RS library may be read is the
 /// loader's to say.
-pub fn is_define_library_form(tv: TaggedValue, env: &Environment) -> bool {
+pub fn is_define_library_form(tv: TaggedValue, env: &Environment, heap: &SharedHeap) -> bool {
     matches!(
-        top_level_head(tv, env),
+        top_level_head(tv, env, heap),
         Some((name, None)) if matches!(&*name, "define-library" | "library")
     )
 }
@@ -88,10 +88,14 @@ pub fn is_define_library_form(tv: TaggedValue, env: &Environment) -> bool {
 /// as it always has, loading the sets before the bad one and then reporting
 /// that one. An `import` met inside a form, a `begin`'s or a macro's, stays
 /// the desugarer's (point C of `PRD/GC_PRD.md` §11.3).
-pub fn top_level_import_sets(tv: TaggedValue, env: &Environment) -> Option<Vec<ImportSet>> {
-    let (_, binding) = top_level_head(tv, env)?;
+pub fn top_level_import_sets(
+    tv: TaggedValue,
+    env: &Environment,
+    shared: &SharedHeap,
+) -> Option<Vec<ImportSet>> {
+    let (_, binding) = top_level_head(tv, env, shared)?;
     let sets = {
-        let heap = env.heap().borrow();
+        let heap = shared.borrow();
         if heap.get_core_syntax(binding?) != Some(CoreForm::Import) {
             return None;
         }
@@ -101,7 +105,7 @@ pub fn top_level_import_sets(tv: TaggedValue, env: &Environment) -> Option<Vec<I
             _ => return None,
         }
     };
-    NoGcScope::cross_all(env.heap(), &sets, |cx, sets| {
+    NoGcScope::cross_all(shared, &sets, |cx, sets| {
         sets.iter()
             .map(|&set| LibraryDefinition::parse_import_set_tagged(set, cx).ok())
             .collect()
@@ -116,9 +120,13 @@ pub fn top_level_import_sets(tv: TaggedValue, env: &Environment) -> Option<Vec<I
 /// (#677) are recognized here, by the same rule. A head that is not a name,
 /// or whose reference the set-of-scopes rule leaves ambiguous, answers
 /// `None`, so the form goes to the desugarer, which reports the ambiguity.
-fn top_level_head(tv: TaggedValue, env: &Environment) -> Option<(Rc<str>, Option<TaggedValue>)> {
+fn top_level_head(
+    tv: TaggedValue,
+    env: &Environment,
+    heap: &SharedHeap,
+) -> Option<(Rc<str>, Option<TaggedValue>)> {
     let (name, scopes) = {
-        let heap = env.heap().borrow();
+        let heap = heap.borrow();
         let (head, _) = heap.try_pair(tv)?;
         match heap.get_symbol_name(head) {
             Some(name) => (Rc::from(name), ScopeSet::new()),
@@ -693,20 +701,21 @@ mod tests {
     /// as the library names they import, in an environment that binds
     /// `bindings` to the `import` marker and `fixnum` to a number.
     fn hoisted(source: &str, bindings: &[&str], fixnum: Option<&str>) -> Option<Vec<String>> {
-        let env = Environment::new();
-        let marker = env.heap().borrow_mut().core_syntax(CoreForm::Import);
+        let heap = patina_core::new_shared_heap();
+        let env = Environment::with_heap(&heap);
+        let marker = heap.borrow_mut().core_syntax(CoreForm::Import);
         for name in bindings {
             env.define(*name, marker);
         }
         if let Some(name) = fixnum {
             env.define(name, TaggedValue::fixnum(1));
         }
-        let form = NoGcScope::with_cx(env.heap(), |cx| {
+        let form = NoGcScope::with_cx(&heap, |cx| {
             let mut parser = Parser::new(source)?;
             Ok::<_, crate::ParseError>(parser.parse_all(cx)?[0].tagged())
         })
         .expect("the form reads");
-        let sets = top_level_import_sets(form, &env)?;
+        let sets = top_level_import_sets(form, &env, &heap)?;
         Some(
             sets.iter()
                 .map(|set| set.library_name().join(" "))

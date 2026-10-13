@@ -22,7 +22,7 @@ fn run<B: Backend>(interpreter: &Interpreter<B>, program: &str) -> String {
         .unwrap_or_else(|e| panic!("{program}: {e}"));
     patina_primitives::primitives::io::datum_writer::format_display_tagged(
         value,
-        interpreter.backend().global_env().heap(),
+        interpreter.heap(),
     )
 }
 

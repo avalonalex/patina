@@ -16,8 +16,12 @@ use patina_core::core_syntax::{ALL_CORE_FORMS, CoreForm};
 use std::rc::Rc;
 
 /// Build the (patina internal syntax) library.
-pub fn build_internal_syntax(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
-    seed_core_syntax(&env);
+pub fn build_internal_syntax(
+    _name: Vec<String>,
+    env: Rc<Environment>,
+    heap: &patina_core::SharedHeap,
+) -> Vec<String> {
+    seed_core_syntax(&env, heap);
     ALL_CORE_FORMS
         .iter()
         .map(|form| form.name().to_string())
@@ -26,14 +30,14 @@ pub fn build_internal_syntax(_name: Vec<String>, env: Rc<Environment>) -> Vec<St
 
 /// Bind every syntactic keyword in `env`.
 ///
-/// The library builder above is one caller; the other is `Desugarer::new()`,
-/// which needs an environment in which core syntax resolves and nothing else
-/// does. Since stage 2 there is no spelling fallback, so a desugarer with an
-/// empty environment cannot desugar `(quote x)` — it would compile a call to an
-/// unbound `quote`.
-pub fn seed_core_syntax(env: &Rc<Environment>) {
+/// The library builder above is one caller; the others make a desugarer's
+/// equivalent of `(null-environment)`, an environment in which core syntax
+/// resolves and nothing else does. Since stage 2 there is no spelling
+/// fallback, so a desugarer with an empty environment cannot desugar
+/// `(quote x)` — it would compile a call to an unbound `quote`.
+pub fn seed_core_syntax(env: &Rc<Environment>, heap: &patina_core::SharedHeap) {
     for &form in ALL_CORE_FORMS {
-        define_core_syntax(env, form);
+        define_core_syntax(env, heap, form);
     }
 }
 
@@ -53,17 +57,17 @@ const TOP_LEVEL_ONLY_SYNTAX: &[CoreForm] = &[CoreForm::Import, CoreForm::Expand]
 /// Shared rather than written twice because the two bootstraps already differ
 /// enough to drift, and a backend that missed this would fail only under
 /// stage 2.
-pub fn seed_top_level_syntax(env: &Rc<Environment>) {
+pub fn seed_top_level_syntax(env: &Rc<Environment>, heap: &patina_core::SharedHeap) {
     for &form in TOP_LEVEL_ONLY_SYNTAX {
-        define_core_syntax(env, form);
+        define_core_syntax(env, heap, form);
     }
 }
 
-/// Bind `form`'s marker under its own name in `env`.
+/// Bind `form`'s marker, on `heap`, under its own name in `env`.
 ///
 /// The marker must leave the heap borrow before `define`, which reaches into
 /// the environment's own `RefCell`s.
-fn define_core_syntax(env: &Rc<Environment>, form: CoreForm) {
-    let marker = env.heap().borrow_mut().core_syntax(form);
+fn define_core_syntax(env: &Rc<Environment>, heap: &patina_core::SharedHeap, form: CoreForm) {
+    let marker = heap.borrow_mut().core_syntax(form);
     env.define(form.name(), marker);
 }

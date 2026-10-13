@@ -18,11 +18,41 @@
 //! `keywords_are_not_recognized_without_a_binding` is the regression guard for
 //! that, and it is the test that would have failed at any point before stage 2.
 
-use patina_core::{ALL_CORE_FORMS, NoGcScope, TaggedValue};
+use patina_core::{ALL_CORE_FORMS, NoGcScope, SharedHeap, TaggedValue, new_shared_heap};
 use patina_frontend::{Desugarer, Parser};
 use patina_ir::CoreExprKind;
 use patina_runtime::Environment;
 use std::rc::Rc;
+
+/// A desugarer over an environment on `heap`, which the forms it desugars
+/// are read on: an environment keeps no handle to its heap (#704).
+struct Subject {
+    desugarer: Desugarer<'static>,
+    heap: SharedHeap,
+}
+
+impl Subject {
+    /// An environment that `build` fills, on a fresh heap.
+    fn new(build: impl FnOnce(&Rc<Environment>, &SharedHeap)) -> Self {
+        let heap = new_shared_heap();
+        let env = Rc::new(Environment::with_heap(&heap));
+        build(&env, &heap);
+        Self {
+            desugarer: Desugarer::with_env(env),
+            heap,
+        }
+    }
+
+    /// The keywords and nothing else — the desugarer's `(null-environment)`.
+    fn keywords() -> Self {
+        Self::new(patina_runtime::stdlib::seed_core_syntax)
+    }
+
+    /// Nothing bound.
+    fn bare() -> Self {
+        Self::new(|_, _| {})
+    }
+}
 
 /// How `(<name> a b)` desugars.
 enum Head {
@@ -34,14 +64,13 @@ enum Head {
     Rejected,
 }
 
-fn desugar_head(desugarer: &Desugarer, name: &str) -> Head {
+fn desugar_head(subject: &Subject, name: &str) -> Head {
     // Two arguments keep every form that takes any past its arity check, so a
     // rejection here means "refused as syntax", never "treated as a call".
     let mut parser = Parser::new(&format!("({} a b)", name)).expect("parser creation failed");
-    let heap = desugarer.env().heap().clone();
-    let desugared = NoGcScope::with_cx(&heap, |cx| {
+    let desugared = NoGcScope::with_cx(&subject.heap, |cx| {
         let form = parser.parse(cx).expect("parse failed");
-        desugarer.desugar_tagged(form, cx)
+        subject.desugarer.desugar_tagged(form, cx)
     });
     let Ok(expr) = desugared else {
         return Head::Rejected;
@@ -54,11 +83,11 @@ fn desugar_head(desugarer: &Desugarer, name: &str) -> Head {
     }
 }
 
-/// `Desugarer::new()` binds the keywords and nothing else — the desugarer's
-/// `(null-environment)`.
+/// `Subject::keywords()` binds the keywords and nothing else — the
+/// desugarer's `(null-environment)`.
 #[test]
 fn every_dispatching_form_is_intercepted_when_bound() {
-    let desugarer = Desugarer::new();
+    let desugarer = Subject::keywords();
     for form in ALL_CORE_FORMS.iter().filter(|f| f.is_dispatching()) {
         let name = form.name();
         assert!(
@@ -76,7 +105,7 @@ fn every_dispatching_form_is_intercepted_when_bound() {
 /// to an unbound name.
 #[test]
 fn every_auxiliary_form_is_rejected_when_bound() {
-    let desugarer = Desugarer::new();
+    let desugarer = Subject::keywords();
     for form in ALL_CORE_FORMS.iter().filter(|f| !f.is_dispatching()) {
         let name = form.name();
         assert!(
@@ -96,11 +125,11 @@ fn every_auxiliary_form_is_rejected_when_bound() {
 /// fallback is what made `(except (scheme base) begin)` mean nothing inside a
 /// library, and deleting it is what this test guards.
 ///
-/// It uses a bare `Environment::new()` rather than `Desugarer::new()`, which
-/// seeds the keywords on purpose.
+/// It uses a bare environment rather than `Subject::keywords()`, which seeds
+/// the keywords on purpose.
 #[test]
 fn keywords_are_not_recognized_without_a_binding() {
-    let desugarer = Desugarer::with_env(Rc::new(Environment::new()));
+    let desugarer = Subject::bare();
     for form in ALL_CORE_FORMS {
         let name = form.name();
         assert!(
@@ -115,7 +144,7 @@ fn keywords_are_not_recognized_without_a_binding() {
 /// that merely fails to desugar, which is most of them.
 #[test]
 fn an_ordinary_identifier_compiles_to_a_call_of_itself() {
-    let desugarer = Desugarer::new();
+    let desugarer = Subject::keywords();
     assert!(matches!(
         desugar_head(&desugarer, "frobnicate"),
         Head::CallOfItself
@@ -142,24 +171,23 @@ fn an_ordinary_identifier_compiles_to_a_call_of_itself() {
 fn apply_is_excluded_on_purpose() {
     assert!(patina_core::CoreForm::from_name("apply").is_none());
 
-    let empty = Desugarer::with_env(Rc::new(Environment::new()));
+    let empty = Subject::bare();
     assert!(matches!(desugar_head(&empty, "apply"), Head::CallOfItself));
 
-    let primitive = Rc::new(Environment::new());
-    primitive.define_primitive(
-        "apply",
-        patina_core::procedure::Arity::Min(2),
-        vec!["patina".into(), "internal".into(), "control".into()],
-    );
-    let with_primitive = Desugarer::with_env(primitive);
+    let with_primitive = Subject::new(|env, heap| {
+        env.define_primitive(
+            heap,
+            "apply",
+            patina_core::procedure::Arity::Min(2),
+            vec!["patina".into(), "internal".into(), "control".into()],
+        )
+    });
     assert!(matches!(
         desugar_head(&with_primitive, "apply"),
         Head::Intercepted
     ));
 
-    let other = Rc::new(Environment::new());
-    other.define("apply", TaggedValue::fixnum(0));
-    let with_other = Desugarer::with_env(other);
+    let with_other = Subject::new(|env, _| env.define("apply", TaggedValue::fixnum(0)));
     assert!(matches!(
         desugar_head(&with_other, "apply"),
         Head::CallOfItself

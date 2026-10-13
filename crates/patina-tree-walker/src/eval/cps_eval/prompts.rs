@@ -115,7 +115,7 @@ impl<'a> CpsEvaluator<'a> {
         // Decide inside the borrow, route outside it:
         // `maybe_route_error_through_cps` allocates the exception object, so
         // it takes `borrow_mut()` and would panic against a live `borrow()`.
-        let heap = self.evaluator.global_env.heap();
+        let heap = &self.evaluator.heap;
         let checked: Result<Rc<PromptTag>, &'static str> = {
             let heap_ref = heap.borrow();
             if !heap_ref.is_callable(body) {
@@ -194,7 +194,7 @@ impl<'a> CpsEvaluator<'a> {
                 exception_handlers,
             );
         }
-        let heap = self.evaluator.global_env.heap();
+        let heap = &self.evaluator.heap;
         let tag = heap.borrow().get_prompt_tag(args[0]).cloned();
         let Some(tag) = tag else {
             return self.maybe_route_error_through_cps(

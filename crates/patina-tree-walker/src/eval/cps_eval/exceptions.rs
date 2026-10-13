@@ -126,16 +126,11 @@ impl<'a> CpsEvaluator<'a> {
 
         // If there are exception handlers, route through them
         if let Some(handler_entry) = exception_handlers.last().cloned() {
-            let exception_tagged = self
-                .evaluator
-                .global_env
-                .heap()
-                .borrow_mut()
-                .alloc_exception(
-                    exception_kind,
-                    message,
-                    vec![], // No irritants for runtime errors
-                );
+            let exception_tagged = self.evaluator.heap.borrow_mut().alloc_exception(
+                exception_kind,
+                message,
+                vec![], // No irritants for runtime errors
+            );
 
             // Pop the handler (it's been invoked)
             let new_handlers = exception_handlers[..exception_handlers.len() - 1].to_vec();

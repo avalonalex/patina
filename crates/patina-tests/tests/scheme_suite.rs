@@ -257,7 +257,7 @@ fn run_on<B: Backend>(
             .map_err(|e| format!("[{label}] could not read {accessor}: {e}"))?;
         let text = patina_primitives::primitives::io::datum_writer::format_display_tagged(
             value,
-            interp.backend().global_env().heap(),
+            interp.heap(),
         );
         *slot = text
             .trim()

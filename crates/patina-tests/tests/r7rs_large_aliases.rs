@@ -11,7 +11,6 @@
 
 use patina_interpreter::{Interpreter, TreeWalkInterpreter};
 use patina_primitives::primitives::io::datum_writer::format_write_tagged;
-use patina_runtime::Backend;
 use patina_tree_walker::Evaluator;
 use patina_vm::VmBackend;
 
@@ -170,13 +169,13 @@ fn eval_to_string(src: &str) -> String {
     let tw_value = tw
         .eval_program(src)
         .unwrap_or_else(|e| panic!("[tree-walker] eval failed for {src}: {e:?}"));
-    let tw_out = format_write_tagged(tw_value, tw.backend().global_env().heap());
+    let tw_out = format_write_tagged(tw_value, tw.heap());
 
     let vm = Interpreter::new(VmBackend::new());
     let vm_value = vm
         .eval_program(src)
         .unwrap_or_else(|e| panic!("[vm] eval failed for {src}: {e:?}"));
-    let vm_out = format_write_tagged(vm_value, vm.backend().global_env().heap());
+    let vm_out = format_write_tagged(vm_value, vm.heap());
 
     assert_eq!(
         tw_out, vm_out,

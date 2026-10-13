@@ -8,7 +8,11 @@ use crate::environment::Environment;
 use std::rc::Rc;
 
 /// Build the (patina internal ephemeron) library
-pub fn build_internal_ephemeron(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
+pub fn build_internal_ephemeron(
+    _name: Vec<String>,
+    env: Rc<Environment>,
+    heap: &patina_core::SharedHeap,
+) -> Vec<String> {
     let library_name = vec![
         "patina".to_string(),
         "internal".to_string(),
@@ -25,7 +29,7 @@ pub fn build_internal_ephemeron(_name: Vec<String>, env: Rc<Environment>) -> Vec
     ];
 
     for (name, arity) in &primitives {
-        env.define_primitive(name, arity.clone(), library_name.clone());
+        env.define_primitive(heap, name, arity.clone(), library_name.clone());
     }
 
     primitives

@@ -20,13 +20,13 @@ fn eval(interp: &TreeWalkInterpreter, code: &str) -> TaggedValue {
 
 /// Check if a TaggedValue is a BigInt using the heap
 fn is_bigint(interp: &TreeWalkInterpreter, tv: TaggedValue) -> bool {
-    let heap = interp.evaluator().global_env.heap();
+    let heap = &interp.evaluator().heap;
     heap.borrow().is_bigint(tv)
 }
 
 /// Get the BigInt string representation if it is one
 fn bigint_str(interp: &TreeWalkInterpreter, tv: TaggedValue) -> Option<String> {
-    let heap = interp.evaluator().global_env.heap();
+    let heap = &interp.evaluator().heap;
     heap.borrow().get_bigint(tv).map(|n| n.to_string())
 }
 

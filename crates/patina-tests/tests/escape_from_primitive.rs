@@ -77,7 +77,7 @@ fn assert_library_program(root: &std::path::Path, program: &str, expected: &str)
             .unwrap_or_else(|e| panic!("{program}: {e}"));
         patina_primitives::primitives::io::datum_writer::format_write_tagged(
             value,
-            interpreter.backend().global_env().heap(),
+            interpreter.heap(),
         )
     }
     let vm = common::vm_interpreter();
@@ -682,7 +682,7 @@ fn test_escaping_out_of_a_library_body_an_eval_import_loads() {
             .unwrap_or_else(|e| panic!("{program}: {e}"));
         patina_primitives::primitives::io::datum_writer::format_write_tagged(
             value,
-            interpreter.backend().global_env().heap(),
+            interpreter.heap(),
         )
     }
 
@@ -834,7 +834,7 @@ fn test_reentering_around_an_open_that_collected_and_retried() {
             .unwrap_or_else(|e| panic!("{program}: {e}"));
         patina_primitives::primitives::io::datum_writer::format_write_tagged(
             value,
-            interpreter.backend().global_env().heap(),
+            interpreter.heap(),
         )
     }
 

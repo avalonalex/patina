@@ -69,7 +69,7 @@ fn test_interpreter_api_with_macros() {
 
     println!("\n=== Testing complex macro code ===");
     let result = interp.eval_program(code).unwrap();
-    let heap = interp.backend().evaluator().global_env.heap();
+    let heap = interp.heap();
     let heap_ref = heap.borrow();
     let name = heap_ref.get_symbol_name(result);
     assert_eq!(name, Some("one"));

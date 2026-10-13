@@ -386,10 +386,7 @@ where
         Mode::Program => interp.eval_program_owned(code),
     };
     match result {
-        Ok(value) => Ok(display_tagged(
-            interp.raw_value(&value),
-            interp.backend().global_env().heap(),
-        )),
+        Ok(value) => Ok(display_tagged(interp.raw_value(&value), interp.heap())),
         Err(e) => {
             let class = match &e {
                 InterpreterError::Lex(_)
@@ -474,12 +471,7 @@ fn expect_error(which: Which, code: &str, mode: Mode) {
 /// could otherwise collect what it posts before anything after the call
 /// could look.
 fn without_safe_points<B: Backend>(interp: Interpreter<B>) -> Interpreter<B> {
-    interp
-        .backend()
-        .global_env()
-        .heap()
-        .borrow_mut()
-        .set_skip_safe_points(true);
+    interp.heap().borrow_mut().set_skip_safe_points(true);
     interp
 }
 

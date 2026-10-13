@@ -32,8 +32,7 @@ use patina_runtime::Backend;
 /// Evaluate a program while a window is open. The heap is the interpreter's
 /// own, so the window is on the counter its dispatch loop polls.
 fn evaluate_inside_a_window<B: Backend>(interp: Interpreter<B>) {
-    let env = interp.global_env();
-    let _window = AssertNoGc::new(env.heap());
+    let _window = AssertNoGc::new(interp.heap());
     let _ = interp.eval_program("(+ 1 2)");
 }
 
@@ -68,8 +67,7 @@ control!(
 #[test]
 fn a_poll_after_the_window_closes_passes() {
     fn run<B: Backend>(interp: Interpreter<B>) {
-        let env = interp.global_env();
-        drop(AssertNoGc::new(env.heap()));
+        drop(AssertNoGc::new(interp.heap()));
         let value = interp.eval_program("(+ 1 2)").expect("evaluate");
         assert_eq!(value, patina_core::TaggedValue::fixnum(3));
     }
@@ -84,7 +82,7 @@ fn a_poll_after_the_window_closes_passes() {
 #[test]
 fn a_run_beneath_a_held_driver_never_collects() {
     fn run<B: Backend>(interp: Interpreter<B>) {
-        let heap = interp.global_env().heap().clone();
+        let heap = interp.heap().clone();
         let counts = || {
             let h = heap.borrow();
             (h.gc_collections(), h.gc_deferred_collections())

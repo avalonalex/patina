@@ -30,7 +30,7 @@ fn literal(value: TaggedValue) -> Rc<CpsExpr> {
 }
 
 fn env_holding(heap: &SharedHeap, value: TaggedValue) -> Rc<Environment> {
-    let env = Rc::new(Environment::with_heap(heap.clone()));
+    let env = Rc::new(Environment::with_heap(heap));
     env.define("held", value);
     env
 }
@@ -86,8 +86,7 @@ fn stacks(heap: &mut Heap, s: &mut Sentinels, step: &'static str) -> Stacks {
 /// entry expression's literals as well.
 #[test]
 fn every_step_result_field_is_traced() {
-    let env = Rc::new(Environment::new());
-    let shared = env.heap().clone();
+    let shared = patina_core::new_shared_heap();
     let mut heap = shared.borrow_mut();
     let mut s = Sentinels::new(&mut heap);
     let h: &mut Heap = &mut heap;
@@ -191,8 +190,8 @@ fn every_step_result_field_is_traced() {
 /// `take_pending_escape`.
 #[test]
 fn every_evaluator_root_is_traced() {
-    let global_env = Rc::new(Environment::new());
-    let shared = global_env.heap().clone();
+    let shared = patina_core::new_shared_heap();
+    let global_env = Rc::new(Environment::with_heap(&shared));
     let mut heap = shared.borrow_mut();
     let mut s = Sentinels::new(&mut heap);
     let global = s.pair(&mut heap, "Evaluator.global_env");
@@ -206,6 +205,7 @@ fn every_evaluator_root_is_traced() {
     let library_roots = LibraryRegistry::register_roots(&library_registry, &shared.borrow());
     let evaluator = Evaluator {
         global_env,
+        heap: shared.clone(),
         debug: Rc::new(DebugConfig::new()),
         library_registry,
         library_roots,

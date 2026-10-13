@@ -49,6 +49,13 @@ pub enum EvalResult {
 #[derive(Trace)]
 pub struct Evaluator {
     pub global_env: Rc<Environment>,
+    /// The heap the evaluator's values live on, its global environment's
+    /// among them: an environment keeps no handle to its heap (#704).
+    #[trace(
+        skip,
+        reason = "a handle to the arenas the collector is marking: not an edge into them"
+    )]
+    pub heap: patina_core::SharedHeap,
     #[trace(skip, reason = "which debug stages print")]
     pub(crate) debug: Rc<DebugConfig>,
     /// Registry of loaded libraries
@@ -122,14 +129,12 @@ impl Evaluator {
         fs: Arc<dyn patina_core::FileSystem>,
         mode: patina_core::GcMode,
     ) -> Self {
-        let global_env = Rc::new(Environment::new());
+        let heap = patina_core::new_shared_heap();
+        let global_env = Rc::new(Environment::with_heap(&heap));
         // Counterpart of the VM's, on the same seam — see that comment.
-        global_env
-            .heap()
-            .borrow_mut()
-            .add_feature("patina-tree-walker");
+        heap.borrow_mut().add_feature("patina-tree-walker");
         // The interpreter's file system, on its instance too (#704).
-        global_env.heap().borrow().instance().set_fs(fs.clone());
+        heap.borrow().instance().set_fs(fs.clone());
 
         // Create primitive registry and register all primitives
         let mut primitive_registry = patina_primitives::PrimitiveRegistry::new();
@@ -139,8 +144,7 @@ impl Evaluator {
         let mut lib_registry = LibraryRegistry::with_default_paths();
         lib_registry.set_fs(fs.clone());
         let library_registry = Rc::new(RefCell::new(lib_registry));
-        let library_roots =
-            LibraryRegistry::register_roots(&library_registry, &global_env.heap().borrow());
+        let library_roots = LibraryRegistry::register_roots(&library_registry, &heap.borrow());
         let loader_registry = Rc::new(RefCell::new(LibraryLoaderRegistry::new()));
 
         // Pairing heap with controller: install the policy's trigger
@@ -148,14 +152,12 @@ impl Evaluator {
         // flag the safe point reads.
         let gc = patina_core::GcController::new(mode);
         patina_core::GcController::note_backend("tree-walker");
-        global_env
-            .heap()
-            .borrow_mut()
-            .set_gc_threshold(gc.current_threshold());
-        let mutator = Rc::clone(global_env.heap().borrow().mutator());
+        heap.borrow_mut().set_gc_threshold(gc.current_threshold());
+        let mutator = Rc::clone(heap.borrow().mutator());
 
         let mut evaluator = Evaluator {
             global_env,
+            heap,
             debug: Rc::new(DebugConfig::new()),
             library_registry,
             library_roots,
@@ -171,7 +173,7 @@ impl Evaluator {
         // Initialize library loaders
         evaluator.init_loaders();
         LibraryLoaderRegistry::install_availability_checker(
-            evaluator.global_env.heap(),
+            &evaluator.heap,
             &evaluator.library_registry,
             &evaluator.loader_registry,
         );
@@ -426,7 +428,7 @@ impl Evaluator {
 
         // `import` and the reserved `expand` keyword are not `(scheme base)`
         // exports. Seed them so the frontend can handle or diagnose them.
-        patina_runtime::stdlib::seed_top_level_syntax(&self.global_env);
+        patina_runtime::stdlib::seed_top_level_syntax(&self.global_env, &self.heap);
 
         // Import (patina debug) into global environment for REPL convenience
         if let Some(lib) = self
@@ -460,7 +462,7 @@ impl Default for Evaluator {
 /// dropping a VM backend does (`Heap::teardown`, #604).
 impl Drop for Evaluator {
     fn drop(&mut self) {
-        if let Ok(mut heap) = self.global_env.heap().try_borrow_mut() {
+        if let Ok(mut heap) = self.heap.try_borrow_mut() {
             heap.teardown();
         }
     }
@@ -531,11 +533,7 @@ impl Evaluator {
         // Pass the global heap so library environments share the same heap for TaggedValue compatibility
         let lib_result = {
             let loaders = self.loader_registry.borrow();
-            loaders.try_simple_load_with_heap(
-                name,
-                &search_paths,
-                self.global_env.heap().clone(),
-            )?
+            loaders.try_simple_load_with_heap(name, &search_paths, self.heap.clone())?
         };
 
         let (lib, loaded_via_rust) = if let Some(lib) = lib_result {
@@ -544,7 +542,7 @@ impl Evaluator {
         } else {
             // Try evaluating loaders (Scheme .sld files)
             // Create a library availability checker for cond-expand
-            let instance = Rc::clone(self.global_env.heap().borrow().instance());
+            let instance = Rc::clone(self.heap.borrow().instance());
             let can_load_library = |lib_name: &[String]| {
                 patina_frontend::cond_expand::library_available(&instance, lib_name)
             };
@@ -554,7 +552,7 @@ impl Evaluator {
                 loaders.try_parse_with_heap_and_library_checker(
                     name,
                     &search_paths,
-                    self.global_env.heap().clone(),
+                    self.heap.clone(),
                     &can_load_library,
                 )?
             };
@@ -665,7 +663,7 @@ impl Evaluator {
     ) -> Result<(), patina_runtime::LibraryError> {
         use patina_frontend::SchemeLibraryLoader;
 
-        let instance = Rc::clone(self.global_env.heap().borrow().instance());
+        let instance = Rc::clone(self.heap.borrow().instance());
         let can_load_library = |lib_name: &[String]| {
             patina_frontend::cond_expand::library_available(&instance, lib_name)
         };
@@ -673,7 +671,7 @@ impl Evaluator {
         let parsed = loader.parse_inline_form(
             form,
             std::path::Path::new("."),
-            self.global_env.heap().clone(),
+            self.heap.clone(),
             &can_load_library,
         )?;
 
@@ -722,7 +720,7 @@ impl Evaluator {
         loading: &patina_runtime::library_registry::Loading,
     ) -> Result<patina_runtime::Library, patina_runtime::LibraryError> {
         // Create a fresh environment for this library, sharing global heap for TaggedValue compatibility
-        let lib_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
+        let lib_env = Rc::new(Environment::with_heap(&self.heap));
         let declarations = parsed.hand_to(loading, &lib_env);
 
         // Step 1: Resolve imports
@@ -743,7 +741,7 @@ impl Evaluator {
         let desugarer = patina_frontend::Desugarer::with_env(lib_env.clone())
             .with_fs(self.fs.clone())
             .with_include_base_of(source);
-        let shared_heap = lib_env.heap().clone();
+        let shared_heap = self.heap.clone();
         while let Some(form) = loading.next_form() {
             // Desugar TaggedValue to CoreExpr
             #[expect(

@@ -22,7 +22,7 @@ impl Evaluator {
         args: Vec<TaggedValue>,
         in_tail_position: bool,
     ) -> Result<super::EvalResult, EvalError> {
-        let heap = self.global_env.heap();
+        let heap = &self.heap;
 
         // Debug trace entry
         if self.debug.is_enabled(super::debug::DebugStage::Apply) {

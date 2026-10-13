@@ -59,6 +59,13 @@ impl BenchInterp {
         }
     }
 
+    fn heap(&self) -> &patina_core::SharedHeap {
+        match self {
+            Self::Vm(i) => i.heap(),
+            Self::TreeWalker(i) => i.heap(),
+        }
+    }
+
     fn check(&self, expression: &str, expected: &str) {
         assert_eq!(
             self.eval(&format!("(equal? {expression} {expected})")),
@@ -136,7 +143,7 @@ const ALLOC: &str =
     "(let loop ((n 256) (xs '())) (if (= n 0) (length xs) (loop (- n 1) (cons n xs))))";
 
 fn expand(interp: &BenchInterp) -> CoreExpr {
-    let heap = interp.env().heap();
+    let heap = interp.heap();
     let mut parser = Parser::new(black_box(SUM)).unwrap();
     let desugarer = Desugarer::with_env(interp.env().clone());
     patina_core::NoGcScope::with_cx(heap, |cx| {
@@ -146,7 +153,7 @@ fn expand(interp: &BenchInterp) -> CoreExpr {
 }
 
 fn heap_counters(interp: &BenchInterp) -> serde_json::Value {
-    let s = interp.env().heap().borrow().stats();
+    let s = interp.heap().borrow().stats();
     json!({
         "arena_slots": {"pairs": s.pairs, "vectors": s.vectors, "strings": s.strings, "objects": s.objects},
         "free_slots": {"pairs": s.free_pairs, "vectors": s.free_vectors, "strings": s.free_strings, "objects": s.free_objects},
@@ -211,7 +218,7 @@ fn phases(c: &mut Criterion) {
                 |interp| {
                     compile_with_qq_resolving(
                         &expand(interp),
-                        interp.env().heap(),
+                        interp.heap(),
                         interp.env(),
                         &registry,
                     )

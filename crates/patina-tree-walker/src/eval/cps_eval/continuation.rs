@@ -203,11 +203,7 @@ impl<'a> CpsEvaluator<'a> {
             exception_handlers,
             prompt_stack,
         );
-        self.evaluator
-            .global_env
-            .heap()
-            .borrow_mut()
-            .alloc_continuation(k)
+        self.evaluator.heap.borrow_mut().alloc_continuation(k)
     }
 
     /// Invoke a continuation with a value, returning the next trampoline step
@@ -295,7 +291,7 @@ impl<'a> CpsEvaluator<'a> {
             } => {
                 // Producer has returned a value - unpack multiple values and call consumer
                 // Use heap methods to check and extract Values type without full conversion
-                let heap = self.evaluator.global_env.heap();
+                let heap = &self.evaluator.heap;
                 let consumer_args_tagged: Vec<TaggedValue> =
                     if let Some(vals) = heap.borrow_mut().get_values_as_tagged(value) {
                         vals
@@ -352,7 +348,7 @@ impl<'a> CpsEvaluator<'a> {
             } => {
                 // Thunk has returned a value. The promise's box is looked up
                 // now, by object — see the variant's doc comment.
-                let heap = self.evaluator.global_env.heap();
+                let heap = &self.evaluator.heap;
                 let cell = heap.borrow().get_promise(promise).expect("still a promise");
 
                 // The thunk may have forced this very promise re-entrantly;
@@ -556,12 +552,8 @@ impl<'a> CpsEvaluator<'a> {
                     // This is an error - raise secondary exception through CPS
                     // Create secondary exception directly as TaggedValue
                     let irritants: Vec<TaggedValue> = original_exception.into_iter().collect();
-                    let secondary_exception_tagged = self
-                        .evaluator
-                        .global_env
-                        .heap()
-                        .borrow_mut()
-                        .alloc_exception(
+                    let secondary_exception_tagged =
+                        self.evaluator.heap.borrow_mut().alloc_exception(
                             patina_core::ExceptionKind::Error,
                             "exception handler returned from non-continuable exception".to_string(),
                             irritants,

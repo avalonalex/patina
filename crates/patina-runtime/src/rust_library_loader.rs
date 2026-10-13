@@ -4,6 +4,7 @@
 //! This is used for performance-critical standard libraries like (scheme base).
 
 use crate::Environment;
+use crate::heap::SharedHeap;
 use crate::library::Library;
 use crate::library_loader::{LibraryLoader, RustLibraryBuilder};
 use crate::library_registry::LibraryError;
@@ -30,9 +31,8 @@ impl RustLibraryLoader {
         }
     }
 
-    /// Build the library `name` in `env` — what `load` and `load_with_heap`
-    /// both do, differing only in whose heap the environment is on.
-    fn build_in(&self, name: &[String], env: Rc<Environment>) -> Result<Library, LibraryError> {
+    /// Build the library `name` in a new namespace on `heap`.
+    fn build_in(&self, name: &[String], heap: &SharedHeap) -> Result<Library, LibraryError> {
         // Look up the builder for this library
         let builder = self
             .builders
@@ -40,7 +40,8 @@ impl RustLibraryLoader {
             .ok_or_else(|| LibraryError::not_found(name))?;
 
         // Call the builder to populate the environment
-        let exports = builder(name.to_vec(), env.clone());
+        let env = Rc::new(Environment::with_heap(heap));
+        let exports = builder(name.to_vec(), env.clone(), heap);
 
         // Create the library
         let mut lib = Library::with_env(name.to_vec(), env);
@@ -97,20 +98,15 @@ impl Default for RustLibraryLoader {
 }
 
 impl LibraryLoader for RustLibraryLoader {
-    fn load(&self, name: &[String], _search_paths: &[PathBuf]) -> Result<Library, LibraryError> {
-        // Create a new environment for the library
-        self.build_in(name, Rc::new(Environment::new()))
-    }
-
     fn load_with_heap(
         &self,
         name: &[String],
         _search_paths: &[PathBuf],
-        heap: crate::heap::SharedHeap,
+        heap: SharedHeap,
     ) -> Result<Library, LibraryError> {
-        // Create a new environment that shares the provided heap
-        // This ensures TaggedValues are allocated on the global heap
-        self.build_in(name, Rc::new(Environment::with_heap(heap)))
+        // A new environment whose values live on the provided heap, the
+        // global one
+        self.build_in(name, &heap)
     }
 
     fn can_load(&self, name: &[String]) -> bool {
@@ -124,8 +120,8 @@ mod tests {
     use patina_core::TaggedValue;
 
     // Test builder function
-    fn build_test_lib(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
-        let tv_internal = env.heap().borrow_mut().alloc_string("private".to_string());
+    fn build_test_lib(_name: Vec<String>, env: Rc<Environment>, heap: &SharedHeap) -> Vec<String> {
+        let tv_internal = heap.borrow_mut().alloc_string("private".to_string());
 
         env.define("foo".to_string(), TaggedValue::fixnum(42));
         env.define("bar".to_string(), TaggedValue::TRUE);
@@ -140,7 +136,10 @@ mod tests {
         let mut loader = RustLibraryLoader::new();
         loader.register(vec!["test".to_string()], build_test_lib);
 
-        let lib = loader.load(&["test".to_string()], &[]).unwrap();
+        let heap = crate::heap::new_shared_heap();
+        let lib = loader
+            .load_with_heap(&["test".to_string()], &[], heap.clone())
+            .unwrap();
 
         assert_eq!(lib.name, vec!["test"]);
         assert!(lib.exports_identifier("foo"));
@@ -158,7 +157,11 @@ mod tests {
     #[test]
     fn test_rust_loader_not_found() {
         let loader = RustLibraryLoader::new();
-        let result = loader.load(&["nonexistent".to_string()], &[]);
+        let result = loader.load_with_heap(
+            &["nonexistent".to_string()],
+            &[],
+            crate::heap::new_shared_heap(),
+        );
         assert!(matches!(result, Err(LibraryError::NotFound { .. })));
     }
 
@@ -178,7 +181,9 @@ mod tests {
         loader.register(name.clone(), build_test_lib);
 
         assert!(loader.can_load(&name));
-        let lib = loader.load(&name, &[]).unwrap();
+        let lib = loader
+            .load_with_heap(&name, &[], crate::heap::new_shared_heap())
+            .unwrap();
         assert_eq!(lib.name, name);
     }
 }

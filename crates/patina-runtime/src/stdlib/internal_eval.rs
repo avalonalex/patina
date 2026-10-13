@@ -7,7 +7,11 @@ use crate::environment::Environment;
 use std::rc::Rc;
 
 /// Build the (patina internal eval) library
-pub fn build_internal_eval(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
+pub fn build_internal_eval(
+    _name: Vec<String>,
+    env: Rc<Environment>,
+    heap: &patina_core::SharedHeap,
+) -> Vec<String> {
     let library_name = vec![
         "patina".to_string(),
         "internal".to_string(),
@@ -23,7 +27,7 @@ pub fn build_internal_eval(_name: Vec<String>, env: Rc<Environment>) -> Vec<Stri
 
     let mut exports = Vec::new();
     for (name, arity) in &primitives {
-        env.define_primitive(name, arity.clone(), library_name.clone());
+        env.define_primitive(heap, name, arity.clone(), library_name.clone());
         exports.push(name.to_string());
     }
 

@@ -805,7 +805,7 @@ mod tests {
         let external = || heap.borrow().external_bytes();
         let name = vec!["test".to_string()];
         let library = |value: i64| {
-            let env = Rc::new(Environment::with_heap(heap.clone()));
+            let env = Rc::new(Environment::with_heap(&heap));
             for i in 0..50 {
                 env.define(format!("private-{i}"), patina_core::TaggedValue::fixnum(i));
             }
@@ -816,7 +816,7 @@ mod tests {
         };
         let mut registry = LibraryRegistry::new();
         registry.register(library(1)).unwrap();
-        let importer = Environment::with_heap(heap.clone());
+        let importer = Environment::with_heap(&heap);
         assert!(
             registry
                 .get(&name)
@@ -1028,8 +1028,8 @@ mod gc_root_tests {
 
     #[test]
     fn a_registered_library_is_a_root() {
-        let env = Rc::new(Environment::new());
-        let shared = env.heap().clone();
+        let shared = patina_core::heap::new_shared_heap();
+        let env = Rc::new(Environment::with_heap(&shared));
         let mut heap = shared.borrow_mut();
         let mut s = Sentinels::new(&mut heap);
         let exported = s.pair(&mut heap, "LibraryRegistry.libraries: Library.exports");
@@ -1056,8 +1056,8 @@ mod gc_root_tests {
     /// is built in, and a body form it has not yet run (#677).
     #[test]
     fn a_library_being_loaded_is_a_root() {
-        let env = Rc::new(Environment::new());
-        let shared = env.heap().clone();
+        let shared = patina_core::heap::new_shared_heap();
+        let env = Rc::new(Environment::with_heap(&shared));
         let mut heap = shared.borrow_mut();
         let mut s = Sentinels::new(&mut heap);
         let defined = s.pair(&mut heap, "LibraryRegistry.loading_stack: LoadingEntry.env");
