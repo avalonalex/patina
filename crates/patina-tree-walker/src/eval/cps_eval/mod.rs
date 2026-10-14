@@ -131,6 +131,64 @@ impl<'a> CpsEvaluator<'a> {
         }
     }
 
+    /// Raise a posted interrupt in `step`'s dynamic environment (#701): the
+    /// step is abandoned and the innermost handler called with the
+    /// `&interrupt` condition, non-continuably, as for an error the step
+    /// met. With no handler, or at the outermost run's `Done`, whose
+    /// handlers have gone, the interrupt leaves the run.
+    #[cold]
+    fn raise_interrupt(&self, step: StepResult) -> Result<StepResult, EvalError> {
+        match step {
+            StepResult::Done(_) => Err(EvalError::Interrupt),
+            StepResult::Continue {
+                expr,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+                ..
+            } => self.maybe_route_error_through_cps(
+                EvalError::Interrupt.at_opt(expr.source.clone()),
+                types::ContValue::Halt,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            ),
+            StepResult::InvokeContinuation {
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+                ..
+            }
+            | StepResult::ApplyProc {
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+                ..
+            }
+            | StepResult::CollectAtCall {
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+                ..
+            } => self.maybe_route_error_through_cps(
+                EvalError::Interrupt,
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            ),
+        }
+    }
+
     /// Point B (#677): the safe point outside any trampoline, where a
     /// library's load ends at the top level. The same root set as
     /// [`Self::maybe_collect`]'s, less a step, since none is running. It
@@ -297,6 +355,7 @@ impl<'a> CpsEvaluator<'a> {
             types::TrampolineKind::Form => GcDriver::acquire(heap),
             types::TrampolineKind::Callback => None,
         };
+        let outermost = driver.is_some();
         let _nested = driver.is_none().then(|| NoGcScope::enter(heap));
         // The open `AssertNoGc` windows, checked at every poll (#624).
         let assert_no_gc = AssertNoGcCount::of(heap);
@@ -315,8 +374,19 @@ impl<'a> CpsEvaluator<'a> {
             // run holds the driver, so a check inside it would almost never
             // run.
             assert_no_gc.assert_none_open();
-            if let Some(driver) = driver.as_mut() {
-                self.maybe_collect(driver, &current_step, expr);
+            if self.evaluator.mutator.poll_due() {
+                // An interrupt is raised at any step, beneath a `NoGcScope`
+                // too (#701). At `Done` only where the outermost run
+                // returns: an interrupt posted during a form's last returns
+                // stops it there rather than stopping the next form (#700),
+                // and a nested run's `Done` leaves it for the run outside.
+                let raise_here = outermost || !matches!(current_step, StepResult::Done(_));
+                if raise_here && self.evaluator.mutator.take_signal() {
+                    current_step = self.raise_interrupt(current_step)?;
+                }
+                if let Some(driver) = driver.as_mut() {
+                    self.maybe_collect(driver, &current_step, expr);
+                }
             }
 
             step_count += 1;

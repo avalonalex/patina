@@ -737,14 +737,25 @@ impl<'a> CpsEvaluator<'a> {
             use patina_core::ExceptionKind;
             use patina_primitives::primitives::io::datum_writer::format_display_tagged;
             let heap = &self.evaluator.heap;
-            let exception_str = format_display_tagged(exception_tagged, heap);
-            // One wording for both — see the VM's `vm_raise_value` for why:
-            // `guard` re-raises with `raise-continuable`, so "continuable" here
-            // described the expansion rather than the user's code.
-            let err = EvalError::SchemeException {
-                kind: ExceptionKind::Error,
-                message: exception_str,
-                irritants_display: String::new(),
+            // An interrupt no handler took, raised again by a declining
+            // `guard`, leaves as the interrupt it is, for the runner that
+            // ends a script on one (#701).
+            let interrupt = heap
+                .borrow()
+                .get_exception(exception_tagged)
+                .is_some_and(|(kind, _, _)| *kind == ExceptionKind::Interrupt);
+            let err = if interrupt {
+                EvalError::Interrupt
+            } else {
+                // One wording for both — see the VM's `vm_raise_value` for
+                // why: `guard` re-raises with `raise-continuable`, so
+                // "continuable" here described the expansion rather than the
+                // user's code.
+                EvalError::SchemeException {
+                    kind: ExceptionKind::Error,
+                    message: format_display_tagged(exception_tagged, heap),
+                    irritants_display: String::new(),
+                }
             };
             Err(super::exceptions::unhandled(
                 err,

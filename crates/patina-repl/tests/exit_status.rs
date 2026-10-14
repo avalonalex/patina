@@ -246,3 +246,88 @@ fn a_failing_program_on_standard_input_fails_whatever_it_says() {
         assert!(!ok, "{backend:?}: {stderr}");
     }
 }
+
+/// A program that writes a marker file once it runs, leaves output unflushed,
+/// then loops until it is interrupted.
+const LOOPS: &str = "(import (scheme base) (scheme write) (scheme file))
+(display \"written\")
+(call-with-output-file \"started\" (lambda (port) (write 'started port)))
+(let loop () (loop))
+";
+
+/// Run patina with `args` in `dir`, `program` on its standard input if given,
+/// and send it SIGINT once it has made the marker file: its (stdout,
+/// stderr, status).
+fn interrupted(
+    dir: &Path,
+    args: &[&str],
+    program: Option<&str>,
+) -> (String, String, std::process::ExitStatus) {
+    let marker = dir.join("started");
+    let _ = fs::remove_file(&marker);
+    let mut patina = common::spawn_patina(dir, args);
+    if let Some(program) = program {
+        patina.write(program);
+    }
+    let started = std::time::Instant::now();
+    while !marker.exists() && started.elapsed() < std::time::Duration::from_secs(10) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(marker.exists(), "patina {args:?} never started its loop");
+    patina.interrupt();
+    patina.finish_with_status()
+}
+
+/// A program Ctrl-C interrupts ends with status 130, 128 + SIGINT, once the
+/// output it left unflushed is written (#701; decision 3 on #697): a script,
+/// with `-k` or without, a program on standard input, and `-p`'s
+/// expressions, on both backends. The interrupt is reported as an error.
+#[test]
+fn an_interrupted_program_exits_130_with_its_output_written() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "loops.scm", LOOPS);
+    for backend in BOTH_BACKENDS {
+        for (mode, extra, program) in [
+            ("script", &["loops.scm"][..], None),
+            ("-k script", &["-k", "loops.scm"][..], None),
+            ("stdin", &[][..], Some(LOOPS)),
+            ("-p", &["-p", LOOPS][..], None),
+        ] {
+            let args: Vec<&str> = backend.iter().chain(extra).copied().collect();
+            let (stdout, stderr, status) = interrupted(dir.path(), &args, program);
+            assert_eq!(
+                status.code(),
+                Some(130),
+                "{backend:?} {mode}: {status}\nstderr: {stderr}"
+            );
+            assert_eq!(stdout, "written", "{backend:?} {mode}: {stderr}");
+            assert!(
+                stderr.contains("Error: interrupted"),
+                "{backend:?} {mode}: {stderr}"
+            );
+        }
+    }
+}
+
+/// A program that catches the interrupt with `(patina interrupt)`'s
+/// `interrupt?` runs on, and ends as it would have.
+#[test]
+fn a_program_that_catches_the_interrupt_runs_on() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "catches.scm",
+        "(import (scheme base) (scheme write) (scheme file) (patina interrupt))
+(display (guard (e ((interrupt? e) 'caught))
+  (call-with-output-file \"started\" (lambda (port) (write 'started port)))
+  (let loop () (loop))))
+(newline)
+",
+    );
+    for backend in BOTH_BACKENDS {
+        let args: Vec<&str> = backend.iter().copied().chain(["catches.scm"]).collect();
+        let (stdout, stderr, status) = interrupted(dir.path(), &args, None);
+        assert!(status.success(), "{backend:?}: {status}\nstderr: {stderr}");
+        assert_eq!(stdout, "caught\n", "{backend:?}: {stderr}");
+    }
+}

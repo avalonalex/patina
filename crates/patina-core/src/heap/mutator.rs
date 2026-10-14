@@ -262,6 +262,26 @@ impl Mutator {
         }
     }
 
+    /// Take what was posted from elsewhere, at a poll whose word read 0:
+    /// whether a [`SIGNAL`](event::SIGNAL) was among it, for the machine to
+    /// raise `&interrupt` (#701). A collection posted from elsewhere joins
+    /// the owner's posts, for the poll that may run it; an event no stage
+    /// services yet is dropped. The poll word is restored unless something
+    /// is still posted.
+    ///
+    /// Any poll may take a signal, under a `NoGcScope` too, where a
+    /// collection stays posted.
+    #[cold]
+    pub fn take_signal(&self) -> bool {
+        if self.event.load(Ordering::Relaxed) == 0 {
+            return false;
+        }
+        let remote = self.event.swap(0, Ordering::SeqCst);
+        self.pending.set(self.pending.get() | (remote & event::GC));
+        self.set_limit(Self::NO_LIMIT);
+        remote & event::SIGNAL != 0
+    }
+
     /// Whether a collection is posted.
     #[inline]
     pub fn gc_posted(&self) -> bool {
@@ -416,6 +436,24 @@ mod tests {
         m.collected();
         assert!(!m.gc_posted());
         assert!(m.poll_due(), "the finalizers are still posted");
+    }
+
+    #[test]
+    fn a_signal_is_taken_once_and_a_remote_collection_joins_the_owners() {
+        let m = Mutator::new();
+        assert!(!m.take_signal());
+        m.post_remote(event::SIGNAL | event::GC_MAJOR);
+        assert!(m.take_signal());
+        assert!(!m.take_signal(), "taken once");
+        assert!(
+            m.gc_posted() && m.poll_due(),
+            "the collection is still posted"
+        );
+        m.collected();
+        assert!(!m.poll_due());
+        m.post_remote(event::DEBUGGER);
+        assert!(!m.take_signal());
+        assert!(!m.poll_due(), "an event nothing services is dropped");
     }
 
     #[test]

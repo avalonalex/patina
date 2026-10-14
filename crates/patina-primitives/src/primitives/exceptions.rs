@@ -67,7 +67,8 @@ pub(super) fn error(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVal
     })
 }
 
-/// (error-object? obj) - Returns #t if obj is an error object
+/// (error-object? obj) - Returns #t if obj is an error object. An interrupt
+/// is not one (#701): a guard that catches errors lets Ctrl-C through.
 pub(super) fn error_object_p(
     heap: &SharedHeap,
     args: &[TaggedValue],
@@ -79,7 +80,31 @@ pub(super) fn error_object_p(
         });
     }
 
-    Ok(TaggedValue::boolean(heap.borrow().is_exception(args[0])))
+    let is_error_object = heap
+        .borrow()
+        .get_exception(args[0])
+        .is_some_and(|(kind, _, _)| *kind != ExceptionKind::Interrupt);
+    Ok(TaggedValue::boolean(is_error_object))
+}
+
+/// (interrupt? obj) - Returns #t if obj is the condition a posted interrupt,
+/// Ctrl-C's, raises (#701). `(patina interrupt)` exports it.
+pub(super) fn interrupt_p(
+    heap: &SharedHeap,
+    args: &[TaggedValue],
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let is_interrupt = heap
+        .borrow()
+        .get_exception(args[0])
+        .is_some_and(|(kind, _, _)| *kind == ExceptionKind::Interrupt);
+    Ok(TaggedValue::boolean(is_interrupt))
 }
 
 /// (error-object-message error-object) - Get the error message string
@@ -350,6 +375,15 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         Arity::Exact(1),
         "Returns #t if obj is a read error.",
         read_error_p,
+    ));
+
+    // interrupt? - predicate, for (patina interrupt)
+    registry.register(PrimitiveFn::new_heap(
+        "patina.internal.errors",
+        "interrupt?",
+        Arity::Exact(1),
+        "Returns #t if obj is the condition an interrupt raises.",
+        interrupt_p,
     ));
 
     // raise - raise an exception

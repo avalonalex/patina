@@ -33,6 +33,8 @@ pub fn build_internal_errors(
         // Error type predicates (stubs)
         ("file-error?", Arity::Exact(1)),
         ("read-error?", Arity::Exact(1)),
+        // An interrupt's predicate, which `(patina interrupt)` exports (#701)
+        ("interrupt?", Arity::Exact(1)),
         // Exception handling (stubs)
         ("raise", Arity::Exact(1)),
         ("raise-continuable", Arity::Exact(1)),

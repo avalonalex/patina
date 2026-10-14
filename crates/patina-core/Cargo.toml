@@ -26,7 +26,9 @@ stacker.workspace = true
 patina-trace-derive = { path = "../patina-trace-derive" }
 
 # `getrlimit(RLIMIT_NOFILE)`, which sets descriptor pressure's threshold
-# (`heap/account.rs`, #607). The binary had it already, through rustyline.
+# (`heap/account.rs`, #607), and `sigaction`, which forwards SIGINT to a
+# heap's interrupt handle (`heap/interrupt.rs`, #701). The binary had it
+# already, through rustyline.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

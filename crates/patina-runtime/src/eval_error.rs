@@ -81,6 +81,12 @@ pub enum EvalError {
     #[error("Continuation escape")]
     ContinuationEscape,
 
+    /// A posted interrupt, Ctrl-C's, that nothing handled (#701). Raised at
+    /// a poll as a non-continuable `&interrupt`, which is not an error
+    /// object; a script that ends on one exits with status 130.
+    #[error("interrupted")]
+    Interrupt,
+
     /// A Scheme-level exception was raised (R7RS Section 6.11)
     /// Uses ExceptionKind from patina-core for consistency.
     /// The irritants are serialized to a string for the error message.
@@ -203,9 +209,11 @@ impl EvalError {
             EvalError::IOError(_) => ErrorKind::FileIO,
             EvalError::InternalError(_) => ErrorKind::Internal,
             EvalError::ContinuationEscape => ErrorKind::ControlFlow,
+            EvalError::Interrupt => ErrorKind::Interrupt,
             EvalError::SchemeException { kind, .. } => match kind {
                 ExceptionKind::FileError => ErrorKind::FileIO,
                 ExceptionKind::ReadError => ErrorKind::Read,
+                ExceptionKind::Interrupt => ErrorKind::Interrupt,
                 _ => ErrorKind::User,
             },
             EvalError::WithLocation { error, .. } | EvalError::WithDiagnostic { error, .. } => {
@@ -287,6 +295,7 @@ impl From<ErrorDetail> for EvalError {
             }
             ErrorKind::Internal => EvalError::InternalError(detail.message),
             ErrorKind::ControlFlow => EvalError::ContinuationEscape,
+            ErrorKind::Interrupt => EvalError::Interrupt,
         }
     }
 }
@@ -303,6 +312,11 @@ impl crate::HasDiagnostic for EvalError {
                 d
             }
             Self::DesugarError(_) => Diagnostic::new(K::Syntax, self.to_string()),
+            Self::Interrupt
+            | Self::SchemeException {
+                kind: ExceptionKind::Interrupt,
+                ..
+            } => Diagnostic::new(K::Interrupt, self.to_string()),
             _ => Diagnostic::new(K::Runtime, self.to_string()),
         }
     }

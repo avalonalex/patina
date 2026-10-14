@@ -367,7 +367,7 @@ impl Repl {
         println!();
         println!("Commands:");
         println!("  (exit) or Ctrl+D to quit");
-        println!("  Ctrl+C to cancel current input");
+        println!("  Ctrl+C to cancel current input, or to interrupt an evaluation");
         println!();
 
         let interp = &self.interpreter;
@@ -379,8 +379,9 @@ impl Repl {
             // Every form on the line, as the VM REPL does: reading only the
             // first left `(define a 1) (define b 2)` with `b` unbound, and
             // dropped a trailing datum the line cut short.
-            let (eval_result, source_map) =
-                interp.eval_program_with_fold_case_owned(line, &source_name, fold_case);
+            let (eval_result, source_map) = crate::CtrlC::during(interp, || {
+                interp.eval_program_with_fold_case_owned(line, &source_name, fold_case)
+            });
             match eval_result {
                 Ok(result) => (interp.raw_value(&result) != patina_core::TaggedValue::UNSPECIFIED)
                     .then(|| interp.display_tagged(&result)),

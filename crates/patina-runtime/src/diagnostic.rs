@@ -23,6 +23,8 @@ pub enum DiagnosticKind {
     NativeExtension,
     Runtime,
     Io,
+    /// A posted interrupt, Ctrl-C's, that nothing handled (#701).
+    Interrupt,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

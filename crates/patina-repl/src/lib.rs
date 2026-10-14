@@ -12,10 +12,12 @@
 // (`PRD/GC_PRD.md` §11.3, #698).
 #![forbid(unsafe_code)]
 
+pub mod ctrl_c;
 pub mod program_stream;
 pub mod repl;
 
 // Re-export main REPL type and shared editor infrastructure
+pub use ctrl_c::CtrlC;
 pub use program_stream::run_program_stream;
 pub use repl::Repl;
 pub use repl::{Lines, SchemeHelper, run_repl_loop, session_lines};

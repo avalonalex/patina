@@ -125,6 +125,9 @@ pub use heap::{
     table::HeapTable,
     trace::{Trace, TraceThroughRc},
 };
+// SIGINT's forwarding to an interrupt handle (#701), on Unix.
+#[cfg(unix)]
+pub use heap::interrupt::SigintForwarding;
 // The derive, beside the trait it implements: one `use patina_core::Trace`
 // brings both, as serde's `Serialize` does.
 pub use patina_trace_derive::Trace;
