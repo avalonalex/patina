@@ -6,20 +6,17 @@
 //! - Character case conversion (char-upcase, char-downcase, char-foldcase)
 //! - Character/integer conversion (char->integer, integer->char)
 //! - Digit value extraction (digit-value)
-use patina_core::TaggedValue;
+//!
+//! Each takes the context (#706): its arguments and value are values of it.
+use patina_core::{Cx, Value};
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-// ========== TaggedValue Extraction Helpers ==========
+// ========== Argument Extraction Helpers ==========
 
-/// Extract a character from a TaggedValue
-fn get_char(
-    tv: TaggedValue,
-    _heap: &std::cell::Ref<'_, patina_core::Heap>,
-    fn_name: &str,
-) -> Result<char, EvalError> {
+/// Extract a character from a value
+fn get_char(tv: Value<'_>, fn_name: &str) -> Result<char, EvalError> {
     if tv.is_char() {
         return Ok(tv.as_char_unchecked());
     }
@@ -29,12 +26,8 @@ fn get_char(
     )))
 }
 
-/// Extract an integer from a TaggedValue
-fn get_integer(
-    tv: TaggedValue,
-    _heap: &std::cell::Ref<'_, patina_core::Heap>,
-    fn_name: &str,
-) -> Result<i64, EvalError> {
+/// Extract an integer from a value
+fn get_integer(tv: Value<'_>, fn_name: &str) -> Result<i64, EvalError> {
     if tv.is_fixnum() {
         return Ok(tv.as_fixnum_unchecked());
     }
@@ -47,10 +40,10 @@ fn get_integer(
 // ========== Character Comparisons ==========
 
 /// (char=? char1 char2 ...) - Character equality
-pub(super) fn char_equal(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_equal<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -58,20 +51,21 @@ pub(super) fn char_equal(
         });
     }
 
-    let heap_ref = heap.borrow();
-
     for i in 0..args.len() - 1 {
-        let c1 = get_char(args[i], &heap_ref, "char=?")?;
-        let c2 = get_char(args[i + 1], &heap_ref, "char=?")?;
+        let c1 = get_char(args[i], "char=?")?;
+        let c2 = get_char(args[i + 1], "char=?")?;
         if c1 != c2 {
-            return Ok(TaggedValue::FALSE);
+            return Ok(Value::FALSE);
         }
     }
-    Ok(TaggedValue::TRUE)
+    Ok(Value::TRUE)
 }
 
 /// (char<? char1 char2 ...) - Character less than
-pub(super) fn char_lt(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_lt<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -79,20 +73,21 @@ pub(super) fn char_lt(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedV
         });
     }
 
-    let heap_ref = heap.borrow();
-
     for i in 0..args.len() - 1 {
-        let c1 = get_char(args[i], &heap_ref, "char<?")?;
-        let c2 = get_char(args[i + 1], &heap_ref, "char<?")?;
+        let c1 = get_char(args[i], "char<?")?;
+        let c2 = get_char(args[i + 1], "char<?")?;
         if c1 >= c2 {
-            return Ok(TaggedValue::FALSE);
+            return Ok(Value::FALSE);
         }
     }
-    Ok(TaggedValue::TRUE)
+    Ok(Value::TRUE)
 }
 
 /// (char>? char1 char2 ...) - Character greater than
-pub(super) fn char_gt(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_gt<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -100,20 +95,21 @@ pub(super) fn char_gt(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedV
         });
     }
 
-    let heap_ref = heap.borrow();
-
     for i in 0..args.len() - 1 {
-        let c1 = get_char(args[i], &heap_ref, "char>?")?;
-        let c2 = get_char(args[i + 1], &heap_ref, "char>?")?;
+        let c1 = get_char(args[i], "char>?")?;
+        let c2 = get_char(args[i + 1], "char>?")?;
         if c1 <= c2 {
-            return Ok(TaggedValue::FALSE);
+            return Ok(Value::FALSE);
         }
     }
-    Ok(TaggedValue::TRUE)
+    Ok(Value::TRUE)
 }
 
 /// (char<=? char1 char2 ...) - Character less than or equal
-pub(super) fn char_le(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_le<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -121,20 +117,21 @@ pub(super) fn char_le(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedV
         });
     }
 
-    let heap_ref = heap.borrow();
-
     for i in 0..args.len() - 1 {
-        let c1 = get_char(args[i], &heap_ref, "char<=?")?;
-        let c2 = get_char(args[i + 1], &heap_ref, "char<=?")?;
+        let c1 = get_char(args[i], "char<=?")?;
+        let c2 = get_char(args[i + 1], "char<=?")?;
         if c1 > c2 {
-            return Ok(TaggedValue::FALSE);
+            return Ok(Value::FALSE);
         }
     }
-    Ok(TaggedValue::TRUE)
+    Ok(Value::TRUE)
 }
 
 /// (char>=? char1 char2 ...) - Character greater than or equal
-pub(super) fn char_ge(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_ge<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -142,16 +139,14 @@ pub(super) fn char_ge(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedV
         });
     }
 
-    let heap_ref = heap.borrow();
-
     for i in 0..args.len() - 1 {
-        let c1 = get_char(args[i], &heap_ref, "char>=?")?;
-        let c2 = get_char(args[i + 1], &heap_ref, "char>=?")?;
+        let c1 = get_char(args[i], "char>=?")?;
+        let c2 = get_char(args[i + 1], "char>=?")?;
         if c1 < c2 {
-            return Ok(TaggedValue::FALSE);
+            return Ok(Value::FALSE);
         }
     }
-    Ok(TaggedValue::TRUE)
+    Ok(Value::TRUE)
 }
 
 // ========== Case-Insensitive Character Comparisons ==========
@@ -234,10 +229,10 @@ fn fold_char(c: char) -> char {
 }
 
 /// (char-ci=? char1 char2 ...) - Case-insensitive character equality
-pub(super) fn char_ci_equal(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_ci_equal<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -245,23 +240,21 @@ pub(super) fn char_ci_equal(
         });
     }
 
-    let heap_ref = heap.borrow();
-
     for i in 0..args.len() - 1 {
-        let c1 = fold_char(get_char(args[i], &heap_ref, "char-ci=?")?);
-        let c2 = fold_char(get_char(args[i + 1], &heap_ref, "char-ci=?")?);
+        let c1 = fold_char(get_char(args[i], "char-ci=?")?);
+        let c2 = fold_char(get_char(args[i + 1], "char-ci=?")?);
         if c1 != c2 {
-            return Ok(TaggedValue::FALSE);
+            return Ok(Value::FALSE);
         }
     }
-    Ok(TaggedValue::TRUE)
+    Ok(Value::TRUE)
 }
 
 /// (char-ci<? char1 char2 ...) - Case-insensitive character less than
-pub(super) fn char_ci_lt(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_ci_lt<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -269,23 +262,21 @@ pub(super) fn char_ci_lt(
         });
     }
 
-    let heap_ref = heap.borrow();
-
     for i in 0..args.len() - 1 {
-        let c1 = fold_char(get_char(args[i], &heap_ref, "char-ci<?")?);
-        let c2 = fold_char(get_char(args[i + 1], &heap_ref, "char-ci<?")?);
+        let c1 = fold_char(get_char(args[i], "char-ci<?")?);
+        let c2 = fold_char(get_char(args[i + 1], "char-ci<?")?);
         if c1 >= c2 {
-            return Ok(TaggedValue::FALSE);
+            return Ok(Value::FALSE);
         }
     }
-    Ok(TaggedValue::TRUE)
+    Ok(Value::TRUE)
 }
 
 /// (char-ci>? char1 char2 ...) - Case-insensitive character greater than
-pub(super) fn char_ci_gt(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_ci_gt<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -293,23 +284,21 @@ pub(super) fn char_ci_gt(
         });
     }
 
-    let heap_ref = heap.borrow();
-
     for i in 0..args.len() - 1 {
-        let c1 = fold_char(get_char(args[i], &heap_ref, "char-ci>?")?);
-        let c2 = fold_char(get_char(args[i + 1], &heap_ref, "char-ci>?")?);
+        let c1 = fold_char(get_char(args[i], "char-ci>?")?);
+        let c2 = fold_char(get_char(args[i + 1], "char-ci>?")?);
         if c1 <= c2 {
-            return Ok(TaggedValue::FALSE);
+            return Ok(Value::FALSE);
         }
     }
-    Ok(TaggedValue::TRUE)
+    Ok(Value::TRUE)
 }
 
 /// (char-ci<=? char1 char2 ...) - Case-insensitive character less than or equal
-pub(super) fn char_ci_le(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_ci_le<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -317,23 +306,21 @@ pub(super) fn char_ci_le(
         });
     }
 
-    let heap_ref = heap.borrow();
-
     for i in 0..args.len() - 1 {
-        let c1 = fold_char(get_char(args[i], &heap_ref, "char-ci<=?")?);
-        let c2 = fold_char(get_char(args[i + 1], &heap_ref, "char-ci<=?")?);
+        let c1 = fold_char(get_char(args[i], "char-ci<=?")?);
+        let c2 = fold_char(get_char(args[i + 1], "char-ci<=?")?);
         if c1 > c2 {
-            return Ok(TaggedValue::FALSE);
+            return Ok(Value::FALSE);
         }
     }
-    Ok(TaggedValue::TRUE)
+    Ok(Value::TRUE)
 }
 
 /// (char-ci>=? char1 char2 ...) - Case-insensitive character greater than or equal
-pub(super) fn char_ci_ge(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_ci_ge<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -341,121 +328,113 @@ pub(super) fn char_ci_ge(
         });
     }
 
-    let heap_ref = heap.borrow();
-
     for i in 0..args.len() - 1 {
-        let c1 = fold_char(get_char(args[i], &heap_ref, "char-ci>=?")?);
-        let c2 = fold_char(get_char(args[i + 1], &heap_ref, "char-ci>=?")?);
+        let c1 = fold_char(get_char(args[i], "char-ci>=?")?);
+        let c2 = fold_char(get_char(args[i + 1], "char-ci>=?")?);
         if c1 < c2 {
-            return Ok(TaggedValue::FALSE);
+            return Ok(Value::FALSE);
         }
     }
-    Ok(TaggedValue::TRUE)
+    Ok(Value::TRUE)
 }
 
 // ========== Character Type Predicates ==========
 
 /// (char-alphabetic? char) - Returns #t if char is alphabetic
-pub(super) fn char_alphabetic_p(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_alphabetic_p<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    let heap_ref = heap.borrow();
-    let c = get_char(args[0], &heap_ref, "char-alphabetic?")?;
-    Ok(TaggedValue::boolean(c.is_alphabetic()))
+    let c = get_char(args[0], "char-alphabetic?")?;
+    Ok(Value::boolean(c.is_alphabetic()))
 }
 
 /// (char-numeric? char) - Returns #t for Unicode decimal digits
-pub(super) fn char_numeric_p(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_numeric_p<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    let heap_ref = heap.borrow();
-    let c = get_char(args[0], &heap_ref, "char-numeric?")?;
+    let c = get_char(args[0], "char-numeric?")?;
     // R7RS requires Numeric_Type=Decimal. Rust's is_numeric() also accepts
     // other numbers, such as superscripts, fractions and Roman numerals.
-    Ok(TaggedValue::boolean(unicode_digit_value(c).is_some()))
+    Ok(Value::boolean(unicode_digit_value(c).is_some()))
 }
 
 /// (char-whitespace? char) - Returns #t if char is whitespace
-pub(super) fn char_whitespace_p(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_whitespace_p<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    let heap_ref = heap.borrow();
-    let c = get_char(args[0], &heap_ref, "char-whitespace?")?;
-    Ok(TaggedValue::boolean(c.is_whitespace()))
+    let c = get_char(args[0], "char-whitespace?")?;
+    Ok(Value::boolean(c.is_whitespace()))
 }
 
 /// (char-upper-case? char) - Returns #t if char is uppercase
-pub(super) fn char_upper_case_p(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_upper_case_p<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    let heap_ref = heap.borrow();
-    let c = get_char(args[0], &heap_ref, "char-upper-case?")?;
+    let c = get_char(args[0], "char-upper-case?")?;
     // R7RS: uppercase means the character has the Unicode Uppercase property
-    Ok(TaggedValue::boolean(c.is_uppercase()))
+    Ok(Value::boolean(c.is_uppercase()))
 }
 
 /// (char-lower-case? char) - Returns #t if char is lowercase
-pub(super) fn char_lower_case_p(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_lower_case_p<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    let heap_ref = heap.borrow();
-    let c = get_char(args[0], &heap_ref, "char-lower-case?")?;
+    let c = get_char(args[0], "char-lower-case?")?;
     // R7RS: lowercase means the character has the Unicode Lowercase property
-    Ok(TaggedValue::boolean(c.is_lowercase()))
+    Ok(Value::boolean(c.is_lowercase()))
 }
 
 // ========== Character Case Conversion ==========
 
 /// (char-upcase char) - Convert character to uppercase
-pub(super) fn char_upcase(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_upcase<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    let heap_ref = heap.borrow();
-    let c = get_char(args[0], &heap_ref, "char-upcase")?;
+    let c = get_char(args[0], "char-upcase")?;
 
-    Ok(TaggedValue::character(simple_mapping(
+    Ok(Value::character(simple_mapping(
         c,
         c.to_uppercase(),
         SIMPLE_UPPER_WHEN_FULL_EXPANDS,
@@ -463,20 +442,19 @@ pub(super) fn char_upcase(
 }
 
 /// (char-downcase char) - Convert character to lowercase
-pub(super) fn char_downcase(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_downcase<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    let heap_ref = heap.borrow();
-    let c = get_char(args[0], &heap_ref, "char-downcase")?;
+    let c = get_char(args[0], "char-downcase")?;
 
-    Ok(TaggedValue::character(simple_mapping(
+    Ok(Value::character(simple_mapping(
         c,
         c.to_lowercase(),
         SIMPLE_LOWER_WHEN_FULL_EXPANDS,
@@ -487,45 +465,43 @@ pub(super) fn char_downcase(
 ///
 /// R7RS: Returns the case-folded character — Unicode *simple* folding, so
 /// ß stays ß (its full folding "ss" is not a character) while ẞ folds to ß.
-pub(super) fn char_foldcase(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_foldcase<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    let heap_ref = heap.borrow();
-    let c = get_char(args[0], &heap_ref, "char-foldcase")?;
+    let c = get_char(args[0], "char-foldcase")?;
 
-    Ok(TaggedValue::character(fold_char(c)))
+    Ok(Value::character(fold_char(c)))
 }
 
 // ========== Character/Integer Conversion ==========
 
 /// (char->integer char) - Convert character to Unicode code point
-pub(super) fn char_to_integer(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_to_integer<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    let heap_ref = heap.borrow();
-    let c = get_char(args[0], &heap_ref, "char->integer")?;
-    Ok(TaggedValue::fixnum(c as u32 as i64))
+    let c = get_char(args[0], "char->integer")?;
+    Ok(Value::fixnum(c as u32 as i64))
 }
 
 /// (integer->char n) - Convert Unicode code point to character
-pub(super) fn integer_to_char(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn integer_to_char<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -533,8 +509,7 @@ pub(super) fn integer_to_char(
         });
     }
 
-    let heap_ref = heap.borrow();
-    let n = get_integer(args[0], &heap_ref, "integer->char")?;
+    let n = get_integer(args[0], "integer->char")?;
 
     if n < 0 {
         return Err(EvalError::TypeError(format!(
@@ -545,7 +520,7 @@ pub(super) fn integer_to_char(
 
     let n = n as u32;
     match char::from_u32(n) {
-        Some(c) => Ok(TaggedValue::character(c)),
+        Some(c) => Ok(Value::character(c)),
         None => Err(EvalError::TypeError(format!(
             "integer->char: {} is not a valid Unicode code point",
             n
@@ -561,24 +536,23 @@ pub(super) fn integer_to_char(
 /// R7RS requires this to work for all Unicode decimal digits (Nd category),
 /// not just ASCII 0-9. Unicode decimal digits are organized in blocks where
 /// each block contains 10 consecutive code points for 0-9.
-pub(super) fn digit_value(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn digit_value<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    let heap_ref = heap.borrow();
-    let c = get_char(args[0], &heap_ref, "digit-value")?;
+    let c = get_char(args[0], "digit-value")?;
 
     // R7RS: Returns the numeric value 0-9 for digit characters, #f otherwise
     // Must handle all Unicode decimal digits, not just ASCII
     match unicode_digit_value(c) {
-        Some(d) => Ok(TaggedValue::fixnum(d as i64)),
-        None => Ok(TaggedValue::FALSE),
+        Some(d) => Ok(Value::fixnum(d as i64)),
+        None => Ok(Value::FALSE),
     }
 }
 
@@ -800,10 +774,10 @@ fn class_predicate(name: &str) -> Option<fn(char) -> bool> {
 /// A vector rather than a list of pairs, because the largest class is 761
 /// ranges and `(srfi 14)` reads the result exactly once, to build its own
 /// representation from it.
-pub(super) fn char_set_unicode_ranges(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_set_unicode_ranges<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -811,17 +785,12 @@ pub(super) fn char_set_unicode_ranges(
         });
     }
 
-    // Scoped so the shared borrow ends before the allocation below takes a
-    // mutable one.
-    let class = {
-        let heap_ref = heap.borrow();
-        match heap_ref.get_symbol_name(args[0]) {
-            Some(name) => name.to_string(),
-            None => {
-                return Err(EvalError::TypeError(
-                    "char-set-unicode-ranges: requires a symbol naming a Unicode class".to_string(),
-                ));
-            }
+    let class = match cx.get_symbol_name(args[0]) {
+        Some(name) => name.to_string(),
+        None => {
+            return Err(EvalError::TypeError(
+                "char-set-unicode-ranges: requires a symbol naming a Unicode class".to_string(),
+            ));
         }
     };
 
@@ -832,17 +801,12 @@ pub(super) fn char_set_unicode_ranges(
         ))
     })?;
 
-    let bounds: Vec<TaggedValue> = cached_class_ranges(&class, pred)
+    let bounds: Vec<Value<'gc>> = cached_class_ranges(&class, pred)
         .iter()
-        .flat_map(|&(lo, hi)| {
-            [
-                TaggedValue::fixnum(lo as i64),
-                TaggedValue::fixnum(hi as i64),
-            ]
-        })
+        .flat_map(|&(lo, hi)| [Value::fixnum(lo as i64), Value::fixnum(hi as i64)])
         .collect();
 
-    Ok(heap.borrow_mut().alloc_vector(bounds))
+    Ok(cx.alloc_vector(bounds))
 }
 
 /// One class's coalesced ranges, shared between every ask for that class.
@@ -904,7 +868,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     use patina_runtime::Arity;
 
     // Character comparisons
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char=?",
         Arity::Min(2),
@@ -912,7 +876,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_equal,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char<?",
         Arity::Min(2),
@@ -920,7 +884,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_lt,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char>?",
         Arity::Min(2),
@@ -928,7 +892,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_gt,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char<=?",
         Arity::Min(2),
@@ -936,7 +900,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_le,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char>=?",
         Arity::Min(2),
@@ -945,7 +909,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Case-insensitive comparisons
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char-ci=?",
         Arity::Min(2),
@@ -953,7 +917,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_ci_equal,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char-ci<?",
         Arity::Min(2),
@@ -961,7 +925,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_ci_lt,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char-ci>?",
         Arity::Min(2),
@@ -969,7 +933,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_ci_gt,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char-ci<=?",
         Arity::Min(2),
@@ -977,7 +941,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_ci_le,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char-ci>=?",
         Arity::Min(2),
@@ -986,7 +950,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Type predicates
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char-alphabetic?",
         Arity::Exact(1),
@@ -994,7 +958,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_alphabetic_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char-numeric?",
         Arity::Exact(1),
@@ -1002,7 +966,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_numeric_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char-whitespace?",
         Arity::Exact(1),
@@ -1010,7 +974,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_whitespace_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char-upper-case?",
         Arity::Exact(1),
@@ -1018,7 +982,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_upper_case_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char-lower-case?",
         Arity::Exact(1),
@@ -1027,7 +991,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Case conversion
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char-upcase",
         Arity::Exact(1),
@@ -1035,7 +999,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_upcase,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char-downcase",
         Arity::Exact(1),
@@ -1043,7 +1007,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_downcase,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char-foldcase",
         Arity::Exact(1),
@@ -1052,7 +1016,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Character/integer conversion
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char->integer",
         Arity::Exact(1),
@@ -1060,7 +1024,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_to_integer,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "integer->char",
         Arity::Exact(1),
@@ -1069,7 +1033,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Digit value
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "digit-value",
         Arity::Exact(1),
@@ -1078,7 +1042,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Unicode character classes, for (srfi 14)'s constants
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "char-set-unicode-ranges",
         Arity::Exact(1),
