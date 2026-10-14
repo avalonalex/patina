@@ -218,6 +218,11 @@ impl RunningPatina {
         }
     }
 
+    /// Whether the child is still running.
+    pub fn running(&mut self) -> bool {
+        self.child.try_wait().expect("wait on patina").is_none()
+    }
+
     /// Send SIGINT, as Ctrl-C at a terminal does (#701). Through kill(1),
     /// which keeps the tests free of unsafe code.
     pub fn interrupt(&self) {

@@ -7,6 +7,11 @@
 //! handled (`patina_runtime::exit_status::INTERRUPTED_STATUS`). A session
 //! forwards it only while an evaluation runs, so that Ctrl-C at the prompt
 //! still abandons the line being typed.
+//!
+//! A program blocked in a read, or in one long primitive, takes the
+//! interrupt only when that returns; a second Ctrl-C while the first waits
+//! ends the process by SIGINT's default action
+//! (`patina_core::InterruptHandle::forward_sigint`).
 
 use patina_interpreter::{Backend, Interpreter};
 

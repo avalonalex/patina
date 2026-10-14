@@ -646,6 +646,9 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
     services yet, are dropped. `InterruptHandle::forward_sigint` makes SIGINT
     post `SIGNAL` through a `sigaction` handler while its guard lives: the
     REPL holds one while an evaluation runs, and a script for its whole run.
+    A SIGINT that finds the last one still posted, by a program that reached
+    no poll since (blocked in a read, or in a long primitive), ends the
+    process by SIGINT's default action, as before forwarding.
   - **Reserved words.** They stay zero until a later stage uses them: the
     allocation buffer (5a), the barrier (7), the register stack (4d), Tick
     mode's count, and the words C1 and C10 reserve.

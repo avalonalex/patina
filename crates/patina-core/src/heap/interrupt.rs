@@ -50,7 +50,7 @@ impl InterruptHandle {
     /// [`SIGNAL`](super::mutator::event::SIGNAL) by raising `&interrupt`
     /// (`Mutator::take_signal`).
     pub fn post(&self, bits: u32) -> bool {
-        self.0.post(bits)
+        self.0.post(bits).is_some()
     }
 
     /// Forward SIGINT to this handle while the guard lives: each one posts
@@ -61,6 +61,11 @@ impl InterruptHandle {
     ///
     /// The handler is installed with `SA_RESTART`, so a read that SIGINT
     /// interrupts resumes, and the interrupt is raised at the poll after it.
+    /// A second SIGINT while the first is still posted ends the process, by
+    /// SIGINT's default action: the program has reached no poll since, being
+    /// blocked in a read or in a long primitive, and is not taking
+    /// interrupts. A running program takes a post at its next call, long
+    /// before a second key press.
     #[cfg(unix)]
     pub fn forward_sigint(&self) -> std::io::Result<SigintForwarding> {
         sigint::forward(&self.0)
@@ -95,12 +100,12 @@ impl InterruptCell {
     }
 
     /// [`InterruptHandle::post`]: count in, load the pointer, post if it is
-    /// not null, count out.
-    fn post(&self, bits: u32) -> bool {
+    /// not null, count out. The events already posted from elsewhere and not
+    /// yet taken, or `None` with no carrier to post to.
+    fn post(&self, bits: u32) -> Option<u32> {
         self.posting.fetch_add(1, Ordering::SeqCst);
         let mutator = self.mutator.load(Ordering::SeqCst);
-        let posted = !mutator.is_null();
-        if posted {
+        let before = (!mutator.is_null()).then(|| {
             // SAFETY: the pointer is non-null only from `attach`, once the
             // carrier is at the address it keeps, until `detach`, in its
             // drop, before its memory is freed. This post counted itself in
@@ -109,10 +114,10 @@ impl InterruptCell {
             // `SeqCst` operations, a load that saw the pointer came before
             // the store of null, so `detach` waits for this post's count
             // out, below, and the `Mutator` is live until then.
-            unsafe { Mutator::post_remote_at(mutator, bits) };
-        }
+            unsafe { Mutator::post_remote_at(mutator, bits) }
+        });
         self.posting.fetch_sub(1, Ordering::SeqCst);
-        posted
+        before
     }
 
     /// The teardown: stop posters reaching the `Mutator`, and wait out any
@@ -150,16 +155,30 @@ mod sigint {
     /// itself in before it loads the target and out after its post, so the
     /// guard's drop, which stores null and waits for the count to read 0,
     /// lets go of the cell only once no handler can reach it.
+    ///
+    /// A SIGINT that finds the last one still posted ends the process
+    /// ([`InterruptHandle::forward_sigint`](super::InterruptHandle::forward_sigint)).
     extern "C" fn on_sigint(_signal: libc::c_int) {
         IN_HANDLER.fetch_add(1, Ordering::SeqCst);
         let cell = TARGET.load(Ordering::SeqCst);
-        if !cell.is_null() {
+        let before = if cell.is_null() {
+            None
+        } else {
             // SAFETY: non-null only while a `SigintForwarding` holds the
             // cell's `Arc`, and its drop waits for this handler's count out
             // before releasing it.
-            unsafe { (*cell).post(event::SIGNAL) };
-        }
+            unsafe { (*cell).post(event::SIGNAL) }
+        };
         IN_HANDLER.fetch_sub(1, Ordering::SeqCst);
+        if before.is_some_and(|before| before & event::SIGNAL != 0) {
+            // SAFETY: `signal` and `raise` are async-signal-safe. SIGINT is
+            // blocked while its handler runs, so the default action ends the
+            // process as this handler returns.
+            unsafe {
+                libc::signal(libc::SIGINT, libc::SIG_DFL);
+                libc::raise(libc::SIGINT);
+            }
+        }
     }
 
     /// SIGINT forwarded to a heap's interrupt handle until this drops,

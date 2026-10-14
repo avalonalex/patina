@@ -181,6 +181,10 @@ it had not yet flushed. A program can catch the interrupt: it raises a
 condition that `interrupt?` from `(patina interrupt)` recognises. That
 condition is not an error object, so a `guard` that catches only errors lets
 Ctrl-C through. At the prompt, Ctrl-C still abandons the line being typed.
+A program blocked reading its input, or inside one long primitive operation,
+sees the interrupt only once that returns. If you press Ctrl-C a second time
+before then, the process ends right away, as it did before Patina caught
+Ctrl-C.
 
 ```scheme
 patina> (define factorial

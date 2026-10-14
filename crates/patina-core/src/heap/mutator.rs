@@ -234,20 +234,22 @@ impl Mutator {
     }
 
     /// [`post_remote`](Self::post_remote) through a pointer, for a poster
-    /// on another thread ([`InterruptHandle::post`]). It reaches the two
-    /// atomic words without forming a `&Mutator`, whose other words are the
-    /// owner's alone.
+    /// on another thread ([`InterruptHandle::post`]): the events already
+    /// posted from elsewhere and not yet taken. It reaches the two atomic
+    /// words without forming a `&Mutator`, whose other words are the owner's
+    /// alone.
     ///
     /// # Safety
     ///
     /// `this` points at a live `Mutator`.
-    pub(super) unsafe fn post_remote_at(this: *const Self, bits: u32) {
+    pub(super) unsafe fn post_remote_at(this: *const Self, bits: u32) -> u32 {
         // SAFETY: `this` is live, by the caller's guarantee. Each borrow is
         // of one atomic word, which any thread may write through `&`, and
         // none is of the whole `Mutator`.
         let (event, reg_limit) = unsafe { (&(*this).event, &(*this).reg_limit) };
-        event.fetch_or(bits, Ordering::SeqCst);
+        let before = event.fetch_or(bits, Ordering::SeqCst);
         reg_limit.store(0, Ordering::SeqCst);
+        before
     }
 
     /// Restore the poll word to `limit` once a poll has serviced what it

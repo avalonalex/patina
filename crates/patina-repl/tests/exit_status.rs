@@ -263,6 +263,14 @@ fn interrupted(
     args: &[&str],
     program: Option<&str>,
 ) -> (String, String, std::process::ExitStatus) {
+    let patina = started(dir, args, program);
+    patina.interrupt();
+    patina.finish_with_status()
+}
+
+/// Patina running with `args` in `dir`, `program` on its standard input if
+/// given, once the program has made the marker file `started`.
+fn started(dir: &Path, args: &[&str], program: Option<&str>) -> common::RunningPatina {
     let marker = dir.join("started");
     let _ = fs::remove_file(&marker);
     let mut patina = common::spawn_patina(dir, args);
@@ -273,9 +281,8 @@ fn interrupted(
     while !marker.exists() && started.elapsed() < std::time::Duration::from_secs(10) {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert!(marker.exists(), "patina {args:?} never started its loop");
-    patina.interrupt();
-    patina.finish_with_status()
+    assert!(marker.exists(), "patina {args:?} never started");
+    patina
 }
 
 /// A program Ctrl-C interrupts ends with status 130, 128 + SIGINT, once the
@@ -329,5 +336,47 @@ fn a_program_that_catches_the_interrupt_runs_on() {
         let (stdout, stderr, status) = interrupted(dir.path(), &args, None);
         assert!(status.success(), "{backend:?}: {status}\nstderr: {stderr}");
         assert_eq!(stdout, "caught\n", "{backend:?}: {stderr}");
+    }
+}
+
+/// A program blocked reading its standard input takes no interrupt until the
+/// read returns, so the first Ctrl-C waits, posted. A second one while it
+/// waits ends the process by SIGINT's default action, as Ctrl-C did before
+/// Patina forwarded it (#701), rather than leaving it unstoppable from the
+/// keyboard.
+#[cfg(unix)]
+#[test]
+fn a_second_ctrl_c_ends_a_program_that_takes_no_interrupt() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "reads.scm",
+        "(import (scheme base) (scheme write) (scheme file))
+(call-with-output-file \"started\" (lambda (port) (write 'started port)))
+(read-line)
+",
+    );
+    for backend in BOTH_BACKENDS {
+        let args: Vec<&str> = backend.iter().copied().chain(["reads.scm"]).collect();
+        // Standard input stays open and empty, so the read blocks. The
+        // marker comes just before the read: wait until the program is in it,
+        // since a Ctrl-C before that is taken at a poll and ends it with 130.
+        let mut patina = started(dir.path(), &args, None);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        patina.interrupt();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        if !patina.running() {
+            let (_, stderr, status) = patina.finish_with_status();
+            panic!("{backend:?}: one Ctrl-C ended a program blocked in a read: {status}\n{stderr}");
+        }
+        patina.interrupt();
+        let (_, stderr, status) = patina.finish_with_status();
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGINT),
+            "{backend:?}: {status}\nstderr: {stderr}"
+        );
     }
 }
