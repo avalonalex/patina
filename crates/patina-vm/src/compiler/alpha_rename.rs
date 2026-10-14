@@ -621,6 +621,7 @@ fn build_renamed_formals(formals: &Formals, bindings: &[Binding]) -> Formals {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use patina_core::Lit;
     use patina_core::scope::ScopeId;
     use patina_core::tagged_value::TaggedValue;
 
@@ -707,14 +708,18 @@ mod tests {
             vec![("x", ScopeSet::new())],
             vec![CoreExpr::new(CoreExprKind::App {
                 func: Rc::new(inner_lambda),
-                args: vec![CoreExpr::new(CoreExprKind::Quote(TaggedValue::fixnum(2)))],
+                args: vec![CoreExpr::new(CoreExprKind::Quote(Lit::immediate(
+                    TaggedValue::fixnum(2),
+                )))],
             })],
             ScopeSet::singleton(s1),
         );
 
         let app = CoreExpr::new(CoreExprKind::App {
             func: Rc::new(outer_lambda),
-            args: vec![CoreExpr::new(CoreExprKind::Quote(TaggedValue::fixnum(1)))],
+            args: vec![CoreExpr::new(CoreExprKind::Quote(Lit::immediate(
+                TaggedValue::fixnum(1),
+            )))],
         });
 
         let renamed = alpha_rename(&app, None)

@@ -19,7 +19,7 @@
 //! construction rather than by keeping two files in step.
 
 use super::{DesugarError, Desugarer, FormCx, Result};
-use patina_core::{Cx, QuasiConstructor, QuasiTemplate, TaggedValue, Value};
+use patina_core::{Cx, Lit, QuasiConstructor, QuasiTemplate, Value};
 use rustc_hash::FxHashSet;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -61,12 +61,12 @@ impl Derivation<'_> {
         // Self-evaluating atoms
         if template.is_fixnum() || template.is_boolean() || template.is_char() || template.is_null()
         {
-            return Ok(QuasiTemplate::Datum(template.tagged()));
+            return Ok(QuasiTemplate::Datum(cx.literals.add(template)));
         }
 
         // Symbols → quote as-is
         if cx.is_symbol(template) {
-            return Ok(QuasiTemplate::Datum(template.tagged()));
+            return Ok(QuasiTemplate::Datum(cx.literals.add(template)));
         }
 
         // Identifiers → convert to plain symbol (strip scope marks), as
@@ -79,14 +79,14 @@ impl Derivation<'_> {
                 .map(|name| String::from(&*name));
             if let Some(name) = name {
                 let sym = cx.intern_symbol(&name);
-                return Ok(QuasiTemplate::Datum(sym.tagged()));
+                return Ok(QuasiTemplate::Datum(cx.literals.add(sym)));
             }
-            return Ok(QuasiTemplate::Datum(template.tagged()));
+            return Ok(QuasiTemplate::Datum(cx.literals.add(template)));
         }
 
         // Strings, bytevectors → quote
         if template.is_string() || cx.is_bytevector(template) {
-            return Ok(QuasiTemplate::Datum(template.tagged()));
+            return Ok(QuasiTemplate::Datum(cx.literals.add(template)));
         }
 
         // Vectors: expand elements, use list->vector
@@ -100,7 +100,7 @@ impl Derivation<'_> {
         }
 
         // Other types: quote as-is
-        Ok(QuasiTemplate::Datum(template.tagged()))
+        Ok(QuasiTemplate::Datum(cx.literals.add(template)))
     }
 
     /// Derive the compound `node` — a pair or a vector — with `derive`,
@@ -165,7 +165,7 @@ impl Derivation<'_> {
                 // symbol)
                 let qq_sym = cx.intern_symbol("quasiquote");
                 Ok(list_of(vec![
-                    QuasiTemplate::Datum(qq_sym.tagged()),
+                    QuasiTemplate::Datum(cx.literals.add(qq_sym)),
                     derived,
                 ]))
             }
@@ -272,7 +272,7 @@ impl Derivation<'_> {
         }
         let derived_operands = self.pair_template(operands, depth - 1, cx)?;
         let sym = cx.intern_symbol(keyword);
-        let head = list_of(vec![QuasiTemplate::Datum(sym.tagged())]);
+        let head = list_of(vec![QuasiTemplate::Datum(cx.literals.add(sym))]);
         Ok(QuasiTemplate::Build(
             QuasiConstructor::Append,
             vec![head, derived_operands],
@@ -420,7 +420,7 @@ impl Derivation<'_> {
             segments.into_iter().map(Segment::into_template).collect();
         parts.extend(tail);
         Ok(match parts.len() {
-            0 => QuasiTemplate::Datum(TaggedValue::NULL),
+            0 => QuasiTemplate::Datum(Lit::NULL),
             1 => parts.pop().expect("one part"),
             _ => QuasiTemplate::Build(QuasiConstructor::Append, parts),
         })
@@ -441,7 +441,7 @@ impl Derivation<'_> {
 
         // Derive as a list (handles splicing, unquote, etc.)
         let list_template = if list.is_null() {
-            QuasiTemplate::Datum(TaggedValue::NULL)
+            QuasiTemplate::Datum(Lit::NULL)
         } else {
             self.pair_template(list, depth, cx)?
         };
@@ -483,7 +483,7 @@ impl Segment {
 /// `(list e1 e2 ... eN)`, or the empty list when there are none.
 fn list_of(elems: Vec<QuasiTemplate>) -> QuasiTemplate {
     if elems.is_empty() {
-        return QuasiTemplate::Datum(TaggedValue::NULL);
+        return QuasiTemplate::Datum(Lit::NULL);
     }
     QuasiTemplate::Build(QuasiConstructor::List, elems)
 }

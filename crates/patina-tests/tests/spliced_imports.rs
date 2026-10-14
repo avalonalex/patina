@@ -358,7 +358,7 @@ fn spliced_eval_import_preserves_initializer_exception_context() {
 
 #[test]
 fn backend_boundaries_refuse_unhandled_ir() {
-    use patina_core::{CoreExpr, CoreExprKind, TaggedValue};
+    use patina_core::{CoreExpr, CoreExprKind, Lit, LiteralPool, TaggedValue};
     use std::rc::Rc;
     let interp = common::tree_walker_interpreter();
     let evaluator = interp.evaluator();
@@ -367,14 +367,22 @@ fn backend_boundaries_refuse_unhandled_ir() {
             import_sets: vec![],
         },
         CoreExprKind::Expand {
-            expr: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::TRUE))),
+            expr: Rc::new(CoreExpr::new(CoreExprKind::Literal(Lit::immediate(
+                TaggedValue::TRUE,
+            )))),
         },
     ] {
         let expr = CoreExpr::new(CoreExprKind::Begin(vec![CoreExpr::new(kind)]));
-        assert!(patina_vm::compiler::compile(&expr).is_err());
+        let literals = || LiteralPool::new(&interp.heap().borrow());
+        assert!(patina_vm::compiler::compile(&expr, &literals()).is_err());
         assert!(
-            patina_tree_walker::eval::eval_cps(&expr, evaluator.global_env.clone(), evaluator)
-                .is_err()
+            patina_tree_walker::eval::eval_cps(
+                &expr,
+                literals(),
+                evaluator.global_env.clone(),
+                evaluator
+            )
+            .is_err()
         );
     }
 }

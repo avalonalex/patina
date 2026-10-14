@@ -743,7 +743,9 @@ impl Evaluator {
             .with_include_base_of(source);
         let shared_heap = self.heap.clone();
         while let Some(form) = loading.next_form() {
-            // Desugar TaggedValue to CoreExpr
+            // Desugar TaggedValue to CoreExpr, its literals in a pool of its
+            // own until its CPS tree holds them (#705).
+            let literals = patina_core::LiteralPool::new(&shared_heap.borrow());
             #[expect(
                 clippy::disallowed_methods,
                 reason = "the import callback loads libraries during the expansion, which holds \
@@ -754,6 +756,7 @@ impl Evaluator {
                 desugarer.desugar_with_imports(
                     form,
                     cx,
+                    &literals,
                     |set, env| self.process_import_set(set, env, context),
                     |e| {
                         patina_runtime::LibraryError::processing(
@@ -776,12 +779,12 @@ impl Evaluator {
                           later forms, which this load's registry entry roots; the run roots the \
                           CPS tree it is entered with"
             )]
-            context.eval_core(&core_expr, &lib_env).map_err(|e| {
-                patina_runtime::LibraryError::EvaluationError {
+            context
+                .eval_core(&core_expr, literals, &lib_env)
+                .map_err(|e| patina_runtime::LibraryError::EvaluationError {
                     file: source.map(|p| p.display().to_string()).unwrap_or_default(),
                     error: Box::new(e),
-                }
-            })?;
+                })?;
         }
 
         // Step 3: Assemble the library and resolve its exports

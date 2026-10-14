@@ -1,5 +1,7 @@
 use crate::error::SourceLocation;
+use crate::literal_pool::Lit;
 use crate::scope::ScopeSet;
+#[cfg(test)]
 use crate::tagged_value::TaggedValue;
 use std::rc::Rc;
 
@@ -142,7 +144,7 @@ impl Drop for CoreExpr {
                 | CoreExprKind::Import { .. }
         );
         if !leaf && !crate::walk::has_stack_room() {
-            let placeholder = CoreExprKind::Literal(TaggedValue::UNSPECIFIED);
+            let placeholder = CoreExprKind::Literal(Lit::UNSPECIFIED);
             crate::walk::drop_deep(std::mem::replace(&mut self.kind, placeholder));
         }
     }
@@ -162,8 +164,9 @@ impl std::fmt::Display for CoreExpr {
 pub enum CoreExprKind {
     /// Literal values: numbers, booleans, strings, etc.
     /// Example: 42, #t, "hello"
-    /// Uses TaggedValue (8 bytes) for compact representation
-    Literal(TaggedValue),
+    /// An immediate inline, anything on the heap an entry of the
+    /// compilation's literal pool (#705, `crate::literal_pool`).
+    Literal(Lit),
 
     /// Variable reference (with optional hygiene scopes)
     /// Example: x, my-function
@@ -175,8 +178,8 @@ pub enum CoreExprKind {
 
     /// Quote: literal data
     /// Example: 'x, '(1 2 3)
-    /// Uses TaggedValue (8 bytes) for compact representation
-    Quote(TaggedValue),
+    /// The datum, through the compilation's literal pool, as `Literal`'s.
+    Quote(Lit),
 
     /// Quasiquote: template with selective evaluation
     /// Example: `(a ,b ,@c) where b and c are evaluated
@@ -253,8 +256,9 @@ pub enum CoreExprKind {
 
     /// Import: load library bindings
     /// Example: (import (scheme base))
-    /// Import sets are kept as TaggedValues (declarative data, not code)
-    Import { import_sets: Vec<TaggedValue> },
+    /// Import sets are kept as data (declarative, not code), through the
+    /// compilation's literal pool.
+    Import { import_sets: Vec<Lit> },
 
     // Note: Parameterize is now a macro using dynamic-wind (lib/scheme/base/parameters.scm)
     // The CoreExpr::Parameterize variant has been removed.
@@ -295,7 +299,7 @@ pub enum CoreExprKind {
 pub enum QuasiTemplate {
     /// Part of the template that is data, used as it was written. It becomes
     /// a `Quote`.
-    Datum(TaggedValue),
+    Datum(Lit),
     /// An unquoted expression, desugared where it was written.
     Unquoted(Rc<CoreExpr>),
     /// A call of one of the constructors, on the values of the parts.
@@ -594,7 +598,11 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(256 * 1024)
             .spawn(|| {
-                let leaf = || CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(0)));
+                let leaf = || {
+                    CoreExpr::new(CoreExprKind::Literal(Lit::immediate(TaggedValue::fixnum(
+                        0,
+                    ))))
+                };
                 let mut nested = leaf();
                 for _ in 0..100_000 {
                     // Through a `Vec` and through an `Rc`.
@@ -605,7 +613,7 @@ mod tests {
                     });
                 }
                 drop(nested);
-                let mut template = QuasiTemplate::Datum(TaggedValue::NULL);
+                let mut template = QuasiTemplate::Datum(Lit::immediate(TaggedValue::NULL));
                 for _ in 0..100_000 {
                     template = QuasiTemplate::Build(QuasiConstructor::List, vec![template]);
                 }

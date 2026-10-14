@@ -523,6 +523,7 @@ fn is_continuation_escape(e: &EvalError) -> bool {
 pub(super) fn lower_quasiquotes_for(
     expr: &patina_core::CoreExpr,
     evaluator: &super::Evaluator,
+    literals: &patina_core::LiteralPool,
 ) -> Result<patina_core::CoreExpr, EvalError> {
     patina_ir::validate_executable(expr).map_err(EvalError::InvalidSyntax)?;
     let heap = &evaluator.heap;
@@ -537,7 +538,10 @@ pub(super) fn lower_quasiquotes_for(
             Rc::from(qualified_name.as_str()),
             Some(index),
         );
-        Some(heap.borrow_mut().alloc_procedure(proc))
+        let word = heap.borrow_mut().alloc_procedure(proc);
+        // SAFETY: allocated just now, and allocation never collects; from
+        // here the pool roots it (#705).
+        Some(unsafe { literals.add_word(word) })
     };
     patina_frontend::lower_quasiquotes(expr, &constructors)
         .map_err(|e| EvalError::InternalError(e.0))
@@ -568,8 +572,12 @@ fn contains_quasiquote(expr: &patina_core::CoreExpr) -> bool {
     finder.found
 }
 
+/// Run `expr`, a form's tree whose literals are `literals`' entries, in
+/// `env`. The pool goes once the CPS tree holds the literals' words, before
+/// the run (#705).
 pub fn eval_cps(
     expr: &patina_core::CoreExpr,
+    literals: patina_core::LiteralPool,
     env: Rc<Environment>,
     evaluator: &super::Evaluator,
 ) -> Result<TaggedValue, EvalError> {
@@ -580,12 +588,13 @@ pub fn eval_cps(
     // and doesn't need CPS transformation
     if let CoreExprKind::Import { import_sets } = &expr.kind {
         let heap = &evaluator.heap;
-        // Every set is read before any loads, since a load may collect
-        // (#677) and the datums in `expr` are no root.
+        // Every set is read through the pool, which roots it (#705), and
+        // before any loads.
         let import_sets = import_sets
             .iter()
             .map(|&set| {
-                patina_core::NoGcScope::cross(heap, [set], |cx, [set]| {
+                patina_core::NoGcScope::with_cx(heap, |cx| {
+                    let set = literals.value(cx, set);
                     patina_frontend::LibraryDefinition::parse_import_set_tagged(set, cx)
                 })
                 .map_err(|e| {
@@ -607,11 +616,12 @@ pub fn eval_cps(
 
     // Lower quasiquote before the CPS transform, so no `Quasiquote` reaches
     // the evaluator and both backends derive one structure.
-    let expr = &lower_quasiquotes_for(expr, evaluator)?;
+    let expr = &lower_quasiquotes_for(expr, evaluator, &literals)?;
 
-    // Transform CoreExpr to CpsExpr
-    let transformer = CpsTransformer::new();
-    let cps_expr = transformer.transform_toplevel(expr);
+    // Transform CoreExpr to CpsExpr, whose literals are words the run
+    // traces: the pool goes before the run (M2).
+    let cps_expr = CpsTransformer::new(&literals).transform_toplevel(expr);
+    drop(literals);
 
     // Create CPS evaluator and evaluate in the specified environment
     let cps_evaluator = CpsEvaluator::new(evaluator);
@@ -633,6 +643,7 @@ pub fn eval_cps(
 )]
 pub(super) fn eval_cps_with(
     expr: &patina_core::CoreExpr,
+    literals: patina_core::LiteralPool,
     env: Rc<Environment>,
     evaluator: &super::Evaluator,
     prompt_stack: Vec<types::PromptFrame>,
@@ -656,7 +667,9 @@ pub(super) fn eval_cps_with(
         !contains_quasiquote(expr),
         "eval_cps_with needs a tree its caller has already lowered"
     );
-    let cps_expr = CpsTransformer::new().transform_toplevel(expr);
+    let cps_expr = CpsTransformer::new(&literals).transform_toplevel(expr);
+    // The CPS tree holds the literals' words now (#705).
+    drop(literals);
     CpsEvaluator::new(evaluator).eval_in_env_with(
         Rc::new(cps_expr),
         env,

@@ -32,6 +32,7 @@ impl<'a> CallbackContext<'_, 'a, '_> {
     pub(crate) fn eval_core(
         &self,
         expr: &patina_core::CoreExpr,
+        literals: patina_core::LiteralPool,
         env: &Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
         if let patina_core::CoreExprKind::Import { .. } = &expr.kind {
@@ -40,9 +41,9 @@ impl<'a> CallbackContext<'_, 'a, '_> {
                 reason = "holds nothing of its own: `expr` is the caller's, and `eval_import` gives \
                           the reason for what it holds across each load"
             )]
-            return self.eval_import(expr, env);
+            return self.eval_import(expr, &literals, env);
         }
-        let expr = super::lower_quasiquotes_for(expr, self.cps.evaluator)?;
+        let expr = super::lower_quasiquotes_for(expr, self.cps.evaluator, &literals)?;
         #[expect(
             clippy::disallowed_methods,
             reason = "holds the lowered `expr`, not read after the call: the run roots the CPS tree \
@@ -51,6 +52,7 @@ impl<'a> CallbackContext<'_, 'a, '_> {
         )]
         let value = super::eval_cps_with(
             &expr,
+            literals,
             env.clone(),
             self.cps.evaluator,
             self.prompt_stack.to_vec(),
@@ -63,17 +65,19 @@ impl<'a> CallbackContext<'_, 'a, '_> {
     pub(crate) fn eval_import(
         &self,
         expr: &patina_core::CoreExpr,
+        literals: &patina_core::LiteralPool,
         env: &Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
         let patina_core::CoreExprKind::Import { import_sets } = &expr.kind else {
             unreachable!("eval_import requires an import")
         };
-        // Every set is read before any loads, since a load may collect
-        // (#677) and the datums in `expr` are no root.
+        // Every set is read through the pool, which roots it (#705), and
+        // before any loads.
         let import_sets = import_sets
             .iter()
             .map(|&set| {
-                patina_core::NoGcScope::cross(self.heap(), [set], |cx, [set]| {
+                patina_core::NoGcScope::with_cx(self.heap(), |cx| {
+                    let set = literals.value(cx, set);
                     patina_frontend::LibraryDefinition::parse_import_set_tagged(set, cx)
                 })
                 .map_err(|e| {
@@ -160,14 +164,14 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
             reason = "holds nothing of its own: the datum moves into the expansion, whose imports \
                       load beneath the context the expansion runs in"
         )]
-        let core_expr = expand_for_eval(evaluator, expr, env, self)?;
+        let (core_expr, literals) = expand_for_eval(evaluator, expr, env, self)?;
 
         #[expect(
             clippy::disallowed_methods,
             reason = "holds `core_expr`, the expanded datum, not read after the call: the run \
                       roots the CPS tree it is entered with"
         )]
-        let value = self.eval_core(&core_expr, env);
+        let value = self.eval_core(&core_expr, literals, env);
         value
     }
 
@@ -206,9 +210,11 @@ pub(super) fn expand_for_eval(
     expr: TaggedValue,
     env: &Rc<Environment>,
     context: &CallbackContext<'_, '_, '_>,
-) -> Result<patina_core::CoreExpr, EvalError> {
+) -> Result<(patina_core::CoreExpr, patina_core::LiteralPool), EvalError> {
     let desugarer =
         patina_frontend::Desugarer::with_env(env.clone()).with_fs(evaluator.fs().clone());
+    // The datum's literals, rooted until the CPS tree holds them (#705).
+    let literals = patina_core::LiteralPool::new(&evaluator.heap().borrow());
     #[expect(
         clippy::disallowed_methods,
         reason = "the import callback loads libraries during the expansion, which holds the datum \
@@ -219,6 +225,7 @@ pub(super) fn expand_for_eval(
         desugarer.desugar_with_imports(
             form,
             cx,
+            &literals,
             |set, env| evaluator.process_import_for_eval_with(set, env, context),
             |e| {
                 EvalError::InvalidSyntax(format!("eval: desugar error: {e}"))
@@ -227,5 +234,6 @@ pub(super) fn expand_for_eval(
             },
         )
     })?;
-    super::lower_quasiquotes_for(&core_expr, evaluator)
+    let lowered = super::lower_quasiquotes_for(&core_expr, evaluator, &literals)?;
+    Ok((lowered, literals))
 }

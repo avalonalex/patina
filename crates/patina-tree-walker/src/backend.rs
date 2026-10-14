@@ -163,6 +163,8 @@ impl TreeWalker {
             None => Desugarer::with_env(env.clone()).with_fs(self.evaluator.fs.clone()),
         };
 
+        // The form's literals, rooted until its CPS tree holds them (#705).
+        let literals = patina_core::LiteralPool::new(&internal_heap.borrow());
         #[expect(
             clippy::disallowed_methods,
             reason = "the import callback loads libraries during the expansion, which holds the \
@@ -173,6 +175,7 @@ impl TreeWalker {
             desugarer.desugar_with_imports(
                 form,
                 cx,
+                &literals,
                 |set, env| self.evaluator.process_import_for_eval(set, env),
                 |e| {
                     let location = e.source_location().cloned();
@@ -189,7 +192,7 @@ impl TreeWalker {
                       collect: holds `core_expr` and the datum, neither read after the call; the \
                       run roots the CPS tree it is entered with, literals included"
         )]
-        let value = eval_cps(&core_expr, env.clone(), &self.evaluator);
+        let value = eval_cps(&core_expr, literals, env.clone(), &self.evaluator);
         value
     }
 

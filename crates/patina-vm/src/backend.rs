@@ -318,6 +318,9 @@ impl VmBackend {
                 .with_fs(self.state.borrow().fs().clone()),
             None => Desugarer::with_env(Rc::clone(env)).with_fs(self.state.borrow().fs().clone()),
         };
+        // The form's literals, rooted from its expansion until its code holds
+        // them (#705).
+        let literals = patina_core::LiteralPool::new(&heap.borrow());
         #[expect(
             clippy::disallowed_methods,
             reason = "the import callback loads libraries during the expansion, which holds the \
@@ -328,6 +331,7 @@ impl VmBackend {
             desugarer.desugar_with_imports(
                 form,
                 cx,
+                &literals,
                 |set, env| self.process_import_set(set, env).map_err(import_error),
                 VmBackendError::from,
             )
@@ -335,7 +339,11 @@ impl VmBackend {
 
         // Compile: CoreExpr → CodeObject (5-pass pipeline + quasiquote expansion).
         let registry = Rc::clone(self.state.borrow().primitive_registry());
-        let (top, nested) = compile_with_qq_resolving(&core_expr, &heap, env, &registry)?;
+        let (top, nested) =
+            compile_with_qq_resolving(&core_expr, &literals, &heap, env, &registry)?;
+        // The code's constants hold the literals' words now, traced from
+        // there on: the pool goes before the form runs (M2).
+        drop((core_expr, literals));
 
         let mut state = self.state.borrow_mut();
         let top_id = state.load_unit(top, nested);
@@ -345,10 +353,10 @@ impl VmBackend {
         #[expect(
             clippy::disallowed_methods,
             reason = "the backend's top level, outermost, so the run may collect. Holds the form's \
-                      `CoreExpr` and datum, neither read after the call; the form's constants are \
-                      in the loaded unit, which the code store roots while it runs, and `env` is \
-                      the global environment, which the machine roots, or the globals of the \
-                      closure the run's frame holds"
+                      datum, not read after the call; the form's constants are in the loaded \
+                      unit, which the code store roots while it runs, and `env` is the global \
+                      environment, which the machine roots, or the globals of the closure the \
+                      run's frame holds"
         )]
         let result = if Rc::ptr_eq(env, &self.global_env) {
             execute(&mut state, top_id)
@@ -588,14 +596,20 @@ impl VmBackend {
         let desugarer = Desugarer::with_env(Rc::clone(&self.global_env))
             .with_fs(self.state.borrow().fs().clone());
         for tv in parsed {
+            let literals = patina_core::LiteralPool::new(&heap.borrow());
             let core_expr = patina_core::NoGcScope::cross(&heap, [tv], |cx, [form]| {
-                desugarer.desugar_tagged(form, cx)
+                desugarer.desugar_tagged(form, cx, &literals)
             })
             .map_err(VmBackendError::from)?;
 
             let registry = Rc::clone(self.state.borrow().primitive_registry());
-            let (top, nested) =
-                compile_with_qq_resolving(&core_expr, &heap, &self.global_env, &registry)?;
+            let (top, nested) = compile_with_qq_resolving(
+                &core_expr,
+                &literals,
+                &heap,
+                &self.global_env,
+                &registry,
+            )?;
 
             disassemble(&top, &nested);
         }
@@ -717,6 +731,9 @@ impl VmBackend {
             let mut state = self.state.borrow_mut();
             state.with_globals(lib_env.clone(), |state| -> Result<(), LibraryError> {
                 while let Some(form) = loading.next_form() {
+                    // The form's literals, rooted until its code holds them
+                    // (#705).
+                    let literals = patina_core::LiteralPool::new(&shared_heap.borrow());
                     #[expect(
                         clippy::disallowed_methods,
                         reason = "the import callback loads libraries during the expansion, which \
@@ -729,6 +746,7 @@ impl VmBackend {
                             desugarer.desugar_with_imports(
                                 form,
                                 cx,
+                                &literals,
                                 |set, env| {
                                     crate::runtime::vm_state::vm_process_import_set(state, set, env)
                                 },
@@ -745,6 +763,7 @@ impl VmBackend {
 
                     let (top, nested) = compile_with_qq_resolving(
                         &core_expr,
+                        &literals,
                         &shared_heap,
                         &lib_env,
                         state.primitive_registry(),
@@ -756,15 +775,16 @@ impl VmBackend {
                             e.diagnostic(),
                         )
                     })?;
+                    // The constants hold the literals now (#705).
+                    drop((core_expr, literals));
 
                     let top_id = state.load_unit(top, nested);
                     #[expect(
                         clippy::disallowed_methods,
                         reason = "outermost when the load is, so the run may collect (point D, \
-                                  #677). Holds the form's `CoreExpr`, not read after the call; \
-                                  `lib_env` and the body's later forms, which this load's \
-                                  registry entry roots; and, through `with_globals`, the globals \
-                                  it set aside, on the machine's traced stack. The form's \
+                                  #677). Holds `lib_env` and the body's later forms, which this \
+                                  load's registry entry roots; and, through `with_globals`, the \
+                                  globals it set aside, on the machine's traced stack. The form's \
                                   constants are in the loaded unit, which the code store roots"
                     )]
                     let result = execute(state, top_id);

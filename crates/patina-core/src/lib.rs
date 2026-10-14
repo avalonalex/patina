@@ -54,6 +54,7 @@ pub mod features;
 pub mod heap;
 pub mod instance;
 pub mod library;
+pub mod literal_pool;
 pub mod macro_debug;
 pub mod numeric;
 pub mod port;
@@ -93,6 +94,7 @@ pub use heap::cx::{
 };
 pub use instance::Instance;
 pub use library::Library;
+pub use literal_pool::{Lit, LiteralPool};
 pub use port::{Port, PortData, PortDirection, PortKind, StdioKind, StringPortData};
 pub use procedure::{Arity, Procedure};
 pub use pvref::{MatchEnv, MatchValue, PVRef};

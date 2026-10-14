@@ -40,12 +40,16 @@ use patina_core::core_expr::CoreExprKind;
 use patina_core::cps_expr::{ContVar, CpsExpr, CpsExprKind, CpsParam};
 use patina_core::error::SourceLocation;
 use patina_core::scope::ScopeSet;
-use patina_core::{CoreExpr, Formals, Symbol};
+use patina_core::{CoreExpr, Formals, LiteralPool, Symbol};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// CPS Transformer state
-pub struct CpsTransformer {
+pub struct CpsTransformer<'a> {
+    /// The literal pool of the compilation being transformed, through which
+    /// each literal's word is copied into the `CpsExpr`, traced from there
+    /// on (#705).
+    literals: &'a LiteralPool,
     /// Counter for generating unique names
     gensym_counter: AtomicU64,
     /// `binding_scopes` of the lambda body being transformed, empty at top
@@ -57,15 +61,11 @@ pub struct CpsTransformer {
     body_scopes: std::cell::RefCell<Rc<ScopeSet>>,
 }
 
-impl Default for CpsTransformer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CpsTransformer {
-    pub fn new() -> Self {
+impl<'a> CpsTransformer<'a> {
+    /// A transformer for trees whose literals are `literals`' entries.
+    pub fn new(literals: &'a LiteralPool) -> Self {
         Self {
+            literals,
             gensym_counter: AtomicU64::new(0),
             body_scopes: std::cell::RefCell::new(Rc::new(ScopeSet::new())),
         }
@@ -149,7 +149,7 @@ impl CpsTransformer {
             // These don't need CPS transformation - just pass to continuation
             CoreExprKind::Literal(v) => CpsExpr::new(CpsExprKind::Continue {
                 cont: k.clone(),
-                value: CpsExpr::rc(CpsExprKind::Literal(*v)),
+                value: CpsExpr::rc(CpsExprKind::Literal(self.literals.word(*v))),
             }),
 
             CoreExprKind::Var { .. } => CpsExpr::new(CpsExprKind::Continue {
@@ -159,7 +159,7 @@ impl CpsTransformer {
 
             CoreExprKind::Quote(v) => CpsExpr::new(CpsExprKind::Continue {
                 cont: k.clone(),
-                value: CpsExpr::rc(CpsExprKind::Literal(*v)),
+                value: CpsExpr::rc(CpsExprKind::Literal(self.literals.word(*v))),
             }),
 
             CoreExprKind::Lambda {
@@ -379,12 +379,12 @@ impl CpsTransformer {
     /// Transform a trivial expression (must be trivial!)
     fn transform_trivial(&self, expr: &CoreExpr) -> CpsExpr {
         let mut result = match &expr.kind {
-            CoreExprKind::Literal(v) => CpsExpr::new(CpsExprKind::Literal(*v)),
+            CoreExprKind::Literal(v) => CpsExpr::new(CpsExprKind::Literal(self.literals.word(*v))),
             CoreExprKind::Var { name, scopes } => CpsExpr::new(CpsExprKind::Var {
                 name: name.clone(),
                 scopes: scopes.clone(),
             }),
-            CoreExprKind::Quote(v) => CpsExpr::new(CpsExprKind::Literal(*v)),
+            CoreExprKind::Quote(v) => CpsExpr::new(CpsExprKind::Literal(self.literals.word(*v))),
             CoreExprKind::Lambda {
                 params,
                 body,
@@ -623,9 +623,20 @@ impl CpsTransformer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use patina_core::Lit;
 
     fn make_literal(n: i64) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(n)))
+        CoreExpr::new(CoreExprKind::Literal(Lit::immediate(TaggedValue::fixnum(
+            n,
+        ))))
+    }
+
+    /// A heap, and a literal pool on it for the transformer to read the
+    /// trees' literals through.
+    fn pool() -> (patina_core::SharedHeap, LiteralPool) {
+        let heap = patina_core::new_shared_heap();
+        let literals = LiteralPool::new(&heap.borrow());
+        (heap, literals)
     }
 
     fn make_var(name: &str) -> CoreExpr {
@@ -650,7 +661,8 @@ mod tests {
                         else_: Rc::new(make_literal(0)),
                     });
                 }
-                let cps = CpsTransformer::new().transform_toplevel(&nested);
+                let (_heap, literals) = pool();
+                let cps = CpsTransformer::new(&literals).transform_toplevel(&nested);
                 assert!(matches!(cps.kind, CpsExprKind::LetCont { .. }));
             })
             .expect("spawn")
@@ -660,7 +672,8 @@ mod tests {
 
     #[test]
     fn test_transform_literal() {
-        let transformer = CpsTransformer::new();
+        let (_heap, literals) = pool();
+        let transformer = CpsTransformer::new(&literals);
         let expr = make_literal(42);
         let cps = transformer.transform_toplevel(&expr);
 
@@ -671,7 +684,8 @@ mod tests {
 
     #[test]
     fn test_transform_variable() {
-        let transformer = CpsTransformer::new();
+        let (_heap, literals) = pool();
+        let transformer = CpsTransformer::new(&literals);
         let expr = make_var("x");
         let cps = transformer.transform_toplevel(&expr);
 
@@ -681,11 +695,14 @@ mod tests {
 
     #[test]
     fn test_transform_if() {
-        let transformer = CpsTransformer::new();
+        let (_heap, literals) = pool();
+        let transformer = CpsTransformer::new(&literals);
 
         // (if #t 1 2)
         let expr = CoreExpr::new(CoreExprKind::If {
-            test: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::TRUE))),
+            test: Rc::new(CoreExpr::new(CoreExprKind::Literal(Lit::immediate(
+                TaggedValue::TRUE,
+            )))),
             then: Rc::new(make_literal(1)),
             else_: Rc::new(make_literal(2)),
         });
@@ -709,7 +726,8 @@ mod tests {
 
     #[test]
     fn test_transform_lambda() {
-        let transformer = CpsTransformer::new();
+        let (_heap, literals) = pool();
+        let transformer = CpsTransformer::new(&literals);
 
         // (lambda (x) x)
         let expr = CoreExpr::new(CoreExprKind::Lambda {
@@ -737,7 +755,8 @@ mod tests {
 
     #[test]
     fn test_transform_application() {
-        let transformer = CpsTransformer::new();
+        let (_heap, literals) = pool();
+        let transformer = CpsTransformer::new(&literals);
 
         // (f x)
         let expr = CoreExpr::new(CoreExprKind::App {
@@ -764,7 +783,8 @@ mod tests {
 
     #[test]
     fn test_transform_begin() {
-        let transformer = CpsTransformer::new();
+        let (_heap, literals) = pool();
+        let transformer = CpsTransformer::new(&literals);
 
         // (begin 1 2 3)
         let expr = CoreExpr::new(CoreExprKind::Begin(vec![
@@ -786,7 +806,8 @@ mod tests {
     /// spelling be taken for it.
     #[test]
     fn test_transform_callcc_is_an_application() {
-        let transformer = CpsTransformer::new();
+        let (_heap, literals) = pool();
+        let transformer = CpsTransformer::new(&literals);
 
         // (call/cc (lambda (k) 42))
         let lambda = CoreExpr::new(CoreExprKind::Lambda {

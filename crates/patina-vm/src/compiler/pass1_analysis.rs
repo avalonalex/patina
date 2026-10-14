@@ -241,6 +241,7 @@ fn formals_names(params: &Formals) -> Vec<Symbol> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use patina_core::Lit;
     use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
     use patina_core::tagged_value::TaggedValue;
     use std::rc::Rc;
@@ -253,7 +254,9 @@ mod tests {
     }
 
     fn lit(n: i64) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(n)))
+        CoreExpr::new(CoreExprKind::Literal(Lit::immediate(TaggedValue::fixnum(
+            n,
+        ))))
     }
 
     fn lambda(params: Vec<&str>, body: Vec<CoreExpr>) -> CoreExpr {

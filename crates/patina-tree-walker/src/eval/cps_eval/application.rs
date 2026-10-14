@@ -1175,8 +1175,9 @@ impl<'a> CpsEvaluator<'a> {
             reason = "holds nothing of its own: the datum moves into the expansion; the caller, \
                       `resumable_step`, gives what it holds across this"
         )]
-        let core = super::callback::expand_for_eval(self.evaluator, expr, env, context)?;
-        let cps = patina_ir::CpsTransformer::new().transform(&core, &EVAL_K.into());
+        let (core, literals) =
+            super::callback::expand_for_eval(self.evaluator, expr, env, context)?;
+        let cps = patina_ir::CpsTransformer::new(&literals).transform(&core, &EVAL_K.into());
         Ok(Rc::new(cps))
     }
 

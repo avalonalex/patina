@@ -67,6 +67,13 @@ impl RootSet {
         true
     }
 
+    /// How many providers are registered now: a test's way to see that a
+    /// registration lasted no longer than it should (a compilation's literal
+    /// pool, #705).
+    pub fn registered(&self) -> usize {
+        self.state.with(|state| state.list.len())
+    }
+
     /// The providers registered now, for one collection.
     pub(crate) fn snapshot(&self) -> Vec<Rc<dyn RootProvider>> {
         self.state
