@@ -546,6 +546,10 @@ const NO_SUITE: &[(&str, &str)] = &[
         "patina filesystem",
         "Patina's own public directory API has no upstream suite; patina_filesystem.rs exercises its VFS operations and errors on both backends, and patina-repl/tests/cli_options.rs checks isolated public imports",
     ),
+    (
+        "patina interrupt",
+        "Patina's own interrupt predicate (#701) has no upstream suite; interrupts.rs raises the condition on both backends and pins `interrupt?` and `error-object?` on it",
+    ),
     // The four re-export shims of #390. Each names functionality R7RS-small
     // already provides, so what there is to test is that the shim loads and
     // that a binding reached through it works — which is behavioural, not
