@@ -61,6 +61,13 @@ chains the shared quasiquote lowering → alpha rename → 5 passes. The lowerin
 is shared rather than the compiler's own: the tree-walker calls it too, from
 the `eval` primitive's callback and from `eval_cps`.
 
+It takes the form's literal pool beside the tree (#705; `docs/GC_DESIGN.md`
+§9.7). A `CoreExpr` holds each heap literal as an entry of the pool, which
+roots it, and pass 2 copies each literal's word into the `ClosedExpr`. From
+there the words reach the code object's constants, which the code store
+roots, so each caller drops the pool once the compile returns, before the
+form runs.
+
 ---
 
 ## 3. Input: `CoreExpr`
@@ -99,7 +106,7 @@ was until #445, a `let-syntax` keyword was unbound inside an unquote.
 
 The callee is the registry's `scheme.base` primitive as a *value* — a
 `Literal` in operator position, allocated once per compilation unit that
-needs it — not a `Var` of that name. A quasiquote denotes the structure it
+needs it, and added to the form's literal pool — not a `Var` of that name. A quasiquote denotes the structure it
 writes whatever `list` means where it appears: under `(import (srfi 101))`,
 whose `list` builds random-access lists, `` `(1 ,x) `` must still be a pair,
 and looked up by name it was not (Larceny triage family 34). That was the
@@ -218,7 +225,8 @@ pub struct AnalysisInfo {
 ## 7. Pass 2 — Closure Conversion
 
 **File:** `pass2_closure.rs`
-**Input:** `CoreExpr` + `AnalysisInfo`
+**Input:** `CoreExpr` + `AnalysisInfo` + the form's `LiteralPool`, through
+which each literal's word is copied into the output
 **Output:** `ClosedExpr`
 
 ### 7.1 Key Types
