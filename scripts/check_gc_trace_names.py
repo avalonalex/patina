@@ -66,6 +66,8 @@ TRACE_FUNCTIONS = {
     # The root providers, each a call to its derived trace.
     "crates/patina-runtime/src/library_registry.rs": ["trace_roots"],
     "crates/patina-tree-walker/src/eval/cps_eval/gc_roots.rs": ["trace_roots"],
+    # A compilation's literal pool, its entries reported as slots (#705).
+    "crates/patina-core/src/literal_pool.rs": ["trace_roots"],
 }
 
 # `..` closing a pattern: after `{`, `(`, `[` or `,`, and before `}`, `)`,
