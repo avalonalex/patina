@@ -134,3 +134,67 @@ fn a_value_kept_past_its_interpreter_is_a_use_after_free() {
         .unwrap_or_default();
     assert!(message.contains("use-after-free"), "{message}");
 }
+
+/// Teardown is safe under posting (#701): a thread posts in a tight loop to
+/// the interrupt handle of each interpreter this one makes, runs a form on
+/// and drops, on both backends. A post begun after the drop has returned
+/// answers `false`, so the drop tore the carrier down with the heap; one
+/// begun before it holds the teardown until it is done. The core's own test
+/// (`heap::interrupt`) also checks that no post writes the freed memory.
+#[test]
+fn interpreters_are_torn_down_safely_while_a_thread_posts_to_them() {
+    use patina_core::{InterruptHandle, event};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, mpsc};
+
+    type Posted = (InterruptHandle, Arc<AtomicBool>);
+
+    fn round<B: Backend>(interp: Interpreter<B>, send: &mpsc::Sender<Posted>) {
+        let value = interp.eval_str_owned("(+ 1 2)").expect("the form runs");
+        assert_eq!(interp.display_tagged(value), "3");
+        let dropped = Arc::new(AtomicBool::new(false));
+        let handle = interp.heap().borrow().interrupt_handle();
+        send.send((handle, Arc::clone(&dropped))).unwrap();
+        drop(interp);
+        dropped.store(true, Ordering::SeqCst);
+    }
+
+    let (send, receive) = mpsc::channel::<Posted>();
+    let done = Arc::new(AtomicBool::new(false));
+    let poster = {
+        let done = Arc::clone(&done);
+        std::thread::spawn(move || {
+            let mut handles = Vec::new();
+            let (mut reached, mut late) = (0usize, 0usize);
+            while !done.load(Ordering::SeqCst) {
+                while let Ok(next) = receive.try_recv() {
+                    handles.push(next);
+                }
+                for (handle, dropped) in &handles {
+                    let after_drop = dropped.load(Ordering::SeqCst);
+                    let posted = handle.post(event::SIGNAL);
+                    assert!(
+                        !(after_drop && posted),
+                        "a post begun after the interpreter's drop reached its carrier"
+                    );
+                    reached += usize::from(posted);
+                    late += usize::from(after_drop);
+                }
+                if handles.len() > 4 {
+                    handles.drain(..handles.len() - 4);
+                }
+            }
+            (reached, late)
+        })
+    };
+    for _ in 0..16 {
+        round(vm_interpreter(), &send);
+        round(tree_walker_interpreter(), &send);
+    }
+    done.store(true, Ordering::SeqCst);
+    let (reached, late) = poster.join().unwrap();
+    assert!(
+        reached > 0 && late > 0,
+        "the poster reached {reached} carriers and posted {late} times after a drop"
+    );
+}
