@@ -106,7 +106,7 @@ use std::sync::OnceLock;
 
 use num_bigint::BigInt;
 
-use super::mutator::{Mutator, event};
+use super::mutator::{Carrier, event};
 use super::{Heap, HeapObjectData};
 use crate::core_expr::ScopedParam;
 pub(crate) use crate::environment::CAPTURED_FRAME_BYTES;
@@ -396,7 +396,7 @@ pub(super) struct ByteAccount {
 impl ByteAccount {
     /// An empty account that posts a collection to `mutator`, the heap's
     /// carrier, when an external charge crosses the byte threshold.
-    pub(super) fn new(mutator: Rc<Mutator>) -> Self {
+    pub(super) fn new(mutator: Rc<Carrier>) -> Self {
         Self {
             shared: Rc::new(SharedCounts {
                 since_gc: Cell::new(0),
@@ -438,7 +438,7 @@ pub(super) struct SharedCounts {
     pub(super) threshold: Cell<usize>,
     /// The heap's carrier, where a charge that crosses the threshold posts
     /// the collection (`Heap::mutator`, #699).
-    pub(super) mutator: Rc<Mutator>,
+    pub(super) mutator: Rc<Carrier>,
     /// Descriptor pressure (#607): the file ports opened since the last
     /// collection and not closed since. Here rather than on the heap because
     /// a port closes by dropping, often inside a sweep, and its

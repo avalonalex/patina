@@ -5,7 +5,10 @@
 //! A JIT keeps the `Mutator` in a pinned register and reads its words at
 //! fixed offsets, so its layout is an ABI. The offsets, the size and the
 //! 128-byte alignment are asserted at compile time below, and they freeze
-//! after stage 6's spike. Under M:1 a heap has one `Mutator`.
+//! after stage 6's spike. Under M:1 a heap has one `Mutator`, in its
+//! [`Carrier`] beside the interrupt cell that points posters at it, and the
+//! carrier's drop is the teardown that keeps them off the freed words
+//! (`heap/interrupt.rs`, #701).
 //!
 //! **Live words.** Today only the event words are live:
 //! - `reg_limit`, the poll word, which a post zeroes;
@@ -40,7 +43,12 @@
 //!   fence makes a Dekker pair with a remote post, so no request is ever lost.
 
 use std::cell::Cell;
+use std::ops::Deref;
+use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering, fence};
+
+use super::interrupt::{InterruptCell, InterruptHandle};
 
 /// The events a poll services, one bit each (`PRD/GC_PRD.md` §12). Today
 /// only [`GC_MAJOR`](event::GC_MAJOR) is posted; the others are named here
@@ -75,9 +83,9 @@ pub mod event {
 
 /// One carrier's words, at the offsets of `PRD/GC_PRD.md` §14's table.
 ///
-/// Its address is stable, since the heap owns it in an `Rc` that the
-/// machines share, and an interrupt handle will point at it (#701). Every
-/// word another thread may write is atomic: `reg_limit`, `event`,
+/// Its address is stable: its [`Carrier`] is made in the `Rc` that the heap
+/// and the machines share, and the heap's interrupt handles point at it
+/// (#701). Every word another thread may write is atomic: `reg_limit`, `event`,
 /// `safepoint_state` and `handshake`. Relaxed loads and stores of those
 /// compile to plain ones, so the atomics cost the owner nothing.
 #[repr(C, align(128))]
@@ -225,6 +233,23 @@ impl Mutator {
         self.reg_limit.store(0, Ordering::SeqCst);
     }
 
+    /// [`post_remote`](Self::post_remote) through a pointer, for a poster
+    /// on another thread ([`InterruptHandle::post`]). It reaches the two
+    /// atomic words without forming a `&Mutator`, whose other words are the
+    /// owner's alone.
+    ///
+    /// # Safety
+    ///
+    /// `this` points at a live `Mutator`.
+    pub(super) unsafe fn post_remote_at(this: *const Self, bits: u32) {
+        // SAFETY: `this` is live, by the caller's guarantee. Each borrow is
+        // of one atomic word, which any thread may write through `&`, and
+        // none is of the whole `Mutator`.
+        let (event, reg_limit) = unsafe { (&(*this).event, &(*this).reg_limit) };
+        event.fetch_or(bits, Ordering::SeqCst);
+        reg_limit.store(0, Ordering::SeqCst);
+    }
+
     /// Restore the poll word to `limit` once a poll has serviced what it
     /// could, unless something is still posted. The fence orders the store
     /// before the re-read, against a remote post's two stores, so a post
@@ -314,6 +339,59 @@ impl Mutator {
 impl Default for Mutator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The heap's carrier: the [`Mutator`] its machines poll, and the interrupt
+/// cell that points posters at it (#701, `heap/interrupt.rs`).
+///
+/// The heap, its byte account, the machines and every driver and
+/// `NoGcScope` share it by `Rc`, and it derefs to its `Mutator`, which is
+/// its first field, so the words are at the carrier's address. It is made
+/// only in its `Rc` ([`Carrier::new`]), so the address the cell records is
+/// the one it keeps.
+///
+/// **Its drop is the teardown** of `PRD/GC_PRD.md` §12: the cell lets go of
+/// the `Mutator` and waits out any post in flight, and only then is the
+/// memory freed. Whichever holder drops the last `Rc`, an
+/// [`InterruptHandle`] that outlives the heap posts nothing.
+#[repr(C)]
+#[derive(Debug)]
+pub struct Carrier {
+    mutator: Mutator,
+    interrupt: Arc<InterruptCell>,
+}
+
+impl Carrier {
+    /// A carrier with nothing posted, its interrupt cell pointing at it.
+    pub fn new() -> Rc<Self> {
+        let carrier = Rc::new(Self {
+            mutator: Mutator::new(),
+            interrupt: Arc::new(InterruptCell::new()),
+        });
+        carrier.interrupt.attach(&carrier.mutator);
+        carrier
+    }
+
+    /// A handle that posts to this carrier from any thread, or from a
+    /// signal handler, until the carrier is dropped.
+    pub fn interrupt_handle(&self) -> InterruptHandle {
+        InterruptHandle::new(&self.interrupt)
+    }
+}
+
+impl Deref for Carrier {
+    type Target = Mutator;
+
+    #[inline]
+    fn deref(&self) -> &Mutator {
+        &self.mutator
+    }
+}
+
+impl Drop for Carrier {
+    fn drop(&mut self) {
+        self.interrupt.detach();
     }
 }
 

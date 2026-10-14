@@ -30,6 +30,7 @@ mod check;
 pub mod cx;
 pub mod gc;
 pub mod handles;
+pub mod interrupt;
 pub mod mutator;
 mod numeric;
 mod root_set;
@@ -479,7 +480,7 @@ pub struct Heap {
     /// is a single load with no borrow: the point of the design §6.1 trigger
     /// redesign, since the safe point used to ask a question whose answer
     /// only changes when something allocates.
-    mutator: Rc<mutator::Mutator>,
+    mutator: Rc<mutator::Carrier>,
 
     /// The code id of each VM closure sweep reclaimed, for a VM that counts
     /// the closures naming each code object so it can drop the code of forms
@@ -646,7 +647,7 @@ impl Heap {
 
     /// Create a heap with pre-allocated capacity
     pub fn with_capacity(pairs: usize, vectors: usize, strings: usize) -> Self {
-        let mutator = Rc::new(mutator::Mutator::new());
+        let mutator = mutator::Carrier::new();
         let telemetry = telemetry::Telemetry::new();
         let handles = HandleTable::new(telemetry.heap_id);
         Self {
@@ -797,8 +798,15 @@ impl Heap {
     /// The heap's carrier (`heap/mutator.rs`, #699). A machine clones the
     /// handle once, at its construction, so that its safe point is a single
     /// load of the poll word with no `RefCell` borrow.
-    pub fn mutator(&self) -> &Rc<mutator::Mutator> {
+    pub fn mutator(&self) -> &Rc<mutator::Carrier> {
         &self.mutator
+    }
+
+    /// A handle that posts events to this heap's carrier from any thread, or
+    /// from a signal handler (`heap/interrupt.rs`, #701). It outlives the
+    /// heap harmlessly: once the carrier is dropped, its posts do nothing.
+    pub fn interrupt_handle(&self) -> interrupt::InterruptHandle {
+        self.mutator.interrupt_handle()
     }
 
     /// The collector attributes of this heap (`heap/attrs.rs`, #699), fixed

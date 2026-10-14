@@ -95,7 +95,7 @@ pub struct Evaluator {
     /// so trampoline entry costs no heap borrow and the per-step safe point
     /// is a single load of its poll word.
     #[trace(skip, reason = "the carrier's event words: no value")]
-    pub(crate) mutator: Rc<patina_core::Mutator>,
+    pub(crate) mutator: Rc<patina_core::Carrier>,
     /// Why `(scheme base)` could not be loaded at construction, if it could
     /// not: see [`Evaluator::bootstrap_error`].
     #[trace(skip, reason = "an error report: strings and library names")]
