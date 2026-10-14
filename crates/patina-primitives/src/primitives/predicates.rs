@@ -1,16 +1,15 @@
 //! Type predicate primitives (R7RS Section 6.x)
 //!
-//! Implements type checking predicates for all Scheme types.
-//! Uses Heap methods directly on TaggedValue for efficient type checking
-//! without conversion to Value.
-use patina_core::TaggedValue;
+//! Implements type checking predicates for all Scheme types. Each takes the
+//! context (#706): it reads its argument through the `Cx`, and the tag
+//! predicates through the value's word.
+use patina_core::{Cx, Value};
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
 
-pub(super) fn rational_p(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn rational_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -18,12 +17,10 @@ pub(super) fn rational_p(
         });
     }
 
-    Ok(TaggedValue::boolean(
-        heap.borrow().is_rational_r7rs(args[0]),
-    ))
+    Ok(Value::boolean(cx.is_rational_r7rs(args[0])))
 }
 
-pub(super) fn real_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn real_p<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -31,10 +28,13 @@ pub(super) fn real_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVa
         });
     }
 
-    Ok(TaggedValue::boolean(heap.borrow().is_real_r7rs(args[0])))
+    Ok(Value::boolean(cx.is_real_r7rs(args[0])))
 }
 
-pub(super) fn complex_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn complex_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -43,10 +43,13 @@ pub(super) fn complex_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
     }
 
     // R7RS: All numbers are complex numbers
-    Ok(TaggedValue::boolean(heap.borrow().is_number(args[0])))
+    Ok(Value::boolean(cx.is_number(args[0])))
 }
 
-pub(super) fn symbol_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn symbol_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -54,10 +57,10 @@ pub(super) fn symbol_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagged
         });
     }
 
-    Ok(TaggedValue::boolean(heap.borrow().is_symbol(args[0])))
+    Ok(Value::boolean(cx.is_symbol(args[0])))
 }
 
-pub(super) fn list_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn list_p<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -65,10 +68,13 @@ pub(super) fn list_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVa
         });
     }
 
-    Ok(TaggedValue::boolean(heap.borrow().is_list(args[0])))
+    Ok(Value::boolean(cx.is_list(args[0])))
 }
 
-pub(super) fn inexact_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn inexact_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -76,15 +82,13 @@ pub(super) fn inexact_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
         });
     }
 
-    Ok(TaggedValue::boolean(
-        heap.borrow().is_inexact_number(args[0]),
-    ))
+    Ok(Value::boolean(cx.is_inexact_number(args[0])))
 }
 
-pub(super) fn boolean_equal(
-    _heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn boolean_equal<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -108,17 +112,17 @@ pub(super) fn boolean_equal(
             ));
         }
         if arg.as_bool_unchecked() != first_val {
-            return Ok(TaggedValue::FALSE);
+            return Ok(Value::FALSE);
         }
     }
 
-    Ok(TaggedValue::TRUE)
+    Ok(Value::TRUE)
 }
 
-pub(super) fn procedure_p(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn procedure_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -128,94 +132,102 @@ pub(super) fn procedure_p(
 
     // Fast path: closures have their own tag
     if args[0].is_closure() {
-        return Ok(TaggedValue::TRUE);
+        return Ok(Value::TRUE);
     }
 
     // Check heap for procedures and continuations
-    let heap_ref = heap.borrow();
     // R7RS: Continuations captured by call/cc satisfy procedure?
-    Ok(TaggedValue::boolean(heap_ref.is_callable(args[0])))
+    Ok(Value::boolean(cx.is_callable(args[0])))
 }
 
 // ===== TaggedValue predicates with fast paths =====
 
 /// (null? obj) - Fast path using TaggedValue
-pub(super) fn null_p(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn null_p<'gc>(_cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    Ok(TaggedValue::boolean(args[0].is_null()))
+    Ok(Value::boolean(args[0].is_null()))
 }
 
 /// (pair? obj) - Check for pair (native or boxed)
-pub(super) fn pair_p(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn pair_p<'gc>(_cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    Ok(TaggedValue::boolean(args[0].is_pair()))
+    Ok(Value::boolean(args[0].is_pair()))
 }
 
 /// (not obj) - Returns #t if obj is #f, #f otherwise
-pub(super) fn not_p(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn not_p<'gc>(_cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     crate::registry::expect_arity(args, 1)?;
-    Ok(TaggedValue::boolean(!args[0].is_truthy()))
+    Ok(Value::boolean(!args[0].is_truthy()))
 }
 
 /// (boolean? obj) - Fast path using TaggedValue
-pub(super) fn boolean_p(
-    _heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn boolean_p<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    Ok(TaggedValue::boolean(args[0].is_boolean()))
+    Ok(Value::boolean(args[0].is_boolean()))
 }
 
 /// (char? obj) - Fast path using TaggedValue
-pub(super) fn char_p(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn char_p<'gc>(_cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    Ok(TaggedValue::boolean(args[0].is_char()))
+    Ok(Value::boolean(args[0].is_char()))
 }
 
 /// (string? obj) - Check for string (native heap string)
-pub(super) fn string_p(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn string_p<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    Ok(TaggedValue::boolean(args[0].is_string()))
+    Ok(Value::boolean(args[0].is_string()))
 }
 
 /// (vector? obj) - Check for vector (native heap vector)
-pub(super) fn vector_p(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn vector_p<'gc>(
+    _cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    Ok(TaggedValue::boolean(args[0].is_vector()))
+    Ok(Value::boolean(args[0].is_vector()))
 }
 
 /// (integer? obj) - Fast path for fixnums
-pub(super) fn integer_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn integer_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -223,14 +235,14 @@ pub(super) fn integer_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
         });
     }
 
-    Ok(TaggedValue::boolean(heap.borrow().is_integer_r7rs(args[0])))
+    Ok(Value::boolean(cx.is_integer_r7rs(args[0])))
 }
 
 /// (exact-integer? obj) - Fast path for fixnums
-pub(super) fn exact_integer_p(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn exact_integer_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -240,13 +252,12 @@ pub(super) fn exact_integer_p(
 
     // exact-integer? is true for exact numbers that are also integers
     // This is fixnum, BigInt, or Rational with denominator 1
-    let heap_ref = heap.borrow();
-    let is_exact_int = heap_ref.is_exact_number(args[0]) && heap_ref.is_integer_r7rs(args[0]);
-    Ok(TaggedValue::boolean(is_exact_int))
+    let is_exact_int = cx.is_exact_number(args[0]) && cx.is_integer_r7rs(args[0]);
+    Ok(Value::boolean(is_exact_int))
 }
 
 /// (exact? obj) - Fast path for fixnums
-pub(super) fn exact_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn exact_p<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -256,14 +267,16 @@ pub(super) fn exact_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedV
 
     // The heap's is_exact_number helper is for exact real arithmetic
     // dispatch. R7RS exact? also accepts a complex with two exact parts.
-    let heap_ref = heap.borrow();
-    Ok(TaggedValue::boolean(
-        heap_ref.is_number(args[0]) && !heap_ref.is_inexact_number(args[0]),
+    Ok(Value::boolean(
+        cx.is_number(args[0]) && !cx.is_inexact_number(args[0]),
     ))
 }
 
 /// (number? obj) - Fast path for fixnums
-pub(super) fn number_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn number_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -273,11 +286,11 @@ pub(super) fn number_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagged
 
     // Fast path: fixnums are numbers
     if args[0].is_fixnum() {
-        return Ok(TaggedValue::TRUE);
+        return Ok(Value::TRUE);
     }
 
     // Check heap for other numeric types
-    Ok(TaggedValue::boolean(heap.borrow().is_number(args[0])))
+    Ok(Value::boolean(cx.is_number(args[0])))
 }
 
 pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
@@ -285,7 +298,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     use patina_runtime::Arity;
 
     // Numeric type predicates (with TaggedValue fast paths)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "number?",
         Arity::Exact(1),
@@ -293,7 +306,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         number_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "complex?",
         Arity::Exact(1),
@@ -301,7 +314,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         complex_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "real?",
         Arity::Exact(1),
@@ -309,7 +322,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         real_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "rational?",
         Arity::Exact(1),
@@ -317,7 +330,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         rational_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "integer?",
         Arity::Exact(1),
@@ -325,7 +338,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         integer_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "exact-integer?",
         Arity::Exact(1),
@@ -333,7 +346,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         exact_integer_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "exact?",
         Arity::Exact(1),
@@ -341,7 +354,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         exact_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "inexact?",
         Arity::Exact(1),
@@ -350,7 +363,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Boolean negation (§6.1)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "not",
         Arity::Exact(1),
@@ -359,7 +372,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Data type predicates (with TaggedValue fast paths)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "boolean?",
         Arity::Exact(1),
@@ -367,7 +380,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         boolean_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string?",
         Arity::Exact(1),
@@ -375,7 +388,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         string_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "symbol?",
         Arity::Exact(1),
@@ -383,7 +396,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         symbol_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "char?",
         Arity::Exact(1),
@@ -391,7 +404,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         char_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "vector?",
         Arity::Exact(1),
@@ -399,7 +412,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         vector_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "procedure?",
         Arity::Exact(1),
@@ -408,7 +421,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // List predicates (with TaggedValue fast paths)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "null?",
         Arity::Exact(1),
@@ -416,7 +429,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         null_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "pair?",
         Arity::Exact(1),
@@ -424,7 +437,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         pair_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "list?",
         Arity::Exact(1),
@@ -433,7 +446,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Boolean equality
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "boolean=?",
         Arity::Min(2),

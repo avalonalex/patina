@@ -13,6 +13,31 @@ impl ApplyContext for Evaluator {
         &self.heap
     }
 
+    /// A primitive that takes the context, called where no step runs (an
+    /// embedder's call through this detached context) or by a step through
+    /// `CallbackContext`, which comes here (#706).
+    fn call_cx(
+        &self,
+        handler: patina_primitives::CxHandler,
+        args: &[TaggedValue],
+    ) -> Result<TaggedValue, EvalError> {
+        let instance = Rc::clone(self.heap.borrow().instance());
+        // SAFETY: a primitive that takes the context cannot call back, so
+        // it reaches no safe point: the tree-walker's are at the top of its
+        // trampoline, between steps, and this call is inside one step or
+        // outside any run. Nothing collects while it runs. Its arguments
+        // are the call's, read from the step as it was made.
+        unsafe {
+            patina_core::heap::cx::enter_call(
+                &self.heap,
+                &self.mutator,
+                &instance,
+                args,
+                |cx, args| handler(cx, args).map(patina_core::Value::tagged),
+            )
+        }
+    }
+
     fn fs(&self) -> &Arc<dyn FileSystem> {
         &self.fs
     }

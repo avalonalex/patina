@@ -124,6 +124,15 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
         self.cps.evaluator.heap()
     }
 
+    /// The evaluator's own: a step's call, inside the step (#706).
+    fn call_cx(
+        &self,
+        handler: patina_primitives::CxHandler,
+        args: &[TaggedValue],
+    ) -> Result<TaggedValue, EvalError> {
+        self.cps.evaluator.call_cx(handler, args)
+    }
+
     fn fs(&self) -> &Arc<dyn FileSystem> {
         self.cps.evaluator.fs()
     }

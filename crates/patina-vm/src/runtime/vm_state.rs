@@ -303,6 +303,30 @@ pub struct VmState {
 }
 
 impl VmState {
+    /// Call `handler`, a primitive that takes the context, on `args`: the
+    /// context made where the call is, and the argument words handed over
+    /// as its values with no copy (#706).
+    pub(super) fn call_cx(
+        &self,
+        handler: patina_primitives::CxHandler,
+        args: &[TaggedValue],
+    ) -> Result<TaggedValue, patina_primitives::EvalError> {
+        let instance = Rc::clone(self.heap.borrow().instance());
+        // SAFETY: the VM calls a primitive inside one instruction, between
+        // its safe points, and a primitive that takes the context cannot
+        // call back, so it reaches none: nothing collects while it runs. Its
+        // arguments are the call's, read from the registers as it was made.
+        unsafe {
+            patina_core::heap::cx::enter_call(
+                &self.heap,
+                &self.mutator,
+                &instance,
+                args,
+                |cx, args| handler(cx, args).map(patina_core::Value::tagged),
+            )
+        }
+    }
+
     /// A machine over `heap`, whose global environment `globals` lives on
     /// it, collecting in the mode the environment selects.
     pub fn new(heap: SharedHeap, globals: Rc<Environment>) -> Self {

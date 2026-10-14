@@ -136,6 +136,35 @@ pub(crate) fn enter<R>(
     f(&mut cx)
 }
 
+/// A context for a machine's call of a primitive, with the call's arguments
+/// as its values (#706): what the VM and the tree-walker run a context
+/// primitive in. The one entry outside this crate that makes a context
+/// without the driver or a scope, for the trusted crates that dispatch
+/// primitives.
+///
+/// # Safety
+///
+/// - No collection runs while `f` runs. A machine vouches for it where it
+///   calls a primitive between its safe points: inside one instruction or
+///   one step, by a primitive that cannot call back, and so reaches none. A
+///   check build asserts it: every collection asserts that no context lives.
+/// - Each word of `args` is live, on this heap: the machine read it from its
+///   registers or its step as it made the call.
+pub unsafe fn enter_call<R>(
+    heap: &RefCell<Heap>,
+    mutator: &Mutator,
+    instance: &Instance,
+    args: &[TaggedValue],
+    f: impl for<'gc> FnOnce(&mut Cx<'gc>, &[Value<'gc>]) -> R,
+) -> R {
+    enter(heap, mutator, instance, |cx| {
+        // SAFETY: the caller's guarantees: each word is live, and stays so
+        // for the context's extent, beneath which nothing collects.
+        let args = unsafe { Value::from_tagged_slice(args) };
+        f(cx, args)
+    })
+}
+
 impl Drop for Cx<'_> {
     fn drop(&mut self) {
         self.mutator.exit_cx();
