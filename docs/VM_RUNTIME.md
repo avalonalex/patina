@@ -226,6 +226,20 @@ Collections that run inside dispatch:
 - the polls themselves, at a closure's entry and a generic call's return;
 - `CollectAtCall`'s, a resumable primitive's collection at its call (§4.5).
 
+**Interrupts** (#701). A poll also services a posted `SIGNAL`: Ctrl-C's,
+through the REPL's SIGINT handler, or a host's, through
+`Interpreter::interrupt_handle()` from another thread. Every loop services
+it, a nested one beneath a `NoGcScope` too, where a collection stays posted
+(`Mutator::take_signal`). The poll answers `VmError::Interrupt`, which the
+loop routes as it routes an error an instruction met (`route_error`): raised
+non-continuably in the innermost handler as an `&interrupt` condition, or
+returned when no handler is installed. The condition is not an error object
+(`error-object?` answers `#f`); `(patina interrupt)`'s `interrupt?` answers
+`#t`, and one that a declining `guard` raises again with no handler left
+leaves as `VmError::Interrupt` (`vm_raise_value`). A form's last returns pass
+no poll, so `run_top_frame` takes an interrupt posted during them where the
+outermost loop returns, and the form, not the next one, answers it (#700).
+
 ### 3.3 Instruction Dispatch
 
 ```rust

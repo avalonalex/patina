@@ -1509,7 +1509,8 @@ Only uncaught, reported errors produce records. Under `-k` each reported error
 gets one, and a later `(exit 0)` cannot erase the failed status.
 
 Kinds are `parse`, `syntax`, `missing-library`, `unbound-identifier`, `load`,
-`native-extension`, `runtime` and `io`. The corpus groups `parse` and `syntax`
+`native-extension`, `runtime`, `io` and `interrupt`, an interrupt nothing
+handled (#701). The corpus groups `parse` and `syntax`
 into its existing `parse-error` bucket. An initialization or export failure
 is `load-error`; a nested missing library or reader failure retains its more
 specific cause. This makes SRFI 179's missing `u1vector-ref` a `load-error` on

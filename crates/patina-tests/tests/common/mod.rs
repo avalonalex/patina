@@ -334,6 +334,7 @@ impl ClassifyError for patina_runtime::EvalError {
             | IOError(_)
             | InternalError(_)
             | ContinuationEscape
+            | Interrupt
             | SchemeException { .. } => ErrorClass::AtRuntime,
         }
     }

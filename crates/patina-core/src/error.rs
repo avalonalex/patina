@@ -32,6 +32,11 @@ pub enum ExceptionKind {
     /// Read/parse error (maps from parse errors)
     /// Satisfies `read-error?` predicate
     ReadError,
+    /// A posted interrupt, Ctrl-C's (#701): raised non-continuably at a
+    /// poll. Not an error object, so `error-object?` answers `#f`, as
+    /// Racket's `exn:break` is no `exn:fail`; `(patina interrupt)`'s
+    /// `interrupt?` answers `#t`.
+    Interrupt,
     /// User-defined exception kind
     Custom(String),
 }
@@ -169,6 +174,9 @@ pub enum ErrorKind {
     /// User-raised error via `(error ...)`
     User,
 
+    /// A posted interrupt (#701): catchable, but not an error object
+    Interrupt,
+
     // === Non-catchable errors (stay in Rust) ===
     /// Internal interpreter bug - should never happen
     Internal,
@@ -188,6 +196,7 @@ impl ErrorKind {
         match self {
             ErrorKind::FileIO => ExceptionKind::FileError,
             ErrorKind::Read => ExceptionKind::ReadError,
+            ErrorKind::Interrupt => ExceptionKind::Interrupt,
             _ => ExceptionKind::Error,
         }
     }
@@ -205,6 +214,7 @@ impl ErrorKind {
             ErrorKind::Read => "read error",
             ErrorKind::Syntax => "syntax error",
             ErrorKind::User => "error",
+            ErrorKind::Interrupt => "interrupt",
             ErrorKind::Internal => "internal error",
             ErrorKind::ControlFlow => "control flow",
         }

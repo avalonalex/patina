@@ -68,6 +68,12 @@ pub enum VmError {
     #[error("unhandled exception: {message}")]
     SchemeException { message: String },
 
+    /// A posted interrupt, Ctrl-C's (#701): raised at a poll as a
+    /// non-continuable `&interrupt`, which is not an error object, and this
+    /// once nothing handles it. A script that ends on one exits with 130.
+    #[error("interrupted")]
+    Interrupt,
+
     /// A continuation was invoked and the frames it restored are not the ones
     /// the current Rust call chain was running. Never reaches a user: the
     /// value the continuation carries is parked on `VmState::pending_escape`
@@ -163,6 +169,7 @@ impl patina_runtime::HasDiagnostic for VmError {
                 d.identifier = Some(name.to_string());
                 d
             }
+            Self::Interrupt => Diagnostic::new(K::Interrupt, self.to_string()),
             _ => Diagnostic::new(K::Runtime, self.to_string()),
         }
     }

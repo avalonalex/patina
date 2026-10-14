@@ -29,6 +29,13 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 static ERROR_REPORTED: AtomicBool = AtomicBool::new(false);
 
+/// Whether an interrupt that nothing handled stopped the program (#701).
+static PROGRAM_INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+/// The status a program that an interrupt stopped ends with: 128 + SIGINT,
+/// what a shell reports for a process SIGINT ended (decision 3 on #697).
+pub const INTERRUPTED_STATUS: i32 = 130;
+
 /// The status of an `exit` that an unhandled error interrupted, or [`NO_EXIT`].
 static INTERRUPTED_EXIT: AtomicI64 = AtomicI64::new(NO_EXIT);
 
@@ -73,6 +80,33 @@ pub fn end_process(requested: i32) -> ! {
         note_error_reported();
     }
     std::process::exit(status_for_exit(requested))
+}
+
+/// Record that the error just reported was an interrupt that nothing
+/// handled, Ctrl-C's (#701), when `diagnostic` is one. A runner stops the
+/// program on it, even under `-k`, and the process ends with
+/// [`INTERRUPTED_STATUS`] ([`end_if_program_interrupted`]). Only the runners
+/// of programs record it: a session returns to its prompt.
+pub fn note_if_interrupt(diagnostic: &crate::Diagnostic) -> bool {
+    let interrupt = diagnostic.kind == crate::DiagnosticKind::Interrupt;
+    if interrupt {
+        PROGRAM_INTERRUPTED.store(true, Ordering::Relaxed);
+    }
+    interrupt
+}
+
+/// Whether an interrupt stopped the program ([`note_if_interrupt`]).
+pub fn program_interrupted() -> bool {
+    PROGRAM_INTERRUPTED.load(Ordering::Relaxed)
+}
+
+/// End the process with [`INTERRUPTED_STATUS`] if an interrupt stopped the
+/// program, once the output it left in file ports is written
+/// ([`end_process`]); return otherwise.
+pub fn end_if_program_interrupted() {
+    if program_interrupted() {
+        end_process(INTERRUPTED_STATUS);
+    }
 }
 
 /// The status `exit` asks for with `args`, or the error it reports for them.

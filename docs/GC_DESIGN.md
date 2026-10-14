@@ -635,8 +635,20 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
     `Rc`: it stores null in the cell and waits until no post is in flight,
     and only then is the `Mutator` freed. So a poster is either waited for
     or does nothing, and a handle that outlives its heap posts nothing and
-    answers `false`. Nothing services the `SIGNAL` bit yet; #701's second
-    part raises `&interrupt` at the poll.
+    answers `false`.
+  - **Servicing a signal** (#701). Any poll takes a posted `SIGNAL`
+    (`Mutator::take_signal`), beneath a `NoGcScope` too, where a collection
+    stays posted, and the machine raises a non-continuable `&interrupt` there
+    (`docs/VM_RUNTIME.md` §3.2; the tree-walker's `raise_interrupt`). Where
+    the outermost loop returns, the machines take one posted during the
+    form's last returns, which pass no poll (#700). A remote post of a
+    collection joins the owner's posts, and the other events, which no stage
+    services yet, are dropped. `InterruptHandle::forward_sigint` makes SIGINT
+    post `SIGNAL` through a `sigaction` handler while its guard lives: the
+    REPL holds one while an evaluation runs, and a script for its whole run.
+    A SIGINT that finds the last one still posted, by a program that reached
+    no poll since (blocked in a read, or in a long primitive), ends the
+    process by SIGINT's default action, as before forwarding.
   - **Reserved words.** They stay zero until a later stage uses them: the
     allocation buffer (5a), the barrier (7), the register stack (4d), Tick
     mode's count, and the words C1 and C10 reserve.

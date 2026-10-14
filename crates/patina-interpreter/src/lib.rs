@@ -64,7 +64,9 @@ mod reentry_lint_control;
 #[allow(deprecated)]
 pub use legacy::{Pipeline, PipelineError, StandardPipeline};
 pub use patina_core::error::SourceLocation;
-pub use patina_core::{Owned, OwnedEnvironment, SharedHeap, TaggedValue, new_shared_heap};
+pub use patina_core::{
+    InterruptHandle, Owned, OwnedEnvironment, SharedHeap, TaggedValue, event, new_shared_heap,
+};
 pub use patina_frontend::{
     DesugarError, Desugarer, LexError, Lexer, ParseError, Parser, SourceMap,
 };
@@ -702,11 +704,12 @@ impl<B: Backend> Interpreter<B> {
                 if diagnostic.path.is_none() {
                     diagnostic.path = Some(source_name.into());
                 }
+                let interrupt = patina_runtime::exit_status::note_if_interrupt(&diagnostic);
                 patina_runtime::diagnostic::emit(diagnostic);
                 eprintln!("Error: {}", format_error_with_source(&error, source_map));
-                // The program asked to exit, so it does not carry on; the caller
-                // ends the process.
-                patina_runtime::exit_status::exit_interrupted().then_some(error)
+                // The program asked to exit, or was interrupted (#701), so it
+                // does not carry on; the caller ends the process.
+                (interrupt || patina_runtime::exit_status::exit_interrupted()).then_some(error)
             },
         );
         if let FormsEnd::Unreadable(error) = &end {
@@ -1014,6 +1017,20 @@ impl<B: Backend> Interpreter<B> {
     /// evaluation in handles ([`Owned`]), not in words read off it.
     pub fn heap(&self) -> &patina_core::SharedHeap {
         self.backend.heap()
+    }
+
+    /// A handle that interrupts this interpreter from anywhere: another
+    /// thread, a timer, a signal handler (#701). Its
+    /// [`post`](InterruptHandle::post) of [`event::SIGNAL`] raises a
+    /// non-continuable `&interrupt` at the running evaluation's next poll,
+    /// which `(patina interrupt)`'s `interrupt?` recognises and which is not
+    /// an error object; unhandled, the evaluation answers an error whose
+    /// diagnostic kind is `interrupt`. A post while nothing runs stops the
+    /// next evaluation at its start. The handle is `Send + Sync + Clone`, and
+    /// outlives the interpreter harmlessly: its posts then do nothing.
+    /// [`InterruptHandle::forward_sigint`] makes Ctrl-C post it.
+    pub fn interrupt_handle(&self) -> InterruptHandle {
+        self.backend.heap().borrow().interrupt_handle()
     }
 
     /// Format a value for display using write notation (machine-readable):

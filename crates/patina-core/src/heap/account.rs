@@ -271,7 +271,8 @@ impl HeapObjectData {
                     crate::error::ExceptionKind::Custom(name) => name.capacity(),
                     crate::error::ExceptionKind::Error
                     | crate::error::ExceptionKind::FileError
-                    | crate::error::ExceptionKind::ReadError => 0,
+                    | crate::error::ExceptionKind::ReadError
+                    | crate::error::ExceptionKind::Interrupt => 0,
                 };
                 custom + message.capacity() + irritants.capacity() * VALUE_BYTES
             }

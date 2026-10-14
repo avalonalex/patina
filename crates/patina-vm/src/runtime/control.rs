@@ -207,7 +207,7 @@ pub(super) fn call_closure_from_regs(
     }
     // The callee's entry: a poll site (§12, #700), with its frame complete
     // and still at pc 0, whose map lists the arguments.
-    super::vm_state::poll(state);
+    super::vm_state::poll(state)?;
 
     Ok(())
 }
@@ -1018,6 +1018,17 @@ pub(super) fn vm_raise_value(
     } else {
         // No handler — format and propagate as Rust error
         use patina_primitives::primitives::io::datum_writer::format_display_tagged;
+        // An interrupt no handler took, whether a poll raised it or a
+        // declining `guard` raised it again, leaves as the interrupt it is,
+        // for the runner that ends a script on one (#701).
+        let interrupt = state
+            .heap()
+            .borrow()
+            .get_exception(exception)
+            .is_some_and(|(kind, _, _)| *kind == patina_core::ExceptionKind::Interrupt);
+        if interrupt {
+            return Err(VmError::Interrupt);
+        }
         let display = format_display_tagged(exception, state.heap());
         // Deliberately the same wording whether or not the raise was
         // continuable — the variant's `Display` supplies it. Continuability is
@@ -1104,6 +1115,7 @@ pub(super) fn classify_error(err: &VmError) -> (patina_core::ExceptionKind, Stri
             (kind, msg)
         }
         VmError::SchemeException { message } => (ExceptionKind::Error, message.clone()),
+        VmError::Interrupt => (ExceptionKind::Interrupt, err.to_string()),
         // Unwrap location wrapper and classify the inner error.
         VmError::WithLocation { error, .. } | VmError::WithDiagnostic { error, .. } => {
             classify_error(error)
@@ -3672,7 +3684,7 @@ pub(super) fn tail_call_closure_resolved(
     let base = state.execution.tail_replace(new_code, func_val);
     store_args_in_window(state, base, arity, arg_vals);
     // The callee's entry, in the reused window (§12, #700).
-    super::vm_state::poll(state);
+    super::vm_state::poll(state)?;
     Ok(())
 }
 
@@ -3698,7 +3710,7 @@ pub(super) fn self_tail_call(
     store_args_in_window(state, base, arity, arg_vals);
     state.execution.restart_closure(func_val);
     // The frame's entry again: the poll every loop passes (§12, #700).
-    super::vm_state::poll(state);
+    super::vm_state::poll(state)?;
     Ok(())
 }
 
@@ -3751,12 +3763,12 @@ pub(super) fn exec_call_primitive(
         if is_tail_site {
             let exit = tail_call_value(state, func_val, arg_vals, exit_depth)?;
             if exit.is_none() {
-                super::vm_state::poll(state);
+                super::vm_state::poll(state)?;
             }
             return Ok(exit);
         }
         call_value(state, func_val, arg_vals, dst)?;
-        super::vm_state::poll(state);
+        super::vm_state::poll(state)?;
         return Ok(None);
     }
     exec_call_primitive_direct(state, base, func_id, arg_vals, dst)

@@ -218,6 +218,22 @@ impl RunningPatina {
         }
     }
 
+    /// Whether the child is still running.
+    pub fn running(&mut self) -> bool {
+        self.child.try_wait().expect("wait on patina").is_none()
+    }
+
+    /// Send SIGINT, as Ctrl-C at a terminal does (#701). Through kill(1),
+    /// which keeps the tests free of unsafe code.
+    pub fn interrupt(&self) {
+        let status = std::process::Command::new("kill")
+            .arg("-INT")
+            .arg(self.child.id().to_string())
+            .status()
+            .expect("run kill");
+        assert!(status.success(), "kill -INT {}", self.child.id());
+    }
+
     /// Close standard input, wait for the child to exit, and return its
     /// (stdout, stderr, success) — failing the test, after killing the child,
     /// if it is still running ten seconds later.

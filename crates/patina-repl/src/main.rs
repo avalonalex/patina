@@ -8,7 +8,7 @@ use patina_interpreter::{
     format_backend_error_with_source, format_error_with_source,
 };
 use patina_repl::repl::needs_more_input;
-use patina_repl::{Repl, run_program_stream, run_repl_loop, session_lines};
+use patina_repl::{CtrlC, Repl, run_program_stream, run_repl_loop, session_lines};
 use patina_runtime::{Diagnostic, DiagnosticKind, HasDiagnostic};
 use patina_vm::VmBackend;
 use patina_vm::tracer::StepTracer;
@@ -222,6 +222,7 @@ where
 
     prepare_backend(interp.backend(), opts, None);
     let heap = interp.backend().heap().clone();
+    let _ctrl_c = CtrlC::for_program(interp);
     for expr in &opts.eval_exprs {
         match interp.eval_program_owned(expr) {
             Ok(value) => {
@@ -231,7 +232,9 @@ where
                 }
             }
             Err(e) => {
-                patina_runtime::diagnostic::emit(e.diagnostic());
+                let diagnostic = e.diagnostic();
+                patina_runtime::exit_status::note_if_interrupt(&diagnostic);
+                patina_runtime::diagnostic::emit(diagnostic);
                 let mut source_map = patina_core::SourceMap::new();
                 source_map.set_source_text(expr.clone());
                 source_map.set_primary_source("<eval>");
@@ -240,6 +243,7 @@ where
                     format_backend_error_with_source(&e, &source_map)
                 );
                 patina_runtime::exit_status::exit_if_interrupted();
+                patina_runtime::exit_status::end_if_program_interrupted();
                 patina_runtime::exit_status::end_process(1);
             }
         }
@@ -351,6 +355,7 @@ fn run(program: Program<'_>, opts: &CliOptions) -> ! {
         // with `--tree-walker` rather than quietly running the other backend.
         let (interp, tracer) = traced_vm();
         prepare_backend(interp.backend(), opts, script);
+        let _ctrl_c = CtrlC::for_program(&interp);
         let clean = run_program(&interp, &program, opts.keep_going);
         if !clean {
             eprintln!("--- Trace: {} events recorded ---", tracer.borrow().len());
@@ -359,10 +364,12 @@ fn run(program: Program<'_>, opts: &CliOptions) -> ! {
     } else if opts.use_tree_walker {
         let interp = TreeWalkInterpreter::new_tree_walker();
         prepare_backend(interp.backend(), opts, script);
+        let _ctrl_c = CtrlC::for_program(&interp);
         finish(run_program(&interp, &program, opts.keep_going))
     } else {
         let interp = Interpreter::new(VmBackend::new());
         prepare_backend(interp.backend(), opts, script);
+        let _ctrl_c = CtrlC::for_program(&interp);
         finish(run_program(&interp, &program, opts.keep_going))
     }
 }
@@ -370,8 +377,10 @@ fn run(program: Program<'_>, opts: &CliOptions) -> ! {
 /// End the process once a program has run, cleanly or not.
 fn finish(clean: bool) -> ! {
     // An error that interrupted an `exit` stopped the program; the exit it
-    // asked for decides the status, now that the trace count is out.
+    // asked for decides the status, now that the trace count is out. An
+    // interrupt that stopped it ends it with 130 (#701).
     patina_runtime::exit_status::exit_if_interrupted();
+    patina_runtime::exit_status::end_if_program_interrupted();
     patina_runtime::exit_status::end_process(if clean { 0 } else { 1 });
 }
 
@@ -399,6 +408,7 @@ where
                     if diagnostic.path.is_none() {
                         diagnostic.path = Some(filename.into());
                     }
+                    patina_runtime::exit_status::note_if_interrupt(&diagnostic);
                     patina_runtime::diagnostic::emit(diagnostic);
                     eprintln!(
                         "Error: {}",
@@ -450,7 +460,9 @@ where
         )]
         let evaluated = backend.eval_with_source_map(datum, backend.global_env(), source_map);
         evaluated.map(|_| ()).map_err(|e| {
-            patina_runtime::diagnostic::emit(e.diagnostic());
+            let diagnostic = e.diagnostic();
+            patina_runtime::exit_status::note_if_interrupt(&diagnostic);
+            patina_runtime::diagnostic::emit(diagnostic);
             format_error_with_source(&e, &source_map.borrow())
         })
     })
@@ -605,7 +617,7 @@ fn run_repl_vm(opts: &CliOptions) {
     println!();
     println!("Commands:");
     println!("  (exit) or Ctrl+D to quit");
-    println!("  Ctrl+C to cancel current input");
+    println!("  Ctrl+C to cancel current input, or to interrupt an evaluation");
     println!();
 
     let mut lines = match session_lines() {
@@ -630,8 +642,9 @@ fn run_repl_vm(opts: &CliOptions) {
             };
         }
 
-        let (result, source_map) =
-            interp.eval_program_with_fold_case_owned(line, "<repl>", fold_case);
+        let (result, source_map) = CtrlC::during(&interp, || {
+            interp.eval_program_with_fold_case_owned(line, "<repl>", fold_case)
+        });
         match result {
             Ok(value) => {
                 let value = interp.raw_value(&value);

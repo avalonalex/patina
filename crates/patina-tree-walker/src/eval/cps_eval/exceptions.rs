@@ -100,6 +100,9 @@ impl<'a> CpsEvaluator<'a> {
                 (kind, msg.clone())
             }
 
+            // A posted interrupt, raised at a poll (#701)
+            EvalError::Interrupt => (ExceptionKind::Interrupt, "interrupted".to_string()),
+
             // Already a Scheme exception - use its kind
             EvalError::SchemeException {
                 kind,

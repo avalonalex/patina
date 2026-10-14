@@ -1295,12 +1295,22 @@ fn run_top_frame(state: &mut VmState) -> Result<TaggedValue, VmError> {
     // The driver entry (#702): the run takes the carrier's driver and may
     // collect, unless a run further out holds it, beneath which it is nested.
     let driver = GcDriver::acquire(&state.heap);
+    let outermost = driver.is_some();
     #[expect(
         clippy::disallowed_methods,
         reason = "the state is in the machine: the frame the caller pushed is the run's root, and \
                   this frame holds nothing"
     )]
     let result = run_loop_until(state, 0, driver);
+    // Where the outermost loop returns, an interrupt posted during the
+    // form's last returns, which pass no poll, stops this form rather than
+    // the next one (#700, #701). Its handlers have gone with it.
+    let result = match result {
+        Ok(_) if outermost && state.mutator.poll_due() && state.mutator.take_signal() => {
+            Err(VmError::Interrupt)
+        }
+        result => result,
+    };
     // Nothing is left to resume: an escape that reached depth 0 *is* this
     // form's value, and a loop re-parks one on the way out for the boundary
     // it may have crossed. Dropped with the transfer flag so neither is
@@ -1478,8 +1488,11 @@ fn dispatch_loop(state: &mut VmState, exit_depth: usize) -> Result<LoopExit, VmE
     // starts here, with its frame complete at pc 0, and a collection posted
     // where none could run (a nested loop's, the previous form's last
     // stretch of returns) runs before the form's first instruction, however
-    // few calls the form makes.
-    poll(state);
+    // few calls the form makes. An interrupt posted since is raised here,
+    // as at any poll (#701).
+    if let Err(e) = poll(state) {
+        route_error(state, e)?;
+    }
 
     loop {
         // No poll here (#700): the machine polls where `PRD/GC_PRD.md` §12
@@ -1532,44 +1545,53 @@ fn dispatch_loop(state: &mut VmState, exit_depth: usize) -> Result<LoopExit, VmE
                     cur_code = state.current_code()?;
                     // A continuation reinstated: a poll site (§12), since the
                     // frame it landed in resumes at a pc no entry poll sees.
-                    poll(state);
+                    if let Err(e) = poll(state) {
+                        route_error(state, e)?;
+                    }
                     continue;
                 }
 
-                // Attach source location from the current frame's code object if available.
-                let e = attach_source_location(state, e);
-
-                // Route catchable errors through exception handlers
-                if is_catchable(&e) && !state.execution.handlers().is_empty() {
-                    let (kind, message) = classify_error(&e);
-                    let exception = state
-                        .heap
-                        .borrow_mut()
-                        .alloc_exception(kind, message, vec![]);
-                    // The raise pushes `raise_step_stub` and the loop drives
-                    // it. Register 0 as the destination is a placeholder: this
-                    // error has no result slot, and a non-continuable raise
-                    // has no value to deliver — `ResumeRaise` raises the
-                    // secondary rather than reaching the stub's `Return`.
-                    //
-                    // It used to be delivered: the old path let a returning
-                    // handler write its value here, which is how `(list
-                    // (car 5))` under a returning handler answered `(())`
-                    // with the handler's value in r0 (Track L §6). That is
-                    // closed. What is left is narrower than what it replaced
-                    // — the `Return` is reachable only if the *secondary's*
-                    // own handler returns a value here — and an attempt to
-                    // build that (a composable continuation as the secondary's
-                    // handler) raises a tertiary instead and terminates at the
-                    // enclosing `guard`. Give the stub a sentinel destination
-                    // if a program is ever found that reaches it.
-                    vm_raise_value(state, exception, 0, false)?;
-                    continue;
-                }
-                return Err(e);
+                route_error(state, e)?;
             }
         }
     }
+}
+
+/// Route `e`, an error a dispatch loop met, to the program's handlers:
+/// raised non-continuably in the innermost, after which the loop goes on
+/// with the handler's call, or answered when it is not catchable or no
+/// handler is installed, for the loop to return.
+fn route_error(state: &mut VmState, e: VmError) -> Result<(), VmError> {
+    // Attach source location from the current frame's code object if available.
+    let e = attach_source_location(state, e);
+
+    // Route catchable errors through exception handlers
+    if is_catchable(&e) && !state.execution.handlers().is_empty() {
+        let (kind, message) = classify_error(&e);
+        let exception = state
+            .heap
+            .borrow_mut()
+            .alloc_exception(kind, message, vec![]);
+        // The raise pushes `raise_step_stub` and the loop drives
+        // it. Register 0 as the destination is a placeholder: this
+        // error has no result slot, and a non-continuable raise
+        // has no value to deliver — `ResumeRaise` raises the
+        // secondary rather than reaching the stub's `Return`.
+        //
+        // It used to be delivered: the old path let a returning
+        // handler write its value here, which is how `(list
+        // (car 5))` under a returning handler answered `(())`
+        // with the handler's value in r0 (Track L §6). That is
+        // closed. What is left is narrower than what it replaced
+        // — the `Return` is reachable only if the *secondary's*
+        // own handler returns a value here — and an attempt to
+        // build that (a composable continuation as the secondary's
+        // handler) raises a tertiary instead and terminates at the
+        // enclosing `guard`. Give the stub a sentinel destination
+        // if a program is ever found that reaches it.
+        return vm_raise_value(state, exception, 0, false);
+    }
+    Err(e)
 }
 
 /// GC safe point: the VM's root set, handed to the shared driver. Returns
@@ -1604,28 +1626,40 @@ fn maybe_collect(state: &mut VmState, driver: &mut GcDriver) -> bool {
 /// - a loop's escape landing, and its start.
 ///
 /// A load of the poll word, and the rest only when something is posted: then
-/// a posted collection runs if the running loop holds the driver at depth 0,
-/// with every frame at the pc it resumes from.
+/// a posted interrupt is raised, and a posted collection runs if the running
+/// loop holds the driver at depth 0, with every frame at the pc it resumes
+/// from.
+///
+/// An interrupt comes back as [`VmError::Interrupt`], which the loop routes
+/// like any error the instruction met: raised non-continuably in the
+/// innermost handler, or returned when there is none (#701).
 #[inline]
-pub(super) fn poll(state: &mut VmState) {
+pub(super) fn poll(state: &mut VmState) -> Result<(), VmError> {
     if state.mutator.poll_due() {
-        poll_slow(state);
+        return poll_slow(state);
     }
+    Ok(())
 }
 
-/// Service a posted collection where the running loop holds the driver
-/// (`VmState::driver`): a nested loop has none, and collects nothing (#702).
+/// Service what is posted: an interrupt wherever the poll is, beneath a
+/// `NoGcScope` too (#701); a collection only where the running loop holds
+/// the driver (`VmState::driver`): a nested loop has none, and collects
+/// nothing (#702).
 #[cold]
 #[inline(never)]
-fn poll_slow(state: &mut VmState) {
+fn poll_slow(state: &mut VmState) -> Result<(), VmError> {
+    if state.mutator.take_signal() {
+        return Err(VmError::Interrupt);
+    }
     let Some(mut driver) = state.driver.take() else {
-        return;
+        return Ok(());
     };
     let collected = maybe_collect(state, &mut driver);
     state.driver = Some(driver);
     if collected {
         state.after_collection();
     }
+    Ok(())
 }
 
 /// Point B (#677): where a library's load ends at the top level, a pending
@@ -1989,7 +2023,7 @@ fn dispatch_one_instruction(
                 call_value_with_probe(state, func_val, None, &arg_vals, dst)?;
                 // A generic call's return: a poll site (§12). A closure's
                 // frame polls at its entry instead.
-                poll(state);
+                poll(state)?;
             }
         }
 
@@ -2031,7 +2065,7 @@ fn dispatch_one_instruction(
                 {
                     return Ok(Some(exit_val));
                 }
-                poll(state);
+                poll(state)?;
             }
         }
 
@@ -2046,7 +2080,7 @@ fn dispatch_one_instruction(
             // callee a direct call accepts — continuations and VM-intercepted
             // control primitives included.
             call_value(state, func_val, &arg_vals, dst)?;
-            poll(state);
+            poll(state)?;
         }
 
         Instruction::TailApply { func, ref args } => {
@@ -2059,7 +2093,7 @@ fn dispatch_one_instruction(
             if let Some(exit_val) = tail_call_value(state, func_val, &arg_vals, exit_depth)? {
                 return Ok(Some(exit_val));
             }
-            poll(state);
+            poll(state)?;
         }
 
         Instruction::Return { val } => {
@@ -2087,7 +2121,7 @@ fn dispatch_one_instruction(
             if let Some(result) = call_any(state, consumer_val, &produced_vals, dst)? {
                 state.set_reg(dst, result);
             }
-            poll(state);
+            poll(state)?;
         }
 
         Instruction::TailCallWithValues {
@@ -2110,7 +2144,7 @@ fn dispatch_one_instruction(
             {
                 return Ok(Some(exit_val));
             }
-            poll(state);
+            poll(state)?;
         }
 
         // ── dynamic-wind (instruction-level) ──────────────────────────
