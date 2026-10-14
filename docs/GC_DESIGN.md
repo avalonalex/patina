@@ -1400,24 +1400,27 @@ holder means they were correctly marked).
 Deferring payload drop to slot reuse would keep env cycles alive indefinitely
 on quiet arenas.
 
-**At the end of a heap's life the heap is in the cycle itself.** An environment
-holds the heap it allocates in (`Environment.heap`, a `SharedHeap`), so every
-heap → env edge above also closes a loop through the heap's own `Rc`. While the interpreter runs,
-its owner keeps the heap alive anyway; once the interpreter is dropped,
-nothing would collect again, and the heap stayed alive with everything in it,
-an unclosed file port's unwritten output among it (#604). So each heap's
-owner, the VM backend or the tree-walker's `Evaluator`, runs
-`Heap::teardown` from its `Drop`: a sweep with nothing marked. Every slot is
-tombstoned, so every environment payload drops, the environments let go of
-the heap, and the heap is freed with its owner's last handle; each port
-flushes and closes as it drops. The interned symbols and core forms go with
-their slots. Values do not outlive their interpreter: one kept past it names
-a freed slot, which a check build refuses as a use after free (§4.5). The
-hosts' handles go with their table, which teardown drops: a handle kept past
-its interpreter holds a dead reference, which the heap refuses to read, and
-dropping it does nothing (#605). The environments the table holds go with it,
-and each holds the heap, so they close the same cycle and teardown breaks it
-too (#620). `heap_teardown.rs` holds both backends to it, and
+**At the end of a heap's life.** Until #704 an environment held the heap it
+allocates in (`Environment.heap`, a `SharedHeap`), so every heap → env edge
+above also closed a loop through the heap's own `Rc`, and once the
+interpreter was dropped nothing would collect again: the heap stayed alive
+with everything in it, an unclosed file port's unwritten output among it
+(#604). An environment now carries only its heap's number
+(`Environment::heap_id`, which `Heap::assert_own` checks), so no loop runs
+through the heap, and it is freed with its owner's last handle. Each heap's
+owner, the VM backend or the tree-walker's `Evaluator`, still runs
+`Heap::teardown` from its `Drop`: a sweep with nothing marked, which
+tombstones every slot while the owner still holds the heap, so every
+environment payload drops and each port flushes and closes as it drops. The
+interned symbols and core forms go with their slots. Values do not outlive
+their interpreter: one kept past it names a freed slot, which a check build
+refuses as a use after free (§4.5). The hosts' handles go with their table,
+which teardown drops: a handle kept past its interpreter holds a dead
+reference, which the heap refuses to read, and dropping it does nothing
+(#605). The environments the table holds go with it; until #704 each held
+the heap and closed the same cycle (#620), and
+`a_held_environment_does_not_keep_its_heap_alive` now pins that none does.
+`heap_teardown.rs` holds both backends to it, and
 `teardown_frees_every_slot_and_the_heap_with_them` the sweep's part.
 
 The heap's `cond-expand` library-availability service is metadata outside the

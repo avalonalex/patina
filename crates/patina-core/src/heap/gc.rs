@@ -2412,7 +2412,7 @@ mod tests {
     #[test]
     fn tombstone_drops_rc_payload_breaking_env_cycle() {
         let shared = crate::heap::new_shared_heap();
-        let env = Rc::new(Environment::with_heap(shared.clone()));
+        let env = Rc::new(Environment::with_heap(&shared));
 
         // heap → env edge (owning Rc inside the heap slot)…
         let spec = shared
@@ -2435,7 +2435,7 @@ mod tests {
     #[test]
     fn env_bindings_are_roots() {
         let shared = crate::heap::new_shared_heap();
-        let env = Rc::new(Environment::with_heap(shared.clone()));
+        let env = Rc::new(Environment::with_heap(&shared));
 
         let live = shared
             .borrow_mut()
@@ -2460,7 +2460,7 @@ mod tests {
     #[test]
     fn parent_env_chain_is_traced() {
         let shared = crate::heap::new_shared_heap();
-        let parent = Rc::new(Environment::with_heap(shared.clone()));
+        let parent = Rc::new(Environment::with_heap(&shared));
         let live = shared
             .borrow_mut()
             .alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
@@ -2515,7 +2515,7 @@ mod tests {
             .borrow_mut()
             .alloc_pair(TaggedValue::fixnum(42), TaggedValue::NULL);
 
-        let env = Rc::new(Environment::with_heap(shared.clone()));
+        let env = Rc::new(Environment::with_heap(&shared));
         let proc = Rc::new(Procedure::CpsLambda {
             params: vec![],
             variadic: None,
@@ -2616,7 +2616,7 @@ mod tests {
             heap.bytes_since_gc() - before
         }
         let shared = crate::heap::new_shared_heap();
-        let env = Rc::new(Environment::with_heap(shared.clone()));
+        let env = Rc::new(Environment::with_heap(&shared));
         let heap = &mut *shared.borrow_mut();
         let value = size_of::<TaggedValue>();
         let pair = charged(heap, |h| {
@@ -2780,7 +2780,7 @@ mod tests {
         }
 
         let shared = crate::heap::new_shared_heap();
-        let env = Rc::new(Environment::with_heap(shared.clone()));
+        let env = Rc::new(Environment::with_heap(&shared));
         let mut heap = shared.borrow_mut();
         let mut roots = TestRoots::default();
         // Each kind twice: one kept, one garbage.
@@ -2867,7 +2867,7 @@ mod tests {
     #[should_panic(expected = "the tree-walker closures charged")]
     fn an_uncharged_closure_fails_the_sweep_check() {
         let shared = crate::heap::new_shared_heap();
-        let env = Rc::new(Environment::with_heap(shared.clone()));
+        let env = Rc::new(Environment::with_heap(&shared));
         let mut heap = shared.borrow_mut();
         heap.alloc_object(HeapObjectData::Procedure(tree_walker_closure(
             &env,
@@ -3099,7 +3099,7 @@ mod tests {
     #[test]
     fn teardown_frees_every_slot_and_the_heap_with_them() {
         let shared: SharedHeap = Rc::new(RefCell::new(Heap::new()));
-        let env = Rc::new(Environment::with_heap(shared.clone()));
+        let env = Rc::new(Environment::with_heap(&shared));
         let kept = {
             let mut heap = shared.borrow_mut();
             let symbol = heap.intern_symbol("kept");
@@ -3144,8 +3144,8 @@ mod tests {
     #[test]
     fn a_namespace_dropped_by_a_sweep_gives_its_tables_back() {
         let shared: SharedHeap = Rc::new(RefCell::new(Heap::new()));
-        let kept = Rc::new(Environment::with_heap(shared.clone()));
-        let dead = Rc::new(Environment::with_heap(shared.clone()));
+        let kept = Rc::new(Environment::with_heap(&shared));
+        let dead = Rc::new(Environment::with_heap(&shared));
         for i in 0..100 {
             dead.define(format!("binding-{i}"), TaggedValue::fixnum(i));
         }

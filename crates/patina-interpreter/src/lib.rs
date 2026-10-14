@@ -64,7 +64,7 @@ mod reentry_lint_control;
 #[allow(deprecated)]
 pub use legacy::{Pipeline, PipelineError, StandardPipeline};
 pub use patina_core::error::SourceLocation;
-pub use patina_core::{Owned, OwnedEnvironment, TaggedValue};
+pub use patina_core::{Owned, OwnedEnvironment, SharedHeap, TaggedValue, new_shared_heap};
 pub use patina_frontend::{
     DesugarError, Desugarer, LexError, Lexer, ParseError, Parser, SourceMap,
 };
@@ -333,7 +333,6 @@ impl<B: Backend> Interpreter<B> {
         let program_name = program_name.into();
         let arguments = arguments.into_iter().collect();
         self.backend
-            .global_env()
             .heap()
             .borrow_mut()
             .set_command_line(program_name, arguments);
@@ -426,7 +425,7 @@ impl<B: Backend> Interpreter<B> {
         source_name: &str,
         env: &Rc<Environment>,
     ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
-        let heap = self.backend.global_env().heap();
+        let heap = self.backend.heap();
         let source_map = Rc::new(RefCell::new(SourceMap::new()));
         let mut parser =
             match Parser::new_with_source_map(input, Rc::from(source_name), source_map.clone()) {
@@ -765,7 +764,7 @@ impl<B: Backend> Interpreter<B> {
         env: &Rc<Environment>,
         mut on_error: impl FnMut(B::Error, &SourceMap) -> Option<B::Error>,
     ) -> (Owned, FormsEnd<B::Error>, Rc<RefCell<SourceMap>>) {
-        let heap = self.backend.global_env().heap();
+        let heap = self.backend.heap();
         // The last value, held across each later form by a handle: it is the
         // answer when every later form fails, so a collection in one must not
         // free it (#605).
@@ -855,7 +854,7 @@ impl<B: Backend> Interpreter<B> {
     /// ```
     pub fn define(&self, name: &str, value: impl AsValue) {
         let global = self.backend.global_env();
-        let value = value.value_in(&global.heap().borrow());
+        let value = value.value_in(&self.backend.heap().borrow());
         self.backend.define(global, name, value);
     }
 
@@ -863,12 +862,12 @@ impl<B: Backend> Interpreter<B> {
     /// next evaluation. Keep the handle, not this, across one. Panics on a
     /// handle another interpreter made.
     pub fn raw_value(&self, handle: &Owned) -> TaggedValue {
-        self.backend.global_env().heap().borrow().held(handle)
+        self.backend.heap().borrow().held(handle)
     }
 
     /// A handle on `value`, which this interpreter answered.
     fn hold(&self, value: TaggedValue) -> Owned {
-        self.backend.global_env().heap().borrow().hold(value)
+        self.backend.heap().borrow().hold(value)
     }
 
     /// A new environment for the host to bind values in, held by a handle
@@ -901,7 +900,7 @@ impl<B: Backend> Interpreter<B> {
                       collect"
         )]
         let env = Rc::new(Environment::with_parent(Rc::clone(global)));
-        global.heap().borrow().hold_environment(env)
+        self.backend.heap().borrow().hold_environment(env)
     }
 
     /// Bind `name` to `value` in the host environment `env`, as a program's
@@ -909,7 +908,7 @@ impl<B: Backend> Interpreter<B> {
     /// Panics on a handle another interpreter made.
     pub fn define_in(&self, env: &OwnedEnvironment, name: &str, value: impl AsValue) {
         let (env, value) = {
-            let heap = self.backend.global_env().heap().borrow();
+            let heap = self.backend.heap().borrow();
             (heap.held_environment(env), value.value_in(&heap))
         };
         self.backend.define(&env, name, value);
@@ -930,11 +929,7 @@ impl<B: Backend> Interpreter<B> {
     /// from it, or write one, as raw, as with [`Interpreter::global_env`].
     /// Panics on a handle another interpreter made.
     pub fn raw_environment(&self, env: &OwnedEnvironment) -> Rc<Environment> {
-        self.backend
-            .global_env()
-            .heap()
-            .borrow()
-            .held_environment(env)
+        self.backend.heap().borrow().held_environment(env)
     }
 
     /// Evaluate a string containing one expression in the host environment
@@ -1013,6 +1008,14 @@ impl<B: Backend> Interpreter<B> {
         self.backend.global_env().clone()
     }
 
+    /// The heap the interpreter's values live on, raw: an environment keeps
+    /// no handle to its heap (#704), so a host that read it through
+    /// [`Interpreter::global_env`] reads it here. Keep values across an
+    /// evaluation in handles ([`Owned`]), not in words read off it.
+    pub fn heap(&self) -> &patina_core::SharedHeap {
+        self.backend.heap()
+    }
+
     /// Format a value for display using write notation (machine-readable):
     /// a bare `TaggedValue`, or a handle ([`Owned`]) this interpreter made.
     ///
@@ -1021,7 +1024,7 @@ impl<B: Backend> Interpreter<B> {
     /// Multiple values (from `values`) are unpacked and displayed one per line.
     pub fn display_tagged(&self, value: impl AsValue) -> String {
         use patina_primitives::primitives::io::datum_writer::format_write_tagged;
-        let heap = self.backend.global_env().heap();
+        let heap = self.backend.heap();
         let tv = value.value_in(&heap.borrow());
 
         // Unpack multiple values (R7RS: each value displayed on its own line)
@@ -1300,7 +1303,7 @@ mod tests {
     fn test_source_info_desugarer_integration() {
         // Verify that source info flows from parser through desugarer
         let backend = TreeWalker::new();
-        let heap = backend.global_env().heap().clone();
+        let heap = Backend::heap(&backend).clone();
         let sm = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
         let source_name: std::rc::Rc<str> = std::rc::Rc::from("test.scm");
         let mut parser = Parser::new_with_source_map("(+ 1 2)", source_name, sm.clone()).unwrap();
@@ -1351,7 +1354,7 @@ mod tests {
     #[test]
     fn test_format_error_with_source() {
         let interp = TreeWalkInterpreter::new_tree_walker();
-        let heap = interp.evaluator().global_env.heap();
+        let heap = &interp.evaluator().heap;
         let sm = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
         let source_name: std::rc::Rc<str> = std::rc::Rc::from("<eval>");
         let input = "(+ 1 bad-var)";
@@ -1388,7 +1391,7 @@ mod tests {
     fn test_expansion_chain_single_macro() {
         // (let ((x 1)) (+ x y)) with undefined y should show "macro expansion: let"
         let interp = TreeWalkInterpreter::new_tree_walker();
-        let heap = interp.evaluator().global_env.heap();
+        let heap = &interp.evaluator().heap;
         let sm = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
         let source_name: std::rc::Rc<str> = std::rc::Rc::from("test.scm");
         let input = "(let ((x 1)) (+ x y))";
@@ -1411,7 +1414,7 @@ mod tests {
         // (cond (#t (+ 0 y))) — y is in a call position so it carries a source location.
         // cond expands to an if form; both cond and (potentially) if should appear in chain.
         let interp = TreeWalkInterpreter::new_tree_walker();
-        let heap = interp.evaluator().global_env.heap();
+        let heap = &interp.evaluator().heap;
         let sm = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
         let source_name: std::rc::Rc<str> = std::rc::Rc::from("test.scm");
         let input = "(cond (#t (+ 0 y)))";
@@ -1438,7 +1441,7 @@ mod tests {
     fn test_no_regression_unexpanded_errors() {
         // Errors from non-macro code still show location without expansion line
         let interp = TreeWalkInterpreter::new_tree_walker();
-        let heap = interp.evaluator().global_env.heap();
+        let heap = &interp.evaluator().heap;
         let sm = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
         let source_name: std::rc::Rc<str> = std::rc::Rc::from("test.scm");
         let input = "(+ 1 undefined-var)";

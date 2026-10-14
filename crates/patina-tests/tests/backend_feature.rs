@@ -243,8 +243,5 @@ fn run<B: patina_runtime::Backend>(
     let value = interp
         .eval_program(program)
         .unwrap_or_else(|e| panic!("failed to run: {e}"));
-    patina_primitives::primitives::io::datum_writer::format_display_tagged(
-        value,
-        interp.backend().global_env().heap(),
-    )
+    patina_primitives::primitives::io::datum_writer::format_display_tagged(value, interp.heap())
 }

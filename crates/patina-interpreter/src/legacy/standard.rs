@@ -38,10 +38,9 @@ impl StandardPipeline {
     /// built between calls (#620). An environment of another heap, which this
     /// adapter never supported, is left as it was.
     fn track(&self, env: &Rc<Environment>) {
-        let global = self.interpreter.global_env();
-        let heap = global.heap();
-        if Rc::ptr_eq(env.heap(), heap) {
-            heap.borrow().track_environment(env);
+        let heap = patina_runtime::Backend::heap(self.interpreter.backend()).borrow();
+        if env.heap_id() == heap.id() {
+            heap.track_environment(env);
         }
     }
 }

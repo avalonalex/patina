@@ -13,10 +13,7 @@ fn command_line<B: Backend>(interp: &Interpreter<B>) -> String {
     let value = interp
         .eval_program("(import (scheme process-context)) (command-line)")
         .unwrap();
-    patina_primitives::primitives::io::datum_writer::format_write_tagged(
-        value,
-        interp.backend().global_env().heap(),
-    )
+    patina_primitives::primitives::io::datum_writer::format_write_tagged(value, interp.heap())
 }
 
 /// Same-backend instances must be independent too: a per-backend or
@@ -94,7 +91,7 @@ fn configured_command_line_reaches_library_bodies_eval_and_load() {
             .unwrap();
         let result = patina_primitives::primitives::io::datum_writer::format_write_tagged(
             value,
-            interp.backend().global_env().heap(),
+            interp.heap(),
         );
         assert_eq!(
             result,
@@ -779,7 +776,7 @@ fn chain_lengths(heap: &patina_core::SharedHeap, value: TaggedValue) -> Vec<Opti
 #[test]
 fn eval_of_one_datum_does_not_extend_its_earlier_chains() {
     fn check<B: Backend>(interp: &Interpreter<B>, backend: &str) {
-        let heap = interp.backend().global_env().heap().clone();
+        let heap = interp.heap().clone();
         let (result, _map) = interp.eval_program_with_source_name(
             "(import (scheme base) (scheme eval) (scheme repl))\n\
              (define form '(case 3 ((1 2) 'a) ((3) 'b) (else 'c)))\n\

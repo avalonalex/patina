@@ -15,7 +15,7 @@ fn check<B: Backend>(interp: Interpreter<B>, code: &str, expected: &str) {
         .eval_program(code)
         .unwrap_or_else(|e| panic!("{} failed: {e}\n{code}", std::any::type_name::<B>()));
     assert_eq!(
-        format_write_tagged(value, interp.backend().global_env().heap()),
+        format_write_tagged(value, interp.heap()),
         expected,
         "{}",
         std::any::type_name::<B>()

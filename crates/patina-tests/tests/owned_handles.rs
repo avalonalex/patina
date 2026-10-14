@@ -23,11 +23,11 @@ const PRELUDE: &str = "(import (scheme base) (patina debug))
 const CHURN: &str = "(churn 200000) (gc) (define keep (list 'a 'b 'c 'd))";
 
 fn collections<B: Backend>(interp: &Interpreter<B>) -> u64 {
-    interp.global_env().heap().borrow().gc_collections()
+    interp.heap().borrow().gc_collections()
 }
 
 fn handles<B: Backend>(interp: &Interpreter<B>) -> usize {
-    interp.global_env().heap().borrow().handle_count()
+    interp.heap().borrow().handle_count()
 }
 
 /// The message of the panic `f` raises.
@@ -184,7 +184,7 @@ fn a_handle_used_with_another_interpreter_is_refused() {
 fn kept_past_its_interpreter<B: Backend>(interp: Interpreter<B>) {
     let held = interp.eval_str_owned("(list 'held 1 2)").unwrap();
     let copy = held.clone();
-    let heap = Rc::downgrade(interp.global_env().heap());
+    let heap = Rc::downgrade(interp.heap());
     drop(interp);
     assert!(heap.upgrade().is_none(), "a handle kept the heap alive");
     drop(held);

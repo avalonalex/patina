@@ -177,7 +177,7 @@ impl<'a> CpsEvaluator<'a> {
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
     ) -> Result<StepResult, EvalError> {
-        let heap = self.evaluator.global_env.heap();
+        let heap = &self.evaluator.heap;
 
         // Try to extract promise from TaggedValue
         let promise_opt = heap.borrow().get_promise(value_tagged);

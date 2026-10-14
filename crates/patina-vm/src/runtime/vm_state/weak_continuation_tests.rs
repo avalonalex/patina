@@ -17,11 +17,9 @@ use super::VmState;
 use crate::types::{
     CallFrame, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use patina_core::environment::Environment;
 use patina_core::heap::gc::collect_for_tests;
 use patina_core::tagged_value::TaggedValue;
 use std::cell::Cell;
-use std::rc::Rc;
 
 // Root the fixture in an owned frame/window instead of exposing a raw
 // register Vec in the public runtime API.
@@ -39,7 +37,7 @@ fn pin_in_register(state: &mut VmState, value: TaggedValue) {
 /// `fresh_state`, these tests drive the collector directly and need only
 /// the heap and the side tables.
 fn bare_state() -> VmState {
-    VmState::new(Rc::new(Environment::new()))
+    VmState::on_a_fresh_heap()
 }
 
 /// A full continuation whose register snapshot pins `payload`.

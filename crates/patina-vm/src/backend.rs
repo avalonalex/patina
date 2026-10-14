@@ -16,6 +16,7 @@ use crate::runtime::vm_state::{collect_if_pending, define_global, import_export}
 use crate::runtime::{VmState, execute, execute_in};
 use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
+use patina_core::heap::SharedHeap;
 use patina_core::tagged_value::TaggedValue;
 use patina_frontend::{Desugarer, SchemeLibraryLoader};
 use patina_runtime::HasDiagnostic;
@@ -124,6 +125,9 @@ impl From<crate::error::CompileError> for VmBackendError {
 /// The heap is shared with the parser so `TaggedValue` indices remain valid.
 pub struct VmBackend {
     state: RefCell<VmState>,
+    /// The heap the machine's values live on, its global environment's
+    /// among them: an environment keeps no handle to its heap (#704).
+    heap: SharedHeap,
     global_env: Rc<Environment>,
     library_registry: Rc<RefCell<LibraryRegistry>>,
     /// The registry's registration with the heap's root set, which keeps it
@@ -188,17 +192,18 @@ impl VmBackend {
         fs: std::sync::Arc<dyn patina_core::FileSystem>,
         mode: patina_core::GcMode,
     ) -> Self {
-        let global_env = Rc::new(Environment::new());
+        let heap = patina_core::new_shared_heap();
+        let global_env = Rc::new(Environment::with_heap(&heap));
         // Name this backend to `cond-expand` and `(features)`, once, on the
         // heap they both read. `crates/patina-tests/tests/backend_feature.rs`
         // covers every shape that reaches a `cond-expand` — a program, `eval`,
         // a library body, a `.sld` declaration, a quasiquote — because a
         // missed one does not error, it silently takes the `else` branch.
-        global_env.heap().borrow_mut().add_feature("patina-vm");
+        heap.borrow_mut().add_feature("patina-vm");
         // The interpreter's file system, on its instance too (#704), for the
         // code that reaches it through a `Cx`.
-        global_env.heap().borrow().instance().set_fs(fs.clone());
-        let mut state = VmState::with_gc_mode(Rc::clone(&global_env), mode);
+        heap.borrow().instance().set_fs(fs.clone());
+        let mut state = VmState::with_gc_mode(heap.clone(), Rc::clone(&global_env), mode);
         // Deliberately *not* `install_primitives()` — that bound every
         // registered primitive into globals regardless of the import set
         // (`cadddr` was callable with only `(scheme base)` imported).
@@ -222,10 +227,10 @@ impl VmBackend {
             Rc::clone(&loader_registry),
         );
 
-        let library_roots =
-            LibraryRegistry::register_roots(&library_registry, &global_env.heap().borrow());
+        let library_roots = LibraryRegistry::register_roots(&library_registry, &heap.borrow());
         let mut backend = VmBackend {
             state: RefCell::new(state),
+            heap,
             global_env,
             library_registry,
             library_roots,
@@ -236,7 +241,7 @@ impl VmBackend {
         // Initialize library loaders
         backend.init_loaders();
         LibraryLoaderRegistry::install_availability_checker(
-            backend.global_env.heap(),
+            &backend.heap,
             &backend.library_registry,
             &backend.loader_registry,
         );
@@ -265,11 +270,11 @@ impl VmBackend {
         env: &Rc<Environment>,
         source_map: Option<&Rc<RefCell<patina_frontend::SourceMap>>>,
     ) -> Result<TaggedValue, VmBackendError> {
-        let heap = self.global_env.heap().clone();
+        let heap = self.heap.clone();
 
         // An inline (define-library ...) is a library definition, not an
         // expression — route it to the library loader before desugaring.
-        if patina_frontend::is_define_library_form(expr, env) {
+        if patina_frontend::is_define_library_form(expr, env, &self.heap) {
             #[expect(
                 clippy::disallowed_methods,
                 reason = "the backend's top level, so the load may collect (#677). Holds the \
@@ -290,7 +295,7 @@ impl VmBackend {
         // A bare `import` loads its libraries here rather than inside the
         // expansion's guard, so that each load collects at its points: inside
         // its body forms and where it ends (#677, #658).
-        if let Some(import_sets) = patina_frontend::top_level_import_sets(expr, env) {
+        if let Some(import_sets) = patina_frontend::top_level_import_sets(expr, env, &self.heap) {
             for import_set in &import_sets {
                 #[expect(
                     clippy::disallowed_methods,
@@ -493,7 +498,7 @@ impl VmBackend {
 
         // `import` and the reserved `expand` keyword are not `(scheme base)`
         // exports. Seed them so the frontend can handle or diagnose them.
-        stdlib::seed_top_level_syntax(&self.global_env);
+        stdlib::seed_top_level_syntax(&self.global_env, &self.heap);
         base
     }
 
@@ -532,7 +537,7 @@ impl VmBackend {
     /// registers the library — replacing a previous same-named one, so
     /// re-evaluating the form at the REPL redefines it.
     fn eval_inline_define_library(&self, form: TaggedValue) -> Result<(), LibraryError> {
-        let heap = self.global_env.heap().clone();
+        let heap = self.heap.clone();
         let instance = Rc::clone(heap.borrow().instance());
         let can_load_library = |lib_name: &[String]| {
             patina_frontend::cond_expand::library_available(&instance, lib_name)
@@ -567,7 +572,7 @@ impl VmBackend {
         use crate::disasm::disassemble;
         use patina_frontend::Parser;
 
-        let heap = self.global_env.heap().clone();
+        let heap = self.heap.clone();
         let parsed = Parser::new(source)
             .and_then(|mut parser| {
                 patina_core::NoGcScope::with_cx(&heap, |cx| {
@@ -615,7 +620,7 @@ impl VmBackend {
         )?;
 
         let search_paths = self.library_search_paths();
-        let heap = self.global_env.heap().clone();
+        let heap = self.heap.clone();
 
         // Try simple (Rust) loaders first
         let rust_result = {
@@ -683,7 +688,7 @@ impl VmBackend {
     ) -> Result<Library, LibraryError> {
         // Create a fresh environment for this library, sharing the global heap
         // so TaggedValue indices are compatible with the global environment.
-        let lib_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
+        let lib_env = Rc::new(Environment::with_heap(&self.heap));
         let declarations = parsed.hand_to(loading, &lib_env);
 
         // Step 1: Resolve imports into lib_env
@@ -706,7 +711,7 @@ impl VmBackend {
         let desugarer = Desugarer::with_env(lib_env.clone())
             .with_fs(self.state.borrow().fs().clone())
             .with_include_base_of(source);
-        let shared_heap = lib_env.heap().clone();
+        let shared_heap = self.heap.clone();
 
         {
             let mut state = self.state.borrow_mut();
@@ -837,7 +842,7 @@ fn import_error(error: LibraryError) -> VmBackendError {
 /// as it is, leaking rather than freeing what the borrow may read.
 impl Drop for VmBackend {
     fn drop(&mut self) {
-        if let Ok(mut heap) = self.global_env.heap().try_borrow_mut() {
+        if let Ok(mut heap) = self.heap.try_borrow_mut() {
             heap.teardown();
         }
     }
@@ -852,6 +857,10 @@ impl Backend for VmBackend {
 
     fn global_env(&self) -> &Rc<Environment> {
         &self.global_env
+    }
+
+    fn heap(&self) -> &SharedHeap {
+        &self.heap
     }
 
     /// The source map's positions are attached to CoreExpr nodes during

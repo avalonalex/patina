@@ -296,7 +296,7 @@ impl<'a> CpsEvaluator<'a> {
                 CpsExprKind::Apply { func, args, cont } => {
                     let proc =
                         try_catchable!(self.eval_trivial_tagged(func, &current_env, &cont_env));
-                    let heap = self.evaluator.global_env.heap();
+                    let heap = &self.evaluator.heap;
 
                     // Evaluate args to TaggedValue and flatten the last list
                     let mut arg_tagged: Vec<TaggedValue> = try_catchable!(

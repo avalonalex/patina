@@ -71,7 +71,7 @@ fn primitive_environment(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let env = Rc::new(Environment::with_heap(heap.clone()));
+    let env = Rc::new(Environment::with_heap(heap));
     for set in &import_sets {
         // Loading stays behind ApplyContext so a Scheme initializer can
         // transfer control normally. Selection never copies binding values.
@@ -493,7 +493,7 @@ fn primitive_null_environment(
     }
 
     // Create environment with only syntactic keywords, sharing global heap for TaggedValue compatibility
-    let env = Rc::new(Environment::with_heap(ctx.heap().clone()));
+    let env = Rc::new(Environment::with_heap(ctx.heap()));
 
     // Load scheme base to get the keywords
     #[expect(
@@ -544,7 +544,7 @@ fn primitive_scheme_report_environment(
     }
 
     // Create environment with all R5RS bindings, sharing global heap for TaggedValue compatibility
-    let env = Rc::new(Environment::with_heap(ctx.heap().clone()));
+    let env = Rc::new(Environment::with_heap(ctx.heap()));
 
     // Load scheme base
     #[expect(
@@ -621,10 +621,10 @@ fn primitive_scheme_report_environment(
 
     // Add null-environment and scheme-report-environment themselves
     let r5rs_lib = vec!["scheme".to_string(), "r5rs".to_string()];
-    env.define_primitive("null-environment", Arity::Exact(1), r5rs_lib.clone());
-    env.define_primitive("scheme-report-environment", Arity::Exact(1), r5rs_lib);
-
     let heap = ctx.heap();
+    env.define_primitive(heap, "null-environment", Arity::Exact(1), r5rs_lib.clone());
+    env.define_primitive(heap, "scheme-report-environment", Arity::Exact(1), r5rs_lib);
+
     Ok(heap.borrow_mut().alloc_environment_specifier(env, false))
 }
 
@@ -694,7 +694,7 @@ fn primitive_load(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
         }
         args[1]
     } else {
-        ctx.interaction_environment().mutable_specifier()
+        ctx.interaction_environment().mutable_specifier(ctx.heap())
     };
 
     match read_source(ctx, &filename) {
@@ -843,7 +843,7 @@ fn primitive_interaction_environment(
         });
     }
 
-    Ok(ctx.interaction_environment().mutable_specifier())
+    Ok(ctx.interaction_environment().mutable_specifier(ctx.heap()))
 }
 
 /// Register eval primitives

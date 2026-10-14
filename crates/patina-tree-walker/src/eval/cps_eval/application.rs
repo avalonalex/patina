@@ -43,7 +43,7 @@ impl<'a> CpsEvaluator<'a> {
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
     ) -> Result<StepResult, EvalError> {
-        let heap = self.evaluator.global_env.heap();
+        let heap = &self.evaluator.heap;
 
         // Extract all type checks upfront to ensure borrows are released before nested heap access
         // This avoids RefCell borrow conflicts when primitives need to borrow the heap.
@@ -154,7 +154,7 @@ impl<'a> CpsEvaluator<'a> {
 
                     if let Some(variadic_param) = variadic {
                         // Build rest list directly as TaggedValue (no conversion needed)
-                        let heap = new_env.heap();
+                        let heap = &self.evaluator.heap;
                         let rest_list = heap
                             .borrow_mut()
                             .list_from_iter(args[params.len()..].iter().copied());
@@ -612,7 +612,7 @@ impl<'a> CpsEvaluator<'a> {
             );
         }
         // Both handler and thunk stay as TaggedValue
-        let heap = self.evaluator.global_env.heap();
+        let heap = &self.evaluator.heap;
         let handler = args[0]; // Keep as TaggedValue
         let thunk = args[1]; // Keep as TaggedValue
 
@@ -736,7 +736,7 @@ impl<'a> CpsEvaluator<'a> {
             // No handler - propagate to Rust level
             use patina_core::ExceptionKind;
             use patina_primitives::primitives::io::datum_writer::format_display_tagged;
-            let heap = self.evaluator.global_env.heap();
+            let heap = &self.evaluator.heap;
             let exception_str = format_display_tagged(exception_tagged, heap);
             // One wording for both — see the VM's `vm_raise_value` for why:
             // `guard` re-raises with `raise-continuable`, so "continuable" here
@@ -783,7 +783,7 @@ impl<'a> CpsEvaluator<'a> {
         // requirement. A non-string is displayed instead of refused; see the
         // `error` primitive in patina-primitives for why. Extracted before
         // anything else takes `borrow_mut()` to allocate the exception.
-        let heap = self.evaluator.global_env.heap();
+        let heap = &self.evaluator.heap;
         let message_opt = heap.borrow().get_string_contents(args[0]);
         let message = match message_opt {
             Some(m) => m,
@@ -839,7 +839,7 @@ impl<'a> CpsEvaluator<'a> {
             );
         }
 
-        let heap = self.evaluator.global_env.heap();
+        let heap = &self.evaluator.heap;
         let proc = args[0]; // Keep as TaggedValue for ApplyProc.proc
         let last_idx = args.len() - 1;
 
@@ -1243,7 +1243,7 @@ impl<'a> CpsEvaluator<'a> {
         dynamic_winds: &[DynamicWindRecord],
         exception_handlers: &[ExceptionHandler],
     ) -> Result<TaggedValue, EvalError> {
-        let heap = self.evaluator.global_env.heap();
+        let heap = &self.evaluator.heap;
 
         // Special handling for primitives that don't go through the registry
         match op {

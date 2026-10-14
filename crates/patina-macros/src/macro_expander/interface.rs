@@ -47,8 +47,8 @@ impl TestExpander {
         use std::rc::Rc;
 
         // Create test environment for macro compilation
-        let test_env = Rc::new(Environment::new());
-        let heap = test_env.heap().clone();
+        let heap = patina_core::new_shared_heap();
+        let test_env = Rc::new(Environment::with_heap(&heap));
 
         // The syntax-rules form is read on the macro's heap, in the context
         // that compiles it; the macro object comes back out as a handle.

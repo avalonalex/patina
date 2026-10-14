@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 impl ApplyContext for Evaluator {
     fn heap(&self) -> &SharedHeap {
-        self.global_env.heap()
+        &self.heap
     }
 
     fn fs(&self) -> &Arc<dyn FileSystem> {

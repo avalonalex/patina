@@ -125,8 +125,7 @@ impl<'a> CpsEvaluator<'a> {
             // Nothing to do after a collection here: its pause is complete
             // (#648).
             evaluator
-                .global_env
-                .heap()
+                .heap
                 .borrow_mut()
                 .finish_collection(std::time::Duration::ZERO);
         }
@@ -140,7 +139,7 @@ impl<'a> CpsEvaluator<'a> {
     /// else.
     pub(crate) fn collect_if_pending(&self) {
         let evaluator = self.evaluator;
-        let heap = evaluator.global_env.heap();
+        let heap = &evaluator.heap;
         if !evaluator.mutator.gc_posted() || evaluator.mutator.no_gc_depth() != 0 {
             return;
         }
@@ -175,7 +174,7 @@ impl<'a> CpsEvaluator<'a> {
     ) -> bool {
         let evaluator = self.evaluator;
         let Some(driver) = driver else {
-            GcController::post_at_call(evaluator.global_env.heap(), kind);
+            GcController::post_at_call(&evaluator.heap, kind);
             return false;
         };
         let collected = GcController::collect_at_call(&evaluator.gc, driver, kind, |collect| {
@@ -186,8 +185,7 @@ impl<'a> CpsEvaluator<'a> {
         });
         if collected {
             evaluator
-                .global_env
-                .heap()
+                .heap
                 .borrow_mut()
                 .finish_collection(std::time::Duration::ZERO);
         }
@@ -294,7 +292,7 @@ impl<'a> CpsEvaluator<'a> {
         expr: Option<&CpsExpr>,
         kind: types::TrampolineKind,
     ) -> Result<TaggedValue, EvalError> {
-        let heap = self.evaluator.global_env.heap();
+        let heap = &self.evaluator.heap;
         let mut driver = match kind {
             types::TrampolineKind::Form => GcDriver::acquire(heap),
             types::TrampolineKind::Callback => None,
@@ -527,7 +525,7 @@ pub(super) fn lower_quasiquotes_for(
     evaluator: &super::Evaluator,
 ) -> Result<patina_core::CoreExpr, EvalError> {
     patina_ir::validate_executable(expr).map_err(EvalError::InvalidSyntax)?;
-    let heap = evaluator.global_env.heap();
+    let heap = &evaluator.heap;
     let registry = evaluator.primitive_registry();
     let constructors = |name: &str| {
         let qualified_name = format!("scheme.base/{name}");
@@ -581,7 +579,7 @@ pub fn eval_cps(
     // Handle Import specially - it's a side-effect that modifies the environment
     // and doesn't need CPS transformation
     if let CoreExprKind::Import { import_sets } = &expr.kind {
-        let heap = evaluator.global_env.heap();
+        let heap = &evaluator.heap;
         // Every set is read before any loads, since a load may collect
         // (#677) and the datums in `expr` are no root.
         let import_sets = import_sets

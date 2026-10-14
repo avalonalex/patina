@@ -1146,7 +1146,7 @@ fn test_cond_expand_library_check_available() {
 
     // Verify the correct branch was taken
     let tv = lib.env.get("result").expect("result should be defined");
-    let heap = lib.env.heap();
+    let heap = &eval.heap;
     let name = heap
         .borrow()
         .get_symbol_name(tv)
@@ -1194,7 +1194,7 @@ fn test_cond_expand_library_check_unavailable() {
 
     // Verify the else branch was taken
     let tv = lib.env.get("result").expect("result should be defined");
-    let heap = lib.env.heap();
+    let heap = &eval.heap;
     let name = heap
         .borrow()
         .get_symbol_name(tv)
@@ -1254,7 +1254,7 @@ fn test_cond_expand_library_check_sld_library() {
 
     // Verify (test helper) was found
     let tv = lib.env.get("result").expect("result should be defined");
-    let heap = lib.env.heap();
+    let heap = &eval.heap;
     let name = heap
         .borrow()
         .get_symbol_name(tv)

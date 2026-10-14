@@ -361,8 +361,8 @@ mod tests {
         let value = s.pair(h, "HandleTable.entries.list[0]: Entry::Value");
         let bound = s.vector(h, "HandleTable.entries.list[2]: Entry::Environment");
         let tracked_value = s.object(h, "HandleTable.entries.tracked[0]");
-        let held = env_holding_on(&shared, h, bound);
-        let tracked = env_holding_on(&shared, h, tracked_value);
+        let held = env_holding_on(h, bound);
+        let tracked = env_holding_on(h, tracked_value);
         heap.handles = Rc::new(HandleTable {
             heap_id: 0,
             entries: HeapTable::new(Entries {
@@ -377,17 +377,10 @@ mod tests {
         drop(tracked);
     }
 
-    /// An environment on `shared`, which `heap` borrows, whose one binding
-    /// holds `value`.
-    fn env_holding_on(
-        shared: &crate::heap::SharedHeap,
-        heap: &super::super::Heap,
-        value: TaggedValue,
-    ) -> Rc<Environment> {
-        let env = Rc::new(Environment::namespace(
-            shared.clone(),
-            heap.external_bytes_handle(),
-        ));
+    /// An environment on `heap`, held borrowed, whose one binding holds
+    /// `value`.
+    fn env_holding_on(heap: &super::super::Heap, value: TaggedValue) -> Rc<Environment> {
+        let env = Rc::new(Environment::namespace(heap));
         env.define("held", value);
         env
     }
@@ -480,7 +473,7 @@ mod tests {
     fn an_environment_handle_from_another_heap_is_refused() {
         let first = new_shared_heap();
         let second = new_shared_heap();
-        let env = Rc::new(Environment::with_heap(first.clone()));
+        let env = Rc::new(Environment::with_heap(&first));
         let handle = first.borrow().hold_environment(env);
         second.borrow().held_environment(&handle);
     }
@@ -490,7 +483,7 @@ mod tests {
     fn an_environment_of_another_heap_is_not_held() {
         let first = new_shared_heap();
         let second = new_shared_heap();
-        let env = Rc::new(Environment::with_heap(first.clone()));
+        let env = Rc::new(Environment::with_heap(&first));
         let _handle = second.borrow().hold_environment(env);
     }
 
@@ -527,22 +520,22 @@ mod tests {
         drop(handle);
     }
 
-    /// An environment handle closes a cycle through the heap: the table
-    /// holds the environment, which holds the heap, which holds the table.
-    /// Teardown breaks it, and the handle still drops to nothing after.
+    /// An environment handle closes no cycle through the heap: the table
+    /// holds the environment, which holds no handle to the heap (#704). So
+    /// the heap goes when its last holder lets go, with no teardown, and the
+    /// handle still drops to nothing after. Before #704 the environment held
+    /// the heap, and only teardown broke the cycle.
     #[test]
-    fn teardown_breaks_the_cycle_through_a_held_environment() {
+    fn a_held_environment_does_not_keep_its_heap_alive() {
         let shared = new_shared_heap();
-        let env = Rc::new(Environment::with_heap(shared.clone()));
+        let env = Rc::new(Environment::with_heap(&shared));
         let handle = shared.borrow().hold_environment(env);
         let weak = Rc::downgrade(&shared);
         drop(shared);
-        let shared = weak
-            .upgrade()
-            .expect("the held environment keeps its heap alive until teardown");
-        shared.borrow_mut().teardown();
-        drop(shared);
-        assert!(weak.upgrade().is_none(), "teardown left the cycle");
+        assert!(
+            weak.upgrade().is_none(),
+            "the held environment kept its heap alive"
+        );
         drop(handle);
     }
 }

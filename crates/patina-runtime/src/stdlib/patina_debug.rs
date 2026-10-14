@@ -8,18 +8,27 @@ use crate::Environment;
 use std::rc::Rc;
 
 /// Build the (patina debug) library
-pub fn build_patina_debug(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
+pub fn build_patina_debug(
+    _name: Vec<String>,
+    env: Rc<Environment>,
+    heap: &patina_core::SharedHeap,
+) -> Vec<String> {
     let library_name = vec!["patina".to_string(), "debug".to_string()];
 
-    env.define_primitive("debug-enable", Arity::Min(1), library_name.clone());
-    env.define_primitive("debug-disable", Arity::Min(1), library_name.clone());
-    env.define_primitive("debug-clear", Arity::Exact(0), library_name.clone());
-    env.define_primitive("debug-status", Arity::Exact(0), library_name.clone());
-    env.define_primitive("debug-mode", Arity::Exact(1), library_name.clone());
-    env.define_primitive("macro-debug-mode", Arity::Exact(1), library_name.clone());
-    env.define_primitive("library?", Arity::Exact(1), library_name.clone());
-    env.define_primitive("gc", Arity::Exact(0), library_name.clone());
-    env.define_primitive("gc-stats", Arity::Exact(0), library_name);
+    env.define_primitive(heap, "debug-enable", Arity::Min(1), library_name.clone());
+    env.define_primitive(heap, "debug-disable", Arity::Min(1), library_name.clone());
+    env.define_primitive(heap, "debug-clear", Arity::Exact(0), library_name.clone());
+    env.define_primitive(heap, "debug-status", Arity::Exact(0), library_name.clone());
+    env.define_primitive(heap, "debug-mode", Arity::Exact(1), library_name.clone());
+    env.define_primitive(
+        heap,
+        "macro-debug-mode",
+        Arity::Exact(1),
+        library_name.clone(),
+    );
+    env.define_primitive(heap, "library?", Arity::Exact(1), library_name.clone());
+    env.define_primitive(heap, "gc", Arity::Exact(0), library_name.clone());
+    env.define_primitive(heap, "gc-stats", Arity::Exact(0), library_name);
 
     // Return list of exported identifiers
     vec![

@@ -380,7 +380,9 @@ pub struct Desugarer<'a> {
     /// Not optional: since core syntactic keywords became bindings and the
     /// spelling fallback was deleted, a desugarer without an environment could
     /// not desugar `(quote x)` — it would compile a call to an unbound
-    /// `quote`. `Desugarer::new()` supplies one holding exactly the keywords.
+    /// `quote`. `patina_runtime::stdlib::seed_core_syntax` makes one holding
+    /// exactly the keywords: the desugarer's equivalent of
+    /// `(null-environment)`.
     env: Rc<Environment>,
 
     /// Current scope set for scope-based hygiene
@@ -430,21 +432,6 @@ pub struct Desugarer<'a> {
 }
 
 impl<'a> Desugarer<'a> {
-    /// Create a desugarer whose environment holds the syntactic keywords and
-    /// nothing else.
-    ///
-    /// The desugarer's equivalent of `(null-environment)`: core forms desugar,
-    /// and every other name is an ordinary variable reference. Before stage 2
-    /// this constructor carried no environment at all and relied on keywords
-    /// being recognized by spelling; with the fallback gone it has to bind
-    /// them, which also means `define-syntax` now works here instead of
-    /// erroring.
-    pub fn new() -> Self {
-        let env = Rc::new(Environment::new());
-        patina_runtime::stdlib::seed_core_syntax(&env);
-        Self::with_env(env)
-    }
-
     /// Create a new desugarer with macro expansion support
     ///
     /// This allows the desugarer to expand macros as it encounters them.
@@ -1354,7 +1341,7 @@ impl<'a> Desugarer<'a> {
                 // A macro exported from a splice can refer to a private local
                 // keyword. Its scopes identify a real expansion-time binding,
                 // even when the bare name has no binding at either site.
-                if let Some((home, scopes)) = def_env.scoped_macro_binding(name, identity) {
+                if let Some((home, scopes)) = cx.scoped_macro_binding(def_env, name, identity) {
                     if self.env.scoped_binding_of(name, identity).ok().flatten()
                         != Some(scopes.clone())
                     {
@@ -3795,12 +3782,6 @@ impl<'a> Desugarer<'a> {
     }
 }
 
-impl Default for Desugarer<'_> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3809,8 +3790,10 @@ mod tests {
     /// Run `f` with a desugarer whose environment holds the syntactic
     /// keywords, in a context over that environment's heap.
     fn with_desugarer<R>(f: impl for<'gc> FnOnce(&Desugarer, &mut Cx<'gc>) -> R) -> R {
-        let desugarer = Desugarer::new();
-        let heap = desugarer.env().heap().clone();
+        let heap = patina_core::new_shared_heap();
+        let env = Rc::new(Environment::with_heap(&heap));
+        patina_runtime::stdlib::seed_core_syntax(&env, &heap);
+        let desugarer = Desugarer::with_env(env);
         patina_core::NoGcScope::with_cx(&heap, |cx| f(&desugarer, cx))
     }
 

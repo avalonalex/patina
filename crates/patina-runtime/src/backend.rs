@@ -63,6 +63,11 @@ pub trait Backend {
     /// - Introspection (listing defined variables)
     fn global_env(&self) -> &Rc<Environment>;
 
+    /// The heap the backend's values live on, and its environments'. An
+    /// environment keeps no handle to its heap (#704), so a host reaches
+    /// the heap here.
+    fn heap(&self) -> &crate::heap::SharedHeap;
+
     /// Evaluate an expression in the global environment (convenience method)
     ///
     /// This is equivalent to `self.eval(expr, self.global_env())` but provided
@@ -132,6 +137,17 @@ mod tests {
     // Mock backend for testing
     struct MockBackend {
         global: Rc<Environment>,
+        heap: crate::heap::SharedHeap,
+    }
+
+    impl MockBackend {
+        fn new() -> Self {
+            let heap = crate::heap::new_shared_heap();
+            Self {
+                global: Rc::new(Environment::with_heap(&heap)),
+                heap,
+            }
+        }
     }
 
     impl Backend for MockBackend {
@@ -149,13 +165,15 @@ mod tests {
         fn global_env(&self) -> &Rc<Environment> {
             &self.global
         }
+
+        fn heap(&self) -> &crate::heap::SharedHeap {
+            &self.heap
+        }
     }
 
     #[test]
     fn test_backend_trait() {
-        let backend = MockBackend {
-            global: Rc::new(Environment::new()),
-        };
+        let backend = MockBackend::new();
 
         let expr = TaggedValue::fixnum(42);
         let result = backend.eval_global(expr).unwrap();
@@ -167,9 +185,7 @@ mod tests {
     /// it does without one.
     #[test]
     fn eval_with_source_map_defaults_to_eval() {
-        let backend = MockBackend {
-            global: Rc::new(Environment::new()),
-        };
+        let backend = MockBackend::new();
         let source_map = Rc::new(RefCell::new(SourceMap::new()));
         let global = backend.global_env().clone();
         let result = backend
@@ -181,9 +197,7 @@ mod tests {
     /// A backend that compiles nothing defines by writing the environment.
     #[test]
     fn define_defaults_to_the_environment() {
-        let backend = MockBackend {
-            global: Rc::new(Environment::new()),
-        };
+        let backend = MockBackend::new();
         let global = backend.global_env().clone();
         backend.define(&global, "answer", TaggedValue::fixnum(42));
         assert_eq!(global.get("answer"), Some(TaggedValue::fixnum(42)));
@@ -191,9 +205,7 @@ mod tests {
 
     #[test]
     fn test_backend_eval_with_env() {
-        let backend = MockBackend {
-            global: Rc::new(Environment::new()),
-        };
+        let backend = MockBackend::new();
 
         let custom_env = Rc::new(Environment::new());
         let expr = TaggedValue::TRUE;

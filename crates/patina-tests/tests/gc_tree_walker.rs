@@ -87,7 +87,6 @@ fn collection_inside_higher_order_primitive_on_the_detached_context() {
     // but the call's arguments: not a global, and not the value of the last
     // evaluation either.
     let list = interp
-        .global_env()
         .heap()
         .borrow_mut()
         .list_from_iter((1..=4).map(TaggedValue::fixnum).collect::<Vec<_>>());

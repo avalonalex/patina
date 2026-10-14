@@ -159,8 +159,7 @@ impl<'a> CpsEvaluator<'a> {
 
         // Allocate CpsLambda procedure directly on the heap
         self.evaluator
-            .global_env
-            .heap()
+            .heap
             .borrow_mut()
             .alloc_procedure(Rc::new(Procedure::CpsLambda {
                 params: scoped_params,

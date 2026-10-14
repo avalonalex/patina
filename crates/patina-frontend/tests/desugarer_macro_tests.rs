@@ -6,21 +6,37 @@
 //! NOTE: These are unit tests for the desugarer only. Full integration tests
 //! (including macro expansion) are in patina-tests.
 
-use patina_core::{NoGcScope, TaggedValue};
+use patina_core::{NoGcScope, SharedHeap, TaggedValue, new_shared_heap};
 use patina_frontend::{DesugarError, Desugarer, Parser};
 use patina_ir::{CoreExpr, CoreExprKind};
+use patina_runtime::Environment;
+use std::rc::Rc;
+
+/// Helper: An environment holding the syntactic keywords, and the heap its
+/// values live on
+fn seeded() -> (Rc<Environment>, SharedHeap) {
+    let heap = new_shared_heap();
+    let env = Rc::new(Environment::with_heap(&heap));
+    patina_runtime::stdlib::seed_core_syntax(&env, &heap);
+    (env, heap)
+}
 
 /// Helper: Desugar `code` with a desugarer whose environment holds the
 /// syntactic keywords
 fn desugar(code: &str) -> Result<CoreExpr, DesugarError> {
-    desugar_with(&Desugarer::new(), code)
+    let (env, heap) = seeded();
+    desugar_with(&Desugarer::with_env(env), &heap, code)
 }
 
-/// Helper: Desugar `code` with `desugarer`, reading it on the heap of the
-/// desugarer's environment
-fn desugar_with(desugarer: &Desugarer, code: &str) -> Result<CoreExpr, DesugarError> {
+/// Helper: Desugar `code` with `desugarer`, reading it on `heap`, the heap
+/// of the desugarer's environment
+fn desugar_with(
+    desugarer: &Desugarer,
+    heap: &SharedHeap,
+    code: &str,
+) -> Result<CoreExpr, DesugarError> {
     let mut parser = Parser::new(code).expect("Parser creation failed");
-    NoGcScope::with_cx(desugarer.env().heap(), |cx| {
+    NoGcScope::with_cx(heap, |cx| {
         let form = parser.parse(cx).expect("Parse failed");
         desugarer.desugar_tagged(form, cx)
     })
@@ -178,9 +194,6 @@ fn test_desugar_application() {
 // Desugarer Macro Tests - define-syntax compiles immediately
 // =========================================================================
 
-use patina_runtime::Environment;
-use std::rc::Rc;
-
 /// Test that desugarer returns Literal(Unspecified) for define-syntax
 /// (macro is compiled immediately and installed in environment)
 #[test]
@@ -189,11 +202,11 @@ fn test_desugarer_returns_unspecified_for_define_syntax() {
     // only through a binding, so an empty environment would compile this to a
     // call of an unbound variable. `core_syntax_list.rs` pins that on purpose;
     // here it would just be noise.
-    let env = Rc::new(Environment::new());
-    patina_runtime::stdlib::seed_core_syntax(&env);
+    let (env, heap) = seeded();
     let desugarer = Desugarer::with_env(env);
     let result = desugar_with(
         &desugarer,
+        &heap,
         "(define-syntax foo (syntax-rules () ((foo x) x)))",
     )
     .expect("Should desugar successfully");
@@ -213,12 +226,11 @@ fn test_desugarer_installs_macro_in_environment() {
     // only through a binding, so an empty environment would compile this to a
     // call of an unbound variable. `core_syntax_list.rs` pins that on purpose;
     // here it would just be noise.
-    let env = Rc::new(Environment::new());
-    patina_runtime::stdlib::seed_core_syntax(&env);
-    let heap = env.heap().clone();
+    let (env, heap) = seeded();
     let desugarer = Desugarer::with_env(env.clone());
     let _ = desugar_with(
         &desugarer,
+        &heap,
         "(define-syntax foo (syntax-rules () ((foo x) x)))",
     )
     .expect("Should desugar successfully");

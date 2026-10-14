@@ -13,8 +13,12 @@ use patina_runtime::{Environment, Library, LibraryError};
 use std::rc::Rc;
 
 /// Test builder for a simple math library
-fn build_simple_math(_name: Vec<String>, env: Rc<Environment>) -> Vec<String> {
-    let mut heap = env.heap().borrow_mut();
+fn build_simple_math(
+    _name: Vec<String>,
+    env: Rc<Environment>,
+    heap: &patina_core::SharedHeap,
+) -> Vec<String> {
+    let mut heap = heap.borrow_mut();
 
     let pi_tv = heap.alloc_real(std::f64::consts::PI);
     let e_tv = heap.alloc_real(std::f64::consts::E);
@@ -40,8 +44,9 @@ fn test_library_creation_basic() {
 #[test]
 fn test_rust_library_builder() {
     // Create environment and build library
-    let env = Rc::new(Environment::new());
-    let exports = build_simple_math(vec!["math".to_string()], env.clone());
+    let heap = patina_core::new_shared_heap();
+    let env = Rc::new(Environment::with_heap(&heap));
+    let exports = build_simple_math(vec!["math".to_string()], env.clone(), &heap);
 
     // Verify exports
     assert_eq!(exports.len(), 2);
@@ -55,8 +60,7 @@ fn test_rust_library_builder() {
 
     // Verify pi value
     let tv = env.get("pi").expect("pi should be defined");
-    let pi = env
-        .heap()
+    let pi = heap
         .borrow()
         .get_real(tv)
         .expect("pi should be a Real value");

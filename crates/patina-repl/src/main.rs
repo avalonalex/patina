@@ -193,7 +193,6 @@ fn prepare_backend<B: Backend + LibraryPaths>(
     }
     if let Some(filename) = script {
         backend
-            .global_env()
             .heap()
             .borrow_mut()
             .set_command_line(filename.to_owned(), opts.script_args.clone());
@@ -222,7 +221,7 @@ where
     use patina_tree_walker::eval::format_write_tagged;
 
     prepare_backend(interp.backend(), opts, None);
-    let heap = interp.backend().global_env().heap().clone();
+    let heap = interp.backend().heap().clone();
     for expr in &opts.eval_exprs {
         match interp.eval_program_owned(expr) {
             Ok(value) => {
@@ -436,7 +435,7 @@ where
     B::Error: HasSourceLocation,
 {
     let backend = interp.backend();
-    let heap = backend.global_env().heap().clone();
+    let heap = backend.heap().clone();
     let input = patina_runtime::Port::stdin();
     run_program_stream(&input, &heap, "<stdin>", keep_going, |datum, source_map| {
         // The crate allows the re-entry rule (its Cargo.toml); this driver
@@ -592,7 +591,7 @@ fn run_repl_vm(opts: &CliOptions) {
 
     let interp = Interpreter::new(VmBackend::new());
     prepare_backend(interp.backend(), opts, None);
-    let heap = interp.backend().global_env().heap().clone();
+    let heap = interp.backend().heap().clone();
 
     println!("Patina Scheme R7RS Interpreter");
     println!("Version {}", env!("CARGO_PKG_VERSION"));

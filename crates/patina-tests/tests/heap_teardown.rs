@@ -45,7 +45,7 @@ fn freed_on_drop<B: Backend>(interp: Interpreter<B>) -> bool {
         .eval_program_owned(HOLDERS)
         .expect("the program runs");
     assert_eq!(interp.display_tagged(value), "(2 kept 2 1)");
-    let heap = Rc::downgrade(interp.global_env().heap());
+    let heap = Rc::downgrade(interp.heap());
     drop(interp);
     heap.upgrade().is_none()
 }
@@ -122,7 +122,7 @@ fn a_value_kept_past_its_interpreter_is_a_use_after_free() {
     let interp = vm_interpreter();
     let held = interp.eval_str_owned("(list 'held 1 2)").expect("a list");
     let value = interp.raw_value(&held);
-    let heap = interp.global_env().heap().clone();
+    let heap = interp.heap().clone();
     drop(interp);
     let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         heap.borrow().get_pair(value);

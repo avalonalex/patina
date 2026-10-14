@@ -303,20 +303,29 @@ pub struct VmState {
 }
 
 impl VmState {
-    /// A machine over `globals`'s heap, collecting in the mode the
-    /// environment selects.
-    pub fn new(globals: Rc<Environment>) -> Self {
-        Self::with_gc_mode(globals, GcMode::from_env())
+    /// A machine over `heap`, whose global environment `globals` lives on
+    /// it, collecting in the mode the environment selects.
+    pub fn new(heap: SharedHeap, globals: Rc<Environment>) -> Self {
+        Self::with_gc_mode(heap, globals, GcMode::from_env())
+    }
+
+    /// A machine over a fresh heap and an empty global environment on it:
+    /// for a test that drives the machine directly. Not an interface.
+    #[doc(hidden)]
+    pub fn on_a_fresh_heap() -> Self {
+        let heap = patina_core::heap::new_shared_heap();
+        let globals = Rc::new(Environment::with_heap(&heap));
+        Self::new(heap, globals)
     }
 
     /// A machine collecting in `mode`, whatever the environment says: for a
     /// test that compares collecting with not collecting (#626).
-    pub(crate) fn with_gc_mode(globals: Rc<Environment>, mode: GcMode) -> Self {
+    pub(crate) fn with_gc_mode(heap: SharedHeap, globals: Rc<Environment>, mode: GcMode) -> Self {
         let mut registry = PrimitiveRegistry::new();
         patina_primitives::register_all(&mut registry);
-        // Share the heap with the environment so TaggedValue indices produced by
-        // the parser (which also uses global_env().heap()) remain valid.
-        let heap = globals.heap().clone();
+        // `globals` lives on `heap`: an environment keeps no handle to its
+        // heap (#704), so the machine is handed both.
+        debug_assert_eq!(globals.heap_id(), heap.borrow().id());
         // Pairing heap with controller: install the policy's trigger
         // threshold (a bare heap defaults to inert) and cache the pending
         // flag the safe point reads.
@@ -387,7 +396,9 @@ impl VmState {
         &self.primitive_registry
     }
 
-    pub(super) fn heap(&self) -> &SharedHeap {
+    /// The heap the machine's values live on, its global environment's
+    /// among them.
+    pub fn heap(&self) -> &SharedHeap {
         &self.heap
     }
 
@@ -436,7 +447,7 @@ impl VmState {
         env: Rc<Environment>,
         run: impl FnOnce(&mut Self) -> T,
     ) -> T {
-        debug_assert!(Rc::ptr_eq(env.heap(), &self.heap));
+        debug_assert_eq!(env.heap_id(), self.heap.borrow().id());
         let saved = std::mem::replace(&mut self.globals, env);
         self.saved_globals.push(saved);
         let result = run(self);
@@ -890,7 +901,7 @@ pub(super) fn vm_load_library(
     )?;
 
     let search_paths: Vec<std::path::PathBuf> = library_registry.borrow().search_paths().to_vec();
-    let heap = state.globals.heap().clone();
+    let heap = state.heap.clone();
 
     // Try simple (Rust) loaders first
     let rust_result = {
@@ -952,7 +963,7 @@ fn vm_evaluate_parsed_library(
     state: &mut VmState,
     parsed: patina_runtime::library_loader::ParsedLibrary,
 ) -> Result<Library, LibraryError> {
-    let lib_env = Rc::new(Environment::with_heap(state.globals.heap().clone()));
+    let lib_env = Rc::new(Environment::with_heap(&state.heap));
 
     // Step 1: Resolve imports into lib_env
     for import_set in &parsed.imports {
@@ -980,7 +991,7 @@ fn vm_evaluate_parsed_library(
     let desugarer = Desugarer::with_env(lib_env.clone())
         .with_fs(state.fs.clone())
         .with_include_base_of(parsed.source.as_deref());
-    let shared_heap = lib_env.heap().clone();
+    let shared_heap = state.heap.clone();
 
     state.with_globals(lib_env.clone(), |state| -> Result<(), LibraryError> {
         for tv in &parsed.body {
@@ -1126,7 +1137,7 @@ fn compile_for_eval(
     env: &Rc<Environment>,
 ) -> Result<(CodeObject, Vec<CodeObject>), VmError> {
     let desugarer = Desugarer::with_env(env.clone()).with_fs(state.fs.clone());
-    let heap = state.globals.heap().clone();
+    let heap = state.heap.clone();
 
     #[expect(
         clippy::disallowed_methods,
@@ -2980,7 +2991,7 @@ mod tests {
 
     #[test]
     fn vm_state_basic() {
-        let mut state = VmState::new(Rc::new(Environment::new()));
+        let mut state = VmState::on_a_fresh_heap();
         let mut code = code();
         code.num_regs = 4;
         let id = state.load_unit(code, Vec::new());
@@ -3017,7 +3028,7 @@ mod tests {
     /// loaded takes a new slot, so no id is ever given out twice (#352).
     #[test]
     fn a_slot_whose_generations_have_run_out_is_not_given_out_again() {
-        let mut state = VmState::new(Rc::new(Environment::new()));
+        let mut state = VmState::on_a_fresh_heap();
         let first = state.load_unit(code(), Vec::new());
         state.release_unit_if_unused(first);
         assert_eq!(state.free_code_ids, vec![CodeObjectId::new(0, 1)]);
@@ -3044,8 +3055,8 @@ mod tests {
     /// binds leaves the parent's fast path alone (#673).
     #[test]
     fn a_definition_marks_only_the_environments_own_binding() {
-        let global = Rc::new(Environment::new());
-        let mut state = VmState::new(Rc::clone(&global));
+        let mut state = VmState::on_a_fresh_heap();
+        let global = Rc::clone(state.global_env());
         state.install_primitives();
         let car = state
             .primitive_registry

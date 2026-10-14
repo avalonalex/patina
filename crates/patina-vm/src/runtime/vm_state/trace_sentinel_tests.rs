@@ -104,8 +104,8 @@ fn collect(state: &VmState) {
 /// and have a test of their own below.
 #[test]
 fn every_vm_state_root_is_traced() {
-    let globals = Rc::new(Environment::new());
-    let shared: SharedHeap = globals.heap().clone();
+    let shared: SharedHeap = patina_core::heap::new_shared_heap();
+    let globals = Rc::new(Environment::with_heap(&shared));
     let mut heap = shared.borrow_mut();
     let mut s = Sentinels::new(&mut heap);
     let h: &mut Heap = &mut heap;
@@ -127,7 +127,7 @@ fn every_vm_state_root_is_traced() {
     let mutator = Rc::clone(h.mutator());
     drop(heap);
     globals.define("global", global);
-    let saved = Rc::new(Environment::with_heap(shared.clone()));
+    let saved = Rc::new(Environment::with_heap(&shared));
     saved.define("saved", saved_global);
 
     let code = code_holding(vec![constant]);
@@ -187,7 +187,7 @@ fn every_vm_state_root_is_traced() {
 /// payload, and nothing else reaches the values in it.
 #[test]
 fn every_continuation_snapshot_field_is_traced() {
-    let mut state = VmState::new(Rc::new(Environment::new()));
+    let mut state = VmState::on_a_fresh_heap();
     let shared = state.heap.clone();
     let mut heap = shared.borrow_mut();
     let mut s = Sentinels::new(&mut heap);
@@ -327,7 +327,7 @@ impl Rewriter {
 fn every_slot_the_vm_reports_is_where_its_value_lives() {
     use patina_core::RootProvider;
     let fixnum = TaggedValue::fixnum;
-    let mut state = VmState::new(Rc::new(Environment::new()));
+    let mut state = VmState::on_a_fresh_heap();
     let code = code_holding(Vec::new());
     state.execution = ExecutionState::from_parts(
         vec![Cell::new(fixnum(1)), Cell::new(fixnum(2))],

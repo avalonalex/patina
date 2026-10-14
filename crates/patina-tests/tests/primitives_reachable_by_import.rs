@@ -30,7 +30,7 @@
 
 mod common;
 use common::{repo_root, shipped_libraries};
-use patina_interpreter::{Backend, TreeWalkInterpreter};
+use patina_interpreter::TreeWalkInterpreter;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Libraries built in Rust rather than declared in a `.sld`, named here
@@ -183,7 +183,7 @@ fn every_exported_primitive_can_be_dispatched() {
     ];
 
     let interp = TreeWalkInterpreter::new_tree_walker();
-    let heap = interp.backend().global_env().heap().clone();
+    let heap = interp.heap().clone();
     let evaluator = interp.backend().evaluator();
 
     // The VM's registry is `register_all` and nothing else — see `VmState::new`.

@@ -39,7 +39,7 @@ fn every_slot_kind_stores_through_the_funnel() {
     let heap: SharedHeap = new_shared_heap();
     let instance = Instance::default();
     let cell = heap.borrow_mut().alloc_mutable_cell(TaggedValue::FALSE);
-    let env = Rc::new(crate::environment::Environment::with_heap(heap.clone()));
+    let env = Rc::new(crate::environment::Environment::with_heap(&heap));
     let closure = heap
         .borrow_mut()
         .alloc_vm_closure(0, vec![TaggedValue::FALSE], env);
