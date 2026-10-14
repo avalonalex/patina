@@ -40,7 +40,8 @@ impl Loading {
 
     /// The next body form, taken out of this load's entry, which roots it no
     /// longer; `None` once every form has been taken. The loader holds the
-    /// form only while it expands it, under `desugar_with_imports`' guard.
+    /// form only while it expands it, in a context beneath which nothing
+    /// collects.
     pub fn next_form(&self) -> Option<TaggedValue> {
         self.registry
             .borrow_mut()

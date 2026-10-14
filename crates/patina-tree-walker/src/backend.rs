@@ -165,20 +165,22 @@ impl TreeWalker {
         #[expect(
             clippy::disallowed_methods,
             reason = "the import callback loads libraries during the expansion, which holds the \
-                      datum and the partial expansion: guarded by `desugar_with_imports`' \
-                      `GcDeferGuard::holding`"
+                      datum and the partial expansion: values of the context the expansion runs in \
+                      (`NoGcScope::cross`), beneath which nothing collects"
         )]
-        let core_expr = desugarer.desugar_with_imports(
-            expr,
-            internal_heap,
-            |set, env| self.evaluator.process_import_for_eval(set, env),
-            |e| {
-                let location = e.source_location().cloned();
-                EvalError::DesugarError(e.to_string())
-                    .with_diagnostic(e.diagnostic())
-                    .at_opt(location)
-            },
-        )?;
+        let core_expr = patina_core::NoGcScope::cross(internal_heap, [expr], |cx, [form]| {
+            desugarer.desugar_with_imports(
+                form,
+                cx,
+                |set, env| self.evaluator.process_import_for_eval(set, env),
+                |e| {
+                    let location = e.source_location().cloned();
+                    EvalError::DesugarError(e.to_string())
+                        .with_diagnostic(e.diagnostic())
+                        .at_opt(location)
+                },
+            )
+        })?;
 
         #[expect(
             clippy::disallowed_methods,

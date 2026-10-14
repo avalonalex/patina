@@ -74,8 +74,11 @@ impl DesugarError {
     /// long as the rest of the program.
     ///
     /// [`MAX_FORM_DEPTH`]: patina_core::walk::MAX_FORM_DEPTH
-    pub fn nested_too_deeply(form: patina_core::TaggedValue, heap: &patina_core::Heap) -> Self {
-        DesugarError::NestedTooDeeply(patina_core::debug_format::format_tagged_brief(form, heap))
+    pub fn nested_too_deeply<'gc>(
+        form: patina_core::Value<'gc>,
+        cx: &patina_core::Cx<'gc>,
+    ) -> Self {
+        DesugarError::NestedTooDeeply(cx.format_brief(form))
     }
 
     pub fn with_diagnostic(self, diagnostic: patina_runtime::Diagnostic) -> Self {

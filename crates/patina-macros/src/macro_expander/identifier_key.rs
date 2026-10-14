@@ -1,6 +1,6 @@
 //! Identifier identity for `syntax-rules` compilation.
 
-use patina_core::{Cx, Heap, TaggedValue, Value};
+use patina_core::{Cx, Value};
 use patina_runtime::ScopeSet;
 use std::rc::Rc;
 
@@ -47,23 +47,13 @@ impl IdentifierKey {
     ///
     /// Returns `None` for a value that is neither a symbol nor an identifier.
     /// This is where the "bare symbol means empty scopes" normalization
-    /// lives, as [`IdentifierKey::from_heap`] does for words.
+    /// lives.
     pub fn from_cx<'gc>(form: Value<'gc>, cx: &Cx<'gc>) -> Option<Self> {
         if let Some((name, scopes)) = cx.get_identifier_data(form) {
             return Some(Self::new(name, scopes));
         }
         cx.get_symbol_name(form)
             .map(|name| Self::new(Rc::from(&*name), ScopeSet::new()))
-    }
-
-    /// [`IdentifierKey::from_cx`] for a word, off the heap: the
-    /// desugarer's, which works in words until it takes a context (#704).
-    pub fn from_heap(form: TaggedValue, heap: &Heap) -> Option<Self> {
-        if let Some((name, scopes)) = heap.get_identifier_data(form) {
-            return Some(Self::new(name.clone(), scopes.clone()));
-        }
-        heap.get_symbol_name(form)
-            .map(|name| Self::new(Rc::from(name), ScopeSet::new()))
     }
 }
 

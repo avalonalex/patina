@@ -126,48 +126,33 @@ impl Desugarer<'_> {
     }
 
     /// Expand `form`, a use of the macro object `mac`, whose body is
-    /// `compiled`: in a context, which the two cross into
-    /// (`macro_expander::cross`), with the expansion coming back as a word.
-    pub(super) fn expand_macro(
+    /// `compiled`.
+    pub(super) fn expand_macro<'gc>(
         &self,
-        mac: TaggedValue,
+        mac: Value<'gc>,
         compiled: &patina_core::CompiledMacro,
-        form: TaggedValue,
-        heap: &SharedHeap,
-    ) -> std::result::Result<Expansion, patina_macros::MacroError> {
+        form: Value<'gc>,
+        cx: &mut Cx<'gc>,
+    ) -> std::result::Result<patina_macros::MacroExpansion<'gc>, patina_macros::MacroError> {
         let use_env = self.expansion_env(&self.env);
         let definition_env = compiled
             .definition_env
             .as_ref()
             .map(|env| self.expansion_env(env));
         let depth = self.open_forms.borrow().depth();
-        crate::macro_expander::cross(heap, [mac, form], |cx, [mac, form]| {
-            patina_macros::macro_expander::expand_macro_at_sites(
-                mac,
-                form,
-                cx,
-                definition_env.as_ref().map(|env| patina_macros::Site {
-                    env,
-                    scopes: &compiled.definition_scopes,
-                }),
-                Some(patina_macros::Site {
-                    env: &use_env,
-                    scopes: &self.current_scopes,
-                }),
-                depth,
-            )
-            .map(|expansion| Expansion {
-                form: expansion.form.tagged(),
-                scope: expansion.scope,
-            })
-        })
+        patina_macros::macro_expander::expand_macro_at_sites(
+            mac,
+            form,
+            cx,
+            definition_env.as_ref().map(|env| patina_macros::Site {
+                env,
+                scopes: &compiled.definition_scopes,
+            }),
+            Some(patina_macros::Site {
+                env: &use_env,
+                scopes: &self.current_scopes,
+            }),
+            depth,
+        )
     }
-}
-
-/// What one expansion produced, as the desugarer holds it: the form as a
-/// word, and the scope the expansion minted
-/// (`patina_macros::MacroExpansion`).
-pub(super) struct Expansion {
-    pub form: TaggedValue,
-    pub scope: patina_runtime::ScopeId,
 }

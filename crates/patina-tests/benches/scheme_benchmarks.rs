@@ -138,10 +138,11 @@ const ALLOC: &str =
 fn expand(interp: &BenchInterp) -> CoreExpr {
     let heap = interp.env().heap();
     let mut parser = Parser::new(black_box(SUM)).unwrap();
-    let datum = patina_core::NoGcScope::with_cx(heap, |cx| parser.parse(cx).unwrap().tagged());
-    Desugarer::with_env(interp.env().clone())
-        .desugar_tagged(datum, heap)
-        .unwrap()
+    let desugarer = Desugarer::with_env(interp.env().clone());
+    patina_core::NoGcScope::with_cx(heap, |cx| {
+        let datum = parser.parse(cx).unwrap();
+        desugarer.desugar_tagged(datum, cx).unwrap()
+    })
 }
 
 fn heap_counters(interp: &BenchInterp) -> serde_json::Value {

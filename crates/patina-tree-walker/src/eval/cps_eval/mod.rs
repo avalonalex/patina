@@ -587,12 +587,13 @@ pub fn eval_cps(
         let import_sets = import_sets
             .iter()
             .map(|&set| {
-                patina_frontend::LibraryDefinition::parse_import_set_tagged(set, heap).map_err(
-                    |e| {
-                        EvalError::InvalidSyntax(format!("Invalid import set: {}", e))
-                            .with_diagnostic(e.diagnostic())
-                    },
-                )
+                patina_core::NoGcScope::cross(heap, [set], |cx, [set]| {
+                    patina_frontend::LibraryDefinition::parse_import_set_tagged(set, cx)
+                })
+                .map_err(|e| {
+                    EvalError::InvalidSyntax(format!("Invalid import set: {}", e))
+                        .with_diagnostic(e.diagnostic())
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
         for import_set in &import_sets {

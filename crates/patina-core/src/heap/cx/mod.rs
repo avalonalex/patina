@@ -305,6 +305,28 @@ impl<'gc> Cx<'gc> {
             .map(|(env, mutable)| (Rc::clone(env), mutable))
     }
 
+    /// What `name`, written with `scopes`, resolves to in `env`
+    /// ([`Environment::resolve_with_scopes`]), as a value, and whether a
+    /// binding's scopes selected it: how converted code reads a binding, a
+    /// macro object among them (#704). An environment's bindings are traced
+    /// with it, and a context reads one the collector reaches or one made
+    /// within the context, as the desugarer's expansion environments are; so
+    /// a binding read now is as live as a heap object's field read now.
+    #[inline]
+    pub fn resolve_with_scopes(
+        &self,
+        env: &Environment,
+        name: &str,
+        scopes: &ScopeSet,
+    ) -> Result<(Option<Value<'gc>>, bool), Box<crate::scope_resolve::AmbiguousReference>> {
+        debug_assert!(
+            std::ptr::eq::<RefCell<Heap>>(&**env.heap(), self.heap),
+            "Cx::resolve_with_scopes: an environment of another heap"
+        );
+        let (word, selected) = env.resolve_with_scopes(name, scopes)?;
+        Ok((word.map(|word| self.brand(word)), selected))
+    }
+
     /// [`Heap::source`], cloned.
     #[inline]
     pub fn source(&self, v: Value<'gc>) -> Option<SourceLocation> {
@@ -545,8 +567,9 @@ impl<'gc> Cx<'gc> {
     }
 
     /// [`Heap::map_syntax_identifiers_memo`], whose `transform` takes this
-    /// context: the same walk, made of this context's operations. Until #704
-    /// moves the desugarer and the expander onto `Cx`, `Heap` keeps its own.
+    /// context: the same walk, made of this context's operations. `Heap`
+    /// keeps its own for [`Cx::rescope_identifiers`], which walks under one
+    /// borrow.
     pub fn map_syntax_identifiers_memo(
         &mut self,
         root: Value<'gc>,

@@ -73,11 +73,13 @@ impl<'a> CallbackContext<'_, 'a, '_> {
         let import_sets = import_sets
             .iter()
             .map(|&set| {
-                patina_frontend::LibraryDefinition::parse_import_set_tagged(set, self.heap())
-                    .map_err(|e| {
-                        EvalError::InvalidSyntax(format!("Invalid import set: {e}"))
-                            .with_diagnostic(e.diagnostic())
-                    })
+                patina_core::NoGcScope::cross(self.heap(), [set], |cx, [set]| {
+                    patina_frontend::LibraryDefinition::parse_import_set_tagged(set, cx)
+                })
+                .map_err(|e| {
+                    EvalError::InvalidSyntax(format!("Invalid import set: {e}"))
+                        .with_diagnostic(e.diagnostic())
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
         for import_set in &import_sets {
@@ -156,7 +158,7 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
         #[expect(
             clippy::disallowed_methods,
             reason = "holds nothing of its own: the datum moves into the expansion, whose imports \
-                      load under `desugar_with_imports`' `GcDeferGuard::holding`"
+                      load beneath the context the expansion runs in"
         )]
         let core_expr = expand_for_eval(evaluator, expr, env, self)?;
 
@@ -210,18 +212,20 @@ pub(super) fn expand_for_eval(
     #[expect(
         clippy::disallowed_methods,
         reason = "the import callback loads libraries during the expansion, which holds the datum \
-                  and the partial expansion: guarded by `desugar_with_imports`' \
-                  `GcDeferGuard::holding`"
+                  and the partial expansion: values of the context the expansion runs in \
+                  (`NoGcScope::cross`), beneath which nothing collects"
     )]
-    let core_expr = desugarer.desugar_with_imports(
-        expr,
-        evaluator.heap(),
-        |set, env| evaluator.process_import_for_eval_with(set, env, context),
-        |e| {
-            EvalError::InvalidSyntax(format!("eval: desugar error: {e}"))
-                .with_diagnostic(e.diagnostic())
-                .at_opt(e.source_location().cloned())
-        },
-    )?;
+    let core_expr = patina_core::NoGcScope::cross(evaluator.heap(), [expr], |cx, [form]| {
+        desugarer.desugar_with_imports(
+            form,
+            cx,
+            |set, env| evaluator.process_import_for_eval_with(set, env, context),
+            |e| {
+                EvalError::InvalidSyntax(format!("eval: desugar error: {e}"))
+                    .with_diagnostic(e.diagnostic())
+                    .at_opt(e.source_location().cloned())
+            },
+        )
+    })?;
     super::lower_quasiquotes_for(&core_expr, evaluator)
 }

@@ -1110,9 +1110,9 @@ impl<'a> CpsEvaluator<'a> {
                     reason = "holds the primitive's `state` (in `resume`), `cont`, `cont_env`, \
                               `env` and the step's three stacks across the datum's expansion, \
                               which loads libraries and runs their bodies. Guarded on the data: \
-                              the whole expansion, its loads included, runs under \
-                              `desugar_with_imports`' `GcDeferGuard::holding`. Besides, a step \
-                              runs inside a trampoline, so any loop the load starts is nested \
+                              the whole expansion, its loads included, runs in a context \
+                              (`NoGcScope::cross`), beneath which nothing collects. Besides, a \
+                              step runs inside a trampoline, so any loop the load starts is nested \
                               (point C, which PRD/GC_PRD.md §11.3 keeps under `NoGcScope`)"
                 )]
                 let evaluated = self.eval_step(expr, &env, &context);

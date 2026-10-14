@@ -462,6 +462,45 @@ impl NoGcScope {
         let scope = NoGcScope::enter(heap);
         scope.mutate(&instance, f)
     }
+
+    /// [`NoGcScope::with_cx`], with `words` handed to `f` as values: how a
+    /// caller that still works in words, a host or code not yet converted,
+    /// hands them to code that takes a context (`PRD/GC_PRD.md` §11.3,
+    /// #704). Each crosses as an embedder's value does (#605), through an
+    /// [`Owned`](crate::Owned) handle read back inside the context, so this
+    /// makes no word a value that a handle would not.
+    #[track_caller]
+    pub fn cross<const N: usize, R>(
+        heap: &SharedHeap,
+        words: [TaggedValue; N],
+        f: impl for<'gc> FnOnce(&mut crate::Cx<'gc>, [crate::Value<'gc>; N]) -> R,
+    ) -> R {
+        let handles = {
+            let heap = heap.borrow();
+            words.map(|word| heap.hold(word))
+        };
+        NoGcScope::with_cx(heap, |cx| {
+            let values = handles.each_ref().map(|handle| cx.held(handle));
+            f(cx, values)
+        })
+    }
+
+    /// [`NoGcScope::cross`] for a number of words known only at run time.
+    #[track_caller]
+    pub fn cross_all<R>(
+        heap: &SharedHeap,
+        words: &[TaggedValue],
+        f: impl for<'gc> FnOnce(&mut crate::Cx<'gc>, &[crate::Value<'gc>]) -> R,
+    ) -> R {
+        let handles: Vec<_> = {
+            let heap = heap.borrow();
+            words.iter().map(|&word| heap.hold(word)).collect()
+        };
+        NoGcScope::with_cx(heap, |cx| {
+            let values: Vec<_> = handles.iter().map(|handle| cx.held(handle)).collect();
+            f(cx, &values)
+        })
+    }
 }
 
 impl Drop for NoGcScope {
@@ -475,8 +514,9 @@ impl Drop for NoGcScope {
 /// A holder's extent: a Rust scope or value that keeps heap values no root
 /// provider sees across a call that can evaluate. A library's unevaluated
 /// body (`ParsedLibrary`, until it is handed to the load's registry entry,
-/// #677), a form being expanded while its imports load
-/// (`desugar_with_imports`), the tree-walker's detached `ApplyContext`.
+/// #677), the tree-walker's detached `ApplyContext`. A form being expanded
+/// while its imports load needs none: it is values of the context the
+/// expansion runs in, beneath which nothing collects (#704).
 ///
 /// A [`NoGcScope`], so nothing collects inside it. In a check build it also
 /// records how many collections the heap has run, and its drop panics if that

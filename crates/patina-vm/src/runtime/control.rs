@@ -2021,11 +2021,12 @@ fn vm_step(
                 reason = "holds `kept`, the primitive's state, and the step's `env` across the \
                           datum's expansion, which loads libraries and runs their bodies; the \
                           caller holds the primitive's arguments. Guarded on the data: the \
-                          expansion runs under `desugar_with_imports`' `GcDeferGuard::holding` \
-                          and each library body under its `ParsedLibrary`'s, and the compile, \
-                          `load_unit` and the closure's allocation after it run no Scheme. \
-                          Besides, only a dispatching loop gets here, so any loop the load starts \
-                          is nested (point C, which PRD/GC_PRD.md §11.3 keeps under `NoGcScope`)"
+                          expansion runs in a context (`NoGcScope::cross`), beneath which nothing \
+                          collects, and each library body under its `ParsedLibrary`'s, and the \
+                          compile, `load_unit` and the closure's allocation after it run no \
+                          Scheme. Besides, only a dispatching loop gets here, so any loop the load \
+                          starts is nested (point C, which PRD/GC_PRD.md §11.3 keeps under \
+                          `NoGcScope`)"
             )]
             let callee = across_reentry(
                 state,

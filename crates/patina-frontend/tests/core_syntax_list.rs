@@ -18,18 +18,11 @@
 //! `keywords_are_not_recognized_without_a_binding` is the regression guard for
 //! that, and it is the test that would have failed at any point before stage 2.
 
-use patina_core::{ALL_CORE_FORMS, NoGcScope, SharedHeap, TaggedValue, new_shared_heap};
+use patina_core::{ALL_CORE_FORMS, NoGcScope, TaggedValue};
 use patina_frontend::{Desugarer, Parser};
 use patina_ir::CoreExprKind;
 use patina_runtime::Environment;
 use std::rc::Rc;
-
-fn parse_tv(code: &str) -> (TaggedValue, SharedHeap) {
-    let heap = new_shared_heap();
-    let mut parser = Parser::new(code).expect("parser creation failed");
-    let tv = NoGcScope::with_cx(&heap, |cx| parser.parse(cx).expect("parse failed").tagged());
-    (tv, heap)
-}
 
 /// How `(<name> a b)` desugars.
 enum Head {
@@ -44,8 +37,13 @@ enum Head {
 fn desugar_head(desugarer: &Desugarer, name: &str) -> Head {
     // Two arguments keep every form that takes any past its arity check, so a
     // rejection here means "refused as syntax", never "treated as a call".
-    let (tv, heap) = parse_tv(&format!("({} a b)", name));
-    let Ok(expr) = desugarer.desugar_tagged(tv, &heap) else {
+    let mut parser = Parser::new(&format!("({} a b)", name)).expect("parser creation failed");
+    let heap = desugarer.env().heap().clone();
+    let desugared = NoGcScope::with_cx(&heap, |cx| {
+        let form = parser.parse(cx).expect("parse failed");
+        desugarer.desugar_tagged(form, cx)
+    });
+    let Ok(expr) = desugared else {
         return Head::Rejected;
     };
     match &expr.kind {

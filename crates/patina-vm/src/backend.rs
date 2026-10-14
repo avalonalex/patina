@@ -316,15 +316,17 @@ impl VmBackend {
         #[expect(
             clippy::disallowed_methods,
             reason = "the import callback loads libraries during the expansion, which holds the \
-                      datum and the partial expansion: guarded by `desugar_with_imports`' \
-                      `GcDeferGuard::holding`"
+                      datum and the partial expansion: values of the context the expansion runs in \
+                      (`NoGcScope::cross`), beneath which nothing collects"
         )]
-        let core_expr = desugarer.desugar_with_imports(
-            expr,
-            &heap,
-            |set, env| self.process_import_set(set, env).map_err(import_error),
-            VmBackendError::from,
-        )?;
+        let core_expr = patina_core::NoGcScope::cross(&heap, [expr], |cx, [form]| {
+            desugarer.desugar_with_imports(
+                form,
+                cx,
+                |set, env| self.process_import_set(set, env).map_err(import_error),
+                VmBackendError::from,
+            )
+        })?;
 
         // Compile: CoreExpr → CodeObject (5-pass pipeline + quasiquote expansion).
         let registry = Rc::clone(self.state.borrow().primitive_registry());
@@ -531,8 +533,10 @@ impl VmBackend {
     /// re-evaluating the form at the REPL redefines it.
     fn eval_inline_define_library(&self, form: TaggedValue) -> Result<(), LibraryError> {
         let heap = self.global_env.heap().clone();
-        let can_load_library =
-            |lib_name: &[String]| patina_frontend::cond_expand::library_available(&heap, lib_name);
+        let instance = Rc::clone(heap.borrow().instance());
+        let can_load_library = |lib_name: &[String]| {
+            patina_frontend::cond_expand::library_available(&instance, lib_name)
+        };
         let loader = SchemeLibraryLoader::new(self.state.borrow().fs().clone());
         let parsed = loader.parse_inline_form(
             form,
@@ -579,9 +583,10 @@ impl VmBackend {
         let desugarer = Desugarer::with_env(Rc::clone(&self.global_env))
             .with_fs(self.state.borrow().fs().clone());
         for tv in parsed {
-            let core_expr = desugarer
-                .desugar_tagged(tv, &heap)
-                .map_err(VmBackendError::from)?;
+            let core_expr = patina_core::NoGcScope::cross(&heap, [tv], |cx, [form]| {
+                desugarer.desugar_tagged(form, cx)
+            })
+            .map_err(VmBackendError::from)?;
 
             let registry = Rc::clone(self.state.borrow().primitive_registry());
             let (top, nested) =
@@ -622,8 +627,9 @@ impl VmBackend {
             lib
         } else {
             // Try evaluating (Scheme .sld) loaders
+            let instance = Rc::clone(heap.borrow().instance());
             let can_load_library = |lib_name: &[String]| {
-                patina_frontend::cond_expand::library_available(&heap, lib_name)
+                patina_frontend::cond_expand::library_available(&instance, lib_name)
             };
 
             let parsed = {
@@ -709,22 +715,28 @@ impl VmBackend {
                     #[expect(
                         clippy::disallowed_methods,
                         reason = "the import callback loads libraries during the expansion, which \
-                                  holds the form and the partial expansion: guarded by \
-                                  `desugar_with_imports`' `GcDeferGuard::holding`"
+                                  holds the form and the partial expansion: values of the context \
+                                  the expansion runs in (`NoGcScope::cross`), beneath which \
+                                  nothing collects"
                     )]
-                    let core_expr = desugarer.desugar_with_imports(
-                        form,
-                        &shared_heap,
-                        |set, env| crate::runtime::vm_state::vm_process_import_set(state, set, env),
-                        |e| {
-                            patina_runtime::LibraryError::processing(
-                                source,
-                                format!("desugar error: {e}"),
-                                e.diagnostic(),
+                    let core_expr =
+                        patina_core::NoGcScope::cross(&shared_heap, [form], |cx, [form]| {
+                            desugarer.desugar_with_imports(
+                                form,
+                                cx,
+                                |set, env| {
+                                    crate::runtime::vm_state::vm_process_import_set(state, set, env)
+                                },
+                                |e| {
+                                    patina_runtime::LibraryError::processing(
+                                        source,
+                                        format!("desugar error: {e}"),
+                                        e.diagnostic(),
+                                    )
+                                    .at_opt(e.source_location().cloned())
+                                },
                             )
-                            .at_opt(e.source_location().cloned())
-                        },
-                    )?;
+                        })?;
 
                     let (top, nested) = compile_with_qq_resolving(
                         &core_expr,
