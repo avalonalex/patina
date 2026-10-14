@@ -27,7 +27,7 @@ use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{
-    AssertNoGc, AssertNoGcCount, CollectKind, GC_CHECK, GcController, GcDriver, GcMode, Mutator,
+    AssertNoGc, AssertNoGcCount, Carrier, CollectKind, GC_CHECK, GcController, GcDriver, GcMode,
     NoGcScope, Trace,
 };
 use patina_primitives::PrimitiveRegistry;
@@ -291,7 +291,7 @@ pub struct VmState {
     /// dispatch-loop entry costs no heap borrow and a poll (a frame's entry,
     /// a transfer's return, #700) is a single load of its poll word.
     #[trace(skip, reason = "the carrier's event words: no value")]
-    mutator: Rc<Mutator>,
+    mutator: Rc<Carrier>,
     /// The carrier's driver, the capability to collect (#702), lent by the
     /// driver entry (`execute`, `execute_in`) to the loop it runs, for that
     /// loop's polls: `None` in a nested loop, which hides the driver for its

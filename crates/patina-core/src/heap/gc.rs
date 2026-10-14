@@ -69,7 +69,7 @@ use super::account::{
 };
 use super::check::SlotChecks;
 use super::handles::HandleTable;
-use super::mutator::Mutator;
+use super::mutator::Carrier;
 pub use super::root_set::{RootSet, RootToken};
 use super::telemetry::{CollectReason, CollectionRecord, PhaseTimes};
 use super::trace::Trace;
@@ -352,9 +352,10 @@ pub(crate) trait Collector {
 /// [`GcController::safe_point`] and [`GcController::collect_at_call`] take,
 /// so a loop that has none cannot reach a collection (#702).
 ///
-/// One per carrier (addition C2): the carrier's [`Mutator`] marks it held,
-/// and [`GcDriver::acquire`] answers `None` while it is. The outermost
-/// drivers take it for their extent:
+/// One per carrier (addition C2): the carrier's
+/// [`Mutator`](super::mutator::Mutator) marks it held, and
+/// [`GcDriver::acquire`] answers `None` while it is. The outermost drivers
+/// take it for their extent:
 /// - the VM's `execute` and `execute_in`, which lend it to the loop they run;
 /// - the tree-walker's run of a form, from outside any run;
 /// - the loaders where a library's load ends at the top level (point B).
@@ -365,7 +366,7 @@ pub(crate) trait Collector {
 /// `&mut Heap`.
 pub struct GcDriver {
     heap: SharedHeap,
-    mutator: Rc<Mutator>,
+    mutator: Rc<Carrier>,
 }
 
 impl GcDriver {
@@ -403,7 +404,8 @@ impl Drop for GcDriver {
 /// An extent beneath which nothing collects (`PRD/GC_PRD.md` §11.3): a
 /// nested entry into a loop, or a holder's ([`GcDeferGuard::holding`]).
 ///
-/// It raises the carrier's `no_gc_depth` ([`Mutator::no_gc_depth`]), and a
+/// It raises the carrier's `no_gc_depth`
+/// ([`Mutator::no_gc_depth`](super::mutator::Mutator::no_gc_depth)), and a
 /// collection runs only at depth 0. So a poll beneath one leaves the event
 /// posted for the outermost loop's next poll, and a collection asked for at
 /// a call is posted and counted. In a check build every collection asserts
@@ -418,7 +420,7 @@ impl Drop for GcDriver {
 #[must_use = "a NoGcScope covers the extent of the binding that holds it"]
 pub struct NoGcScope {
     heap: SharedHeap,
-    mutator: Rc<Mutator>,
+    mutator: Rc<Carrier>,
 }
 
 impl NoGcScope {
@@ -3794,7 +3796,7 @@ mod tests {
         #[test]
         #[should_panic(expected = "unbalanced GC defer: exit without a matching enter")]
         fn an_unbalanced_defer_exit_panics() {
-            Mutator::new().exit_no_gc();
+            crate::Mutator::new().exit_no_gc();
         }
 
         #[test]

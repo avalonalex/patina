@@ -620,9 +620,23 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
     and re-read make a Dekker pair with a remote post (OCaml's protocol), so
     no post is lost.
   - **Shared by `Rc`.** The heap, its byte account and both machines share the
-    `Mutator` (`Heap::mutator`), as they shared the `Rc<Cell<bool>>` flag it
-    replaced. In `Heap` it holds that flag's place, one pointer, so the
-    allocator's hot fields keep theirs.
+    heap's `Carrier` (`Heap::mutator`), which derefs to its `Mutator`, as
+    they shared the `Rc<Cell<bool>>` flag it replaced. In `Heap` it holds
+    that flag's place, one pointer, so the allocator's hot fields keep
+    theirs.
+  - **The interrupt handle (#701, `heap/interrupt.rs`).**
+    `Heap::interrupt_handle` answers an `InterruptHandle`: an `Arc` of the
+    carrier's interrupt cell, which holds a pointer to the `Mutator` and a
+    count of the posts in flight. It is `Send + Sync + Clone`, held to it by
+    a compile-time assertion (C11), and its `post` is async-signal-safe: it
+    counts itself in, loads the pointer, makes a remote post if the pointer
+    is not null, and counts itself out, each step `SeqCst`.
+  - **Teardown** is the `Carrier`'s drop, whichever holder drops its last
+    `Rc`: it stores null in the cell and waits until no post is in flight,
+    and only then is the `Mutator` freed. So a poster is either waited for
+    or does nothing, and a handle that outlives its heap posts nothing and
+    answers `false`. Nothing services the `SIGNAL` bit yet; #701's second
+    part raises `&interrupt` at the poll.
   - **Reserved words.** They stay zero until a later stage uses them: the
     allocation buffer (5a), the barrier (7), the register stack (4d), Tick
     mode's count, and the words C1 and C10 reserve.
@@ -1421,7 +1435,10 @@ reference, which the heap refuses to read, and dropping it does nothing
 the heap and closed the same cycle (#620), and
 `a_held_environment_does_not_keep_its_heap_alive` now pins that none does.
 `heap_teardown.rs` holds both backends to it, and
-`teardown_frees_every_slot_and_the_heap_with_them` the sweep's part.
+`teardown_frees_every_slot_and_the_heap_with_them` the sweep's part. It
+also holds them to the carrier's teardown (§6): a thread posts to each
+interpreter's interrupt handle while the interpreter is dropped, and a post
+begun after the drop reaches nothing (#701).
 
 The heap's `cond-expand` library-availability service is metadata outside the
 Scheme arenas. Its runtime implementation holds **weak** references to the

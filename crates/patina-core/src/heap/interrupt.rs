@@ -1,0 +1,261 @@
+//! The `InterruptHandle`: how a signal handler, a timer or another thread
+//! posts an event to a heap's carrier (#701; `PRD/GC_PRD.md` §12, decision
+//! 9).
+//!
+//! A signal handler cannot borrow an interpreter, and there is no
+//! process-wide GC singleton to find one by, so each heap hands out a
+//! handle: an `Arc` of an `InterruptCell` that points at its carrier's
+//! [`Mutator`]. The handle is `Send + Sync + Clone`, and
+//! [`InterruptHandle::post`] is async-signal-safe.
+//!
+//! **Teardown** ([`Carrier`](super::mutator::Carrier)'s drop) stores null
+//! into the cell, then waits until no post is in flight, and only then is the
+//! `Mutator` freed. A post counts itself in before it loads the pointer and
+//! out after its last write, all four operations `SeqCst`, so a poster is
+//! either waited for or reads null and does nothing. A handle may outlive
+//! its heap: its posts then answer `false`.
+//!
+//! Under M:1 the cell points at the one carrier for the heap's life. When
+//! carriers share a mutator token (§18.7), it will follow the holder.
+
+use std::ptr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+
+use super::mutator::Mutator;
+
+/// A heap's handle for posting events from anywhere: a signal handler, a
+/// timer, a profiler, a host's other thread. See the [module docs](self).
+#[derive(Clone, Debug)]
+pub struct InterruptHandle(Arc<InterruptCell>);
+
+// C11 (`PRD/GC_PRD.md` §18.6): the handle crosses threads, which is what it
+// is for.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<InterruptHandle>();
+};
+
+impl InterruptHandle {
+    pub(super) fn new(cell: &Arc<InterruptCell>) -> Self {
+        Self(Arc::clone(cell))
+    }
+
+    /// Post `bits` ([`event`](super::mutator::event)) to the heap's carrier,
+    /// which services them at its next poll: whether the carrier was there
+    /// to post to.
+    ///
+    /// Async-signal-safe: lock-free atomics only, no allocation and no panic
+    /// path, so a signal handler may call it. Nothing services
+    /// [`SIGNAL`](super::mutator::event::SIGNAL) yet: #701's second part
+    /// does.
+    pub fn post(&self, bits: u32) -> bool {
+        let cell = &*self.0;
+        cell.posting.fetch_add(1, Ordering::SeqCst);
+        let mutator = cell.mutator.load(Ordering::SeqCst);
+        let posted = !mutator.is_null();
+        if posted {
+            // SAFETY: the pointer is non-null only from `attach`, once the
+            // carrier is at the address it keeps, until `detach`, in its
+            // drop, before its memory is freed. This post counted itself in
+            // before it loaded the pointer, and `detach` stores null before
+            // it waits for the count to read 0; in the one order of the four
+            // `SeqCst` operations, a load that saw the pointer came before
+            // the store of null, so `detach` waits for this post's count
+            // out, below, and the `Mutator` is live until then.
+            unsafe { Mutator::post_remote_at(mutator, bits) };
+        }
+        cell.posting.fetch_sub(1, Ordering::SeqCst);
+        posted
+    }
+}
+
+/// What every handle on a heap shares: where its carrier's `Mutator` is,
+/// and how many posts are in flight.
+#[derive(Debug)]
+pub(super) struct InterruptCell {
+    /// The carrier's `Mutator`, or null once its teardown began. Posters
+    /// reach its atomic words alone.
+    mutator: AtomicPtr<Mutator>,
+    /// The posts in flight, each between its count in and its count out.
+    posting: AtomicUsize,
+}
+
+impl InterruptCell {
+    /// A cell that points at no carrier yet.
+    pub(super) fn new() -> Self {
+        Self {
+            mutator: AtomicPtr::new(ptr::null_mut()),
+            posting: AtomicUsize::new(0),
+        }
+    }
+
+    /// Point posters at `mutator`, which stays at its address until
+    /// [`detach`](Self::detach).
+    pub(super) fn attach(&self, mutator: &Mutator) {
+        self.mutator
+            .store(ptr::from_ref(mutator).cast_mut(), Ordering::SeqCst);
+    }
+
+    /// The teardown: stop posters reaching the `Mutator`, and wait out any
+    /// post already reaching it. The caller frees it after.
+    ///
+    /// A poster interrupted between its count in and its count out is
+    /// another thread's, or a signal handler that has already returned to
+    /// this one, so the wait ends.
+    pub(super) fn detach(&self) {
+        self.mutator.store(ptr::null_mut(), Ordering::SeqCst);
+        while self.posting.load(Ordering::SeqCst) != 0 {
+            std::thread::yield_now();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+
+    use super::super::mutator::{Carrier, Mutator, event};
+    use super::InterruptHandle;
+
+    #[test]
+    fn a_post_reaches_the_carrier() {
+        let carrier = Carrier::new();
+        let handle = carrier.interrupt_handle();
+        assert!(!carrier.poll_due());
+        assert!(handle.post(event::SIGNAL));
+        assert!(carrier.poll_due());
+        assert!(!carrier.gc_posted(), "a remote post is not the owner's");
+    }
+
+    #[test]
+    fn a_post_after_teardown_does_nothing() {
+        let carrier = Carrier::new();
+        let handle = carrier.interrupt_handle();
+        let clone = handle.clone();
+        drop(carrier);
+        assert!(!handle.post(event::SIGNAL));
+        assert!(!clone.post(event::SIGNAL));
+    }
+
+    /// The wait itself, deterministically: a post that loaded the pointer
+    /// before the teardown began holds the teardown until it has written
+    /// and counted itself out.
+    #[test]
+    fn teardown_waits_out_a_post_in_flight() {
+        let carrier = Carrier::new();
+        let handle = carrier.interrupt_handle();
+        let wrote = Arc::new(AtomicBool::new(false));
+        let (loaded, ready) = mpsc::channel();
+        let poster = {
+            let handle = handle.clone();
+            let wrote = Arc::clone(&wrote);
+            std::thread::spawn(move || {
+                // `post`'s steps, with the teardown let in between the load
+                // and the write.
+                let cell = &*handle.0;
+                cell.posting.fetch_add(1, Ordering::SeqCst);
+                let mutator = cell.mutator.load(Ordering::SeqCst);
+                assert!(!mutator.is_null());
+                loaded.send(()).unwrap();
+                while !cell.mutator.load(Ordering::SeqCst).is_null() {
+                    std::hint::spin_loop();
+                }
+                std::thread::sleep(Duration::from_millis(20));
+                // SAFETY: the teardown has begun, and waits for this post.
+                unsafe { Mutator::post_remote_at(mutator, event::SIGNAL) };
+                wrote.store(true, Ordering::SeqCst);
+                cell.posting.fetch_sub(1, Ordering::SeqCst);
+            })
+        };
+        ready.recv().unwrap();
+        drop::<Rc<Carrier>>(carrier);
+        assert!(
+            wrote.load(Ordering::SeqCst),
+            "the teardown returned before the post in flight ended"
+        );
+        poster.join().unwrap();
+        assert!(!handle.post(event::SIGNAL));
+    }
+
+    /// A block the size and alignment of a carrier's `Rc` allocation, so the
+    /// allocator hands a freed carrier's memory to one: a post that wrote
+    /// the freed `Mutator` would change its bytes.
+    #[repr(C, align(128))]
+    struct Probe([u64; 48]);
+
+    const PATTERN: u64 = 0xA5A5_5A5A_A5A5_5A5A;
+
+    /// Teardown under posting (#701's acceptance): a thread posts in a tight
+    /// loop to every handle it has been sent, while this one makes carriers
+    /// and drops them. A post that begins after a drop has returned answers
+    /// `false`, and none writes the memory the drop freed, which the probes
+    /// allocated in its place would show. Run in the debug build and in
+    /// release with `gc-check`.
+    #[test]
+    fn teardown_is_safe_under_posting() {
+        // A carrier's `Rc` allocation: the counts, padded to the carrier's
+        // alignment, then the carrier.
+        assert_eq!(
+            std::mem::size_of::<Probe>(),
+            128 + std::mem::size_of::<Carrier>()
+        );
+        const ROUNDS: usize = 2_000;
+        let (send, receive) = mpsc::channel::<(InterruptHandle, Arc<AtomicBool>)>();
+        let done = Arc::new(AtomicBool::new(false));
+        let poster = {
+            let done = Arc::clone(&done);
+            std::thread::spawn(move || {
+                let mut handles = Vec::new();
+                let mut late = 0usize;
+                while !done.load(Ordering::SeqCst) {
+                    while let Ok(next) = receive.try_recv() {
+                        handles.push(next);
+                    }
+                    for (handle, dropped) in &handles {
+                        let after_drop = dropped.load(Ordering::SeqCst);
+                        let posted = handle.post(event::SIGNAL);
+                        assert!(
+                            !(after_drop && posted),
+                            "a post begun after teardown reached the carrier"
+                        );
+                        late += usize::from(after_drop);
+                    }
+                    // Keep the recent handles, so a post meets each drop.
+                    if handles.len() > 8 {
+                        handles.drain(..handles.len() - 8);
+                    }
+                }
+                late
+            })
+        };
+        for _ in 0..ROUNDS {
+            let carrier = Carrier::new();
+            let dropped = Arc::new(AtomicBool::new(false));
+            send.send((carrier.interrupt_handle(), Arc::clone(&dropped)))
+                .unwrap();
+            // Let the poster reach it before the drop, now and then.
+            for _ in 0..64 {
+                std::hint::spin_loop();
+            }
+            drop::<Rc<Carrier>>(carrier);
+            dropped.store(true, Ordering::SeqCst);
+            let probes: Vec<Box<Probe>> = (0..4).map(|_| Box::new(Probe([PATTERN; 48]))).collect();
+            for _ in 0..256 {
+                std::hint::spin_loop();
+            }
+            for probe in &probes {
+                assert!(
+                    probe.0.iter().all(|&word| word == PATTERN),
+                    "a post wrote a freed carrier's memory"
+                );
+            }
+        }
+        done.store(true, Ordering::SeqCst);
+        let late = poster.join().unwrap();
+        assert!(late > 0, "the poster never posted after a teardown");
+    }
+}
