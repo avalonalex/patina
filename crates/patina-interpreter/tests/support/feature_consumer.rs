@@ -2,11 +2,20 @@
 //! Its cfgs are host features, deliberately separate from workspace unification.
 #![allow(deprecated)] // Exercise the compatibility APIs as an external caller.
 
-use patina_interpreter::{Backend, Environment, EvalError, Interpreter, TaggedValue};
+use patina_interpreter::{
+    Backend, Environment, EvalError, Interpreter, SharedHeap, TaggedValue, new_shared_heap,
+};
 use std::rc::Rc;
 
-// A host-supplied backend needs neither of Patina's concrete backends.
-struct LiteralBackend(Rc<Environment>);
+// A host-supplied backend needs neither of Patina's concrete backends: a
+// global environment, and the heap its values live on.
+struct LiteralBackend(Rc<Environment>, SharedHeap);
+impl LiteralBackend {
+    fn new() -> Self {
+        let heap = new_shared_heap();
+        Self(Rc::new(Environment::with_heap(&heap)), heap)
+    }
+}
 impl Backend for LiteralBackend {
     type Error = EvalError;
     fn eval(&self, datum: TaggedValue, _: &Rc<Environment>) -> Result<TaggedValue, EvalError> {
@@ -14,6 +23,9 @@ impl Backend for LiteralBackend {
     }
     fn global_env(&self) -> &Rc<Environment> {
         &self.0
+    }
+    fn heap(&self) -> &SharedHeap {
+        &self.1
     }
 }
 
@@ -95,7 +107,7 @@ where
 }
 
 fn main() {
-    let host = Interpreter::new(LiteralBackend(Rc::new(Environment::new())));
+    let host = Interpreter::new(LiteralBackend::new());
     assert_eq!(host.eval_program("40 42").unwrap().as_fixnum(), Some(42));
     assert!(host.eval_program("42 (").is_err());
     // `Backend::define`'s default, which a host-supplied backend takes.

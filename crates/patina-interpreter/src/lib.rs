@@ -64,7 +64,7 @@ mod reentry_lint_control;
 #[allow(deprecated)]
 pub use legacy::{Pipeline, PipelineError, StandardPipeline};
 pub use patina_core::error::SourceLocation;
-pub use patina_core::{Owned, OwnedEnvironment, TaggedValue};
+pub use patina_core::{Owned, OwnedEnvironment, SharedHeap, TaggedValue, new_shared_heap};
 pub use patina_frontend::{
     DesugarError, Desugarer, LexError, Lexer, ParseError, Parser, SourceMap,
 };
