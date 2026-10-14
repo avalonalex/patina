@@ -174,6 +174,14 @@ cargo build --release
 cargo test --all --lib --tests
 ```
 
+Ctrl-C while a form is running interrupts it. At the REPL, `Error: interrupted`
+is printed and you are back at the prompt. A script, a program on standard
+input, or `-p` stops and exits with status 130, after writing out any output
+it had not yet flushed. A program can catch the interrupt: it raises a
+condition that `interrupt?` from `(patina interrupt)` recognises. That
+condition is not an error object, so a `guard` that catches only errors lets
+Ctrl-C through. At the prompt, Ctrl-C still abandons the line being typed.
+
 ```scheme
 patina> (define factorial
           (lambda (n)
@@ -262,6 +270,16 @@ with `define_in(&env, name, &value)` and `lookup_in(&env, name)`, and evaluate
 in it with `eval_str_in(&env, …)` and `eval_program_in(&env, …)`, on either
 backend: what the code defines or imports stays in it. An environment built
 with `Environment::with_parent` is not rooted between calls.
+
+`interrupt_handle()` answers an `InterruptHandle`, which a host uses to
+interrupt a running evaluation from another thread, a timer or a signal
+handler ([#701](https://github.com/avalonalex/patina/issues/701)). Its
+`post(event::SIGNAL)` makes the evaluation raise the interrupt at its next
+poll, as Ctrl-C does in the CLI. If nothing handles it, the evaluation answers
+an error whose diagnostic kind is `interrupt`. The handle is `Send + Sync +
+Clone`, and it can outlive the interpreter: once the interpreter is gone, a
+post does nothing and answers `false`. On Unix, `forward_sigint()` makes SIGINT
+post it for as long as its guard is held.
 
 A value belongs to the interpreter that made it, and another interpreter
 refuses its handles. Dropping an interpreter frees its heap and flushes the
