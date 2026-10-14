@@ -4,6 +4,7 @@
 //! `GlobalRef` that resolves to a registry primitive in the compile
 //! environment — and keeps the generic `Call` path everywhere else.
 
+use patina_core::Lit;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
 use patina_core::procedure::Arity;
 use patina_core::tagged_value::TaggedValue;
@@ -20,7 +21,9 @@ fn var(name: &str) -> CoreExpr {
 }
 
 fn lit(n: i64) -> CoreExpr {
-    CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(n)))
+    CoreExpr::new(CoreExprKind::Literal(Lit::immediate(TaggedValue::fixnum(
+        n,
+    ))))
 }
 
 fn app(func: CoreExpr, args: Vec<CoreExpr>) -> CoreExpr {
@@ -48,8 +51,10 @@ fn lambda(params: Vec<&str>, body: Vec<CoreExpr>) -> CoreExpr {
 fn compile_all_in(state: &VmState, expr: &CoreExpr) -> Vec<Instruction> {
     let env = state.global_env().clone();
     let heap = state.heap().clone();
-    let (top, nested) = compile_with_qq_resolving(expr, &heap, &env, state.primitive_registry())
-        .expect("compile error");
+    let literals = patina_core::LiteralPool::new(&heap.borrow());
+    let (top, nested) =
+        compile_with_qq_resolving(expr, &literals, &heap, &env, state.primitive_registry())
+            .expect("compile error");
     let mut instrs = top.instructions;
     for co in nested {
         instrs.extend(co.instructions);

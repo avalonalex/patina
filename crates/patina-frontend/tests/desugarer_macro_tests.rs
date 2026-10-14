@@ -36,9 +36,11 @@ fn desugar_with(
     code: &str,
 ) -> Result<CoreExpr, DesugarError> {
     let mut parser = Parser::new(code).expect("Parser creation failed");
+    // The tests read no heap literal of the tree: the pool goes with it.
+    let literals = patina_core::LiteralPool::new(&heap.borrow());
     NoGcScope::with_cx(heap, |cx| {
         let form = parser.parse(cx).expect("Parse failed");
-        desugarer.desugar_tagged(form, cx)
+        desugarer.desugar_tagged(form, cx, &literals)
     })
 }
 
@@ -213,7 +215,7 @@ fn test_desugarer_returns_unspecified_for_define_syntax() {
 
     // Should be Literal(Unspecified) - macro is compiled at desugar time
     assert!(
-        matches!(&result.kind, CoreExprKind::Literal(val) if *val == TaggedValue::UNSPECIFIED),
+        matches!(&result.kind, CoreExprKind::Literal(val) if val.as_immediate() == Some(TaggedValue::UNSPECIFIED)),
         "Expected Literal(Unspecified), got {:?}",
         result
     );

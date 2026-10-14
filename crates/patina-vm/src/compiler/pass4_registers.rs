@@ -589,7 +589,7 @@ mod tests {
 
     fn pipeline(expr: &CoreExpr) -> RegExpr {
         let info = Pass1Analysis::run(expr);
-        let closed = Pass2Closure::run(expr, &info);
+        let closed = Pass2Closure::run(expr, &info, &crate::compiler::no_literals());
         let tailed = Pass3Tail::run(&closed);
         Pass4Registers::run(&tailed).expr
     }

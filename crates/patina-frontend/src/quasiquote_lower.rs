@@ -25,8 +25,7 @@
 //! `Quasiquote` at all. Nothing downstream of this carries that node.
 
 use patina_core::core_expr::{CoreExpr, CoreExprKind};
-use patina_core::tagged_value::TaggedValue;
-use patina_core::{QuasiConstructor, QuasiTemplate};
+use patina_core::{Lit, QuasiConstructor, QuasiTemplate};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -43,14 +42,15 @@ impl std::fmt::Display for QuasiquoteError {
     }
 }
 
-/// Resolves `list`, `append` and `list->vector` to procedure *values*.
+/// Resolves `list`, `append` and `list->vector` to procedure *values*, each
+/// a literal of the compilation's pool (#705), which roots it.
 ///
 /// A closure rather than the primitive registry itself, and that is a layering
 /// choice worth naming: `patina-primitives` depends on this crate, so a pass
 /// living here cannot name `PrimitiveRegistry` without a cycle. Each backend
-/// supplies its own resolver over its own registry and heap, and both get the
-/// same lowering.
-pub type ConstructorResolver<'a> = &'a dyn Fn(&str) -> Option<TaggedValue>;
+/// supplies its own resolver over its own registry, heap and pool, and both
+/// get the same lowering.
+pub type ConstructorResolver<'a> = &'a dyn Fn(&str) -> Option<Lit>;
 
 /// Recursively lower all `Quasiquote` nodes in a `CoreExpr` tree.
 ///
@@ -77,9 +77,9 @@ struct Lowering<'a> {
     /// The constructor procedures, allocated the first time a template needs
     /// each: most units have no quasiquote at all, and one that has a
     /// hundred shares three objects.
-    list: Cell<Option<TaggedValue>>,
-    append: Cell<Option<TaggedValue>>,
-    list_to_vector: Cell<Option<TaggedValue>>,
+    list: Cell<Option<Lit>>,
+    append: Cell<Option<Lit>>,
+    list_to_vector: Cell<Option<Lit>>,
 }
 
 impl Lowering<'_> {
@@ -93,7 +93,7 @@ impl Lowering<'_> {
     ///
     /// Allocated once per unit and cached: most units have no quasiquote at
     /// all, and one with a hundred templates shares three objects.
-    fn constructor(&self, which: QuasiConstructor) -> Result<TaggedValue, QuasiquoteError> {
+    fn constructor(&self, which: QuasiConstructor) -> Result<Lit, QuasiquoteError> {
         // Selected by `match`, so adding a constructor is a compile error
         // here rather than an out-of-bounds index at run time.
         let slot = match which {

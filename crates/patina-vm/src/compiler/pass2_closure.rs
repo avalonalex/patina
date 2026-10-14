@@ -27,6 +27,7 @@
 //! See VM_COMPILER.md §Pass 2.
 
 use super::pass1_analysis::{AnalysisInfo, NodeId};
+use patina_core::LiteralPool;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, Symbol};
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
@@ -186,14 +187,18 @@ enum VarLoc {
 
 struct Ctx<'a> {
     analysis: &'a AnalysisInfo,
+    /// The compilation's literal pool, whose words this pass copies into the
+    /// tree the later passes compile (#705).
+    literals: &'a LiteralPool,
     counter: u32,
     scopes: Vec<Vec<(Symbol, VarLoc)>>,
 }
 
 impl<'a> Ctx<'a> {
-    fn new(analysis: &'a AnalysisInfo) -> Self {
+    fn new(analysis: &'a AnalysisInfo, literals: &'a LiteralPool) -> Self {
         Self {
             analysis,
+            literals,
             counter: 0,
             scopes: vec![],
         }
@@ -224,8 +229,8 @@ impl<'a> Ctx<'a> {
 pub struct Pass2Closure;
 
 impl Pass2Closure {
-    pub fn run(expr: &CoreExpr, analysis: &AnalysisInfo) -> ClosedExpr {
-        let mut ctx = Ctx::new(analysis);
+    pub fn run(expr: &CoreExpr, analysis: &AnalysisInfo, literals: &LiteralPool) -> ClosedExpr {
+        let mut ctx = Ctx::new(analysis, literals);
         convert(expr, &mut ctx)
     }
 }
@@ -238,8 +243,8 @@ fn convert(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
 fn convert_inner(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
     let source = expr.source.clone();
     let kind = match &expr.kind {
-        CoreExprKind::Literal(v) => ClosedExprKind::Literal(*v),
-        CoreExprKind::Quote(v) => ClosedExprKind::Quote(*v),
+        CoreExprKind::Literal(v) => ClosedExprKind::Literal(ctx.literals.word(*v)),
+        CoreExprKind::Quote(v) => ClosedExprKind::Quote(ctx.literals.word(*v)),
         CoreExprKind::Quasiquote(_) => ClosedExprKind::Quasiquote,
 
         CoreExprKind::Var { name, .. } => match ctx.lookup(name) {
@@ -440,6 +445,7 @@ fn flatten_formals(params: &Formals) -> (Vec<Symbol>, bool) {
 mod tests {
     use super::*;
     use crate::compiler::pass1_analysis::Pass1Analysis;
+    use patina_core::Lit;
     use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
     use patina_core::tagged_value::TaggedValue;
     use std::rc::Rc;
@@ -452,7 +458,9 @@ mod tests {
     }
 
     fn lit(n: i64) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(n)))
+        CoreExpr::new(CoreExprKind::Literal(Lit::immediate(TaggedValue::fixnum(
+            n,
+        ))))
     }
 
     fn lambda(params: Vec<&str>, body: Vec<CoreExpr>) -> CoreExpr {
@@ -472,7 +480,7 @@ mod tests {
     fn literal_converts() {
         let expr = lit(7);
         let info = Pass1Analysis::run(&expr);
-        let closed = Pass2Closure::run(&expr, &info);
+        let closed = Pass2Closure::run(&expr, &info, &crate::compiler::no_literals());
         assert!(matches!(closed.kind, ClosedExprKind::Literal(_)));
     }
 
@@ -480,7 +488,7 @@ mod tests {
     fn local_ref_resolved() {
         let expr = lambda(vec!["x"], vec![var("x")]);
         let info = Pass1Analysis::run(&expr);
-        let closed = Pass2Closure::run(&expr, &info);
+        let closed = Pass2Closure::run(&expr, &info, &crate::compiler::no_literals());
         let ClosedExprKind::Lambda(lam) = &closed.kind else {
             panic!("expected Lambda")
         };
@@ -492,7 +500,7 @@ mod tests {
     fn unbound_free_var_stays_global_not_captured() {
         let expr = lambda(vec!["x"], vec![var("y")]);
         let info = Pass1Analysis::run(&expr);
-        let closed = Pass2Closure::run(&expr, &info);
+        let closed = Pass2Closure::run(&expr, &info, &crate::compiler::no_literals());
         let ClosedExprKind::Lambda(lam) = &closed.kind else {
             panic!("expected Lambda")
         };
@@ -506,7 +514,7 @@ mod tests {
     #[test]
     fn unresolved_var_becomes_global_ref() {
         let info = Pass1Analysis::run(&var("foo"));
-        let closed = Pass2Closure::run(&var("foo"), &info);
+        let closed = Pass2Closure::run(&var("foo"), &info, &crate::compiler::no_literals());
         assert!(matches!(&closed.kind, ClosedExprKind::GlobalRef(n) if n.as_ref() == "foo"));
     }
 
@@ -515,7 +523,7 @@ mod tests {
         let inner = lambda(vec!["y"], vec![var("x")]);
         let outer = lambda(vec!["x"], vec![inner]);
         let info = Pass1Analysis::run(&outer);
-        let closed = Pass2Closure::run(&outer, &info);
+        let closed = Pass2Closure::run(&outer, &info, &crate::compiler::no_literals());
         let ClosedExprKind::Lambda(outer_lam) = &closed.kind else {
             panic!("expected Lambda (outer)")
         };
@@ -540,7 +548,7 @@ mod tests {
         let inner = lambda(vec![], vec![var("x")]);
         let outer = lambda(vec!["x"], vec![set_x, inner]);
         let info = Pass1Analysis::run(&outer);
-        let closed = Pass2Closure::run(&outer, &info);
+        let closed = Pass2Closure::run(&outer, &info, &crate::compiler::no_literals());
         let ClosedExprKind::Lambda(outer_lam) = &closed.kind else {
             panic!("expected Lambda")
         };
@@ -563,7 +571,7 @@ mod tests {
         let outer = lambda(vec!["x"], vec![mid]);
 
         let info = Pass1Analysis::run(&outer);
-        let closed = Pass2Closure::run(&outer, &info);
+        let closed = Pass2Closure::run(&outer, &info, &crate::compiler::no_literals());
 
         let ClosedExprKind::Lambda(outer_lam) = &closed.kind else {
             panic!("expected Lambda");
@@ -605,7 +613,7 @@ mod tests {
         let outer = lambda(vec!["x"], vec![body_thunk]);
 
         let info = Pass1Analysis::run(&outer);
-        let closed = Pass2Closure::run(&outer, &info);
+        let closed = Pass2Closure::run(&outer, &info, &crate::compiler::no_literals());
 
         let ClosedExprKind::Lambda(outer_lam) = &closed.kind else {
             panic!("expected outer Lambda");

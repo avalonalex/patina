@@ -1328,9 +1328,10 @@ mod tests {
         let desugarer = Desugarer::with_env_and_source_map(env, sm);
 
         // Read, and desugar with source map
+        let literals = patina_core::LiteralPool::new(&heap.borrow());
         let core_expr = patina_core::NoGcScope::with_cx(&heap, |cx| {
             let expr = parser.parse(cx).unwrap();
-            desugarer.desugar_tagged(expr, cx).unwrap()
+            desugarer.desugar_tagged(expr, cx, &literals).unwrap()
         });
 
         // The CoreExpr should have source info from the list form

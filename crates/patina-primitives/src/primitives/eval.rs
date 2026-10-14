@@ -166,8 +166,11 @@ fn primitive_eval(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
     // (#435), and expanding twice can also install a transformer twice.
     if !mutable {
         let desugarer = Desugarer::with_env(env.clone()).with_fs(ctx.fs().clone());
+        // Its literals are never read: the tree is only searched for a
+        // definition, and dropped with the pool.
+        let literals = patina_core::LiteralPool::new(&heap.borrow());
         let core_expr = patina_core::NoGcScope::cross(heap, [args[0]], |cx, [form]| {
-            desugarer.desugar_tagged(form, cx)
+            desugarer.desugar_tagged(form, cx, &literals)
         })
         .map_err(|e| {
             EvalError::InvalidSyntax(format!("eval: failed to desugar expression: {e}"))

@@ -995,6 +995,8 @@ fn vm_evaluate_parsed_library(
 
     state.with_globals(lib_env.clone(), |state| -> Result<(), LibraryError> {
         for tv in &parsed.body {
+            // The form's literals, rooted until its code holds them (#705).
+            let literals = patina_core::LiteralPool::new(&shared_heap.borrow());
             #[expect(
                 clippy::disallowed_methods,
                 reason = "the import callback loads libraries during the expansion: guarded by the \
@@ -1004,6 +1006,7 @@ fn vm_evaluate_parsed_library(
                 desugarer.desugar_with_imports(
                     form,
                     cx,
+                    &literals,
                     |set, env| vm_process_import_set(state, set, env),
                     |e| {
                         patina_runtime::LibraryError::processing(
@@ -1018,6 +1021,7 @@ fn vm_evaluate_parsed_library(
 
             let (top, nested) = compile_with_qq_resolving(
                 &core_expr,
+                &literals,
                 &shared_heap,
                 &lib_env,
                 &state.primitive_registry,
@@ -1029,6 +1033,8 @@ fn vm_evaluate_parsed_library(
                     e.diagnostic(),
                 )
             })?;
+            // The constants hold the literals now (#705).
+            drop((core_expr, literals));
 
             // Each body form is a re-entry boundary: a raise in it can reach
             // a handler of the program's, and one that escapes (a `guard`
@@ -1138,6 +1144,9 @@ fn compile_for_eval(
 ) -> Result<(CodeObject, Vec<CodeObject>), VmError> {
     let desugarer = Desugarer::with_env(env.clone()).with_fs(state.fs.clone());
     let heap = state.heap.clone();
+    // The datum's literals, rooted until the code holds them, and dropped as
+    // this returns it (#705).
+    let literals = patina_core::LiteralPool::new(&heap.borrow());
 
     #[expect(
         clippy::disallowed_methods,
@@ -1149,6 +1158,7 @@ fn compile_for_eval(
         desugarer.desugar_with_imports(
             form,
             cx,
+            &literals,
             |set, env| {
                 vm_process_import_set(state, set, env).map_err(|e| {
                     VmError::Runtime {
@@ -1168,12 +1178,14 @@ fn compile_for_eval(
         )
     })?;
 
-    compile_with_qq_resolving(&core_expr, &heap, env, &state.primitive_registry).map_err(|e| {
-        VmError::Runtime {
-            message: format!("eval: compile error: {}", e),
-        }
-        .with_diagnostic(e.diagnostic())
-    })
+    compile_with_qq_resolving(&core_expr, &literals, &heap, env, &state.primitive_registry).map_err(
+        |e| {
+            VmError::Runtime {
+                message: format!("eval: compile error: {}", e),
+            }
+            .with_diagnostic(e.diagnostic())
+        },
+    )
 }
 
 /// The datum `expr`, compiled in `env`, as a closure of no arguments whose

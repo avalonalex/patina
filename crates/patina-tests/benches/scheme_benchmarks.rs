@@ -142,14 +142,17 @@ const SUM: &str = "(let loop ((n 100) (acc 0)) (if (= n 0) acc (loop (- n 1) (+ 
 const ALLOC: &str =
     "(let loop ((n 256) (xs '())) (if (= n 0) (length xs) (loop (- n 1) (cons n xs))))";
 
-fn expand(interp: &BenchInterp) -> CoreExpr {
+/// `SUM`, desugared, with the literal pool its literals are entries of.
+fn expand(interp: &BenchInterp) -> (CoreExpr, patina_core::LiteralPool) {
     let heap = interp.heap();
     let mut parser = Parser::new(black_box(SUM)).unwrap();
     let desugarer = Desugarer::with_env(interp.env().clone());
-    patina_core::NoGcScope::with_cx(heap, |cx| {
+    let literals = patina_core::LiteralPool::new(&heap.borrow());
+    let expr = patina_core::NoGcScope::with_cx(heap, |cx| {
         let datum = parser.parse(cx).unwrap();
-        desugarer.desugar_tagged(datum, cx).unwrap()
-    })
+        desugarer.desugar_tagged(datum, cx, &literals).unwrap()
+    });
+    (expr, literals)
 }
 
 fn heap_counters(interp: &BenchInterp) -> serde_json::Value {
@@ -216,8 +219,10 @@ fn phases(c: &mut Criterion) {
             b.iter_batched_ref(
                 make_interpreter,
                 |interp| {
+                    let (expr, literals) = expand(interp);
                     compile_with_qq_resolving(
-                        &expand(interp),
+                        &expr,
+                        &literals,
                         interp.heap(),
                         interp.env(),
                         &registry,
@@ -229,7 +234,10 @@ fn phases(c: &mut Criterion) {
         } else {
             b.iter_batched_ref(
                 make_interpreter,
-                |interp| CpsTransformer::new().transform_toplevel(&expand(interp)),
+                |interp| {
+                    let (expr, literals) = expand(interp);
+                    CpsTransformer::new(&literals).transform_toplevel(&expr)
+                },
                 BatchSize::PerIteration,
             );
         }

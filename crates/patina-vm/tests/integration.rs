@@ -9,17 +9,29 @@
               test crates do in their Cargo.toml"
 )]
 
+use patina_core::Lit;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
 use patina_core::scope::ScopeSet;
 use patina_core::tagged_value::TaggedValue;
-use patina_vm::compiler::compile;
 use patina_vm::runtime::{VmState, execute};
+use patina_vm::types::CodeObject;
 use patina_vm::types::CodeObjectId;
 use std::rc::Rc;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// `patina_vm::compiler::compile`, for these hand-built trees, whose
+/// literals are all immediates: none needs a pool entry (#705), so the pool
+/// is an empty one on a heap of its own.
+fn compile(
+    expr: &CoreExpr,
+) -> Result<(CodeObject, Vec<CodeObject>), patina_vm::error::CompileError> {
+    let heap = patina_core::new_shared_heap();
+    let literals = patina_core::LiteralPool::new(&heap.borrow());
+    patina_vm::compiler::compile(expr, &literals)
+}
 
 fn fresh_state() -> VmState {
     let mut state = VmState::on_a_fresh_heap();
@@ -42,15 +54,17 @@ fn var(name: &str) -> CoreExpr {
 }
 
 fn lit(n: i64) -> CoreExpr {
-    CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(n)))
+    CoreExpr::new(CoreExprKind::Literal(Lit::immediate(TaggedValue::fixnum(
+        n,
+    ))))
 }
 
 fn lit_bool(b: bool) -> CoreExpr {
-    CoreExpr::new(CoreExprKind::Literal(if b {
+    CoreExpr::new(CoreExprKind::Literal(Lit::immediate(if b {
         TaggedValue::TRUE
     } else {
         TaggedValue::FALSE
-    }))
+    })))
 }
 
 fn app(func: CoreExpr, args: Vec<CoreExpr>) -> CoreExpr {
@@ -233,7 +247,7 @@ fn tail_call_self_recursion() {
     let n_sym = Rc::<str>::from("n");
 
     let body = if_(
-        CoreExpr::new(CoreExprKind::Literal(TaggedValue::FALSE)),
+        CoreExpr::new(CoreExprKind::Literal(Lit::immediate(TaggedValue::FALSE))),
         app(
             CoreExpr::new(CoreExprKind::Var {
                 name: self_sym.clone(),

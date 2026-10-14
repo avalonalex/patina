@@ -78,7 +78,7 @@ use crate::source_map::SourceMap;
 use patina_core::error::SourceLocation;
 use patina_core::source_document::ExpansionChain;
 use patina_core::walk::OpenNodes;
-use patina_core::{CoreForm, Cx, TaggedValue, Value};
+use patina_core::{CoreForm, Cx, Lit, LiteralPool, TaggedValue, Value};
 use patina_ir::{CoreExpr, CoreExprKind};
 use patina_macros::IdentifierKey;
 use patina_macros::macro_expander::utils::list_to_vec_with_tail;
@@ -96,6 +96,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// nothing of the form outlives the context (#704).
 pub(crate) struct FormCx<'a, 'gc> {
     cx: &'a mut Cx<'gc>,
+    /// The compilation's literal pool, where every heap datum the form
+    /// quotes goes (#705): a node holds the entry, the pool roots the datum.
+    literals: &'a LiteralPool,
     /// Syntax-to-datum copies shared by every quote in this form, so that a
     /// datum two quotes insert stays one object (`quoted_datum`).
     quoted: HashMap<Value<'gc>, Value<'gc>>,
@@ -1876,7 +1879,7 @@ impl<'a> Desugarer<'a> {
     }
 
     fn quoted_datum<'gc>(&self, value: Value<'gc>, cx: &mut FormCx<'_, 'gc>) -> Value<'gc> {
-        let FormCx { cx, quoted } = cx;
+        let FormCx { cx, quoted, .. } = cx;
         utils::strip_identifiers_tagged(value, cx, quoted)
     }
 
@@ -1890,7 +1893,12 @@ impl<'a> Desugarer<'a> {
     ///
     /// This is the primary entry point for desugaring, once per top-level
     /// form.
-    pub fn desugar_tagged<'gc>(&self, tagged: Value<'gc>, cx: &mut Cx<'gc>) -> Result<CoreExpr> {
+    pub fn desugar_tagged<'gc>(
+        &self,
+        tagged: Value<'gc>,
+        cx: &mut Cx<'gc>,
+        literals: &LiteralPool,
+    ) -> Result<CoreExpr> {
         // The entry point, and only that: everything inside a form recurses
         // through `desugar_form`. So returning from here is the end of a
         // top-level form — where early bindings are settled
@@ -1904,6 +1912,7 @@ impl<'a> Desugarer<'a> {
         self.form.set(NEXT_FORM.fetch_add(1, Ordering::Relaxed));
         let mut cx = FormCx {
             cx,
+            literals,
             quoted: HashMap::new(),
         };
         let result = self.desugar_form(tagged, &mut cx);
@@ -1920,6 +1929,7 @@ impl<'a> Desugarer<'a> {
         &self,
         tagged: Value<'gc>,
         cx: &mut Cx<'gc>,
+        literals: &LiteralPool,
         import: impl FnMut(&crate::ImportSet, &Rc<Environment>) -> std::result::Result<(), E>,
         syntax_error: impl FnOnce(DesugarError) -> E,
     ) -> std::result::Result<CoreExpr, E> {
@@ -1972,7 +1982,7 @@ impl<'a> Desugarer<'a> {
             top_level: Cell::new(self.top_level.get()),
             import_handler: Some(&handler),
         };
-        let result = desugarer.desugar_tagged(tagged, cx);
+        let result = desugarer.desugar_tagged(tagged, cx, literals);
         if let Some(error) = failure.into_inner() {
             Err(error)
         } else {
@@ -2025,22 +2035,34 @@ impl<'a> Desugarer<'a> {
         let _phase = patina_core::scope_trace::enter(patina_core::scope_trace::Phase::Desugar);
         // Immediate values - no heap access needed
         if tagged.is_fixnum() {
-            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged.tagged())));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(
+                cx.literals.add(tagged),
+            )));
         }
         if tagged.is_char() {
-            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged.tagged())));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(
+                cx.literals.add(tagged),
+            )));
         }
         if tagged == Value::TRUE || tagged == Value::FALSE {
-            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged.tagged())));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(
+                cx.literals.add(tagged),
+            )));
         }
         if tagged == Value::NULL {
-            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged.tagged())));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(
+                cx.literals.add(tagged),
+            )));
         }
         if tagged == Value::UNSPECIFIED {
-            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged.tagged())));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(
+                cx.literals.add(tagged),
+            )));
         }
         if tagged == Value::EOF {
-            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged.tagged())));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(
+                cx.literals.add(tagged),
+            )));
         }
 
         // Symbol - variable reference without scopes
@@ -2063,27 +2085,39 @@ impl<'a> Desugarer<'a> {
         // Native heap types - self-evaluating literals
         // String - native heap strings now support mutation directly
         if tagged.is_string() {
-            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged.tagged())));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(
+                cx.literals.add(tagged),
+            )));
         }
         if tagged.is_vector() {
             let datum = self.quoted_datum(tagged, cx);
-            return Ok(CoreExpr::new(CoreExprKind::Literal(datum.tagged())));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(cx.literals.add(datum))));
         }
         // Numeric types stored natively on heap
         if cx.is_complex(tagged) {
-            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged.tagged())));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(
+                cx.literals.add(tagged),
+            )));
         }
         if cx.is_real(tagged) {
-            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged.tagged())));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(
+                cx.literals.add(tagged),
+            )));
         }
         if cx.is_bigint(tagged) {
-            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged.tagged())));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(
+                cx.literals.add(tagged),
+            )));
         }
         if cx.is_rational(tagged) {
-            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged.tagged())));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(
+                cx.literals.add(tagged),
+            )));
         }
         if cx.is_bytevector(tagged) {
-            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged.tagged())));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(
+                cx.literals.add(tagged),
+            )));
         }
 
         // Pair - special form or application
@@ -2550,7 +2584,7 @@ impl<'a> Desugarer<'a> {
                 Ok(CoreExpr::new(CoreExprKind::If {
                     test: Rc::new(test),
                     then: Rc::new(then),
-                    else_: CoreExpr::rc(CoreExprKind::Literal(TaggedValue::UNSPECIFIED)),
+                    else_: CoreExpr::rc(CoreExprKind::Literal(Lit::UNSPECIFIED)),
                 }))
             }
             3 => {
@@ -2731,9 +2765,7 @@ impl<'a> Desugarer<'a> {
 
         if exprs.is_empty() {
             // (begin) with no body is valid in Scheme, returns unspecified
-            return Ok(CoreExpr::new(CoreExprKind::Literal(
-                TaggedValue::UNSPECIFIED,
-            )));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(Lit::UNSPECIFIED)));
         }
 
         let body: Vec<CoreExpr> = exprs
@@ -2838,7 +2870,7 @@ impl<'a> Desugarer<'a> {
             });
         }
         let datum = self.quoted_datum(args_vec[0], cx);
-        Ok(CoreExpr::new(CoreExprKind::Quote(datum.tagged())))
+        Ok(CoreExpr::new(CoreExprKind::Quote(cx.literals.add(datum))))
     }
 
     /// Desugar quasiquote: `(quasiquote template)` → `Quasiquote`, holding
@@ -2899,9 +2931,7 @@ impl<'a> Desugarer<'a> {
         let tv = cx.alloc_macro(Rc::new(compiled_macro), literals);
         self.define_syntax_binding(env, name, binder_scopes, tv.tagged());
 
-        Ok(CoreExpr::new(CoreExprKind::Literal(
-            TaggedValue::UNSPECIFIED,
-        )))
+        Ok(CoreExpr::new(CoreExprKind::Literal(Lit::UNSPECIFIED)))
     }
 
     /// Both written body forms and expanded `define-syntax` forms bind the
@@ -2979,12 +3009,13 @@ impl<'a> Desugarer<'a> {
             // A later macro reference may now reach a different imported
             // location. Keep already-emitted aliases, but refresh lookups.
             self.early.imports.borrow_mut().clear();
-            return Ok(CoreExpr::new(CoreExprKind::Literal(
-                TaggedValue::UNSPECIFIED,
-            )));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(Lit::UNSPECIFIED)));
         }
         Ok(CoreExpr::new(CoreExprKind::Import {
-            import_sets: import_sets.into_iter().map(Value::tagged).collect(),
+            import_sets: import_sets
+                .into_iter()
+                .map(|set| cx.literals.add(set))
+                .collect(),
         }))
     }
 
@@ -3379,9 +3410,7 @@ impl<'a> Desugarer<'a> {
         cx: &mut FormCx<'_, 'gc>,
     ) -> Result<CoreExpr> {
         if body.is_empty() {
-            return Ok(CoreExpr::new(CoreExprKind::Literal(
-                TaggedValue::UNSPECIFIED,
-            )));
+            return Ok(CoreExpr::new(CoreExprKind::Literal(Lit::UNSPECIFIED)));
         }
 
         let desugared: Vec<CoreExpr> = body
@@ -3571,9 +3600,7 @@ impl<'a> Desugarer<'a> {
         }
 
         if all_exprs.is_empty() {
-            Ok(CoreExpr::new(CoreExprKind::Literal(
-                TaggedValue::UNSPECIFIED,
-            )))
+            Ok(CoreExpr::new(CoreExprKind::Literal(Lit::UNSPECIFIED)))
         } else if all_exprs.len() == 1 {
             Ok(all_exprs.into_iter().next().unwrap())
         } else {
@@ -3787,13 +3814,34 @@ mod tests {
     use super::*;
     use patina_ir::Formals;
 
+    /// A desugarer for one test, with the literal pool its trees' literals
+    /// are entries of (#705).
+    struct TestDesugarer {
+        desugarer: Desugarer<'static>,
+        literals: LiteralPool,
+    }
+
+    impl TestDesugarer {
+        fn desugar_tagged<'gc>(&self, tagged: Value<'gc>, cx: &mut Cx<'gc>) -> Result<CoreExpr> {
+            self.desugarer.desugar_tagged(tagged, cx, &self.literals)
+        }
+
+        /// The word a literal of a tree this desugared stands for.
+        fn word(&self, lit: Lit) -> TaggedValue {
+            self.literals.word(lit)
+        }
+    }
+
     /// Run `f` with a desugarer whose environment holds the syntactic
     /// keywords, in a context over that environment's heap.
-    fn with_desugarer<R>(f: impl for<'gc> FnOnce(&Desugarer, &mut Cx<'gc>) -> R) -> R {
+    fn with_desugarer<R>(f: impl for<'gc> FnOnce(&TestDesugarer, &mut Cx<'gc>) -> R) -> R {
         let heap = patina_core::new_shared_heap();
         let env = Rc::new(Environment::with_heap(&heap));
         patina_runtime::stdlib::seed_core_syntax(&env, &heap);
-        let desugarer = Desugarer::with_env(env);
+        let desugarer = TestDesugarer {
+            desugarer: Desugarer::with_env(env),
+            literals: LiteralPool::new(&heap.borrow()),
+        };
         patina_core::NoGcScope::with_cx(&heap, |cx| f(&desugarer, cx))
     }
 
@@ -3817,6 +3865,7 @@ mod tests {
             let tagged = Value::fixnum(42);
             let result = desugarer.desugar_tagged(tagged, cx).unwrap();
             if let CoreExprKind::Literal(v) = result.kind {
+                let v = desugarer.word(v);
                 assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 42);
             } else {
                 panic!("Expected Literal, got {:?}", result);
@@ -3829,6 +3878,7 @@ mod tests {
         with_desugarer(|desugarer, cx| {
             let result = desugarer.desugar_tagged(Value::TRUE, cx).unwrap();
             if let CoreExprKind::Literal(v) = result.kind {
+                let v = desugarer.word(v);
                 assert_eq!(v, TaggedValue::TRUE);
             } else {
                 panic!("Expected Literal, got {:?}", result);
@@ -3842,6 +3892,7 @@ mod tests {
             let tagged = cx.alloc_string("hello".to_string());
             let result = desugarer.desugar_tagged(tagged, cx).unwrap();
             if let CoreExprKind::Literal(v) = result.kind {
+                let v = desugarer.word(v);
                 assert!(!v.is_immediate());
             } else {
                 panic!("Expected Literal, got {:?}", result);
@@ -3855,6 +3906,7 @@ mod tests {
             let tagged = Value::character('a');
             let result = desugarer.desugar_tagged(tagged, cx).unwrap();
             if let CoreExprKind::Literal(v) = result.kind {
+                let v = desugarer.word(v);
                 assert!(v.is_char() && v.as_char_unchecked() == 'a');
             } else {
                 panic!("Expected Literal, got {:?}", result);
@@ -3890,6 +3942,7 @@ mod tests {
             let list = make_list(&[sym("quote", cx), sym("x", cx)], cx);
             let result = desugarer.desugar_tagged(list, cx).unwrap();
             if let CoreExprKind::Quote(val) = result.kind {
+                let val = desugarer.word(val);
                 assert!(!val.is_immediate());
             } else {
                 panic!("Expected Quote, got {:?}", result);
@@ -3982,12 +4035,14 @@ mod tests {
             );
             let result = desugarer.desugar_tagged(list, cx).unwrap();
             if let CoreExprKind::If { test, then, else_ } = &result.kind {
-                assert!(matches!(&test.kind, CoreExprKind::Literal(v) if *v == TaggedValue::TRUE));
                 assert!(
-                    matches!(&then.kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 1)
+                    matches!(&test.kind, CoreExprKind::Literal(v) if v.as_immediate() == Some(TaggedValue::TRUE))
                 );
                 assert!(
-                    matches!(&else_.kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 2)
+                    matches!(&then.kind, CoreExprKind::Literal(v) if v.as_immediate() == Some(TaggedValue::fixnum(1)))
+                );
+                assert!(
+                    matches!(&else_.kind, CoreExprKind::Literal(v) if v.as_immediate() == Some(TaggedValue::fixnum(2)))
                 );
             } else {
                 panic!("Expected If, got {:?}", result);
@@ -4002,12 +4057,14 @@ mod tests {
             let list = make_list(&[sym("if", cx), Value::TRUE, Value::fixnum(1)], cx);
             let result = desugarer.desugar_tagged(list, cx).unwrap();
             if let CoreExprKind::If { test, then, else_ } = &result.kind {
-                assert!(matches!(&test.kind, CoreExprKind::Literal(v) if *v == TaggedValue::TRUE));
                 assert!(
-                    matches!(&then.kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 1)
+                    matches!(&test.kind, CoreExprKind::Literal(v) if v.as_immediate() == Some(TaggedValue::TRUE))
                 );
                 assert!(
-                    matches!(&else_.kind, CoreExprKind::Literal(v) if *v == TaggedValue::UNSPECIFIED)
+                    matches!(&then.kind, CoreExprKind::Literal(v) if v.as_immediate() == Some(TaggedValue::fixnum(1)))
+                );
+                assert!(
+                    matches!(&else_.kind, CoreExprKind::Literal(v) if v.as_immediate() == Some(TaggedValue::UNSPECIFIED))
                 );
             } else {
                 panic!("Expected If, got {:?}", result);
@@ -4029,7 +4086,7 @@ mod tests {
                 assert_eq!(var.as_ref(), "x");
                 assert!(scopes.is_empty());
                 assert!(
-                    matches!(&value.kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 42)
+                    matches!(&value.kind, CoreExprKind::Literal(v) if v.as_immediate() == Some(TaggedValue::fixnum(42)))
                 );
             } else {
                 panic!("Expected Set, got {:?}", result);
@@ -4063,7 +4120,7 @@ mod tests {
             if let CoreExprKind::Define { name, value, .. } = &result.kind {
                 assert_eq!(name.as_ref(), "x");
                 assert!(
-                    matches!(&value.kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 42)
+                    matches!(&value.kind, CoreExprKind::Literal(v) if v.as_immediate() == Some(TaggedValue::fixnum(42)))
                 );
             } else {
                 panic!("Expected Define, got {:?}", result);
@@ -4156,7 +4213,7 @@ mod tests {
             if let CoreExprKind::Begin(exprs) = &result.kind {
                 assert_eq!(exprs.len(), 1);
                 assert!(
-                    matches!(&exprs[0].kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 42)
+                    matches!(&exprs[0].kind, CoreExprKind::Literal(v) if v.as_immediate() == Some(TaggedValue::fixnum(42)))
                 );
             } else {
                 panic!("Expected Begin, got {:?}", result);
@@ -4193,6 +4250,7 @@ mod tests {
             let list = make_list(&[sym("begin", cx)], cx);
             let result = desugarer.desugar_tagged(list, cx).unwrap();
             if let CoreExprKind::Literal(v) = result.kind {
+                let v = desugarer.word(v);
                 assert_eq!(v, TaggedValue::UNSPECIFIED);
             } else {
                 panic!("Expected Literal, got {:?}", result);
@@ -4261,6 +4319,7 @@ mod tests {
             let list = make_list(&[sym("cond-expand", cx), clause], cx);
             let result = desugarer.desugar_tagged(list, cx).unwrap();
             if let CoreExprKind::Literal(v) = result.kind {
+                let v = desugarer.word(v);
                 assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 42);
             } else {
                 panic!("Expected Literal, got {:?}", result);
@@ -4289,6 +4348,7 @@ mod tests {
             let list = make_list(&[sym("cond-expand", cx), c1, c2], cx);
             let result = desugarer.desugar_tagged(list, cx).unwrap();
             if let CoreExprKind::Literal(v) = result.kind {
+                let v = desugarer.word(v);
                 assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 99);
             } else {
                 panic!("Expected Literal, got {:?}", result);
@@ -4318,6 +4378,7 @@ mod tests {
             let list = make_list(&[sym("cond-expand", cx), clause], cx);
             let result = desugarer.desugar_tagged(list, cx).unwrap();
             if let CoreExprKind::Literal(v) = result.kind {
+                let v = desugarer.word(v);
                 assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 100);
             } else {
                 panic!("Expected Literal, got {:?}", result);
@@ -4337,6 +4398,7 @@ mod tests {
             let list = make_list(&[sym("cond-expand", cx), clause], cx);
             let result = desugarer.desugar_tagged(list, cx).unwrap();
             if let CoreExprKind::Literal(v) = result.kind {
+                let v = desugarer.word(v);
                 assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 200);
             } else {
                 panic!("Expected Literal, got {:?}", result);
@@ -4353,6 +4415,7 @@ mod tests {
             let list = make_list(&[sym("cond-expand", cx), clause], cx);
             let result = desugarer.desugar_tagged(list, cx).unwrap();
             if let CoreExprKind::Literal(v) = result.kind {
+                let v = desugarer.word(v);
                 assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 300);
             } else {
                 panic!("Expected Literal, got {:?}", result);
@@ -4393,6 +4456,7 @@ mod tests {
             let list = make_list(&[sym("cond-expand", cx), c1, c2, c3], cx);
             let result = desugarer.desugar_tagged(list, cx).unwrap();
             if let CoreExprKind::Literal(v) = result.kind {
+                let v = desugarer.word(v);
                 assert!(v.is_fixnum() && v.as_fixnum_unchecked() == 1);
             } else {
                 panic!("Expected Literal, got {:?}", result);
@@ -4422,6 +4486,7 @@ mod tests {
             let list = make_list(&[sym("cond-expand", cx), clause], cx);
             let result = desugarer.desugar_tagged(list, cx).unwrap();
             if let CoreExprKind::Literal(v) = result.kind {
+                let v = desugarer.word(v);
                 assert_eq!(v, TaggedValue::UNSPECIFIED);
             } else {
                 panic!("Expected Literal(Unspecified), got {:?}", result);

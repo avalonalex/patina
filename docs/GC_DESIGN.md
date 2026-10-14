@@ -350,9 +350,10 @@ robust — do both.
 
 Live procedures keep their code alive, and code embeds heap values:
 `CpsExprKind::Literal(TaggedValue)` / `Quasiquote{template}`
-(`crates/patina-core/src/cps_expr.rs:158,:324`), analogous nodes in `CoreExpr`.
-When the tracer reaches a `Procedure` or `Continuation`, it must trace the
-literals in the body `Rc<CpsExpr>`.
+(`crates/patina-core/src/cps_expr.rs:158,:324`). When the tracer reaches a
+`Procedure` or `Continuation`, it must trace the literals in the body
+`Rc<CpsExpr>`. A `CoreExpr` holds no heap word: until its form is compiled,
+its literals are its compilation's literal pool's (§9.7).
 
 - **Tree-walker:** walk the expression tree, memoized per collection by
   `Rc::as_ptr` (an expression shared by many closures is walked once).
@@ -523,6 +524,7 @@ expansion runs in (§7; point C of `PRD/GC_PRD.md` §11.3).
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
 | `Heap.handles` | `heap/handles.rs` | What hosts keep across evaluations, each rooted until its handle is dropped: an `Owned` handle's value (#605) — what the `eval_*_owned` methods and `Interpreter::lookup` answer, and the last value of a program the interpreter is running — and an `OwnedEnvironment`'s environment (#620), traced by `visit_env` with everything bound in it. Also the environments hosts hold by their own `Rc` and lend to the legacy pipeline, kept weakly and traced while anything holds them. Visited in `GcVisitor::new` beside the intern tables, so every collection on either backend traces them; visited, not only marked, since a handle's value can be anything. A handle holds its table weakly and keeps nothing alive |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
+| A compilation's `LiteralPool` | `crates/patina-core/src/literal_pool.rs` | The heap literals of the form being compiled, from its expansion until its code holds them (§9.7, #705): registered with the heap's root set for the pool's life, its entries reported as slots. Each backend drops the pool once the form is compiled, before it runs, so it never holds more than one form's quoted text |
 | Macro literals and environments | `heap/mod.rs`, `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: the literals the object holds (§9.6), and its body's `definition_env` and each `foreign_expansions` environment (§4.3) |
 | In-flight `ExceptionObject.irritants` | `crates/patina-core/src/error.rs:44` | Lives in a propagating `Err` on the Rust stack; covered by deferral (GC never runs during unwinding — safe points are at loop tops, not in error paths) |
 
@@ -1110,7 +1112,9 @@ beside today's `SharedHeap` surface until they do.
   expander went when it took a context (#704). Converted code reads a
   binding, a macro object among them, through the context
   (`Cx::resolve_with_scopes`), as it reads a heap object's field: an
-  environment is traced with its bindings.
+  environment is traced with its bindings. A form's literals never cross:
+  its `CoreExpr` holds them through its compilation's literal pool, and a
+  context reads one as a value there (`LiteralPool::value`, §9.7).
 - **The funnel.** `Cx::store(slot, v)` is the one way a value is written into
   a heap object: a pair's car or cdr, a vector's element, a cell, a record's
   field, a closure's free variable, a promise's box, a parameter's value.
@@ -1640,6 +1644,43 @@ held a `SharedHeap` clone for them. Now no `CompiledMacro` holds a word or a
 heap, so one held anywhere, cloned or outliving its object, names nothing a
 collection can free, and a context can read a literal as a `Value` without
 the raw-word API.
+
+### 9.7 The `CoreExpr` literal pool
+
+A form's `CoreExpr` holds no heap word (#705; `PRD/GC_PRD.md` §11.3, M2).
+Each literal is a `Lit` (`crates/patina-core/src/literal_pool.rs`):
+- **An immediate** is held inline.
+- **Anything on the heap** is an entry of the `LiteralPool` of the
+  compilation that made it: a `Literal`'s value, a `Quote`'s datum, a
+  quasiquote template's data, an `Import`'s sets, and the quasiquote
+  constructors a backend adds.
+- **Rooting.** The pool is registered with the heap's root set for its life,
+  and reports each entry as a slot, which a collector that moves can update
+  in place.
+- **Reading.** A safe crate reads an entry as a value through the pool
+  (`LiteralPool::value`), with no raw-word API. A backend copies its word
+  into the code it runs: the VM in pass 2, the tree-walker in the CPS
+  transform.
+- **Scoped to one compilation.** Each backend makes a pool for each form it
+  compiles, in `eval`'s expansion and a library's body forms as well as at
+  the top level. It drops the pool once the code holds the literals, before
+  the form runs: the VM's constants and the tree-walker's `CpsExpr` are traced
+  in their own right. So a pool never holds more than one form's quoted text,
+  and nothing it held stays live through it.
+- **Tests.** `a_collection_keeps_a_pooled_literal` is the sentinel, and
+  `literal_pools.rs` holds every compilation path to dropping its pool.
+- **Why indices, not a root beside the words.** Until the pool, the literals
+  were words in the tree, sound only because nothing collects while a form is
+  desugared and compiled. A pool rooting those same words would have kept
+  that soundness, but not a collector that moves, which would leave the
+  tree's copies stale, and not a safe crate's read, which would need the
+  raw-word API.
+
+**`Step` state takes the machine's route, not the pool.** A resumable
+primitive's state lives across the call it suspends for, not within a
+compilation. The machine roots it in the suspended frame (`resume_stub` on
+the VM, the `ResumePrimitive` continuation on the tree-walker), and hands
+it back on resume: as a value, once primitives take a context (#706).
 
 ---
 

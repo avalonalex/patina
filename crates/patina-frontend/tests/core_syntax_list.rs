@@ -68,9 +68,10 @@ fn desugar_head(subject: &Subject, name: &str) -> Head {
     // Two arguments keep every form that takes any past its arity check, so a
     // rejection here means "refused as syntax", never "treated as a call".
     let mut parser = Parser::new(&format!("({} a b)", name)).expect("parser creation failed");
+    let literals = patina_core::LiteralPool::new(&subject.heap.borrow());
     let desugared = NoGcScope::with_cx(&subject.heap, |cx| {
         let form = parser.parse(cx).expect("parse failed");
-        subject.desugarer.desugar_tagged(form, cx)
+        subject.desugarer.desugar_tagged(form, cx, &literals)
     });
     let Ok(expr) = desugared else {
         return Head::Rejected;

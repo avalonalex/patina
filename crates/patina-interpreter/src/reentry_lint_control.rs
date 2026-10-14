@@ -64,9 +64,10 @@ fn every_nameable_entry_is_matched() {
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |c: &CpsEvaluator<'_>| c.apply_from_direct_tagged(TaggedValue::NULL, Vec::new());
     #[expect(clippy::disallowed_methods, reason = "positive control")]
-    let _ = |e: &crate::CoreExpr, env: Rc<Environment>, ev: &Evaluator| {
-        patina_tree_walker::eval_cps(e, env, ev)
-    };
+    let _ = |e: &crate::CoreExpr,
+             literals: patina_core::LiteralPool,
+             env: Rc<Environment>,
+             ev: &Evaluator| { patina_tree_walker::eval_cps(e, literals, env, ev) };
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |ev: &Evaluator| ev.load_library(&[]);
     #[expect(clippy::disallowed_methods, reason = "positive control")]

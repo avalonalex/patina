@@ -260,6 +260,7 @@ mod tests {
     use super::*;
     use crate::compiler::pass1_analysis::Pass1Analysis;
     use crate::compiler::pass2_closure::Pass2Closure;
+    use patina_core::Lit;
     use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
     use patina_core::tagged_value::TaggedValue;
     use std::rc::Rc;
@@ -272,7 +273,9 @@ mod tests {
     }
 
     fn lit(n: i64) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(n)))
+        CoreExpr::new(CoreExprKind::Literal(Lit::immediate(TaggedValue::fixnum(
+            n,
+        ))))
     }
 
     fn app(func: CoreExpr, args: Vec<CoreExpr>) -> CoreExpr {
@@ -297,7 +300,7 @@ mod tests {
 
     fn pipeline(expr: &CoreExpr) -> TailedExpr {
         let info = Pass1Analysis::run(expr);
-        let closed = Pass2Closure::run(expr, &info);
+        let closed = Pass2Closure::run(expr, &info, &crate::compiler::no_literals());
         Pass3Tail::run(&closed)
     }
 
@@ -343,7 +346,9 @@ mod tests {
     #[test]
     fn if_branches_inherit_tail() {
         let if_expr = CoreExpr::new(CoreExprKind::If {
-            test: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::TRUE))),
+            test: Rc::new(CoreExpr::new(CoreExprKind::Literal(Lit::immediate(
+                TaggedValue::TRUE,
+            )))),
             then: Rc::new(app(var("f"), vec![])),
             else_: Rc::new(app(var("g"), vec![])),
         });

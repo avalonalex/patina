@@ -30,6 +30,7 @@ use crate::types::CodeObject;
 use patina_core::core_expr::CoreExpr;
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
+use patina_core::{Lit, LiteralPool};
 use patina_primitives::PrimitiveRegistry;
 use std::rc::Rc;
 
@@ -46,10 +47,13 @@ type PrimitiveResolver<'a> = Option<(&'a SharedHeap, &'a Rc<Environment>, &'a Pr
 /// global in one way only: nothing the program imports or defines can
 /// redirect it — which is the whole reason the lowering references these as
 /// values rather than by name (Larceny triage family 34).
+/// The quasiquote constructors, each a fresh primitive procedure added to
+/// `literals`, which roots it from its allocation on (#705).
 fn registry_constructors<'a>(
     heap: &'a SharedHeap,
     registry: &'a PrimitiveRegistry,
-) -> impl Fn(&str) -> Option<patina_core::TaggedValue> + 'a {
+    literals: &'a LiteralPool,
+) -> impl Fn(&str) -> Option<Lit> + 'a {
     move |name| {
         let qualified_name = format!("scheme.base/{name}");
         let index = registry.resolve_index(&qualified_name)?;
@@ -60,12 +64,15 @@ fn registry_constructors<'a>(
             Rc::from(qualified_name.as_str()),
             Some(index),
         );
-        Some(heap.borrow_mut().alloc_procedure(proc))
+        let word = heap.borrow_mut().alloc_procedure(proc);
+        // SAFETY: allocated just now, and allocation never collects.
+        Some(unsafe { literals.add_word(word) })
     }
 }
 
 fn compile_pipeline(
     expr: &CoreExpr,
+    literals: &LiteralPool,
     resolver: PrimitiveResolver<'_>,
 ) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
     patina_ir::validate_executable(expr).map_err(CompileError::Internal)?;
@@ -75,7 +82,7 @@ fn compile_pipeline(
     } = alpha_rename::alpha_rename(expr, resolver.map(|(_, env, _)| env))?;
 
     let analysis = pass1_analysis::Pass1Analysis::run(&renamed);
-    let closed = pass2_closure::Pass2Closure::run(&renamed, &analysis);
+    let closed = pass2_closure::Pass2Closure::run(&renamed, &analysis, literals);
     let tailed = pass3_tail::Pass3Tail::run(&closed);
     let allocated = pass4_registers::Pass4Registers::run(&tailed);
     let prim_calls = resolver
@@ -117,8 +124,12 @@ fn compile_pipeline(
 /// Returns `(top_level_code, nested_codes)`. The caller should load them
 /// together with `VmState::load_unit` before executing. No environment is
 /// available, so primitive calls stay on the generic `Call` path.
-pub fn compile(expr: &CoreExpr) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
-    compile_pipeline(expr, None)
+/// Compile `expr`, whose literals are `literals`' entries.
+pub fn compile(
+    expr: &CoreExpr,
+    literals: &LiteralPool,
+) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
+    compile_pipeline(expr, literals, None)
 }
 
 /// Compile with quasiquote lowering *and* compile-time primitive resolution:
@@ -126,15 +137,28 @@ pub fn compile(expr: &CoreExpr) -> Result<(CodeObject, Vec<CodeObject>), Compile
 /// registry's `list`, `append` and `list->vector` (allocated on `heap`), then
 /// callees that resolve to registry primitives in `env` emit `CallPrimitive`
 /// (see `primitive_calls`). This is the entry the VM backend uses.
+/// Compile `expr`, whose literals are `literals`' entries, with its
+/// quasiquotes lowered over `registry`'s constructors and its primitive calls
+/// resolved in `env`. The words of the literals reach the code's constants,
+/// traced from there on, so the caller drops the pool once this returns.
 pub fn compile_with_qq_resolving(
     expr: &CoreExpr,
+    literals: &LiteralPool,
     heap: &SharedHeap,
     env: &Rc<Environment>,
     registry: &PrimitiveRegistry,
 ) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
-    let expanded = patina_frontend::lower_quasiquotes(expr, &registry_constructors(heap, registry))
-        .map_err(|e| CompileError::Internal(e.0))?;
-    compile_pipeline(&expanded, Some((heap, env, registry)))
+    let expanded =
+        patina_frontend::lower_quasiquotes(expr, &registry_constructors(heap, registry, literals))
+            .map_err(|e| CompileError::Internal(e.0))?;
+    compile_pipeline(&expanded, literals, Some((heap, env, registry)))
+}
+
+/// A pool for a test's hand-built tree, whose literals are all immediates:
+/// none needs an entry (#705), so the pool's heap can go at once.
+#[cfg(test)]
+pub(crate) fn no_literals() -> LiteralPool {
+    LiteralPool::new(&patina_core::new_shared_heap().borrow())
 }
 
 /// Each pass grows its stack with the depth of the code, and each tree a pass
@@ -150,17 +174,24 @@ mod depth_tests {
         std::thread::Builder::new()
             .stack_size(512 * 1024)
             .spawn(|| {
-                let literal =
-                    |n| Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(n))));
-                let mut nested = CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(1)));
+                let literal = |n| {
+                    Rc::new(CoreExpr::new(CoreExprKind::Literal(Lit::immediate(
+                        TaggedValue::fixnum(n),
+                    ))))
+                };
+                let mut nested = CoreExpr::new(CoreExprKind::Literal(Lit::immediate(
+                    TaggedValue::fixnum(1),
+                )));
                 for _ in 0..10_000 {
                     nested = CoreExpr::new(CoreExprKind::If {
-                        test: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::TRUE))),
+                        test: Rc::new(CoreExpr::new(CoreExprKind::Literal(Lit::immediate(
+                            TaggedValue::TRUE,
+                        )))),
                         then: Rc::new(nested),
                         else_: literal(0),
                     });
                 }
-                compile(&nested).expect("compiles");
+                compile(&nested, &no_literals()).expect("compiles");
             })
             .expect("spawn")
             .join()
@@ -192,19 +223,33 @@ mod quasiquote_lowering_tests {
         registry
     }
 
-    fn lower(heap: &SharedHeap, template: QuasiTemplate) -> CoreExpr {
+    /// Lower `template`, whose literals are `literals`' entries, through the
+    /// backend's constructors.
+    fn lower(heap: &SharedHeap, literals: &LiteralPool, template: QuasiTemplate) -> CoreExpr {
         let expr = CoreExpr::new(CoreExprKind::Quasiquote(template));
-        lower_quasiquotes(&expr, &registry_constructors(heap, &make_registry()))
-            .expect("the constructors resolve")
+        lower_quasiquotes(
+            &expr,
+            &registry_constructors(heap, &make_registry(), literals),
+        )
+        .expect("the constructors resolve")
+    }
+
+    /// The symbol `name`, as a literal of `literals`.
+    fn symbol(heap: &SharedHeap, literals: &LiteralPool, name: &str) -> Lit {
+        let symbol = heap.borrow_mut().intern_symbol(name);
+        // SAFETY: interned just now, and nothing has collected.
+        unsafe { literals.add_word(symbol) }
     }
 
     #[test]
     fn lower_self_evaluating() {
         let heap = make_heap();
-        let lowered = lower(&heap, QuasiTemplate::Datum(TaggedValue::fixnum(42)));
+        let literals = LiteralPool::new(&heap.borrow());
+        let datum = QuasiTemplate::Datum(Lit::immediate(TaggedValue::fixnum(42)));
+        let lowered = lower(&heap, &literals, datum);
 
         match &lowered.kind {
-            CoreExprKind::Quote(v) => assert_eq!(v.as_fixnum(), Some(42)),
+            CoreExprKind::Quote(v) => assert_eq!(literals.word(*v).as_fixnum(), Some(42)),
             other => panic!("expected Quote, got {:?}", other),
         }
     }
@@ -212,11 +257,12 @@ mod quasiquote_lowering_tests {
     #[test]
     fn lower_symbol() {
         let heap = make_heap();
-        let sym = heap.borrow_mut().intern_symbol("foo");
-        let lowered = lower(&heap, QuasiTemplate::Datum(sym));
+        let literals = LiteralPool::new(&heap.borrow());
+        let sym = symbol(&heap, &literals, "foo");
+        let lowered = lower(&heap, &literals, QuasiTemplate::Datum(sym));
 
         match &lowered.kind {
-            CoreExprKind::Quote(v) => assert!(heap.borrow().is_symbol(*v)),
+            CoreExprKind::Quote(v) => assert!(heap.borrow().is_symbol(literals.word(*v))),
             other => panic!("expected Quote, got {:?}", other),
         }
     }
@@ -224,11 +270,16 @@ mod quasiquote_lowering_tests {
     #[test]
     fn lower_list_no_unquotes() {
         let heap = make_heap();
+        let literals = LiteralPool::new(&heap.borrow());
         let parts = ["a", "b", "c"]
             .iter()
-            .map(|name| QuasiTemplate::Datum(heap.borrow_mut().intern_symbol(name)))
+            .map(|name| QuasiTemplate::Datum(symbol(&heap, &literals, name)))
             .collect();
-        let lowered = lower(&heap, QuasiTemplate::Build(QuasiConstructor::List, parts));
+        let lowered = lower(
+            &heap,
+            &literals,
+            QuasiTemplate::Build(QuasiConstructor::List, parts),
+        );
 
         // Should become (<list primitive> 'a 'b 'c) — the primitive itself,
         // not a reference to whatever `list` names where the template sits.
@@ -237,7 +288,10 @@ mod quasiquote_lowering_tests {
                 assert_eq!(args.len(), 3);
                 match &func.kind {
                     CoreExprKind::Literal(v) => {
-                        let proc = heap.borrow().get_procedure(*v).expect("a procedure");
+                        let proc = heap
+                            .borrow()
+                            .get_procedure(literals.word(*v))
+                            .expect("a procedure");
                         match proc.as_ref() {
                             Procedure::Primitive { qualified_name, .. } => {
                                 assert_eq!(&**qualified_name, "scheme.base/list")

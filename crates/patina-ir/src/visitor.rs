@@ -1,4 +1,4 @@
-use patina_core::{CoreExpr, CoreExprKind, Formals, QuasiTemplate, ScopeSet, Symbol, TaggedValue};
+use patina_core::{CoreExpr, CoreExprKind, Formals, Lit, QuasiTemplate, ScopeSet, Symbol};
 
 /// Visitor trait for walking `CoreExpr` trees.
 ///
@@ -57,17 +57,18 @@ pub trait ExprVisitor {
     // ── Leaf nodes (no sub-expressions) ──────────────────────────────────
 
     /// Visit a literal value (number, boolean, string, …).
-    fn visit_literal(&mut self, _val: &TaggedValue) {}
+    fn visit_literal(&mut self, _val: &Lit) {}
 
     /// Visit a variable reference.
     fn visit_var(&mut self, _name: &Symbol, _scopes: &ScopeSet) {}
 
     /// Visit a quoted datum.
-    fn visit_quote(&mut self, _val: &TaggedValue) {}
+    fn visit_quote(&mut self, _val: &Lit) {}
 
     /// Visit an import declaration.
-    /// Import sets are kept as `TaggedValue` declarative data, not sub-expressions.
-    fn visit_import(&mut self, _import_sets: &[TaggedValue]) {}
+    /// Import sets are kept as declarative data, through the literal pool,
+    /// not sub-expressions.
+    fn visit_import(&mut self, _import_sets: &[Lit]) {}
 
     // ── Interior nodes (default recurses into children) ───────────────────
 
@@ -187,7 +188,7 @@ pub fn validate_executable(expr: &CoreExpr) -> Result<(), String> {
     #[derive(Default)]
     struct Check(Option<&'static str>);
     impl ExprVisitor for Check {
-        fn visit_import(&mut self, _sets: &[TaggedValue]) {
+        fn visit_import(&mut self, _sets: &[Lit]) {
             self.0
                 .get_or_insert("import must be handled during top-level expansion");
         }
@@ -205,8 +206,8 @@ pub fn validate_executable(expr: &CoreExpr) -> Result<(), String> {
 mod tests {
     use super::*;
     use patina_core::{
-        CoreExpr, CoreExprKind, Formals, QuasiConstructor, QuasiTemplate, ScopeSet, ScopedParam,
-        TaggedValue,
+        CoreExpr, CoreExprKind, Formals, Lit, QuasiConstructor, QuasiTemplate, ScopeSet,
+        ScopedParam,
     };
     use std::collections::HashSet;
 
@@ -220,7 +221,7 @@ mod tests {
     }
 
     fn lit() -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Literal(TaggedValue::UNSPECIFIED))
+        CoreExpr::new(CoreExprKind::Literal(Lit::UNSPECIFIED))
     }
 
     fn app(func: CoreExpr, args: Vec<CoreExpr>) -> CoreExpr {
@@ -372,7 +373,7 @@ mod tests {
                 QuasiTemplate::Build(
                     QuasiConstructor::List,
                     vec![
-                        QuasiTemplate::Datum(TaggedValue::UNSPECIFIED),
+                        QuasiTemplate::Datum(Lit::UNSPECIFIED),
                         QuasiTemplate::Unquoted(std::rc::Rc::new(var("x"))),
                     ],
                 ),
@@ -399,11 +400,11 @@ mod tests {
         let exprs = vec![
             lit(),
             var("x"),
-            CoreExpr::new(CoreExprKind::Quote(TaggedValue::UNSPECIFIED)),
+            CoreExpr::new(CoreExprKind::Quote(Lit::UNSPECIFIED)),
             CoreExpr::new(CoreExprKind::Quasiquote(QuasiTemplate::Build(
                 QuasiConstructor::List,
                 vec![
-                    QuasiTemplate::Datum(TaggedValue::UNSPECIFIED),
+                    QuasiTemplate::Datum(Lit::UNSPECIFIED),
                     QuasiTemplate::Unquoted(std::rc::Rc::new(var("x"))),
                 ],
             ))),
