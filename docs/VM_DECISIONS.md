@@ -129,9 +129,28 @@ for the design, root inventory, safe-point protocol, and staging.
 tree-walker and VM). ~6 higher-order primitives use `ApplyContext` trait, each
 backend provides its own.
 
+**The signature is moving to the context** (#706; `PRD/GC_PRD.md` §11.3's
+`Prim`), one category per PR. The registry accepts both kinds while the files
+convert, and the old one goes with the last file:
+
 ```rust
-pub type TaggedHandler = fn(&SharedHeap, Vec<TaggedValue>) -> Result<TaggedValue, EvalError>;
+// A primitive that takes the context: reads and allocates through the `Cx`,
+// and its arguments and value are values of it.
+pub type CxHandler =
+    for<'gc> fn(&mut Cx<'gc>, &[Value<'gc>]) -> Result<Value<'gc>, EvalError>;
+// The kind it replaces.
+pub type TaggedHandler = fn(&SharedHeap, &[TaggedValue]) -> Result<TaggedValue, EvalError>;
 ```
+
+- **The machine makes the context.** It does so where it calls the
+  primitive, between its safe points, through `ApplyContext::call_cx`. The VM
+  and the tree-walker hand the argument words over as values with no copy
+  (`patina_core::heap::cx::enter_call`, `unsafe`, for the trusted crates). A
+  primitive that takes the context cannot call back, so it reaches no safe
+  point, and nothing collects while it runs.
+- **Without a machine**, an embedder's own `ApplyContext`, `call_cx`'s
+  default crosses each word through a handle.
+- **Converted so far:** the type predicates (`predicates.rs`).
 
 ---
 
@@ -159,7 +178,7 @@ frontend pipeline and compiles direct-style (no CPS transform).
 | Frontend (lexer/parser/desugarer) | Yes | Unchanged |
 | Library system | Yes | Backend-agnostic |
 | `Backend` trait | Yes | VM implements same trait |
-| `patina-primitives` (~290 prims) | Yes | Shared crate |
+| `patina-primitives` (~290 prims) | Yes | Shared crate; each machine makes the context for a primitive that takes one (§6) |
 | CPS transform / `CpsExpr` | No | VM compiles direct-style |
 
 ---

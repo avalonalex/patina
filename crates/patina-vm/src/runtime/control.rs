@@ -2546,6 +2546,18 @@ impl patina_primitives::ApplyContext for VmApplyContext {
         // SAFETY: pointer is valid for the lifetime of the primitive call.
         unsafe { (*self.state).global_env().clone() }
     }
+
+    /// The machine's call of a primitive that takes the context (#706): the
+    /// context made where the call is, and the argument words handed over as
+    /// its values with no copy.
+    fn call_cx(
+        &self,
+        handler: patina_primitives::CxHandler,
+        args: &[TaggedValue],
+    ) -> Result<TaggedValue, patina_primitives::EvalError> {
+        // SAFETY: pointer is valid for the lifetime of the primitive call.
+        unsafe { (*self.state).call_cx(handler, args) }
+    }
 }
 
 /// Apply a procedure (VmClosure or primitive) to args within the VM,

@@ -1069,10 +1069,16 @@ placement + deferral:
 beside today's `SharedHeap` surface until they do.
 
 - **`Cx<'gc>`, the mutation and allocation context.** No method on it can
-  collect. It is made in two ways:
+  collect. It is made in three ways:
   - by `GcDriver::mutate`, whose `&mut` borrow keeps the driver from reaching
     a safe point while the context lives;
-  - by `NoGcScope::mutate`, beneath which nothing collects.
+  - by `NoGcScope::mutate`, beneath which nothing collects;
+  - by a machine's call of a primitive that takes the context
+    (`heap::cx::enter_call`, #706). It is `unsafe`, for the trusted crates:
+    the machine vouches that the call is between its safe points, and that
+    the argument words it hands over are live. A primitive that takes the
+    context cannot call back, so it reaches no safe point, and a check
+    build's assertion that no context lives at a collection backs the claim.
 
   It borrows the heap's `RefCell` for each call. Reads take `&Cx`; allocation
   and stores take `&mut Cx`. A bulk read is a `Ref` tied to the `&Cx` borrow,
