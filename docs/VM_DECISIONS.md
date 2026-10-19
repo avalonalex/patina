@@ -145,13 +145,20 @@ pub type TaggedHandler = fn(&SharedHeap, &[TaggedValue]) -> Result<TaggedValue, 
 - **The machine makes the context.** It does so where it calls the
   primitive, between its safe points, through `ApplyContext::call_cx`. The VM
   and the tree-walker hand the argument words over as values with no copy
-  (`patina_core::heap::cx::enter_call`, `unsafe`, for the trusted crates). A
+  (`patina_core::heap::cx::enter_call`, `unsafe`, for the trusted crates), and
+  lend the context the heap's instance, which each keeps from construction. A
   primitive that takes the context cannot call back, so it reaches no safe
   point, and nothing collects while it runs.
+- **The VM calls one directly** at a `CallPrimitive` site
+  (`PrimitiveRegistry::cx_handler`), with no `ApplyContext` and no `Step`
+  between, since it can neither call back nor suspend. A heap handler's call
+  pays about 10 instructions for the check until its category converts.
 - **Without a machine**, an embedder's own `ApplyContext`, `call_cx`'s
   default crosses each word through a handle.
 - **Converted so far:** the type predicates (`predicates.rs`), the
-  characters (`characters.rs`) and the strings (`strings.rs`).
+  characters (`characters.rs`), the strings (`strings.rs`) and the lists
+  (`lists.rs`), but for `member` and `assoc`, which call a comparator and
+  convert with the higher-order primitives.
 
 ---
 

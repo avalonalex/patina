@@ -515,6 +515,25 @@ impl PrimitiveRegistry {
         }
     }
 
+    /// The handler of the primitive at `index`, if it takes the context —
+    /// for a machine that calls it itself, with no [`ApplyContext`] and no
+    /// [`Step`] between, since it can neither call back nor suspend (#706).
+    /// `None` for any other kind, which [`Self::start`] dispatches. The
+    /// caller checks the arity first ([`Self::check_arity`]).
+    #[inline]
+    pub fn cx_handler(&self, index: usize) -> Option<CxHandler> {
+        match self.entries.get(index)?.handler {
+            PrimitiveHandler::Cx(handler) => Some(handler),
+            _ => None,
+        }
+    }
+
+    /// Check `arg_count` against the arity of the primitive at `index`, as
+    /// every dispatch does before it calls the handler.
+    pub fn check_arity(&self, index: usize, arg_count: usize) -> Result<(), EvalError> {
+        self.entry(index)?.check_arity(arg_count)
+    }
+
     /// The resumable primitive at `index`'s two halves, if it is one — for a
     /// machine that runs its calls itself rather than through
     /// [`Self::apply_by_index`].

@@ -1,20 +1,24 @@
 //! List and pair primitive operations (R7RS Section 6.4)
 //!
 //! Implements pair construction, list manipulation, and search operations.
+//!
+//! Each takes the context (#706), but for `member` and `assoc`, which call a
+//! comparator from Rust and convert with the other higher-order primitives.
+//! The mutators store through the context's funnel (`Cx::set_car`,
+//! `Cx::set_cdr`).
 
 use crate::apply_context::ApplyContext;
-use patina_core::{SpineEnd, TaggedValue};
+use patina_core::{Cx, SpineEnd, TaggedValue, Value};
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
 
-// ========== TaggedValue Extraction Helpers ==========
+// ========== Argument Extraction Helpers ==========
 
-/// Extract an integer from a TaggedValue
-fn get_integer(tv: TaggedValue, heap: &patina_core::Heap, fn_name: &str) -> Result<i64, EvalError> {
+/// Extract an integer from a value
+fn get_integer<'gc>(cx: &Cx<'gc>, tv: Value<'gc>, fn_name: &str) -> Result<i64, EvalError> {
     if tv.is_fixnum() {
         return Ok(tv.as_fixnum_unchecked());
     }
-    if let Some(n) = heap.get_bigint(tv) {
+    if let Some(n) = cx.get_bigint(tv) {
         use num_traits::ToPrimitive;
         if let Some(i) = n.to_i64() {
             return Ok(i);
@@ -33,19 +37,19 @@ fn get_integer(tv: TaggedValue, heap: &patina_core::Heap, fn_name: &str) -> Resu
 
 // ========== List Primitives ==========
 
-pub(super) fn cons(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn cons<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
             actual: args.len(),
         });
     }
-    // Allocate native heap pair - args are already TaggedValue
-    let pair_tv = heap.borrow_mut().alloc_pair(args[0], args[1]);
-    Ok(pair_tv)
+    // Allocate native heap pair
+    let pair = cx.alloc_pair(args[0], args[1]);
+    Ok(pair)
 }
 
-pub(super) fn car(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn car<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -55,20 +59,17 @@ pub(super) fn car(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue
 
     // Fast path: native heap pair
     if args[0].is_pair() {
-        let heap_ref = heap.borrow();
-        let car_tv = heap_ref.car(args[0]);
-        return Ok(car_tv);
+        return Ok(cx.car(args[0]));
     }
 
     // Fallback: use try_pair for any other pair types
-    let (car, _) = heap
-        .borrow()
+    let (car, _) = cx
         .try_pair(args[0])
         .ok_or_else(|| EvalError::TypeError("car expects a pair".into()))?;
     Ok(car)
 }
 
-pub(super) fn cdr(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn cdr<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -78,14 +79,11 @@ pub(super) fn cdr(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue
 
     // Fast path: native heap pair
     if args[0].is_pair() {
-        let heap_ref = heap.borrow();
-        let cdr_tv = heap_ref.cdr(args[0]);
-        return Ok(cdr_tv);
+        return Ok(cx.cdr(args[0]));
     }
 
     // Fallback: use try_pair for any other pair types
-    let (_, cdr) = heap
-        .borrow()
+    let (_, cdr) = cx
         .try_pair(args[0])
         .ok_or_else(|| EvalError::TypeError("cdr expects a pair".into()))?;
     Ok(cdr)
@@ -95,20 +93,19 @@ pub(super) fn cdr(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue
 /// innermost first — so `cadr` is `cdr` then `car`, exactly like the former
 /// Scheme definition `(define (cadr x) (car (cdr x)))`.
 ///
-/// Each step is a direct `Heap::car`/`Heap::cdr` under one borrow rather
-/// than a chained call through the handler fns above: the handlers'
-/// `try_pair` fallback only ever *fails* (it is `is_pair()`-gated, same as
-/// the fast path), so guarding with `is_pair` and emitting the same
-/// "car/cdr expects a pair" message is behavior-identical while skipping
-/// the per-step arity check, slice temp, and RefCell borrow.
+/// Each step is a direct `Cx::car`/`Cx::cdr` rather than a chained call
+/// through the handler fns above: the handlers' `try_pair` fallback only
+/// ever *fails* (it is `is_pair()`-gated, same as the fast path), so
+/// guarding with `is_pair` and emitting the same "car/cdr expects a pair"
+/// message is behavior-identical while skipping the per-step arity check
+/// and slice temp.
 macro_rules! cxr {
     ($fname:ident, $($step:ident),+) => {
-        pub(super) fn $fname(
-            heap: &SharedHeap,
-            args: &[TaggedValue],
-        ) -> Result<TaggedValue, EvalError> {
+        pub(super) fn $fname<'gc>(
+            cx: &mut Cx<'gc>,
+            args: &[Value<'gc>],
+        ) -> Result<Value<'gc>, EvalError> {
             crate::registry::expect_arity(args, 1)?;
-            let h = heap.borrow();
             let mut v = args[0];
             $(
                 if !v.is_pair() {
@@ -116,7 +113,7 @@ macro_rules! cxr {
                         concat!(stringify!($step), " expects a pair").into(),
                     ));
                 }
-                v = h.$step(v);
+                v = cx.$step(v);
             )+
             Ok(v)
         }
@@ -157,13 +154,13 @@ cxr!(cddadr, cdr, car, cdr, cdr);
 cxr!(cdddar, car, cdr, cdr, cdr);
 cxr!(cddddr, cdr, cdr, cdr, cdr);
 
-pub(super) fn list(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn list<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     // list accepts any number of arguments (0 or more)
     // Use native heap list construction
-    Ok(heap.borrow_mut().list_from_iter(args.iter().copied()))
+    Ok(cx.list_from_iter(args.iter().copied()))
 }
 
-pub(super) fn length(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn length<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -171,42 +168,42 @@ pub(super) fn length(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVa
         });
     }
 
-    let len = heap
-        .borrow()
+    let len = cx
         .list_len(args[0])
         .ok_or_else(|| EvalError::TypeError("length expects a proper list".into()))?;
-    Ok(TaggedValue::fixnum(len as i64))
+    Ok(Value::fixnum(len as i64))
 }
 
-pub(super) fn append(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn append<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     let Some((&last, lists)) = args.split_last() else {
-        return Ok(TaggedValue::NULL);
+        return Ok(Value::NULL);
     };
     // Only non-final arguments must be proper lists. The last argument is
     // shared as a tail, including when it is an atom or a circular list.
     let mut result = last;
     for &list in lists.iter().rev() {
-        result = heap
-            .borrow_mut()
+        result = cx
             .list_append(list, result)
             .ok_or_else(|| EvalError::TypeError("append expects a proper list".into()))?;
     }
     Ok(result)
 }
 
-pub(super) fn reverse(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn reverse<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    heap.borrow_mut()
-        .list_reverse(args[0])
+    cx.list_reverse(args[0])
         .ok_or_else(|| EvalError::TypeError("reverse expects a proper list".into()))
 }
 
-pub(super) fn list_ref(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn list_ref<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -214,9 +211,7 @@ pub(super) fn list_ref(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagged
         });
     }
 
-    let heap_ref = heap.borrow();
-
-    let k = get_integer(args[1], &heap_ref, "list-ref")?;
+    let k = get_integer(cx, args[1], "list-ref")?;
     if k < 0 {
         return Err(EvalError::TypeError(
             "list-ref: index must be non-negative".to_string(),
@@ -224,29 +219,29 @@ pub(super) fn list_ref(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagged
     }
     let k = k as usize;
 
-    // Fast path: use Heap::list_ref for native pairs
-    if let Some(elem) = heap_ref.list_ref(args[0], k) {
+    // Fast path: use Cx::list_ref for native pairs
+    if let Some(elem) = cx.list_ref(args[0], k) {
         return Ok(elem);
     }
 
     // Slow path: walk via try_pair
-    drop(heap_ref);
     let mut current = args[0];
     for _ in 0..k {
-        let (_, cdr) = heap
-            .borrow()
+        let (_, cdr) = cx
             .try_pair(current)
             .ok_or_else(|| EvalError::TypeError("list-ref: index out of bounds".into()))?;
         current = cdr;
     }
-    let (car, _) = heap
-        .borrow()
+    let (car, _) = cx
         .try_pair(current)
         .ok_or_else(|| EvalError::TypeError("list-ref: index out of bounds".into()))?;
     Ok(car)
 }
 
-pub(super) fn list_tail(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn list_tail<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -254,9 +249,7 @@ pub(super) fn list_tail(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
         });
     }
 
-    let heap_ref = heap.borrow();
-
-    let k = get_integer(args[1], &heap_ref, "list-tail")?;
+    let k = get_integer(cx, args[1], "list-tail")?;
     if k < 0 {
         return Err(EvalError::TypeError(
             "list-tail: index must be non-negative".to_string(),
@@ -264,17 +257,15 @@ pub(super) fn list_tail(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
     }
     let k = k as usize;
 
-    // Fast path: use Heap::list_tail for native pairs
-    if let Some(tail) = heap_ref.list_tail(args[0], k) {
+    // Fast path: use Cx::list_tail for native pairs
+    if let Some(tail) = cx.list_tail(args[0], k) {
         return Ok(tail);
     }
 
     // Slow path: walk via try_pair
-    drop(heap_ref);
     let mut current = args[0];
     for _ in 0..k {
-        let (_, cdr) = heap
-            .borrow()
+        let (_, cdr) = cx
             .try_pair(current)
             .ok_or_else(|| EvalError::TypeError("list-tail: index out of bounds".into()))?;
         current = cdr;
@@ -282,7 +273,7 @@ pub(super) fn list_tail(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
     Ok(current)
 }
 
-pub(super) fn memq(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn memq<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -300,33 +291,30 @@ pub(super) fn memq(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
 
         // Fast path: native heap pair
         if current.is_pair() {
-            let heap_ref = heap.borrow();
-            let car = heap_ref.car(current);
-            let cdr = heap_ref.cdr(current);
-            if heap_ref.values_eq(obj, car) {
+            let (car, cdr) = cx.get_pair(current);
+            if cx.values_eq(obj, car) {
                 return Ok(current);
             }
-            drop(heap_ref);
             current = cdr;
             continue;
         }
 
         // Fallback path: use try_pair for any other pair types
         let saved = current;
-        let (car, cdr) = match heap.borrow().try_pair(current) {
+        let (car, cdr) = match cx.try_pair(current) {
             Some(pair) => pair,
             None => break,
         };
-        if heap.borrow().values_eq(obj, car) {
+        if cx.values_eq(obj, car) {
             return Ok(saved);
         }
         current = cdr;
     }
 
-    Ok(TaggedValue::FALSE)
+    Ok(Value::FALSE)
 }
 
-pub(super) fn memv(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn memv<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -344,30 +332,27 @@ pub(super) fn memv(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
 
         // Fast path: native heap pair
         if current.is_pair() {
-            let heap_ref = heap.borrow();
-            let car = heap_ref.car(current);
-            let cdr = heap_ref.cdr(current);
-            if heap_ref.values_eqv(obj, car) {
+            let (car, cdr) = cx.get_pair(current);
+            if cx.values_eqv(obj, car) {
                 return Ok(current);
             }
-            drop(heap_ref);
             current = cdr;
             continue;
         }
 
         // Fallback path: use try_pair for any other pair types
         let saved = current;
-        let (car, cdr) = match heap.borrow().try_pair(current) {
+        let (car, cdr) = match cx.try_pair(current) {
             Some(pair) => pair,
             None => break,
         };
-        if heap.borrow().values_eqv(obj, car) {
+        if cx.values_eqv(obj, car) {
             return Ok(saved);
         }
         current = cdr;
     }
 
-    Ok(TaggedValue::FALSE)
+    Ok(Value::FALSE)
 }
 
 pub(super) fn member(
@@ -459,7 +444,7 @@ pub(super) fn member(
     }
 }
 
-pub(super) fn assq(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn assq<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -476,15 +461,15 @@ pub(super) fn assq(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
         }
 
         // Get (entry, rest) from alist spine
-        let (entry, rest) = match heap.borrow().try_pair(current) {
+        let (entry, rest) = match cx.try_pair(current) {
             Some(pair) => pair,
             None => break,
         };
 
         // Get (entry_car, _) from entry pair
-        let entry_car = heap.borrow().try_pair(entry).map(|(c, _)| c);
+        let entry_car = cx.try_pair(entry).map(|(c, _)| c);
         if let Some(entry_car) = entry_car
-            && heap.borrow().values_eq(obj, entry_car)
+            && cx.values_eq(obj, entry_car)
         {
             return Ok(entry);
         }
@@ -492,10 +477,10 @@ pub(super) fn assq(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
         current = rest;
     }
 
-    Ok(TaggedValue::FALSE)
+    Ok(Value::FALSE)
 }
 
-pub(super) fn assv(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn assv<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -512,15 +497,15 @@ pub(super) fn assv(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
         }
 
         // Get (entry, rest) from alist spine
-        let (entry, rest) = match heap.borrow().try_pair(current) {
+        let (entry, rest) = match cx.try_pair(current) {
             Some(pair) => pair,
             None => break,
         };
 
         // Get (entry_car, _) from entry pair
-        let entry_car = heap.borrow().try_pair(entry).map(|(c, _)| c);
+        let entry_car = cx.try_pair(entry).map(|(c, _)| c);
         if let Some(entry_car) = entry_car
-            && heap.borrow().values_eqv(obj, entry_car)
+            && cx.values_eqv(obj, entry_car)
         {
             return Ok(entry);
         }
@@ -528,7 +513,7 @@ pub(super) fn assv(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
         current = rest;
     }
 
-    Ok(TaggedValue::FALSE)
+    Ok(Value::FALSE)
 }
 
 pub(super) fn assoc(
@@ -619,7 +604,10 @@ pub(super) fn assoc(
 }
 
 /// (make-list k [fill]) - Create list of k elements
-pub(super) fn make_list(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn make_list<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
             expected: "1 or 2".to_string(),
@@ -628,30 +616,26 @@ pub(super) fn make_list(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
     }
 
     // Get the length
-    let k = {
-        let heap_ref = heap.borrow();
-        let k = get_integer(args[0], &heap_ref, "make-list")?;
-        if k < 0 {
-            return Err(EvalError::TypeError(format!(
-                "make-list: length must be non-negative, got {}",
-                k
-            )));
-        }
-        k as usize
-    };
+    let k = get_integer(cx, args[0], "make-list")?;
+    if k < 0 {
+        return Err(EvalError::TypeError(format!(
+            "make-list: length must be non-negative, got {}",
+            k
+        )));
+    }
+    let k = k as usize;
 
-    // Get the fill value (default to unspecified) - keep as TaggedValue
+    // Get the fill value (default to unspecified)
     let fill = if args.len() == 2 {
         args[1]
     } else {
-        TaggedValue::UNSPECIFIED
+        Value::UNSPECIFIED
     };
 
-    // Build list directly using heap allocation (no Value conversion)
-    let mut result = TaggedValue::NULL;
-    let mut heap_ref = heap.borrow_mut();
+    // Build the list a pair at a time
+    let mut result = Value::NULL;
     for _ in 0..k {
-        result = heap_ref.alloc_pair(fill, result);
+        result = cx.alloc_pair(fill, result);
     }
 
     Ok(result)
@@ -659,7 +643,10 @@ pub(super) fn make_list(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
 
 /// (list-copy list) - Create shallow copy of list
 /// Copies proper and dotted spines; rejects circular cdr chains.
-pub(super) fn list_copy(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn list_copy<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -669,19 +656,19 @@ pub(super) fn list_copy(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
 
     // Validate before allocating output pairs. Unlike list_to_vec, spine
     // preserves an improper tail (and returns a non-pair input unchanged).
-    let (cars, end) = heap.borrow().spine(args[0]);
+    let (cars, end) = cx.spine(args[0]);
     let tail = match end {
-        SpineEnd::Null => TaggedValue::NULL,
+        SpineEnd::Null => Value::NULL,
         SpineEnd::Improper(tail) => tail,
         SpineEnd::Circular => {
             return Err(EvalError::TypeError("list-copy: circular list".into()));
         }
     };
-    Ok(heap.borrow_mut().list_from_iter_with_tail(cars, tail))
+    Ok(cx.list_from_iter_with_tail(cars, tail))
 }
 
 /// (set-car! pair obj) - Mutate the car of a pair
-pub(super) fn set_car(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn set_car<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -690,15 +677,15 @@ pub(super) fn set_car(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedV
     }
 
     if args[0].is_pair() {
-        heap.borrow_mut().set_car(args[0], args[1]);
-        Ok(TaggedValue::UNSPECIFIED)
+        cx.set_car(args[0], args[1]);
+        Ok(Value::UNSPECIFIED)
     } else {
         Err(EvalError::TypeError("set-car! expects a pair".to_string()))
     }
 }
 
 /// (set-cdr! pair obj) - Mutate the cdr of a pair
-pub(super) fn set_cdr(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn set_cdr<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -707,15 +694,18 @@ pub(super) fn set_cdr(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedV
     }
 
     if args[0].is_pair() {
-        heap.borrow_mut().set_cdr(args[0], args[1]);
-        Ok(TaggedValue::UNSPECIFIED)
+        cx.set_cdr(args[0], args[1]);
+        Ok(Value::UNSPECIFIED)
     } else {
         Err(EvalError::TypeError("set-cdr! expects a pair".to_string()))
     }
 }
 
 /// (list-set! list k obj) - Set the k-th element of a list to obj
-pub(super) fn list_set(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn list_set<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 3 {
         return Err(EvalError::WrongArity {
             expected: "3".to_string(),
@@ -724,19 +714,16 @@ pub(super) fn list_set(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagged
     }
 
     // Get index first
-    let index = {
-        let heap_ref = heap.borrow();
-        let index = get_integer(args[1], &heap_ref, "list-set!")?;
-        if index < 0 {
-            return Err(EvalError::TypeError(format!(
-                "list-set!: index must be non-negative, got {}",
-                index
-            )));
-        }
-        index as usize
-    };
+    let index = get_integer(cx, args[1], "list-set!")?;
+    if index < 0 {
+        return Err(EvalError::TypeError(format!(
+            "list-set!: index must be non-negative, got {}",
+            index
+        )));
+    }
+    let index = index as usize;
 
-    // Fast path: native heap pair - navigate using TaggedValue
+    // Fast path: native heap pair
     if args[0].is_pair() {
         let mut current = args[0];
         for i in 0..index {
@@ -746,12 +733,12 @@ pub(super) fn list_set(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagged
                     index, i
                 )));
             }
-            current = heap.borrow().cdr(current);
+            current = cx.cdr(current);
         }
 
         if current.is_pair() {
-            heap.borrow_mut().set_car(current, args[2]);
-            return Ok(TaggedValue::UNSPECIFIED);
+            cx.set_car(current, args[2]);
+            return Ok(Value::UNSPECIFIED);
         } else {
             return Err(EvalError::TypeError(format!(
                 "list-set!: index {} out of bounds",
@@ -763,7 +750,7 @@ pub(super) fn list_set(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagged
     // Slow path: walk via try_pair to find the target pair
     let mut current = args[0];
     for i in 0..index {
-        let (_, cdr) = heap.borrow().try_pair(current).ok_or_else(|| {
+        let (_, cdr) = cx.try_pair(current).ok_or_else(|| {
             EvalError::TypeError(format!(
                 "list-set!: index {} out of bounds (list has {} elements)",
                 index, i
@@ -773,8 +760,8 @@ pub(super) fn list_set(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagged
     }
 
     if current.is_pair() {
-        heap.borrow_mut().set_car(current, args[2]);
-        Ok(TaggedValue::UNSPECIFIED)
+        cx.set_car(current, args[2]);
+        Ok(Value::UNSPECIFIED)
     } else {
         Err(EvalError::TypeError(format!(
             "list-set!: index {} out of bounds",
@@ -788,7 +775,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use patina_runtime::Arity;
 
     // Cons - construct pair
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "cons",
         Arity::Exact(2),
@@ -797,7 +784,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Car - first element of pair
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "car",
         Arity::Exact(1),
@@ -806,7 +793,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Cdr - rest of pair
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "cdr",
         Arity::Exact(1),
@@ -816,7 +803,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Car/cdr compositions (two- and three-deep, R7RS §6.4)
     for (name, handler) in [
-        ("caar", caar as crate::registry::TaggedHandler),
+        ("caar", caar as crate::registry::CxHandler),
         ("cadr", cadr),
         ("cdar", cdar),
         ("cddr", cddr),
@@ -829,7 +816,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         ("cddar", cddar),
         ("cdddr", cdddr),
     ] {
-        registry.register(PrimitiveFn::new_heap(
+        registry.register(PrimitiveFn::new_cx(
             "scheme.base",
             name,
             Arity::Exact(1),
@@ -840,7 +827,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Four-deep compositions ((scheme cxr))
     for (name, handler) in [
-        ("caaaar", caaaar as crate::registry::TaggedHandler),
+        ("caaaar", caaaar as crate::registry::CxHandler),
         ("caaadr", caaadr),
         ("caadar", caadar),
         ("caaddr", caaddr),
@@ -857,7 +844,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         ("cdddar", cdddar),
         ("cddddr", cddddr),
     ] {
-        registry.register(PrimitiveFn::new_heap(
+        registry.register(PrimitiveFn::new_cx(
             "scheme.cxr",
             name,
             Arity::Exact(1),
@@ -867,7 +854,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     }
 
     // List - construct list from arguments
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "list",
         Arity::Min(0),
@@ -876,7 +863,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Length - list length
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "length",
         Arity::Exact(1),
@@ -885,7 +872,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Append - concatenate lists
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "append",
         Arity::Min(0),
@@ -894,7 +881,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Reverse - reverse list
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "reverse",
         Arity::Exact(1),
@@ -903,7 +890,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // List-ref - nth element
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "list-ref",
         Arity::Exact(2),
@@ -912,7 +899,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // List-tail - drop first k elements
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "list-tail",
         Arity::Exact(2),
@@ -921,7 +908,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Memq - member using eq?
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "memq",
         Arity::Exact(2),
@@ -930,7 +917,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Memv - member using eqv?
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "memv",
         Arity::Exact(2),
@@ -948,7 +935,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Assq - association list lookup using eq?
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "assq",
         Arity::Exact(2),
@@ -957,7 +944,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Assv - association list lookup using eqv?
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "assv",
         Arity::Exact(2),
@@ -975,7 +962,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // make-list - Create list of k elements with optional fill value
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "make-list",
         Arity::Range(1, 2),
@@ -984,7 +971,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // list-copy - Create shallow copy of list
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "list-copy",
         Arity::Exact(1),
@@ -993,7 +980,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // set-car! - Mutate car of pair
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "set-car!",
         Arity::Exact(2),
@@ -1002,7 +989,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // set-cdr! - Mutate cdr of pair
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "set-cdr!",
         Arity::Exact(2),
@@ -1011,7 +998,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // list-set! - Set element at index
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "list-set!",
         Arity::Exact(3),

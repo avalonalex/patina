@@ -125,6 +125,7 @@ fn every_vm_state_root_is_traced() {
     let pre_regs = s.pair(h, "VmState.tracer: StepTracer.pre_regs");
     let pre_all_regs = s.vector(h, "VmState.tracer: StepTracer.pre_all_regs");
     let mutator = Rc::clone(h.mutator());
+    let instance = Rc::clone(h.instance());
     drop(heap);
     globals.define("global", global);
     let saved = Rc::new(Environment::with_heap(&shared));
@@ -175,6 +176,7 @@ fn every_vm_state_root_is_traced() {
         fs: Arc::new(patina_core::NativeFs),
         gc: RefCell::new(GcController::from_env()),
         mutator,
+        instance,
         driver: None,
     };
 

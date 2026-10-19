@@ -198,6 +198,7 @@ fn every_evaluator_root_is_traced() {
     let escaping = s.vector(&mut heap, "Evaluator.pending_escape: the value");
     let held = s.string(&mut heap, "Evaluator.pending_escape: the continuation");
     let mutator = Rc::clone(heap.mutator());
+    let instance = Rc::clone(heap.instance());
     drop(heap);
     global_env.define("global", global);
 
@@ -215,6 +216,7 @@ fn every_evaluator_root_is_traced() {
         fs: Arc::new(patina_core::NativeFs),
         gc: RefCell::new(GcController::from_env()),
         mutator,
+        instance,
         bootstrap_error: None,
     };
     evaluator.set_pending_escape(

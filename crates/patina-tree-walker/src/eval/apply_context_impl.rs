@@ -21,7 +21,6 @@ impl ApplyContext for Evaluator {
         handler: patina_primitives::CxHandler,
         args: &[TaggedValue],
     ) -> Result<TaggedValue, EvalError> {
-        let instance = Rc::clone(self.heap.borrow().instance());
         // SAFETY: a primitive that takes the context cannot call back, so
         // it reaches no safe point: the tree-walker's are at the top of its
         // trampoline, between steps, and this call is inside one step or
@@ -31,7 +30,7 @@ impl ApplyContext for Evaluator {
             patina_core::heap::cx::enter_call(
                 &self.heap,
                 &self.mutator,
-                &instance,
+                &self.instance,
                 args,
                 |cx, args| handler(cx, args).map(patina_core::Value::tagged),
             )
