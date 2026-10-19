@@ -150,8 +150,8 @@ pub type TaggedHandler = fn(&SharedHeap, &[TaggedValue]) -> Result<TaggedValue, 
   point, and nothing collects while it runs.
 - **Without a machine**, an embedder's own `ApplyContext`, `call_cx`'s
   default crosses each word through a handle.
-- **Converted so far:** the type predicates (`predicates.rs`) and the
-  characters (`characters.rs`).
+- **Converted so far:** the type predicates (`predicates.rs`), the
+  characters (`characters.rs`) and the strings (`strings.rs`).
 
 ---
 
