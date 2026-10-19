@@ -876,7 +876,11 @@ contract ([K11](#k11)). Tier 1 caches VM registers in SSA between suspension poi
 each; a later tier 2 may unbox and derive within a block but publishes **tagged values only**, so the same
 `(code, pc)` means the same thing whichever tier wrote the frame, capture stays a `memcpy`, and invariant W holds.
 
-**Helper classes**, from a machine-checked `#[helper(class = …, noalloc)]` attribute and a table the JIT reads:
+**Helper classes**, from a machine-checked `#[helper(class = …, noalloc)]` attribute and a table the JIT reads, both
+built at stage 6 against the helpers the spike settles on (the owner's decision on [#697], 2026-10-19). Until then a
+built-in primitive's class follows from its handler ([#706]): one that takes the context cannot run Scheme or collect,
+so it is `Leaf` unless it blocks, and a higher-order or resumable one is `Transfer`. A host primitive declares its class
+at registration (§11.5).
 
 | Class | Contract | Examples |
 |---|---|---|
@@ -1464,12 +1468,13 @@ that a lane cannot go quietly blind:
   nightly in the `gc-check` build.
 
 **Contract tests:** `Mutator` offsets, alignment and `GcAttrs`; emitters against their Rust twins once the spike exists;
-a call-graph test of the helper table (no `Leaf` reaches a `Transfer` function, no `NoAlloc` an allocation); a host
-`Leaf` primitive that allocates, called from JIT code, leaving the heap verifier clean (§11.5); `install_code` refusing
-a body compiled against other `GcAttrs` (§14); embedded addresses limited to §11.2's four cases; no `Drop` in layout
-payloads; compile-fail doctests of the brand; the conformance suite (§14); the `InterruptHandle` tests; a CI check against new
-`thread_local!`, `static mut` and heap-side `Rc`/`RefCell`/`Cell` (§18.6). **Scoreboards** gate every stage: both chibi
-scripts; the matrix on both backends with `escape_from_primitive.rs` and the raise-site tests; the hygiene matrix, with
+a call-graph test of the helper table at stage 6 (no `Leaf` reaches a `Transfer` function, no `NoAlloc` an
+allocation); a host `Leaf` primitive that allocates, called from JIT code, leaving the heap verifier clean (§11.5);
+`install_code` refusing a body compiled against other `GcAttrs` (§14); embedded addresses limited to §11.2's four
+cases; no `Drop` in layout payloads; compile-fail doctests of the brand; the conformance suite (§14); the
+`InterruptHandle` tests; a CI check against new `thread_local!`, `static mut` and heap-side `Rc`/`RefCell`/`Cell`
+(§18.6). **Scoreboards** gate every stage: both chibi scripts; the matrix on both backends with
+`escape_from_primitive.rs` and the raise-site tests; the hygiene matrix, with
 §17.4's `def-getter` maker; `ephemerons.rs`, `finished_forms_release_code.rs`, `gc_vm.rs`, `gc_tree_walker.rs`,
 `unclosed_output_ports.rs`; `vm_callprimitive.rs` with its two set-after-use tests;
 `crates/patina-tests/tests/scheme/control/parameters.scm`; the error-location tests in `interpreter_api.rs`;
@@ -2017,7 +2022,7 @@ the plan stops after it.
 | 5 | The new heap, non-moving and whole-heap, kind by kind: 5a the `patina-gc` crate, spaces, `MarkRegion`, `NullGc`, verifier, Miri, the weak contract and its conformance suite; 5b pairs; 5c procedures and fixed-size kinds; 5d vectors, strings, bytevectors, bignums, the LOS; 5e arenas, old collector and `RefCell` deleted, pacing, decommit, `max_heap`, collect-and-retry; 5f inline flonum operations, then the final tag map and self-tagged flonums | 16–21 | 5a: the `def-getter` maker under zeal-major; 5c: the weak symbol table, name hash and old allocation (SD2), the NMS as mark-region with hole reuse, introduced definitions reclaimed, cells no longer a root region; 5e: the heap ceiling and its `RLIMIT_AS` fitting, idle trim at prompts, `notify_idle` and empty-buffer reads, per-block decommit, boost decay, SS3's counters and the phase-change clause, `memory-budget`; the nightly soak from 5 | `HeapSlot::compare_exchange` (addition C5, 5d); the tax re-measurement at the exit | lanes byte-identical per sub-stage; `large_request_after_garbage` on both backends; exit: [K9](#k9) and [K17](#k17); `large-live` reported against §9.10's budgets; 5f: [K6](#k6) | the representation win: about 2× fewer bytes, bump allocation, pauses proportional to live data, memory returned | [#609], [#616] |
 | 5g | Limits (after 5e, independent of 5f) | 3–4 (§17.3; the process budget's week is this file's estimate) | external bytes in `max_heap`; the soft target; the process budget (`MemoryBudget`); the whole-limit request check; the maximal major; the progress guard; the condition payload; the `NoGcScope` pre-entry check; the near-limit and memory-pressure hooks; the handler-room test; the limits lane | — | the limits lane green, outside the byte-identical lanes; [K19](#k19) | a program that grows gets a catchable condition naming what grew, instead of exhausting the machine | — |
 | C | Variant C (decision 2; after stage 5 and before the JIT track's first merged stage; its own PR; decision 3 settled first): the records' indirection, the shadow bitsets and `mark_if_*` deleted; per-binding guards on `cell.value == expected` for `CallPrimitive`, the inline operations and `JumpUnlessCellHolds`; JIT globals one load under `WATCHED` | about 2–3 (this file's estimate), outside the totals | — | — | the six define-after-use tests flip, with oracle-scored `DIVERGENCES.tsv` rows; `vm_callprimitive.rs`'s two set-after-use tests stay green; `run_suite_oracles.sh` green; ≤ 1% in instructions | one-load JIT globals; guards that recover when a program restores a procedure | filed when it starts |
-| 6 | JIT ABI spike and freeze, on an unmerged branch | 3–5 | §11.2's fourth embedded-address case; the code-memory interface (`install_code`, per-unit free) | the publication spike, with code publication (§18.2 rule 4 (h)); the reserved words frozen | the spike answers its questions; [K6](#k6), [K7](#k7) and [K11](#k11) decided; `install_code` records each body's `GcAttrs` and refuses a mismatch (§14); against the Cranelift version it pins, the four facts this contract takes from the design review confirmed (prologues never save the pinned register, `Tail` results arrive in `x2`, `JITModule` has no `MAP_JIT` and frees only whole modules, single-bit tests lower to `tbz`/`tbnz`), and BTI landing pads checked | the JIT track can start without touching the GC | — |
+| 6 | JIT ABI spike and freeze, on an unmerged branch; the runtime helper table (`#[helper(class, noalloc)]`, `GcAttrs.helpers`, §11.2) | 3–5 | §11.2's fourth embedded-address case; the code-memory interface (`install_code`, per-unit free) | the publication spike, with code publication (§18.2 rule 4 (h)); the reserved words frozen | the spike answers its questions; [K6](#k6), [K7](#k7) and [K11](#k11) decided; the helper table's call-graph test (§16); `install_code` records each body's `GcAttrs` and refuses a mismatch (§14); against the Cranelift version it pins, the four facts this contract takes from the design review confirmed (prologues never save the pinned register, `Tail` results arrive in `x2`, `JITModule` has no `MAP_JIT` and frees only whole modules, single-bit tests lower to `tbz`/`tbnz`), and BTI landing pads checked | the JIT track can start without touching the GC | — |
 | 7 | Sticky generations, behind a switch, with young and old LOS lists | 7–10 | the store buffer's soft limit counted in address-space fitting | — | the barrier-tax experiment ([K2](#k2)); the generational experiment decides the default ([K1](#k1)), set only through `HeapConfig` at a heap's creation (§9); [K8](#k8); per-workload max minor pause within §9.10's formula (constants measured in 7b); minors free dead young LOS runs (zeal-minor lane with an RSS bound); if JIT code is merged, `jit-invalidate` zeal on a generational heap with the verifier on (§13) | minor pauses proportional to survivors | — |
 | 8 | Opportunistic evacuation | 6–9 | the footprint trigger; the sparse return-to-baseline row judged against stage 8's bound | — | move-all lane green for 4 weeks; [K3](#k3) | fragmentation cured; moving proven; the [K4](#k4) nursery becomes possible | — |
 | 9 | Threads readiness: the `GreenThread` split; thread, mutex and condition-variable objects with their root rule and `FinalKind::Thread`, on both backends; deep-bound `parameterize`; safe regions | 7–10 | the Linux stack probe, then per-thread or chunked stacks as it decides (§18.1), under the per-heap stack address-space bound; idle trims at thread waits and mid-datum reads; the thread rows of the steady-state lane | the seeded multi-carrier simulation lane (addition C8); `GreenThread` asserted (C11) | two-mutator lane green; thread-lifetime tests on both backends; decision 23 recorded; ≤ 1% in instructions | SRFI 18 (M:1) can start | — |
@@ -2262,4 +2267,5 @@ from them on these known points before filing it:
 [#687]: https://github.com/avalonalex/patina/issues/687
 [#697]: https://github.com/avalonalex/patina/issues/697
 [#704]: https://github.com/avalonalex/patina/issues/704
+[#706]: https://github.com/avalonalex/patina/issues/706
 [#718]: https://github.com/avalonalex/patina/issues/718
