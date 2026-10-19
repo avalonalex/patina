@@ -4,15 +4,18 @@
 //! - O(1) random access
 //! - Mutable vectors via vector-set!
 //! - Conversion operations with lists and strings
+//!
+//! Each takes the context (#706). A read borrows the vector's elements
+//! through the `Cx`, and the mutators store through the context's funnel
+//! (`Cx::vector_set`, and `store_range` and `fill_range` for a run).
 
-use patina_core::TaggedValue;
+use patina_core::{Cx, Value};
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
 
-// ========== TaggedValue Extraction Helpers ==========
+// ========== Argument Extraction Helpers ==========
 
-/// Extract an integer from a TaggedValue (supports fixnum, BigInteger, Rational)
-fn get_index(tv: TaggedValue, heap: &patina_core::Heap, fn_name: &str) -> Result<usize, EvalError> {
+/// Extract an integer from a value (supports fixnum, BigInteger, Rational)
+fn get_index<'gc>(cx: &Cx<'gc>, tv: Value<'gc>, fn_name: &str) -> Result<usize, EvalError> {
     if tv.is_fixnum() {
         let n = tv.as_fixnum_unchecked();
         if n < 0 {
@@ -23,7 +26,7 @@ fn get_index(tv: TaggedValue, heap: &patina_core::Heap, fn_name: &str) -> Result
         }
         return Ok(n as usize);
     }
-    if let Some(n) = heap.get_bigint(tv) {
+    if let Some(n) = cx.get_bigint(tv) {
         use num_traits::ToPrimitive;
         if n.sign() == num_bigint::Sign::Minus {
             return Err(EvalError::IndexOutOfBounds(format!(
@@ -35,7 +38,7 @@ fn get_index(tv: TaggedValue, heap: &patina_core::Heap, fn_name: &str) -> Result
             .to_usize()
             .ok_or_else(|| EvalError::IndexOutOfBounds(format!("{} index too large", fn_name)));
     }
-    if let Some(r) = heap.get_rational(tv) {
+    if let Some(r) = cx.get_rational(tv) {
         use num_bigint::BigInt;
         use num_traits::ToPrimitive;
         if r.denom() != &BigInt::from(1) {
@@ -62,16 +65,16 @@ fn get_index(tv: TaggedValue, heap: &patina_core::Heap, fn_name: &str) -> Result
     )))
 }
 
-/// Extract string characters from a TaggedValue
-fn get_string_chars(
-    tv: TaggedValue,
-    heap: &patina_core::Heap,
+/// Extract string characters from a value
+fn get_string_chars<'gc>(
+    cx: &Cx<'gc>,
+    tv: Value<'gc>,
     fn_name: &str,
 ) -> Result<Vec<char>, EvalError> {
     if tv.is_string() {
-        return Ok(heap.get_string_chars(tv).to_vec());
+        return Ok(cx.get_string_chars(tv).to_vec());
     }
-    if let Some(s) = heap.get_string_contents(tv) {
+    if let Some(s) = cx.get_string_contents(tv) {
         return Ok(s.chars().collect());
     }
     Err(EvalError::TypeError(format!(
@@ -82,10 +85,10 @@ fn get_string_chars(
 
 // ========== Vector Primitives ==========
 
-pub(super) fn make_vector(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn make_vector<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
             expected: "1 or 2".to_string(),
@@ -93,46 +96,42 @@ pub(super) fn make_vector(
         });
     }
 
-    let heap_ref = heap.borrow();
-
-    let k = get_index(args[0], &heap_ref, "make-vector")?;
+    let k = get_index(cx, args[0], "make-vector")?;
     let fill = if args.len() == 2 {
         args[1]
     } else {
-        TaggedValue::UNSPECIFIED
+        Value::UNSPECIFIED
     };
-    drop(heap_ref);
 
-    Ok(heap.borrow_mut().alloc_vector_fill(k, fill))
+    Ok(cx.alloc_vector_fill(k, fill))
 }
 
-pub(super) fn vector(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn vector<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     // vector accepts any number of arguments (0 or more)
-    // Args are already TaggedValues, allocate native heap vector directly
-    Ok(heap.borrow_mut().alloc_vector(args.to_vec()))
+    // Allocate the native heap vector directly
+    Ok(cx.alloc_vector(args.to_vec()))
 }
 
-pub(super) fn vector_length(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn vector_length<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    let heap_ref = heap.borrow();
-    let len = heap_ref
+    let len = cx
         .try_vector_len(args[0])
         .ok_or_else(|| EvalError::TypeError("vector-length expects a vector".to_string()))?;
-    Ok(TaggedValue::fixnum(len as i64))
+    Ok(Value::fixnum(len as i64))
 }
 
-pub(super) fn vector_ref(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn vector_ref<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -140,13 +139,12 @@ pub(super) fn vector_ref(
         });
     }
 
-    // Phase 1: validate and classify with immutable borrow
+    // Phase 1: validate and classify
     let (idx, vec_len) = {
-        let heap_ref = heap.borrow();
-        let vec_len = heap_ref
+        let vec_len = cx
             .try_vector_len(args[0])
             .ok_or_else(|| EvalError::TypeError("vector-ref expects a vector".to_string()))?;
-        let idx = get_index(args[1], &heap_ref, "vector-ref")?;
+        let idx = get_index(cx, args[1], "vector-ref")?;
         (idx, vec_len)
     };
 
@@ -158,13 +156,13 @@ pub(super) fn vector_ref(
     }
 
     // Phase 2: get element (all vectors are native)
-    Ok(heap.borrow().vector_ref(args[0], idx))
+    Ok(cx.vector_ref(args[0], idx))
 }
 
-pub(super) fn vector_set(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn vector_set<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 3 {
         return Err(EvalError::WrongArity {
             expected: "3".to_string(),
@@ -177,11 +175,10 @@ pub(super) fn vector_set(
 
     // Phase 1: validate index
     let (idx, vec_len) = {
-        let heap_ref = heap.borrow();
-        let vec_len = heap_ref
+        let vec_len = cx
             .try_vector_len(vec_tv)
             .ok_or_else(|| EvalError::TypeError("vector-set! expects a vector".to_string()))?;
-        let idx = get_index(args[1], &heap_ref, "vector-set!")?;
+        let idx = get_index(cx, args[1], "vector-set!")?;
         (idx, vec_len)
     };
 
@@ -193,15 +190,15 @@ pub(super) fn vector_set(
     }
 
     // Phase 2: set element (all vectors are native)
-    heap.borrow_mut().vector_set(vec_tv, idx, new_val_tv);
+    cx.vector_set(vec_tv, idx, new_val_tv);
 
-    Ok(TaggedValue::UNSPECIFIED)
+    Ok(Value::UNSPECIFIED)
 }
 
-pub(super) fn vector_to_list(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn vector_to_list<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
             expected: "1 to 3".to_string(),
@@ -209,21 +206,20 @@ pub(super) fn vector_to_list(
         });
     }
 
-    // Phase 1: validate bounds with immutable borrow
+    // Phase 1: validate bounds
     let (start, end) = {
-        let heap_ref = heap.borrow();
-        let vec_len = heap_ref
+        let vec_len = cx
             .try_vector_len(args[0])
             .ok_or_else(|| EvalError::TypeError("vector->list expects a vector".to_string()))?;
 
         let start = if args.len() >= 2 {
-            get_index(args[1], &heap_ref, "vector->list")?
+            get_index(cx, args[1], "vector->list")?
         } else {
             0
         };
 
         let end = if args.len() >= 3 {
-            get_index(args[2], &heap_ref, "vector->list")?
+            get_index(cx, args[2], "vector->list")?
         } else {
             vec_len
         };
@@ -238,16 +234,16 @@ pub(super) fn vector_to_list(
     };
 
     // Phase 2: extract elements (all vectors are native)
-    let items: Vec<TaggedValue> = heap.borrow().vector_slice(args[0])[start..end].to_vec();
+    let items: Vec<Value<'gc>> = cx.vector_slice(args[0])[start..end].to_vec();
 
     // Build list
-    Ok(heap.borrow_mut().list_from_iter(items))
+    Ok(cx.list_from_iter(items))
 }
 
-pub(super) fn list_to_vector(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn list_to_vector<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -255,16 +251,16 @@ pub(super) fn list_to_vector(
         });
     }
 
-    let elements = heap.borrow().list_to_vec(args[0]).ok_or_else(|| {
+    let elements = cx.list_to_vec(args[0]).ok_or_else(|| {
         EvalError::TypeError("list->vector: argument must be a proper list".into())
     })?;
-    Ok(heap.borrow_mut().alloc_vector(elements))
+    Ok(cx.alloc_vector(elements))
 }
 
-pub(super) fn vector_to_string(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn vector_to_string<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
             expected: "1 to 3".to_string(),
@@ -274,19 +270,18 @@ pub(super) fn vector_to_string(
 
     // Phase 1: validate bounds
     let (start, end) = {
-        let heap_ref = heap.borrow();
-        let vec_len = heap_ref
+        let vec_len = cx
             .try_vector_len(args[0])
             .ok_or_else(|| EvalError::TypeError("vector->string expects a vector".to_string()))?;
 
         let start = if args.len() >= 2 {
-            get_index(args[1], &heap_ref, "vector->string")?
+            get_index(cx, args[1], "vector->string")?
         } else {
             0
         };
 
         let end = if args.len() >= 3 {
-            get_index(args[2], &heap_ref, "vector->string")?
+            get_index(cx, args[2], "vector->string")?
         } else {
             vec_len
         };
@@ -302,8 +297,7 @@ pub(super) fn vector_to_string(
 
     // Phase 2: extract characters from vector elements (all vectors are native)
     let chars = {
-        let heap_ref = heap.borrow();
-        let slice = heap_ref.vector_slice(args[0]);
+        let slice = cx.vector_slice(args[0]);
         let mut chars = Vec::new();
         for tv in &slice[start..end] {
             if tv.is_char() {
@@ -317,13 +311,13 @@ pub(super) fn vector_to_string(
         chars
     };
 
-    Ok(heap.borrow_mut().alloc_string_chars(chars))
+    Ok(cx.alloc_string_chars(chars))
 }
 
-pub(super) fn string_to_vector(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn string_to_vector<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
             expected: "1 to 3".to_string(),
@@ -331,22 +325,19 @@ pub(super) fn string_to_vector(
         });
     }
 
-    let heap_ref = heap.borrow();
-
-    let chars = get_string_chars(args[0], &heap_ref, "string->vector")?;
+    let chars = get_string_chars(cx, args[0], "string->vector")?;
 
     let start = if args.len() >= 2 {
-        get_index(args[1], &heap_ref, "string->vector")?
+        get_index(cx, args[1], "string->vector")?
     } else {
         0
     };
 
     let end = if args.len() >= 3 {
-        get_index(args[2], &heap_ref, "string->vector")?
+        get_index(cx, args[2], "string->vector")?
     } else {
         chars.len()
     };
-    drop(heap_ref);
 
     if start > end || end > chars.len() {
         return Err(EvalError::IndexOutOfBounds(
@@ -354,17 +345,17 @@ pub(super) fn string_to_vector(
         ));
     }
 
-    let elements: Vec<TaggedValue> = chars[start..end]
+    let elements: Vec<Value<'gc>> = chars[start..end]
         .iter()
-        .map(|c| TaggedValue::character(*c))
+        .map(|c| Value::character(*c))
         .collect();
-    Ok(heap.borrow_mut().alloc_vector(elements))
+    Ok(cx.alloc_vector(elements))
 }
 
-pub(super) fn vector_copy(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn vector_copy<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
             expected: "1 to 3".to_string(),
@@ -374,19 +365,18 @@ pub(super) fn vector_copy(
 
     // Phase 1: validate bounds
     let (start, end) = {
-        let heap_ref = heap.borrow();
-        let vec_len = heap_ref
+        let vec_len = cx
             .try_vector_len(args[0])
             .ok_or_else(|| EvalError::TypeError("vector-copy expects a vector".to_string()))?;
 
         let start = if args.len() >= 2 {
-            get_index(args[1], &heap_ref, "vector-copy")?
+            get_index(cx, args[1], "vector-copy")?
         } else {
             0
         };
 
         let end = if args.len() >= 3 {
-            get_index(args[2], &heap_ref, "vector-copy")?
+            get_index(cx, args[2], "vector-copy")?
         } else {
             vec_len
         };
@@ -401,15 +391,15 @@ pub(super) fn vector_copy(
     };
 
     // Phase 2: extract elements (all vectors are native)
-    let elements: Vec<TaggedValue> = heap.borrow().vector_slice(args[0])[start..end].to_vec();
+    let elements: Vec<Value<'gc>> = cx.vector_slice(args[0])[start..end].to_vec();
 
-    Ok(heap.borrow_mut().alloc_vector(elements))
+    Ok(cx.alloc_vector(elements))
 }
 
-pub(super) fn vector_copy_bang(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn vector_copy_bang<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 3 || args.len() > 5 {
         return Err(EvalError::WrongArity {
             expected: "3 to 5".to_string(),
@@ -422,23 +412,22 @@ pub(super) fn vector_copy_bang(
 
     // Phase 1: validate bounds and extract source elements
     let (at, from_elements) = {
-        let heap_ref = heap.borrow();
-        let at = get_index(args[1], &heap_ref, "vector-copy!")?;
-        let from_len = heap_ref
+        let at = get_index(cx, args[1], "vector-copy!")?;
+        let from_len = cx
             .try_vector_len(from_tv)
             .ok_or_else(|| EvalError::TypeError("vector-copy! expects a vector".to_string()))?;
-        let to_len = heap_ref
+        let to_len = cx
             .try_vector_len(to_tv)
             .ok_or_else(|| EvalError::TypeError("vector-copy! expects a vector".to_string()))?;
 
         let start = if args.len() >= 4 {
-            get_index(args[3], &heap_ref, "vector-copy!")?
+            get_index(cx, args[3], "vector-copy!")?
         } else {
             0
         };
 
         let end = if args.len() >= 5 {
-            get_index(args[4], &heap_ref, "vector-copy!")?
+            get_index(cx, args[4], "vector-copy!")?
         } else {
             from_len
         };
@@ -463,32 +452,21 @@ pub(super) fn vector_copy_bang(
             ));
         }
 
-        // Extract source elements (all vectors are native)
-        let from_elements: Vec<TaggedValue> = heap_ref.vector_slice(from_tv)[start..end].to_vec();
+        // Extract source elements (all vectors are native): copied first, so
+        // a run copied within one vector reads none it has written
+        let from_elements: Vec<Value<'gc>> = cx.vector_slice(from_tv)[start..end].to_vec();
         (at, from_elements)
     };
 
-    copy_elements_to_vector(heap, to_tv, at, &from_elements)
+    // Phase 2: store the run (all vectors are native)
+    cx.store_range(to_tv, at, from_elements.into_iter());
+    Ok(Value::UNSPECIFIED)
 }
 
-/// Helper: copy elements into a destination vector (all vectors are native)
-fn copy_elements_to_vector(
-    heap: &std::rc::Rc<std::cell::RefCell<patina_core::Heap>>,
-    to_tv: TaggedValue,
-    at: usize,
-    elements: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
-    let mut heap_mut = heap.borrow_mut();
-    for (i, &elem) in elements.iter().enumerate() {
-        heap_mut.vector_set(to_tv, at + i, elem);
-    }
-    Ok(TaggedValue::UNSPECIFIED)
-}
-
-pub(super) fn vector_append(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn vector_append<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     // vector-append accepts any number of arguments (0 or more)
 
     // Validate all args are vectors first
@@ -501,21 +479,18 @@ pub(super) fn vector_append(
     }
 
     // Collect all elements
-    let mut all_elements: Vec<TaggedValue> = Vec::new();
-    {
-        let heap_ref = heap.borrow();
-        for &arg in args {
-            all_elements.extend_from_slice(heap_ref.vector_slice(arg));
-        }
+    let mut all_elements: Vec<Value<'gc>> = Vec::new();
+    for &arg in args {
+        all_elements.extend_from_slice(&cx.vector_slice(arg));
     }
 
-    Ok(heap.borrow_mut().alloc_vector(all_elements))
+    Ok(cx.alloc_vector(all_elements))
 }
 
-pub(super) fn vector_fill(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn vector_fill<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 || args.len() > 4 {
         return Err(EvalError::WrongArity {
             expected: "2 to 4".to_string(),
@@ -528,19 +503,18 @@ pub(super) fn vector_fill(
 
     // Phase 1: validate bounds
     let (start, end) = {
-        let heap_ref = heap.borrow();
-        let vec_len = heap_ref
+        let vec_len = cx
             .try_vector_len(vec_tv)
             .ok_or_else(|| EvalError::TypeError("vector-fill! expects a vector".to_string()))?;
 
         let start = if args.len() >= 3 {
-            get_index(args[2], &heap_ref, "vector-fill!")?
+            get_index(cx, args[2], "vector-fill!")?
         } else {
             0
         };
 
         let end = if args.len() >= 4 {
-            get_index(args[3], &heap_ref, "vector-fill!")?
+            get_index(cx, args[3], "vector-fill!")?
         } else {
             vec_len
         };
@@ -555,12 +529,9 @@ pub(super) fn vector_fill(
     };
 
     // Phase 2: fill (all vectors are native)
-    let mut heap_mut = heap.borrow_mut();
-    for i in start..end {
-        heap_mut.vector_set(vec_tv, i, fill_tv);
-    }
+    cx.fill_range(vec_tv, start, end - start, fill_tv);
 
-    Ok(TaggedValue::UNSPECIFIED)
+    Ok(Value::UNSPECIFIED)
 }
 
 pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
@@ -568,7 +539,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use patina_runtime::Arity;
 
     // Make-vector
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "make-vector",
         Arity::Range(1, 2),
@@ -577,7 +548,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Vector constructor
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "vector",
         Arity::Min(0),
@@ -586,7 +557,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Vector-length
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "vector-length",
         Arity::Exact(1),
@@ -595,7 +566,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Vector-ref
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "vector-ref",
         Arity::Exact(2),
@@ -604,7 +575,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Vector-set!
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "vector-set!",
         Arity::Exact(3),
@@ -613,7 +584,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Vector->list
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "vector->list",
         Arity::Range(1, 3),
@@ -622,7 +593,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // List->vector
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "list->vector",
         Arity::Exact(1),
@@ -631,7 +602,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Vector->string
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "vector->string",
         Arity::Range(1, 3),
@@ -640,7 +611,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String->vector
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string->vector",
         Arity::Range(1, 3),
@@ -649,7 +620,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Vector-copy
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "vector-copy",
         Arity::Range(1, 3),
@@ -658,7 +629,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Vector-copy!
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "vector-copy!",
         Arity::Range(3, 5),
@@ -667,7 +638,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Vector-append
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "vector-append",
         Arity::Min(0),
@@ -676,7 +647,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Vector-fill!
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "vector-fill!",
         Arity::Range(2, 4),
