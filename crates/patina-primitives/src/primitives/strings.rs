@@ -6,27 +6,33 @@
 //! - Comparison operations (case-sensitive and case-insensitive)
 //!
 //! Note: UTF-8 conversion happens at I/O boundaries.
+//!
+//! Each takes the context (#706). A read borrows the string's characters
+//! through the `Cx`, so a borrow held across an allocation does not
+//! compile, and the mutators write through the context's string stores
+//! (`Cx::string_set_char`, `string_fill`, `string_copy_chars`).
 
-use patina_core::TaggedValue;
+use patina_core::{Cx, Value};
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
+use std::cell::Ref;
 
-// ========== TaggedValue Extraction Helpers ==========
+// ========== Argument Extraction Helpers ==========
 
 /// Borrow a string's characters for read operations.
 ///
 /// Borrowed, not copied: `string-ref` and `string-length` sit inside the
 /// `(scheme base)` higher-order loops, and a per-call copy of the whole
 /// string turned those loops quadratic. Callers that need an owned copy
-/// call `.to_vec()` at their own site.
-fn get_string_as_chars<'h>(
-    tv: TaggedValue,
-    heap: &'h std::cell::Ref<'_, patina_core::Heap>,
+/// call `.to_vec()` at their own site. The borrow is tied to the context's,
+/// so one held across an allocation does not compile (#706).
+fn get_string_as_chars<'a, 'gc>(
+    cx: &'a Cx<'gc>,
+    tv: Value<'gc>,
     fn_name: &str,
-) -> Result<&'h [char], EvalError> {
+) -> Result<Ref<'a, [char]>, EvalError> {
     // Native heap string path
     if tv.is_string() {
-        return Ok(heap.get_string_chars(tv));
+        return Ok(cx.get_string_chars(tv));
     }
 
     // Not a string
@@ -36,17 +42,13 @@ fn get_string_as_chars<'h>(
     )))
 }
 
-/// Extract an integer from a TaggedValue
-fn get_integer(
-    tv: TaggedValue,
-    heap: &std::cell::Ref<'_, patina_core::Heap>,
-    fn_name: &str,
-) -> Result<i64, EvalError> {
+/// Extract an integer from a value
+fn get_integer<'gc>(cx: &Cx<'gc>, tv: Value<'gc>, fn_name: &str) -> Result<i64, EvalError> {
     if tv.is_fixnum() {
         return Ok(tv.as_fixnum_unchecked());
     }
     // BigInt on heap (convert to i64 if possible)
-    if let Some(n) = heap.get_bigint(tv) {
+    if let Some(n) = cx.get_bigint(tv) {
         use num_traits::ToPrimitive;
         if let Some(i) = n.to_i64() {
             return Ok(i);
@@ -63,12 +65,8 @@ fn get_integer(
     )))
 }
 
-/// Extract a character from a TaggedValue
-fn get_char(
-    tv: TaggedValue,
-    _heap: &std::cell::Ref<'_, patina_core::Heap>,
-    fn_name: &str,
-) -> Result<char, EvalError> {
+/// Extract a character from a value
+fn get_char(tv: Value<'_>, fn_name: &str) -> Result<char, EvalError> {
     if tv.is_char() {
         return Ok(tv.as_char_unchecked());
     }
@@ -83,10 +81,10 @@ fn chars_to_string(chars: &[char]) -> String {
     chars.iter().collect()
 }
 
-pub(super) fn string_length(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn string_length<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -94,15 +92,14 @@ pub(super) fn string_length(
         });
     }
 
-    let heap_ref = heap.borrow();
-    let chars = get_string_as_chars(args[0], &heap_ref, "string-length")?;
-    Ok(TaggedValue::fixnum(chars.len() as i64))
+    let chars = get_string_as_chars(cx, args[0], "string-length")?;
+    Ok(Value::fixnum(chars.len() as i64))
 }
 
-pub(super) fn string_ref(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn string_ref<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -110,10 +107,8 @@ pub(super) fn string_ref(
         });
     }
 
-    let heap_ref = heap.borrow();
-
-    let chars = get_string_as_chars(args[0], &heap_ref, "string-ref")?;
-    let k = get_integer(args[1], &heap_ref, "string-ref")?;
+    let chars = get_string_as_chars(cx, args[0], "string-ref")?;
+    let k = get_integer(cx, args[1], "string-ref")?;
 
     if k < 0 {
         return Err(EvalError::IndexOutOfBounds(format!(
@@ -132,13 +127,13 @@ pub(super) fn string_ref(
         )));
     }
 
-    Ok(TaggedValue::character(chars[idx]))
+    Ok(Value::character(chars[idx]))
 }
 
-pub(super) fn string_set(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn string_set<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 3 {
         return Err(EvalError::WrongArity {
             expected: "3".to_string(),
@@ -148,9 +143,8 @@ pub(super) fn string_set(
 
     // Extract index and char with immutable borrow
     let (k, ch) = {
-        let heap_ref = heap.borrow();
-        let k = get_integer(args[1], &heap_ref, "string-set!")?;
-        let ch = get_char(args[2], &heap_ref, "string-set!")?;
+        let k = get_integer(cx, args[1], "string-set!")?;
+        let ch = get_char(args[2], "string-set!")?;
         (k, ch)
     };
 
@@ -165,16 +159,15 @@ pub(super) fn string_set(
 
     // Native heap string path
     if args[0].is_string() {
-        let mut heap_mut = heap.borrow_mut();
-        let len = heap_mut.string_char_len(args[0]);
+        let len = cx.string_char_len(args[0]);
         if idx >= len {
             return Err(EvalError::IndexOutOfBounds(format!(
                 "string-set! index {} out of bounds for string of length {}",
                 k, len
             )));
         }
-        heap_mut.string_set_char(args[0], idx, ch);
-        return Ok(TaggedValue::UNSPECIFIED);
+        cx.string_set_char(args[0], idx, ch);
+        return Ok(Value::UNSPECIFIED);
     }
 
     Err(EvalError::TypeError(
@@ -182,10 +175,10 @@ pub(super) fn string_set(
     ))
 }
 
-pub(super) fn make_string(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn make_string<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
             expected: "1 to 2".to_string(),
@@ -193,9 +186,7 @@ pub(super) fn make_string(
         });
     }
 
-    let heap_ref = heap.borrow();
-
-    let k = get_integer(args[0], &heap_ref, "make-string")?;
+    let k = get_integer(cx, args[0], "make-string")?;
 
     if k < 0 {
         return Err(EvalError::TypeError(format!(
@@ -205,34 +196,30 @@ pub(super) fn make_string(
     }
 
     let fill_char = if args.len() == 2 {
-        get_char(args[1], &heap_ref, "make-string")?
+        get_char(args[1], "make-string")?
     } else {
         ' ' // Default fill character
     };
 
-    drop(heap_ref);
     let chars: Vec<char> = std::iter::repeat_n(fill_char, k as usize).collect();
-    Ok(heap.borrow_mut().alloc_string_chars(chars))
+    Ok(cx.alloc_string_chars(chars))
 }
 
-pub(super) fn string(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    let heap_ref = heap.borrow();
-
+pub(super) fn string<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     let mut chars = Vec::new();
 
     for &arg in args {
-        let ch = get_char(arg, &heap_ref, "string")?;
+        let ch = get_char(arg, "string")?;
         chars.push(ch);
     }
 
-    drop(heap_ref);
-    Ok(heap.borrow_mut().alloc_string_chars(chars))
+    Ok(cx.alloc_string_chars(chars))
 }
 
-pub(super) fn string_equal(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn string_equal<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::WrongArity {
             expected: "at least 2".to_string(),
@@ -240,56 +227,54 @@ pub(super) fn string_equal(
         });
     }
 
-    let heap_ref = heap.borrow();
-
     // Get first string for comparison
-    let first = get_string_as_chars(args[0], &heap_ref, "string=?")?;
+    let first = get_string_as_chars(cx, args[0], "string=?")?;
 
     // Compare all remaining strings
     for arg in &args[1..] {
-        let s = get_string_as_chars(*arg, &heap_ref, "string=?")?;
-        if s != first {
-            return Ok(TaggedValue::FALSE);
+        let s = get_string_as_chars(cx, *arg, "string=?")?;
+        if *s != *first {
+            return Ok(Value::FALSE);
         }
     }
 
-    Ok(TaggedValue::TRUE)
+    Ok(Value::TRUE)
 }
 
-pub(super) fn string_less(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
-    string_compare(heap, args, |a, b| a < b, "string<?")
+pub(super) fn string_less<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    string_compare(cx, args, |a, b| a < b, "string<?")
 }
 
-pub(super) fn string_greater(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
-    string_compare(heap, args, |a, b| a > b, "string>?")
+pub(super) fn string_greater<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    string_compare(cx, args, |a, b| a > b, "string>?")
 }
 
-pub(super) fn string_less_equal(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
-    string_compare(heap, args, |a, b| a <= b, "string<=?")
+pub(super) fn string_less_equal<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    string_compare(cx, args, |a, b| a <= b, "string<=?")
 }
 
-pub(super) fn string_greater_equal(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
-    string_compare(heap, args, |a, b| a >= b, "string>=?")
+pub(super) fn string_greater_equal<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    string_compare(cx, args, |a, b| a >= b, "string>=?")
 }
 
-fn string_compare<F>(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
+fn string_compare<'gc, F>(
+    cx: &Cx<'gc>,
+    args: &[Value<'gc>],
     cmp: F,
     fn_name: &str,
-) -> Result<TaggedValue, EvalError>
+) -> Result<Value<'gc>, EvalError>
 where
     F: Fn(&[char], &[char]) -> bool,
 {
@@ -300,61 +285,59 @@ where
         });
     }
 
-    let heap_ref = heap.borrow();
-
     for i in 0..args.len() - 1 {
-        let a = get_string_as_chars(args[i], &heap_ref, fn_name)?;
-        let b = get_string_as_chars(args[i + 1], &heap_ref, fn_name)?;
+        let a = get_string_as_chars(cx, args[i], fn_name)?;
+        let b = get_string_as_chars(cx, args[i + 1], fn_name)?;
 
-        if !cmp(a, b) {
-            return Ok(TaggedValue::FALSE);
+        if !cmp(&a, &b) {
+            return Ok(Value::FALSE);
         }
     }
 
-    Ok(TaggedValue::TRUE)
+    Ok(Value::TRUE)
 }
 
-pub(super) fn string_ci_equal(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
-    string_ci_compare(heap, args, |a, b| a == b, "string-ci=?")
+pub(super) fn string_ci_equal<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    string_ci_compare(cx, args, |a, b| a == b, "string-ci=?")
 }
 
-pub(super) fn string_ci_less(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
-    string_ci_compare(heap, args, |a, b| a < b, "string-ci<?")
+pub(super) fn string_ci_less<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    string_ci_compare(cx, args, |a, b| a < b, "string-ci<?")
 }
 
-pub(super) fn string_ci_greater(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
-    string_ci_compare(heap, args, |a, b| a > b, "string-ci>?")
+pub(super) fn string_ci_greater<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    string_ci_compare(cx, args, |a, b| a > b, "string-ci>?")
 }
 
-pub(super) fn string_ci_less_equal(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
-    string_ci_compare(heap, args, |a, b| a <= b, "string-ci<=?")
+pub(super) fn string_ci_less_equal<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    string_ci_compare(cx, args, |a, b| a <= b, "string-ci<=?")
 }
 
-pub(super) fn string_ci_greater_equal(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
-    string_ci_compare(heap, args, |a, b| a >= b, "string-ci>=?")
+pub(super) fn string_ci_greater_equal<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    string_ci_compare(cx, args, |a, b| a >= b, "string-ci>=?")
 }
 
-fn string_ci_compare<F>(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
+fn string_ci_compare<'gc, F>(
+    cx: &Cx<'gc>,
+    args: &[Value<'gc>],
     cmp: F,
     fn_name: &str,
-) -> Result<TaggedValue, EvalError>
+) -> Result<Value<'gc>, EvalError>
 where
     F: Fn(&str, &str) -> bool,
 {
@@ -365,45 +348,43 @@ where
         });
     }
 
-    let heap_ref = heap.borrow();
-
     for i in 0..args.len() - 1 {
-        let a_chars = get_string_as_chars(args[i], &heap_ref, fn_name)?;
-        let b_chars = get_string_as_chars(args[i + 1], &heap_ref, fn_name)?;
+        let a_chars = get_string_as_chars(cx, args[i], fn_name)?;
+        let b_chars = get_string_as_chars(cx, args[i + 1], fn_name)?;
 
         // R7RS 6.7: string-ci=? and friends compare "as if by
         // string-foldcase" — full case folding, so "Straße" and "STRASSE"
         // are equal. Lower-casing left ß as ß and said they were not.
         use unicode_casefold::UnicodeCaseFold;
-        let a_str: String = chars_to_string(a_chars).case_fold().collect();
-        let b_str: String = chars_to_string(b_chars).case_fold().collect();
+        let a_str: String = chars_to_string(&a_chars).case_fold().collect();
+        let b_str: String = chars_to_string(&b_chars).case_fold().collect();
 
         if !cmp(&a_str, &b_str) {
-            return Ok(TaggedValue::FALSE);
+            return Ok(Value::FALSE);
         }
     }
 
-    Ok(TaggedValue::TRUE)
+    Ok(Value::TRUE)
 }
 
-pub(super) fn string_append(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
-    let heap_ref = heap.borrow();
-
+pub(super) fn string_append<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     let mut result: Vec<char> = Vec::new();
 
     for &arg in args {
-        let chars = get_string_as_chars(arg, &heap_ref, "string-append")?;
+        let chars = get_string_as_chars(cx, arg, "string-append")?;
         result.extend(chars.iter());
     }
 
-    drop(heap_ref);
-    Ok(heap.borrow_mut().alloc_string_chars(result))
+    Ok(cx.alloc_string_chars(result))
 }
 
-pub(super) fn substring(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn substring<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 3 {
         return Err(EvalError::WrongArity {
             expected: "3".to_string(),
@@ -411,12 +392,9 @@ pub(super) fn substring(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
         });
     }
 
-    let heap_ref = heap.borrow();
-
-    let chars = get_string_as_chars(args[0], &heap_ref, "substring")?.to_vec();
-    let start = get_integer(args[1], &heap_ref, "substring")?;
-    let end = get_integer(args[2], &heap_ref, "substring")?;
-    drop(heap_ref);
+    let chars = get_string_as_chars(cx, args[0], "substring")?.to_vec();
+    let start = get_integer(cx, args[1], "substring")?;
+    let end = get_integer(cx, args[2], "substring")?;
 
     if start < 0 || end < 0 {
         return Err(EvalError::IndexOutOfBounds(
@@ -442,13 +420,13 @@ pub(super) fn substring(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
     }
 
     let substr: Vec<char> = chars[start_idx..end_idx].to_vec();
-    Ok(heap.borrow_mut().alloc_string_chars(substr))
+    Ok(cx.alloc_string_chars(substr))
 }
 
-pub(super) fn string_to_list(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn string_to_list<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
             expected: "1 to 3".to_string(),
@@ -458,17 +436,16 @@ pub(super) fn string_to_list(
 
     // Extract chars and indices
     let (chars, start, end) = {
-        let heap_ref = heap.borrow();
-        let chars = get_string_as_chars(args[0], &heap_ref, "string->list")?.to_vec();
+        let chars = get_string_as_chars(cx, args[0], "string->list")?.to_vec();
 
         let start = if args.len() >= 2 {
-            get_integer(args[1], &heap_ref, "string->list")? as usize
+            get_integer(cx, args[1], "string->list")? as usize
         } else {
             0
         };
 
         let end = if args.len() >= 3 {
-            get_integer(args[2], &heap_ref, "string->list")? as usize
+            get_integer(cx, args[2], "string->list")? as usize
         } else {
             chars.len()
         };
@@ -482,17 +459,13 @@ pub(super) fn string_to_list(
         (chars, start, end)
     };
 
-    Ok(heap.borrow_mut().list_from_iter(
-        chars[start..end]
-            .iter()
-            .map(|&ch| TaggedValue::character(ch)),
-    ))
+    Ok(cx.list_from_iter(chars[start..end].iter().map(|&ch| Value::character(ch))))
 }
 
-pub(super) fn list_to_string(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn list_to_string<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -500,8 +473,7 @@ pub(super) fn list_to_string(
         });
     }
 
-    let elements = heap
-        .borrow()
+    let elements = cx
         .list_to_vec(args[0])
         .ok_or_else(|| EvalError::TypeError("list->string expects a proper list".into()))?;
     let mut chars = Vec::with_capacity(elements.len());
@@ -513,13 +485,13 @@ pub(super) fn list_to_string(
         }
         chars.push(tv.as_char_unchecked());
     }
-    Ok(heap.borrow_mut().alloc_string_chars(chars))
+    Ok(cx.alloc_string_chars(chars))
 }
 
-pub(super) fn string_copy(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn string_copy<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
             expected: "1 to 3".to_string(),
@@ -527,21 +499,18 @@ pub(super) fn string_copy(
         });
     }
 
-    let heap_ref = heap.borrow();
-
-    let chars = get_string_as_chars(args[0], &heap_ref, "string-copy")?.to_vec();
+    let chars = get_string_as_chars(cx, args[0], "string-copy")?.to_vec();
 
     if args.len() == 1 {
         // Simple copy
-        drop(heap_ref);
-        return Ok(heap.borrow_mut().alloc_string_chars(chars));
+        return Ok(cx.alloc_string_chars(chars));
     }
 
     // Copy substring
-    let start = get_integer(args[1], &heap_ref, "string-copy")? as usize;
+    let start = get_integer(cx, args[1], "string-copy")? as usize;
 
     let end = if args.len() >= 3 {
-        get_integer(args[2], &heap_ref, "string-copy")? as usize
+        get_integer(cx, args[2], "string-copy")? as usize
     } else {
         chars.len()
     };
@@ -553,17 +522,16 @@ pub(super) fn string_copy(
     }
 
     let substr: Vec<char> = chars[start..end].to_vec();
-    drop(heap_ref);
-    Ok(heap.borrow_mut().alloc_string_chars(substr))
+    Ok(cx.alloc_string_chars(substr))
 }
 
 // ========== String Case Conversion ==========
 
 /// (string-upcase string) - Convert string to uppercase
-pub(super) fn string_upcase(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn string_upcase<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -571,20 +539,18 @@ pub(super) fn string_upcase(
         });
     }
 
-    let heap_ref = heap.borrow();
-    let chars = get_string_as_chars(args[0], &heap_ref, "string-upcase")?.to_vec();
-    drop(heap_ref);
+    let chars = get_string_as_chars(cx, args[0], "string-upcase")?.to_vec();
 
     // Convert to String, uppercase, then back to Vec<char>
     let upper: Vec<char> = chars_to_string(&chars).to_uppercase().chars().collect();
-    Ok(heap.borrow_mut().alloc_string_chars(upper))
+    Ok(cx.alloc_string_chars(upper))
 }
 
 /// (string-downcase string) - Convert string to lowercase
-pub(super) fn string_downcase(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn string_downcase<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -592,13 +558,11 @@ pub(super) fn string_downcase(
         });
     }
 
-    let heap_ref = heap.borrow();
-    let chars = get_string_as_chars(args[0], &heap_ref, "string-downcase")?.to_vec();
-    drop(heap_ref);
+    let chars = get_string_as_chars(cx, args[0], "string-downcase")?.to_vec();
 
     // Convert to String, lowercase, then back to Vec<char>
     let lower: Vec<char> = chars_to_string(&chars).to_lowercase().chars().collect();
-    Ok(heap.borrow_mut().alloc_string_chars(lower))
+    Ok(cx.alloc_string_chars(lower))
 }
 
 /// (string-foldcase string) - Case-fold string for case-insensitive comparison
@@ -607,10 +571,10 @@ pub(super) fn string_downcase(
 /// - ß (sharp s) folds to "ss"
 /// - ſ (long s) folds to "s"
 /// - All forms of sigma (Σ, σ, ς) fold to σ
-pub(super) fn string_foldcase(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn string_foldcase<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -620,21 +584,19 @@ pub(super) fn string_foldcase(
 
     use unicode_casefold::UnicodeCaseFold;
 
-    let heap_ref = heap.borrow();
-    let chars = get_string_as_chars(args[0], &heap_ref, "string-foldcase")?.to_vec();
-    drop(heap_ref);
+    let chars = get_string_as_chars(cx, args[0], "string-foldcase")?.to_vec();
 
     let folded: Vec<char> = chars_to_string(&chars).case_fold().collect();
-    Ok(heap.borrow_mut().alloc_string_chars(folded))
+    Ok(cx.alloc_string_chars(folded))
 }
 
 // ========== String Mutation ==========
 
 /// (string-fill! string fill [start [end]]) - Fill string with character
-pub(super) fn string_fill(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn string_fill<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 || args.len() > 4 {
         return Err(EvalError::WrongArity {
             expected: "2 to 4".to_string(),
@@ -644,10 +606,9 @@ pub(super) fn string_fill(
 
     // Extract fill_char and indices with immutable borrow
     let (fill_char, start, end_arg) = {
-        let heap_ref = heap.borrow();
-        let fill_char = get_char(args[1], &heap_ref, "string-fill!")?;
+        let fill_char = get_char(args[1], "string-fill!")?;
         let start = if args.len() >= 3 {
-            let n = get_integer(args[2], &heap_ref, "string-fill!")?;
+            let n = get_integer(cx, args[2], "string-fill!")?;
             if n < 0 {
                 return Err(EvalError::TypeError(
                     "string-fill! start index must be non-negative".to_string(),
@@ -658,7 +619,7 @@ pub(super) fn string_fill(
             0
         };
         let end_arg = if args.len() >= 4 {
-            let n = get_integer(args[3], &heap_ref, "string-fill!")?;
+            let n = get_integer(cx, args[3], "string-fill!")?;
             if n < 0 {
                 return Err(EvalError::TypeError(
                     "string-fill! end index must be non-negative".to_string(),
@@ -673,9 +634,7 @@ pub(super) fn string_fill(
 
     // Native heap string path
     if args[0].is_string() {
-        let mut heap_mut = heap.borrow_mut();
-        let chars = heap_mut.get_string_chars_mut(args[0]);
-        let len = chars.len();
+        let len = cx.string_char_len(args[0]);
         let end = end_arg.unwrap_or(len);
 
         if start > end || end > len {
@@ -684,8 +643,8 @@ pub(super) fn string_fill(
             ));
         }
 
-        chars[start..end].fill(fill_char);
-        return Ok(TaggedValue::UNSPECIFIED);
+        cx.string_fill(args[0], fill_char, start..end);
+        return Ok(Value::UNSPECIFIED);
     }
 
     Err(EvalError::TypeError(
@@ -694,10 +653,10 @@ pub(super) fn string_fill(
 }
 
 /// (string-copy! to at from [start [end]]) - Copy characters from one string to another
-pub(super) fn string_copy_mutate(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn string_copy_mutate<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 3 || args.len() > 5 {
         return Err(EvalError::WrongArity {
             expected: "3 to 5".to_string(),
@@ -707,9 +666,7 @@ pub(super) fn string_copy_mutate(
 
     // Extract at, source chars, start, end with immutable borrow
     let (at, source_chars, start, end) = {
-        let heap_ref = heap.borrow();
-
-        let at = get_integer(args[1], &heap_ref, "string-copy!")?;
+        let at = get_integer(cx, args[1], "string-copy!")?;
         if at < 0 {
             return Err(EvalError::TypeError(
                 "string-copy! at index must be non-negative".to_string(),
@@ -717,11 +674,11 @@ pub(super) fn string_copy_mutate(
         }
         let at = at as usize;
 
-        let from = get_string_as_chars(args[2], &heap_ref, "string-copy!")?;
+        let from = get_string_as_chars(cx, args[2], "string-copy!")?;
         let from_len = from.len();
 
         let start = if args.len() >= 4 {
-            let n = get_integer(args[3], &heap_ref, "string-copy!")?;
+            let n = get_integer(cx, args[3], "string-copy!")?;
             if n < 0 {
                 return Err(EvalError::TypeError(
                     "string-copy! start index must be non-negative".to_string(),
@@ -733,7 +690,7 @@ pub(super) fn string_copy_mutate(
         };
 
         let end = if args.len() >= 5 {
-            let n = get_integer(args[4], &heap_ref, "string-copy!")?;
+            let n = get_integer(cx, args[4], "string-copy!")?;
             if n < 0 {
                 return Err(EvalError::TypeError(
                     "string-copy! end index must be non-negative".to_string(),
@@ -757,15 +714,13 @@ pub(super) fn string_copy_mutate(
 
     // Native heap string path
     if args[0].is_string() {
-        let mut heap_mut = heap.borrow_mut();
-        let to_chars = heap_mut.get_string_chars_mut(args[0]);
-        if at + copy_len > to_chars.len() {
+        if at + copy_len > cx.string_char_len(args[0]) {
             return Err(EvalError::IndexOutOfBounds(
                 "string-copy! destination index out of bounds".to_string(),
             ));
         }
-        to_chars[at..at + copy_len].copy_from_slice(&source_chars);
-        return Ok(TaggedValue::UNSPECIFIED);
+        cx.string_copy_chars(args[0], at, &source_chars);
+        return Ok(Value::UNSPECIFIED);
     }
 
     Err(EvalError::TypeError(
@@ -778,7 +733,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use patina_runtime::Arity;
 
     // String length
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string-length",
         Arity::Exact(1),
@@ -787,7 +742,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String ref
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string-ref",
         Arity::Exact(2),
@@ -796,7 +751,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String set!
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string-set!",
         Arity::Exact(3),
@@ -805,7 +760,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Make-string
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "make-string",
         Arity::Range(1, 2),
@@ -814,7 +769,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String constructor
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string",
         Arity::Min(0),
@@ -823,7 +778,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String equality
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string=?",
         Arity::Min(2),
@@ -832,7 +787,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String less than
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string<?",
         Arity::Min(2),
@@ -841,7 +796,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String greater than
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string>?",
         Arity::Min(2),
@@ -850,7 +805,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String less than or equal
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string<=?",
         Arity::Min(2),
@@ -859,7 +814,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String greater than or equal
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string>=?",
         Arity::Min(2),
@@ -868,7 +823,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String case-insensitive equality
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string-ci=?",
         Arity::Min(2),
@@ -877,7 +832,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String case-insensitive less than
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string-ci<?",
         Arity::Min(2),
@@ -886,7 +841,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String case-insensitive greater than
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string-ci>?",
         Arity::Min(2),
@@ -895,7 +850,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String case-insensitive less than or equal
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string-ci<=?",
         Arity::Min(2),
@@ -904,7 +859,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String case-insensitive greater than or equal
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string-ci>=?",
         Arity::Min(2),
@@ -913,7 +868,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String append
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string-append",
         Arity::Min(0),
@@ -922,7 +877,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // Substring
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "substring",
         Arity::Exact(3),
@@ -931,7 +886,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String->list
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string->list",
         Arity::Range(1, 3),
@@ -940,7 +895,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // List->string
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "list->string",
         Arity::Exact(1),
@@ -949,7 +904,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String-copy
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string-copy",
         Arity::Range(1, 3),
@@ -958,7 +913,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String case conversion (scheme.char library)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "string-upcase",
         Arity::Exact(1),
@@ -966,7 +921,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         string_upcase,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "string-downcase",
         Arity::Exact(1),
@@ -974,7 +929,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         string_downcase,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.char",
         "string-foldcase",
         Arity::Exact(1),
@@ -983,7 +938,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // String mutation (scheme.base)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string-fill!",
         Arity::Range(2, 4),
@@ -991,7 +946,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         string_fill,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string-copy!",
         Arity::Range(3, 5),
