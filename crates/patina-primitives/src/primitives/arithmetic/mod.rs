@@ -12,7 +12,8 @@
 //! - Complex number operations (real-part, imag-part, magnitude, etc.)
 //! - Number theory (gcd, lcm, numerator, denominator, etc.)
 //!
-//! All operations delegate to Heap numeric methods on TaggedValue.
+//! Each takes the context (#706), and delegates to its numeric methods
+//! (`Cx::numeric_add` and the rest), which own the numeric tower.
 
 mod basic;
 mod comparison;
@@ -35,7 +36,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     // ===== Basic Arithmetic =====
 
     // Addition (with fast fixnum path)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "+",
         Arity::Min(0),
@@ -44,7 +45,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Subtraction (with fast fixnum path)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "-",
         Arity::Min(1),
@@ -53,7 +54,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Multiplication (with fast fixnum path)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "*",
         Arity::Min(0),
@@ -62,7 +63,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Division (no fast path - typically produces rationals)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "/",
         Arity::Min(1),
@@ -73,7 +74,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     // ===== Numeric Comparisons (all with fast fixnum paths) =====
 
     // Numeric equality
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "=",
         Arity::Min(2),
@@ -82,7 +83,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Less than
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "<",
         Arity::Min(2),
@@ -91,7 +92,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Greater than
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         ">",
         Arity::Min(2),
@@ -100,7 +101,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Less than or equal
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "<=",
         Arity::Min(2),
@@ -109,7 +110,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Greater than or equal
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         ">=",
         Arity::Min(2),
@@ -120,7 +121,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     // ===== Integer Division =====
 
     // Quotient
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "quotient",
         Arity::Exact(2),
@@ -129,7 +130,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Remainder
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "remainder",
         Arity::Exact(2),
@@ -138,7 +139,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Modulo
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "modulo",
         Arity::Exact(2),
@@ -147,7 +148,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Floor division (floor/, floor-quotient, floor-remainder)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "floor/",
         Arity::Exact(2),
@@ -155,7 +156,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         division::floor_div,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "floor-quotient",
         Arity::Exact(2),
@@ -163,7 +164,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         division::floor_quotient,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "floor-remainder",
         Arity::Exact(2),
@@ -172,7 +173,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Truncate division (truncate/, truncate-quotient, truncate-remainder)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "truncate/",
         Arity::Exact(2),
@@ -180,7 +181,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         division::truncate_div,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "truncate-quotient",
         Arity::Exact(2),
@@ -188,7 +189,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         division::truncate_quotient,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "truncate-remainder",
         Arity::Exact(2),
@@ -199,7 +200,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     // ===== Rounding and Utilities =====
 
     // Floor
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "floor",
         Arity::Exact(1),
@@ -208,7 +209,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Ceiling
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "ceiling",
         Arity::Exact(1),
@@ -217,7 +218,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Truncate
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "truncate",
         Arity::Exact(1),
@@ -226,7 +227,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Round
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "round",
         Arity::Exact(1),
@@ -235,7 +236,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Absolute value
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "abs",
         Arity::Exact(1),
@@ -244,7 +245,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Maximum
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "max",
         Arity::Min(1),
@@ -253,7 +254,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Minimum
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "min",
         Arity::Min(1),
@@ -264,7 +265,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     // ===== Transcendental Functions =====
 
     // Square root (in both scheme.base and scheme.inexact per R7RS)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "sqrt",
         Arity::Exact(1),
@@ -273,7 +274,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Register sqrt again under scheme.inexact
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.inexact",
         "sqrt",
         Arity::Exact(1),
@@ -282,7 +283,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Square
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "square",
         Arity::Exact(1),
@@ -291,7 +292,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Exponentiation
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "expt",
         Arity::Exact(2),
@@ -300,7 +301,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Sine
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.inexact",
         "sin",
         Arity::Exact(1),
@@ -309,7 +310,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Cosine
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.inexact",
         "cos",
         Arity::Exact(1),
@@ -318,7 +319,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Tangent
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.inexact",
         "tan",
         Arity::Exact(1),
@@ -327,7 +328,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Arcsine
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.inexact",
         "asin",
         Arity::Exact(1),
@@ -336,7 +337,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Arccosine
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.inexact",
         "acos",
         Arity::Exact(1),
@@ -345,7 +346,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Arctangent
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.inexact",
         "atan",
         Arity::Range(1, 2),
@@ -354,7 +355,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Exponential
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.inexact",
         "exp",
         Arity::Exact(1),
@@ -363,7 +364,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Natural logarithm
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.inexact",
         "log",
         Arity::Range(1, 2),
@@ -373,7 +374,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
 
     // ===== Sign and Parity Predicates (§6.2.6) =====
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "zero?",
         Arity::Exact(1),
@@ -381,7 +382,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         predicates::zero_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "positive?",
         Arity::Exact(1),
@@ -389,7 +390,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         predicates::positive_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "negative?",
         Arity::Exact(1),
@@ -397,7 +398,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         predicates::negative_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "odd?",
         Arity::Exact(1),
@@ -405,7 +406,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         predicates::odd_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "even?",
         Arity::Exact(1),
@@ -416,7 +417,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     // ===== Float Predicates =====
 
     // Finite predicate
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.inexact",
         "finite?",
         Arity::Exact(1),
@@ -425,7 +426,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Infinite predicate
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.inexact",
         "infinite?",
         Arity::Exact(1),
@@ -434,7 +435,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // NaN predicate
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.inexact",
         "nan?",
         Arity::Exact(1),
@@ -445,14 +446,14 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     // ===== Complex Number Operations =====
 
     // Real part (also in scheme.base for convenience)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "real-part",
         Arity::Exact(1),
         "Returns the real part of z.",
         complex::real_part,
     ));
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.complex",
         "real-part",
         Arity::Exact(1),
@@ -461,14 +462,14 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Imaginary part (also in scheme.base for convenience)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "imag-part",
         Arity::Exact(1),
         "Returns the imaginary part of z.",
         complex::imag_part,
     ));
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.complex",
         "imag-part",
         Arity::Exact(1),
@@ -477,7 +478,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Magnitude
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.complex",
         "magnitude",
         Arity::Exact(1),
@@ -486,7 +487,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Angle
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.complex",
         "angle",
         Arity::Exact(1),
@@ -495,7 +496,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Make rectangular
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.complex",
         "make-rectangular",
         Arity::Exact(2),
@@ -504,7 +505,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Make polar
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.complex",
         "make-polar",
         Arity::Exact(2),
@@ -515,7 +516,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     // ===== Number Theory =====
 
     // Greatest common divisor
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "gcd",
         Arity::Min(0),
@@ -524,7 +525,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Least common multiple
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "lcm",
         Arity::Min(0),
@@ -533,7 +534,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Numerator
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "numerator",
         Arity::Exact(1),
@@ -542,7 +543,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Denominator
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "denominator",
         Arity::Exact(1),
@@ -551,7 +552,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Exact
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "exact",
         Arity::Exact(1),
@@ -560,7 +561,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Inexact
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "inexact",
         Arity::Exact(1),
@@ -569,7 +570,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Exact integer square root
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "exact-integer-sqrt",
         Arity::Exact(1),
@@ -578,7 +579,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // Rationalize
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "rationalize",
         Arity::Exact(2),
