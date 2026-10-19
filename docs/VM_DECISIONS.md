@@ -151,7 +151,9 @@ pub type TaggedHandler = fn(&SharedHeap, &[TaggedValue]) -> Result<TaggedValue, 
 - **Without a machine**, an embedder's own `ApplyContext`, `call_cx`'s
   default crosses each word through a handle.
 - **Converted so far:** the type predicates (`predicates.rs`), the
-  characters (`characters.rs`) and the strings (`strings.rs`).
+  characters (`characters.rs`), the strings (`strings.rs`) and the lists
+  (`lists.rs`), but for `member` and `assoc`, which call a comparator and
+  convert with the higher-order primitives.
 
 ---
 
