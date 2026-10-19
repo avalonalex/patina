@@ -3806,11 +3806,23 @@ pub(super) fn exec_call_primitive_direct(
     arg_vals: &[TaggedValue],
     dst: u16,
 ) -> Result<Option<TaggedValue>, VmError> {
+    let index = func_id.0 as usize;
+    // A primitive that takes the context is called here, with no
+    // `ApplyContext` and no `Step` between: it can neither call back nor
+    // suspend (#706).
+    if let Some(handler) = state.primitive_registry().cx_handler(index) {
+        state
+            .primitive_registry()
+            .check_arity(index, arg_vals.len())
+            .map_err(eval_to_vm_error)?;
+        let value = state.call_cx(handler, arg_vals).map_err(eval_to_vm_error)?;
+        state.set_reg_at(base, dst, value);
+        return Ok(None);
+    }
     let registry = Rc::clone(state.primitive_registry());
     let ctx = VmApplyContext {
         state: state as *mut VmState,
     };
-    let index = func_id.0 as usize;
     let step = vm_step(state, registry.start(index, arg_vals, &ctx))?;
     // No frame check here: a continuation escaping out of a re-entrant
     // primitive is signalled at the boundary (`across_reentry`) and unwinds

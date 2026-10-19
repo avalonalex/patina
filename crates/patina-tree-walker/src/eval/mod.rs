@@ -96,6 +96,12 @@ pub struct Evaluator {
     /// is a single load of its poll word.
     #[trace(skip, reason = "the carrier's event words: no value")]
     pub(crate) mutator: Rc<patina_core::Carrier>,
+    /// The heap's instance (`Heap::instance`, #703), cached at construction
+    /// so a call of a primitive that takes the context lends it to the
+    /// context with no heap borrow and no count (#706). A heap keeps one
+    /// instance for its life; what changes is inside it.
+    #[trace(skip, reason = "the interpreter's metadata: no value")]
+    pub(crate) instance: Rc<patina_core::Instance>,
     /// Why `(scheme base)` could not be loaded at construction, if it could
     /// not: see [`Evaluator::bootstrap_error`].
     #[trace(skip, reason = "an error report: strings and library names")]
@@ -154,6 +160,7 @@ impl Evaluator {
         patina_core::GcController::note_backend("tree-walker");
         heap.borrow_mut().set_gc_threshold(gc.current_threshold());
         let mutator = Rc::clone(heap.borrow().mutator());
+        let instance = Rc::clone(heap.borrow().instance());
 
         let mut evaluator = Evaluator {
             global_env,
@@ -167,6 +174,7 @@ impl Evaluator {
             fs,
             gc: RefCell::new(gc),
             mutator,
+            instance,
             bootstrap_error: None,
         };
 

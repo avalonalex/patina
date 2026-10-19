@@ -292,6 +292,12 @@ pub struct VmState {
     /// a transfer's return, #700) is a single load of its poll word.
     #[trace(skip, reason = "the carrier's event words: no value")]
     mutator: Rc<Carrier>,
+    /// The heap's instance (`Heap::instance`, #703), cached at construction
+    /// so a call of a primitive that takes the context lends it to the
+    /// context with no heap borrow and no count (#706). A heap keeps one
+    /// instance for its life; what changes is inside it.
+    #[trace(skip, reason = "the interpreter's metadata: no value")]
+    instance: Rc<patina_core::Instance>,
     /// The carrier's driver, the capability to collect (#702), lent by the
     /// driver entry (`execute`, `execute_in`) to the loop it runs, for that
     /// loop's polls: `None` in a nested loop, which hides the driver for its
@@ -311,7 +317,6 @@ impl VmState {
         handler: patina_primitives::CxHandler,
         args: &[TaggedValue],
     ) -> Result<TaggedValue, patina_primitives::EvalError> {
-        let instance = Rc::clone(self.heap.borrow().instance());
         // SAFETY: the VM calls a primitive inside one instruction, between
         // its safe points, and a primitive that takes the context cannot
         // call back, so it reaches none: nothing collects while it runs. Its
@@ -320,7 +325,7 @@ impl VmState {
             patina_core::heap::cx::enter_call(
                 &self.heap,
                 &self.mutator,
-                &instance,
+                &self.instance,
                 args,
                 |cx, args| handler(cx, args).map(patina_core::Value::tagged),
             )
@@ -357,6 +362,7 @@ impl VmState {
         GcController::note_backend("vm");
         heap.borrow_mut().set_gc_threshold(gc.current_threshold());
         let mutator = Rc::clone(heap.borrow().mutator());
+        let instance = Rc::clone(heap.borrow().instance());
         heap.borrow_mut().enable_gc_freed_closure_tracking();
         let parameter_set = registry.resolve_index("scheme.base/%parameter-set!");
         Self {
@@ -405,6 +411,7 @@ impl VmState {
             fs: Arc::new(patina_core::NativeFs),
             gc: RefCell::new(gc),
             mutator,
+            instance,
             driver: None,
         }
     }
