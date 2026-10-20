@@ -5,11 +5,8 @@
 
 use crate::apply_context::ApplyContext;
 use crate::registry::PrimitiveRegistry;
-use patina_core::{TaggedValue, heap::PromiseState};
+use patina_core::{Cx, PromiseView, TaggedValue, Value, heap::PromiseState};
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 /// Register all lazy evaluation primitives
 pub(super) fn register(registry: &mut PrimitiveRegistry) {
@@ -24,7 +21,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         force,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.lazy",
         "promise?",
         Arity::Exact(1),
@@ -32,7 +29,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         promise_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.lazy",
         "make-promise",
         Arity::Exact(1),
@@ -41,7 +38,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // Internal helper for delay/delay-force macros
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.lazy",
         "%make-delayed-promise",
         Arity::Exact(1),
@@ -49,7 +46,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         make_delayed_promise,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.lazy",
         "%make-forced-promise",
         Arity::Exact(1),
@@ -63,15 +60,17 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 /// promise holding `obj`, wrapping a promise rather than returning it. That
 /// is what makes `(force (delay p))` yield the promise `p` itself instead of
 /// forcing through it, which `delay-force` is for.
-fn make_forced_promise(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+fn make_forced_promise<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    let state = Rc::new(RefCell::new(PromiseState::Forced(args[0])));
-    Ok(heap.borrow_mut().alloc_promise(state))
+    Ok(cx.alloc_promise(PromiseView::Forced(args[0])))
 }
 
 /// Force evaluation of a promise
@@ -152,7 +151,7 @@ fn force_tagged(ctx: &dyn ApplyContext, obj: TaggedValue) -> Result<TaggedValue,
 }
 
 /// Check if a value is a promise
-fn promise_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+fn promise_p<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -160,14 +159,14 @@ fn promise_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, Eva
         });
     }
 
-    Ok(TaggedValue::boolean(heap.borrow().is_promise(args[0])))
+    Ok(Value::boolean(cx.is_promise(args[0])))
 }
 
 /// Create a promise from a value
 ///
 /// If the value is already a promise, return it unchanged.
 /// Otherwise, wrap it in a promise that's already forced.
-fn make_promise(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+fn make_promise<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -176,21 +175,22 @@ fn make_promise(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, 
     }
 
     // Check if already a promise using heap method
-    if heap.borrow().is_promise(args[0]) {
+    if cx.is_promise(args[0]) {
         // Already a promise, return it unchanged
         return Ok(args[0]);
     }
 
     // Wrap in a forced promise natively on the heap
-    Ok(heap
-        .borrow_mut()
-        .alloc_promise(Rc::new(RefCell::new(PromiseState::Forced(args[0])))))
+    Ok(cx.alloc_promise(PromiseView::Forced(args[0])))
 }
 
 /// Create a delayed promise from a thunk (internal helper for delay macro)
 ///
 /// The thunk should be a zero-argument procedure that will be called when forced.
-fn make_delayed_promise(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+fn make_delayed_promise<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -199,7 +199,5 @@ fn make_delayed_promise(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
     }
 
     // Create a delayed promise natively on the heap
-    Ok(heap
-        .borrow_mut()
-        .alloc_promise(Rc::new(RefCell::new(PromiseState::Delayed(args[0])))))
+    Ok(cx.alloc_promise(PromiseView::Delayed(args[0])))
 }

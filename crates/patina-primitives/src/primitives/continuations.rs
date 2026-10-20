@@ -10,10 +10,9 @@
 //! handled directly by the CPS evaluator via special CpsExpr forms, not as
 //! primitives. This module only provides supporting predicates and constructors.
 use crate::registry::PrimitiveRegistry;
-use patina_core::TaggedValue;
 use patina_core::cps_expr::PromptTag;
+use patina_core::{Cx, Value};
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
 use std::rc::Rc;
 
 /// Register continuation helper primitives
@@ -22,7 +21,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     use patina_runtime::Arity;
 
     // continuation? - Type predicate
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.control",
         "continuation?",
         Arity::Exact(1),
@@ -31,7 +30,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // make-continuation-prompt-tag - Create a prompt tag
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.control",
         "make-continuation-prompt-tag",
         Arity::Range(0, 1),
@@ -40,7 +39,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // continuation-prompt-tag? - Type predicate
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.control",
         "continuation-prompt-tag?",
         Arity::Exact(1),
@@ -49,7 +48,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // default-continuation-prompt-tag - Get the default prompt tag
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.control",
         "default-continuation-prompt-tag",
         Arity::Exact(0),
@@ -59,7 +58,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 }
 
 /// Check if a value is a continuation
-fn continuation_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+fn continuation_p<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -67,21 +66,20 @@ fn continuation_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue
         });
     }
 
-    Ok(TaggedValue::boolean(heap.borrow().is_continuation(args[0])))
+    Ok(Value::boolean(cx.is_continuation(args[0])))
 }
 
 /// Create a new continuation prompt tag
-fn make_continuation_prompt_tag(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+fn make_continuation_prompt_tag<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     let name = if args.is_empty() {
         "prompt".to_string()
     } else if args.len() == 1 {
-        let heap_ref = heap.borrow();
-        if let Some(s) = heap_ref.get_string_contents(args[0]) {
+        if let Some(s) = cx.get_string_contents(args[0]) {
             s
-        } else if let Some(name) = heap_ref.get_symbol_or_identifier_name(args[0]) {
+        } else if let Some(name) = cx.get_symbol_or_identifier_name(args[0]) {
             name.to_string()
         } else {
             return Err(EvalError::TypeError(
@@ -95,16 +93,14 @@ fn make_continuation_prompt_tag(
         });
     };
 
-    Ok(heap
-        .borrow_mut()
-        .alloc_prompt_tag(Rc::new(PromptTag::new(name))))
+    Ok(cx.alloc_prompt_tag(Rc::new(PromptTag::new(name))))
 }
 
 /// Check if a value is a continuation prompt tag
-fn continuation_prompt_tag_p(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+fn continuation_prompt_tag_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -112,7 +108,7 @@ fn continuation_prompt_tag_p(
         });
     }
 
-    Ok(TaggedValue::boolean(heap.borrow().is_prompt_tag(args[0])))
+    Ok(Value::boolean(cx.is_prompt_tag(args[0])))
 }
 
 /// Get the default continuation prompt tag
@@ -121,11 +117,9 @@ fn continuation_prompt_tag_p(
 /// Each call creates a new tag with the same name but unique ID.
 /// Note: For full delimited continuation support, this should be a
 /// thread-local singleton. See DELIMITED_CONTINUATIONS_DESIGN.md.
-fn default_continuation_prompt_tag(
-    heap: &SharedHeap,
-    _args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
-    Ok(heap
-        .borrow_mut()
-        .alloc_prompt_tag(Rc::new(PromptTag::new("default"))))
+fn default_continuation_prompt_tag<'gc>(
+    cx: &mut Cx<'gc>,
+    _args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    Ok(cx.alloc_prompt_tag(Rc::new(PromptTag::new("default"))))
 }

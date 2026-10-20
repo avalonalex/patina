@@ -5,11 +5,11 @@
 //! - `call-with-values` - Call producer and consumer
 
 use crate::apply_context::ApplyContext;
-use patina_core::TaggedValue;
-use patina_runtime::{EvalError, SharedHeap};
+use patina_core::{Cx, TaggedValue, Value};
+use patina_runtime::EvalError;
 
-pub(super) fn values(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    Ok(heap.borrow_mut().values_from(args.to_vec()))
+pub(super) fn values<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+    Ok(cx.values_from(args.to_vec()))
 }
 
 /// (call-with-values producer consumer)
@@ -68,7 +68,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     use patina_runtime::Arity;
 
     // values - Return multiple values
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "values",
         Arity::Min(0),
