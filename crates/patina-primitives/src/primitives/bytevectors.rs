@@ -2,19 +2,17 @@
 //!
 //! Implements R7RS bytevector operations.
 //! Bytevectors are vectors of exact integers in the range 0-255.
-use patina_core::TaggedValue;
+//!
+//! Each takes the context (#706). The argument helpers that read no heap,
+//! the index and byte extractors, take a value alone.
+use patina_core::{Cx, Value};
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
 
-// ========== TaggedValue Extraction Helpers ==========
+// ========== Argument Extraction Helpers ==========
 
 /// Get bytevector bytes (cloned)
-fn get_bv_bytes(
-    tv: TaggedValue,
-    heap: &std::cell::Ref<'_, patina_core::Heap>,
-    fn_name: &str,
-) -> Result<Vec<u8>, EvalError> {
-    if let Some(bytes) = heap.get_bytevector_bytes(tv) {
+fn get_bv_bytes<'gc>(cx: &Cx<'gc>, tv: Value<'gc>, fn_name: &str) -> Result<Vec<u8>, EvalError> {
+    if let Some(bytes) = cx.get_bytevector_bytes(tv) {
         return Ok(bytes);
     }
     Err(EvalError::TypeError(format!(
@@ -23,12 +21,8 @@ fn get_bv_bytes(
     )))
 }
 
-/// Extract a non-negative integer from TaggedValue
-fn get_index(
-    tv: TaggedValue,
-    _heap: &std::cell::Ref<'_, patina_core::Heap>,
-    fn_name: &str,
-) -> Result<usize, EvalError> {
+/// Extract a non-negative integer from a value
+fn get_index(tv: Value<'_>, fn_name: &str) -> Result<usize, EvalError> {
     if tv.is_fixnum() {
         let n = tv.as_fixnum_unchecked();
         if n >= 0 {
@@ -45,13 +39,9 @@ fn get_index(
     )))
 }
 
-/// Extract a byte (0-255) from TaggedValue
-fn get_byte(
-    tv: TaggedValue,
-    heap: &std::cell::Ref<'_, patina_core::Heap>,
-    fn_name: &str,
-) -> Result<u8, EvalError> {
-    get_byte_in(tv, heap, fn_name, false)
+/// Extract a byte (0-255) from a value
+fn get_byte(tv: Value<'_>, fn_name: &str) -> Result<u8, EvalError> {
+    get_byte_in(tv, fn_name, false)
 }
 
 /// Extract a *fill* byte, which may also be written as a signed byte.
@@ -68,22 +58,13 @@ fn get_byte(
 /// widening [`get_byte`] itself would move Patina away from both oracles at
 /// two sites to reach one. The ceiling stays 255 either way: Gauche rejects
 /// 256 and -129, and chibi's truncation is not a behaviour to copy.
-fn get_fill_byte(
-    tv: TaggedValue,
-    heap: &std::cell::Ref<'_, patina_core::Heap>,
-    fn_name: &str,
-) -> Result<u8, EvalError> {
-    get_byte_in(tv, heap, fn_name, true)
+fn get_fill_byte(tv: Value<'_>, fn_name: &str) -> Result<u8, EvalError> {
+    get_byte_in(tv, fn_name, true)
 }
 
 /// The shared body of [`get_byte`] and [`get_fill_byte`]: the same extraction,
 /// differing only in whether the signed spelling of a byte is accepted.
-fn get_byte_in(
-    tv: TaggedValue,
-    _heap: &std::cell::Ref<'_, patina_core::Heap>,
-    fn_name: &str,
-    signed_ok: bool,
-) -> Result<u8, EvalError> {
+fn get_byte_in(tv: Value<'_>, fn_name: &str, signed_ok: bool) -> Result<u8, EvalError> {
     if tv.is_fixnum() {
         let n = tv.as_fixnum_unchecked();
         if (0..=255).contains(&n) {
@@ -110,29 +91,28 @@ fn get_byte_in(
 // ========== Bytevector Primitives ==========
 
 /// (bytevector? obj) - Type predicate
-pub(super) fn bytevector_p(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn bytevector_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    let heap_ref = heap.borrow();
-    if heap_ref.is_any_bytevector(args[0]) {
-        Ok(TaggedValue::TRUE)
+    if cx.is_any_bytevector(args[0]) {
+        Ok(Value::TRUE)
     } else {
-        Ok(TaggedValue::FALSE)
+        Ok(Value::FALSE)
     }
 }
 
 /// (make-bytevector k [byte]) - Create bytevector of k bytes
-pub(super) fn make_bytevector(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn make_bytevector<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
             expected: "1 or 2".to_string(),
@@ -140,41 +120,35 @@ pub(super) fn make_bytevector(
         });
     }
 
-    let heap_ref = heap.borrow();
-
-    let k = get_index(args[0], &heap_ref, "make-bytevector")?;
+    let k = get_index(args[0], "make-bytevector")?;
     let fill = if args.len() == 2 {
-        get_fill_byte(args[1], &heap_ref, "make-bytevector")?
+        get_fill_byte(args[1], "make-bytevector")?
     } else {
         0
     };
 
-    drop(heap_ref);
-    Ok(heap.borrow_mut().alloc_bytevector(vec![fill; k]))
+    Ok(cx.alloc_bytevector(vec![fill; k]))
 }
 
 /// (bytevector byte ...) - Construct bytevector from arguments
-pub(super) fn bytevector(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
-    let heap_ref = heap.borrow();
-
+pub(super) fn bytevector<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     let mut bytes = Vec::with_capacity(args.len());
     for (i, &arg) in args.iter().enumerate() {
-        let byte = get_byte(arg, &heap_ref, &format!("bytevector argument {}", i))?;
+        let byte = get_byte(arg, &format!("bytevector argument {}", i))?;
         bytes.push(byte);
     }
 
-    drop(heap_ref);
-    Ok(heap.borrow_mut().alloc_bytevector(bytes))
+    Ok(cx.alloc_bytevector(bytes))
 }
 
 /// (bytevector-length bytevector) - Get length
-pub(super) fn bytevector_length(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn bytevector_length<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -182,9 +156,8 @@ pub(super) fn bytevector_length(
         });
     }
 
-    let heap_ref = heap.borrow();
-    match heap_ref.bytevector_len(args[0]) {
-        Some(len) => Ok(TaggedValue::fixnum(len as i64)),
+    match cx.bytevector_len(args[0]) {
+        Some(len) => Ok(Value::fixnum(len as i64)),
         None => Err(EvalError::TypeError(
             "bytevector-length: argument must be a bytevector".to_string(),
         )),
@@ -192,10 +165,10 @@ pub(super) fn bytevector_length(
 }
 
 /// (bytevector-u8-ref bytevector k) - Get byte at index k
-pub(super) fn bytevector_u8_ref(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn bytevector_u8_ref<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -203,13 +176,11 @@ pub(super) fn bytevector_u8_ref(
         });
     }
 
-    let heap_ref = heap.borrow();
-
-    let bv_len = heap_ref.bytevector_len(args[0]).ok_or_else(|| {
+    let bv_len = cx.bytevector_len(args[0]).ok_or_else(|| {
         EvalError::TypeError("bytevector-u8-ref: argument must be a bytevector".to_string())
     })?;
 
-    let index = get_index(args[1], &heap_ref, "bytevector-u8-ref")?;
+    let index = get_index(args[1], "bytevector-u8-ref")?;
     if index >= bv_len {
         return Err(EvalError::TypeError(format!(
             "bytevector-u8-ref: index {} out of bounds (length {})",
@@ -217,8 +188,8 @@ pub(super) fn bytevector_u8_ref(
         )));
     }
 
-    match heap_ref.bytevector_u8_ref(args[0], index) {
-        Some(byte) => Ok(TaggedValue::fixnum(byte as i64)),
+    match cx.bytevector_u8_ref(args[0], index) {
+        Some(byte) => Ok(Value::fixnum(byte as i64)),
         None => Err(EvalError::TypeError(
             "bytevector-u8-ref: argument must be a bytevector".to_string(),
         )),
@@ -226,10 +197,10 @@ pub(super) fn bytevector_u8_ref(
 }
 
 /// (bytevector-u8-set! bytevector k byte) - Set byte at index k
-pub(super) fn bytevector_u8_set(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn bytevector_u8_set<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 3 {
         return Err(EvalError::WrongArity {
             expected: "3".to_string(),
@@ -237,13 +208,11 @@ pub(super) fn bytevector_u8_set(
         });
     }
 
-    let heap_ref = heap.borrow();
-
-    let bv_len = heap_ref.bytevector_len(args[0]).ok_or_else(|| {
+    let bv_len = cx.bytevector_len(args[0]).ok_or_else(|| {
         EvalError::TypeError("bytevector-u8-set!: argument must be a bytevector".to_string())
     })?;
 
-    let index = get_index(args[1], &heap_ref, "bytevector-u8-set!")?;
+    let index = get_index(args[1], "bytevector-u8-set!")?;
     if index >= bv_len {
         return Err(EvalError::TypeError(format!(
             "bytevector-u8-set!: index {} out of bounds (length {})",
@@ -251,23 +220,21 @@ pub(super) fn bytevector_u8_set(
         )));
     }
 
-    let byte = get_byte(args[2], &heap_ref, "bytevector-u8-set!")?;
-    drop(heap_ref);
+    let byte = get_byte(args[2], "bytevector-u8-set!")?;
 
-    let mut heap_mut = heap.borrow_mut();
-    if !heap_mut.bytevector_u8_set(args[0], index, byte) {
+    if !cx.bytevector_u8_set(args[0], index, byte) {
         return Err(EvalError::TypeError(
             "bytevector-u8-set!: argument must be a bytevector".to_string(),
         ));
     }
-    Ok(TaggedValue::UNSPECIFIED)
+    Ok(Value::UNSPECIFIED)
 }
 
 /// (bytevector-copy bytevector [start [end]]) - Copy bytevector
-pub(super) fn bytevector_copy(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn bytevector_copy<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
             expected: "1 to 3".to_string(),
@@ -275,11 +242,10 @@ pub(super) fn bytevector_copy(
         });
     }
 
-    let heap_ref = heap.borrow();
-    let bytes = get_bv_bytes(args[0], &heap_ref, "bytevector-copy")?;
+    let bytes = get_bv_bytes(cx, args[0], "bytevector-copy")?;
 
     let start = if args.len() >= 2 {
-        let s = get_index(args[1], &heap_ref, "bytevector-copy")?;
+        let s = get_index(args[1], "bytevector-copy")?;
         if s > bytes.len() {
             return Err(EvalError::TypeError(format!(
                 "bytevector-copy: start index out of bounds: {}",
@@ -292,7 +258,7 @@ pub(super) fn bytevector_copy(
     };
 
     let end = if args.len() >= 3 {
-        let e = get_index(args[2], &heap_ref, "bytevector-copy")?;
+        let e = get_index(args[2], "bytevector-copy")?;
         if e < start || e > bytes.len() {
             return Err(EvalError::TypeError(format!(
                 "bytevector-copy: end index out of bounds or less than start: {}",
@@ -305,15 +271,14 @@ pub(super) fn bytevector_copy(
     };
 
     let copied = bytes[start..end].to_vec();
-    drop(heap_ref);
-    Ok(heap.borrow_mut().alloc_bytevector(copied))
+    Ok(cx.alloc_bytevector(copied))
 }
 
 /// (bytevector-copy! to at from [start [end]]) - Copy bytes from one bytevector to another
-pub(super) fn bytevector_copy_mut(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn bytevector_copy_mut<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 3 || args.len() > 5 {
         return Err(EvalError::WrongArity {
             expected: "3 to 5".to_string(),
@@ -321,15 +286,13 @@ pub(super) fn bytevector_copy_mut(
         });
     }
 
-    let heap_ref = heap.borrow();
-
-    let at = get_index(args[1], &heap_ref, "bytevector-copy!")?;
+    let at = get_index(args[1], "bytevector-copy!")?;
 
     // Get source bytes
-    let from_bytes = get_bv_bytes(args[2], &heap_ref, "bytevector-copy!")?;
+    let from_bytes = get_bv_bytes(cx, args[2], "bytevector-copy!")?;
 
     let start = if args.len() >= 4 {
-        let s = get_index(args[3], &heap_ref, "bytevector-copy!")?;
+        let s = get_index(args[3], "bytevector-copy!")?;
         if s > from_bytes.len() {
             return Err(EvalError::TypeError(format!(
                 "bytevector-copy!: start index out of bounds: {}",
@@ -342,7 +305,7 @@ pub(super) fn bytevector_copy_mut(
     };
 
     let end = if args.len() >= 5 {
-        let e = get_index(args[4], &heap_ref, "bytevector-copy!")?;
+        let e = get_index(args[4], "bytevector-copy!")?;
         if e < start || e > from_bytes.len() {
             return Err(EvalError::TypeError(format!(
                 "bytevector-copy!: end index out of bounds or less than start: {}",
@@ -358,7 +321,7 @@ pub(super) fn bytevector_copy_mut(
     let copy_len = src_slice.len();
 
     // Validate destination has enough space
-    let to_len = heap_ref.bytevector_len(args[0]).ok_or_else(|| {
+    let to_len = cx.bytevector_len(args[0]).ok_or_else(|| {
         EvalError::TypeError("bytevector-copy!: first argument must be a bytevector".to_string())
     })?;
 
@@ -372,40 +335,35 @@ pub(super) fn bytevector_copy_mut(
 
     // Copy into a temp buffer (src_slice already cloned via get_bv_bytes)
     let temp = src_slice.to_vec();
-    drop(heap_ref);
 
-    let mut heap_mut = heap.borrow_mut();
-    if !heap_mut.bytevector_copy_into(args[0], at, &temp) {
+    if !cx.bytevector_copy_into(args[0], at, &temp) {
         return Err(EvalError::TypeError(
             "bytevector-copy!: first argument must be a bytevector".to_string(),
         ));
     }
 
-    Ok(TaggedValue::UNSPECIFIED)
+    Ok(Value::UNSPECIFIED)
 }
 
 /// (bytevector-append bytevector ...) - Concatenate bytevectors
-pub(super) fn bytevector_append(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
-    let heap_ref = heap.borrow();
-
+pub(super) fn bytevector_append<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     let mut result_bytes = Vec::new();
     for (i, &arg) in args.iter().enumerate() {
-        let bytes = get_bv_bytes(arg, &heap_ref, &format!("bytevector-append argument {}", i))?;
+        let bytes = get_bv_bytes(cx, arg, &format!("bytevector-append argument {}", i))?;
         result_bytes.extend_from_slice(&bytes);
     }
 
-    drop(heap_ref);
-    Ok(heap.borrow_mut().alloc_bytevector(result_bytes))
+    Ok(cx.alloc_bytevector(result_bytes))
 }
 
 /// (utf8->string bytevector [start [end]]) - Decode UTF-8 bytevector to string
-pub(super) fn utf8_to_string(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn utf8_to_string<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
             expected: "1 to 3".to_string(),
@@ -413,11 +371,10 @@ pub(super) fn utf8_to_string(
         });
     }
 
-    let heap_ref = heap.borrow();
-    let bytes = get_bv_bytes(args[0], &heap_ref, "utf8->string")?;
+    let bytes = get_bv_bytes(cx, args[0], "utf8->string")?;
 
     let start = if args.len() >= 2 {
-        let s = get_index(args[1], &heap_ref, "utf8->string")?;
+        let s = get_index(args[1], "utf8->string")?;
         if s > bytes.len() {
             return Err(EvalError::TypeError(format!(
                 "utf8->string: start index out of bounds: {}",
@@ -430,7 +387,7 @@ pub(super) fn utf8_to_string(
     };
 
     let end = if args.len() >= 3 {
-        let e = get_index(args[2], &heap_ref, "utf8->string")?;
+        let e = get_index(args[2], "utf8->string")?;
         if e < start || e > bytes.len() {
             return Err(EvalError::TypeError(format!(
                 "utf8->string: end index out of bounds or less than start: {}",
@@ -444,10 +401,7 @@ pub(super) fn utf8_to_string(
 
     let slice = &bytes[start..end];
     match std::str::from_utf8(slice) {
-        Ok(s) => {
-            drop(heap_ref);
-            Ok(heap.borrow_mut().alloc_string(s.to_string()))
-        }
+        Ok(s) => Ok(cx.alloc_string(s.to_string())),
         Err(e) => Err(EvalError::TypeError(format!(
             "utf8->string: invalid UTF-8 sequence at byte {}",
             e.valid_up_to()
@@ -456,10 +410,10 @@ pub(super) fn utf8_to_string(
 }
 
 /// (string->utf8 string [start [end]]) - Encode string as UTF-8 bytevector
-pub(super) fn string_to_utf8(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn string_to_utf8<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() || args.len() > 3 {
         return Err(EvalError::WrongArity {
             expected: "1 to 3".to_string(),
@@ -467,9 +421,7 @@ pub(super) fn string_to_utf8(
         });
     }
 
-    let heap_ref = heap.borrow();
-
-    let s = heap_ref.get_string_contents(args[0]).ok_or_else(|| {
+    let s = cx.get_string_contents(args[0]).ok_or_else(|| {
         EvalError::TypeError("string->utf8: argument must be a string".to_string())
     })?;
 
@@ -477,7 +429,7 @@ pub(super) fn string_to_utf8(
     let char_count = chars.len();
 
     let start = if args.len() >= 2 {
-        let idx = get_index(args[1], &heap_ref, "string->utf8")?;
+        let idx = get_index(args[1], "string->utf8")?;
         if idx > char_count {
             return Err(EvalError::TypeError(format!(
                 "string->utf8: start index out of bounds: {}",
@@ -490,7 +442,7 @@ pub(super) fn string_to_utf8(
     };
 
     let end = if args.len() >= 3 {
-        let idx = get_index(args[2], &heap_ref, "string->utf8")?;
+        let idx = get_index(args[2], "string->utf8")?;
         if idx < start || idx > char_count {
             return Err(EvalError::TypeError(format!(
                 "string->utf8: end index out of bounds or less than start: {}",
@@ -506,8 +458,7 @@ pub(super) fn string_to_utf8(
     let substring: String = chars.iter().skip(start).take(end - start).collect();
     let bytes = substring.into_bytes();
 
-    drop(heap_ref);
-    Ok(heap.borrow_mut().alloc_bytevector(bytes))
+    Ok(cx.alloc_bytevector(bytes))
 }
 
 pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
@@ -515,7 +466,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     use patina_runtime::Arity;
 
     // bytevector? - Type predicate
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "bytevector?",
         Arity::Exact(1),
@@ -524,7 +475,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // make-bytevector - Create bytevector
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "make-bytevector",
         Arity::Range(1, 2),
@@ -533,7 +484,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // bytevector - Construct from arguments
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "bytevector",
         Arity::Min(0),
@@ -542,7 +493,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // bytevector-length - Get length
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "bytevector-length",
         Arity::Exact(1),
@@ -551,7 +502,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // bytevector-u8-ref - Get byte
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "bytevector-u8-ref",
         Arity::Exact(2),
@@ -560,7 +511,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // bytevector-u8-set! - Set byte
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "bytevector-u8-set!",
         Arity::Exact(3),
@@ -569,7 +520,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // bytevector-copy - Copy bytevector
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "bytevector-copy",
         Arity::Range(1, 3),
@@ -578,7 +529,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // bytevector-copy! - Copy bytes
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "bytevector-copy!",
         Arity::Range(3, 5),
@@ -587,7 +538,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // bytevector-append - Concatenate bytevectors
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "bytevector-append",
         Arity::Min(0),
@@ -596,7 +547,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // utf8->string - Decode UTF-8 bytevector to string
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "utf8->string",
         Arity::Range(1, 3),
@@ -605,7 +556,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
     ));
 
     // string->utf8 - Encode string as UTF-8 bytevector
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "string->utf8",
         Arity::Range(1, 3),
