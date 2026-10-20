@@ -29,7 +29,7 @@ use patina_runtime::Arity;
 
 pub(super) fn register(registry: &mut PrimitiveRegistry) {
     // Port predicates
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "port?",
         Arity::Exact(1),
@@ -37,7 +37,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::port_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "input-port?",
         Arity::Exact(1),
@@ -45,7 +45,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::input_port_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "output-port?",
         Arity::Exact(1),
@@ -53,7 +53,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::output_port_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "textual-port?",
         Arity::Exact(1),
@@ -61,7 +61,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::textual_port_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "binary-port?",
         Arity::Exact(1),
@@ -69,7 +69,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::binary_port_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "input-port-open?",
         Arity::Exact(1),
@@ -77,7 +77,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::input_port_open_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "output-port-open?",
         Arity::Exact(1),
@@ -86,7 +86,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // String ports
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "open-input-string",
         Arity::Exact(1),
@@ -94,7 +94,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::open_input_string,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "open-output-string",
         Arity::Exact(0),
@@ -102,7 +102,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::open_output_string,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "get-output-string",
         Arity::Exact(1),
@@ -111,7 +111,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // Bytevector ports
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "open-input-bytevector",
         Arity::Exact(1),
@@ -119,7 +119,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::open_input_bytevector,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "open-output-bytevector",
         Arity::Exact(0),
@@ -127,7 +127,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::open_output_bytevector,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "get-output-bytevector",
         Arity::Exact(1),
@@ -136,7 +136,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // Current ports
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "current-input-port",
         Arity::Range(0, 1),
@@ -144,7 +144,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::current_input_port,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "current-output-port",
         Arity::Range(0, 1),
@@ -152,7 +152,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::current_output_port,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "current-error-port",
         Arity::Range(0, 1),
@@ -161,7 +161,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // Port operations
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "close-port",
         Arity::Exact(1),
@@ -169,7 +169,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::close_port,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "close-input-port",
         Arity::Exact(1),
@@ -177,7 +177,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::close_input_port,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "close-output-port",
         Arity::Exact(1),
@@ -194,7 +194,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // EOF handling
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "eof-object?",
         Arity::Exact(1),
@@ -202,7 +202,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::eof_object_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "eof-object",
         Arity::Exact(0),
@@ -286,7 +286,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // Text input
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "read-char",
         Arity::Range(0, 1),
@@ -294,7 +294,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         text_input::read_char,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "peek-char",
         Arity::Range(0, 1),
@@ -302,7 +302,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         text_input::peek_char,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "char-ready?",
         Arity::Range(0, 1),
@@ -310,7 +310,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         text_input::char_ready_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "read-line",
         // 0..=2: the optional second argument is chibi's max-chars
@@ -320,7 +320,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         text_input::read_line,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "read-string",
         Arity::Range(1, 2),
@@ -329,7 +329,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // Binary I/O
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "read-u8",
         Arity::Range(0, 1),
@@ -337,7 +337,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         binary::read_u8,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "peek-u8",
         Arity::Range(0, 1),
@@ -345,7 +345,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         binary::peek_u8,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "u8-ready?",
         Arity::Range(0, 1),
@@ -353,7 +353,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         binary::u8_ready_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "write-u8",
         Arity::Range(1, 2),
@@ -361,7 +361,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         binary::write_u8,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "read-bytevector",
         Arity::Range(1, 2),
@@ -369,7 +369,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         binary::read_bytevector,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "read-bytevector!",
         Arity::Range(1, 4),
@@ -377,7 +377,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         binary::read_bytevector_bang,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "write-bytevector",
         Arity::Range(1, 4),
@@ -386,7 +386,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // Read (S-expression parsing) - in (scheme base)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "read",
         Arity::Range(0, 1),
@@ -395,7 +395,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // (scheme read) library - re-exports read
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.read",
         "read",
         Arity::Range(0, 1),
@@ -443,7 +443,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // Flush is in scheme base
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "flush-output-port",
         Arity::Range(0, 1),

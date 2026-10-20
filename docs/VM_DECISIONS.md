@@ -125,21 +125,19 @@ for the design, root inventory, safe-point protocol, and staging.
 
 ## 6. Primitives: Shared `patina-primitives` Crate
 
-**Decision:** ~290 heap-only primitives in `patina-primitives` (shared by
-tree-walker and VM). ~6 higher-order primitives use `ApplyContext` trait, each
-backend provides its own.
+**Decision:** ~305 primitives in `patina-primitives` that take the context
+(shared by tree-walker and VM). ~30 higher-order and resumable primitives use
+the `ApplyContext` trait, which each backend provides.
 
-**The signature is moving to the context** (#706; `PRD/GC_PRD.md` §11.3's
-`Prim`), one category per PR. The registry accepts both kinds while the files
-convert, and the old one goes with the last file:
+**The signature is the context's** (#706; `PRD/GC_PRD.md` §11.3's `Prim`).
+Every primitive that calls nothing back takes the context. The kind that took
+the heap went with the last of its files, I/O's (#706, part 12):
 
 ```rust
 // A primitive that takes the context: reads and allocates through the `Cx`,
 // and its arguments and value are values of it.
 pub type CxHandler =
     for<'gc> fn(&mut Cx<'gc>, &[Value<'gc>]) -> Result<Value<'gc>, EvalError>;
-// The kind it replaces.
-pub type TaggedHandler = fn(&SharedHeap, &[TaggedValue]) -> Result<TaggedValue, EvalError>;
 ```
 
 - **The machine makes the context.** It does so where it calls the
@@ -151,23 +149,20 @@ pub type TaggedHandler = fn(&SharedHeap, &[TaggedValue]) -> Result<TaggedValue, 
   point, and nothing collects while it runs.
 - **The VM calls one directly** at a `CallPrimitive` site
   (`PrimitiveRegistry::cx_handler`), with no `ApplyContext` and no `Step`
-  between, since it can neither call back nor suspend. A heap handler's call
-  pays about 10 instructions for the check until its category converts.
+  between, since it can neither call back nor suspend. A higher-order or
+  resumable primitive's call pays about 10 instructions for the check.
 - **Without a machine**, an embedder's own `ApplyContext`, `call_cx`'s
   default crosses each word through a handle.
-- **Converted so far:** the type predicates (`predicates.rs`), the
-  characters (`characters.rs`), the strings (`strings.rs`), the lists
-  (`lists.rs`), but for `member` and `assoc`, which call a comparator and
-  convert with the higher-order primitives, the vectors (`vectors.rs`), the
-  numbers (`arithmetic/`), the bytevectors (`bytevectors.rs`) and the
-  records (`records.rs`), whose `%record-set!` stores through the funnel's
-  record field, the equality, symbol, bitwise, number conversion and
-  ephemeron primitives, and the runtime's: prompt tags, the promise and
-  `values` constructors, the process context, `features`, the clock and
-  `gc-stats`, the datum writer and text output, and the exceptions. The
-  writer reads an object's kind through `Cx::get_object` and its values
-  through the context's accessors; its `_tagged` entry points cross a word
-  in for a host (`NoGcScope::cross`).
+- **Stores** go through the funnel (`Cx::store`, the ranges), and a record's
+  field through its `RecordField`.
+- **The datum writer** reads an object's kind through `Cx::get_object` and
+  its values through the context's accessors. Its `_tagged` entry points
+  cross a word in for a host (`NoGcScope::cross`).
+- **Still on the heap:** the higher-order and resumable primitives, through
+  `ApplyContext::heap`. They are `member` and `assoc` with a comparator,
+  `force`, `call-with-values`, `(gc)`, `eval` and `load`, the parameters,
+  `call-with-port`, and the file and directory procedures. They are what is
+  left of #706.
 
 ---
 

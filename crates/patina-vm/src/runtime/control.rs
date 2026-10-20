@@ -3840,8 +3840,9 @@ pub(super) fn exec_call_primitive_direct(
 }
 
 /// Call a primitive procedure (as returned by `primitive_procedure`).
-/// Arguments are borrowed: heap-tier handlers read them in place; only the
-/// higher-order tier copies them into an owned Vec at the registry boundary.
+/// Arguments are borrowed: a primitive that takes the context reads them in
+/// place; only the higher-order tier copies them into an owned Vec at the
+/// registry boundary.
 ///
 /// # State contract
 ///

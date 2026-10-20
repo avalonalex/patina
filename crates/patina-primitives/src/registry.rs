@@ -3,25 +3,19 @@
 use crate::apply_context::ApplyContext;
 use patina_core::{CollectKind, Cx, Value};
 use patina_runtime::environment::Environment;
-use patina_runtime::{Arity, EvalError, SharedHeap, TaggedValue};
+use patina_runtime::{Arity, EvalError, TaggedValue};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
-
-/// Handler for heap-only primitives (~260 primitives)
-/// These only need the heap for allocation/inspection. Arguments are borrowed:
-/// heap handlers never re-enter the evaluator, so the slice can safely point at
-/// caller-owned storage (eventually the VM register file itself).
-///
-/// Giving way to [`CxHandler`], one category of primitives at a time (#706).
-pub type TaggedHandler = fn(&SharedHeap, &[TaggedValue]) -> Result<TaggedValue, EvalError>;
 
 /// Handler for a primitive that takes the context (#706; `PRD/GC_PRD.md`
 /// §11.3's `Prim`): it reads and allocates through the [`Cx`], and its
 /// arguments and value are values of it, so the borrow checker refuses one
 /// held where a collection could free it. It cannot call back into the
 /// evaluator: it has no [`ApplyContext`]. The machine makes the context for
-/// the call ([`ApplyContext::call_cx`]).
+/// the call ([`ApplyContext::call_cx`]). Every primitive that calls nothing
+/// back is one: the kind that took the heap went with the last of its files.
+/// Its arguments are borrowed, since it never re-enters the evaluator.
 pub type CxHandler = for<'gc> fn(&mut Cx<'gc>, &[Value<'gc>]) -> Result<Value<'gc>, EvalError>;
 
 /// Handler for higher-order primitives (~25 primitives)
@@ -131,9 +125,7 @@ pub type ResumableResume =
 
 /// Handler variant for a primitive
 pub enum PrimitiveHandler {
-    /// Heap-only: only needs SharedHeap
-    Heap(TaggedHandler),
-    /// Takes the context: what every heap-only handler becomes (#706).
+    /// Takes the context (#706): every primitive that calls nothing back.
     Cx(CxHandler),
     /// Higher-order: needs ApplyContext (for apply_proc, eval_expr, load_scheme_library)
     HigherOrder(HOTaggedHandler),
@@ -224,22 +216,6 @@ pub struct PrimitiveFn {
 }
 
 impl PrimitiveFn {
-    pub fn new_heap(
-        library: &'static str,
-        name: &'static str,
-        arity: Arity,
-        help: &'static str,
-        handler: TaggedHandler,
-    ) -> Self {
-        PrimitiveFn {
-            library,
-            name,
-            arity,
-            help,
-            handler: PrimitiveHandler::Heap(handler),
-        }
-    }
-
     /// A primitive that takes the context ([`CxHandler`], #706).
     pub fn new_cx(
         library: &'static str,
@@ -470,7 +446,6 @@ impl PrimitiveRegistry {
         let primitive = self.entry(index)?;
         primitive.check_arity(args.len())?;
         match &primitive.handler {
-            PrimitiveHandler::Heap(h) => h(ctx.heap(), args),
             PrimitiveHandler::Cx(h) => ctx.call_cx(*h, args),
             PrimitiveHandler::HigherOrder(h) => h(ctx, args.to_vec()),
             #[expect(
@@ -499,7 +474,6 @@ impl PrimitiveRegistry {
         let primitive = self.entry(index)?;
         primitive.check_arity(args.len())?;
         match &primitive.handler {
-            PrimitiveHandler::Heap(h) => h(ctx.heap(), &args),
             PrimitiveHandler::Cx(h) => ctx.call_cx(*h, &args),
             PrimitiveHandler::HigherOrder(h) => h(ctx, args),
             #[expect(
@@ -557,7 +531,6 @@ impl PrimitiveRegistry {
         let primitive = self.entry(index)?;
         primitive.check_arity(args.len())?;
         match &primitive.handler {
-            PrimitiveHandler::Heap(h) => h(ctx.heap(), args).map(Step::Done),
             PrimitiveHandler::Cx(h) => ctx.call_cx(*h, args).map(Step::Done),
             PrimitiveHandler::HigherOrder(h) => h(ctx, args.to_vec()).map(Step::Done),
             PrimitiveHandler::Resumable { start, .. } => start(ctx, args),

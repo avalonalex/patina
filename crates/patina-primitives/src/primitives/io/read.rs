@@ -3,15 +3,14 @@
 //! This module implements the R7RS read procedure for parsing
 //! S-expressions from input ports.
 
-use super::ports::get_input_port_tagged;
-use patina_core::TaggedValue;
+use super::ports::get_input_port;
+use patina_core::{Cx, Value};
 use patina_frontend::Parser;
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
 
 /// (read [port]) - Read a Scheme expression from an input port
 /// Returns the parsed value, or eof-object if at end of input
-pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn read<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() > 1 {
         return Err(EvalError::WrongArity {
             expected: "read expects 0 or 1 arguments".to_string(),
@@ -20,17 +19,13 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
     }
 
     // Extract port from tagged args or use current-input-port
-    let port = {
-        let heap_ref = heap.borrow();
-        get_input_port_tagged(args, 0, &heap_ref)?
-    };
+    let port = get_input_port(cx, args, 0)?;
 
+    // The reader reads through this primitive's own context (#704, #706).
     let name = port.input_name();
-    patina_core::NoGcScope::with_cx(heap, |cx| {
-        Parser::read_from_port(port.clone(), cx).map(|datum| datum.map(|d| d.tagged()))
-    })
-    .map(|datum| datum.unwrap_or(TaggedValue::EOF))
-    .map_err(|e| read_error(&e, &name, &port))
+    Parser::read_from_port(port.clone(), cx)
+        .map(|datum| datum.unwrap_or(Value::EOF))
+        .map_err(|e| read_error(&e, &name, &port))
 }
 
 /// Report the data source's coordinates, not coordinates in an unread slice
