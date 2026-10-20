@@ -159,7 +159,9 @@ pub type TaggedHandler = fn(&SharedHeap, &[TaggedValue]) -> Result<TaggedValue, 
   characters (`characters.rs`), the strings (`strings.rs`), the lists
   (`lists.rs`), but for `member` and `assoc`, which call a comparator and
   convert with the higher-order primitives, the vectors (`vectors.rs`), the
-  numbers (`arithmetic/`) and the bytevectors (`bytevectors.rs`).
+  numbers (`arithmetic/`), the bytevectors (`bytevectors.rs`) and the
+  records (`records.rs`), whose `%record-set!` stores through the funnel's
+  record field.
 
 ---
 
