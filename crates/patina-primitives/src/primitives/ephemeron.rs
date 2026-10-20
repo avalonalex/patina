@@ -9,15 +9,15 @@
 //!
 //! The behaviour lives in the collector (`heap::gc`'s ephemeron fixpoint);
 //! these procedures are the SRFI's surface over `HeapObjectData::Ephemeron`.
+//! Each takes the context (#706).
 
 use crate::registry::{PrimitiveFn, PrimitiveRegistry, expect_arity};
-use patina_core::TaggedValue;
+use patina_core::{Cx, Value};
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
 
 pub fn register(registry: &mut PrimitiveRegistry) {
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.ephemeron",
         "make-ephemeron",
         Arity::Exact(2),
@@ -25,7 +25,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
         make_ephemeron,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.ephemeron",
         "ephemeron?",
         Arity::Exact(1),
@@ -33,7 +33,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
         ephemeron_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.ephemeron",
         "ephemeron-broken?",
         Arity::Exact(1),
@@ -41,7 +41,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
         ephemeron_broken_p,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.ephemeron",
         "ephemeron-key",
         Arity::Exact(1),
@@ -49,7 +49,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
         ephemeron_key,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.ephemeron",
         "ephemeron-datum",
         Arity::Exact(1),
@@ -57,7 +57,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
         ephemeron_datum,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.ephemeron",
         "reference-barrier",
         Arity::Exact(1),
@@ -72,49 +72,48 @@ pub fn register(registry: &mut PrimitiveRegistry) {
 /// The inner `Option` is `None` for a broken pair, so `ephemeron-broken?`
 /// answers from the same lookup — and a pair whose key is legitimately `#f`
 /// stays distinguishable from a broken one.
-fn as_ephemeron(
-    heap: &SharedHeap,
+fn as_ephemeron<'gc>(
+    cx: &Cx<'gc>,
     who: &str,
-    args: &[TaggedValue],
-) -> Result<Option<(TaggedValue, TaggedValue)>, EvalError> {
+    args: &[Value<'gc>],
+) -> Result<Option<(Value<'gc>, Value<'gc>)>, EvalError> {
     expect_arity(args, 1)?;
     let obj = args[0];
-    let heap = heap.borrow();
-    heap.ephemeron_state(obj).ok_or_else(|| {
+    cx.ephemeron_state(obj).ok_or_else(|| {
         EvalError::TypeError(format!(
             "{who}: expected an ephemeron, got {}",
-            heap.type_name(obj)
+            cx.type_name(obj)
         ))
     })
 }
 
-fn make_ephemeron(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+fn make_ephemeron<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     expect_arity(args, 2)?;
-    Ok(heap.borrow_mut().alloc_ephemeron(args[0], args[1]))
+    Ok(cx.alloc_ephemeron(args[0], args[1]))
 }
 
-fn ephemeron_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+fn ephemeron_p<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     expect_arity(args, 1)?;
-    Ok(TaggedValue::boolean(heap.borrow().is_ephemeron(args[0])))
+    Ok(Value::boolean(cx.is_ephemeron(args[0])))
 }
 
 /// A pair is broken exactly when the collector cleared it, which it signals by
 /// setting the key to `#f`. SRFI 124 lets a key legitimately *be* `#f`, so
 /// this asks the heap rather than comparing the key a caller could have
 /// supplied — a pair made with a `#f` key is not broken until collected.
-fn ephemeron_broken_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    let pair = as_ephemeron(heap, "ephemeron-broken?", args)?;
-    Ok(TaggedValue::boolean(pair.is_none()))
+fn ephemeron_broken_p<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+    let pair = as_ephemeron(cx, "ephemeron-broken?", args)?;
+    Ok(Value::boolean(pair.is_none()))
 }
 
-fn ephemeron_key(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    let pair = as_ephemeron(heap, "ephemeron-key", args)?;
-    Ok(pair.map_or(TaggedValue::FALSE, |(key, _)| key))
+fn ephemeron_key<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+    let pair = as_ephemeron(cx, "ephemeron-key", args)?;
+    Ok(pair.map_or(Value::FALSE, |(key, _)| key))
 }
 
-fn ephemeron_datum(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    let pair = as_ephemeron(heap, "ephemeron-datum", args)?;
-    Ok(pair.map_or(TaggedValue::FALSE, |(_, datum)| datum))
+fn ephemeron_datum<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+    let pair = as_ephemeron(cx, "ephemeron-datum", args)?;
+    Ok(pair.map_or(Value::FALSE, |(_, datum)| datum))
 }
 
 /// SRFI 124: "returns an unspecified value" after ensuring `obj` is still
@@ -125,7 +124,7 @@ fn ephemeron_datum(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
 /// this primitive. The VM's temporary retirement (#423) happens after the
 /// call, and never clears the local binding before the argument is loaded.
 /// The tree-walker likewise roots the argument while evaluating the call.
-fn reference_barrier(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+fn reference_barrier<'gc>(_cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     expect_arity(args, 1)?;
-    Ok(TaggedValue::UNSPECIFIED)
+    Ok(Value::UNSPECIFIED)
 }
