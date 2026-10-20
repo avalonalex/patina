@@ -452,7 +452,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // File utilities (scheme file library)
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.file",
         "file-exists?",
         Arity::Exact(1),
@@ -460,7 +460,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         file::file_exists_p,
     ));
 
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.file",
         "delete-file",
         Arity::Exact(1),
@@ -476,12 +476,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
             "directory-files",
             Arity::Exact(1),
             "Returns the entry names in a directory, including \".\" and \"..\".",
-            directory::directory_files
-                as fn(
-                    &dyn crate::apply_context::ApplyContext,
-                    Vec<patina_core::TaggedValue>,
-                )
-                    -> Result<patina_core::TaggedValue, patina_runtime::EvalError>,
+            directory::directory_files as crate::registry::CxHandler,
         ),
         (
             "create-directory",
@@ -520,13 +515,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
             directory::file_regular_p,
         ),
     ] {
-        registry.register(PrimitiveFn::new_higher_order(
-            "scheme.file",
-            name,
-            arity,
-            doc,
-            f,
-        ));
+        registry.register(PrimitiveFn::new_cx("scheme.file", name, arity, doc, f));
     }
 
     // Higher-order file operations: `(patina internal io)`'s, which
