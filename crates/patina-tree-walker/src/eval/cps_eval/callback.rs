@@ -137,6 +137,29 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
         self.cps.evaluator.call_cx(handler, args)
     }
 
+    /// A higher-order primitive's call back (#706): this context's
+    /// [`Self::apply_proc`], with its value branded in the primitive's
+    /// context.
+    fn apply_in<'gc>(
+        &self,
+        _cx: &mut patina_core::Cx<'gc>,
+        proc: patina_core::Value<'gc>,
+        args: &[patina_core::Value<'gc>],
+    ) -> Result<patina_core::Value<'gc>, EvalError> {
+        let args = patina_core::Value::tagged_slice(args).to_vec();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the call back `apply_in` is for, on a nested trampoline that defers, as \
+                      `apply_proc`'s own reason says; each of its callers gives what it holds \
+                      across it, at its call"
+        )]
+        let result = self.apply_proc(proc.tagged(), args)?;
+        // SAFETY: the call ran on a nested trampoline, which cannot collect,
+        // and the word it answered stays live until the primitive's context,
+        // whose brand `'gc` is, closes.
+        Ok(unsafe { patina_core::Value::from_tagged(result) })
+    }
+
     /// The evaluator's own: a step's resumable primitive, inside the step
     /// (#706).
     fn step_cx(

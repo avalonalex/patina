@@ -5,6 +5,7 @@
 //! use this trait to remain backend-agnostic.
 
 use crate::registry::{CxHandler, StepFn, TaggedStep};
+use patina_core::{Cx, Value};
 use patina_runtime::EvalError;
 use patina_runtime::{Environment, FileSystem, Library, SharedHeap, TaggedValue};
 use std::rc::Rc;
@@ -30,6 +31,30 @@ pub trait ApplyContext {
         proc: TaggedValue,
         args: Vec<TaggedValue>,
     ) -> Result<TaggedValue, EvalError>;
+
+    /// Call `proc` on `args` from a higher-order primitive's context, as
+    /// [`Self::apply_proc`] does, and answer its value in that context
+    /// (#706). What the primitive holds across the call stays live: the call
+    /// runs on a nested loop, which cannot collect.
+    ///
+    /// The machines override this, branding the word the call answers. The
+    /// default, for a context with no machine, crosses it back through a
+    /// handle.
+    fn apply_in<'gc>(
+        &self,
+        cx: &mut Cx<'gc>,
+        proc: Value<'gc>,
+        args: &[Value<'gc>],
+    ) -> Result<Value<'gc>, EvalError> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the call back `apply_in` makes; each of its callers gives what it holds \
+                      across it, at its call"
+        )]
+        let result = self.apply_proc(proc.tagged(), Value::tagged_slice(args).to_vec())?;
+        let handle = self.heap().borrow().hold(result);
+        Ok(cx.held(&handle))
+    }
 
     /// Evaluate a datum expression in the given environment.
     ///
@@ -61,9 +86,11 @@ pub trait ApplyContext {
         })
     }
 
-    /// Run `step`, one half of a resumable primitive, in a context over
-    /// `args` (#706): how the registry starts one and resumes it. Its step
-    /// leaves the context as words ([`Step::tagged`](crate::Step::tagged)).
+    /// Run `step`, one half of a resumable primitive or a higher-order
+    /// primitive, in a context over `args` (#706): how the registry runs
+    /// either. Its step leaves the context as words
+    /// ([`Step::tagged`](crate::Step::tagged)); a higher-order primitive's is
+    /// done with its value.
     ///
     /// The machines override this as they do [`Self::call_cx`]. The default,
     /// for a context with no machine, crosses each word through a handle.

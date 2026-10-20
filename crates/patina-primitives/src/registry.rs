@@ -18,12 +18,15 @@ use std::rc::Rc;
 /// Its arguments are borrowed, since it never re-enters the evaluator.
 pub type CxHandler = for<'gc> fn(&mut Cx<'gc>, &[Value<'gc>]) -> Result<Value<'gc>, EvalError>;
 
-/// Handler for higher-order primitives (10 of them)
-/// These need ApplyContext to call back into the evaluator. They take an
-/// owned Vec: re-entering the VM may reallocate the register file, which
-/// would invalidate a borrowed argument slice.
-pub type HOTaggedHandler =
-    fn(&dyn ApplyContext, Vec<TaggedValue>) -> Result<TaggedValue, EvalError>;
+/// Handler for a higher-order primitive (10 of them): one that calls back
+/// into the evaluator from Rust ([`ApplyContext::apply_in`]) or loads a
+/// library. It takes the context (#706), and the machine's [`ApplyContext`]
+/// beside it to call back through. Its values stay live across a call back,
+/// which runs on a nested loop that cannot collect. The registry hands it a
+/// copy of its arguments: re-entering the VM may reallocate the register
+/// file, which would invalidate a borrowed argument slice.
+pub type HigherOrderHandler =
+    for<'gc> fn(&mut Cx<'gc>, &dyn ApplyContext, &[Value<'gc>]) -> Result<Value<'gc>, EvalError>;
 
 /// What a resumable primitive asks of the machine running it.
 ///
@@ -132,9 +135,9 @@ impl Step<'_> {
     }
 }
 
-/// One half of a resumable primitive as the registry hands it to a machine
-/// ([`ApplyContext::step_cx`]): run in a context over its words, it answers
-/// its step as words.
+/// One half of a resumable primitive, or a higher-order primitive, as the
+/// registry hands it to a machine ([`ApplyContext::step_cx`]): run in a
+/// context over its words, it answers its step as words.
 pub type StepFn<'a> =
     &'a mut dyn for<'gc> FnMut(&mut Cx<'gc>, &[Value<'gc>]) -> Result<TaggedStep, EvalError>;
 
@@ -199,8 +202,9 @@ pub type ResumableResume = for<'gc> fn(
 pub enum PrimitiveHandler {
     /// Takes the context (#706): every primitive that calls nothing back.
     Cx(CxHandler),
-    /// Higher-order: needs ApplyContext (for apply_proc, eval_expr, load_scheme_library)
-    HigherOrder(HOTaggedHandler),
+    /// Higher-order: takes the context, and calls back through the
+    /// `ApplyContext` beside it ([`HigherOrderHandler`]).
+    HigherOrder(HigherOrderHandler),
     /// Calls a procedure and carries on with the result through the machine,
     /// not from Rust ([`Step`]).
     Resumable {
@@ -274,6 +278,25 @@ fn start_in(
     ctx.step_cx(args, &mut |cx, args| start(cx, ctx, args).map(Step::tagged))
 }
 
+/// Call a higher-order primitive on `args`, in a context the machine makes
+/// for it ([`ApplyContext::step_cx`]), as the step that is done with its
+/// value. `args` is the registry's own copy, which a call back cannot move.
+fn call_higher_order(
+    ctx: &dyn ApplyContext,
+    handler: HigherOrderHandler,
+    args: Vec<TaggedValue>,
+) -> Result<TaggedValue, EvalError> {
+    let step = ctx.step_cx(&args, &mut |cx, args| {
+        handler(cx, ctx, args).map(|value| TaggedStep::Done(value.tagged()))
+    })?;
+    match step {
+        TaggedStep::Done(value) => Ok(value),
+        _ => Err(EvalError::InternalError(
+            "a higher-order primitive answered a step".into(),
+        )),
+    }
+}
+
 /// Resume a resumable primitive with the `state` it kept and the `result` of
 /// what it asked for, in a context the machine makes for it.
 fn resume_in(
@@ -333,7 +356,7 @@ impl PrimitiveFn {
         name: &'static str,
         arity: Arity,
         help: &'static str,
-        handler: HOTaggedHandler,
+        handler: HigherOrderHandler,
     ) -> Self {
         PrimitiveFn {
             library,
@@ -542,7 +565,7 @@ impl PrimitiveRegistry {
         primitive.check_arity(args.len())?;
         match &primitive.handler {
             PrimitiveHandler::Cx(h) => ctx.call_cx(*h, args),
-            PrimitiveHandler::HigherOrder(h) => h(ctx, args.to_vec()),
+            PrimitiveHandler::HigherOrder(h) => call_higher_order(ctx, *h, args.to_vec()),
             #[expect(
                 clippy::disallowed_methods,
                 reason = "holds `args`, the primitive's arguments, across its calls. A machine \
@@ -570,7 +593,7 @@ impl PrimitiveRegistry {
         primitive.check_arity(args.len())?;
         match &primitive.handler {
             PrimitiveHandler::Cx(h) => ctx.call_cx(*h, &args),
-            PrimitiveHandler::HigherOrder(h) => h(ctx, args),
+            PrimitiveHandler::HigherOrder(h) => call_higher_order(ctx, *h, args),
             #[expect(
                 clippy::disallowed_methods,
                 reason = "holds `args`, the primitive's arguments, across its calls. Reached \
@@ -627,7 +650,9 @@ impl PrimitiveRegistry {
         primitive.check_arity(args.len())?;
         match &primitive.handler {
             PrimitiveHandler::Cx(h) => ctx.call_cx(*h, args).map(TaggedStep::Done),
-            PrimitiveHandler::HigherOrder(h) => h(ctx, args.to_vec()).map(TaggedStep::Done),
+            PrimitiveHandler::HigherOrder(h) => {
+                call_higher_order(ctx, *h, args.to_vec()).map(TaggedStep::Done)
+            }
             PrimitiveHandler::Resumable { start, .. } => start_in(ctx, *start, args),
         }
     }

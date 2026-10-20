@@ -5,7 +5,7 @@
 
 use crate::apply_context::ApplyContext;
 use crate::registry::PrimitiveRegistry;
-use patina_core::{Cx, PromiseView, TaggedValue, Value, heap::PromiseState};
+use patina_core::{Cx, PromiseBox, PromiseView, Value};
 use patina_runtime::EvalError;
 
 /// Register all lazy evaluation primitives
@@ -80,7 +80,11 @@ fn make_forced_promise<'gc>(
 /// 2. Otherwise, force the thunk and cache the result
 ///
 /// If the argument is not a promise, return it unchanged.
-fn force(ctx: &dyn ApplyContext, args: Vec<TaggedValue>) -> Result<TaggedValue, EvalError> {
+fn force<'gc>(
+    cx: &mut Cx<'gc>,
+    ctx: &dyn ApplyContext,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -88,7 +92,7 @@ fn force(ctx: &dyn ApplyContext, args: Vec<TaggedValue>) -> Result<TaggedValue, 
         });
     }
 
-    force_tagged(ctx, args[0])
+    force_value(cx, ctx, args[0])
 }
 
 /// Force a promise — R7RS 7.3's reference algorithm, iteratively.
@@ -108,18 +112,20 @@ fn force(ctx: &dyn ApplyContext, args: Vec<TaggedValue>) -> Result<TaggedValue, 
 /// never memoized. If the promise is already done when the thunk returns,
 /// that value wins and the thunk's result is dropped (R7RS: "unless
 /// (promise-done? promise)").
-fn force_tagged(ctx: &dyn ApplyContext, obj: TaggedValue) -> Result<TaggedValue, EvalError> {
-    let heap = ctx.heap();
+///
+/// The forced value is stored through the funnel ([`PromiseBox`], #706),
+/// which the GC census counts at `promise_force_prim`.
+fn force_value<'gc>(
+    cx: &mut Cx<'gc>,
+    ctx: &dyn ApplyContext,
+    obj: Value<'gc>,
+) -> Result<Value<'gc>, EvalError> {
     loop {
-        let cell = match heap.borrow().get_promise(obj) {
-            Some(p) => p,
+        let thunk = match cx.promise_state(obj) {
             None => return Ok(obj), // Not a promise, return unchanged
+            Some(PromiseView::Forced(value)) => return Ok(value),
+            Some(PromiseView::Delayed(thunk)) => thunk,
         };
-        let thunk = match *cell.borrow() {
-            PromiseState::Forced(value) => return Ok(value),
-            PromiseState::Delayed(thunk) => thunk,
-        };
-        drop(cell);
 
         #[expect(
             clippy::disallowed_methods,
@@ -130,21 +136,15 @@ fn force_tagged(ctx: &dyn ApplyContext, obj: TaggedValue) -> Result<TaggedValue,
                       nested run defers, and the tree-walker's detached `ApplyContext for \
                       Evaluator`, whose `GcDeferGuard::holding` defers it (#622)"
         )]
-        let result = ctx.apply_proc(thunk, vec![])?;
+        let result = ctx.apply_in(cx, thunk, &[])?;
 
-        let cell = heap.borrow().get_promise(obj).expect("still a promise");
-        if let PromiseState::Forced(value) = *cell.borrow() {
+        if let PromiseView::Forced(value) = cx.promise_state(obj).expect("still a promise") {
             return Ok(value);
         }
-        if heap.borrow().is_promise(result) {
-            heap.borrow_mut().promise_update(obj, result);
+        if cx.is_promise(result) {
+            cx.promise_update(obj, result);
         } else {
-            patina_core::census::store(
-                patina_core::census::Site::PromiseForcePrimitive,
-                Some(obj),
-                result,
-            );
-            *cell.borrow_mut() = PromiseState::Forced(result);
+            cx.store(PromiseBox(obj), result);
             return Ok(result);
         }
     }

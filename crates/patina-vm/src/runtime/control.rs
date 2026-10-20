@@ -2560,6 +2560,27 @@ impl patina_primitives::ApplyContext for VmApplyContext {
         unsafe { (*self.state).call_cx(handler, args) }
     }
 
+    /// A higher-order primitive's call back (#706): [`Self::apply_proc`],
+    /// with its value branded in the primitive's context.
+    fn apply_in<'gc>(
+        &self,
+        _cx: &mut patina_core::Cx<'gc>,
+        proc: patina_core::Value<'gc>,
+        args: &[patina_core::Value<'gc>],
+    ) -> Result<patina_core::Value<'gc>, patina_primitives::EvalError> {
+        let args = patina_core::Value::tagged_slice(args).to_vec();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the call back `apply_in` is for, as `apply_proc`'s own reason says; each of \
+                      its callers gives what it holds across it, at its call"
+        )]
+        let result = self.apply_proc(proc.tagged(), args)?;
+        // SAFETY: the call ran on a nested loop, which cannot collect, and
+        // the word it answered stays live until the primitive's context,
+        // whose brand `'gc` is, closes: beneath a context nothing collects.
+        Ok(unsafe { patina_core::Value::from_tagged(result) })
+    }
+
     /// A resumable primitive's half, in the context the machine makes for
     /// it, as [`Self::call_cx`] makes one (#706).
     fn step_cx(

@@ -40,6 +40,10 @@ fn every_nameable_entry_is_matched() {
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |c: &dyn ApplyContext| c.apply_proc(TaggedValue::NULL, Vec::new());
     #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |c: &dyn ApplyContext, cx: &mut patina_core::Cx<'_>| {
+        let _ = c.apply_in(cx, patina_core::Value::NULL, &[]);
+    };
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |c: &dyn ApplyContext, env: &Rc<Environment>| c.eval_expr(TaggedValue::NULL, env);
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |c: &dyn ApplyContext| c.load_scheme_library(&[]);

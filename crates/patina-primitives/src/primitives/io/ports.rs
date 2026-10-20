@@ -9,7 +9,7 @@
 //!
 //! Each takes the context (#706), and finds a port argument through it
 //! (`Cx::get_port`, an `Rc` of the port, holding no borrow of the heap).
-use patina_core::{Cx, TaggedValue, Value};
+use patina_core::{Cx, Value};
 use patina_runtime::EvalError;
 use patina_runtime::{Port, PortDirection};
 use std::cell::RefCell;
@@ -588,10 +588,11 @@ pub(super) fn flush_output_port<'gc>(
 // =============================================================================
 
 /// (call-with-port port proc) - Calls proc with port, then closes the port
-pub(super) fn call_with_port(
+pub(super) fn call_with_port<'gc>(
+    cx: &mut Cx<'gc>,
     ctx: &dyn crate::apply_context::ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "call-with-port expects 2 arguments".to_string(),
@@ -599,14 +600,11 @@ pub(super) fn call_with_port(
         });
     }
 
-    let heap = ctx.heap();
-
     // Extract port for close() call
-    let port = heap.borrow().get_port(args[0]).cloned().ok_or_else(|| {
+    let port = cx.get_port(args[0]).ok_or_else(|| {
         EvalError::TypeError("call-with-port expects a port as first argument".to_string())
     })?;
 
-    // Call the procedure with the port — both already TaggedValues
     #[expect(
         clippy::disallowed_methods,
         reason = "holds `port`, the Rust handle it closes afterwards (an `Rc<Port>`, which no \
@@ -614,7 +612,7 @@ pub(super) fn call_with_port(
                   importing `(patina internal io)`: the `(scheme base)` version runs its procedure \
                   as a frame (#471)"
     )]
-    let result = ctx.apply_proc(args[1], vec![args[0]]);
+    let result = ctx.apply_in(cx, args[1], &[args[0]]);
 
     // R7RS 6.13.1: the port is closed if `proc` returns, and "must not be
     // closed automatically" if it does not. An `Err` here is a raise or a

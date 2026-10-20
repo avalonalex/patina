@@ -8,7 +8,7 @@
 //! `Cx::set_cdr`).
 
 use crate::apply_context::ApplyContext;
-use patina_core::{Cx, SpineEnd, TaggedValue, Value};
+use patina_core::{Cx, SpineEnd, Value};
 use patina_runtime::EvalError;
 
 // ========== Argument Extraction Helpers ==========
@@ -355,10 +355,11 @@ pub(super) fn memv<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'
     Ok(Value::FALSE)
 }
 
-pub(super) fn member(
+pub(super) fn member<'gc>(
+    cx: &mut Cx<'gc>,
     ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 || args.len() > 3 {
         return Err(EvalError::WrongArity {
             expected: "2 or 3".to_string(),
@@ -366,10 +367,8 @@ pub(super) fn member(
         });
     }
 
-    let heap = ctx.heap();
-
     if args.len() == 2 {
-        // 2-arg path: pure TaggedValue with heap.tagged_values_equal
+        // 2-arg path: `equal?` through the context
         let obj = args[0];
         let mut current = args[1];
 
@@ -380,32 +379,30 @@ pub(super) fn member(
 
             // Fast path: native heap pair
             if current.is_pair() {
-                let heap_ref = heap.borrow();
-                let car = heap_ref.car(current);
-                let cdr = heap_ref.cdr(current);
-                if heap_ref.tagged_values_equal(obj, car) {
+                let car = cx.car(current);
+                let cdr = cx.cdr(current);
+                if cx.tagged_values_equal(obj, car) {
                     return Ok(current);
                 }
-                drop(heap_ref);
                 current = cdr;
                 continue;
             }
 
             // Fallback path: use try_pair for any other pair types
             let saved = current;
-            let (car, cdr) = match heap.borrow().try_pair(current) {
+            let (car, cdr) = match cx.try_pair(current) {
                 Some(pair) => pair,
                 None => break,
             };
-            if heap.borrow().tagged_values_equal(obj, car) {
+            if cx.tagged_values_equal(obj, car) {
                 return Ok(saved);
             }
             current = cdr;
         }
 
-        Ok(TaggedValue::FALSE)
+        Ok(Value::FALSE)
     } else {
-        // 3-arg path: custom comparator — apply() takes TaggedValue directly
+        // 3-arg path: custom comparator, called back through the context
         let obj = args[0];
         let compare_proc = args[2];
 
@@ -417,7 +414,7 @@ pub(super) fn member(
             }
 
             let saved = current;
-            let (car_tv, cdr) = match heap.borrow().try_pair(current) {
+            let (car_tv, cdr) = match cx.try_pair(current) {
                 Some(pair) => pair,
                 None => break,
             };
@@ -432,7 +429,7 @@ pub(super) fn member(
                           lists)`: the `(scheme base)` `member` calls its comparator as a frame \
                           (#471)"
             )]
-            let result = ctx.apply_proc(compare_proc, vec![obj, car_tv])? != TaggedValue::FALSE;
+            let result = ctx.apply_in(cx, compare_proc, &[obj, car_tv])? != Value::FALSE;
 
             if result {
                 return Ok(saved);
@@ -440,7 +437,7 @@ pub(super) fn member(
             current = cdr;
         }
 
-        Ok(TaggedValue::FALSE)
+        Ok(Value::FALSE)
     }
 }
 
@@ -516,10 +513,11 @@ pub(super) fn assv<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'
     Ok(Value::FALSE)
 }
 
-pub(super) fn assoc(
+pub(super) fn assoc<'gc>(
+    cx: &mut Cx<'gc>,
     ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() < 2 || args.len() > 3 {
         return Err(EvalError::WrongArity {
             expected: "2 or 3".to_string(),
@@ -527,10 +525,8 @@ pub(super) fn assoc(
         });
     }
 
-    let heap = ctx.heap();
-
     if args.len() == 2 {
-        // 2-arg path: pure TaggedValue with heap.tagged_values_equal
+        // 2-arg path: `equal?` through the context
         let obj = args[0];
         let mut current = args[1];
 
@@ -540,15 +536,15 @@ pub(super) fn assoc(
             }
 
             // Get (entry, rest) from alist spine
-            let (entry, rest) = match heap.borrow().try_pair(current) {
+            let (entry, rest) = match cx.try_pair(current) {
                 Some(pair) => pair,
                 None => break,
             };
 
             // Get (entry_car, _) from entry pair
-            let entry_car = heap.borrow().try_pair(entry).map(|(c, _)| c);
+            let entry_car = cx.try_pair(entry).map(|(c, _)| c);
             if let Some(entry_car) = entry_car
-                && heap.borrow().tagged_values_equal(obj, entry_car)
+                && cx.tagged_values_equal(obj, entry_car)
             {
                 return Ok(entry);
             }
@@ -556,9 +552,9 @@ pub(super) fn assoc(
             current = rest;
         }
 
-        Ok(TaggedValue::FALSE)
+        Ok(Value::FALSE)
     } else {
-        // 3-arg path: custom comparator — apply() takes TaggedValue directly
+        // 3-arg path: custom comparator, called back through the context
         let obj = args[0];
         let compare_proc = args[2];
 
@@ -570,13 +566,13 @@ pub(super) fn assoc(
             }
 
             // Get (entry, rest) from alist spine
-            let (entry, rest) = match heap.borrow().try_pair(current) {
+            let (entry, rest) = match cx.try_pair(current) {
                 Some(pair) => pair,
                 None => break,
             };
 
             // Get (entry_car, _) from entry pair
-            let entry_car_tv = heap.borrow().try_pair(entry).map(|(c, _)| c);
+            let entry_car_tv = cx.try_pair(entry).map(|(c, _)| c);
             if let Some(entry_car_tv) = entry_car_tv {
                 #[expect(
                     clippy::disallowed_methods,
@@ -588,8 +584,7 @@ pub(super) fn assoc(
                               `(patina internal lists)`: the `(scheme base)` `assoc` calls its \
                               comparator as a frame (#471)"
                 )]
-                let result =
-                    ctx.apply_proc(compare_proc, vec![obj, entry_car_tv])? != TaggedValue::FALSE;
+                let result = ctx.apply_in(cx, compare_proc, &[obj, entry_car_tv])? != Value::FALSE;
 
                 if result {
                     return Ok(entry);
@@ -599,7 +594,7 @@ pub(super) fn assoc(
             current = rest;
         }
 
-        Ok(TaggedValue::FALSE)
+        Ok(Value::FALSE)
     }
 }
 
