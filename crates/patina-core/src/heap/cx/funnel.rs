@@ -3,7 +3,8 @@
 //!
 //! A slot names a value field of a heap object: a pair's car or cdr, a
 //! vector's element, a mutable cell's value, a record's field, a VM
-//! closure's free variable, a promise's box, a parameter's value.
+//! closure's free variable, a promise's box, a parameter's value (two
+//! slots, which the census tells apart).
 //! [`Cx::store`] writes one; [`Cx::store_range`] and [`Cx::fill_range`]
 //! write a run of a vector's elements (addition C4); [`Fresh`] takes the
 //! initializing stores into an object no one else has seen yet.
@@ -92,6 +93,12 @@ pub struct PromiseBox<'gc>(pub Value<'gc>);
 #[derive(Clone, Copy, Debug)]
 pub struct ParamValue<'gc>(pub Value<'gc>);
 
+/// A parameter object's current value, as its converter answered it:
+/// [`ParamValue`]'s field, which the GC census counts apart, at
+/// `parameter_install_converted` (`%parameter-set!` resumed, #706).
+#[derive(Clone, Copy, Debug)]
+pub struct ConvertedParamValue<'gc>(pub Value<'gc>);
+
 impl sealed::Sealed for PairCar<'_> {}
 impl sealed::Sealed for PairCdr<'_> {}
 impl sealed::Sealed for VectorElem<'_> {}
@@ -100,6 +107,7 @@ impl sealed::Sealed for RecordField<'_> {}
 impl sealed::Sealed for ClosureFree<'_> {}
 impl sealed::Sealed for PromiseBox<'_> {}
 impl sealed::Sealed for ParamValue<'_> {}
+impl sealed::Sealed for ConvertedParamValue<'_> {}
 
 /// The panic of a store into a slot that does not exist.
 #[cold]
@@ -182,16 +190,28 @@ impl<'gc> Slot<'gc> for PromiseBox<'gc> {
 
 impl<'gc> Slot<'gc> for ParamValue<'gc> {
     fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
-        let Some((values, _)) = heap.get_parameter(self.0.tagged()) else {
-            no_such_slot("a parameter's value of a non-parameter");
-        };
-        check_storable(v, "parameter");
-        census::store(Site::ParameterInstall, Some(self.0.tagged()), v);
-        let mut values = values.borrow_mut();
-        match values.last_mut() {
-            Some(top) => *top = v,
-            None => values.push(v),
-        }
+        write_parameter(heap, self.0, v, Site::ParameterInstall);
+    }
+}
+
+impl<'gc> Slot<'gc> for ConvertedParamValue<'gc> {
+    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
+        write_parameter(heap, self.0, v, Site::ParameterInstallConverted);
+    }
+}
+
+/// Make `v` the current value of the parameter object `param`, counted in
+/// the census at `site`.
+fn write_parameter(heap: &mut Heap, param: Value<'_>, v: TaggedValue, site: Site) {
+    let Some((values, _)) = heap.get_parameter(param.tagged()) else {
+        no_such_slot("a parameter's value of a non-parameter");
+    };
+    check_storable(v, "parameter");
+    census::store(site, Some(param.tagged()), v);
+    let mut values = values.borrow_mut();
+    match values.last_mut() {
+        Some(top) => *top = v,
+        None => values.push(v),
     }
 }
 

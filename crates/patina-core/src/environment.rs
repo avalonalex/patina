@@ -1,5 +1,5 @@
 use crate::Trace;
-use crate::heap::{ExternalBytes, SharedHeap};
+use crate::heap::{ExternalBytes, Heap, SharedHeap};
 use crate::scope::ScopeSet;
 use crate::scope_resolve::AmbiguousReference;
 use crate::tagged_value::TaggedValue;
@@ -1137,7 +1137,7 @@ impl Environment {
     /// than this cache — before it, the VM answered a fresh specifier over
     /// the library's environment — and the cache changes only how long the
     /// answer lives.
-    pub fn mutable_specifier(self: &Rc<Self>, heap: &SharedHeap) -> TaggedValue {
+    pub fn mutable_specifier(self: &Rc<Self>, heap: &RefCell<Heap>) -> TaggedValue {
         let rare = self.rare.get_or_init(Default::default);
         if let Some(specifier) = rare.specifier.get() {
             return specifier;

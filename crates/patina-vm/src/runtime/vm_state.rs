@@ -332,6 +332,32 @@ impl VmState {
         }
     }
 
+    /// Run `step`, one half of a resumable primitive, in a context made where
+    /// the call is, with the argument words handed over as its values: how
+    /// the registry starts one and resumes it (#706).
+    pub(super) fn step_cx(
+        &self,
+        args: &[TaggedValue],
+        step: patina_primitives::StepFn<'_>,
+    ) -> Result<patina_primitives::TaggedStep, patina_primitives::EvalError> {
+        // SAFETY: as `call_cx`'s. The VM runs a resumable primitive's half
+        // inside one instruction, between its safe points, and the half
+        // answers a step rather than calling back. A nested loop it starts,
+        // as `eval`'s check does in expanding a form, opens a `NoGcScope`
+        // and has no driver (#702): nothing collects while it runs. Its
+        // arguments are the call's, or the state and result `resume_stub`'s
+        // frame held, read from the registers as it was made.
+        unsafe {
+            patina_core::heap::cx::enter_call(
+                &self.heap,
+                &self.mutator,
+                &self.instance,
+                args,
+                |cx, args| step(cx, args),
+            )
+        }
+    }
+
     /// A machine over `heap`, whose global environment `globals` lives on
     /// it, collecting in the mode the environment selects.
     pub fn new(heap: SharedHeap, globals: Rc<Environment>) -> Self {

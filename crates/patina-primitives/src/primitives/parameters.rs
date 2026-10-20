@@ -18,13 +18,9 @@
 
 use crate::apply_context::ApplyContext;
 use crate::registry::{Step, done_with_result};
-use patina_core::TaggedValue;
-use patina_core::census::Site;
-use patina_core::heap::ParameterData;
+use patina_core::{ConvertedParamValue, Cx, ParamValue, TaggedValue, Value};
 use patina_runtime::EvalError;
 use smallvec::smallvec;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 /// make-parameter primitive
 ///
@@ -34,10 +30,11 @@ use std::rc::Rc;
 /// provided, it will be called to validate/convert any value set on this
 /// parameter — `init` included, which is the call this primitive asks the
 /// machine to make rather than making it from Rust ([`Step`], #478).
-pub(super) fn make_parameter(
-    ctx: &dyn ApplyContext,
-    args: &[TaggedValue],
-) -> Result<Step, EvalError> {
+pub(super) fn make_parameter<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
     // Check arity: 1 or 2 arguments
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
@@ -45,17 +42,13 @@ pub(super) fn make_parameter(
             actual: args.len(),
         });
     }
-    let heap = ctx.heap();
     let Some(&converter) = args.get(1) else {
-        let param = heap
-            .borrow_mut()
-            .alloc_parameter(Rc::new(RefCell::new(vec![args[0]])), None);
-        return Ok(Step::Done(param));
+        return Ok(Step::Done(cx.alloc_parameter(args[0], None)));
     };
-    if !heap.borrow().is_procedure(converter) {
+    if !cx.is_procedure(converter) {
         return Err(EvalError::TypeError(format!(
             "make-parameter: converter must be a procedure, got {}",
-            heap.borrow().type_name(converter)
+            cx.type_name(converter)
         )));
     }
     Ok(Step::Call {
@@ -66,24 +59,18 @@ pub(super) fn make_parameter(
 }
 
 /// `make-parameter` once its converter has returned the initial value.
-pub(super) fn make_parameter_converted(
-    ctx: &dyn ApplyContext,
-    converter: TaggedValue,
-    init: TaggedValue,
-) -> Result<Step, EvalError> {
-    let param = ctx
-        .heap()
-        .borrow_mut()
-        .alloc_parameter(Rc::new(RefCell::new(vec![init])), Some(converter));
-    Ok(Step::Done(param))
+pub(super) fn make_parameter_converted<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    converter: Value<'gc>,
+    init: Value<'gc>,
+) -> Result<Step<'gc>, EvalError> {
+    Ok(Step::Done(cx.alloc_parameter(init, Some(converter))))
 }
 
 /// The converter of `param`, if it is a parameter object that has one.
-fn converter_of(ctx: &dyn ApplyContext, param: TaggedValue) -> Option<TaggedValue> {
-    let heap = ctx.heap();
-    let heap = heap.borrow();
-    heap.get_parameter(param)
-        .and_then(|(_, converter)| converter)
+fn converter_of<'gc>(cx: &Cx<'gc>, param: Value<'gc>) -> Option<Value<'gc>> {
+    cx.parameter_converter(param).flatten()
 }
 
 /// `(%parameter-convert param value)` — the value `param` would take on, with
@@ -98,21 +85,22 @@ fn converter_of(ctx: &dyn ApplyContext, param: TaggedValue) -> Option<TaggedValu
 /// The converter is called by the machine ([`Step`]), so a continuation
 /// captured inside it and re-entered after `parameterize` used the value
 /// runs the rest of the `parameterize` again with the new one (#478).
-pub(super) fn parameter_convert(
-    ctx: &dyn ApplyContext,
-    args: &[TaggedValue],
-) -> Result<Step, EvalError> {
+pub(super) fn parameter_convert<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
     let [param, value] = args[..] else {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
             actual: args.len(),
         });
     };
-    Ok(match converter_of(ctx, param) {
+    Ok(match converter_of(cx, param) {
         Some(conv) => Step::Call {
             callee: conv,
             args: smallvec![value],
-            state: TaggedValue::UNSPECIFIED,
+            state: Value::UNSPECIFIED,
         },
         // No converter, or not a parameter object at all — the standard ports
         // are parameter-like procedures whose validation only happens on
@@ -124,64 +112,54 @@ pub(super) fn parameter_convert(
 /// `(%parameter-set! param value)` — what calling a parameter object with one
 /// argument does: its converter, if it has one, applied to `value`, and the
 /// result made the current value. The backends dispatch `(p v)` here, so the
-/// converter is a call the machine makes ([`Step`], #478).
-pub(super) fn parameter_set(
-    ctx: &dyn ApplyContext,
-    args: &[TaggedValue],
-) -> Result<Step, EvalError> {
+/// converter is a call the machine makes ([`Step`], #478). The value is
+/// stored through the funnel ([`ParamValue`], #706), which the GC census
+/// counts at `parameter_install`, or after a converter at
+/// `parameter_install_converted`.
+pub(super) fn parameter_set<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
     let [param, value] = args[..] else {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
             actual: args.len(),
         });
     };
-    let (values, converter) = parameter_parts(ctx, param)?;
-    match converter {
+    match parameter_converter(cx, param)? {
         Some(conv) => Ok(Step::Call {
             callee: conv,
             args: smallvec![value],
             state: param,
         }),
-        None => Ok(install(&values, param, value, Site::ParameterInstall)),
+        None => {
+            cx.store(ParamValue(param), value);
+            Ok(Step::Done(Value::UNSPECIFIED))
+        }
     }
 }
 
 /// `%parameter-set!` once the converter has returned the value to install.
-pub(super) fn parameter_set_converted(
-    ctx: &dyn ApplyContext,
-    param: TaggedValue,
-    value: TaggedValue,
-) -> Result<Step, EvalError> {
-    let (values, _) = parameter_parts(ctx, param)?;
-    Ok(install(
-        &values,
-        param,
-        value,
-        Site::ParameterInstallConverted,
-    ))
+pub(super) fn parameter_set_converted<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    param: Value<'gc>,
+    value: Value<'gc>,
+) -> Result<Step<'gc>, EvalError> {
+    parameter_converter(cx, param)?;
+    cx.store(ConvertedParamValue(param), value);
+    Ok(Step::Done(Value::UNSPECIFIED))
 }
 
-/// The value stack and converter of the parameter object `param`.
-fn parameter_parts(ctx: &dyn ApplyContext, param: TaggedValue) -> Result<ParameterData, EvalError> {
-    ctx.heap()
-        .borrow()
-        .get_parameter(param)
+/// The converter of the parameter object `param`, if it has one, or the
+/// error `%parameter-set!` raises for anything that is not one.
+fn parameter_converter<'gc>(
+    cx: &Cx<'gc>,
+    param: Value<'gc>,
+) -> Result<Option<Value<'gc>>, EvalError> {
+    cx.parameter_converter(param)
         .ok_or_else(|| EvalError::TypeError("%parameter-set!: not a parameter object".to_string()))
-}
-
-/// Make `value` the current value of `param`, whose stack is `values`;
-/// `site` says which setter, for the GC census.
-fn install(
-    values: &RefCell<Vec<TaggedValue>>,
-    param: TaggedValue,
-    value: TaggedValue,
-    site: Site,
-) -> Step {
-    patina_core::census::store(site, Some(param), value);
-    if let Some(top) = values.borrow_mut().last_mut() {
-        *top = value;
-    }
-    Step::Done(TaggedValue::UNSPECIFIED)
 }
 
 /// `(%parameterize-swap! params vals)` — install `vals` into `params`,

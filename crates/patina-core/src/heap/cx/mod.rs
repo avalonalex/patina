@@ -104,8 +104,8 @@ pub mod funnel;
 mod methods;
 
 pub use funnel::{
-    CellValue, ClosureFree, Fresh, PairCar, PairCdr, ParamValue, PromiseBox, RecordField, Slot,
-    VectorElem,
+    CellValue, ClosureFree, ConvertedParamValue, Fresh, PairCar, PairCdr, ParamValue, PromiseBox,
+    RecordField, Slot, VectorElem,
 };
 
 /// The mutation and allocation context. See the [module docs](self).
@@ -342,6 +342,37 @@ impl<'gc> Cx<'gc> {
             .borrow()
             .get_environment_specifier(v.tagged())
             .map(|(env, mutable)| (Rc::clone(env), mutable))
+    }
+
+    /// `env`'s mutable specifier ([`Environment::mutable_specifier`]): the
+    /// same object each time, which `env` holds and traces with its
+    /// bindings, allocated the first time. `load` evaluates in the
+    /// interaction environment's.
+    #[inline]
+    pub fn mutable_specifier(&mut self, env: &Rc<Environment>) -> Value<'gc> {
+        let word = env.mutable_specifier(self.heap);
+        self.brand(word)
+    }
+
+    /// What `name` is bound to in `env` or its parents
+    /// ([`Environment::get`]), as a value: read as
+    /// [`Self::resolve_with_scopes`] reads a binding, which it is as live
+    /// as.
+    #[inline]
+    pub fn lookup(&self, env: &Environment, name: &str) -> Option<Value<'gc>> {
+        debug_assert!(
+            env.heap_id() == self.heap.borrow().id(),
+            "Cx::lookup: an environment of another heap"
+        );
+        env.get(name).map(|word| self.brand(word))
+    }
+
+    /// A literal pool on this context's heap ([`LiteralPool::new`]), for a
+    /// form a primitive desugars, as `eval` does to check an immutable
+    /// environment's.
+    #[inline]
+    pub fn literal_pool(&self) -> crate::LiteralPool {
+        crate::LiteralPool::new(&self.heap.borrow())
     }
 
     /// What `name`, written with `scopes`, resolves to in `env`

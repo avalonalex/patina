@@ -40,17 +40,22 @@ pub type HOTaggedHandler =
 /// cannot collect from Rust, where the collector sees neither its frame nor
 /// its caller's, so it asks the machine, which suspends the call where its
 /// roots see everything and collects there.
-pub enum Step {
+///
+/// A primitive builds its step in its context, of the context's values
+/// (#706); the machine takes it as words as the context closes
+/// ([`Step::tagged`], [`TaggedStep`]), and keeps them where its collector
+/// sees them.
+pub enum Step<'gc> {
     /// Finished, with this value.
-    Done(TaggedValue),
+    Done(Value<'gc>),
     /// Call `callee` with `args`; when it returns `v`, resume the primitive
     /// with `state` and `v`. `state` is whatever the rest of the primitive
     /// needs — a value the machine keeps where the collector sees it, and
     /// which a continuation captured in the call carries along.
     Call {
-        callee: TaggedValue,
-        args: CallArgs,
-        state: TaggedValue,
+        callee: Value<'gc>,
+        args: CallArgs<'gc>,
+        state: Value<'gc>,
     },
     /// Evaluate the datum `expr` in `env`, as `eval` does, and resume the
     /// primitive with `state` and its value. The machine expands and runs it
@@ -59,9 +64,9 @@ pub enum Step {
     /// continuation captured in it carries the rest of the primitive, as one
     /// captured in a [`Step::Call`] does (#477).
     Eval {
-        expr: TaggedValue,
+        expr: Value<'gc>,
         env: Rc<Environment>,
-        state: TaggedValue,
+        state: Value<'gc>,
     },
     /// Run a collection of `kind` at this call, then resume the primitive
     /// with `state` and whether the collection ran (`#t`, or `#f` where it
@@ -96,32 +101,99 @@ pub enum Step {
     /// opens and `load` make it anyway, for the error it raises.
     Collect {
         kind: CollectKind,
+        state: Value<'gc>,
+    },
+}
+
+impl Step<'_> {
+    /// This step as words, for the machine that takes it.
+    pub fn tagged(self) -> TaggedStep {
+        match self {
+            Step::Done(value) => TaggedStep::Done(value.tagged()),
+            Step::Call {
+                callee,
+                args,
+                state,
+            } => TaggedStep::Call {
+                callee: callee.tagged(),
+                args: args.iter().map(|arg| arg.tagged()).collect(),
+                state: state.tagged(),
+            },
+            Step::Eval { expr, env, state } => TaggedStep::Eval {
+                expr: expr.tagged(),
+                env,
+                state: state.tagged(),
+            },
+            Step::Collect { kind, state } => TaggedStep::Collect {
+                kind,
+                state: state.tagged(),
+            },
+        }
+    }
+}
+
+/// One half of a resumable primitive as the registry hands it to a machine
+/// ([`ApplyContext::step_cx`]): run in a context over its words, it answers
+/// its step as words.
+pub type StepFn<'a> =
+    &'a mut dyn for<'gc> FnMut(&mut Cx<'gc>, &[Value<'gc>]) -> Result<TaggedStep, EvalError>;
+
+/// A [`Step`] as the machine takes it: its values as words, out of the
+/// context the primitive ran in. The machine keeps them where its collector
+/// sees them — the VM in `resume_stub`'s frame, the tree-walker in a
+/// `ResumePrimitive` continuation — and each variant means what [`Step`]'s
+/// does.
+pub enum TaggedStep {
+    Done(TaggedValue),
+    Call {
+        callee: TaggedValue,
+        args: TaggedCallArgs,
+        state: TaggedValue,
+    },
+    Eval {
+        expr: TaggedValue,
+        env: Rc<Environment>,
+        state: TaggedValue,
+    },
+    Collect {
+        kind: CollectKind,
         state: TaggedValue,
     },
 }
 
 /// A resume that is done with what the call returned: the second half of a
 /// primitive that makes one call and answers its value.
-pub fn done_with_result(
+pub fn done_with_result<'gc>(
+    _cx: &mut Cx<'gc>,
     _ctx: &dyn ApplyContext,
-    _state: TaggedValue,
-    result: TaggedValue,
-) -> Result<Step, EvalError> {
+    _state: Value<'gc>,
+    result: Value<'gc>,
+) -> Result<Step<'gc>, EvalError> {
     Ok(Step::Done(result))
 }
 
 /// The arguments of a [`Step::Call`]: held inline up to three, which covers
 /// every call a resumable primitive makes, so asking for one allocates
 /// nothing.
-pub type CallArgs = smallvec::SmallVec<[TaggedValue; 3]>;
+pub type CallArgs<'gc> = smallvec::SmallVec<[Value<'gc>; 3]>;
 
-/// A resumable primitive's first half: its arguments in, a [`Step`] out.
-pub type ResumableStart = fn(&dyn ApplyContext, &[TaggedValue]) -> Result<Step, EvalError>;
+/// [`CallArgs`] as words, in a [`TaggedStep`].
+pub type TaggedCallArgs = smallvec::SmallVec<[TaggedValue; 3]>;
+
+/// A resumable primitive's first half: its arguments in, a [`Step`] out. It
+/// takes the context (#706), and the machine's [`ApplyContext`] beside it,
+/// which `load` asks for the interaction environment.
+pub type ResumableStart =
+    for<'gc> fn(&mut Cx<'gc>, &dyn ApplyContext, &[Value<'gc>]) -> Result<Step<'gc>, EvalError>;
 
 /// A resumable primitive's continuation: the `state` its last [`Step::Call`]
 /// asked to keep, and what the call returned.
-pub type ResumableResume =
-    fn(&dyn ApplyContext, TaggedValue, TaggedValue) -> Result<Step, EvalError>;
+pub type ResumableResume = for<'gc> fn(
+    &mut Cx<'gc>,
+    &dyn ApplyContext,
+    Value<'gc>,
+    Value<'gc>,
+) -> Result<Step<'gc>, EvalError>;
 
 /// Handler variant for a primitive
 pub enum PrimitiveHandler {
@@ -143,13 +215,13 @@ pub enum PrimitiveHandler {
 /// call; the machines take the other route.
 fn run_synchronously(
     ctx: &dyn ApplyContext,
-    mut step: Step,
+    mut step: TaggedStep,
     resume: ResumableResume,
 ) -> Result<TaggedValue, EvalError> {
     loop {
         match step {
-            Step::Done(value) => return Ok(value),
-            Step::Call {
+            TaggedStep::Done(value) => return Ok(value),
+            TaggedStep::Call {
                 callee,
                 args,
                 state,
@@ -168,9 +240,9 @@ fn run_synchronously(
                               (docs/GC_DESIGN.md §7)"
                 )]
                 let result = ctx.apply_proc(callee, args.into_vec())?;
-                step = resume(ctx, state, result)?;
+                step = resume_in(ctx, resume, state, result)?;
             }
-            Step::Eval { expr, env, state } => {
+            TaggedStep::Eval { expr, env, state } => {
                 #[expect(
                     clippy::disallowed_methods,
                     reason = "holds `state` and the environment `env` across the evaluation, \
@@ -179,17 +251,40 @@ fn run_synchronously(
                               context's `eval_expr` holds `GcDeferGuard::holding`"
                 )]
                 let result = ctx.eval_expr(expr, &env)?;
-                step = resume(ctx, state, result)?;
+                step = resume_in(ctx, resume, state, result)?;
             }
-            Step::Collect { kind: _, state } => {
+            TaggedStep::Collect { kind: _, state } => {
                 // No machine, so no roots to collect with: posted for the
                 // next safe point that may collect, as where a machine's
                 // collection is deferred (`Heap::defer_collection`).
                 ctx.heap().borrow_mut().defer_collection();
-                step = resume(ctx, state, TaggedValue::FALSE)?;
+                step = resume_in(ctx, resume, state, TaggedValue::FALSE)?;
             }
         }
     }
+}
+
+/// Start a resumable primitive on `args`, in a context the machine makes for
+/// it ([`ApplyContext::step_cx`]): its step, as words.
+fn start_in(
+    ctx: &dyn ApplyContext,
+    start: ResumableStart,
+    args: &[TaggedValue],
+) -> Result<TaggedStep, EvalError> {
+    ctx.step_cx(args, &mut |cx, args| start(cx, ctx, args).map(Step::tagged))
+}
+
+/// Resume a resumable primitive with the `state` it kept and the `result` of
+/// what it asked for, in a context the machine makes for it.
+fn resume_in(
+    ctx: &dyn ApplyContext,
+    resume: ResumableResume,
+    state: TaggedValue,
+    result: TaggedValue,
+) -> Result<TaggedStep, EvalError> {
+    ctx.step_cx(&[state, result], &mut |cx, words| {
+        resume(cx, ctx, words[0], words[1]).map(Step::tagged)
+    })
 }
 
 /// Handler-side exact-arity check: the standard `WrongArity` error every
@@ -458,7 +553,7 @@ impl PrimitiveRegistry {
                           embedder's own: see `run_synchronously`"
             )]
             PrimitiveHandler::Resumable { start, resume } => {
-                run_synchronously(ctx, start(ctx, args)?, *resume)
+                run_synchronously(ctx, start_in(ctx, *start, args)?, *resume)
             }
         }
     }
@@ -484,7 +579,7 @@ impl PrimitiveRegistry {
                           as a holder, or an embedder's own: see `run_synchronously`"
             )]
             PrimitiveHandler::Resumable { start, resume } => {
-                run_synchronously(ctx, start(ctx, &args)?, *resume)
+                run_synchronously(ctx, start_in(ctx, *start, &args)?, *resume)
             }
         }
     }
@@ -520,20 +615,20 @@ impl PrimitiveRegistry {
 
     /// Apply the primitive at `index` as a machine that makes a resumable
     /// primitive's calls itself: a resumable one's first [`Step`], and any
-    /// other's value as [`Step::Done`] — so one dispatch serves both, where
-    /// [`Self::apply_by_index`] would run the calls from Rust.
+    /// other's value as [`TaggedStep::Done`] — so one dispatch serves both,
+    /// where [`Self::apply_by_index`] would run the calls from Rust.
     pub fn start(
         &self,
         index: usize,
         args: &[TaggedValue],
         ctx: &dyn ApplyContext,
-    ) -> Result<Step, EvalError> {
+    ) -> Result<TaggedStep, EvalError> {
         let primitive = self.entry(index)?;
         primitive.check_arity(args.len())?;
         match &primitive.handler {
-            PrimitiveHandler::Cx(h) => ctx.call_cx(*h, args).map(Step::Done),
-            PrimitiveHandler::HigherOrder(h) => h(ctx, args.to_vec()).map(Step::Done),
-            PrimitiveHandler::Resumable { start, .. } => start(ctx, args),
+            PrimitiveHandler::Cx(h) => ctx.call_cx(*h, args).map(TaggedStep::Done),
+            PrimitiveHandler::HigherOrder(h) => h(ctx, args.to_vec()).map(TaggedStep::Done),
+            PrimitiveHandler::Resumable { start, .. } => start_in(ctx, *start, args),
         }
     }
 
@@ -545,9 +640,9 @@ impl PrimitiveRegistry {
         state: TaggedValue,
         result: TaggedValue,
         ctx: &dyn ApplyContext,
-    ) -> Result<Step, EvalError> {
+    ) -> Result<TaggedStep, EvalError> {
         match &self.entry(index)?.handler {
-            PrimitiveHandler::Resumable { resume, .. } => resume(ctx, state, result),
+            PrimitiveHandler::Resumable { resume, .. } => resume_in(ctx, *resume, state, result),
             _ => Err(EvalError::InternalError(format!(
                 "primitive {index} is not resumable"
             ))),

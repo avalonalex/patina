@@ -3,10 +3,14 @@
 //! This module implements R7RS file I/O procedures:
 //! - open-input-file, open-output-file
 //! - open-binary-input-file, open-binary-output-file
-//! - file-exists?, delete-file, which take the context (#706)
+//! - file-exists?, delete-file
 //! - `(patina internal io)`'s call-with-input-file and call-with-output-file
 //!   (`(scheme file)`'s are Scheme, over `open-input-file` and
 //!   `open-output-file`)
+//!
+//! Each takes the context (#706), and opens through the file system of the
+//! context's instance. The opens and `call-with-*-file` are resumable, and
+//! start and resume with one.
 //!
 //! # Running out of descriptors (#607)
 //!
@@ -36,20 +40,11 @@
 use crate::apply_context::ApplyContext;
 use crate::registry::Step;
 use patina_core::port::out_of_descriptors;
-use patina_core::{CollectKind, Cx, Heap, TaggedValue, Value};
+use patina_core::{CollectKind, Cx, Value};
 use patina_runtime::EvalError;
 use patina_runtime::Port;
 use smallvec::smallvec;
 use std::rc::Rc;
-
-// =============================================================================
-// TaggedValue extraction helpers
-// =============================================================================
-
-/// Extract a String content from TaggedValue
-fn get_string_tv(tv: TaggedValue, heap: &std::cell::Ref<'_, Heap>) -> Option<String> {
-    heap.get_string_contents(tv)
-}
 
 // =============================================================================
 // Opening
@@ -75,8 +70,9 @@ impl OpenMode {
         }
     }
 
-    fn open(self, path: &str, ctx: &dyn ApplyContext) -> std::io::Result<Rc<Port>> {
-        let fs = ctx.fs().as_ref();
+    fn open(self, path: &str, cx: &Cx<'_>) -> std::io::Result<Rc<Port>> {
+        let fs = cx.instance().fs();
+        let fs = fs.as_ref();
         match self {
             OpenMode::Input => Port::open_input_file(path, fs),
             OpenMode::Output => Port::open_output_file(path, fs),
@@ -88,27 +84,23 @@ impl OpenMode {
 
 /// The file name `name` holds, or the type error `primitive` raises for one
 /// that is not a string.
-fn file_name(
-    ctx: &dyn ApplyContext,
-    primitive: &str,
-    name: TaggedValue,
-) -> Result<String, EvalError> {
-    get_string_tv(name, &ctx.heap().borrow())
+fn file_name<'gc>(cx: &Cx<'gc>, primitive: &str, name: Value<'gc>) -> Result<String, EvalError> {
+    cx.get_string_contents(name)
         .ok_or_else(|| EvalError::TypeError(format!("{primitive} expects a string filename")))
 }
 
 /// Open the file `name` names, for `mode`, as a port on the heap; `None`
 /// when descriptors ran out, which the caller collects and tries again
 /// after. Any other failure is the file error.
-fn try_open(
-    ctx: &dyn ApplyContext,
+fn try_open<'gc>(
+    cx: &mut Cx<'gc>,
     primitive: &str,
     mode: OpenMode,
-    name: TaggedValue,
-) -> Result<Option<TaggedValue>, EvalError> {
-    let path = file_name(ctx, primitive, name)?;
-    match mode.open(&path, ctx) {
-        Ok(port) => Ok(Some(ctx.heap().borrow_mut().alloc_port(port))),
+    name: Value<'gc>,
+) -> Result<Option<Value<'gc>>, EvalError> {
+    let path = file_name(cx, primitive, name)?;
+    match mode.open(&path, cx) {
+        Ok(port) => Ok(Some(cx.alloc_port(port))),
         Err(e) if out_of_descriptors(&e) => Ok(None),
         Err(e) => Err(open_error(mode, &path, e)),
     }
@@ -117,17 +109,17 @@ fn try_open(
 /// Open the file `name` names, for `mode`, after a collection asked for
 /// because descriptors ran out: the last attempt, whose failure is the file
 /// error.
-fn open_again(
-    ctx: &dyn ApplyContext,
+fn open_again<'gc>(
+    cx: &mut Cx<'gc>,
     primitive: &str,
     mode: OpenMode,
-    name: TaggedValue,
-) -> Result<TaggedValue, EvalError> {
-    let path = file_name(ctx, primitive, name)?;
+    name: Value<'gc>,
+) -> Result<Value<'gc>, EvalError> {
+    let path = file_name(cx, primitive, name)?;
     let port = mode
-        .open(&path, ctx)
+        .open(&path, cx)
         .map_err(|e| open_error(mode, &path, e))?;
-    Ok(ctx.heap().borrow_mut().alloc_port(port))
+    Ok(cx.alloc_port(port))
 }
 
 /// The file error for an open that failed. `file-error?` recognises it by
@@ -143,7 +135,7 @@ fn open_error(mode: OpenMode, path: &str, e: std::io::Error) -> EvalError {
 
 /// A full collection at the call, after which the open is tried again with
 /// `state` (#607).
-fn collect_then_retry(state: TaggedValue) -> Step {
+fn collect_then_retry(state: Value<'_>) -> Step<'_> {
     Step::Collect {
         kind: CollectKind::Major,
         state,
@@ -152,13 +144,13 @@ fn collect_then_retry(state: TaggedValue) -> Step {
 
 /// An `open-*-file` primitive's first half: the port, or a collection to
 /// retry after, keeping the file name.
-fn open_start(
-    ctx: &dyn ApplyContext,
+fn open_start<'gc>(
+    cx: &mut Cx<'gc>,
     primitive: &str,
     mode: OpenMode,
-    args: &[TaggedValue],
-) -> Result<Step, EvalError> {
-    Ok(match try_open(ctx, primitive, mode, args[0])? {
+    args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
+    Ok(match try_open(cx, primitive, mode, args[0])? {
         Some(port) => Step::Done(port),
         None => collect_then_retry(args[0]),
     })
@@ -168,71 +160,79 @@ fn open_start(
 // check it again.
 
 /// (open-input-file filename) - Opens a file for reading and returns an input port
-pub(super) fn open_input_file(
-    ctx: &dyn ApplyContext,
-    args: &[TaggedValue],
-) -> Result<Step, EvalError> {
-    open_start(ctx, "open-input-file", OpenMode::Input, args)
+pub(super) fn open_input_file<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
+    open_start(cx, "open-input-file", OpenMode::Input, args)
 }
 
 /// `open-input-file` resumed after the collection it asked for: open again.
-pub(super) fn open_input_file_again(
-    ctx: &dyn ApplyContext,
-    name: TaggedValue,
-    _collected: TaggedValue,
-) -> Result<Step, EvalError> {
-    open_again(ctx, "open-input-file", OpenMode::Input, name).map(Step::Done)
+pub(super) fn open_input_file_again<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    name: Value<'gc>,
+    _collected: Value<'gc>,
+) -> Result<Step<'gc>, EvalError> {
+    open_again(cx, "open-input-file", OpenMode::Input, name).map(Step::Done)
 }
 
 /// (open-output-file filename) - Opens a file for writing and returns an output port
-pub(super) fn open_output_file(
-    ctx: &dyn ApplyContext,
-    args: &[TaggedValue],
-) -> Result<Step, EvalError> {
-    open_start(ctx, "open-output-file", OpenMode::Output, args)
+pub(super) fn open_output_file<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
+    open_start(cx, "open-output-file", OpenMode::Output, args)
 }
 
 /// `open-output-file` resumed after the collection it asked for.
-pub(super) fn open_output_file_again(
-    ctx: &dyn ApplyContext,
-    name: TaggedValue,
-    _collected: TaggedValue,
-) -> Result<Step, EvalError> {
-    open_again(ctx, "open-output-file", OpenMode::Output, name).map(Step::Done)
+pub(super) fn open_output_file_again<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    name: Value<'gc>,
+    _collected: Value<'gc>,
+) -> Result<Step<'gc>, EvalError> {
+    open_again(cx, "open-output-file", OpenMode::Output, name).map(Step::Done)
 }
 
 /// (open-binary-input-file filename) - Opens a binary file for reading
-pub(super) fn open_binary_input_file(
-    ctx: &dyn ApplyContext,
-    args: &[TaggedValue],
-) -> Result<Step, EvalError> {
-    open_start(ctx, "open-binary-input-file", OpenMode::BinaryInput, args)
+pub(super) fn open_binary_input_file<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
+    open_start(cx, "open-binary-input-file", OpenMode::BinaryInput, args)
 }
 
 /// `open-binary-input-file` resumed after the collection it asked for.
-pub(super) fn open_binary_input_file_again(
-    ctx: &dyn ApplyContext,
-    name: TaggedValue,
-    _collected: TaggedValue,
-) -> Result<Step, EvalError> {
-    open_again(ctx, "open-binary-input-file", OpenMode::BinaryInput, name).map(Step::Done)
+pub(super) fn open_binary_input_file_again<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    name: Value<'gc>,
+    _collected: Value<'gc>,
+) -> Result<Step<'gc>, EvalError> {
+    open_again(cx, "open-binary-input-file", OpenMode::BinaryInput, name).map(Step::Done)
 }
 
 /// (open-binary-output-file filename) - Opens a binary file for writing
-pub(super) fn open_binary_output_file(
-    ctx: &dyn ApplyContext,
-    args: &[TaggedValue],
-) -> Result<Step, EvalError> {
-    open_start(ctx, "open-binary-output-file", OpenMode::BinaryOutput, args)
+pub(super) fn open_binary_output_file<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
+    open_start(cx, "open-binary-output-file", OpenMode::BinaryOutput, args)
 }
 
 /// `open-binary-output-file` resumed after the collection it asked for.
-pub(super) fn open_binary_output_file_again(
-    ctx: &dyn ApplyContext,
-    name: TaggedValue,
-    _collected: TaggedValue,
-) -> Result<Step, EvalError> {
-    open_again(ctx, "open-binary-output-file", OpenMode::BinaryOutput, name).map(Step::Done)
+pub(super) fn open_binary_output_file_again<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    name: Value<'gc>,
+    _collected: Value<'gc>,
+) -> Result<Step<'gc>, EvalError> {
+    open_again(cx, "open-binary-output-file", OpenMode::BinaryOutput, name).map(Step::Done)
 }
 
 /// (file-exists? filename) - Returns #t if file exists. Takes the context
@@ -288,7 +288,7 @@ pub(super) fn delete_file<'gc>(
 
 /// Call `proc` with `port` as a call the machine makes, keeping the port to
 /// close when it returns.
-fn call_with(port: TaggedValue, proc: TaggedValue) -> Step {
+fn call_with<'gc>(port: Value<'gc>, proc: Value<'gc>) -> Step<'gc> {
     Step::Call {
         callee: proc,
         args: smallvec![port],
@@ -299,16 +299,16 @@ fn call_with(port: TaggedValue, proc: TaggedValue) -> Step {
 /// A `call-with-*-file` primitive's first half: open, and call the procedure
 /// with the port, or collect and retry, keeping the file name and the
 /// procedure in a pair — the one allocation, on the way to a collection.
-fn call_with_file_start(
-    ctx: &dyn ApplyContext,
+fn call_with_file_start<'gc>(
+    cx: &mut Cx<'gc>,
     primitive: &str,
     mode: OpenMode,
-    args: &[TaggedValue],
-) -> Result<Step, EvalError> {
+    args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
     let (name, proc) = (args[0], args[1]);
-    Ok(match try_open(ctx, primitive, mode, name)? {
+    Ok(match try_open(cx, primitive, mode, name)? {
         Some(port) => call_with(port, proc),
-        None => collect_then_retry(ctx.heap().borrow_mut().alloc_pair(name, proc)),
+        None => collect_then_retry(cx.alloc_pair(name, proc)),
     })
 }
 
@@ -319,58 +319,60 @@ fn call_with_file_start(
 /// re-entered after this returned comes back here, and closes the closed
 /// port again. After the collection asked for, `state` is the file name and
 /// the procedure: open again, and call it.
-fn call_with_file_resume(
-    ctx: &dyn ApplyContext,
+fn call_with_file_resume<'gc>(
+    cx: &mut Cx<'gc>,
     primitive: &str,
     mode: OpenMode,
-    state: TaggedValue,
-    value: TaggedValue,
-) -> Result<Step, EvalError> {
-    let heap = ctx.heap();
-    let port = heap.borrow().get_port(state).cloned();
-    if let Some(port) = port {
+    state: Value<'gc>,
+    value: Value<'gc>,
+) -> Result<Step<'gc>, EvalError> {
+    if let Some(port) = cx.get_port(state) {
         port.close();
         return Ok(Step::Done(value));
     }
-    let (name, proc) = heap.borrow().get_pair(state);
-    let port = open_again(ctx, primitive, mode, name)?;
+    let (name, proc) = cx.get_pair(state);
+    let port = open_again(cx, primitive, mode, name)?;
     Ok(call_with(port, proc))
 }
 
 /// (call-with-input-file filename proc) - Opens file for reading, calls proc
 /// with port, closes it if proc returns. Reached only by importing
 /// `(patina internal io)`: `(scheme file)`'s is Scheme (#471).
-pub(super) fn call_with_input_file(
-    ctx: &dyn ApplyContext,
-    args: &[TaggedValue],
-) -> Result<Step, EvalError> {
-    call_with_file_start(ctx, "call-with-input-file", OpenMode::Input, args)
+pub(super) fn call_with_input_file<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
+    call_with_file_start(cx, "call-with-input-file", OpenMode::Input, args)
 }
 
 /// `call-with-input-file` resumed ([`call_with_file_resume`]).
-pub(super) fn call_with_input_file_resume(
-    ctx: &dyn ApplyContext,
-    state: TaggedValue,
-    value: TaggedValue,
-) -> Result<Step, EvalError> {
-    call_with_file_resume(ctx, "call-with-input-file", OpenMode::Input, state, value)
+pub(super) fn call_with_input_file_resume<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    state: Value<'gc>,
+    value: Value<'gc>,
+) -> Result<Step<'gc>, EvalError> {
+    call_with_file_resume(cx, "call-with-input-file", OpenMode::Input, state, value)
 }
 
 /// (call-with-output-file filename proc) - Opens file for writing, calls
 /// proc with port, closes (and so flushes) it if proc returns. Reached only
 /// by importing `(patina internal io)`: `(scheme file)`'s is Scheme (#471).
-pub(super) fn call_with_output_file(
-    ctx: &dyn ApplyContext,
-    args: &[TaggedValue],
-) -> Result<Step, EvalError> {
-    call_with_file_start(ctx, "call-with-output-file", OpenMode::Output, args)
+pub(super) fn call_with_output_file<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
+    call_with_file_start(cx, "call-with-output-file", OpenMode::Output, args)
 }
 
 /// `call-with-output-file` resumed ([`call_with_file_resume`]).
-pub(super) fn call_with_output_file_resume(
-    ctx: &dyn ApplyContext,
-    state: TaggedValue,
-    value: TaggedValue,
-) -> Result<Step, EvalError> {
-    call_with_file_resume(ctx, "call-with-output-file", OpenMode::Output, state, value)
+pub(super) fn call_with_output_file_resume<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    state: Value<'gc>,
+    value: Value<'gc>,
+) -> Result<Step<'gc>, EvalError> {
+    call_with_file_resume(cx, "call-with-output-file", OpenMode::Output, state, value)
 }

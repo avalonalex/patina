@@ -1010,7 +1010,7 @@ impl<'a> CpsEvaluator<'a> {
     }
 
     /// Start the resumable primitive at registry `index` on `args`, and act on
-    /// the [`Step`](patina_primitives::Step) it returns.
+    /// the [`Step`](patina_primitives::Step) it returns, as words.
     #[allow(clippy::too_many_arguments)]
     fn start_resumable(
         &self,
@@ -1054,7 +1054,7 @@ impl<'a> CpsEvaluator<'a> {
     pub(super) fn resumable_step(
         &self,
         index: usize,
-        step: Result<patina_primitives::Step, EvalError>,
+        step: Result<patina_primitives::TaggedStep, EvalError>,
         cont: ContValue,
         cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
@@ -1064,7 +1064,7 @@ impl<'a> CpsEvaluator<'a> {
         // Taken whatever the result, so it can never describe a later call.
         let declined_by_every_handler = super::types::take_unhandled_in_callback();
         match step {
-            Ok(patina_primitives::Step::Done(value)) => Ok(StepResult::InvokeContinuation {
+            Ok(patina_primitives::TaggedStep::Done(value)) => Ok(StepResult::InvokeContinuation {
                 cont,
                 value,
                 env: self.evaluator.global_env.clone(),
@@ -1073,7 +1073,7 @@ impl<'a> CpsEvaluator<'a> {
                 dynamic_winds,
                 exception_handlers,
             }),
-            Ok(patina_primitives::Step::Call {
+            Ok(patina_primitives::TaggedStep::Call {
                 callee,
                 args,
                 state,
@@ -1091,20 +1091,22 @@ impl<'a> CpsEvaluator<'a> {
                 dynamic_winds,
                 exception_handlers,
             }),
-            Ok(patina_primitives::Step::Collect { kind, state }) => Ok(StepResult::CollectAtCall {
-                kind,
-                cont: ContValue::ResumePrimitive {
-                    index,
-                    state,
-                    original_cont: Box::new(cont),
-                },
-                env: self.evaluator.global_env.clone(),
-                cont_env,
-                prompt_stack,
-                dynamic_winds,
-                exception_handlers,
-            }),
-            Ok(patina_primitives::Step::Eval { expr, env, state }) => {
+            Ok(patina_primitives::TaggedStep::Collect { kind, state }) => {
+                Ok(StepResult::CollectAtCall {
+                    kind,
+                    cont: ContValue::ResumePrimitive {
+                        index,
+                        state,
+                        original_cont: Box::new(cont),
+                    },
+                    env: self.evaluator.global_env.clone(),
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds,
+                    exception_handlers,
+                })
+            }
+            Ok(patina_primitives::TaggedStep::Eval { expr, env, state }) => {
                 let resume = |cont| ContValue::ResumePrimitive {
                     index,
                     state,
