@@ -3,14 +3,13 @@
 //! R7RS §6.13 defines `features` for querying implementation capabilities.
 use crate::registry::PrimitiveFn;
 use crate::registry::PrimitiveRegistry;
-use patina_core::TaggedValue;
+use patina_core::{Cx, Value};
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
 
 /// Register all system primitives in the registry
 pub(super) fn register(registry: &mut PrimitiveRegistry) {
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "features",
         Arity::Exact(0),
@@ -27,7 +26,8 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 /// The advertised set is per interpreter instance and includes the backend's
 /// own identifier — `patina-vm` or `patina-tree-walker` — which is what makes
 /// `(cond-expand (patina-vm …) (else …))` selectable. R7RS §4.2.1 requires this
-/// list and `cond-expand` to agree, which is why both read `Heap::features()`.
+/// list and `cond-expand` to agree, which is why both read the instance's
+/// feature set (`Instance::features`).
 ///
 /// Example (macOS/arm64, VM backend; the exact set is platform-dependent):
 /// ```scheme
@@ -35,7 +35,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 ///                full-unicode-strings ieee-float little-endian macosx patina
 ///                patina-vm posix r7rs ratios unix)
 /// ```
-fn features(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+fn features<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "0".to_string(),
@@ -43,15 +43,15 @@ fn features(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, Eval
         });
     }
 
-    let mut h = heap.borrow_mut();
-    // The heap's own registry, not `default_features()`: R7RS §4.2.1 defines
-    // this as "a list of the feature identifiers which `cond-expand` treats as
-    // true", and `cond-expand` reads the same field. Building a fresh default
-    // here is how the two came to disagree about the backend identifier.
-    let names = h.features_and_close().all_features();
-    let sym_tvs: Vec<TaggedValue> = names
+    // The instance's own registry, not `default_features()`: R7RS §4.2.1
+    // defines this as "a list of the feature identifiers which `cond-expand`
+    // treats as true", and `cond-expand` reads the same field. Building a
+    // fresh default here is how the two came to disagree about the backend
+    // identifier.
+    let names = cx.instance().features_and_close().all_features();
+    let sym_tvs: Vec<Value<'gc>> = names
         .into_iter()
-        .map(|name| h.intern_symbol(&name))
+        .map(|name| cx.intern_symbol(&name))
         .collect();
-    Ok(h.list_from_iter(sym_tvs))
+    Ok(cx.list_from_iter(sym_tvs))
 }

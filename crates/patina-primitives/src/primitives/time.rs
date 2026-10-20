@@ -6,10 +6,9 @@
 //! - jiffies-per-second: Jiffy resolution constant
 use crate::registry::PrimitiveFn;
 use crate::registry::PrimitiveRegistry;
-use patina_core::TaggedValue;
+use patina_core::{Cx, Value};
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
 use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -26,7 +25,7 @@ fn program_start() -> Instant {
 
 /// Register all time primitives in the registry
 pub(super) fn register(registry: &mut PrimitiveRegistry) {
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.time",
         "current-second",
         Arity::Exact(0),
@@ -34,20 +33,20 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         current_second,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.time",
         "current-jiffy",
         Arity::Exact(0),
         "Return elapsed jiffies (microseconds) since program start as exact integer",
-        |_heap, args| current_jiffy(args),
+        |_cx, args| current_jiffy(args),
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.time",
         "jiffies-per-second",
         Arity::Exact(0),
         "Return the number of jiffies per second (1000000 for microsecond resolution)",
-        |_heap, args| jiffies_per_second(args),
+        |_cx, args| jiffies_per_second(args),
     ));
 }
 
@@ -58,7 +57,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 /// "returning Coordinated Universal Time plus a suitable constant might be
 /// the best an implementation can do" - so we return UTC which is standard
 /// for system time.
-fn current_second(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+fn current_second<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "0".to_string(),
@@ -72,7 +71,7 @@ fn current_second(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue
 
     // Return as inexact (f64) per R7RS spec
     let seconds = duration.as_secs_f64();
-    Ok(heap.borrow_mut().alloc_real(seconds))
+    Ok(cx.alloc_real(seconds))
 }
 
 /// Return elapsed jiffies since program start as exact integer.
@@ -80,7 +79,7 @@ fn current_second(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue
 /// A jiffy is an implementation-defined fraction of a second.
 /// We use microseconds (1,000,000 jiffies per second) which provides
 /// good resolution while fitting in a compact integer for most durations.
-fn current_jiffy(args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+fn current_jiffy<'gc>(args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "0".to_string(),
@@ -91,7 +90,7 @@ fn current_jiffy(args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     let elapsed = program_start().elapsed();
     let micros = elapsed.as_micros() as i64;
 
-    Ok(TaggedValue::fixnum(micros))
+    Ok(Value::fixnum(micros))
 }
 
 /// Return the number of jiffies per SI second.
@@ -99,7 +98,7 @@ fn current_jiffy(args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
 /// This is an implementation-specified constant. We use 1,000,000
 /// (microsecond resolution) which is a good balance between precision
 /// and compact integer representation.
-fn jiffies_per_second(args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+fn jiffies_per_second<'gc>(args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "0".to_string(),
@@ -107,5 +106,5 @@ fn jiffies_per_second(args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
         });
     }
 
-    Ok(TaggedValue::fixnum(JIFFIES_PER_SECOND))
+    Ok(Value::fixnum(JIFFIES_PER_SECOND))
 }

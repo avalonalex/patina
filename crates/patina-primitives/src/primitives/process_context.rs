@@ -8,14 +8,13 @@
 //! - get-environment-variables: Get all env vars
 use crate::registry::PrimitiveFn;
 use crate::registry::PrimitiveRegistry;
-use patina_core::TaggedValue;
+use patina_core::{Cx, Value};
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
 
 /// Register all process-context primitives in the registry
 pub(super) fn register(registry: &mut PrimitiveRegistry) {
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.process-context",
         "command-line",
         Arity::Exact(0),
@@ -23,7 +22,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         command_line,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.process-context",
         "exit",
         Arity::Range(0, 1),
@@ -31,7 +30,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         exit_proc,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.process-context",
         "emergency-exit",
         Arity::Range(0, 1),
@@ -39,7 +38,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         emergency_exit,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.process-context",
         "get-environment-variable",
         Arity::Exact(1),
@@ -47,7 +46,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         get_environment_variable,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.process-context",
         "get-environment-variables",
         Arity::Exact(0),
@@ -59,7 +58,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 /// Return the command line arguments as a list of strings.
 ///
 /// The first element is the program name (implementation-dependent).
-fn command_line(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+fn command_line<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "0".to_string(),
@@ -67,15 +66,14 @@ fn command_line(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, 
         });
     }
 
-    // Release the immutable borrow before allocating. Keep the configured
+    // Copied out of the instance before allocating. Keep the configured
     // Rust strings unchanged even if Scheme mutates this result (#593).
-    let command_line = heap.borrow().command_line().to_vec();
-    let mut h = heap.borrow_mut();
-    let arg_tvs: Vec<TaggedValue> = command_line
+    let command_line = cx.instance().command_line().to_vec();
+    let arg_tvs: Vec<Value<'gc>> = command_line
         .into_iter()
-        .map(|s| h.alloc_string(s))
+        .map(|s| cx.alloc_string(s))
         .collect();
-    Ok(h.list_from_iter(arg_tvs))
+    Ok(cx.list_from_iter(arg_tvs))
 }
 
 /// Exit the program with optional status, without unwinding.
@@ -90,7 +88,7 @@ fn command_line(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, 
 /// - No argument or #t: exit with success (0)
 /// - #f: exit with failure (1)
 /// - Integer: exit with that code
-fn exit_proc(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+fn exit_proc<'gc>(_cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     exit_now(args)
 }
 
@@ -100,14 +98,14 @@ fn exit_proc(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, Ev
 /// The output a program left in open file ports is still written: what
 /// `emergency-exit` skips is the program's cleanup, not its output. chibi
 /// agrees; Gauche drops that output, as POSIX `_exit` would (#343).
-fn emergency_exit(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+fn emergency_exit<'gc>(_cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     exit_now(args)
 }
 
 /// End the process with the status `args` ask for, running no after thunk
 /// first.
-fn exit_now(args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    let status = patina_runtime::exit_status::requested_status(args)?;
+fn exit_now<'gc>(args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+    let status = patina_runtime::exit_status::requested_status(Value::tagged_slice(args))?;
     // A success is withheld from a program that already reported an error (-k).
     patina_runtime::exit_status::end_process(status);
 }
@@ -115,10 +113,10 @@ fn exit_now(args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
 /// Get the value of an environment variable.
 ///
 /// Returns #f if the variable is not set.
-fn get_environment_variable(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+fn get_environment_variable<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -127,8 +125,7 @@ fn get_environment_variable(
     }
 
     let name: String = {
-        let heap_ref = heap.borrow();
-        match heap_ref.get_string_contents(args[0]) {
+        match cx.get_string_contents(args[0]) {
             Some(s) => s,
             None => {
                 return Err(EvalError::TypeError(
@@ -139,18 +136,18 @@ fn get_environment_variable(
     };
 
     match std::env::var(&name) {
-        Ok(value) => Ok(heap.borrow_mut().alloc_string(value)),
-        Err(_) => Ok(TaggedValue::FALSE),
+        Ok(value) => Ok(cx.alloc_string(value)),
+        Err(_) => Ok(Value::FALSE),
     }
 }
 
 /// Get all environment variables as an alist.
 ///
 /// Each entry is (name . value) where both are strings.
-fn get_environment_variables(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+fn get_environment_variables<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "0".to_string(),
@@ -158,14 +155,13 @@ fn get_environment_variables(
         });
     }
 
-    let mut h = heap.borrow_mut();
     // Build alist entries as (name . value) pairs
-    let entry_tvs: Vec<TaggedValue> = std::env::vars()
+    let entry_tvs: Vec<Value<'gc>> = std::env::vars()
         .map(|(k, v)| {
-            let key = h.alloc_string(k);
-            let val = h.alloc_string(v);
-            h.alloc_pair(key, val)
+            let key = cx.alloc_string(k);
+            let val = cx.alloc_string(v);
+            cx.alloc_pair(key, val)
         })
         .collect();
-    Ok(h.list_from_iter(entry_tvs))
+    Ok(cx.list_from_iter(entry_tvs))
 }

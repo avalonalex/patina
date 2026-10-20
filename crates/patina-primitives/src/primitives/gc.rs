@@ -87,9 +87,9 @@ use crate::registry::PrimitiveRegistry;
 use crate::registry::Step;
 use patina_core::CollectKind;
 use patina_core::TaggedValue;
+use patina_core::{Cx, Value};
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
 
 // Both are registered with Arity::Exact(0); the registry checks arity before
 // dispatch, so the handlers don't re-check.
@@ -106,7 +106,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         gc_done,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.debug",
         "gc-stats",
         Arity::Exact(0),
@@ -134,19 +134,18 @@ fn gc_done(
     Ok(Step::Done(TaggedValue::UNSPECIFIED))
 }
 
-fn gc_stats(heap: &SharedHeap, _args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    let mut h = heap.borrow_mut();
-    let stats = h.stats();
-    let n = |count: usize| TaggedValue::fixnum(count as i64);
+fn gc_stats<'gc>(cx: &mut Cx<'gc>, _args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+    let stats = cx.stats();
+    let n = |count: usize| Value::fixnum(count as i64);
     // A limit the GC mode does not use is installed as `usize::MAX`.
     let limit = |at: usize| {
         if at == usize::MAX {
-            TaggedValue::FALSE
+            Value::FALSE
         } else {
             n(at)
         }
     };
-    let threshold = h.gc_threshold();
+    let threshold = cx.gc_threshold();
     let entries = [
         ("pairs", n(stats.pairs)),
         ("vectors", n(stats.vectors)),
@@ -175,24 +174,24 @@ fn gc_stats(heap: &SharedHeap, _args: &[TaggedValue]) -> Result<TaggedValue, Eva
         ),
         ("last-swept", n(stats.gc_last_swept)),
         ("live-bytes", n(stats.live_bytes)),
-        ("bytes-since-gc", n(h.bytes_since_gc())),
+        ("bytes-since-gc", n(cx.bytes_since_gc())),
         ("bytes-trigger", limit(threshold.bytes)),
         ("bytes-allocated", n(stats.bytes_allocated as usize)),
         ("bytes-reclaimed", n(stats.bytes_reclaimed as usize)),
         ("committed-bytes", n(stats.committed_bytes)),
         ("external-bytes", n(stats.external_bytes)),
-        ("open-file-ports", n(h.open_file_ports())),
+        ("open-file-ports", n(cx.open_file_ports())),
         (
             "descriptor-limit",
-            patina_core::heap::descriptor_limit().map_or(TaggedValue::FALSE, n),
+            patina_core::heap::descriptor_limit().map_or(Value::FALSE, n),
         ),
     ];
 
-    let mut alist: Vec<TaggedValue> = entries
+    let mut alist: Vec<Value<'gc>> = entries
         .iter()
         .map(|&(name, value)| {
-            let key = h.intern_symbol(name);
-            h.alloc_pair(key, value)
+            let key = cx.intern_symbol(name);
+            cx.alloc_pair(key, value)
         })
         .collect();
 
@@ -201,34 +200,34 @@ fn gc_stats(heap: &SharedHeap, _args: &[TaggedValue]) -> Result<TaggedValue, Eva
     // mutator utilisation at 10 ms; K16's two high-water marks, each with
     // the site of the deferral window that set it, or #f; and the process's
     // resident size and CPU time, or #f where they cannot be read.
-    let micros = |d: std::time::Duration| TaggedValue::fixnum(d.as_micros() as i64);
-    let bytes = |n: u64| TaggedValue::fixnum(n as i64);
-    let wait = h.wait_high_water();
-    let deferral = h.deferral_high_water();
-    let mmu = h.mmu(10).unwrap_or(1.0);
+    let micros = |d: std::time::Duration| Value::fixnum(d.as_micros() as i64);
+    let bytes = |n: u64| Value::fixnum(n as i64);
+    let wait = cx.wait_high_water();
+    let deferral = cx.deferral_high_water();
+    let mmu = cx.mmu(10).unwrap_or(1.0);
     let mut values = vec![
-        ("last-pause-us", micros(h.last_pause())),
-        ("pause-max-us", micros(h.pause_max())),
-        ("pause-total-us", micros(h.pause_total())),
-        ("mmu-10ms", h.alloc_real(mmu)),
+        ("last-pause-us", micros(cx.last_pause())),
+        ("pause-max-us", micros(cx.pause_max())),
+        ("pause-total-us", micros(cx.pause_total())),
+        ("mmu-10ms", cx.alloc_real(mmu)),
         ("wait-max-bytes", bytes(wait.bytes)),
-        ("wait-max-us", micros(h.wait_time_max())),
+        ("wait-max-us", micros(cx.wait_time_max())),
     ];
     for (name, site) in [("wait-site", wait.site), ("deferral-site", deferral.site)] {
         let value = match site {
-            Some(site) => h.alloc_string(site.to_string()),
-            None => TaggedValue::FALSE,
+            Some(site) => cx.alloc_string(site.to_string()),
+            None => Value::FALSE,
         };
         values.push((name, value));
     }
     values.push(("deferral-max-bytes", bytes(deferral.bytes)));
     let resident = patina_core::heap::telemetry::resident_bytes();
     let cpu = patina_core::heap::telemetry::cpu_micros();
-    values.push(("resident-bytes", resident.map_or(TaggedValue::FALSE, bytes)));
-    values.push(("cpu-us", cpu.map_or(TaggedValue::FALSE, bytes)));
+    values.push(("resident-bytes", resident.map_or(Value::FALSE, bytes)));
+    values.push(("cpu-us", cpu.map_or(Value::FALSE, bytes)));
     for (name, value) in values {
-        let key = h.intern_symbol(name);
-        alist.push(h.alloc_pair(key, value));
+        let key = cx.intern_symbol(name);
+        alist.push(cx.alloc_pair(key, value));
     }
-    Ok(h.list_from_iter(alist))
+    Ok(cx.list_from_iter(alist))
 }

@@ -161,8 +161,11 @@ pub type TaggedHandler = fn(&SharedHeap, &[TaggedValue]) -> Result<TaggedValue, 
   convert with the higher-order primitives, the vectors (`vectors.rs`), the
   numbers (`arithmetic/`), the bytevectors (`bytevectors.rs`) and the
   records (`records.rs`), whose `%record-set!` stores through the funnel's
-  record field, and the equality, symbol, bitwise, number conversion and
-  ephemeron primitives.
+  record field, the equality, symbol, bitwise, number conversion and
+  ephemeron primitives, and the runtime's: prompt tags, the promise and
+  `values` constructors, the process context, `features`, the clock and
+  `gc-stats`. The exceptions follow the datum writer, which formats their
+  irritants, in the I/O part.
 
 ---
 
