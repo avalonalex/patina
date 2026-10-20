@@ -1,5 +1,8 @@
 //! Directory operations, routed through the VFS `FileSystem` trait.
 //!
+//! Each takes the context (#706), and reaches the interpreter's file system
+//! through the context's instance ([`Instance::fs`](patina_core::Instance::fs)).
+//!
 //! These back `(patina filesystem)` and the portable half of the external
 //! `(chibi filesystem)` adaptation. See `docs/VFS_DESIGN.md` for the public
 //! contract. The POSIX half (file descriptors, stat fields, symlinks, pipes)
@@ -27,26 +30,19 @@
 //! spells tolerance with `guard` rather than a return-value test), and
 //! `test-lib/chibi/PROVENANCE.md` records it for that tree.
 
-use crate::apply_context::ApplyContext;
-use patina_core::{Heap, TaggedValue};
+use patina_core::{Cx, Value};
 use patina_runtime::EvalError;
 use std::path::Path;
 
-fn get_string_tv(tv: TaggedValue, heap: &std::cell::Ref<'_, Heap>) -> Option<String> {
-    heap.get_string_contents(tv)
-}
-
 /// Pull a single string argument, or report the arity/type error naming `who`.
-fn one_path(who: &str, ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<String, EvalError> {
+fn one_path<'gc>(who: &str, cx: &Cx<'gc>, args: &[Value<'gc>]) -> Result<String, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: format!("{who} expects 1 argument"),
             actual: args.len(),
         });
     }
-    let heap = ctx.heap();
-    let heap_ref = heap.borrow();
-    get_string_tv(args[0], &heap_ref)
+    cx.get_string_contents(args[0])
         .ok_or_else(|| EvalError::TypeError(format!("{who} expects a string path")))
 }
 
@@ -59,112 +55,111 @@ fn io_error(who: &str, path: &str, e: std::io::Error) -> EvalError {
 /// Includes `.` and `..`, which the VFS layer omits: chibi's callers expect
 /// them (its own `directory-fold-tree` filters them out by name), so leaving
 /// them off would silently change the traversal every consumer writes.
-pub(super) fn directory_files(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    let path = one_path("directory-files", ctx, &args)?;
-    let mut names = ctx
+pub(super) fn directory_files<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    let path = one_path("directory-files", cx, args)?;
+    let mut names = cx
+        .instance()
         .fs()
         .read_dir(Path::new(&path))
         .map_err(|e| io_error("directory-files", &path, e))?;
     names.sort();
 
-    let heap = ctx.heap();
-    let mut list = TaggedValue::NULL;
+    let mut list = Value::NULL;
     for name in names
         .iter()
         .rev()
         .chain([&"..".to_string(), &".".to_string()])
     {
-        let s = heap.borrow_mut().alloc_string(name.clone());
-        list = heap.borrow_mut().alloc_pair(s, list);
+        let s = cx.alloc_string(name.clone());
+        list = cx.alloc_pair(s, list);
     }
     Ok(list)
 }
 
 /// `(create-directory dir [mode])` — the mode is accepted and ignored, since
 /// the VFS layer has no permission model to apply it to.
-pub(super) fn create_directory(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn create_directory<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
             expected: "create-directory expects 1 or 2 arguments".to_string(),
             actual: args.len(),
         });
     }
-    let path = one_path("create-directory", ctx, &args[..1])?;
-    ctx.fs()
+    let path = one_path("create-directory", cx, &args[..1])?;
+    cx.instance()
+        .fs()
         .create_dir(Path::new(&path))
         .map_err(|e| io_error("create-directory", &path, e))?;
-    Ok(TaggedValue::boolean(true))
+    Ok(Value::boolean(true))
 }
 
 /// `(delete-directory dir)` — the directory must be empty.
-pub(super) fn delete_directory(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    let path = one_path("delete-directory", ctx, &args)?;
-    ctx.fs()
+pub(super) fn delete_directory<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    let path = one_path("delete-directory", cx, args)?;
+    cx.instance()
+        .fs()
         .remove_dir(Path::new(&path))
         .map_err(|e| io_error("delete-directory", &path, e))?;
-    Ok(TaggedValue::boolean(true))
+    Ok(Value::boolean(true))
 }
 
 /// `(current-directory)` — getter only, as in `(chibi filesystem)`.
-pub(super) fn current_directory(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn current_directory<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "current-directory expects 0 arguments".to_string(),
             actual: args.len(),
         });
     }
-    let dir = ctx
+    let dir = cx
+        .instance()
         .fs()
         .current_dir()
         .map_err(|e| io_error("current-directory", ".", e))?;
-    let heap = ctx.heap();
-    let s = heap
-        .borrow_mut()
-        .alloc_string(dir.to_string_lossy().into_owned());
-    Ok(s)
+    Ok(cx.alloc_string(dir.to_string_lossy().into_owned()))
 }
 
 /// `(change-directory dir)`
-pub(super) fn change_directory(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    let path = one_path("change-directory", ctx, &args)?;
-    ctx.fs()
+pub(super) fn change_directory<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    let path = one_path("change-directory", cx, args)?;
+    cx.instance()
+        .fs()
         .set_current_dir(Path::new(&path))
         .map_err(|e| io_error("change-directory", &path, e))?;
-    Ok(TaggedValue::boolean(true))
+    Ok(Value::boolean(true))
 }
 
 /// `(file-directory? path)`
-pub(super) fn file_directory_p(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    let path = one_path("file-directory?", ctx, &args)?;
-    Ok(TaggedValue::boolean(ctx.fs().is_dir(Path::new(&path))))
+pub(super) fn file_directory_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    let path = one_path("file-directory?", cx, args)?;
+    Ok(Value::boolean(cx.instance().fs().is_dir(Path::new(&path))))
 }
 
 /// `(file-regular? path)` — a plain file, so explicitly not a directory.
-pub(super) fn file_regular_p(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    let path = one_path("file-regular?", ctx, &args)?;
+pub(super) fn file_regular_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    let path = one_path("file-regular?", cx, args)?;
     let p = Path::new(&path);
-    Ok(TaggedValue::boolean(
-        ctx.fs().is_file(p) && !ctx.fs().is_dir(p),
-    ))
+    let fs = cx.instance().fs();
+    Ok(Value::boolean(fs.is_file(p) && !fs.is_dir(p)))
 }

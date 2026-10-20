@@ -18,10 +18,10 @@ use std::rc::Rc;
 /// Its arguments are borrowed, since it never re-enters the evaluator.
 pub type CxHandler = for<'gc> fn(&mut Cx<'gc>, &[Value<'gc>]) -> Result<Value<'gc>, EvalError>;
 
-/// Handler for higher-order primitives (~25 primitives)
-/// These need ApplyContext to call back into the evaluator (or reach the
-/// filesystem). They take an owned Vec: re-entering the VM may reallocate the
-/// register file, which would invalidate a borrowed argument slice.
+/// Handler for higher-order primitives (10 of them)
+/// These need ApplyContext to call back into the evaluator. They take an
+/// owned Vec: re-entering the VM may reallocate the register file, which
+/// would invalidate a borrowed argument slice.
 pub type HOTaggedHandler =
     fn(&dyn ApplyContext, Vec<TaggedValue>) -> Result<TaggedValue, EvalError>;
 

@@ -3,7 +3,7 @@
 //! This module implements R7RS file I/O procedures:
 //! - open-input-file, open-output-file
 //! - open-binary-input-file, open-binary-output-file
-//! - file-exists?, delete-file
+//! - file-exists?, delete-file, which take the context (#706)
 //! - `(patina internal io)`'s call-with-input-file and call-with-output-file
 //!   (`(scheme file)`'s are Scheme, over `open-input-file` and
 //!   `open-output-file`)
@@ -36,7 +36,7 @@
 use crate::apply_context::ApplyContext;
 use crate::registry::Step;
 use patina_core::port::out_of_descriptors;
-use patina_core::{CollectKind, Heap, TaggedValue};
+use patina_core::{CollectKind, Cx, Heap, TaggedValue, Value};
 use patina_runtime::EvalError;
 use patina_runtime::Port;
 use smallvec::smallvec;
@@ -235,22 +235,21 @@ pub(super) fn open_binary_output_file_again(
     open_again(ctx, "open-binary-output-file", OpenMode::BinaryOutput, name).map(Step::Done)
 }
 
-/// (file-exists? filename) - Returns #t if file exists
-pub(super) fn file_exists_p(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+/// (file-exists? filename) - Returns #t if file exists. Takes the context
+/// (#706), and asks the instance's file system.
+pub(super) fn file_exists_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "file-exists? expects 1 argument".to_string(),
             actual: args.len(),
         });
     }
-    let heap = ctx.heap();
-    let heap_ref = heap.borrow();
-    match get_string_tv(args[0], &heap_ref) {
-        Some(path) => Ok(TaggedValue::boolean(
-            ctx.fs().file_exists(std::path::Path::new(&path)),
+    match cx.get_string_contents(args[0]) {
+        Some(path) => Ok(Value::boolean(
+            cx.instance().fs().file_exists(std::path::Path::new(&path)),
         )),
         None => Err(EvalError::TypeError(
             "file-exists? expects a string filename".to_string(),
@@ -258,25 +257,24 @@ pub(super) fn file_exists_p(
     }
 }
 
-/// (delete-file filename) - Deletes the file
-pub(super) fn delete_file(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+/// (delete-file filename) - Deletes the file. Takes the context (#706).
+pub(super) fn delete_file<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "delete-file expects 1 argument".to_string(),
             actual: args.len(),
         });
     }
-    let heap = ctx.heap();
-    let heap_ref = heap.borrow();
-    match get_string_tv(args[0], &heap_ref) {
+    match cx.get_string_contents(args[0]) {
         Some(path) => {
-            ctx.fs()
+            cx.instance()
+                .fs()
                 .remove_file(std::path::Path::new(&path))
                 .map_err(|e| EvalError::IOError(format!("Cannot delete '{}': {}", path, e)))?;
-            Ok(TaggedValue::UNSPECIFIED)
+            Ok(Value::UNSPECIFIED)
         }
         None => Err(EvalError::TypeError(
             "delete-file expects a string filename".to_string(),

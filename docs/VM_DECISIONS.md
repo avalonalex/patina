@@ -125,8 +125,8 @@ for the design, root inventory, safe-point protocol, and staging.
 
 ## 6. Primitives: Shared `patina-primitives` Crate
 
-**Decision:** ~305 primitives in `patina-primitives` that take the context
-(shared by tree-walker and VM). ~30 higher-order and resumable primitives use
+**Decision:** ~315 primitives in `patina-primitives` that take the context
+(shared by tree-walker and VM). ~20 higher-order and resumable primitives use
 the `ApplyContext` trait, which each backend provides.
 
 **The signature is the context's** (#706; `PRD/GC_PRD.md` §11.3's `Prim`).
@@ -153,6 +153,9 @@ pub type CxHandler =
   resumable primitive's call pays about 10 instructions for the check.
 - **Without a machine**, an embedder's own `ApplyContext`, `call_cx`'s
   default crosses each word through a handle.
+- **Instance data** comes through the context's instance (`Cx::instance`):
+  the command line, the features, and the file system that `file-exists?`,
+  `delete-file` and the directory procedures ask (`Instance::fs`).
 - **Stores** go through the funnel (`Cx::store`, the ranges), and a record's
   field through its `RecordField`.
 - **The datum writer** reads an object's kind through `Cx::get_object` and
@@ -160,9 +163,10 @@ pub type CxHandler =
   cross a word in for a host (`NoGcScope::cross`).
 - **Still on the heap:** the higher-order and resumable primitives, through
   `ApplyContext::heap`. They are `member` and `assoc` with a comparator,
-  `force`, `call-with-values`, `(gc)`, `eval` and `load`, the parameters,
-  `call-with-port`, and the file and directory procedures. They are what is
-  left of #706.
+  `force`, `call-with-values`, `(gc)`, `eval`, `load` and the environment
+  procedures, the parameters, `call-with-port`, the file opens and
+  `call-with-input-file` and `call-with-output-file`. They are what is left of
+  #706.
 
 ---
 
