@@ -164,8 +164,10 @@ pub type TaggedHandler = fn(&SharedHeap, &[TaggedValue]) -> Result<TaggedValue, 
   record field, the equality, symbol, bitwise, number conversion and
   ephemeron primitives, and the runtime's: prompt tags, the promise and
   `values` constructors, the process context, `features`, the clock and
-  `gc-stats`. The exceptions follow the datum writer, which formats their
-  irritants, in the I/O part.
+  `gc-stats`, the datum writer and text output, and the exceptions. The
+  writer reads an object's kind through `Cx::get_object` and its values
+  through the context's accessors; its `_tagged` entry points cross a word
+  in for a host (`NoGcScope::cross`).
 
 ---
 

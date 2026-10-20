@@ -211,7 +211,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // Text output
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "display",
         Arity::Range(1, 2),
@@ -219,7 +219,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         text_output::display,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "write",
         Arity::Range(1, 2),
@@ -229,7 +229,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 
     // (scheme write) library procedures
     // display and write are also exported from (scheme write)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.write",
         "display",
         Arity::Range(1, 2),
@@ -237,7 +237,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         text_output::display,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.write",
         "write",
         Arity::Range(1, 2),
@@ -245,7 +245,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         text_output::write,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.write",
         "write-shared",
         Arity::Range(1, 2),
@@ -253,7 +253,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         text_output::write_shared,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.write",
         "write-simple",
         Arity::Range(1, 2),
@@ -261,7 +261,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         text_output::write_simple,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "newline",
         Arity::Range(0, 1),
@@ -269,7 +269,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         text_output::newline,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "write-char",
         Arity::Range(1, 2),
@@ -277,7 +277,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         text_output::write_char,
     ));
 
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "write-string",
         Arity::Range(1, 4),

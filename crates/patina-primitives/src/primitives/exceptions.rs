@@ -10,17 +10,21 @@
 //! - `raise` - Raise an exception
 //! - `raise-continuable` - Raise a continuable exception
 //! - `with-exception-handler` - Install an exception handler
+//!
+//! Each takes the context (#706). A value in a message is formatted by the
+//! datum writer's context entry point (`format_display`), and the
+//! predicates read an error object's kind alone (`Cx::exception_kind`).
 
+use crate::primitives::io::datum_writer::format_display;
 use patina_core::ExceptionKind;
-use patina_core::TaggedValue;
+use patina_core::{Cx, Value};
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
 
 /// (error message obj ...) - Create and raise an error object
 ///
 /// Creates an error object with the given message and irritants, then raises it.
 /// The irritants can be any values.
-pub(super) fn error(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn error<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "at least 1".to_string(),
@@ -34,24 +38,16 @@ pub(super) fn error(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVal
     // including the bundled SRFI 41. Rejecting it replaced every one of that
     // library's 53 diagnostics with a complaint about the argument; chibi and
     // Gauche both report the symbol as the message, and so do we now.
-    let message = {
-        let heap_ref = heap.borrow();
-        match heap_ref.get_string_contents(args[0]) {
-            Some(s) => s,
-            None => {
-                drop(heap_ref);
-                use crate::primitives::io::datum_writer::format_display_tagged;
-                format_display_tagged(args[0], heap)
-            }
-        }
+    let message = match cx.get_string_contents(args[0]) {
+        Some(s) => s,
+        None => format_display(cx, args[0]),
     };
 
     // Remaining arguments are irritants - serialize to display string
     let irritants_display = if args.len() > 1 {
-        use crate::primitives::io::datum_writer::format_display_tagged;
         args[1..]
             .iter()
-            .map(|tv| format_display_tagged(*tv, heap))
+            .map(|tv| format_display(cx, *tv))
             .collect::<Vec<_>>()
             .join(" ")
     } else {
@@ -69,10 +65,10 @@ pub(super) fn error(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVal
 
 /// (error-object? obj) - Returns #t if obj is an error object. An interrupt
 /// is not one (#701): a guard that catches errors lets Ctrl-C through.
-pub(super) fn error_object_p(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn error_object_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -80,19 +76,18 @@ pub(super) fn error_object_p(
         });
     }
 
-    let is_error_object = heap
-        .borrow()
-        .get_exception(args[0])
-        .is_some_and(|(kind, _, _)| *kind != ExceptionKind::Interrupt);
-    Ok(TaggedValue::boolean(is_error_object))
+    let is_error_object = cx
+        .exception_kind(args[0])
+        .is_some_and(|kind| kind != ExceptionKind::Interrupt);
+    Ok(Value::boolean(is_error_object))
 }
 
 /// (interrupt? obj) - Returns #t if obj is the condition a posted interrupt,
 /// Ctrl-C's, raises (#701). `(patina interrupt)` exports it.
-pub(super) fn interrupt_p(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn interrupt_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -100,18 +95,17 @@ pub(super) fn interrupt_p(
         });
     }
 
-    let is_interrupt = heap
-        .borrow()
-        .get_exception(args[0])
-        .is_some_and(|(kind, _, _)| *kind == ExceptionKind::Interrupt);
-    Ok(TaggedValue::boolean(is_interrupt))
+    let is_interrupt = cx
+        .exception_kind(args[0])
+        .is_some_and(|kind| kind == ExceptionKind::Interrupt);
+    Ok(Value::boolean(is_interrupt))
 }
 
 /// (error-object-message error-object) - Get the error message string
-pub(super) fn error_object_message(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn error_object_message<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -119,25 +113,22 @@ pub(super) fn error_object_message(
         });
     }
 
-    let message = {
-        let heap_ref = heap.borrow();
-        match heap_ref.get_exception(args[0]) {
-            Some((_kind, message, _irritants)) => message.to_string(),
-            None => {
-                return Err(EvalError::TypeError(
-                    "error-object-message: argument must be an error object".to_string(),
-                ));
-            }
+    let message = match cx.get_exception(args[0]) {
+        Some((_kind, message, _irritants)) => message,
+        None => {
+            return Err(EvalError::TypeError(
+                "error-object-message: argument must be an error object".to_string(),
+            ));
         }
     };
-    Ok(heap.borrow_mut().alloc_string(message))
+    Ok(cx.alloc_string(message))
 }
 
 /// (error-object-irritants error-object) - Get the list of irritants
-pub(super) fn error_object_irritants(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn error_object_irritants<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -145,26 +136,23 @@ pub(super) fn error_object_irritants(
         });
     }
 
-    let irritants = {
-        let heap_ref = heap.borrow();
-        match heap_ref.get_exception(args[0]) {
-            Some((_kind, _message, irritants)) => irritants.to_vec(),
-            None => {
-                return Err(EvalError::TypeError(
-                    "error-object-irritants: argument must be an error object".to_string(),
-                ));
-            }
+    let irritants = match cx.get_exception(args[0]) {
+        Some((_kind, _message, irritants)) => irritants,
+        None => {
+            return Err(EvalError::TypeError(
+                "error-object-irritants: argument must be an error object".to_string(),
+            ));
         }
     };
-    // Irritants are already TaggedValues — build a list directly
-    Ok(heap.borrow_mut().list_from_iter(irritants))
+    // The irritants are values: build a list directly
+    Ok(cx.list_from_iter(irritants))
 }
 
 /// (file-error? obj) - Returns #t if obj is a file error
-pub(super) fn file_error_p(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn file_error_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -172,18 +160,17 @@ pub(super) fn file_error_p(
         });
     }
 
-    let is_file_error = heap
-        .borrow()
-        .get_exception(args[0])
-        .is_some_and(|(kind, _, _)| *kind == ExceptionKind::FileError);
-    Ok(TaggedValue::boolean(is_file_error))
+    let is_file_error = cx
+        .exception_kind(args[0])
+        .is_some_and(|kind| kind == ExceptionKind::FileError);
+    Ok(Value::boolean(is_file_error))
 }
 
 /// (read-error? obj) - Returns #t if obj is a read error
-pub(super) fn read_error_p(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn read_error_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
@@ -191,18 +178,17 @@ pub(super) fn read_error_p(
         });
     }
 
-    let is_read_error = heap
-        .borrow()
-        .get_exception(args[0])
-        .is_some_and(|(kind, _, _)| *kind == ExceptionKind::ReadError);
-    Ok(TaggedValue::boolean(is_read_error))
+    let is_read_error = cx
+        .exception_kind(args[0])
+        .is_some_and(|kind| kind == ExceptionKind::ReadError);
+    Ok(Value::boolean(is_read_error))
 }
 
 /// (raise obj) - Raise an exception
 ///
 /// Raises the given object as an exception. If it's already an exception object,
 /// raises it directly. Otherwise, wraps it in an exception.
-pub(super) fn raise(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn raise<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "raise expects 1 argument".to_string(),
@@ -212,16 +198,10 @@ pub(super) fn raise(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVal
 
     // If it's already an exception object, extract its info using heap method
     {
-        use crate::primitives::io::datum_writer::format_display_tagged;
-        let heap_ref = heap.borrow();
-        if let Some((kind, message, irritants)) = heap_ref.get_exception(args[0]) {
-            let kind = kind.clone();
-            let message = message.to_string();
-            let irritants = irritants.to_vec();
-            drop(heap_ref);
+        if let Some((kind, message, irritants)) = cx.get_exception(args[0]) {
             let irritants_display = irritants
                 .iter()
-                .map(|tv| format_display_tagged(*tv, heap))
+                .map(|tv| format_display(cx, *tv))
                 .collect::<Vec<_>>()
                 .join(" ");
             return Err(EvalError::SchemeException {
@@ -234,8 +214,7 @@ pub(super) fn raise(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVal
 
     // Otherwise, raise it as a generic exception with the object as the message
     {
-        use crate::primitives::io::datum_writer::format_display_tagged;
-        let message = format_display_tagged(args[0], heap);
+        let message = format_display(cx, args[0]);
         Err(EvalError::SchemeException {
             kind: ExceptionKind::Error,
             message,
@@ -249,10 +228,10 @@ pub(super) fn raise(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVal
 /// Similar to raise, but allows the exception handler to return a value
 /// that becomes the result of raise-continuable.
 /// NOTE: This is currently a stub - proper implementation requires CPS integration.
-pub(super) fn raise_continuable(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn raise_continuable<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "raise-continuable expects 1 argument".to_string(),
@@ -263,8 +242,7 @@ pub(super) fn raise_continuable(
     // For now, just raise like a non-continuable exception
     // Full implementation needs CPS exception handler support
     {
-        use crate::primitives::io::datum_writer::format_display_tagged;
-        let message = format!("continuable: {}", format_display_tagged(args[0], heap));
+        let message = format!("continuable: {}", format_display(cx, args[0]));
         Err(EvalError::SchemeException {
             kind: ExceptionKind::Error,
             message,
@@ -278,10 +256,10 @@ pub(super) fn raise_continuable(
 /// Calls thunk with handler installed as the current exception handler.
 /// If an exception is raised, handler is called with the exception object.
 /// NOTE: This is currently a stub - proper implementation requires CPS integration.
-pub(super) fn with_exception_handler(
-    heap: &SharedHeap,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, EvalError> {
+pub(super) fn with_exception_handler<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -289,21 +267,17 @@ pub(super) fn with_exception_handler(
         });
     }
 
-    let heap_ref = heap.borrow();
-
-    // Verify both are procedures using heap methods
-    if !heap_ref.is_callable(args[0]) {
+    // Verify both are procedures
+    if !cx.is_callable(args[0]) {
         return Err(EvalError::TypeError(
             "with-exception-handler: first argument must be a procedure".to_string(),
         ));
     }
-    if !heap_ref.is_callable(args[1]) {
+    if !cx.is_callable(args[1]) {
         return Err(EvalError::TypeError(
             "with-exception-handler: second argument must be a procedure".to_string(),
         ));
     }
-    drop(heap_ref);
-
     // For now, just call the thunk without exception handling
     // Full implementation needs CPS integration to:
     // 1. Install the handler
@@ -324,7 +298,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
 
     // Library is patina.internal.errors to match the internal library declaration.
     // error - create and raise an error
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.errors",
         "error",
         Arity::Min(1),
@@ -333,7 +307,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // error-object? - predicate
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.errors",
         "error-object?",
         Arity::Exact(1),
@@ -342,7 +316,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // error-object-message - accessor
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.errors",
         "error-object-message",
         Arity::Exact(1),
@@ -351,7 +325,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // error-object-irritants - accessor
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.errors",
         "error-object-irritants",
         Arity::Exact(1),
@@ -360,7 +334,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // file-error? - predicate
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.errors",
         "file-error?",
         Arity::Exact(1),
@@ -369,7 +343,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // read-error? - predicate
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.errors",
         "read-error?",
         Arity::Exact(1),
@@ -378,7 +352,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // interrupt? - predicate, for (patina interrupt)
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.errors",
         "interrupt?",
         Arity::Exact(1),
@@ -387,7 +361,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // raise - raise an exception
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.errors",
         "raise",
         Arity::Exact(1),
@@ -396,7 +370,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // raise-continuable - raise a continuable exception
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.errors",
         "raise-continuable",
         Arity::Exact(1),
@@ -405,7 +379,7 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
     ));
 
     // with-exception-handler - install an exception handler
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_cx(
         "patina.internal.errors",
         "with-exception-handler",
         Arity::Exact(2),
