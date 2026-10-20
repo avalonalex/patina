@@ -290,6 +290,16 @@ impl<'gc> Cx<'gc> {
         ))
     }
 
+    /// The kind of the error object `v`, or `None` if `v` is none: what the
+    /// predicates (`error-object?`, `file-error?`) ask, without the copies of
+    /// the message and the irritants [`Cx::get_exception`] makes.
+    #[inline]
+    pub fn exception_kind(&self, v: Value<'gc>) -> Option<ExceptionKind> {
+        let heap = self.heap.borrow();
+        heap.get_exception(v.tagged())
+            .map(|(kind, _, _)| kind.clone())
+    }
+
     /// [`Heap::get_identifier_data`], owned.
     #[inline]
     pub fn get_identifier_data(&self, v: Value<'gc>) -> Option<(Rc<str>, ScopeSet)> {

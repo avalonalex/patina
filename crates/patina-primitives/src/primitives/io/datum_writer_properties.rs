@@ -7,7 +7,7 @@ use super::*;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::ToPrimitive;
-use patina_core::{SharedHeap, new_shared_heap};
+use patina_core::{Heap, SharedHeap, new_shared_heap};
 use patina_frontend::Parser;
 use proptest::prelude::*;
 use proptest::test_runner::RngSeed;

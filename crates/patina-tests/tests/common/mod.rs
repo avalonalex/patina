@@ -52,7 +52,6 @@ use patina_interpreter::{Interpreter, InterpreterError, TreeWalkInterpreter, Tre
 use patina_primitives::primitives::io::datum_writer::format_write_tagged;
 use patina_runtime::Backend;
 use patina_vm::VmBackend;
-use std::cell::RefCell;
 
 // ─── Backend selection ───────────────────────────────────────────────────────
 
@@ -233,7 +232,7 @@ pub fn shipped_libraries(root: &std::path::Path) -> Vec<Vec<String>> {
 }
 
 /// Format a TaggedValue for display (backend-agnostic).
-fn display_tagged(tv: TaggedValue, heap: &RefCell<patina_core::heap::Heap>) -> String {
+fn display_tagged(tv: TaggedValue, heap: &patina_core::SharedHeap) -> String {
     // Unpack multiple values (R7RS: each value displayed on its own line)
     let vals = heap.borrow().get_values(tv).map(|v| v.to_vec());
     if let Some(vals) = vals {

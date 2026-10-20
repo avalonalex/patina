@@ -6,7 +6,7 @@
 //! - Bytevector ports: open-input-bytevector, open-output-bytevector, get-output-bytevector
 //! - Current ports: current-input-port, current-output-port, current-error-port
 //! - Port closing: close-port, close-input-port, close-output-port
-use patina_core::{Heap, TaggedValue};
+use patina_core::{Cx, Heap, TaggedValue, Value};
 use patina_runtime::{EvalError, SharedHeap};
 use patina_runtime::{Port, PortDirection};
 use std::cell::RefCell;
@@ -91,6 +91,29 @@ pub(super) fn get_output_port_tagged(
                     return Err(EvalError::TypeError("expected an output port".to_string()));
                 }
                 Ok(p.clone())
+            }
+            None => Err(EvalError::TypeError("expected a port".to_string())),
+        }
+    } else {
+        Ok(get_current_output_port())
+    }
+}
+
+/// [`get_output_port_tagged`] through the context (#706), for the handlers
+/// that take it: the output port at `arg_index`, or the current output port.
+/// The word form goes when the rest of this file takes the context.
+pub(super) fn get_output_port<'gc>(
+    cx: &Cx<'gc>,
+    args: &[Value<'gc>],
+    arg_index: usize,
+) -> Result<Rc<Port>, EvalError> {
+    if args.len() > arg_index {
+        match cx.get_port(args[arg_index]) {
+            Some(p) => {
+                if !p.is_output() {
+                    return Err(EvalError::TypeError("expected an output port".to_string()));
+                }
+                Ok(p)
             }
             None => Err(EvalError::TypeError("expected a port".to_string())),
         }

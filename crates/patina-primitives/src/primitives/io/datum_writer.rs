@@ -3,13 +3,16 @@
 //! This module implements R7RS datum labels (#n= and #n#) for handling
 //! circular and shared structures in output operations.
 //!
-//! The write path uses TaggedValue directly (write_tagged, find_circular_tagged)
-//! for all compound types (pairs, vectors, strings).
-//! Leaf object types (BigInt, Symbol, etc.) are formatted directly via Heap methods.
+//! The write path walks values through the context (#706): `write_tagged`
+//! and `find_circular_tagged` for the compound types (pairs, vectors,
+//! strings), and the leaf object types (BigInt, Symbol, etc.) through
+//! `Cx::get_object`'s view of the object, or a value accessor where a part
+//! is a value. `format_write` and its siblings take the context; the
+//! `_tagged` entry points take a word and a heap, for a host, and cross the
+//! word in (`NoGcScope::cross`).
 
 use patina_core::debug_format::format_real;
-use patina_core::{Heap, TaggedValue};
-use std::cell::RefCell;
+use patina_core::{Cx, NoGcScope, SharedHeap, TaggedValue, Value};
 use std::collections::{HashMap, HashSet};
 
 /// Format a Real (f64) number in R7RS style (delegates to patina_core::debug_format::format_real)
@@ -17,7 +20,7 @@ fn format_real_number(f: f64, out: &mut String) {
     format_real(f, out);
 }
 
-/// Format a complex number from its real and imaginary TaggedValue parts.
+/// Format a complex number from its real and imaginary parts.
 ///
 /// R7RS rules:
 /// - A zero part is omitted only when it is *exact*: `0+5i` → `+5i`, but
@@ -25,37 +28,35 @@ fn format_real_number(f: f64, out: &mut String) {
 ///   back with exact zero parts and so name different numbers
 /// - Exact ±1 imaginary is displayed as `±i`: `3+1i` → `3+i`
 /// - Inexact ±1.0 imaginary keeps the number: `3.0+1.0i` stays `3.0+1.0i`
-fn format_complex(real_tv: TaggedValue, imag_tv: TaggedValue, heap: &Heap, out: &mut String) {
-    // Helper: check if TaggedValue is exact zero
-
-    // Helper: check if TaggedValue is exact 1 (not inexact 1.0)
-    let is_exact_one = |tv: TaggedValue| -> bool {
+fn format_complex<'gc>(cx: &Cx<'gc>, real_tv: Value<'gc>, imag_tv: Value<'gc>, out: &mut String) {
+    // Helper: check if a part is exact 1 (not inexact 1.0)
+    let is_exact_one = |tv: Value<'gc>| -> bool {
         if tv.is_fixnum() {
             return tv.as_fixnum_unchecked() == 1;
         }
-        if let Some(n) = heap.get_bigint(tv) {
+        if let Some(n) = cx.get_bigint(tv) {
             use num_traits::One;
-            return n == &num_bigint::BigInt::one();
+            return n == num_bigint::BigInt::one();
         }
-        if let Some(r) = heap.get_rational(tv) {
+        if let Some(r) = cx.get_rational(tv) {
             use num_traits::One;
             return r.is_one();
         }
         false
     };
 
-    // Helper: check if TaggedValue is exact -1 (not inexact -1.0)
-    let is_exact_neg_one = |tv: TaggedValue| -> bool {
+    // Helper: check if a part is exact -1 (not inexact -1.0)
+    let is_exact_neg_one = |tv: Value<'gc>| -> bool {
         if tv.is_fixnum() {
             return tv.as_fixnum_unchecked() == -1;
         }
-        if let Some(n) = heap.get_bigint(tv) {
+        if let Some(n) = cx.get_bigint(tv) {
             use num_traits::One;
-            return n == &(-num_bigint::BigInt::one());
+            return n == -num_bigint::BigInt::one();
         }
-        if let Some(r) = heap.get_rational(tv) {
+        if let Some(r) = cx.get_rational(tv) {
             use num_traits::One;
-            return r == &(-num_rational::BigRational::one());
+            return r == -num_rational::BigRational::one();
         }
         false
     };
@@ -63,8 +64,8 @@ fn format_complex(real_tv: TaggedValue, imag_tv: TaggedValue, heap: &Heap, out: 
     // Exact zeros may be dropped; inexact ones may not. `0.0+2.0i` is not
     // `+2.0i` and `1.0+0.0i` is not `1.0` — R7RS 6.2.6 has `(real? 3.0+0.0i)`
     // answer #f, so writing it as a real is writing a different number.
-    let real_is_exact_zero = heap.is_exact_zero(real_tv);
-    let imag_is_exact_zero = heap.is_exact_zero(imag_tv);
+    let real_is_exact_zero = cx.is_exact_zero(real_tv);
+    let imag_is_exact_zero = cx.is_exact_zero(imag_tv);
 
     if real_is_exact_zero && imag_is_exact_zero {
         out.push('0');
@@ -73,7 +74,7 @@ fn format_complex(real_tv: TaggedValue, imag_tv: TaggedValue, heap: &Heap, out: 
 
     if imag_is_exact_zero {
         // Pure real
-        format_tagged_leaf(real_tv, heap, out);
+        format_tagged_leaf(cx, real_tv, out);
         return;
     }
 
@@ -89,7 +90,7 @@ fn format_complex(real_tv: TaggedValue, imag_tv: TaggedValue, heap: &Heap, out: 
             out.push_str("-i");
         } else {
             let mut imag_str = String::new();
-            format_tagged_leaf(imag_tv, heap, &mut imag_str);
+            format_tagged_leaf(cx, imag_tv, &mut imag_str);
             if imag_str.starts_with('+') || imag_str.starts_with('-') {
                 out.push_str(&imag_str);
             } else {
@@ -102,7 +103,7 @@ fn format_complex(real_tv: TaggedValue, imag_tv: TaggedValue, heap: &Heap, out: 
     }
 
     // Both parts non-zero
-    format_tagged_leaf(real_tv, heap, out);
+    format_tagged_leaf(cx, real_tv, out);
 
     if is_exact_one(imag_tv) {
         out.push_str("+i");
@@ -110,7 +111,7 @@ fn format_complex(real_tv: TaggedValue, imag_tv: TaggedValue, heap: &Heap, out: 
         out.push_str("-i");
     } else {
         let mut imag_str = String::new();
-        format_tagged_leaf(imag_tv, heap, &mut imag_str);
+        format_tagged_leaf(cx, imag_tv, &mut imag_str);
         if imag_str.starts_with('+') || imag_str.starts_with('-') {
             out.push_str(&imag_str);
         } else {
@@ -312,7 +313,7 @@ const ERROR_OBJECT_OPEN: &str = "#<error-object: ";
 /// nothing about which backend produced the value. Adding a heap variant
 /// means teaching both. Nothing here is `read`-able syntax; R7RS gives these
 /// types no external representation.
-fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mut String) {
+fn format_leaf_object<'gc>(cx: &Cx<'gc>, tv: Value<'gc>, display_mode: bool, out: &mut String) {
     use patina_core::heap::HeapObjectData;
     use std::fmt::Write;
 
@@ -326,7 +327,7 @@ fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mu
     // except a retired VM register's fill, which a debugging reader of the
     // registers may print (#625, GC_PRD §11.1); no program can hold one.
     if !tv.is_object() {
-        out.push_str(if tv == TaggedValue::DEAD_SLOT {
+        out.push_str(if *tv == TaggedValue::DEAD_SLOT {
             "#<dead>"
         } else {
             "#<unknown>"
@@ -334,13 +335,17 @@ fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mu
         return;
     }
 
-    match heap.get_object(tv) {
+    match &*cx.get_object(tv) {
         HeapObjectData::Symbol(name) => write_symbol_name(name, display_mode, out),
         HeapObjectData::Identifier { name, .. } => write_symbol_name(name, display_mode, out),
         HeapObjectData::BigInt(n) => out.push_str(&n.to_string()),
         HeapObjectData::Rational(r) => out.push_str(&r.to_string()),
         HeapObjectData::Real(f) => format_real_number(*f, out),
-        HeapObjectData::Complex { real, imag } => format_complex(*real, *imag, heap, out),
+        // The parts are values, so they are read as values.
+        HeapObjectData::Complex { .. } => {
+            let (real, imag) = cx.get_complex(tv).expect("a complex number");
+            format_complex(cx, real, imag, out)
+        }
         HeapObjectData::Bytevector(bytes) => {
             out.push_str("#u8(");
             for (i, b) in bytes.iter().enumerate() {
@@ -417,10 +422,10 @@ fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mu
     }
 }
 
-/// Format a TaggedValue as a leaf (non-compound) for numeric display.
+/// Format a value as a leaf (non-compound) for numeric display.
 /// Handles inline types and delegates to format_leaf_object for TAG_OBJECT.
 /// Used internally by format_complex — always uses write mode for numbers.
-fn format_tagged_leaf(tv: TaggedValue, heap: &Heap, out: &mut String) {
+fn format_tagged_leaf<'gc>(cx: &Cx<'gc>, tv: Value<'gc>, out: &mut String) {
     if tv.is_fixnum() {
         out.push_str(&tv.as_fixnum_unchecked().to_string());
     } else if tv.is_boolean() {
@@ -431,10 +436,10 @@ fn format_tagged_leaf(tv: TaggedValue, heap: &Heap, out: &mut String) {
         out.push_str(&tv.to_string());
     } else if tv.is_eof() {
         out.push_str("#<eof>");
-    } else if tv == TaggedValue::UNSPECIFIED {
+    } else if tv == Value::UNSPECIFIED {
         out.push_str("#<unspecified>");
     } else {
-        format_leaf_object(tv, heap, false, out);
+        format_leaf_object(cx, tv, false, out);
     }
 }
 
@@ -450,7 +455,7 @@ enum Entry {
 }
 
 /// Writer that handles circular/shared structures using datum labels
-pub(super) struct DatumLabelWriter<'a> {
+pub(super) struct DatumLabelWriter<'a, 'gc> {
     /// Maps pointer addresses to label numbers for circular structures
     labels: HashMap<usize, usize>,
     /// Set of addresses currently on the traversal stack (for detecting cycles)
@@ -464,12 +469,12 @@ pub(super) struct DatumLabelWriter<'a> {
     display_mode: bool,
     /// Whether to label all shared structures (write-shared) or only circular (write)
     label_shared: bool,
-    /// Heap reference for accessing heap-allocated values
-    heap: &'a RefCell<Heap>,
+    /// The context the values are read through
+    cx: &'a Cx<'gc>,
 }
 
-impl<'a> DatumLabelWriter<'a> {
-    pub(super) fn new(display_mode: bool, label_shared: bool, heap: &'a RefCell<Heap>) -> Self {
+impl<'a, 'gc> DatumLabelWriter<'a, 'gc> {
+    pub(super) fn new(display_mode: bool, label_shared: bool, cx: &'a Cx<'gc>) -> Self {
         Self {
             labels: HashMap::new(),
             on_stack: HashMap::new(),
@@ -477,7 +482,7 @@ impl<'a> DatumLabelWriter<'a> {
             next_label: 0,
             display_mode,
             label_shared,
-            heap,
+            cx,
         }
     }
 
@@ -536,10 +541,10 @@ impl<'a> DatumLabelWriter<'a> {
         }
     }
 
-    /// Find circular structures starting from a TaggedValue (primary path).
+    /// Find circular structures starting from a value (primary path).
     /// Only recurses into compound types (pairs, vectors, error objects).
     /// Immediate types, strings, and closures have no sub-structure.
-    pub(super) fn find_circular_tagged(&mut self, tv: TaggedValue) {
+    pub(super) fn find_circular_tagged(&mut self, tv: Value<'gc>) {
         if tv.is_pair() {
             // The cdr chain is walked, not recursed into. A list's spine is
             // length, not nesting, and spending a frame per element on it is
@@ -561,10 +566,7 @@ impl<'a> DatumLabelWriter<'a> {
                 }
                 self.spine.push(addr);
 
-                let (car_tv, cdr_tv) = {
-                    let heap_ref = self.heap.borrow();
-                    (heap_ref.car(current), heap_ref.cdr(current))
-                };
+                let (car_tv, cdr_tv) = self.cx.get_pair(current);
                 self.find_circular_tagged(car_tv);
                 if !cdr_tv.is_pair() {
                     self.find_circular_tagged(cdr_tv);
@@ -581,10 +583,7 @@ impl<'a> DatumLabelWriter<'a> {
             if !self.visit(addr) {
                 return;
             }
-            let elements: Vec<TaggedValue> = {
-                let heap_ref = self.heap.borrow();
-                heap_ref.vector_slice(tv).to_vec()
-            };
+            let elements: Vec<Value<'gc>> = self.cx.vector_slice(tv).to_vec();
             for elem_tv in &elements {
                 self.find_circular_tagged(*elem_tv);
             }
@@ -610,13 +609,11 @@ impl<'a> DatumLabelWriter<'a> {
             if !self.visit(addr) {
                 return;
             }
-            let irritants = {
-                let heap_ref = self.heap.borrow();
-                heap_ref
-                    .get_exception(tv)
-                    .map(|(_, _, irritants)| irritants.to_vec())
-                    .unwrap_or_default()
-            };
+            let irritants = self
+                .cx
+                .get_exception(tv)
+                .map(|(_, _, irritants)| irritants)
+                .unwrap_or_default();
             for irritant in irritants {
                 self.find_circular_tagged(irritant);
             }
@@ -629,11 +626,11 @@ impl<'a> DatumLabelWriter<'a> {
     // Pass 2: Write with labels
     // =========================================================================
 
-    /// Write a TaggedValue with datum labels (primary path).
+    /// Write a value with datum labels (primary path).
     /// Handles immediate types and native heap types directly.
     pub(super) fn write_tagged(
         &self,
-        tv: TaggedValue,
+        tv: Value<'gc>,
         out: &mut String,
         emitted: &mut HashSet<usize>,
     ) {
@@ -664,7 +661,7 @@ impl<'a> DatumLabelWriter<'a> {
             out.push_str("#<eof>");
             return;
         }
-        if tv == TaggedValue::UNSPECIFIED {
+        if tv == Value::UNSPECIFIED {
             out.push_str("#<unspecified>");
             return;
         }
@@ -691,10 +688,7 @@ impl<'a> DatumLabelWriter<'a> {
                 return;
             }
 
-            let elements: Vec<TaggedValue> = {
-                let heap_ref = self.heap.borrow();
-                heap_ref.vector_slice(tv).to_vec()
-            };
+            let elements: Vec<Value<'gc>> = self.cx.vector_slice(tv).to_vec();
             out.push_str("#(");
             for (i, elem_tv) in elements.iter().enumerate() {
                 if i > 0 {
@@ -708,15 +702,14 @@ impl<'a> DatumLabelWriter<'a> {
 
         // Native heap string
         if tv.is_string() {
-            let heap_ref = self.heap.borrow();
-            let chars = heap_ref.get_string_chars(tv);
+            let chars = self.cx.get_string_chars(tv);
             if self.display_mode {
-                for &c in chars {
+                for &c in chars.iter() {
                     out.push(c);
                 }
             } else {
                 out.push('"');
-                for &c in chars {
+                for &c in chars.iter() {
                     match c {
                         '"' => out.push_str("\\\""),
                         '\\' => out.push_str("\\\\"),
@@ -747,13 +740,11 @@ impl<'a> DatumLabelWriter<'a> {
             if self.emit_label(tv, out, emitted) {
                 return;
             }
-            let (message, irritants) = {
-                let heap_ref = self.heap.borrow();
-                heap_ref
-                    .get_exception(tv)
-                    .map(|(_, message, irritants)| (message.to_string(), irritants.to_vec()))
-                    .expect("is_exception just said so")
-            };
+            let (message, irritants) = self
+                .cx
+                .get_exception(tv)
+                .map(|(_, message, irritants)| (message, irritants))
+                .expect("is_exception just said so");
             out.push_str(ERROR_OBJECT_OPEN);
             out.push_str(&message);
             for irritant in irritants {
@@ -764,9 +755,8 @@ impl<'a> DatumLabelWriter<'a> {
             return;
         }
 
-        // HeapObjectData leaf types — format using heap methods
-        let heap_ref = self.heap.borrow();
-        format_leaf_object(tv, &heap_ref, self.display_mode, out);
+        // HeapObjectData leaf types — format from the object's view
+        format_leaf_object(self.cx, tv, self.display_mode, out);
     }
 
     /// Write whatever label `tv` carries, and say whether that finished the
@@ -777,7 +767,7 @@ impl<'a> DatumLabelWriter<'a> {
     /// The one place either form of a label is written. Every kind of value
     /// the writer descends into needs the same three lines, and a fourth copy
     /// of them is how the rule drifts.
-    fn emit_label(&self, tv: TaggedValue, out: &mut String, emitted: &mut HashSet<usize>) -> bool {
+    fn emit_label(&self, tv: Value<'gc>, out: &mut String, emitted: &mut HashSet<usize>) -> bool {
         use std::fmt::Write;
         let addr = tv.raw() as usize;
         let Some(&label) = self.labels.get(&addr) else {
@@ -800,7 +790,7 @@ impl<'a> DatumLabelWriter<'a> {
     /// pair either loses the sharing it records or strands a `#n#` whose
     /// definition never appears. The two elisions are the quote shorthand's
     /// cdr and the list notation's inlined tail, and both consult this.
-    fn is_labelled(&self, tv: TaggedValue) -> bool {
+    fn is_labelled(&self, tv: Value<'gc>) -> bool {
         self.labels.contains_key(&(tv.raw() as usize))
     }
 
@@ -810,15 +800,14 @@ impl<'a> DatumLabelWriter<'a> {
     /// bignum, flonum, record, port and procedure in the datum — so it must
     /// not allocate. Copying the irritants unconditionally made the common
     /// answer (`no`) pay for a `Vec`.
-    fn is_exception(&self, tv: TaggedValue) -> bool {
-        self.heap.borrow().is_exception(tv)
+    fn is_exception(&self, tv: Value<'gc>) -> bool {
+        self.cx.is_exception(tv)
     }
 
-    /// Write list contents from a native heap pair (TaggedValue).
-    /// Gets car/cdr as TaggedValues and formats without conversion.
+    /// Write list contents from a native heap pair.
     fn write_tagged_list_contents(
         &self,
-        tv: TaggedValue,
+        tv: Value<'gc>,
         out: &mut String,
         emitted: &mut HashSet<usize>,
     ) {
@@ -837,10 +826,7 @@ impl<'a> DatumLabelWriter<'a> {
         let mut deferred_closes = 0usize;
         let mut current = tv;
         loop {
-            let (car_tv, cdr_tv) = {
-                let heap_ref = self.heap.borrow();
-                (heap_ref.car(current), heap_ref.cdr(current))
-            };
+            let (car_tv, cdr_tv) = self.cx.get_pair(current);
 
             self.write_tagged(car_tv, out, emitted);
 
@@ -895,26 +881,27 @@ impl<'a> DatumLabelWriter<'a> {
     /// read.
     fn write_quote_shorthand_tagged(
         &self,
-        tv: TaggedValue,
+        tv: Value<'gc>,
         out: &mut String,
         emitted: &mut HashSet<usize>,
     ) -> bool {
-        let prefix = {
-            let heap_ref = self.heap.borrow();
-            match heap_ref.get_symbol_or_identifier_name(heap_ref.car(tv)) {
-                Some("quote") => Some("'"),
-                Some("quasiquote") => Some("`"),
-                Some("unquote") => Some(","),
-                Some("unquote-splicing") => Some(",@"),
-                _ => None,
-            }
+        let prefix = match self
+            .cx
+            .get_symbol_or_identifier_name(self.cx.car(tv))
+            .as_deref()
+        {
+            Some("quote") => Some("'"),
+            Some("quasiquote") => Some("`"),
+            Some("unquote") => Some(","),
+            Some("unquote-splicing") => Some(",@"),
+            _ => None,
         };
         let Some(prefix) = prefix else {
             return false;
         };
 
         // The cdr must be a single-element list: a pair, with a null cdr...
-        let cdr_tv = self.heap.borrow().cdr(tv);
+        let cdr_tv = self.cx.cdr(tv);
         if !cdr_tv.is_pair() {
             return false;
         }
@@ -927,10 +914,7 @@ impl<'a> DatumLabelWriter<'a> {
             return false;
         }
 
-        let (inner_car, inner_cdr) = {
-            let heap_ref = self.heap.borrow();
-            (heap_ref.car(cdr_tv), heap_ref.cdr(cdr_tv))
-        };
+        let (inner_car, inner_cdr) = self.cx.get_pair(cdr_tv);
         if !inner_cdr.is_null() {
             return false;
         }
@@ -942,54 +926,75 @@ impl<'a> DatumLabelWriter<'a> {
 }
 
 // =============================================================================
-// Public entry points — TaggedValue-based (no conversion needed)
+// Public entry points
 // =============================================================================
 
-/// Format a TaggedValue for write (machine-readable, datum labels for circular only)
-pub fn format_write_tagged(tv: TaggedValue, heap: &RefCell<Heap>) -> String {
-    let mut writer = DatumLabelWriter::new(false, false, heap);
-    writer.find_circular_tagged(tv);
+/// Format a value for write (machine-readable, datum labels for circular only)
+pub fn format_write<'gc>(cx: &Cx<'gc>, v: Value<'gc>) -> String {
+    format_labelled(cx, v, false, false)
+}
+
+/// Format a value for display (human-readable, datum labels for circular only)
+pub fn format_display<'gc>(cx: &Cx<'gc>, v: Value<'gc>) -> String {
+    format_labelled(cx, v, true, false)
+}
+
+/// Format a value for write-shared (datum labels for all shared)
+pub(super) fn format_write_shared<'gc>(cx: &Cx<'gc>, v: Value<'gc>) -> String {
+    format_labelled(cx, v, false, true)
+}
+
+/// Format a value for write-simple (no datum labels)
+pub(super) fn format_write_simple<'gc>(cx: &Cx<'gc>, v: Value<'gc>) -> String {
+    format_simple_recursive_tagged(cx, v, false)
+}
+
+/// The two passes of a labelled write: find the labels, then write.
+fn format_labelled<'gc>(
+    cx: &Cx<'gc>,
+    v: Value<'gc>,
+    display_mode: bool,
+    label_shared: bool,
+) -> String {
+    let mut writer = DatumLabelWriter::new(display_mode, label_shared, cx);
+    writer.find_circular_tagged(v);
 
     let mut output = String::new();
     let mut emitted = HashSet::new();
-    writer.write_tagged(tv, &mut output, &mut emitted);
+    writer.write_tagged(v, &mut output, &mut emitted);
     output
 }
 
-/// Format a TaggedValue for display (human-readable, datum labels for circular only)
-pub fn format_display_tagged(tv: TaggedValue, heap: &RefCell<Heap>) -> String {
-    let mut writer = DatumLabelWriter::new(true, false, heap);
-    writer.find_circular_tagged(tv);
-
-    let mut output = String::new();
-    let mut emitted = HashSet::new();
-    writer.write_tagged(tv, &mut output, &mut emitted);
-    output
+/// [`format_write`] of a word on `heap`, for a host: the word crosses in as
+/// a value (`NoGcScope::cross`).
+pub fn format_write_tagged(tv: TaggedValue, heap: &SharedHeap) -> String {
+    NoGcScope::cross(heap, [tv], |cx, [v]| format_write(cx, v))
 }
 
-/// Format a TaggedValue for write-shared (datum labels for all shared)
-pub(super) fn format_write_shared_tagged(tv: TaggedValue, heap: &RefCell<Heap>) -> String {
-    let mut writer = DatumLabelWriter::new(false, true, heap);
-    writer.find_circular_tagged(tv);
-
-    let mut output = String::new();
-    let mut emitted = HashSet::new();
-    writer.write_tagged(tv, &mut output, &mut emitted);
-    output
+/// [`format_display`] of a word on `heap`, for a host.
+pub fn format_display_tagged(tv: TaggedValue, heap: &SharedHeap) -> String {
+    NoGcScope::cross(heap, [tv], |cx, [v]| format_display(cx, v))
 }
 
-/// Format a TaggedValue for write-simple (no datum labels)
-pub(super) fn format_write_simple_tagged(tv: TaggedValue, heap: &RefCell<Heap>) -> String {
-    format_simple_recursive_tagged(tv, heap, false)
+/// [`format_write_shared`] of a word on `heap`, for the writer's tests.
+#[cfg(test)]
+pub(super) fn format_write_shared_tagged(tv: TaggedValue, heap: &SharedHeap) -> String {
+    NoGcScope::cross(heap, [tv], |cx, [v]| format_write_shared(cx, v))
+}
+
+/// [`format_write_simple`] of a word on `heap`, for the writer's tests.
+#[cfg(test)]
+pub(super) fn format_write_simple_tagged(tv: TaggedValue, heap: &SharedHeap) -> String {
+    NoGcScope::cross(heap, [tv], |cx, [v]| format_write_simple(cx, v))
 }
 
 // =============================================================================
 // Simple recursive formatting (no circular structure handling)
 // =============================================================================
 
-/// Format a TaggedValue without circular structure handling (primary path).
+/// Format a value without circular structure handling (primary path).
 /// Handles immediate types and native heap types directly.
-fn format_simple_recursive_tagged(tv: TaggedValue, heap: &RefCell<Heap>, display: bool) -> String {
+fn format_simple_recursive_tagged<'gc>(cx: &Cx<'gc>, tv: Value<'gc>, display: bool) -> String {
     // Immediate types
     if tv.is_fixnum() {
         return tv.as_fixnum_unchecked().to_string();
@@ -1010,35 +1015,29 @@ fn format_simple_recursive_tagged(tv: TaggedValue, heap: &RefCell<Heap>, display
     if tv.is_eof() {
         return "#<eof>".to_string();
     }
-    if tv == TaggedValue::UNSPECIFIED {
+    if tv == Value::UNSPECIFIED {
         return "#<unspecified>".to_string();
     }
 
     // Native heap pair
     if tv.is_pair() {
-        let (car_tv, cdr_tv) = {
-            let hr = heap.borrow();
-            (hr.car(tv), hr.cdr(tv))
-        };
+        let (car_tv, cdr_tv) = cx.get_pair(tv);
         let mut result = String::from("(");
-        result.push_str(&format_simple_recursive_tagged(car_tv, heap, display));
-        format_simple_list_tail(cdr_tv, &mut result, heap, display);
+        result.push_str(&format_simple_recursive_tagged(cx, car_tv, display));
+        format_simple_list_tail(cx, cdr_tv, &mut result, display);
         result.push(')');
         return result;
     }
 
     // Native heap vector
     if tv.is_vector() {
-        let elements: Vec<TaggedValue> = {
-            let hr = heap.borrow();
-            hr.vector_slice(tv).to_vec()
-        };
+        let elements: Vec<Value<'gc>> = cx.vector_slice(tv).to_vec();
         let mut result = String::from("#(");
         for (i, elem_tv) in elements.iter().enumerate() {
             if i > 0 {
                 result.push(' ');
             }
-            result.push_str(&format_simple_recursive_tagged(*elem_tv, heap, display));
+            result.push_str(&format_simple_recursive_tagged(cx, *elem_tv, display));
         }
         result.push(')');
         return result;
@@ -1046,13 +1045,12 @@ fn format_simple_recursive_tagged(tv: TaggedValue, heap: &RefCell<Heap>, display
 
     // Native heap string
     if tv.is_string() {
-        let hr = heap.borrow();
-        let chars = hr.get_string_chars(tv);
+        let chars = cx.get_string_chars(tv);
         if display {
             return chars.iter().collect();
         }
         let mut result = String::from("\"");
-        for &c in chars {
+        for &c in chars.iter() {
             match c {
                 '"' => result.push_str("\\\""),
                 '\\' => result.push_str("\\\\"),
@@ -1070,33 +1068,30 @@ fn format_simple_recursive_tagged(tv: TaggedValue, heap: &RefCell<Heap>, display
     }
 
     // HeapObjectData leaf types
-    let hr = heap.borrow();
     // See `write_tagged` for why the error object is rendered here. This is
     // `write-simple`'s path, so its irritants get no datum labels — R7RS
     // §6.13.3 lets `write-simple` diverge on a cycle, and a circular irritant
     // is a cycle like any other.
-    if let Some((_, message, irritants)) = hr.get_exception(tv) {
-        let (message, irritants) = (message.to_string(), irritants.to_vec());
-        drop(hr);
+    if let Some((_, message, irritants)) = cx.get_exception(tv) {
         let mut result = String::from(ERROR_OBJECT_OPEN);
         result.push_str(&message);
         for irritant in irritants {
             result.push(' ');
-            result.push_str(&format_simple_recursive_tagged(irritant, heap, display));
+            result.push_str(&format_simple_recursive_tagged(cx, irritant, display));
         }
         result.push('>');
         return result;
     }
     let mut result = String::new();
-    format_leaf_object(tv, &hr, display, &mut result);
+    format_leaf_object(cx, tv, display, &mut result);
     result
 }
 
 /// Format remaining list elements (cdr chain) in simple mode.
-fn format_simple_list_tail(
-    start: TaggedValue,
+fn format_simple_list_tail<'gc>(
+    cx: &Cx<'gc>,
+    start: Value<'gc>,
     result: &mut String,
-    heap: &RefCell<Heap>,
     display: bool,
 ) {
     let mut cdr_tv = start;
@@ -1104,17 +1099,14 @@ fn format_simple_list_tail(
         if cdr_tv.is_null() {
             break;
         } else if cdr_tv.is_pair() {
-            let (car, next) = {
-                let hr = heap.borrow();
-                (hr.car(cdr_tv), hr.cdr(cdr_tv))
-            };
+            let (car, next) = cx.get_pair(cdr_tv);
             result.push(' ');
-            result.push_str(&format_simple_recursive_tagged(car, heap, display));
+            result.push_str(&format_simple_recursive_tagged(cx, car, display));
             cdr_tv = next;
         } else {
             // Non-pair, non-null — dotted pair
             result.push_str(" . ");
-            result.push_str(&format_simple_recursive_tagged(cdr_tv, heap, display));
+            result.push_str(&format_simple_recursive_tagged(cx, cdr_tv, display));
             break;
         }
     }
