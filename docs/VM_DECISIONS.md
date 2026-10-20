@@ -161,7 +161,8 @@ pub type TaggedHandler = fn(&SharedHeap, &[TaggedValue]) -> Result<TaggedValue, 
   convert with the higher-order primitives, the vectors (`vectors.rs`), the
   numbers (`arithmetic/`), the bytevectors (`bytevectors.rs`) and the
   records (`records.rs`), whose `%record-set!` stores through the funnel's
-  record field.
+  record field, and the equality, symbol, bitwise, number conversion and
+  ephemeron primitives.
 
 ---
 
