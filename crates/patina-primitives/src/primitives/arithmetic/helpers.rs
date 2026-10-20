@@ -5,10 +5,9 @@
 
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
-use patina_core::TaggedValue;
 use patina_core::numeric::NumericError;
+use patina_core::{Cx, TaggedValue, Value};
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
 
 /// Convert a NumericError to an EvalError with context
 pub(super) fn numeric_err(e: NumericError, op: &str) -> EvalError {
@@ -35,18 +34,18 @@ pub(super) fn numeric_err(e: NumericError, op: &str) -> EvalError {
     }
 }
 
-/// Helper to convert BigRational to the appropriate TaggedValue type
+/// Helper to convert BigRational to the appropriate value type
 /// Simplifies to fixnum or BigInteger if denominator is 1
-pub(crate) fn rational_to_tagged(heap: &SharedHeap, r: num_rational::BigRational) -> TaggedValue {
+pub(crate) fn rational_to_value<'gc>(cx: &mut Cx<'gc>, r: num_rational::BigRational) -> Value<'gc> {
     if r.denom() == &BigInt::from(1) {
         // Denominator is 1, simplify to integer
         let numer = r.numer();
         if let Some(n) = numer.to_i64().filter(|n| TaggedValue::fits_fixnum(*n)) {
-            TaggedValue::fixnum(n)
+            Value::fixnum(n)
         } else {
-            heap.borrow_mut().alloc_bigint(numer.clone())
+            cx.alloc_bigint(numer.clone())
         }
     } else {
-        heap.borrow_mut().alloc_rational(r)
+        cx.alloc_rational(r)
     }
 }

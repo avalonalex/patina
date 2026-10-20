@@ -7,83 +7,79 @@
 //! All operations use Heap methods which have built-in fixnum fast paths.
 
 use super::helpers::numeric_err;
-use patina_core::TaggedValue;
+use patina_core::{Cx, Value};
 use patina_runtime::EvalError;
-use patina_runtime::SharedHeap;
 
 /// (floor x) - Rounds x toward negative infinity
 /// Uses Heap::numeric_floor with built-in fixnum fast path.
-pub(super) fn floor(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn floor<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    heap.borrow_mut()
-        .numeric_floor(args[0])
+    cx.numeric_floor(args[0])
         .map_err(|e| numeric_err(e, "floor"))
 }
 
 /// (ceiling x) - Rounds x toward positive infinity
 /// Uses Heap::numeric_ceiling with built-in fixnum fast path.
-pub(super) fn ceiling(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn ceiling<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    heap.borrow_mut()
-        .numeric_ceiling(args[0])
+    cx.numeric_ceiling(args[0])
         .map_err(|e| numeric_err(e, "ceiling"))
 }
 
 /// (truncate x) - Rounds x toward zero
 /// Uses Heap::numeric_truncate with built-in fixnum fast path.
-pub(super) fn truncate(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn truncate<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    heap.borrow_mut()
-        .numeric_truncate(args[0])
+    cx.numeric_truncate(args[0])
         .map_err(|e| numeric_err(e, "truncate"))
 }
 
 /// (round x) - Rounds x to nearest integer (banker's rounding: ties round to even)
 /// Uses Heap::numeric_round with built-in fixnum fast path.
-pub(super) fn round(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn round<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    heap.borrow_mut()
-        .numeric_round(args[0])
+    cx.numeric_round(args[0])
         .map_err(|e| numeric_err(e, "round"))
 }
 
 /// (abs x) - Absolute value
 /// Uses Heap::numeric_abs with built-in fixnum fast path.
-pub(super) fn abs(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn abs<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "1".to_string(),
             actual: args.len(),
         });
     }
-    heap.borrow_mut()
-        .numeric_abs(args[0])
-        .map_err(|e| numeric_err(e, "abs"))
+    cx.numeric_abs(args[0]).map_err(|e| numeric_err(e, "abs"))
 }
 
 /// (max x1 x2 ...) - Maximum of arguments
 /// Uses Heap::numeric_max with built-in fixnum fast path.
-pub(super) fn max(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn max<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "at least 1".to_string(),
@@ -93,8 +89,7 @@ pub(super) fn max(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue
 
     // Single arg case - validate it's a number and return
     if args.len() == 1 {
-        return heap
-            .borrow_mut()
+        return cx
             .numeric_max(args[0], args[0])
             .map_err(|e| numeric_err(e, "max"));
     }
@@ -103,8 +98,7 @@ pub(super) fn max(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue
     let mut current_tv = args[0];
 
     for arg in &args[1..] {
-        current_tv = heap
-            .borrow_mut()
+        current_tv = cx
             .numeric_max(current_tv, *arg)
             .map_err(|e| numeric_err(e, "max"))?;
     }
@@ -114,7 +108,7 @@ pub(super) fn max(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue
 
 /// (min x1 x2 ...) - Minimum of arguments
 /// Uses Heap::numeric_min with built-in fixnum fast path.
-pub(super) fn min(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+pub(super) fn min<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
     if args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "at least 1".to_string(),
@@ -124,8 +118,7 @@ pub(super) fn min(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue
 
     // Single arg case - validate it's a number and return
     if args.len() == 1 {
-        return heap
-            .borrow_mut()
+        return cx
             .numeric_min(args[0], args[0])
             .map_err(|e| numeric_err(e, "min"));
     }
@@ -134,8 +127,7 @@ pub(super) fn min(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue
     let mut current_tv = args[0];
 
     for arg in &args[1..] {
-        current_tv = heap
-            .borrow_mut()
+        current_tv = cx
             .numeric_min(current_tv, *arg)
             .map_err(|e| numeric_err(e, "min"))?;
     }
