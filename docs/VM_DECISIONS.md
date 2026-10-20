@@ -158,8 +158,8 @@ pub type TaggedHandler = fn(&SharedHeap, &[TaggedValue]) -> Result<TaggedValue, 
 - **Converted so far:** the type predicates (`predicates.rs`), the
   characters (`characters.rs`), the strings (`strings.rs`), the lists
   (`lists.rs`), but for `member` and `assoc`, which call a comparator and
-  convert with the higher-order primitives, the vectors (`vectors.rs`) and
-  the numbers (`arithmetic/`).
+  convert with the higher-order primitives, the vectors (`vectors.rs`), the
+  numbers (`arithmetic/`) and the bytevectors (`bytevectors.rs`).
 
 ---
 
