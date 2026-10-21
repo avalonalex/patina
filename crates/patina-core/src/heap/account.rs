@@ -597,6 +597,58 @@ impl ExternalBytes {
     }
 }
 
+/// A host's account of the bytes it holds outside the heap on its values'
+/// behalf (#710, `PRD/GC_PRD.md` §11.5's external-bytes accounter, after
+/// V8's `ExternalMemoryAccounter`): a buffer a host primitive keeps for an
+/// object, say. What it charges counts toward the next collection like an
+/// allocation, and into L until it is given back; whatever it still holds
+/// when it is dropped is given back then.
+#[derive(Debug)]
+pub struct ExternalAccounter {
+    bytes: ExternalBytes,
+    held: usize,
+}
+
+impl ExternalAccounter {
+    /// An accounter holding nothing, charging through `bytes`.
+    pub fn new(bytes: ExternalBytes) -> Self {
+        ExternalAccounter { bytes, held: 0 }
+    }
+
+    /// Charge `bytes` more.
+    pub fn increase(&mut self, bytes: usize) {
+        self.held += bytes;
+        self.bytes.charge(bytes);
+    }
+
+    /// Give back `bytes` of what this accounter charged. Giving back more is
+    /// a bug in the host: it panics in debug builds, and gives back what is
+    /// held in release.
+    pub fn decrease(&mut self, bytes: usize) {
+        debug_assert!(
+            bytes <= self.held,
+            "an external-bytes accounter gave back {bytes} of the {} it held",
+            self.held
+        );
+        let bytes = bytes.min(self.held);
+        self.held -= bytes;
+        self.bytes.release(bytes);
+    }
+
+    /// What this accounter holds now.
+    pub fn held(&self) -> usize {
+        self.held
+    }
+}
+
+impl Drop for ExternalAccounter {
+    fn drop(&mut self) {
+        if self.held > 0 {
+            self.bytes.release(self.held);
+        }
+    }
+}
+
 impl Heap {
     /// Bytes charged since the last collection: what the adaptive trigger
     /// compares against `max(8 MiB, 2·L)`.

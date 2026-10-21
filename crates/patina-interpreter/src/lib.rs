@@ -64,6 +64,7 @@ mod reentry_lint_control;
 #[allow(deprecated)]
 pub use legacy::{Pipeline, PipelineError, StandardPipeline};
 pub use patina_core::error::SourceLocation;
+pub use patina_core::heap::ExternalAccounter;
 pub use patina_core::{
     InterruptHandle, Owned, OwnedEnvironment, SharedHeap, TaggedValue, event, new_shared_heap,
 };
@@ -1221,6 +1222,31 @@ impl<B: Backend> Interpreter<B> {
     /// [`InterruptHandle::forward_sigint`] makes Ctrl-C post it.
     pub fn interrupt_handle(&self) -> InterruptHandle {
         self.backend.heap().borrow().interrupt_handle()
+    }
+
+    /// An accounter for the bytes the host holds outside the heap on its
+    /// values' behalf (#710): what it charges counts toward the next
+    /// collection like an allocation, so a host whose primitives keep large
+    /// buffers for small objects is collected as often as their size asks.
+    /// Whatever it still holds when dropped is given back.
+    ///
+    /// ```
+    /// # #[cfg(feature = "vm")]
+    /// # {
+    /// # use patina_interpreter::VmInterpreter;
+    /// let interp = VmInterpreter::new_vm();
+    /// // The heap's namespaces charge their tables too.
+    /// let before = interp.heap().borrow().external_bytes();
+    /// let mut buffers = interp.external_bytes();
+    /// buffers.increase(1 << 20);
+    /// assert_eq!(interp.heap().borrow().external_bytes(), before + (1 << 20));
+    /// drop(buffers);
+    /// assert_eq!(interp.heap().borrow().external_bytes(), before);
+    /// # }
+    /// ```
+    pub fn external_bytes(&self) -> patina_core::heap::ExternalAccounter {
+        let bytes = self.backend.heap().borrow().external_bytes_handle();
+        patina_core::heap::ExternalAccounter::new(bytes)
     }
 
     /// Format a value for display using write notation (machine-readable):

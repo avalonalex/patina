@@ -30,6 +30,23 @@ use std::rc::Rc;
 /// 1. Expression evaluation in a given environment
 /// 2. Access to the global environment (for REPL, introspection)
 /// 3. A backend-specific error type
+///
+/// # Words
+///
+/// This is the raw layer: its methods take and answer `TaggedValue`s, bare
+/// words that root nothing. A host calls the `Interpreter`'s methods
+/// instead, which keep values in handles (#605). A caller of these keeps
+/// two rules, which both machines keep:
+/// - **A word passed in is live** in the backend's heap: an immediate, or an
+///   object nothing has freed since it was made, as a datum just read in a
+///   context is, or as a handle's word is while the handle lives.
+/// - **A word answered holds until the next evaluation,** which may collect.
+///   Keep it in a handle (`Heap::hold`) to keep it past that.
+///
+/// The trait keeps these words through stage 3 of the collector's redesign,
+/// and moves to handles at stage 4b, when `&Rc<Environment>` becomes a
+/// namespace handle, so an implementor migrates once (owner decision,
+/// 2026-10-21, #710; DESIGN E.3).
 pub trait Backend {
     /// Backend-specific error type
     ///

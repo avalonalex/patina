@@ -111,6 +111,26 @@ in [#580](https://github.com/avalonalex/patina/issues/580). New library work
 belongs in GitHub issues; procedural macro work remains in the
 [syntax-case design](../PRD/macro/SYNTAX_CASE_DESIGN.md).
 
+## Changing the embedding API
+
+The embedding API changes by [#601](https://github.com/avalonalex/patina/pull/601)'s
+convention, so that a host's code keeps compiling across a change. The API is
+`patina-interpreter`'s `Interpreter`, the public `Backend` trait, and what
+the crate re-exports.
+1. **Add the replacement beside the old API.**
+2. **Mark the old one deprecated:** `#[deprecated(note = "use …")]`, naming
+   its replacement. Existing callers then compile, with a warning that says
+   what to do.
+3. **Allow the internal callers that remain:** `#[allow(deprecated)]` where
+   one is left, so `clippy -D warnings` stays green. A test file that still
+   calls the old API carries `#![allow(deprecated)]`.
+4. **Keep `scripts/check_embedding_features.sh` green at each step.** A host
+   built against each feature set, and an external `Backend`, still compile.
+
+Removal waits for the stage the GC redesign names: the deprecated forms go at
+stage 5e (`PRD/GC_PRD.md` §11.5, DESIGN E.3). A new driver entry also goes on
+#622's clippy list, with its control in `reentry_lint_control.rs` (AGENTS.md).
+
 ## Current Status
 
 Both backends achieve **100% R7RS-small compliance**:

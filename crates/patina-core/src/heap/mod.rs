@@ -50,8 +50,9 @@ use crate::tagged_value::{HeapIndex, TaggedValue};
 use account::ByteAccount;
 pub(crate) use account::FilePortCharge;
 pub use account::{
-    ExternalBytes, FILE_PORT_BYTES, GcThreshold, OBJECT_SLOT_BYTES, PAIR_SLOT_BYTES,
-    STRING_SLOT_BYTES, VECTOR_SLOT_BYTES, descriptor_limit, descriptor_pressure_threshold,
+    ExternalAccounter, ExternalBytes, FILE_PORT_BYTES, GcThreshold, OBJECT_SLOT_BYTES,
+    PAIR_SLOT_BYTES, STRING_SLOT_BYTES, VECTOR_SLOT_BYTES, descriptor_limit,
+    descriptor_pressure_threshold,
 };
 use check::SlotChecks;
 use handles::{HandleTable, Owned, OwnedEnvironment};

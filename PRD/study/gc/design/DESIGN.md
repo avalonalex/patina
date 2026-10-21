@@ -1789,8 +1789,8 @@ migrates with #601's deprecation convention, one step per stage, with `check_emb
 |---|---|---|
 | 1 | unchanged | the `locations` store is deleted; its accessors (`get`, `len`, `iter_locations`; only tests read them today) are deprecated, answer empty, and go at 5e; error formatting unchanged |
 | 2 | `Owned`-returning `eval_*` added; bare-value forms deprecated | — |
-| 3 | `Backend::eval` takes and returns raw words through the `pub unsafe` API; `with`, `call`, `register_primitive`, `register_resumable` and `interrupt_handle` added | — |
-| 4b | `&Rc<Environment>` replaced by a namespace handle; `global_env` deprecated | — |
+| 3 | `Backend` keeps its words, documented as the raw layer (owner decision, 2026-10-21, #710: the `pub unsafe` API is out of reach of `patina-interpreter`, which forbids `unsafe`); `with`, `call`, `register_primitive`, `register_resumable`, `interrupt_handle` and the external-bytes accounter added | — |
+| 4b | `&Rc<Environment>` replaced by a namespace handle, and `Backend`'s words by handles; `global_env` deprecated | — |
 | 4c | — | locations come from identifier source ids; `format_interpreter_error` unchanged |
 | 5e | deprecated forms removed | — |
 
