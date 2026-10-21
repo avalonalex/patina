@@ -1126,11 +1126,14 @@ beside today's `SharedHeap` surface until they do.
   a heap object: a pair's car or cdr, a vector's element, a cell, a record's
   field, a closure's free variable, a promise's box, a parameter's value.
   `store_range` and `fill_range` write a run of a vector's elements (C4), and
-  `Fresh` takes the initializing stores into an object just made. The arena
-  heap has no barrier (`BarrierKind::None`), so the funnel checks the holder
-  and stores, as `Heap`'s mutators do. Stage 7's barrier and, under
-  `threaded`, publication will go here, and #708 routes every store through
-  it.
+  `Fresh` takes the initializing stores into an object just made. The
+  machines, which hold words, store through the same slots with
+  `Heap::store`, or with `Heap::try_store` where their own check of the
+  holder would repeat the funnel's: it writes nothing into a slot that does
+  not exist and answers `false` (#708). The arena heap has no barrier
+  (`BarrierKind::None`), so the funnel checks the holder and stores, as
+  `Heap`'s mutators do. Stage 7's barrier and, under `threaded`,
+  publication will go here, and #708 routes every store through it.
 - **Coverage.** `Cx` has a method for each `Heap` method that the crates
   outside the machines call, 194 at #703, under the same name where its shape
   holds:

@@ -55,7 +55,11 @@ pub enum Site {
     RecordSet,
     ParameterInstall,
     ParameterInstallConverted,
+    /// The `force` primitive's store of a forced value: the registry's
+    /// fallback, where no machine intercepts `force`.
     PromiseForcePrimitive,
+    /// A machine's own `force`: the VM's `force_stub`, and since #708 the
+    /// tree-walker's CPS `force`, in the study's spelling.
     PromiseForceVm,
     /// The environment sites hold their values off the heap, so their
     /// holder is never young or old.

@@ -95,16 +95,15 @@ impl Evaluator {
                 }
                 // 4. Check for parameters
                 else {
-                    let param_opt = heap.borrow().get_parameter(proc);
-                    if let Some((values, converter)) = param_opt {
+                    let param_opt = heap.borrow().parameter_parts(proc);
+                    if let Some((current, converter)) = param_opt {
                         match args.len() {
                             0 => {
                                 // Get current value (top of stack)
-                                let stack = values.borrow();
-                                let current_tagged = stack.last().ok_or_else(|| {
+                                let current_tagged = current.ok_or_else(|| {
                                     EvalError::InvalidSyntax("parameter stack is empty".to_string())
                                 })?;
-                                Ok(super::EvalResult::Tagged(*current_tagged))
+                                Ok(super::EvalResult::Tagged(current_tagged))
                             }
                             1 => {
                                 // Set value (replace top of stack after applying converter)
@@ -112,9 +111,8 @@ impl Evaluator {
                                     // Apply converter — conv and args[0] are already TaggedValue
                                     #[expect(
                                         clippy::disallowed_methods,
-                                        reason = "holds `values`, the parameter's value stack (an \
-                                                  `Rc`, which no collection frees), and writes the \
-                                                  converted value into it after the call; the \
+                                        reason = "holds `proc`, the parameter object, and stores \
+                                                  the converted value into it after the call; the \
                                                   value converted moves into the call. Reached \
                                                   only through the detached `ApplyContext for \
                                                   Evaluator`, under its \
@@ -134,14 +132,25 @@ impl Evaluator {
                                     args[0]
                                 };
 
-                                // Set the new value (replace top of stack)
-                                let mut stack = values.borrow_mut();
-                                if let Some(last) = stack.last_mut() {
-                                    *last = new_val;
-                                } else {
-                                    return Err(EvalError::InvalidSyntax(
-                                        "parameter stack is empty".to_string(),
-                                    ));
+                                // Set the new value through the funnel, after a
+                                // converter its twin slot, as `%parameter-set!`
+                                // stores it (#708).
+                                // SAFETY: the call's operator and the value it
+                                // takes, live words of this heap, under the
+                                // detached context's guard: nothing collects
+                                // before the store.
+                                let (param, value) = unsafe {
+                                    (
+                                        patina_core::Value::from_tagged(proc),
+                                        patina_core::Value::from_tagged(new_val),
+                                    )
+                                };
+                                let mut heap = heap.borrow_mut();
+                                match converter {
+                                    Some(_) => {
+                                        heap.store(patina_core::ConvertedParamValue(param), value)
+                                    }
+                                    None => heap.store(patina_core::ParamValue(param), value),
                                 }
                                 Ok(super::EvalResult::Tagged(TaggedValue::UNSPECIFIED))
                             }

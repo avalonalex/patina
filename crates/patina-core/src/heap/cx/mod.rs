@@ -104,8 +104,8 @@ pub mod funnel;
 mod methods;
 
 pub use funnel::{
-    CellValue, ClosureFree, ConvertedParamValue, Fresh, PairCar, PairCdr, ParamValue, PromiseBox,
-    RecordField, Slot, VectorElem,
+    CellValue, ClosureFree, ConvertedParamValue, Fresh, MachinePromiseBox, MachineVectorElem,
+    PairCar, PairCdr, ParamValue, PromiseBox, RecordField, Slot, VectorElem,
 };
 
 /// The mutation and allocation context. See the [module docs](self).

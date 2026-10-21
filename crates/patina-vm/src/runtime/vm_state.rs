@@ -1957,11 +1957,21 @@ fn dispatch_one_instruction(
                 .ok_or_else(|| VmError::Runtime {
                     message: "StoreClosure in non-closure frame".into(),
                 })?;
-            let ok = state
+            // SAFETY: the frame's closure and the instruction's operand,
+            // live words of this heap, and nothing collects inside the
+            // instruction.
+            let (closure, val) = unsafe {
+                (
+                    patina_core::Value::from_tagged(closure),
+                    patina_core::Value::from_tagged(val),
+                )
+            };
+            // Through the funnel (#708), which checks the slot.
+            let stored = state
                 .heap
                 .borrow_mut()
-                .set_vm_closure_free_var(closure, slot as usize, val);
-            if !ok {
+                .try_store(patina_core::ClosureFree(closure, slot as usize), val);
+            if !stored {
                 return Err(VmError::Runtime {
                     message: format!("closure slot {} out of range", slot),
                 });
@@ -2909,20 +2919,29 @@ fn dispatch_one_instruction(
                 dst,
                 [vec, idx, x],
                 {
-                    // Out-of-bounds falls back so the handler's error message is
-                    // used. Writes `dst ← unspecified`, matching the handler.
-                    (vec.is_vector() && idx.is_fixnum())
+                    // A non-vector or an index out of bounds falls back so the
+                    // handler's error message is used; the funnel checks both.
+                    // Writes `dst ← unspecified`, matching the handler.
+                    idx.is_fixnum()
                         .then(|| {
                             let i = usize::try_from(idx.as_fixnum_unchecked()).ok()?;
-                            let mut heap = state.heap.borrow_mut();
-                            let slot = heap.vector_slice_mut(vec).get_mut(i)?;
-                            *slot = x;
-                            patina_core::census::store(
-                                patina_core::census::Site::VmVectorSet,
-                                Some(vec),
-                                x,
-                            );
-                            Some(TaggedValue::UNSPECIFIED)
+                            // SAFETY: the instruction's operands, read from
+                            // its registers: live words of this heap, and
+                            // nothing collects inside the instruction.
+                            let (vec, x) = unsafe {
+                                (
+                                    patina_core::Value::from_tagged(vec),
+                                    patina_core::Value::from_tagged(x),
+                                )
+                            };
+                            // Through the funnel, counted at `vm_vector_set`
+                            // (#708), which checks the index: one past the
+                            // end stores nothing and falls back.
+                            let stored = state
+                                .heap
+                                .borrow_mut()
+                                .try_store(patina_core::MachineVectorElem(vec, i), x);
+                            stored.then_some(TaggedValue::UNSPECIFIED)
                         })
                         .flatten()
                 }
@@ -2950,8 +2969,21 @@ fn dispatch_one_instruction(
         Instruction::WriteCell { cell, src } => {
             let cell_tv = state.reg_at(base, cell);
             let val = state.reg_at(base, src);
-            let ok = state.heap.borrow().write_mutable_cell(cell_tv, val);
-            if !ok {
+            // SAFETY: the instruction's operands, read from its registers:
+            // live words of this heap, and nothing collects inside the
+            // instruction.
+            let (cell, val) = unsafe {
+                (
+                    patina_core::Value::from_tagged(cell_tv),
+                    patina_core::Value::from_tagged(val),
+                )
+            };
+            // Through the funnel (#708), which checks the holder.
+            let stored = state
+                .heap
+                .borrow_mut()
+                .try_store(patina_core::CellValue(cell), val);
+            if !stored {
                 return Err(VmError::Runtime {
                     message: "WriteCell: not a MutableCell".into(),
                 });
