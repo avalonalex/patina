@@ -32,16 +32,11 @@ pub(super) fn call_with_values<'gc>(
     let producer = args[0];
     let consumer = args[1];
 
-    // Call producer with no arguments to get values
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "holds `consumer` (and `args`) across the producer's call. Both machines \
-                  intercept `call-with-values` (the VM's `VM_INTERCEPTED_PRIMITIVES`, the \
-                  tree-walker's `apply_call_with_values`), so this registry fallback runs only \
-                  where neither does: the VM's unit tests (`install_primitives`), dispatched by a \
-                  loop whose nested run defers, and the tree-walker's detached `ApplyContext for \
-                  Evaluator`, whose `GcDeferGuard::holding` defers it (#622)"
-    )]
+    // Call producer with no arguments to get values. Both machines intercept
+    // `call-with-values` (the VM's `VM_INTERCEPTED_PRIMITIVES`, the
+    // tree-walker's `apply_call_with_values`), so this registry fallback runs
+    // only where neither does: the VM's unit tests (`install_primitives`), and
+    // the tree-walker's detached `ApplyContext for Evaluator`.
     let produced = ctx.apply_in(cx, producer, &[])?;
 
     // Unpack multiple values if present, otherwise use single value
@@ -50,13 +45,7 @@ pub(super) fn call_with_values<'gc>(
         None => vec![produced],
     };
 
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the consumer's call, the last thing the frame does: it holds nothing it reads \
-                  after the call, and the consumer's arguments move into it"
-    )]
-    let consumed = ctx.apply_in(cx, consumer, &consumer_args);
-    consumed
+    ctx.apply_in(cx, consumer, &consumer_args)
 }
 
 pub(super) fn register(registry: &mut super::PrimitiveRegistry) {

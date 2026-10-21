@@ -27,11 +27,13 @@
 # convert the sites.
 
 disallowed-methods = [
-    # patina-primitives: a primitive calling back into the program
+    # patina-primitives: a call back into the program from outside a context.
+    # A higher-order primitive's own calls back (`ApplyContext::apply_in`,
+    # `load_scheme_library`) are made beneath its context, which the brand
+    # covers: it holds values of the context, and a nested loop has no driver
+    # to collect with (#707).
     { path = "patina_primitives::apply_context::ApplyContext::apply_proc", reason = "runs a procedure from Rust on a nested loop; what the caller holds across it is safe only while that loop defers. Prefer a resumable primitive (`Step::Call`), and give the reason in an `expect` (#622)" },
-    { path = "patina_primitives::apply_context::ApplyContext::apply_in", reason = "runs a procedure from a higher-order primitive's context on a nested loop; what the primitive holds across it is safe only while that loop defers. Prefer a resumable primitive (`Step::Call`), and give the reason in an `expect` (#622, #706)" },
     { path = "patina_primitives::apply_context::ApplyContext::eval_expr", reason = "evaluates a datum from Rust on a nested loop; prefer `Step::Eval`, and give the reason in an `expect` (#622)" },
-    { path = "patina_primitives::apply_context::ApplyContext::load_scheme_library", reason = "loads a library, which runs its body; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_primitives::registry::run_synchronously", reason = "runs a resumable primitive's calls from Rust, holding its state; give the reason in an `expect` (#622)" },
 
     # patina-vm: the driver loop, the re-entry boundary and library loading

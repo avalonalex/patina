@@ -605,13 +605,8 @@ pub(super) fn call_with_port<'gc>(
         EvalError::TypeError("call-with-port expects a port as first argument".to_string())
     })?;
 
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "holds `port`, the Rust handle it closes afterwards (an `Rc<Port>`, which no \
-                  collection frees), and no heap value it reads after the call. Reached only by \
-                  importing `(patina internal io)`: the `(scheme base)` version runs its procedure \
-                  as a frame (#471)"
-    )]
+    // Reached only by importing `(patina internal io)`: the `(scheme base)`
+    // version runs its procedure as a frame (#471).
     let result = ctx.apply_in(cx, args[1], &[args[0]]);
 
     // R7RS 6.13.1: the port is closed if `proc` returns, and "must not be

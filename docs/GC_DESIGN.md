@@ -1225,8 +1225,8 @@ these checks except the defer balance, which every build checks.
   every collection out of its extent, so it cannot fire yet; once stage 4e
   lets nested loops collect, the first that does under a holder fails at the
   holder rather than freeing what it holds. It does not reach the values a
-  primitive holds across `ApplyContext::apply_proc`, which takes no guard of
-  its own.
+  primitive holds across `ApplyContext::apply_in`, which takes no guard of its
+  own: they are its context's, and nothing beneath a context collects.
 - *The scopes' balance* (`Mutator::exit_no_gc`) is an `assert!` in **every**
   build: in release an underflow would wrap the depth and end collection with
   no report.
@@ -1287,8 +1287,7 @@ missing assertion.
 **Every Rust re-entry carries its reason (#622).** A Rust call that reaches a
 driver loop can collect, and nothing in its type says so. The workspace
 `clippy.toml` lists each such entry under `disallowed-methods`:
-`ApplyContext::apply_proc`, `eval_expr` and `load_scheme_library`, and
-`run_synchronously`; the VM's `execute`, `execute_nested`, `run_loop_until`,
+`ApplyContext::apply_proc` and `eval_expr`, and `run_synchronously`; the VM's `execute`, `execute_nested`, `run_loop_until`,
 `run_loop_until_outcome` and `across_reentry`, and its library loading; the
 tree-walker's `run_trampoline`, every function that starts one (`eval_cps`,
 `CpsEvaluator::eval_in_env`, `apply_from_direct_with`, `eval_core`,
@@ -1303,8 +1302,11 @@ built with it is reachable from no root unless its caller makes it so (#620):
 a host's is held by an `OwnedEnvironment` (`Interpreter::new_environment`).
 Only `with_parent` is listed, as #622 scoped it: an environment from
 `Environment::new` or `with_heap` that is held across a re-entry is named in
-that call's reason instead (the loaders' `lib_env`, the environment
-primitives' `env`). Every call outside the exempt crates carries
+that call's reason instead (the loaders' `lib_env`). A call made beneath a
+context is not listed: a higher-order primitive's `ApplyContext::apply_in`
+and `load_scheme_library` hold only values of its context, which the brand
+covers, and nothing beneath a context collects (#707). Every call outside the
+exempt crates carries
 `#[expect(clippy::disallowed_methods, reason = "…")]` on the narrowest `let`,
 match arm or statement around it (a tail call bound in a `let`, which
 `let_and_return` then leaves alone; the function only for a wrapper whose one
