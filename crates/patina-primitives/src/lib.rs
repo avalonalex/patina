@@ -20,7 +20,7 @@ pub mod registry;
 
 pub use apply_context::ApplyContext;
 pub use registry::{
-    CallArgs, CxHandler, HOTaggedHandler, PrimitiveFn, PrimitiveHandler, PrimitiveRegistry,
+    CallArgs, CxHandler, HigherOrderHandler, PrimitiveFn, PrimitiveHandler, PrimitiveRegistry,
     ResumableResume, ResumableStart, Step, StepFn, TaggedCallArgs, TaggedStep,
 };
 

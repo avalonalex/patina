@@ -18,7 +18,7 @@
 
 use crate::apply_context::ApplyContext;
 use crate::registry::{Step, done_with_result};
-use patina_core::{ConvertedParamValue, Cx, ParamValue, TaggedValue, Value};
+use patina_core::{ConvertedParamValue, Cx, ParamValue, Value};
 use patina_runtime::EvalError;
 use smallvec::smallvec;
 
@@ -183,34 +183,33 @@ fn parameter_converter<'gc>(
 /// partway left the earlier ones installed with no after-thunk to undo them:
 /// `(parameterize ((current-output-port sink) (current-input-port 5)) …)` sent
 /// every later write to `sink` forever.
-pub(super) fn parameterize_swap(
+pub(super) fn parameterize_swap<'gc>(
+    cx: &mut Cx<'gc>,
     ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    let [params_tv, vals_tv] = args[..] else {
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    let [params_list, vals_list] = args[..] else {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
             actual: args.len(),
         });
     };
-    let (params, vals) = {
-        let heap = ctx.heap();
-        let heap = heap.borrow();
-        let lists = heap.list_to_vec(params_tv).zip(heap.list_to_vec(vals_tv));
-        lists.ok_or_else(|| {
+    let (params, vals) = cx
+        .list_to_vec(params_list)
+        .zip(cx.list_to_vec(vals_list))
+        .ok_or_else(|| {
             EvalError::TypeError("%parameterize-swap!: expected two lists".to_string())
-        })?
-    };
+        })?;
     if params.len() != vals.len() {
         return Err(EvalError::TypeError(
             "%parameterize-swap!: parameter and value lists differ in length".to_string(),
         ));
     }
 
-    let mut olds: Vec<TaggedValue> = Vec::with_capacity(params.len());
+    let mut olds: Vec<Value<'gc>> = Vec::with_capacity(params.len());
     for (i, (&param, &val)) in params.iter().zip(vals.iter()).enumerate() {
-        let old = read_parameter(ctx, param)?;
-        match install_parameter(ctx, param, val) {
+        let old = read_parameter(cx, ctx, param)?;
+        match install_parameter(cx, ctx, param, val) {
             Ok(()) => olds.push(old),
             Err(e) => {
                 // Innermost first, so the undo mirrors the install. A value
@@ -218,26 +217,24 @@ pub(super) fn parameterize_swap(
                 // validation; if putting one back escapes anyway, that escape
                 // outranks the error being unwound.
                 for (j, &done) in params[..i].iter().enumerate().rev() {
-                    install_parameter(ctx, done, olds[j])?;
+                    install_parameter(cx, ctx, done, olds[j])?;
                 }
                 return Err(e);
             }
         }
     }
-    Ok(ctx.heap().borrow_mut().list_from_iter(olds))
+    Ok(cx.list_from_iter(olds))
 }
 
 /// A parameter's current value — read from the object, or by calling it, for
 /// the parameter-like procedures that are not objects.
-fn read_parameter(ctx: &dyn ApplyContext, param: TaggedValue) -> Result<TaggedValue, EvalError> {
-    let stored = {
-        let heap = ctx.heap();
-        let heap = heap.borrow();
-        heap.get_parameter(param)
-            .map(|(values, _)| values.borrow().last().copied())
-    };
-    match stored {
-        Some(value) => Ok(value.unwrap_or(TaggedValue::UNSPECIFIED)),
+fn read_parameter<'gc>(
+    cx: &mut Cx<'gc>,
+    ctx: &dyn ApplyContext,
+    param: Value<'gc>,
+) -> Result<Value<'gc>, EvalError> {
+    match cx.parameter_value(param) {
+        Some(value) => Ok(value),
         #[expect(
             clippy::disallowed_methods,
             reason = "holds `param`, and `parameterize_swap` above it holds the parameter and \
@@ -248,42 +245,37 @@ fn read_parameter(ctx: &dyn ApplyContext, param: TaggedValue) -> Result<TaggedVa
                       tree-walker's detached `ApplyContext for Evaluator`, by that context's \
                       `GcDeferGuard::holding`. Stage 4a ends this call (PRD/GC_PRD.md §11.3)"
         )]
-        None => ctx.apply_proc(param, vec![]),
+        None => ctx.apply_in(cx, param, &[]),
     }
 }
 
-/// Install `value`, bypassing the converter for a real parameter object.
-fn install_parameter(
+/// Install `value`, bypassing the converter for a real parameter object:
+/// through the funnel ([`ParamValue`], #706), which the GC census counts at
+/// `parameter_install`.
+fn install_parameter<'gc>(
+    cx: &mut Cx<'gc>,
     ctx: &dyn ApplyContext,
-    param: TaggedValue,
-    value: TaggedValue,
+    param: Value<'gc>,
+    value: Value<'gc>,
 ) -> Result<(), EvalError> {
-    let values = {
-        let heap = ctx.heap();
-        let heap = heap.borrow();
-        heap.get_parameter(param).map(|(values, _)| values)
-    };
-    match values {
-        Some(values) => {
-            if let Some(top) = values.borrow_mut().last_mut() {
-                *top = value;
-            }
-            Ok(())
-        }
-        // Not a parameter object: the assignment *is* the validation.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "`parameterize_swap` above it holds `params`, `vals` and `olds` across the \
-                      call of a parameter-like procedure that is not a parameter object, which \
-                      validates the value by being set; once an earlier `install` has \
-                      overwritten a parameter object's top, `olds` holds the only reference to \
-                      its old value. Deferred: under a machine, by the `NoGcScope` of the nested \
-                      run the call starts, which has no driver and cannot collect; on \
-                      the tree-walker's detached `ApplyContext for Evaluator`, by that context's \
-                      `GcDeferGuard::holding`. Stage 4a ends this call (PRD/GC_PRD.md §11.3)"
-        )]
-        None => ctx.apply_proc(param, vec![value]).map(|_| ()),
+    if cx.is_parameter(param) {
+        cx.store(ParamValue(param), value);
+        return Ok(());
     }
+    // Not a parameter object: the assignment *is* the validation.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "`parameterize_swap` above it holds `params`, `vals` and `olds` across the \
+                  call of a parameter-like procedure that is not a parameter object, which \
+                  validates the value by being set; once an earlier `install` has \
+                  overwritten a parameter object's top, `olds` holds the only reference to \
+                  its old value. Deferred: under a machine, by the `NoGcScope` of the nested \
+                  run the call starts, which has no driver and cannot collect; on \
+                  the tree-walker's detached `ApplyContext for Evaluator`, by that context's \
+                  `GcDeferGuard::holding`. Stage 4a ends this call (PRD/GC_PRD.md §11.3)"
+    )]
+    let assigned = ctx.apply_in(cx, param, &[value]);
+    assigned.map(|_| ())
 }
 
 /// Register parameter primitives with the registry

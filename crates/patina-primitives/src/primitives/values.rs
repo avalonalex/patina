@@ -5,7 +5,7 @@
 //! - `call-with-values` - Call producer and consumer
 
 use crate::apply_context::ApplyContext;
-use patina_core::{Cx, TaggedValue, Value};
+use patina_core::{Cx, Value};
 use patina_runtime::EvalError;
 
 pub(super) fn values<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
@@ -17,10 +17,11 @@ pub(super) fn values<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value
 ///
 /// Note: The CPS evaluator handles call-with-values for TCO. This registry
 /// version is a fallback for non-CPS call sites.
-pub(super) fn call_with_values(
+pub(super) fn call_with_values<'gc>(
+    cx: &mut Cx<'gc>,
     ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -41,17 +42,12 @@ pub(super) fn call_with_values(
                   loop whose nested run defers, and the tree-walker's detached `ApplyContext for \
                   Evaluator`, whose `GcDeferGuard::holding` defers it (#622)"
     )]
-    let produced_tv = ctx.apply_proc(producer, vec![])?;
+    let produced = ctx.apply_in(cx, producer, &[])?;
 
     // Unpack multiple values if present, otherwise use single value
-    let heap = ctx.heap();
-    let consumer_args: Vec<TaggedValue> = {
-        let heap_ref = heap.borrow();
-        if let Some(vals) = heap_ref.get_values(produced_tv) {
-            vals.to_vec()
-        } else {
-            vec![produced_tv]
-        }
+    let consumer_args: Vec<Value<'gc>> = match cx.get_values(produced) {
+        Some(vals) => vals.to_vec(),
+        None => vec![produced],
     };
 
     #[expect(
@@ -59,7 +55,7 @@ pub(super) fn call_with_values(
         reason = "the consumer's call, the last thing the frame does: it holds nothing it reads \
                   after the call, and the consumer's arguments move into it"
     )]
-    let consumed = ctx.apply_proc(consumer, consumer_args);
+    let consumed = ctx.apply_in(cx, consumer, &consumer_args);
     consumed
 }
 

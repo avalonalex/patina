@@ -1365,7 +1365,7 @@ impl Environment {
     /// `format!()` allocations on every primitive call.
     pub fn define_primitive(
         &self,
-        heap: &SharedHeap,
+        heap: &RefCell<Heap>,
         name: &'static str,
         arity: crate::procedure::Arity,
         library: Vec<String>,

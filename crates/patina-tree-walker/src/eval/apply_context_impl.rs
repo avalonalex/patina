@@ -37,18 +37,41 @@ impl ApplyContext for Evaluator {
         }
     }
 
-    /// A resumable primitive's half, in a context made as [`Self::call_cx`]
-    /// makes one (#706).
+    /// A higher-order primitive's call back (#706): [`Self::apply_proc`],
+    /// with its value branded in the primitive's context.
+    fn apply_in<'gc>(
+        &self,
+        _cx: &mut patina_core::Cx<'gc>,
+        proc: patina_core::Value<'gc>,
+        args: &[patina_core::Value<'gc>],
+    ) -> Result<patina_core::Value<'gc>, EvalError> {
+        let args = patina_core::Value::tagged_slice(args).to_vec();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the call back `apply_in` is for, deferred as `apply_proc`'s own reason \
+                      says; each of its callers gives what it holds across it, at its call"
+        )]
+        let result = self.apply_proc(proc.tagged(), args)?;
+        // SAFETY: `apply_proc` runs the call under `GcDeferGuard::holding`,
+        // so nothing collects, and the word it answered stays live until the
+        // primitive's context, whose brand `'gc` is, closes.
+        Ok(unsafe { patina_core::Value::from_tagged(result) })
+    }
+
+    /// A resumable primitive's half or a higher-order primitive, in a context
+    /// made as [`Self::call_cx`] makes one (#706).
     fn step_cx(
         &self,
         args: &[TaggedValue],
         step: patina_primitives::StepFn<'_>,
     ) -> Result<patina_primitives::TaggedStep, EvalError> {
         // SAFETY: as `call_cx`'s. A resumable primitive's half answers a step
-        // rather than calling back, and a nested trampoline it starts, as
-        // `eval`'s check does in expanding a form, keeps a `NoGcScope`:
-        // nothing collects while it runs. Its arguments are the call's, or the
-        // state and result its `ResumePrimitive` continuation held.
+        // rather than calling back; a higher-order primitive calls back on a
+        // nested trampoline (`apply_in`), as `eval`'s check runs one in
+        // expanding a form, and a nested trampoline keeps a `NoGcScope`:
+        // nothing collects while the primitive runs. Its arguments are the
+        // call's, or the state and result its `ResumePrimitive` continuation
+        // held.
         unsafe {
             patina_core::heap::cx::enter_call(
                 &self.heap,

@@ -354,6 +354,27 @@ impl<'gc> Cx<'gc> {
         self.brand(word)
     }
 
+    /// A new empty namespace whose values live on this context's heap
+    /// ([`Environment::with_heap`]): what `environment` and the R5RS
+    /// constructors build.
+    #[inline]
+    pub fn new_namespace(&self) -> Environment {
+        Environment::namespace(&self.heap.borrow())
+    }
+
+    /// Bind `name` in `env` to the primitive `library`'s `name`
+    /// ([`Environment::define_primitive`]).
+    #[inline]
+    pub fn define_primitive(
+        &mut self,
+        env: &Environment,
+        name: &'static str,
+        arity: crate::procedure::Arity,
+        library: Vec<String>,
+    ) {
+        env.define_primitive(self.heap, name, arity, library);
+    }
+
     /// What `name` is bound to in `env` or its parents
     /// ([`Environment::get`]), as a value: read as
     /// [`Self::resolve_with_scopes`] reads a binding, which it is as live

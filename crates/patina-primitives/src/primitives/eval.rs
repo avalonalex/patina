@@ -11,9 +11,7 @@
 use crate::apply_context::ApplyContext;
 use crate::registry::{PrimitiveFn, PrimitiveRegistry, Step, done_with_result};
 use patina_core::port::out_of_descriptors;
-use patina_core::{
-    CollectKind, CoreExpr, CoreExprKind, Cx, TaggedValue, Value, core_syntax::CoreForm,
-};
+use patina_core::{CollectKind, CoreExpr, CoreExprKind, Cx, Value, core_syntax::CoreForm};
 use patina_frontend::{Desugarer, LibraryDefinition};
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
@@ -26,10 +24,10 @@ use std::rc::Rc;
 /// Runtime arguments can contain cycles even though source import declarations
 /// cannot. Check the pair graph before invoking the recursive import parser;
 /// shared, acyclic sublists are valid and must not be mistaken for cycles.
-fn check_import_datum(tv: TaggedValue, heap: &patina_core::Heap) -> Result<(), EvalError> {
+fn check_import_datum<'gc>(cx: &Cx<'gc>, form: Value<'gc>) -> Result<(), EvalError> {
     let mut active = HashSet::new();
     let mut complete = HashSet::new();
-    let mut work = vec![(tv, false)];
+    let mut work = vec![(form, false)];
     while let Some((value, leaving)) = work.pop() {
         if leaving {
             active.remove(&value.raw());
@@ -39,7 +37,7 @@ fn check_import_datum(tv: TaggedValue, heap: &patina_core::Heap) -> Result<(), E
         if complete.contains(&value.raw()) {
             continue;
         }
-        if let Some((car, cdr)) = heap.try_pair(value) {
+        if let Some((car, cdr)) = cx.try_pair(value) {
             if !active.insert(value.raw()) {
                 return Err(EvalError::InvalidSyntax(
                     "environment: cyclic import set".to_string(),
@@ -54,26 +52,23 @@ fn check_import_datum(tv: TaggedValue, heap: &patina_core::Heap) -> Result<(), E
 }
 
 /// (environment import-set ...) → immutable environment-specifier
-fn primitive_environment(
+fn primitive_environment<'gc>(
+    cx: &mut Cx<'gc>,
     ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
-    let heap = ctx.heap();
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     let import_sets = args
-        .into_iter()
-        .map(|arg| {
-            check_import_datum(arg, &heap.borrow())?;
-            patina_core::NoGcScope::cross(heap, [arg], |cx, [arg]| {
-                LibraryDefinition::parse_import_set_tagged(arg, cx)
-            })
-            .map_err(|e| {
+        .iter()
+        .map(|&arg| {
+            check_import_datum(cx, arg)?;
+            LibraryDefinition::parse_import_set_tagged(arg, cx).map_err(|e| {
                 EvalError::InvalidSyntax(format!("environment: {e}"))
                     .with_diagnostic(e.diagnostic())
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let env = Rc::new(Environment::with_heap(heap));
+    let env = Rc::new(cx.new_namespace());
     for set in &import_sets {
         // Loading stays behind ApplyContext so a Scheme initializer can
         // transfer control normally. Selection never copies binding values.
@@ -91,7 +86,7 @@ fn primitive_environment(
             library.import_into(&env, name, &export);
         }
     }
-    Ok(heap.borrow_mut().alloc_environment_specifier(env, false))
+    Ok(cx.alloc_environment_specifier(env, false))
 }
 
 /// Reject core definitions before desugaring: define-syntax installs its
@@ -463,10 +458,11 @@ const R5RS_PROCEDURES: &[&str] = &[
 ///
 /// Returns an environment with only the R5RS syntactic keywords.
 /// Currently only version 5 is supported.
-fn primitive_null_environment(
+fn primitive_null_environment<'gc>(
+    cx: &mut Cx<'gc>,
     ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "null-environment expects 1 argument".to_string(),
@@ -477,10 +473,9 @@ fn primitive_null_environment(
     let version = if args[0].is_fixnum() {
         args[0].as_fixnum_unchecked()
     } else {
-        let heap = ctx.heap();
         return Err(EvalError::TypeError(format!(
             "null-environment: expected integer version, got {}",
-            heap.borrow().type_name(args[0])
+            cx.type_name(args[0])
         )));
     };
 
@@ -491,8 +486,8 @@ fn primitive_null_environment(
         )));
     }
 
-    // Create environment with only syntactic keywords, sharing global heap for TaggedValue compatibility
-    let env = Rc::new(Environment::with_heap(ctx.heap()));
+    // An environment with only syntactic keywords, on this context's heap
+    let env = Rc::new(cx.new_namespace());
 
     // Load scheme base to get the keywords
     #[expect(
@@ -506,18 +501,18 @@ fn primitive_null_environment(
 
     install_r5rs_syntax(&env, &base_lib);
 
-    let heap = ctx.heap();
-    Ok(heap.borrow_mut().alloc_environment_specifier(env, false))
+    Ok(cx.alloc_environment_specifier(env, false))
 }
 
 /// (scheme-report-environment version) → environment-specifier
 ///
 /// Returns an environment with all R5RS bindings (syntax + procedures).
 /// Currently only version 5 is supported.
-fn primitive_scheme_report_environment(
+fn primitive_scheme_report_environment<'gc>(
+    cx: &mut Cx<'gc>,
     ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
             expected: "scheme-report-environment expects 1 argument".to_string(),
@@ -528,10 +523,9 @@ fn primitive_scheme_report_environment(
     let version = if args[0].is_fixnum() {
         args[0].as_fixnum_unchecked()
     } else {
-        let heap = ctx.heap();
         return Err(EvalError::TypeError(format!(
             "scheme-report-environment: expected integer version, got {}",
-            heap.borrow().type_name(args[0])
+            cx.type_name(args[0])
         )));
     };
 
@@ -542,8 +536,8 @@ fn primitive_scheme_report_environment(
         )));
     }
 
-    // Create environment with all R5RS bindings, sharing global heap for TaggedValue compatibility
-    let env = Rc::new(Environment::with_heap(ctx.heap()));
+    // An environment with all R5RS bindings, on this context's heap
+    let env = Rc::new(cx.new_namespace());
 
     // Load scheme base
     #[expect(
@@ -620,11 +614,10 @@ fn primitive_scheme_report_environment(
 
     // Add null-environment and scheme-report-environment themselves
     let r5rs_lib = vec!["scheme".to_string(), "r5rs".to_string()];
-    let heap = ctx.heap();
-    env.define_primitive(heap, "null-environment", Arity::Exact(1), r5rs_lib.clone());
-    env.define_primitive(heap, "scheme-report-environment", Arity::Exact(1), r5rs_lib);
+    cx.define_primitive(&env, "null-environment", Arity::Exact(1), r5rs_lib.clone());
+    cx.define_primitive(&env, "scheme-report-environment", Arity::Exact(1), r5rs_lib);
 
-    Ok(heap.borrow_mut().alloc_environment_specifier(env, false))
+    Ok(cx.alloc_environment_specifier(env, false))
 }
 
 /// The state `load` keeps between the forms of its file, a vector: the forms
@@ -811,10 +804,11 @@ fn load_next<'gc>(cx: &mut Cx<'gc>, state: Value<'gc>) -> Result<Step<'gc>, Eval
 /// The environment is the backend's `interaction_environment`, which on the
 /// VM, inside a library's body, is the library's (`mutable_specifier`'s doc
 /// says what that means for the cache).
-fn primitive_interaction_environment(
+fn primitive_interaction_environment<'gc>(
+    cx: &mut Cx<'gc>,
     ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
     if !args.is_empty() {
         return Err(EvalError::WrongArity {
             expected: "interaction-environment expects 0 arguments".to_string(),
@@ -822,7 +816,7 @@ fn primitive_interaction_environment(
         });
     }
 
-    Ok(ctx.interaction_environment().mutable_specifier(ctx.heap()))
+    Ok(cx.mutable_specifier(&ctx.interaction_environment()))
 }
 
 /// Register eval primitives

@@ -125,14 +125,14 @@ for the design, root inventory, safe-point protocol, and staging.
 
 ## 6. Primitives: Shared `patina-primitives` Crate
 
-**Decision:** ~315 primitives in `patina-primitives` that take the context
-(shared by tree-walker and VM). 12 resumable primitives start and resume with
-the context too, and ~10 higher-order ones use the `ApplyContext` trait, which
-each backend provides.
+**Decision:** ~337 primitives in `patina-primitives`, shared by tree-walker
+and VM, each taking the context. The 12 resumable and 10 higher-order ones take
+the `ApplyContext` trait beside it, which each backend provides.
 
 **The signature is the context's** (#706; `PRD/GC_PRD.md` §11.3's `Prim`).
-Every primitive that calls nothing back takes the context. The kind that took
-the heap went with the last of its files, I/O's (#706, part 12):
+Every primitive takes the context. One that calls nothing back takes it alone;
+the kind that took the heap went with the last of its files, I/O's (#706, part
+12):
 
 ```rust
 // A primitive that takes the context: reads and allocates through the `Cx`,
@@ -170,10 +170,16 @@ pub type CxHandler =
   interaction environment. A parameter's value is stored through the funnel's
   `ParamValue`, or after a converter its twin `ConvertedParamValue`, which the
   GC census counts apart.
-- **Still on the heap:** the higher-order primitives, through
-  `ApplyContext::heap`. They are `member` and `assoc` with a comparator,
-  `force`, `call-with-values`, `call-with-port`, `%parameterize-swap!` and the
-  environment procedures. They are what is left of #706.
+- **A higher-order primitive** takes the context, and calls back through the
+  `ApplyContext` beside it (`ApplyContext::apply_in`), whose answer is a value
+  of the context. What it holds across the call stays live: the call runs on a
+  nested loop, which cannot collect. They are `member` and `assoc` with a
+  comparator, `force`, `call-with-values`, `call-with-port`,
+  `%parameterize-swap!` and the environment procedures. `force` stores through
+  `PromiseBox`, and `%parameterize-swap!` through `ParamValue`.
+- **Still on the heap:** `ApplyContext`'s defaults, which cross words through
+  handles for a context with no machine, and `run_synchronously`'s posted
+  collection. They are what is left of #706.
 
 ---
 
@@ -201,7 +207,7 @@ frontend pipeline and compiles direct-style (no CPS transform).
 | Frontend (lexer/parser/desugarer) | Yes | Unchanged |
 | Library system | Yes | Backend-agnostic |
 | `Backend` trait | Yes | VM implements same trait |
-| `patina-primitives` (~290 prims) | Yes | Shared crate; each machine makes the context for a primitive that takes one (§6) |
+| `patina-primitives` (~337 prims) | Yes | Shared crate; each machine makes the context every primitive takes (§6) |
 | CPS transform / `CpsExpr` | No | VM compiles direct-style |
 
 ---
