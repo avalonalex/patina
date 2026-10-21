@@ -61,6 +61,25 @@ impl Drop for Loading {
     }
 }
 
+/// Why a host's primitive could not be registered (#710).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RegisterError {
+    /// The library is in a namespace the bundled libraries use: `scheme`,
+    /// `srfi`, or `patina`, where the internal libraries Rust builds live.
+    #[error("({}) is in a namespace the bundled libraries use", .0.join(" "))]
+    Reserved(Vec<String>),
+    /// The library is loaded, or a search path finds it, and the host did
+    /// not make it.
+    #[error("({}) is not a library the host made", .0.join(" "))]
+    NotTheHosts(Vec<String>),
+    /// The library already exports the name.
+    #[error("({}) already exports {name}", .library.join(" "))]
+    AlreadyExported { library: Vec<String>, name: String },
+    /// The machine is running, and registration waits until it is not.
+    #[error("the interpreter is running: register a primitive between evaluations")]
+    Running,
+}
+
 /// Error types for library operations
 #[derive(Debug, Clone)]
 pub enum LibraryError {
@@ -335,6 +354,11 @@ pub struct LibraryRegistry {
     /// Virtual filesystem for file existence checks in `find_library_file`.
     #[trace(skip, reason = "the filesystem")]
     fs: Arc<dyn FileSystem>,
+
+    /// The libraries the host made by registering primitives in them
+    /// (#710), which a later registration may add to.
+    #[trace(skip, reason = "library names")]
+    host_libraries: std::collections::HashSet<Vec<String>>,
 }
 
 /// A library on the loading stack. Once its parsed body is handed over
@@ -365,6 +389,7 @@ impl LibraryRegistry {
             search_paths: Vec::new(),
             loading_stack: Vec::new(),
             fs: Arc::new(patina_core::NativeFs),
+            host_libraries: std::collections::HashSet::new(),
         }
     }
 
@@ -535,6 +560,62 @@ impl LibraryRegistry {
     /// Get a mutable reference to a loaded library
     pub fn get_mut(&mut self, name: &[String]) -> Option<&mut Library> {
         self.libraries.get_mut(name)
+    }
+
+    /// Whether the host may export `name` from `library` (#710): a library
+    /// it made, or one no one has. Refused in the bundled libraries'
+    /// namespaces, where Rust builds libraries no search path shows, and for
+    /// a library loaded otherwise or that a search path finds.
+    pub fn check_host_export(&self, library: &[String], name: &str) -> Result<(), RegisterError> {
+        if matches!(
+            library.first().map(String::as_str),
+            Some("scheme" | "srfi" | "patina")
+        ) {
+            return Err(RegisterError::Reserved(library.to_vec()));
+        }
+        if self.host_libraries.contains(library) {
+            let exported = self
+                .libraries
+                .get(library)
+                .is_some_and(|lib| lib.exports.contains_key(name));
+            return if exported {
+                Err(RegisterError::AlreadyExported {
+                    library: library.to_vec(),
+                    name: name.to_string(),
+                })
+            } else {
+                Ok(())
+            };
+        }
+        if self.libraries.contains_key(library) || self.find_library_file(library).is_some() {
+            return Err(RegisterError::NotTheHosts(library.to_vec()));
+        }
+        Ok(())
+    }
+
+    /// Bind `name` to `value` in the host library `library` and export it
+    /// (#710). The first export makes the library, in a namespace of its
+    /// own on `heap`; a later one adds to it, which a program reaches by
+    /// importing the library after the registration. Check it with
+    /// [`Self::check_host_export`] first.
+    pub fn export_from_host_library(
+        &mut self,
+        library: &[String],
+        name: &str,
+        value: TaggedValue,
+        heap: &patina_core::SharedHeap,
+    ) {
+        if self.host_libraries.insert(library.to_vec()) {
+            let env = Rc::new(Environment::with_heap(heap));
+            self.libraries
+                .insert(library.to_vec(), Library::with_env(library.to_vec(), env));
+        }
+        let lib = self
+            .libraries
+            .get_mut(library)
+            .expect("a host library stays registered");
+        lib.env.define(name, value);
+        lib.export_tagged(name.to_string(), value);
     }
 
     /// Find the file path for a library, over this registry's search paths.
@@ -1045,6 +1126,7 @@ mod gc_root_tests {
             search_paths: Vec::new(),
             loading_stack: Vec::new(),
             fs: Arc::new(patina_core::NativeFs),
+            host_libraries: std::collections::HashSet::new(),
         };
 
         let mut heap = shared.borrow_mut();
@@ -1078,6 +1160,7 @@ mod gc_root_tests {
                 body: VecDeque::from([form]),
             }],
             fs: Arc::new(patina_core::NativeFs),
+            host_libraries: std::collections::HashSet::new(),
         };
 
         let mut heap = shared.borrow_mut();

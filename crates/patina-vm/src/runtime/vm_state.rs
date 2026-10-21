@@ -454,6 +454,15 @@ impl VmState {
         &self.primitive_registry
     }
 
+    /// Append a host's `primitive` to the registry (#710), answering its
+    /// index, or `None` while a run shares the registry.
+    pub fn register_primitive(
+        &mut self,
+        primitive: patina_primitives::PrimitiveFn,
+    ) -> Option<usize> {
+        Rc::get_mut(&mut self.primitive_registry).map(|registry| registry.register(primitive))
+    }
+
     /// The heap the machine's values live on, its global environment's
     /// among them.
     pub fn heap(&self) -> &SharedHeap {

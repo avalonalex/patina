@@ -179,11 +179,47 @@ impl<'a> CpsEvaluator<'a> {
                     })
                 }
 
-                Procedure::Primitive { name, .. } => {
-                    // Handle CPS-sensitive primitives specially
-                    // Helper methods now take Vec<TaggedValue> directly
+                Procedure::Primitive {
+                    name,
+                    qualified_name,
+                    ..
+                } => {
+                    // The CPS-sensitive primitives, picked by the binding
+                    // they came from, never the name alone: a host's
+                    // primitive of the same name in a library of its own is
+                    // an ordinary primitive (#710). The VM picks the same by
+                    // the same names (`VM_INTERCEPTED_PRIMITIVES`). The short
+                    // name is matched first, which rejects every other
+                    // primitive as cheaply as before; the qualified name
+                    // confirms the binding.
+                    let bound = |q: &str| &**qualified_name == q;
                     match *name {
-                        "call-with-values" => self.apply_call_with_values(
+                        "call-with-values" if bound("patina.internal.control/call-with-values") => {
+                            self.apply_call_with_values(
+                                args,
+                                cont,
+                                cont_env,
+                                prompt_stack,
+                                dynamic_winds,
+                                exception_handlers,
+                            )
+                        }
+
+                        "call-with-current-continuation" | "call/cc"
+                            if bound("patina.internal.control/call-with-current-continuation")
+                                || bound("patina.internal.control/call/cc") =>
+                        {
+                            self.apply_call_cc(
+                                args,
+                                cont,
+                                cont_env,
+                                prompt_stack,
+                                dynamic_winds,
+                                exception_handlers,
+                            )
+                        }
+
+                        "force" if bound("patina.internal.lazy/force") => self.apply_force(
                             args,
                             cont,
                             cont_env,
@@ -192,7 +228,17 @@ impl<'a> CpsEvaluator<'a> {
                             exception_handlers,
                         ),
 
-                        "call-with-current-continuation" | "call/cc" => self.apply_call_cc(
+                        "dynamic-wind" if bound("patina.internal.control/dynamic-wind") => self
+                            .apply_dynamic_wind(
+                                args,
+                                cont,
+                                cont_env,
+                                prompt_stack,
+                                dynamic_winds,
+                                exception_handlers,
+                            ),
+
+                        "exit" if bound("patina.internal.system/exit") => self.apply_exit(
                             args,
                             cont,
                             cont_env,
@@ -201,43 +247,20 @@ impl<'a> CpsEvaluator<'a> {
                             exception_handlers,
                         ),
 
-                        "force" => self.apply_force(
-                            args,
-                            cont,
-                            cont_env,
-                            prompt_stack,
-                            dynamic_winds,
-                            exception_handlers,
-                        ),
+                        "with-exception-handler"
+                            if bound("patina.internal.errors/with-exception-handler") =>
+                        {
+                            self.apply_with_exception_handler(
+                                args,
+                                cont,
+                                cont_env,
+                                prompt_stack,
+                                dynamic_winds,
+                                exception_handlers,
+                            )
+                        }
 
-                        "dynamic-wind" => self.apply_dynamic_wind(
-                            args,
-                            cont,
-                            cont_env,
-                            prompt_stack,
-                            dynamic_winds,
-                            exception_handlers,
-                        ),
-
-                        "exit" => self.apply_exit(
-                            args,
-                            cont,
-                            cont_env,
-                            prompt_stack,
-                            dynamic_winds,
-                            exception_handlers,
-                        ),
-
-                        "with-exception-handler" => self.apply_with_exception_handler(
-                            args,
-                            cont,
-                            cont_env,
-                            prompt_stack,
-                            dynamic_winds,
-                            exception_handlers,
-                        ),
-
-                        "raise" => self.apply_raise(
+                        "raise" if bound("patina.internal.errors/raise") => self.apply_raise(
                             args,
                             cont,
                             cont_env,
@@ -247,26 +270,21 @@ impl<'a> CpsEvaluator<'a> {
                             false,
                         ),
 
-                        "raise-continuable" => self.apply_raise(
-                            args,
-                            cont,
-                            cont_env,
-                            prompt_stack,
-                            dynamic_winds,
-                            exception_handlers,
-                            true,
-                        ),
+                        "raise-continuable"
+                            if bound("patina.internal.errors/raise-continuable") =>
+                        {
+                            self.apply_raise(
+                                args,
+                                cont,
+                                cont_env,
+                                prompt_stack,
+                                dynamic_winds,
+                                exception_handlers,
+                                true,
+                            )
+                        }
 
-                        "error" => self.apply_error(
-                            args,
-                            cont,
-                            cont_env,
-                            prompt_stack,
-                            dynamic_winds,
-                            exception_handlers,
-                        ),
-
-                        "apply" => self.apply_apply(
+                        "error" if bound("patina.internal.errors/error") => self.apply_error(
                             args,
                             cont,
                             cont_env,
@@ -275,7 +293,7 @@ impl<'a> CpsEvaluator<'a> {
                             exception_handlers,
                         ),
 
-                        "call-with-continuation-prompt" => self.apply_call_with_prompt(
+                        "apply" if bound("patina.internal.control/apply") => self.apply_apply(
                             args,
                             cont,
                             cont_env,
@@ -284,14 +302,31 @@ impl<'a> CpsEvaluator<'a> {
                             exception_handlers,
                         ),
 
-                        "abort-current-continuation" => self.apply_abort_current_continuation(
-                            args,
-                            cont,
-                            cont_env,
-                            prompt_stack,
-                            dynamic_winds,
-                            exception_handlers,
-                        ),
+                        "call-with-continuation-prompt"
+                            if bound("patina.internal.control/call-with-continuation-prompt") =>
+                        {
+                            self.apply_call_with_prompt(
+                                args,
+                                cont,
+                                cont_env,
+                                prompt_stack,
+                                dynamic_winds,
+                                exception_handlers,
+                            )
+                        }
+
+                        "abort-current-continuation"
+                            if bound("patina.internal.control/abort-current-continuation") =>
+                        {
+                            self.apply_abort_current_continuation(
+                                args,
+                                cont,
+                                cont_env,
+                                prompt_stack,
+                                dynamic_winds,
+                                exception_handlers,
+                            )
+                        }
 
                         _ => {
                             // For other primitives, delegate to direct evaluator
