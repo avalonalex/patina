@@ -16,6 +16,70 @@ use std::rc::Rc;
 /// the call ([`ApplyContext::call_cx`]). Every primitive that calls nothing
 /// back is one: the kind that took the heap went with the last of its files.
 /// Its arguments are borrowed, since it never re-enters the evaluator.
+///
+/// The cases below pin the brand at the handler (#709). A primitive's
+/// arguments are values of its call's context, so it cannot keep one past the
+/// call. What it keeps is plain data:
+///
+/// ```
+/// use std::cell::Cell;
+/// use patina_core::{Cx, Value};
+/// use patina_primitives::{CxHandler, EvalError};
+///
+/// thread_local! {
+///     static LAST: Cell<Option<i64>> = const { Cell::new(None) };
+/// }
+///
+/// fn remember<'gc>(_: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+///     LAST.with(|last| last.set(args[0].as_fixnum()));
+///     Ok(args[0])
+/// }
+/// let _: CxHandler = remember;
+/// ```
+///
+/// Its argument kept in a thread-local, an error with no code to pin:
+///
+/// ```compile_fail
+/// use std::cell::Cell;
+/// use patina_core::{Cx, Value};
+/// use patina_primitives::{CxHandler, EvalError};
+///
+/// thread_local! {
+///     static LAST: Cell<Option<Value<'static>>> = const { Cell::new(None) };
+/// }
+///
+/// fn remember<'gc>(_: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+///     LAST.with(|last| last.set(Some(args[0])));
+///     Ok(args[0])
+/// }
+/// let _: CxHandler = remember;
+/// ```
+///
+/// Nor can it reach the heap, through which it could collect. Its context
+/// reads, allocates and stores, and leads to no heap:
+///
+/// ```
+/// use patina_core::{Cx, Value};
+/// use patina_primitives::{CxHandler, EvalError};
+///
+/// fn pair<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+///     Ok(cx.alloc_pair(args[0], args[1]))
+/// }
+/// let _: CxHandler = pair;
+/// ```
+///
+/// Asking it for the heap:
+///
+/// ```compile_fail,E0599
+/// use patina_core::{Cx, Value};
+/// use patina_primitives::{CxHandler, EvalError};
+///
+/// fn pair<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+///     let _heap = cx.heap();
+///     Ok(cx.alloc_pair(args[0], args[1]))
+/// }
+/// let _: CxHandler = pair;
+/// ```
 pub type CxHandler = for<'gc> fn(&mut Cx<'gc>, &[Value<'gc>]) -> Result<Value<'gc>, EvalError>;
 
 /// Handler for a higher-order primitive (10 of them): one that calls back

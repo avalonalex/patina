@@ -49,13 +49,12 @@ jobs:
 
     # The compile-time refusals, as `compile_fail` doctests beside examples
     # that compile, which `--lib --tests` above does not build:
-    # `#[derive(Trace)]`'s two (#686), a field whose type has no `Trace` and
-    # a `skip` without its reason, on `patina_core::Trace`; and the brand's
-    # (#703, #704), a value that leaves its context, on `patina_core::Value`
-    # and `Cx`, and a macro compiler that outlives one, on
-    # `patina_macros::Compiler`.
+    # `#[derive(Trace)]`'s two (#686), on `patina_core::Trace`; the funnel's
+    # seal (#708), on `patina_core::heap::Interior`; and the brand's (#703,
+    # #704, #709), in core, primitives, the frontend and macros.
+    # docs/TEST_ORGANIZATION.md, "Compile-time refusals", lists every case.
     - name: Compile-time checks
-      run: cargo test -p patina-core -p patina-macros --doc
+      run: cargo test -p patina-core -p patina-macros -p patina-primitives -p patina-frontend --doc
 
     # The per-PR GC stress lane (#626; docs/TEST_ORGANIZATION.md, "GC
     # lanes"): thirteen targets that drive the collector, control flow and

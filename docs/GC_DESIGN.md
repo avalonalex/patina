@@ -1311,8 +1311,9 @@ Only `with_parent` is listed, as #622 scoped it: an environment from
 `Environment::new` or `with_heap` that is held across a re-entry is named in
 that call's reason instead (the loaders' `lib_env`). A call made beneath a
 context is not listed: a higher-order primitive's `ApplyContext::apply_in`
-and `load_scheme_library` hold only values of its context, which the brand
-covers, and nothing beneath a context collects (#707). Every call outside the
+and `load_scheme_library` take its context, so it holds only values of it
+across them, which the brand covers, and no borrow of it (#709); and nothing
+beneath a context collects (#707). Every call outside the
 exempt crates carries
 `#[expect(clippy::disallowed_methods, reason = "…")]` on the narrowest `let`,
 match arm or statement around it (a tail call bound in a `let`, which

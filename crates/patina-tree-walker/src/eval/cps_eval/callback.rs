@@ -214,7 +214,11 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
                   holds its values across the load, which runs nested under the calling step's \
                   trampoline, so it collects nowhere (#677)"
     )]
-    fn load_scheme_library(&self, name: &[String]) -> Result<Rc<Library>, EvalError> {
+    fn load_scheme_library(
+        &self,
+        _cx: &mut patina_core::Cx<'_>,
+        name: &[String],
+    ) -> Result<Rc<Library>, EvalError> {
         self.cps
             .evaluator
             .load_library_with(name, self)

@@ -30,7 +30,16 @@
 //! assert!(Value::NULL.is_null());
 //! ```
 //!
-//! A value in a `static`:
+//! A constant compiles, since no collection need see it:
+//!
+//! ```
+//! use patina_core::Value;
+//!
+//! const NIL: Value<'static> = Value::NULL;
+//! assert!(NIL.is_null());
+//! ```
+//!
+//! A value in a `static` does not (#709):
 //!
 //! ```compile_fail,E0277
 //! use patina_core::Value;

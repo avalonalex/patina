@@ -80,6 +80,46 @@ pub use patina_runtime::{CompiledMacro, CompiledRule};
 ///     compiler.compile_template(cx, form, 0).unwrap();
 /// });
 /// ```
+///
+/// A compilation takes the context, so a borrow of the context cannot be held
+/// across one (#709). Read out of it first:
+///
+/// ```
+/// use patina_core::{GcDriver, Instance, new_shared_heap};
+/// use patina_macros::Compiler;
+///
+/// let heap = new_shared_heap();
+/// let instance = Instance::default();
+/// let mut driver = GcDriver::acquire(&heap).unwrap();
+/// let length = driver.mutate(&instance, |cx| {
+///     let mut compiler = Compiler::new(vec![], None);
+///     let name = cx.alloc_string("x".to_string());
+///     let form = cx.intern_symbol("x");
+///     let length = cx.get_string_chars(name).len();
+///     compiler.compile_template(cx, form, 0).unwrap();
+///     length
+/// });
+/// assert_eq!(length, 1);
+/// ```
+///
+/// The slice held across the compilation:
+///
+/// ```compile_fail,E0502
+/// use patina_core::{GcDriver, Instance, new_shared_heap};
+/// use patina_macros::Compiler;
+///
+/// let heap = new_shared_heap();
+/// let instance = Instance::default();
+/// let mut driver = GcDriver::acquire(&heap).unwrap();
+/// driver.mutate(&instance, |cx| {
+///     let mut compiler = Compiler::new(vec![], None);
+///     let name = cx.alloc_string("x".to_string());
+///     let form = cx.intern_symbol("x");
+///     let chars = cx.get_string_chars(name);
+///     compiler.compile_template(cx, form, 0).unwrap();
+///     chars.len()
+/// });
+/// ```
 pub struct Compiler<'gc> {
     /// Literals exactly as written, for identity-based membership tests.
     ///
