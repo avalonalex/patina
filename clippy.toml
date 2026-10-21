@@ -76,6 +76,7 @@ disallowed-methods = [
     { path = "patina_runtime::backend::Backend::eval", reason = "evaluates a form, outermost when nothing else runs, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_runtime::backend::Backend::eval_global", reason = "evaluates a form, outermost when nothing else runs, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_runtime::backend::Backend::eval_with_source_map", reason = "evaluates a form, outermost when nothing else runs, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_runtime::backend::Backend::call", reason = "applies a procedure as a form, outermost when nothing else runs, so it may collect; give what the caller holds across it in an `expect` (#622, #710)" },
     { path = "patina_interpreter::Interpreter::eval_str", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_interpreter::Interpreter::eval_str_with_source_name", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_interpreter::Interpreter::eval_str_in_env", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
@@ -90,6 +91,7 @@ disallowed-methods = [
     { path = "patina_interpreter::Interpreter::eval_program_resilient_with_source_name", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     # the twins that answer a handle (#605), under a temporary name that the
     # plain names take back at stage 5e
+    { path = "patina_interpreter::Interpreter::call", reason = "applies a procedure, outermost, so it may collect; give what the caller holds across it in an `expect` (#622, #710)" },
     { path = "patina_interpreter::Interpreter::eval_str_owned", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_interpreter::Interpreter::eval_str_with_source_name_owned", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_interpreter::Interpreter::eval_program_owned", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },

@@ -855,18 +855,20 @@ cargo test --package patina-tests --test scheme_suite
 | frontend | `Parser::parse` | a slice held across a parse | E0502 |
 | macros | `Compiler` | a compiler made outside the context it compiles in | E0521 |
 | macros | `Compiler` | a slice held across a compilation | E0502 |
+| interpreter | `Interpreter::with` | a value leaving `with` (#710) | a lifetime error, no code |
+| interpreter | `Interpreter::call` | a call made inside `with`, so a value from `with` passed to `call` there (#710) | E0499 |
 
-The embedding API's cases come with #710:
-- a value escaping `Interpreter::with`;
-- a host primitive keeping its argument in a `static`;
-- a value from `with` passed to `call`.
+A host primitive keeping its argument in a `static` comes with #710's host
+primitives.
 
 `patina-compat` has none of its own. It reads in words inside its own context
 (`sexp::parse_all`), and none of its API takes or answers a value.
 
-**Run with** (CI runs the same, as "Compile-time checks"):
+**Run with** (CI runs the same, as "Compile-time checks", and the
+interpreter's in "Embedding examples and feature combinations"):
 ```bash
 cargo test -p patina-core -p patina-macros -p patina-primitives -p patina-frontend --doc
+cargo test -p patina-interpreter --doc
 ```
 
 ## Test Utilities

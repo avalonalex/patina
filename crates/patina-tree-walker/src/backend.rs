@@ -196,6 +196,51 @@ impl TreeWalker {
         value
     }
 
+    /// [`Backend::call`]: the application of `f` to `args` as a form of the
+    /// global environment, built as `CoreExpr` from literals, so no binding
+    /// is consulted, and run as [`Self::eval_datum`] runs a form (#710).
+    fn call_procedure(
+        &self,
+        f: TaggedValue,
+        args: &[TaggedValue],
+    ) -> Result<TaggedValue, EvalError> {
+        use patina_core::{CoreExpr, CoreExprKind};
+
+        // A form starts with no interrupted `exit` noted.
+        patina_runtime::exit_status::forget_interrupted_exit();
+        // The application's literals, rooted until its CPS tree holds them,
+        // as a form's are (#705).
+        let literals = patina_core::LiteralPool::new(&self.evaluator.heap.borrow());
+        // SAFETY: the words are a host's handles' (`Interpreter::call`),
+        // which root them, on this backend's heap.
+        let (callee, operands) = unsafe {
+            let callee = literals.add_word(f);
+            let operands: Vec<_> = args.iter().map(|&arg| literals.add_word(arg)).collect();
+            (callee, operands)
+        };
+        let core_expr = CoreExpr::new(CoreExprKind::App {
+            func: Rc::new(CoreExpr::new(CoreExprKind::Literal(callee))),
+            args: operands
+                .into_iter()
+                .map(|operand| CoreExpr::new(CoreExprKind::Quote(operand)))
+                .collect(),
+        });
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the call's entry, from outside any loop, so the run may collect: holds \
+                      `core_expr`, not read after the call; the run roots the CPS tree it is \
+                      entered with, literals included, and the host's handles root the callee \
+                      and its arguments besides"
+        )]
+        let value = eval_cps(
+            &core_expr,
+            literals,
+            self.evaluator.global_env.clone(),
+            &self.evaluator,
+        );
+        value
+    }
+
     /// Add a library search path — counterpart of
     /// `VmBackend::add_library_search_path`, so callers can treat both
     /// backends uniformly.
@@ -244,6 +289,12 @@ impl Backend for TreeWalker {
         source_map: &Rc<RefCell<SourceMap>>,
     ) -> Result<TaggedValue, Self::Error> {
         self.eval_datum(expr, env, Some(source_map))
+    }
+
+    /// Builds the application as `CoreExpr` and runs it as a form, consulting
+    /// no binding (`call_procedure`, #710).
+    fn call(&self, f: TaggedValue, args: &[TaggedValue]) -> Result<TaggedValue, Self::Error> {
+        self.call_procedure(f, args)
     }
 }
 

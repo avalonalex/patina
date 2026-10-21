@@ -289,6 +289,11 @@ enum FormsEnd<E> {
 /// [`Interpreter::raw_value`]), and any other panics on it. The `eval_*`
 /// methods that answer a bare value are deprecated.
 ///
+/// A host makes values in [`Interpreter::with`], whose context lets one
+/// leave only as a handle, and calls a procedure with
+/// [`Interpreter::call`], which applies it to handles' values as a
+/// top-level form, and answers a handle (#710).
+///
 /// An environment the host builds is held the same way:
 /// [`Interpreter::new_environment`] answers an [`OwnedEnvironment`], a child
 /// of the global environment that is rooted, with everything bound in it,
@@ -877,6 +882,122 @@ impl<B: Backend> Interpreter<B> {
         let global = self.backend.global_env();
         let value = value.value_in(&self.backend.heap().borrow());
         self.backend.define(global, name, value);
+    }
+
+    /// Run `f` with a mutation context on the interpreter's heap, to read,
+    /// allocate and store values as a primitive does (#710). It takes
+    /// `&mut self`, so no evaluation runs inside it, and so no collection: a
+    /// value is good for the whole of `f`, and leaves it only as a handle
+    /// ([`Cx::hold`](patina_core::Cx::hold)).
+    ///
+    /// ```
+    /// # #[cfg(feature = "vm")]
+    /// # {
+    /// # use patina_interpreter::VmInterpreter;
+    /// use patina_core::Value;
+    ///
+    /// let mut interp = VmInterpreter::new_vm();
+    /// let list = interp.with(|cx| {
+    ///     let list = cx.list_from_iter([Value::fixnum(1), Value::fixnum(2)]);
+    ///     cx.hold(list)
+    /// });
+    /// assert_eq!(interp.display_tagged(&list), "(1 2)");
+    /// # }
+    /// ```
+    ///
+    /// The cases below pin the brand at the embedding API (#709). A value
+    /// leaves only as a handle:
+    ///
+    /// ```
+    /// use patina_core::Value;
+    /// use patina_interpreter::{Backend, Interpreter, Owned};
+    ///
+    /// fn made<B: Backend>(interp: &mut Interpreter<B>) -> Owned {
+    ///     interp.with(|cx| {
+    ///         let list = cx.list_from_iter([Value::fixnum(1)]);
+    ///         cx.hold(list)
+    ///     })
+    /// }
+    /// ```
+    ///
+    /// The value itself leaving, an error with no code to pin:
+    ///
+    /// ```compile_fail
+    /// use patina_core::Value;
+    /// use patina_interpreter::{Backend, Interpreter};
+    ///
+    /// fn made<B: Backend>(interp: &mut Interpreter<B>) {
+    ///     let list = interp.with(|cx| cx.list_from_iter([Value::fixnum(1)]));
+    /// }
+    /// ```
+    pub fn with<R>(&mut self, f: impl for<'gc> FnOnce(&mut patina_core::Cx<'gc>) -> R) -> R {
+        patina_core::NoGcScope::with_cx(self.backend.heap(), f)
+    }
+
+    /// Apply the procedure `f` holds to the values `args` hold, as a
+    /// program's application of it at the top level does (#710). Like the
+    /// `eval_*` methods, it is a driver entry: the callee may collect while
+    /// it runs, with its arguments rooted by their handles, and a
+    /// continuation it captures behaves as one captured in a form. Panics on
+    /// a handle another interpreter made.
+    ///
+    /// ```
+    /// # #[cfg(feature = "vm")]
+    /// # {
+    /// # use patina_interpreter::VmInterpreter;
+    /// use patina_core::Value;
+    ///
+    /// let mut interp = VmInterpreter::new_vm();
+    /// # interp.backend().add_library_search_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib"));
+    /// interp.eval_program_owned("(import (scheme base)) (define (twice x) (* 2 x))").unwrap();
+    /// let twice = interp.lookup("twice").unwrap();
+    /// let three = interp.with(|cx| cx.hold(Value::fixnum(3)));
+    /// let six = interp.call(&twice, &[three]).unwrap();
+    /// assert_eq!(interp.display_tagged(&six), "6");
+    /// # }
+    /// ```
+    ///
+    /// Inside [`Interpreter::with`] the interpreter is borrowed, so nothing
+    /// that may collect can run there: a value made in `with` is passed to
+    /// `call` as a handle, after it (#709).
+    ///
+    /// ```
+    /// use patina_core::Value;
+    /// use patina_interpreter::{Backend, Interpreter, InterpreterError, Owned};
+    ///
+    /// fn call_after<B: Backend>(
+    ///     interp: &mut Interpreter<B>,
+    ///     f: &Owned,
+    /// ) -> Result<Owned, InterpreterError<B::Error>> {
+    ///     let three = interp.with(|cx| cx.hold(Value::fixnum(3)));
+    ///     interp.call(f, &[three])
+    /// }
+    /// ```
+    ///
+    /// The call made inside `with`:
+    ///
+    /// ```compile_fail,E0499
+    /// use patina_core::Value;
+    /// use patina_interpreter::{Backend, Interpreter, Owned};
+    ///
+    /// fn call_inside<B: Backend>(interp: &mut Interpreter<B>, f: &Owned) {
+    ///     interp.with(|cx| {
+    ///         let three = cx.hold(Value::fixnum(3));
+    ///         let _ = interp.call(f, &[three]);
+    ///     });
+    /// }
+    /// ```
+    pub fn call(&mut self, f: &Owned, args: &[Owned]) -> Result<Owned, InterpreterError<B::Error>> {
+        let callee = self.raw_value(f);
+        let operands: Vec<TaggedValue> = args.iter().map(|arg| self.raw_value(arg)).collect();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the outermost entry, so the backend's run may collect. Holds the callee's \
+                      and the arguments' words, not read after the call: the host's handles \
+                      root them through it"
+        )]
+        let value = self.backend.call(callee, &operands);
+        Ok(self.hold(value.map_err(InterpreterError::Backend)?))
     }
 
     /// The value `handle` holds, raw: a bare `TaggedValue`, valid until the

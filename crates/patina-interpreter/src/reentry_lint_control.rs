@@ -84,6 +84,12 @@ fn every_nameable_entry_is_matched() {
     let _ = |b: &VmBackend, env: &Rc<Environment>, map: &Rc<RefCell<crate::SourceMap>>| {
         b.eval_with_source_map(TaggedValue::NULL, env, map)
     };
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |b: &VmBackend| b.call(TaggedValue::NULL, &[]);
+
+    // patina-interpreter: a host's call of a procedure (#710)
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |i: &mut Vm, f: &crate::Owned| i.call(f, &[]);
 
     // patina-interpreter: the twins that answer a handle (#605)
     #[expect(clippy::disallowed_methods, reason = "positive control")]

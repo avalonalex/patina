@@ -367,6 +367,56 @@ impl VmBackend {
         Ok(result?)
     }
 
+    /// [`Backend::call`]: the application of `f` to `args` as a form of the
+    /// global environment, built as `CoreExpr` from literals, so no binding
+    /// is consulted, and compiled and run as [`Self::eval_datum`] runs a form
+    /// (#710).
+    fn call_procedure(
+        &self,
+        f: TaggedValue,
+        args: &[TaggedValue],
+    ) -> Result<TaggedValue, VmBackendError> {
+        use patina_core::{CoreExpr, CoreExprKind};
+
+        let heap = self.heap.clone();
+        // The application's literals, rooted until its code holds them, as
+        // a form's are (#705).
+        let literals = patina_core::LiteralPool::new(&heap.borrow());
+        // SAFETY: the words are a host's handles' (`Interpreter::call`),
+        // which root them, on this backend's heap.
+        let (callee, operands) = unsafe {
+            let callee = literals.add_word(f);
+            let operands: Vec<_> = args.iter().map(|&arg| literals.add_word(arg)).collect();
+            (callee, operands)
+        };
+        let core_expr = CoreExpr::new(CoreExprKind::App {
+            func: Rc::new(CoreExpr::new(CoreExprKind::Literal(callee))),
+            args: operands
+                .into_iter()
+                .map(|operand| CoreExpr::new(CoreExprKind::Quote(operand)))
+                .collect(),
+        });
+
+        let registry = Rc::clone(self.state.borrow().primitive_registry());
+        let (top, nested) =
+            compile_with_qq_resolving(&core_expr, &literals, &heap, &self.global_env, &registry)?;
+        // The code's constants hold the words now (M2).
+        drop((core_expr, literals));
+
+        let mut state = self.state.borrow_mut();
+        let top_id = state.load_unit(top, nested);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the call's entry, outermost, so the run may collect. Holds nothing it reads \
+                      afterwards: the callee and its arguments are in the loaded unit's \
+                      constants, which the code store roots while it runs, and the host's \
+                      handles root them besides"
+        )]
+        let result = execute(&mut state, top_id);
+        state.release_unit_if_unused(top_id);
+        Ok(result?)
+    }
+
     /// Initialize library loaders (Rust internal libs + Scheme .sld loader).
     fn init_loaders(&self) {
         let mut loaders = self.loader_registry.borrow_mut();
@@ -896,6 +946,12 @@ impl Backend for VmBackend {
     /// calls the new value (#673).
     fn define(&self, env: &Rc<Environment>, name: &str, value: TaggedValue) {
         define_global(&mut self.state.borrow_mut(), env, Rc::from(name), value);
+    }
+
+    /// Builds the application as `CoreExpr` and runs it as a form, consulting
+    /// no binding (`call_procedure`, #710).
+    fn call(&self, f: TaggedValue, args: &[TaggedValue]) -> Result<TaggedValue, Self::Error> {
+        self.call_procedure(f, args)
     }
 }
 
