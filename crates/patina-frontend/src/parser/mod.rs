@@ -393,6 +393,74 @@ impl Parser {
     /// Parse one datum, which must be there: `UnexpectedEof` when only
     /// whitespace and comments remain. Use `parse_next` to read up to the
     /// end of the input.
+    ///
+    /// The cases below pin the brand at the reader (#709). The datum is a
+    /// value of the context it is read in, so it cannot leave that context,
+    /// though what it says can:
+    ///
+    /// ```
+    /// use patina_core::{GcDriver, Instance, new_shared_heap};
+    /// use patina_frontend::Parser;
+    ///
+    /// let heap = new_shared_heap();
+    /// let instance = Instance::default();
+    /// let mut driver = GcDriver::acquire(&heap).unwrap();
+    /// let car = driver.mutate(&instance, |cx| {
+    ///     let datum = Parser::new("(1 2)").unwrap().parse(cx).unwrap();
+    ///     cx.car(datum).as_fixnum()
+    /// });
+    /// assert_eq!(car, Some(1));
+    /// ```
+    ///
+    /// The datum leaving it, an error with no code to pin:
+    ///
+    /// ```compile_fail
+    /// use patina_core::{GcDriver, Instance, new_shared_heap};
+    /// use patina_frontend::Parser;
+    ///
+    /// let heap = new_shared_heap();
+    /// let instance = Instance::default();
+    /// let mut driver = GcDriver::acquire(&heap).unwrap();
+    /// let datum = driver.mutate(&instance, |cx| Parser::new("(1 2)").unwrap().parse(cx).unwrap());
+    /// ```
+    ///
+    /// A parse allocates, so a borrow of the context cannot be held across
+    /// one. Read out of it first:
+    ///
+    /// ```
+    /// use patina_core::{GcDriver, Instance, new_shared_heap};
+    /// use patina_frontend::Parser;
+    ///
+    /// let heap = new_shared_heap();
+    /// let instance = Instance::default();
+    /// let mut driver = GcDriver::acquire(&heap).unwrap();
+    /// let length = driver.mutate(&instance, |cx| {
+    ///     let mut parser = Parser::new("\"ab\" (1 2)").unwrap();
+    ///     let string = parser.parse(cx).unwrap();
+    ///     let length = cx.get_string_chars(string).len();
+    ///     parser.parse(cx).unwrap();
+    ///     length
+    /// });
+    /// assert_eq!(length, 2);
+    /// ```
+    ///
+    /// The slice held across the next parse:
+    ///
+    /// ```compile_fail,E0502
+    /// use patina_core::{GcDriver, Instance, new_shared_heap};
+    /// use patina_frontend::Parser;
+    ///
+    /// let heap = new_shared_heap();
+    /// let instance = Instance::default();
+    /// let mut driver = GcDriver::acquire(&heap).unwrap();
+    /// driver.mutate(&instance, |cx| {
+    ///     let mut parser = Parser::new("\"ab\" (1 2)").unwrap();
+    ///     let string = parser.parse(cx).unwrap();
+    ///     let chars = cx.get_string_chars(string);
+    ///     parser.parse(cx).unwrap();
+    ///     chars.len()
+    /// });
+    /// ```
     pub fn parse<'gc>(&mut self, cx: &mut Cx<'gc>) -> Result<Value<'gc>, ParseError> {
         self.nesting = 0;
         // A label's scope is its outermost datum (R7RS 2.4): the table is

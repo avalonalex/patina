@@ -25,9 +25,9 @@
 //! read, a [`Ref`] tied to the `&Cx` borrow, cannot be held across an
 //! allocation, which needs `&mut`: the borrow checker refuses what was a
 //! `BorrowMutError` at run time. No method returns `&BigInt`, `&mut [char]`
-//! or `&mut [TaggedValue]` into the heap, but for the transitional
-//! [`Cx::get_object`], whose object the datum writer reads until #706 gives
-//! it a view of the kind.
+//! or `&mut [TaggedValue]` into the heap. [`Cx::get_object`] hands the datum
+//! writer an object to match on, whose changing payloads it cannot borrow
+//! (#708).
 //!
 //! **Coverage.** The methods are what `patina-frontend`, `patina-macros`,
 //! `patina-primitives`, `patina-runtime` and the hosts call on `Heap` today,
@@ -52,7 +52,25 @@
 //! assert_eq!(sum, 3);
 //! ```
 //!
-//! A value cannot leave the call that made it:
+//! The cases below pin the brand (#709): each fails to compile, beside a twin
+//! that compiles once the violation is removed.
+//!
+//! A value cannot leave the call that made it, though what it says can:
+//!
+//! ```
+//! use patina_core::{GcDriver, Instance, Value, new_shared_heap};
+//!
+//! let heap = new_shared_heap();
+//! let instance = Instance::default();
+//! let mut driver = GcDriver::acquire(&heap).unwrap();
+//! let car = driver.mutate(&instance, |cx| {
+//!     let pair = cx.alloc_pair(Value::fixnum(1), Value::NULL);
+//!     cx.car(pair).as_fixnum()
+//! });
+//! assert_eq!(car, Some(1));
+//! ```
+//!
+//! The value leaving it, an error with no code to pin:
 //!
 //! ```compile_fail
 //! use patina_core::{GcDriver, Instance, Value, new_shared_heap};
@@ -64,7 +82,25 @@
 //! ```
 //!
 //! Nor can a value be used after a call that may collect: while a context
-//! lives, the driver it borrows cannot reach a safe point.
+//! lives, the driver it borrows cannot reach a safe point. Once the context
+//! has closed, the driver can:
+//!
+//! ```
+//! use patina_core::{GcController, GcDriver, GcMode, Instance, Value, new_shared_heap};
+//!
+//! let heap = new_shared_heap();
+//! let instance = Instance::default();
+//! let gc = std::cell::RefCell::new(GcController::new(GcMode::Off));
+//! let mut driver = GcDriver::acquire(&heap).unwrap();
+//! let car = driver.mutate(&instance, |cx| {
+//!     let pair = cx.alloc_pair(Value::fixnum(1), Value::NULL);
+//!     cx.car(pair).as_fixnum()
+//! });
+//! GcController::safe_point(&gc, &mut driver, |collect| collect(&[]));
+//! assert_eq!(car, Some(1));
+//! ```
+//!
+//! The safe point inside the context:
 //!
 //! ```compile_fail,E0499
 //! use patina_core::{GcController, GcDriver, GcMode, Instance, Value, new_shared_heap};
@@ -77,6 +113,40 @@
 //!     let pair = cx.alloc_pair(Value::NULL, Value::NULL);
 //!     GcController::safe_point(&gc, &mut driver, |collect| collect(&[]));
 //!     cx.car(pair)
+//! });
+//! ```
+//!
+//! A slice is a borrow of the context, so it cannot be held across an
+//! allocation. Read out of it first:
+//!
+//! ```
+//! use patina_core::{GcDriver, Instance, Value, new_shared_heap};
+//!
+//! let heap = new_shared_heap();
+//! let instance = Instance::default();
+//! let mut driver = GcDriver::acquire(&heap).unwrap();
+//! let car = driver.mutate(&instance, |cx| {
+//!     let vector = cx.alloc_vector_fill(2, Value::fixnum(7));
+//!     let first = cx.vector_slice(vector)[0];
+//!     let pair = cx.alloc_pair(first, Value::NULL);
+//!     cx.car(pair).as_fixnum()
+//! });
+//! assert_eq!(car, Some(7));
+//! ```
+//!
+//! The slice held across the allocation:
+//!
+//! ```compile_fail,E0502
+//! use patina_core::{GcDriver, Instance, Value, new_shared_heap};
+//!
+//! let heap = new_shared_heap();
+//! let instance = Instance::default();
+//! let mut driver = GcDriver::acquire(&heap).unwrap();
+//! driver.mutate(&instance, |cx| {
+//!     let vector = cx.alloc_vector_fill(2, Value::fixnum(7));
+//!     let elements = cx.vector_slice(vector);
+//!     let pair = cx.alloc_pair(elements[0], Value::NULL);
+//!     elements.len()
 //! });
 //! ```
 

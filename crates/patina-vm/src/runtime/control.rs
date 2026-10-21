@@ -2512,6 +2512,7 @@ impl patina_primitives::ApplyContext for VmApplyContext {
     )]
     fn load_scheme_library(
         &self,
+        _cx: &mut patina_core::Cx<'_>,
         name: &[String],
     ) -> Result<Rc<patina_core::library::Library>, patina_primitives::EvalError> {
         let state = unsafe { &mut *self.state };

@@ -34,6 +34,43 @@ pub trait ApplyContext {
     /// (#706). What the primitive holds across the call stays live: the call
     /// runs on a nested loop, which cannot collect. A machine brands the word
     /// the call answers.
+    ///
+    /// A value of the context outlives the call, then, but a borrow of the
+    /// context cannot be held across it, since the call takes the context
+    /// (#709). Read from it after the call:
+    ///
+    /// ```
+    /// use patina_core::{Cx, Value};
+    /// use patina_primitives::{ApplyContext, EvalError};
+    ///
+    /// fn first_after<'gc>(
+    ///     cx: &mut Cx<'gc>,
+    ///     ctx: &dyn ApplyContext,
+    ///     f: Value<'gc>,
+    ///     v: Value<'gc>,
+    /// ) -> Result<Value<'gc>, EvalError> {
+    ///     ctx.apply_in(cx, f, &[])?;
+    ///     Ok(cx.vector_slice(v)[0])
+    /// }
+    /// ```
+    ///
+    /// A slice held across the call:
+    ///
+    /// ```compile_fail,E0502
+    /// use patina_core::{Cx, Value};
+    /// use patina_primitives::{ApplyContext, EvalError};
+    ///
+    /// fn first_after<'gc>(
+    ///     cx: &mut Cx<'gc>,
+    ///     ctx: &dyn ApplyContext,
+    ///     f: Value<'gc>,
+    ///     v: Value<'gc>,
+    /// ) -> Result<Value<'gc>, EvalError> {
+    ///     let elements = cx.vector_slice(v);
+    ///     ctx.apply_in(cx, f, &[])?;
+    ///     Ok(elements[0])
+    /// }
+    /// ```
     fn apply_in<'gc>(
         &self,
         cx: &mut Cx<'gc>,
@@ -47,10 +84,50 @@ pub trait ApplyContext {
     fn eval_expr(&self, expr: TaggedValue, env: &Rc<Environment>)
     -> Result<TaggedValue, EvalError>;
 
-    /// Load a Scheme library by name.
+    /// Load a Scheme library by name, from a primitive's context: the
+    /// environment procedures' (`environment`, `null-environment`,
+    /// `scheme-report-environment`). It takes the context, as
+    /// [`Self::apply_in`] does: the load allocates, so a borrow of the context
+    /// held across it is refused (#709).
     ///
-    /// Used by `environment`, `null-environment`, `scheme-report-environment`.
-    fn load_scheme_library(&self, name: &[String]) -> Result<Rc<Library>, EvalError>;
+    /// Read from the context before the load, or after it:
+    ///
+    /// ```
+    /// use patina_core::{Cx, Value};
+    /// use patina_primitives::{ApplyContext, EvalError};
+    ///
+    /// fn first_char<'gc>(
+    ///     cx: &mut Cx<'gc>,
+    ///     ctx: &dyn ApplyContext,
+    ///     s: Value<'gc>,
+    /// ) -> Result<Option<char>, EvalError> {
+    ///     let first = cx.get_string_chars(s).first().copied();
+    ///     ctx.load_scheme_library(cx, &["scheme".to_string(), "base".to_string()])?;
+    ///     Ok(first)
+    /// }
+    /// ```
+    ///
+    /// A slice held across the load:
+    ///
+    /// ```compile_fail,E0502
+    /// use patina_core::{Cx, Value};
+    /// use patina_primitives::{ApplyContext, EvalError};
+    ///
+    /// fn first_char<'gc>(
+    ///     cx: &mut Cx<'gc>,
+    ///     ctx: &dyn ApplyContext,
+    ///     s: Value<'gc>,
+    /// ) -> Result<Option<char>, EvalError> {
+    ///     let chars = cx.get_string_chars(s);
+    ///     ctx.load_scheme_library(cx, &["scheme".to_string(), "base".to_string()])?;
+    ///     Ok(chars.first().copied())
+    /// }
+    /// ```
+    fn load_scheme_library(
+        &self,
+        cx: &mut Cx<'_>,
+        name: &[String],
+    ) -> Result<Rc<Library>, EvalError>;
 
     /// Get the interaction (global mutable) environment.
     ///
@@ -112,7 +189,11 @@ mod tests {
             unreachable!("no primitive here evaluates")
         }
 
-        fn load_scheme_library(&self, _: &[String]) -> Result<Rc<Library>, EvalError> {
+        fn load_scheme_library(
+            &self,
+            _: &mut Cx<'_>,
+            _: &[String],
+        ) -> Result<Rc<Library>, EvalError> {
             unreachable!("no primitive here loads")
         }
 

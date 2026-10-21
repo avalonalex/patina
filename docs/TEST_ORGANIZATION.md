@@ -823,6 +823,52 @@ cargo test --package patina-tests --test cps_features
 cargo test --package patina-tests --test scheme_suite
 ```
 
+### 3. Compile-time refusals (`compile_fail` doctests)
+
+**Location:** doc comments beside the API each refusal is about.
+
+**Purpose:** pin what the compiler must refuse. That covers the brand of
+`PRD/GC_PRD.md` §11.3 (#703, #709), the store funnel's seal (#708) and the
+`Trace` derive's checks (#686).
+- **Each case** is a `compile_fail` doctest with its error code pinned,
+  beside a positive twin: the same code with the violation removed, which
+  compiles.
+- **An error with no code,** such as a lifetime error, is a plain
+  `compile_fail`. Its twin is what shows that it fails for its reason.
+- **Doctests rather than trybuild,** which would be a new dependency
+  (decision 1 on #697, 2026-10-13).
+
+| Crate | Item | Case | Error |
+|-------|------|------|-------|
+| core | `value` module | a value in a `static` (its twin is a `const`) | E0277 |
+| core | `heap::cx` module | a value leaving the call that made it | a lifetime error, no code |
+| core | `heap::cx` module | a value used after a call that may collect: a safe point while a context lives | E0499 |
+| core | `heap::cx` module | a slice held across an allocation | E0502 |
+| core | `heap::Interior` | a record's, a parameter's or a promise's payload borrowed outside core (#708) | E0624 |
+| core | `Trace` | a field whose type has no `Trace` (#686) | not pinned |
+| core | `Trace` | a `skip` without its reason (#686) | a derive error, no code |
+| primitives | `ApplyContext::apply_in` | a slice held across the call | E0502 |
+| primitives | `ApplyContext::load_scheme_library` | a slice held across the load | E0502 |
+| primitives | `CxHandler` | a primitive keeping its argument in a thread-local | a lifetime error, no code |
+| primitives | `CxHandler` | a primitive asking its context for the heap | E0599 |
+| frontend | `Parser::parse` | a parsed datum leaving its context | a lifetime error, no code |
+| frontend | `Parser::parse` | a slice held across a parse | E0502 |
+| macros | `Compiler` | a compiler made outside the context it compiles in | E0521 |
+| macros | `Compiler` | a slice held across a compilation | E0502 |
+
+The embedding API's cases come with #710:
+- a value escaping `Interpreter::with`;
+- a host primitive keeping its argument in a `static`;
+- a value from `with` passed to `call`.
+
+`patina-compat` has none of its own. It reads in words inside its own context
+(`sexp::parse_all`), and none of its API takes or answers a value.
+
+**Run with** (CI runs the same, as "Compile-time checks"):
+```bash
+cargo test -p patina-core -p patina-macros -p patina-primitives -p patina-frontend --doc
+```
+
 ## Test Utilities
 
 **Common Helpers** (`crates/patina-tests/tests/common/mod.rs`):

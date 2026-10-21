@@ -136,7 +136,11 @@ impl ApplyContext for Evaluator {
                   back holds its values across it, safe under this function's \
                   `GcDeferGuard::holding`"
     )]
-    fn load_scheme_library(&self, name: &[String]) -> Result<Rc<Library>, EvalError> {
+    fn load_scheme_library(
+        &self,
+        _cx: &mut patina_core::Cx<'_>,
+        name: &[String],
+    ) -> Result<Rc<Library>, EvalError> {
         let _gc_defer = GcDeferGuard::holding(&self.heap);
         self.load_library(name)
             .map_err(patina_runtime::LibraryError::into_eval_error)

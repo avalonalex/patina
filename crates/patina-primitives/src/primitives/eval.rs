@@ -72,7 +72,7 @@ fn primitive_environment<'gc>(
     for set in &import_sets {
         // Loading stays behind ApplyContext so a Scheme initializer can
         // transfer control normally. Selection never copies binding values.
-        let library = ctx.load_scheme_library(set.library_name())?;
+        let library = ctx.load_scheme_library(cx, set.library_name())?;
         for binding in set.resolve_bindings(library.export_names()) {
             let (name, export) = binding.map_err(patina_runtime::LibraryError::into_eval_error)?;
             library.import_into(&env, name, &export);
@@ -483,7 +483,7 @@ fn primitive_null_environment<'gc>(
 
     // Load scheme base to get the keywords
     let base_lib = ctx
-        .load_scheme_library(&["scheme".to_string(), "base".to_string()])
+        .load_scheme_library(cx, &["scheme".to_string(), "base".to_string()])
         .map_err(|e| EvalError::InternalError(format!("Cannot load scheme base: {}", e)))?;
 
     install_r5rs_syntax(&env, &base_lib);
@@ -528,7 +528,7 @@ fn primitive_scheme_report_environment<'gc>(
 
     // Load scheme base
     let base_lib = ctx
-        .load_scheme_library(&["scheme".to_string(), "base".to_string()])
+        .load_scheme_library(cx, &["scheme".to_string(), "base".to_string()])
         .map_err(|e| EvalError::InternalError(format!("Cannot load scheme base: {}", e)))?;
 
     // Install syntactic keywords
@@ -546,18 +546,18 @@ fn primitive_scheme_report_environment<'gc>(
     // next unrelated error. Unreachable today (nothing user-written runs while
     // `(scheme inexact)` loads), and the only sentinel-protocol break the
     // audit's sweep of every `apply_proc`/`eval_expr` site found (F7).
-    let optional_library =
-        |name: &str| -> Result<Option<Rc<patina_core::library::Library>>, EvalError> {
-            match ctx.load_scheme_library(&["scheme".to_string(), name.to_string()]) {
-                Ok(lib) => Ok(Some(lib)),
-                Err(EvalError::ContinuationEscape) => Err(EvalError::ContinuationEscape),
-                Err(_) => Ok(None),
-            }
-        };
+    let optional_library = |cx: &mut Cx<'gc>, name: &str| {
+        let name = ["scheme".to_string(), name.to_string()];
+        match ctx.load_scheme_library(cx, &name) {
+            Ok(lib) => Ok(Some(lib)),
+            Err(EvalError::ContinuationEscape) => Err(EvalError::ContinuationEscape),
+            Err(_) => Ok(None),
+        }
+    };
 
     // Try to load additional libraries for R5RS features
     // (scheme inexact) for sin, cos, etc.
-    if let Some(inexact_lib) = optional_library("inexact")? {
+    if let Some(inexact_lib) = optional_library(cx, "inexact")? {
         for name in &[
             "sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "sqrt",
         ] {
@@ -566,7 +566,7 @@ fn primitive_scheme_report_environment<'gc>(
     }
 
     // (scheme complex) for make-rectangular, etc.
-    if let Some(complex_lib) = optional_library("complex")? {
+    if let Some(complex_lib) = optional_library(cx, "complex")? {
         for name in &[
             "make-rectangular",
             "make-polar",
