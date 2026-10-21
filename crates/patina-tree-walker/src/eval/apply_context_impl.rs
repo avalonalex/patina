@@ -4,15 +4,10 @@ use super::{EvalResult, Evaluator};
 use patina_core::{GcDeferGuard, TaggedValue};
 use patina_primitives::ApplyContext;
 use patina_runtime::EvalError;
-use patina_runtime::{Environment, FileSystem, Library, SharedHeap};
+use patina_runtime::{Environment, Library};
 use std::rc::Rc;
-use std::sync::Arc;
 
 impl ApplyContext for Evaluator {
-    fn heap(&self) -> &SharedHeap {
-        &self.heap
-    }
-
     /// A primitive that takes the context, called where no step runs (an
     /// embedder's call through this detached context) or by a step through
     /// `CallbackContext`, which comes here (#706).
@@ -83,10 +78,6 @@ impl ApplyContext for Evaluator {
         }
     }
 
-    fn fs(&self) -> &Arc<dyn FileSystem> {
-        &self.fs
-    }
-
     /// The detached context: an embedder's call through `ApplyContext for
     /// Evaluator` (`Interpreter::evaluator()`), with no machine loop above
     /// it, so nothing would defer the run it starts. A primitive applied here
@@ -99,7 +90,7 @@ impl ApplyContext for Evaluator {
         proc: TaggedValue,
         args: Vec<TaggedValue>,
     ) -> Result<TaggedValue, EvalError> {
-        let _gc_defer = GcDeferGuard::holding(self.heap());
+        let _gc_defer = GcDeferGuard::holding(&self.heap);
         let (mut proc, mut args) = (proc, args);
         loop {
             #[expect(
@@ -132,7 +123,7 @@ impl ApplyContext for Evaluator {
         expr: TaggedValue,
         env: &Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
-        let _gc_defer = GcDeferGuard::holding(self.heap());
+        let _gc_defer = GcDeferGuard::holding(&self.heap);
         // A call from outside any step: the same path a step's `eval` takes
         // (`cps_eval/callback.rs`), with nothing to inherit.
         let cps = super::cps_eval::CpsEvaluator::new(self);
@@ -146,7 +137,7 @@ impl ApplyContext for Evaluator {
                   `GcDeferGuard::holding`"
     )]
     fn load_scheme_library(&self, name: &[String]) -> Result<Rc<Library>, EvalError> {
-        let _gc_defer = GcDeferGuard::holding(self.heap());
+        let _gc_defer = GcDeferGuard::holding(&self.heap);
         self.load_library(name)
             .map_err(patina_runtime::LibraryError::into_eval_error)
     }

@@ -242,7 +242,7 @@ Code written against `Cx<'gc>` (`patina_core::Cx`, #703), which the safe crates 
 ## When Adding Features
 
 **New primitive:**
-1. Implement shared primitives in `crates/patina-primitives/src/primitives/<category>.rs`.
+1. Implement shared primitives in `crates/patina-primitives/src/primitives/<category>.rs`. A primitive takes the context (`fn(&mut Cx<'gc>, &[Value<'gc>])`, registered with `PrimitiveFn::new_cx`), and reaches the heap only through it; a store goes through the funnel (`Cx::store`). `docs/VM_DECISIONS.md` §6 has the signatures (#706).
 2. Register in the category’s `register()` and ensure it is called by `primitives/mod.rs::register_all()`.
 3. Export from the library builder in `crates/patina-runtime/src/stdlib/internal_<name>.rs`.
 4. For control primitives, check each backend’s dispatch/ApplyContext implementation; test both backends.

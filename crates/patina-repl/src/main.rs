@@ -218,7 +218,7 @@ fn run_eval_print<B: Backend + LibraryPaths>(interp: &Interpreter<B>, opts: &Cli
 where
     B::Error: patina_core::error::HasSourceLocation,
 {
-    use patina_tree_walker::eval::format_write_tagged;
+    use patina_interpreter::format_write_tagged;
 
     prepare_backend(interp.backend(), opts, None);
     let heap = interp.backend().heap().clone();

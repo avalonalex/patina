@@ -260,9 +260,12 @@ fn run_synchronously(
             TaggedStep::Collect { kind: _, state } => {
                 // No machine, so no roots to collect with: posted for the
                 // next safe point that may collect, as where a machine's
-                // collection is deferred (`Heap::defer_collection`).
-                ctx.heap().borrow_mut().defer_collection();
-                step = resume_in(ctx, resume, state, TaggedValue::FALSE)?;
+                // collection is deferred (`Cx::defer_collection`), from the
+                // context the primitive resumes in.
+                step = ctx.step_cx(&[state, TaggedValue::FALSE], &mut |cx, words| {
+                    cx.defer_collection();
+                    resume(cx, ctx, words[0], words[1]).map(Step::tagged)
+                })?;
             }
         }
     }

@@ -75,10 +75,7 @@ fn assert_library_program(root: &std::path::Path, program: &str, expected: &str)
         let value = interpreter
             .eval_program(program)
             .unwrap_or_else(|e| panic!("{program}: {e}"));
-        patina_primitives::primitives::io::datum_writer::format_write_tagged(
-            value,
-            interpreter.heap(),
-        )
+        patina_interpreter::format_write_tagged(value, interpreter.heap())
     }
     let vm = common::vm_interpreter();
     vm.backend().add_library_search_path(root.to_path_buf());
@@ -680,10 +677,7 @@ fn test_escaping_out_of_a_library_body_an_eval_import_loads() {
         let value = interpreter
             .eval_program(program)
             .unwrap_or_else(|e| panic!("{program}: {e}"));
-        patina_primitives::primitives::io::datum_writer::format_write_tagged(
-            value,
-            interpreter.heap(),
-        )
+        patina_interpreter::format_write_tagged(value, interpreter.heap())
     }
 
     let root = TempDir::new().expect("temp dir");
@@ -832,10 +826,7 @@ fn test_reentering_around_an_open_that_collected_and_retried() {
         let value = interpreter
             .eval_program(program)
             .unwrap_or_else(|e| panic!("{program}: {e}"));
-        patina_primitives::primitives::io::datum_writer::format_write_tagged(
-            value,
-            interpreter.heap(),
-        )
+        patina_interpreter::format_write_tagged(value, interpreter.heap())
     }
 
     let vm = patina_interpreter::Interpreter::new(patina_vm::VmBackend::with_fs(ScarceFs::new()));

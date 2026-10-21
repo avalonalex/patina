@@ -7,12 +7,12 @@
 //! and `find_circular_tagged` for the compound types (pairs, vectors,
 //! strings), and the leaf object types (BigInt, Symbol, etc.) through
 //! `Cx::get_object`'s view of the object, or a value accessor where a part
-//! is a value. `format_write` and its siblings take the context; the
-//! `_tagged` entry points take a word and a heap, for a host, and cross the
-//! word in (`NoGcScope::cross`).
+//! is a value. `format_write` and its siblings take the context. A host that
+//! holds a word crosses it in first (`NoGcScope::cross`), as the interpreter's
+//! `format_write_tagged` does.
 
 use patina_core::debug_format::format_real;
-use patina_core::{Cx, NoGcScope, SharedHeap, TaggedValue, Value};
+use patina_core::{Cx, TaggedValue, Value};
 use std::collections::{HashMap, HashSet};
 
 /// Format a Real (f64) number in R7RS style (delegates to patina_core::debug_format::format_real)
@@ -949,6 +949,23 @@ pub(super) fn format_write_simple<'gc>(cx: &Cx<'gc>, v: Value<'gc>) -> String {
     format_simple_recursive_tagged(cx, v, false)
 }
 
+/// The writers on a word, for this module's tests, which hold words: each
+/// crosses its word in first, as a host does (`NoGcScope::cross`).
+#[cfg(test)]
+fn format_write_tagged(tv: TaggedValue, heap: &patina_core::SharedHeap) -> String {
+    patina_core::NoGcScope::cross(heap, [tv], |cx, [v]| format_write(cx, v))
+}
+
+#[cfg(test)]
+fn format_write_shared_tagged(tv: TaggedValue, heap: &patina_core::SharedHeap) -> String {
+    patina_core::NoGcScope::cross(heap, [tv], |cx, [v]| format_write_shared(cx, v))
+}
+
+#[cfg(test)]
+fn format_write_simple_tagged(tv: TaggedValue, heap: &patina_core::SharedHeap) -> String {
+    patina_core::NoGcScope::cross(heap, [tv], |cx, [v]| format_write_simple(cx, v))
+}
+
 /// The two passes of a labelled write: find the labels, then write.
 fn format_labelled<'gc>(
     cx: &Cx<'gc>,
@@ -963,29 +980,6 @@ fn format_labelled<'gc>(
     let mut emitted = HashSet::new();
     writer.write_tagged(v, &mut output, &mut emitted);
     output
-}
-
-/// [`format_write`] of a word on `heap`, for a host: the word crosses in as
-/// a value (`NoGcScope::cross`).
-pub fn format_write_tagged(tv: TaggedValue, heap: &SharedHeap) -> String {
-    NoGcScope::cross(heap, [tv], |cx, [v]| format_write(cx, v))
-}
-
-/// [`format_display`] of a word on `heap`, for a host.
-pub fn format_display_tagged(tv: TaggedValue, heap: &SharedHeap) -> String {
-    NoGcScope::cross(heap, [tv], |cx, [v]| format_display(cx, v))
-}
-
-/// [`format_write_shared`] of a word on `heap`, for the writer's tests.
-#[cfg(test)]
-pub(super) fn format_write_shared_tagged(tv: TaggedValue, heap: &SharedHeap) -> String {
-    NoGcScope::cross(heap, [tv], |cx, [v]| format_write_shared(cx, v))
-}
-
-/// [`format_write_simple`] of a word on `heap`, for the writer's tests.
-#[cfg(test)]
-pub(super) fn format_write_simple_tagged(tv: TaggedValue, heap: &SharedHeap) -> String {
-    NoGcScope::cross(heap, [tv], |cx, [v]| format_write_simple(cx, v))
 }
 
 // =============================================================================

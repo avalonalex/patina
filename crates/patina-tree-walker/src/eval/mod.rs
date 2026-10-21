@@ -10,10 +10,14 @@ mod primitives;
 pub use cps_eval::{CpsEvaluator, eval_cps};
 pub use error::EvalError;
 
-// Re-export datum writer functions for use by interpreter crate
-pub use patina_primitives::primitives::io::datum_writer::{
-    format_display_tagged, format_write_tagged,
-};
+/// `display` of a word on the evaluator's heap, for an error message: the
+/// word crosses into a context as a host's does (`NoGcScope::cross`), and the
+/// datum writer writes it there (#706).
+pub(crate) fn format_display_tagged(tv: TaggedValue, heap: &patina_core::SharedHeap) -> String {
+    patina_core::NoGcScope::cross(heap, [tv], |cx, [v]| {
+        patina_primitives::primitives::io::datum_writer::format_display(cx, v)
+    })
+}
 
 use debug::DebugConfig;
 use patina_core::{CpsContinuation, TaggedValue, Trace};

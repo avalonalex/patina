@@ -105,6 +105,24 @@ impl ProgramOutcome {
     }
 }
 
+/// `write` of a word on `heap`, for a host that holds one: the word crosses
+/// into a context as an embedder's value does (`NoGcScope::cross`), and the
+/// datum writer writes it there (#706). Prefer [`Interpreter::display_tagged`]
+/// with an [`Owned`] handle, which a later evaluation cannot free.
+pub fn format_write_tagged(tv: TaggedValue, heap: &SharedHeap) -> String {
+    patina_core::NoGcScope::cross(heap, [tv], |cx, [v]| {
+        patina_primitives::primitives::io::datum_writer::format_write(cx, v)
+    })
+}
+
+/// `display` of a word on `heap`, for a host that holds one, as
+/// [`format_write_tagged`] writes one.
+pub fn format_display_tagged(tv: TaggedValue, heap: &SharedHeap) -> String {
+    patina_core::NoGcScope::cross(heap, [tv], |cx, [v]| {
+        patina_primitives::primitives::io::datum_writer::format_display(cx, v)
+    })
+}
+
 /// Format any `InterpreterError` with source context.
 ///
 /// An alias for [`format_backend_error_with_source`]: an
@@ -1040,7 +1058,6 @@ impl<B: Backend> Interpreter<B> {
     /// including heap pairs, vectors, strings, and circular structures.
     /// Multiple values (from `values`) are unpacked and displayed one per line.
     pub fn display_tagged(&self, value: impl AsValue) -> String {
-        use patina_primitives::primitives::io::datum_writer::format_write_tagged;
         let heap = self.backend.heap();
         let tv = value.value_in(&heap.borrow());
 

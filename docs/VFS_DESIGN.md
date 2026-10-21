@@ -59,8 +59,7 @@ for failed directory listing; Patina raises errors.
 
 Default constructors use `NativeFs`. The same filesystem reaches the primitives,
 file ports, `load`, the desugarer's includes, and Scheme library loading/search.
-A primitive that takes the context reads it from the context's instance
-(`Instance::fs`, #706), and one that takes an `ApplyContext` from that. File
+A primitive reads it from its context's instance (`Instance::fs`, #706). File
 ports use `ReadPort` and `WritePort` streams; a writer's `finalize` method
 completes output when the port closes.
 
