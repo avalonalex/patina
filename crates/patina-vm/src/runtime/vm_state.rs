@@ -1957,15 +1957,6 @@ fn dispatch_one_instruction(
                 .ok_or_else(|| VmError::Runtime {
                     message: "StoreClosure in non-closure frame".into(),
                 })?;
-            let mut heap = state.heap.borrow_mut();
-            if heap
-                .get_vm_closure_free_var(closure, slot as usize)
-                .is_none()
-            {
-                return Err(VmError::Runtime {
-                    message: format!("closure slot {} out of range", slot),
-                });
-            }
             // SAFETY: the frame's closure and the instruction's operand,
             // live words of this heap, and nothing collects inside the
             // instruction.
@@ -1975,8 +1966,16 @@ fn dispatch_one_instruction(
                     patina_core::Value::from_tagged(val),
                 )
             };
-            // Through the funnel (#708).
-            heap.store(patina_core::ClosureFree(closure, slot as usize), val);
+            // Through the funnel (#708), which checks the slot.
+            let stored = state
+                .heap
+                .borrow_mut()
+                .try_store(patina_core::ClosureFree(closure, slot as usize), val);
+            if !stored {
+                return Err(VmError::Runtime {
+                    message: format!("closure slot {} out of range", slot),
+                });
+            }
         }
 
         Instruction::LoadGlobal { dst, ref name } => {
@@ -2920,15 +2919,12 @@ fn dispatch_one_instruction(
                 dst,
                 [vec, idx, x],
                 {
-                    // Out-of-bounds falls back so the handler's error message is
-                    // used. Writes `dst ← unspecified`, matching the handler.
-                    (vec.is_vector() && idx.is_fixnum())
+                    // A non-vector or an index out of bounds falls back so the
+                    // handler's error message is used; the funnel checks both.
+                    // Writes `dst ← unspecified`, matching the handler.
+                    idx.is_fixnum()
                         .then(|| {
                             let i = usize::try_from(idx.as_fixnum_unchecked()).ok()?;
-                            let mut heap = state.heap.borrow_mut();
-                            if i >= heap.vector_len(vec) {
-                                return None;
-                            }
                             // SAFETY: the instruction's operands, read from
                             // its registers: live words of this heap, and
                             // nothing collects inside the instruction.
@@ -2939,9 +2935,13 @@ fn dispatch_one_instruction(
                                 )
                             };
                             // Through the funnel, counted at `vm_vector_set`
-                            // (#708).
-                            heap.store(patina_core::MachineVectorElem(vec, i), x);
-                            Some(TaggedValue::UNSPECIFIED)
+                            // (#708), which checks the index: one past the
+                            // end stores nothing and falls back.
+                            let stored = state
+                                .heap
+                                .borrow_mut()
+                                .try_store(patina_core::MachineVectorElem(vec, i), x);
+                            stored.then_some(TaggedValue::UNSPECIFIED)
                         })
                         .flatten()
                 }
@@ -2969,12 +2969,6 @@ fn dispatch_one_instruction(
         Instruction::WriteCell { cell, src } => {
             let cell_tv = state.reg_at(base, cell);
             let val = state.reg_at(base, src);
-            let mut heap = state.heap.borrow_mut();
-            if !heap.is_mutable_cell(cell_tv) {
-                return Err(VmError::Runtime {
-                    message: "WriteCell: not a MutableCell".into(),
-                });
-            }
             // SAFETY: the instruction's operands, read from its registers:
             // live words of this heap, and nothing collects inside the
             // instruction.
@@ -2984,8 +2978,16 @@ fn dispatch_one_instruction(
                     patina_core::Value::from_tagged(val),
                 )
             };
-            // Through the funnel (#708).
-            heap.store(patina_core::CellValue(cell), val);
+            // Through the funnel (#708), which checks the holder.
+            let stored = state
+                .heap
+                .borrow_mut()
+                .try_store(patina_core::CellValue(cell), val);
+            if !stored {
+                return Err(VmError::Runtime {
+                    message: "WriteCell: not a MutableCell".into(),
+                });
+            }
         }
 
         Instruction::Nop => {}

@@ -133,6 +133,30 @@ fn the_heap_stores_through_the_funnel() {
     );
 }
 
+/// `Heap::try_store` stores into a slot that exists and answers `true`; for
+/// one that does not, it writes nothing and answers `false`, where
+/// `Heap::store` panics (#708).
+#[test]
+fn the_heap_tries_a_store_into_a_slot_that_may_not_exist() {
+    let heap = new_shared_heap();
+    let mut h = heap.borrow_mut();
+    let vector = h.alloc_vector(vec![TaggedValue::FALSE; 2]);
+    let cell = h.alloc_mutable_cell(TaggedValue::FALSE);
+    // SAFETY: each word was allocated above, on this heap, which nothing
+    // collects here.
+    let (vector_v, cell_v) = unsafe { (Value::from_tagged(vector), Value::from_tagged(cell)) };
+    assert!(h.try_store(MachineVectorElem(vector_v, 1), Value::fixnum(1)));
+    assert!(!h.try_store(MachineVectorElem(vector_v, 2), Value::fixnum(2)));
+    assert!(!h.try_store(MachineVectorElem(cell_v, 0), Value::fixnum(3)));
+    assert_eq!(
+        h.vector_slice(vector),
+        [TaggedValue::FALSE, TaggedValue::fixnum(1)]
+    );
+    assert!(h.try_store(CellValue(cell_v), Value::fixnum(4)));
+    assert!(!h.try_store(CellValue(vector_v), Value::fixnum(5)));
+    assert_eq!(h.read_mutable_cell(cell), Some(TaggedValue::fixnum(4)));
+}
+
 #[test]
 #[should_panic(expected = "Cx::store: no such slot")]
 fn a_store_into_the_wrong_object_panics() {

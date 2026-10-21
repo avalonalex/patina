@@ -7,7 +7,7 @@
 //! the census counts at more than one site has a slot for each: a
 //! parameter's value after a converter, and the machines' own vector and
 //! promise stores (#708). The trusted crates, which hold words, write through
-//! [`Heap::store`].
+//! [`Heap::store`] and [`Heap::try_store`].
 //! [`Cx::store`] writes one; [`Cx::store_range`] and [`Cx::fill_range`]
 //! write a run of a vector's elements (addition C4); [`Fresh`] takes the
 //! initializing stores into an object no one else has seen yet.
@@ -21,6 +21,9 @@
 //! **A store into the wrong object panics**, in every build: a slot of a
 //! holder of another kind, or an index past its end. Checking the arguments
 //! for a Scheme error is the caller's job, as it is before `Heap::set_car`.
+//! A machine whose own check would repeat the funnel's asks it instead:
+//! [`Heap::try_store`] answers `false` for a slot that does not exist, and
+//! writes nothing.
 //!
 //! ```
 //! use patina_core::{GcDriver, Instance, PairCar, Value, VectorElem, new_shared_heap};
@@ -49,10 +52,12 @@ use crate::value::Value;
 /// A value field of a heap object, which [`Cx::store`] writes. Sealed: the
 /// slot kinds are the ones below, and only the funnel can write one.
 pub trait Slot<'gc>: sealed::Sealed {
-    /// Write `v` into the slot. Callable only inside core, which alone can
-    /// make the token: a slot is written through [`Cx::store`].
+    /// Write `v` into the slot, or, if it does not exist, write nothing and
+    /// answer what it names. Callable only inside core, which alone can make
+    /// the token: a slot is written through [`Cx::store`], or by the trusted
+    /// crates through [`Heap::store`] and [`Heap::try_store`].
     #[doc(hidden)]
-    fn write(self, heap: &mut Heap, v: TaggedValue, token: sealed::Token);
+    fn write(self, heap: &mut Heap, v: TaggedValue, token: sealed::Token) -> sealed::Written;
 }
 
 mod sealed {
@@ -61,6 +66,10 @@ mod sealed {
     /// The proof a write comes from the funnel: no code outside core can
     /// make one.
     pub struct Token(pub(super) ());
+
+    /// A write's answer: `Err` names the slot that does not exist, for the
+    /// panic of a store into it.
+    pub type Written = Result<(), &'static str>;
 }
 
 /// A pair's car.
@@ -134,120 +143,156 @@ fn no_such_slot(slot: &str) -> ! {
 }
 
 impl<'gc> Slot<'gc> for PairCar<'gc> {
-    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
+    #[inline]
+    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) -> sealed::Written {
         if !self.0.is_pair() {
-            no_such_slot("a pair's car of a non-pair");
+            return Err("a pair's car of a non-pair");
         }
         heap.set_car(self.0.tagged(), v);
+        Ok(())
     }
 }
 
 impl<'gc> Slot<'gc> for PairCdr<'gc> {
-    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
+    #[inline]
+    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) -> sealed::Written {
         if !self.0.is_pair() {
-            no_such_slot("a pair's cdr of a non-pair");
+            return Err("a pair's cdr of a non-pair");
         }
         heap.set_cdr(self.0.tagged(), v);
+        Ok(())
     }
 }
 
 impl<'gc> Slot<'gc> for VectorElem<'gc> {
-    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
+    #[inline]
+    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) -> sealed::Written {
         let VectorElem(vector, index) = self;
-        write_vector_elem(heap, vector, index, v, Site::VectorSet);
+        write_vector_elem(heap, vector, index, v, Site::VectorSet)
     }
 }
 
 impl<'gc> Slot<'gc> for MachineVectorElem<'gc> {
-    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
+    #[inline]
+    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) -> sealed::Written {
         let MachineVectorElem(vector, index) = self;
-        write_vector_elem(heap, vector, index, v, Site::VmVectorSet);
+        write_vector_elem(heap, vector, index, v, Site::VmVectorSet)
     }
 }
 
 /// Store `v` into the vector `vector`'s element `index`, counted in the
 /// census at `site`.
 #[inline]
-fn write_vector_elem(heap: &mut Heap, vector: Value<'_>, index: usize, v: TaggedValue, site: Site) {
+fn write_vector_elem(
+    heap: &mut Heap,
+    vector: Value<'_>,
+    index: usize,
+    v: TaggedValue,
+    site: Site,
+) -> sealed::Written {
     if !vector.is_vector() || index >= heap.vector_len(vector.tagged()) {
-        no_such_slot("a vector element of a non-vector, or past its end");
+        return Err("a vector element of a non-vector, or past its end");
     }
     heap.vector_store(site, vector.tagged(), index, v);
+    Ok(())
 }
 
 impl<'gc> Slot<'gc> for CellValue<'gc> {
-    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
+    #[inline]
+    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) -> sealed::Written {
         if !heap.write_mutable_cell(self.0.tagged(), v) {
-            no_such_slot("a cell's value of a non-cell");
+            return Err("a cell's value of a non-cell");
         }
+        Ok(())
     }
 }
 
 impl<'gc> Slot<'gc> for RecordField<'gc> {
-    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
+    #[inline]
+    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) -> sealed::Written {
         let RecordField(record, index) = self;
         let Some((_, fields)) = heap.get_record(record.tagged()) else {
-            no_such_slot("a record's field of a non-record");
+            return Err("a record's field of a non-record");
         };
         let mut fields = fields.borrow_mut();
         let Some(field) = fields.get_mut(index) else {
-            no_such_slot("a record's field past its last");
+            return Err("a record's field past its last");
         };
         check_storable(v, "record");
         census::store(Site::RecordSet, Some(record.tagged()), v);
         *field = v;
+        Ok(())
     }
 }
 
 impl<'gc> Slot<'gc> for ClosureFree<'gc> {
-    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
+    #[inline]
+    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) -> sealed::Written {
         let ClosureFree(closure, slot) = self;
         if !heap.set_vm_closure_free_var(closure.tagged(), slot, v) {
-            no_such_slot("a closure's free variable of a non-closure, or past its last");
+            return Err("a closure's free variable of a non-closure, or past its last");
         }
+        Ok(())
     }
 }
 
 impl<'gc> Slot<'gc> for PromiseBox<'gc> {
-    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
-        write_promise(heap, self.0, v, Site::PromiseForcePrimitive);
+    #[inline]
+    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) -> sealed::Written {
+        write_promise(heap, self.0, v, Site::PromiseForcePrimitive)
     }
 }
 
 impl<'gc> Slot<'gc> for MachinePromiseBox<'gc> {
-    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
-        write_promise(heap, self.0, v, Site::PromiseForceVm);
+    #[inline]
+    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) -> sealed::Written {
+        write_promise(heap, self.0, v, Site::PromiseForceVm)
     }
 }
 
 /// Make the promise `promise` forced, with `v`, counted in the census at
 /// `site`.
-fn write_promise(heap: &mut Heap, promise: Value<'_>, v: TaggedValue, site: Site) {
+#[inline]
+fn write_promise(
+    heap: &mut Heap,
+    promise: Value<'_>,
+    v: TaggedValue,
+    site: Site,
+) -> sealed::Written {
     let Some(cell) = heap.get_promise(promise.tagged()) else {
-        no_such_slot("a promise's box of a non-promise");
+        return Err("a promise's box of a non-promise");
     };
     check_storable(v, "promise");
     census::store(site, Some(promise.tagged()), v);
     *cell.borrow_mut() = PromiseState::Forced(v);
+    Ok(())
 }
 
 impl<'gc> Slot<'gc> for ParamValue<'gc> {
-    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
-        write_parameter(heap, self.0, v, Site::ParameterInstall);
+    #[inline]
+    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) -> sealed::Written {
+        write_parameter(heap, self.0, v, Site::ParameterInstall)
     }
 }
 
 impl<'gc> Slot<'gc> for ConvertedParamValue<'gc> {
-    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
-        write_parameter(heap, self.0, v, Site::ParameterInstallConverted);
+    #[inline]
+    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) -> sealed::Written {
+        write_parameter(heap, self.0, v, Site::ParameterInstallConverted)
     }
 }
 
 /// Make `v` the current value of the parameter object `param`, counted in
 /// the census at `site`.
-fn write_parameter(heap: &mut Heap, param: Value<'_>, v: TaggedValue, site: Site) {
+#[inline]
+fn write_parameter(
+    heap: &mut Heap,
+    param: Value<'_>,
+    v: TaggedValue,
+    site: Site,
+) -> sealed::Written {
     let Some((values, _)) = heap.get_parameter(param.tagged()) else {
-        no_such_slot("a parameter's value of a non-parameter");
+        return Err("a parameter's value of a non-parameter");
     };
     check_storable(v, "parameter");
     census::store(site, Some(param.tagged()), v);
@@ -256,17 +301,28 @@ fn write_parameter(heap: &mut Heap, param: Value<'_>, v: TaggedValue, site: Site
         Some(top) => *top = v,
         None => values.push(v),
     }
+    Ok(())
 }
 
 impl Heap {
     /// Write `v` into `slot`: the funnel [`Cx::store`] is, for the trusted
     /// crates, which make its values from the words they hold
-    /// (`Value::from_tagged`): the VM's inline `vector-set!`, its
-    /// `WriteCell` and `StoreClosure`, the machines' own `force` and the
-    /// tree-walker's parameter call (#708).
+    /// (`Value::from_tagged`): the machines' own `force` and the
+    /// tree-walker's parameter call (#708). Panics as [`Cx::store`] does.
     #[inline]
     pub fn store<'gc, S: Slot<'gc>>(&mut self, slot: S, v: Value<'gc>) {
-        slot.write(self, v.tagged(), sealed::Token(()));
+        if let Err(slot) = slot.write(self, v.tagged(), sealed::Token(())) {
+            no_such_slot(slot);
+        }
+    }
+
+    /// [`Heap::store`], for a slot that may not exist: `false`, with nothing
+    /// written, if it does not. For a machine whose own check of the holder
+    /// would repeat the funnel's: the VM's inline `vector-set!`, `WriteCell`
+    /// and `StoreClosure` (#708).
+    #[inline]
+    pub fn try_store<'gc, S: Slot<'gc>>(&mut self, slot: S, v: Value<'gc>) -> bool {
+        slot.write(self, v.tagged(), sealed::Token(())).is_ok()
     }
 }
 
@@ -274,7 +330,10 @@ impl<'gc> Cx<'gc> {
     /// Write `v` into `slot`: the funnel. See the [module docs](self).
     #[inline]
     pub fn store<S: Slot<'gc>>(&mut self, slot: S, v: Value<'gc>) {
-        slot.write(&mut self.heap.borrow_mut(), v.tagged(), sealed::Token(()));
+        let written = slot.write(&mut self.heap.borrow_mut(), v.tagged(), sealed::Token(()));
+        if let Err(slot) = written {
+            no_such_slot(slot);
+        }
     }
 
     /// Write `src` into the vector `vector`'s elements from `start`: one

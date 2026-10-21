@@ -114,17 +114,17 @@ pub const GC_CHECK: bool = cfg!(any(debug_assertions, feature = "gc-check"));
 /// register by a path that skipped those checks, so that it fails at the
 /// store rather than at a read far from the wrong map.
 ///
-/// It guards the mutators (`set_car`, `set_cdr`, `vector_set`,
-/// `write_mutable_cell`, `set_vm_closure_free_var`) and the constructors the
+/// It guards every store through the funnel (`Cx::store`, `Heap::store` and
+/// `try_store`, `Fresh::init`), which since #708 the VM's inline
+/// `vector-set!`, `WriteCell` and `StoreClosure` take too; the mutators the
+/// funnel writes through (`set_car`, `set_cdr`, `vector_set`,
+/// `write_mutable_cell`, `set_vm_closure_free_var`); and the constructors the
 /// VM moves register values into the heap through: `alloc_pair`, and with it
 /// `list_from_iter` and `list_from_iter_with_tail` (a call's rest list),
 /// `alloc_vector`, `alloc_mutable_cell` (`AllocCell`) and `alloc_vm_closure`
-/// (`MakeClosure`'s captures). It cannot see a write through the raw slice
-/// `vector_slice_mut` hands out; the one such writer, the VM's inline
-/// `vector-set!`, stores a value it read through `reg_at`, which panics on one.
-/// The other constructors (records, promises, `values` and the rest) are not
-/// checked: what they store is a primitive's arguments, which came through
-/// `reg_at` or out of the heap.
+/// (`MakeClosure`'s captures). The other constructors (records, promises,
+/// `values` and the rest) are not checked: what they store is a primitive's
+/// arguments, which came through `reg_at` or out of the heap.
 #[inline(always)]
 fn check_storable(value: TaggedValue, into: &'static str) {
     if GC_CHECK && value == TaggedValue::DEAD_SLOT {
@@ -1570,6 +1570,7 @@ impl Heap {
     /// Write a new value into a `MutableCell`.
     ///
     /// Returns `false` if `ptr` does not point to a `MutableCell`.
+    #[inline]
     pub fn write_mutable_cell(&self, ptr: TaggedValue, val: TaggedValue) -> bool {
         if !ptr.is_object() {
             return false;
@@ -1586,6 +1587,7 @@ impl Heap {
     }
 
     /// Returns `true` if `ptr` is a `MutableCell`.
+    #[inline]
     pub fn is_mutable_cell(&self, ptr: TaggedValue) -> bool {
         ptr.is_object() && matches!(self.get_object(ptr), HeapObjectData::MutableCell(_))
     }
@@ -1701,6 +1703,7 @@ impl Heap {
     ///
     /// Returns `None` if `closure` is not a `VmClosure` or the slot is out
     /// of range.
+    #[inline]
     pub fn get_vm_closure_free_var(
         &self,
         closure: TaggedValue,
@@ -1716,6 +1719,7 @@ impl Heap {
     ///
     /// Returns `false` if `closure` is not a `VmClosure` or the slot is out
     /// of range.
+    #[inline]
     pub fn set_vm_closure_free_var(
         &mut self,
         closure: TaggedValue,
