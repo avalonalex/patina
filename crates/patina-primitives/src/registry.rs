@@ -391,6 +391,15 @@ pub(crate) fn expect_arity<T>(args: &[T], n: usize) -> Result<(), EvalError> {
     Ok(())
 }
 
+// C11 (`PRD/GC_PRD.md` §18.6): the registry is `Send + Sync`, entries of fn
+// pointers and names, so under `threaded` one registry can serve every
+// carrier. What holds one today does not need it to be: the VM's `Rc`, and the
+// index each procedure caches in a `Cell`.
+const _: () = {
+    const fn send_and_sync<T: Send + Sync>() {}
+    send_and_sync::<PrimitiveRegistry>();
+};
+
 /// A machine a host registers its primitives in (#710): both backends are
 /// one, and `Interpreter::register_primitive` asks for one.
 pub trait HostPrimitives {

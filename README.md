@@ -285,6 +285,26 @@ Clone`, and it can outlive the interpreter: once the interpreter is gone, a
 post does nothing and answers `false`. On Unix, `forward_sigint()` makes SIGINT
 post it for as long as its guard is held.
 
+`with(|cx| …)` gives the host a context on the interpreter's heap, to read,
+allocate and store values as a primitive does; a value leaves it only as a
+handle (`cx.hold`). `call(&f, &args)` applies the procedure a handle holds to
+the values handles hold, as a program's application at the top level does,
+and answers a handle ([#710](https://github.com/avalonalex/patina/issues/710)).
+
+A host registers primitives of its own with `register_primitive(lib, name,
+PrimSpec { f, arity, class })`, or `register_resumable(lib, name, arity,
+start, resume)` for one that calls a procedure. Each is exported from the
+library `lib`, a library of the host's, which a program imports to call it.
+A primitive takes the context the machine makes for its call, as a built-in
+one does: `fn(&mut Cx<'gc>, &[Value<'gc>]) -> Result<Value<'gc>, EvalError>`.
+Its `class` says whether it may block (`Transfer`) or never does (`Leaf`).
+`external_bytes()` answers an accounter for the bytes the host holds outside
+the heap for its values, which count toward the next collection.
+
+The `Backend` trait under the interpreter is the raw layer: its methods take
+and answer bare `TaggedValue`s, by the rules its documentation gives, and it
+moves to handles at stage 4b of the collector's redesign.
+
 A value belongs to the interpreter that made it, and another interpreter
 refuses its handles. Dropping an interpreter frees its heap and flushes the
 file ports the program left open (#604), so read values before you drop it; a

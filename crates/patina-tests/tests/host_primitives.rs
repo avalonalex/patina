@@ -4,7 +4,9 @@
 //! primitive to the machine's registry and export it from a library of the
 //! host's, which a program imports to call it. A primitive takes the context
 //! the machine makes for its call, as a built-in one does; one that calls a
-//! procedure is resumable, and asks the machine to make the call.
+//! procedure is resumable, and asks the machine to make the call. What a host
+//! holds outside the heap for its values, it charges through an accounter
+//! (`Interpreter::external_bytes`), and the charge counts toward collection.
 
 mod common;
 use common::{tree_walker_interpreter, vm_interpreter};
@@ -260,4 +262,43 @@ fn a_later_registration<B: Backend + HostPrimitives>(mut interp: Interpreter<B>)
 fn a_later_registration_reaches_a_later_import() {
     assert_eq!(a_later_registration(vm_interpreter()), "(x x)");
     assert_eq!(a_later_registration(tree_walker_interpreter()), "(x x)");
+}
+
+/// A program too small to collect on its own, run once before a host's
+/// charge and once after.
+const SMALL: &str = "(import (scheme base))
+    (define (go n) (if (> n 0) (begin (cons n n) (go (- n 1)))))
+    (go 1000)";
+
+fn a_host_charge<B: Backend>(interp: Interpreter<B>) -> (bool, usize) {
+    interp.eval_program_owned(SMALL).unwrap();
+    let before = collections(&interp);
+    interp.eval_program_owned(SMALL).unwrap();
+    assert_eq!(
+        collections(&interp),
+        before,
+        "the small program collected on its own"
+    );
+    let mut buffers = interp.external_bytes();
+    buffers.increase(64 << 20);
+    interp.eval_program_owned(SMALL).unwrap();
+    let collected = collections(&interp) > before;
+    // The heap's namespaces charge their tables too, so what the drop gives
+    // back is measured, not the total.
+    let with_charge = interp.heap().borrow().external_bytes();
+    drop(buffers);
+    let given_back = with_charge - interp.heap().borrow().external_bytes();
+    (collected, given_back)
+}
+
+#[test]
+fn a_hosts_external_bytes_count_toward_collection() {
+    // The charge brings on a collection the program alone would not, and
+    // the accounter gives back what it holds when dropped.
+    for answer in [
+        a_host_charge(vm_interpreter()),
+        a_host_charge(tree_walker_interpreter()),
+    ] {
+        assert_eq!(answer, (true, 64 << 20));
+    }
 }

@@ -2,7 +2,7 @@
 
 **Status**: Proposed
 **Date**: 2026-03-20
-**Revised**: 2026-10-12, under the collector's contract (GC redesign stage 2, #694): see [Garbage Collection](#garbage-collection)
+**Revised**: 2026-10-12, under the collector's contract (GC redesign stage 2, #694): see [Garbage Collection](#garbage-collection); 2026-10-21, §1.2–§1.5 for the host primitives of stage 3 (#710)
 **Phase**: Phase 3 (post-VM, alongside `syntax-case`)
 
 ---
@@ -21,7 +21,7 @@ Patina is R7RS-complete but has no mechanism for users to extend it with native 
 
 ### Layer 1: Rust Plugin API (compile-time)
 
-Extend Patina by writing Rust crates that register new Scheme primitives. Leverages the existing `PrimitiveFn` / `TaggedHandler` / `HOTaggedHandler` infrastructure. Works identically on both tree-walker and VM backends with zero backend-specific code.
+Extend Patina by writing Rust crates that register new Scheme primitives through the interpreter (`register_primitive`, `register_resumable`, #710), into the same registry the built-in primitives use. Works identically on both tree-walker and VM backends with zero backend-specific code.
 
 ### Layer 2: Dynamic C FFI (runtime)
 
@@ -67,125 +67,99 @@ Scheme-visible as `#<foreign sqlite-connection>`. Primitives:
 - `(foreign? obj)` → `#t` if foreign object
 - `(foreign-type obj)` → `"sqlite-connection"` (string)
 
-### 1.2 Plugin Crate API (`patina-plugin`)
+### 1.2 The Plugin API
 
-New thin crate re-exporting core types + providing `LibraryBuilder`:
+No crate of its own: a plugin depends on `patina-interpreter`, whose re-exports are what it names, and on
+`patina-core` for the context and its values (stage 3, #710):
 
 ```rust
-// patina-plugin/src/lib.rs
-pub mod prelude {
-    // No `HeapIndex`: a plugin never sees how a value is encoded. `SharedHeap`
-    // is a heap-only handler's argument, for the length of a call, until stage
-    // 3 gives handlers `Cx`; what a plugin keeps past a call is an `Owned`
-    // handle (see "Garbage Collection" below).
-    pub use patina_core::{TaggedValue, Owned, SharedHeap};
-    pub use patina_runtime::{Arity, EvalError, Environment};
-    pub use patina_primitives::{
-        PrimitiveFn, TaggedHandler, HOTaggedHandler, ApplyContext,
-    };
-    pub use crate::LibraryBuilder;
-}
-
-pub struct LibraryBuilder {
-    library_name: Vec<String>,
-    primitives: Vec<PrimitiveFn>,
-}
-
-impl LibraryBuilder {
-    pub fn new(name: &[&str]) -> Self;
-
-    /// Register a heap-only primitive (most common)
-    pub fn define(
-        &mut self,
-        name: &'static str,
-        arity: Arity,
-        handler: TaggedHandler,
-    );
-
-    /// Register a higher-order primitive (needs eval callback)
-    pub fn define_ho(
-        &mut self,
-        name: &'static str,
-        arity: Arity,
-        handler: HOTaggedHandler,
-    );
-
-    /// Finalize: returns primitives for registration
-    pub fn build(self) -> Vec<PrimitiveFn>;
-}
+use patina_core::{Cx, Value};
+use patina_interpreter::{
+    Arity, Backend, EvalError, HostPrimitives, Interpreter, PrimClass, PrimSpec, RegisterError,
+    // for a primitive that calls a procedure:
+    ApplyContext, CallArgs, ResumableResume, ResumableStart, Step,
+};
 ```
+
+- **A primitive is a `Prim`:** `for<'gc> fn(&mut Cx<'gc>, &[Value<'gc>]) -> Result<Value<'gc>, EvalError>`, as a
+  built-in one is (`PRD/GC_PRD.md` §11.3).
+  - It reads, allocates and stores through the context the machine makes for its call. Beneath that context nothing
+    collects and nothing calls Scheme.
+  - Its arguments are values of that context, so it cannot keep one past the call (#709's compile-fail cases). What
+    it keeps is plain data, or a host payload (§1.1).
+- **A primitive that calls a procedure is resumable.**
+  - `start` answers `Step::Call { callee, args, state }`, and the machine makes the call. `resume` runs with the
+    `state` and what the call returned.
+  - So a continuation captured in the callee and re-entered after the primitive returned resumes it, as chibi and
+    Gauche resume such a call (#471).
+- **`class` is `Leaf` or `Transfer`.** A `Leaf` never blocks; a `Transfer` may, and a resumable primitive always is
+  one. The JIT treats every host primitive as allocating, so no class says `NoAlloc` (§11.5).
 
 ### 1.3 Plugin Registration
 
-Plugins expose a registration function. The host binary collects them:
+A plugin exposes a registration function, which the host calls on its interpreter:
 
 ```rust
 // In a plugin crate (e.g. patina-sqlite):
-use patina_plugin::prelude::*;
-
-pub fn register(builder: &mut LibraryBuilder) {
-    builder.define("sqlite-open", Arity::Exact(1), sqlite_open);
-    builder.define("sqlite-exec", Arity::Range(2, 3), sqlite_exec);
-    builder.define("sqlite-close", Arity::Exact(1), sqlite_close);
+pub fn register<B: Backend + HostPrimitives>(interp: &mut Interpreter<B>) -> Result<(), RegisterError> {
+    let lib = ["myapp", "sqlite"];
+    let blocking = |f, arity| PrimSpec { f, arity, class: PrimClass::Transfer };
+    interp.register_primitive(&lib, "sqlite-open", blocking(sqlite_open, Arity::Exact(1)))?;
+    interp.register_primitive(&lib, "sqlite-exec", blocking(sqlite_exec, Arity::Range(2, 3)))?;
+    interp.register_primitive(&lib, "sqlite-close", blocking(sqlite_close, Arity::Exact(1)))?;
+    Ok(())
 }
 
-fn sqlite_open(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    let path = heap.borrow().get_string_as_utf8(args[0]);
-    let db = rusqlite::Connection::open(&path)
-        .map_err(|e| EvalError::IOError(e.to_string()))?;
-    let ptr = heap.borrow_mut().alloc_foreign(
-        "sqlite-connection",
-        Box::new(db),
-        // No finalizer: dropping the connection closes it, after the collection
-        // that proves the object dead or at teardown. `sqlite3_close` may block,
-        // which F7 governs (see "Garbage Collection" below).
-        None,
-    );
-    Ok(ptr)
+fn sqlite_open<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+    let path = cx
+        .get_string_contents(args[0])
+        .ok_or_else(|| EvalError::TypeError("sqlite-open: expected a string".into()))?;
+    let db = rusqlite::Connection::open(&path).map_err(|e| EvalError::IOError(e.to_string()))?;
+    // §1.1's foreign object, which stage 4f's host payloads bring. No finalizer: dropping the
+    // connection closes it, after the collection that proves the object dead or at teardown.
+    Ok(cx.alloc_foreign("sqlite-connection", Box::new(db), None))
 }
 ```
 
-Host binary registers plugins at startup:
+Each of these blocks on the file system, so each is a `Transfer`. A host that keeps a large buffer for a small
+object charges it through `Interpreter::external_bytes()`, so the heap collects as often as the buffers ask.
+
+The host binary registers its plugins at startup:
 
 ```rust
-// In patina-repl or user's binary:
-fn register_plugins(registry: &mut PrimitiveRegistry, heap: &SharedHeap) {
-    // Static plugin list — compiled into binary
-    let mut builder = LibraryBuilder::new(&["myapp", "sqlite"]);
-    patina_sqlite::register(&mut builder);
-    for prim in builder.build() {
-        registry.register(prim);
-    }
-}
+let mut interp = patina_interpreter::VmInterpreter::new_vm();
+patina_sqlite::register(&mut interp)?;
 ```
 
 ### 1.4 Scheme-Side Usage
 
-```scheme
-(define-library (myapp sqlite)
-  (import (scheme base))
-  ;; Primitives auto-available from Rust plugin registration
-  (export sqlite-open sqlite-exec sqlite-close))
+Registration exports each primitive from its library, so a program imports the library itself, with no
+`define-library` to write:
 
-;; User code:
-(import (myapp sqlite))
+```scheme
+(import (scheme base) (myapp sqlite))
 (define db (sqlite-open "test.db"))
 (sqlite-exec db "CREATE TABLE t (id INTEGER, name TEXT)")
 (sqlite-close db)
 ```
 
+`RegisterError` refuses three things:
+- a library of the bundled namespaces (`scheme`, `srfi`, `patina`);
+- a library loaded otherwise, or one a search path finds;
+- a name the library already exports.
+
+A program that imported the library before a later registration reaches only what was registered then.
+
 ### 1.5 Why This Works for Both Backends
 
-Both tree-walker and VM dispatch primitives through the same path:
-
-```
-PrimitiveRegistry.apply_tagged(qualified_name, args, &dyn ApplyContext)
-  → PrimitiveHandler::Heap(handler)(heap, args)
-  → PrimitiveHandler::HigherOrder(handler)(ctx, args)
-  → PrimitiveHandler::Resumable { start, resume }   (the machine runs each call it asks for)
-```
-
-No backend-specific code is needed. The `ApplyContext` trait abstracts over tree-walker's `Evaluator` and VM's `VmApplyContext`.
+- **Both machines implement `HostPrimitives`.** A registration appends the primitive to the machine's registry, and
+  the library's namespace binds it under a qualified name that resolves to that entry.
+- **A call then dispatches as a built-in primitive's does,** by the entry's index, through the context the machine
+  makes (`ApplyContext::call_cx`, `step_cx`). That includes the VM's `CallPrimitive` fast path.
+- **A resumable primitive's calls run as frames of the machine:** the VM's `resume_stub`, the tree-walker's
+  `ResumePrimitive` continuation.
+- **Each machine picks its control primitives** (`call/cc`, `force`, `apply` and the rest) by the qualified name of
+  the binding they came from. So a plugin's primitive of the same name, in a library of its own, is its own (#710).
 
 ---
 
@@ -289,7 +263,7 @@ Scheme symbol mapping:
 
 ```
 crates/patina-ffi/
-├── Cargo.toml          # depends on libloading, libffi, patina-plugin
+├── Cargo.toml          # depends on libloading, libffi, patina-interpreter
 ├── src/
 │   ├── lib.rs          # Library builder for (patina ffi)
 │   ├── types.rs        # FfiType enum + parsing from Scheme symbols
@@ -340,18 +314,18 @@ Dynamic C FFI is inherently unsafe. Incorrect type declarations cause UB. The de
 
 ### Phase B: Plugin API
 
-**Goal**: `patina-plugin` crate + `LibraryBuilder`
+**Goal**: the host-primitive API, which stage 3 of the GC redesign built (#710, §1.2–§1.5)
 
 | Task | Crate | Effort |
 |---|---|---|
-| Create `patina-plugin` crate with `LibraryBuilder` | patina-plugin | M |
-| Plugin registration hook in `StandardPipeline` | patina-pipeline | S |
-| Plugin registration hook in `Interpreter` | patina-interpreter | S |
-| Example plugin: `(patina example)` with trivial primitives | patina-plugin | S |
-| Integration test: load plugin library from Scheme | patina-tests | S |
+| `register_primitive` and `register_resumable`, exporting from a host's library | patina-interpreter | done (#710) |
+| `HostPrimitives` on both machines | patina-vm, patina-tree-walker | done (#710) |
+| Integration tests: a host primitive, a resumable one re-entered, the refusals | patina-tests | done (#710, `host_primitives.rs`) |
+| Example plugin crate with trivial primitives | a new example | S |
 | Documentation: how to write a plugin | docs/ | S |
 
 **Deliverable**: External Rust crates can define new Scheme libraries with native primitives. Both backends work.
+The legacy `StandardPipeline` takes no registrations; a host moves to `Interpreter`.
 
 ### Phase C: Dynamic C FFI — Core
 
