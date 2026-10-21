@@ -20,7 +20,7 @@
 //! are forgotten, so what the reader holds stays bounded.
 
 use patina_core::source_map::source_lines;
-use patina_core::{SharedHeap, TaggedValue};
+use patina_core::{Cx, TaggedValue};
 use patina_frontend::{Reader, ReaderState, dialect};
 use patina_interpreter::{ParseError, ProgramOutcome, SourceMap, format_parse_error_with_source};
 use patina_runtime::{Diagnostic, DiagnosticKind, HasDiagnostic, Port};
@@ -33,20 +33,23 @@ const SOURCE_TEXT_KEPT: usize = 1 << 20;
 /// Evaluate the program `input` delivers, each form as soon as the line that
 /// ends it has arrived, and say how it went.
 ///
+/// `with_cx` makes the context each form is read in, on the interpreter's
+/// heap, a read at a time: the run keeps no heap of its own (#707).
 /// `eval_form` evaluates one datum against the run's source map, and renders
 /// an error for printing. `keep_going` is the CLI's `-k`: without it the first
 /// error ends the run, and with it an evaluation error is counted and the next
 /// form runs. A read error, and input that ends inside a form, end the run
 /// either way, since nothing after them can be read.
-pub fn run_program_stream<E>(
+pub fn run_program_stream<E, C>(
     input: &Port,
-    heap: &SharedHeap,
+    with_cx: C,
     source_name: &str,
     keep_going: bool,
     eval_form: E,
 ) -> ProgramOutcome
 where
     E: FnMut(TaggedValue, &Rc<RefCell<SourceMap>>) -> Result<(), String>,
+    C: FnMut(&mut dyn for<'gc> FnMut(&mut Cx<'gc>)),
 {
     let r6rs = dialect::allow_r6rs();
     let source_map = Rc::new(RefCell::new(SourceMap::new()));
@@ -54,7 +57,7 @@ where
     source_map.borrow_mut().set_primary_source(source_name);
     let mut run = Run {
         input,
-        heap,
+        with_cx,
         source_name: Rc::from(source_name),
         keep_going,
         eval_form,
@@ -88,9 +91,10 @@ where
 }
 
 /// What a run carries from one line to the next.
-struct Run<'a, E> {
+struct Run<'a, E, C> {
     input: &'a Port,
-    heap: &'a SharedHeap,
+    /// Makes the context a form is read in ([`run_program_stream`]).
+    with_cx: C,
     source_name: Rc<str>,
     keep_going: bool,
     eval_form: E,
@@ -106,9 +110,10 @@ struct Run<'a, E> {
     lines: u32,
 }
 
-impl<E> Run<'_, E>
+impl<E, C> Run<'_, E, C>
 where
     E: FnMut(TaggedValue, &Rc<RefCell<SourceMap>>) -> Result<(), String>,
+    C: FnMut(&mut dyn for<'gc> FnMut(&mut Cx<'gc>)),
 {
     /// A line has arrived on the end of the unread text: run what it finished.
     fn line_arrived(&mut self, line: &str) -> Option<ProgramOutcome> {
@@ -143,13 +148,14 @@ where
             let source_name = self.source_name.clone();
             let source_map = self.source_map.clone();
             let reader = &mut self.reader;
-            let datum = patina_core::NoGcScope::with_cx(self.heap, |cx| {
-                let datum = reader.next_datum(cx, move |parser| {
+            let mut read = None;
+            (self.with_cx)(&mut |cx| {
+                let datum = reader.next_datum(cx, |parser| {
                     parser.recording_into(source_name.clone(), source_map.clone())
                 });
-                datum.map(|datum| datum.map(|d| d.tagged()))
+                read = Some(datum.map(|datum| datum.map(|d| d.tagged())));
             });
-            let Some(datum) = datum else {
+            let Some(datum) = read.expect("the run's context ran the read") else {
                 self.consume_what_was_read();
                 return None;
             };
@@ -289,6 +295,14 @@ fn advance(mut at: ReaderState, text: &str) -> ReaderState {
 mod tests {
     use super::*;
 
+    /// A context on `heap` for each read, as the REPL makes one on its
+    /// interpreter's.
+    fn reading_on(
+        heap: &patina_core::SharedHeap,
+    ) -> impl FnMut(&mut dyn for<'gc> FnMut(&mut Cx<'gc>)) + '_ {
+        move |read| patina_core::NoGcScope::with_cx(heap, |cx| read(cx))
+    }
+
     /// Where each form evaluated was, or `None` for one the parser records no
     /// position for.
     type Seen = Vec<Option<(u32, u32)>>;
@@ -303,14 +317,20 @@ mod tests {
         let heap = patina_core::new_shared_heap();
         let input = Port::new_input_string(text.to_string());
         let mut seen = Vec::new();
-        let outcome = run_program_stream(&input, &heap, "<test>", keep_going, |datum, _| {
-            let at = heap
-                .borrow()
-                .source(datum)
-                .map(|loc| (loc.line, loc.column));
-            seen.push(at);
-            act(&input, at)
-        });
+        let outcome = run_program_stream(
+            &input,
+            reading_on(&heap),
+            "<test>",
+            keep_going,
+            |datum, _| {
+                let at = heap
+                    .borrow()
+                    .source(datum)
+                    .map(|loc| (loc.line, loc.column));
+                seen.push(at);
+                act(&input, at)
+            },
+        );
         (outcome, seen)
     }
 
@@ -408,7 +428,7 @@ mod tests {
         let heap = patina_core::new_shared_heap();
         let input = Port::new_input_string("(a)\n".to_string());
         input.close();
-        let outcome = run_program_stream(&input, &heap, "<test>", true, |_, _| Ok(()));
+        let outcome = run_program_stream(&input, reading_on(&heap), "<test>", true, |_, _| Ok(()));
         assert!(!outcome.read_to_end);
     }
 
@@ -443,7 +463,7 @@ mod tests {
         let heap = patina_core::new_shared_heap();
         let input = Port::new_input_string("(define (f)\n  1)\n(f)\n".to_string());
         let mut quoted = None;
-        run_program_stream(&input, &heap, "<test>", false, |_, map| {
+        run_program_stream(&input, reading_on(&heap), "<test>", false, |_, map| {
             quoted = map.borrow().get_line(1);
             Ok(())
         });
@@ -462,7 +482,7 @@ mod tests {
         let heap = patina_core::new_shared_heap();
         let input = Port::new_input_string("#!fold-case\n(A)\n(B\n C)\n".to_string());
         let mut written = Vec::new();
-        let outcome = run_program_stream(&input, &heap, "<test>", false, |datum, _| {
+        let outcome = run_program_stream(&input, reading_on(&heap), "<test>", false, |datum, _| {
             written.push(patina_core::debug_format::format_tagged(
                 datum,
                 &heap.borrow(),

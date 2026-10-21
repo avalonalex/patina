@@ -151,10 +151,10 @@ impl SchemeLibraryLoader {
         &self,
         lib_form: TaggedValue,
         base_dir: &Path,
-        heap: SharedHeap,
+        heap: &SharedHeap,
         can_load_library: &dyn Fn(&[String]) -> bool,
     ) -> Result<ParsedLibrary, LibraryError> {
-        let lib_def = NoGcScope::cross(&heap, [lib_form], |cx, [lib_form]| {
+        let lib_def = NoGcScope::cross(heap, [lib_form], |cx, [lib_form]| {
             LibraryDefinition::from_tagged_with_library_checker(lib_form, cx, can_load_library)
         })
         .map_err(|e| Self::library_error_from_parse(Path::new(INLINE_SOURCE_LABEL), "", e))?;
@@ -195,7 +195,7 @@ impl SchemeLibraryLoader {
         lib_def: LibraryDefinition,
         base_dir: &Path,
         source: Option<PathBuf>,
-        heap: SharedHeap,
+        heap: &SharedHeap,
     ) -> Result<ParsedLibrary, LibraryError> {
         let mut included_files = HashSet::new();
         if let Some(path) = &source
@@ -220,7 +220,7 @@ impl SchemeLibraryLoader {
             &mut exports,
             &mut imports,
             &mut body,
-            &heap,
+            heap,
         )?;
 
         Ok(ParsedLibrary::new(
@@ -267,7 +267,7 @@ impl SchemeLibraryLoader {
             "a fresh heap should carry no backend identity; if it does, this \
              method is no longer the odd one out and should take the caller's heap"
         );
-        self.parse_sld_file_with_heap_and_checker(name, path, heap, can_load_library)
+        self.parse_sld_file_with_heap_and_checker(name, path, &heap, can_load_library)
     }
 
     /// Parse a .sld file into a ParsedLibrary with a shared heap and library checker.
@@ -278,7 +278,7 @@ impl SchemeLibraryLoader {
         &self,
         name: &[String],
         path: PathBuf,
-        heap: SharedHeap,
+        heap: &SharedHeap,
         can_load_library: &dyn Fn(&[String]) -> bool,
     ) -> Result<ParsedLibrary, LibraryError> {
         // Read the file
@@ -293,7 +293,7 @@ impl SchemeLibraryLoader {
             message: e.format_in_source(&path.display().to_string(), &content),
         })?;
 
-        let lib_def = NoGcScope::with_cx(&heap, |cx| {
+        let lib_def = NoGcScope::with_cx(heap, |cx| {
             let read = parser.parse(cx).and_then(|form| {
                 // The file is its `define-library` form, so nothing should
                 // follow; read on anyway, so that a file cut short after the
@@ -679,7 +679,7 @@ impl EvaluatingLibraryLoader for SchemeLibraryLoader {
         &self,
         name: &[String],
         search_paths: &[PathBuf],
-        heap: SharedHeap,
+        heap: &SharedHeap,
         can_load_library: &dyn Fn(&[String]) -> bool,
     ) -> Result<ParsedLibrary, LibraryError> {
         // Find the .sld file

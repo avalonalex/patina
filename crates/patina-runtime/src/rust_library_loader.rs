@@ -102,11 +102,11 @@ impl LibraryLoader for RustLibraryLoader {
         &self,
         name: &[String],
         _search_paths: &[PathBuf],
-        heap: SharedHeap,
+        heap: &SharedHeap,
     ) -> Result<Library, LibraryError> {
         // A new environment whose values live on the provided heap, the
         // global one
-        self.build_in(name, &heap)
+        self.build_in(name, heap)
     }
 
     fn can_load(&self, name: &[String]) -> bool {
@@ -138,7 +138,7 @@ mod tests {
 
         let heap = crate::heap::new_shared_heap();
         let lib = loader
-            .load_with_heap(&["test".to_string()], &[], heap.clone())
+            .load_with_heap(&["test".to_string()], &[], &heap)
             .unwrap();
 
         assert_eq!(lib.name, vec!["test"]);
@@ -160,7 +160,7 @@ mod tests {
         let result = loader.load_with_heap(
             &["nonexistent".to_string()],
             &[],
-            crate::heap::new_shared_heap(),
+            &crate::heap::new_shared_heap(),
         );
         assert!(matches!(result, Err(LibraryError::NotFound { .. })));
     }
@@ -182,7 +182,7 @@ mod tests {
 
         assert!(loader.can_load(&name));
         let lib = loader
-            .load_with_heap(&name, &[], crate::heap::new_shared_heap())
+            .load_with_heap(&name, &[], &crate::heap::new_shared_heap())
             .unwrap();
         assert_eq!(lib.name, name);
     }

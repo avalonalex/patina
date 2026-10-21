@@ -964,7 +964,7 @@ pub(super) fn vm_load_library(
     // Try simple (Rust) loaders first
     let rust_result = {
         let loaders = loader_registry.borrow();
-        loaders.try_simple_load_with_heap(name, &search_paths, heap.clone())?
+        loaders.try_simple_load_with_heap(name, &search_paths, &heap)?
     };
 
     let lib = if let Some(lib) = rust_result {
@@ -981,7 +981,7 @@ pub(super) fn vm_load_library(
             loaders.try_parse_with_heap_and_library_checker(
                 name,
                 &search_paths,
-                heap.clone(),
+                &heap,
                 &can_load_library,
             )?
         };

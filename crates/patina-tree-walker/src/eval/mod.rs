@@ -545,7 +545,7 @@ impl Evaluator {
         // Pass the global heap so library environments share the same heap for TaggedValue compatibility
         let lib_result = {
             let loaders = self.loader_registry.borrow();
-            loaders.try_simple_load_with_heap(name, &search_paths, self.heap.clone())?
+            loaders.try_simple_load_with_heap(name, &search_paths, &self.heap)?
         };
 
         let (lib, loaded_via_rust) = if let Some(lib) = lib_result {
@@ -564,7 +564,7 @@ impl Evaluator {
                 loaders.try_parse_with_heap_and_library_checker(
                     name,
                     &search_paths,
-                    self.heap.clone(),
+                    &self.heap,
                     &can_load_library,
                 )?
             };
@@ -683,7 +683,7 @@ impl Evaluator {
         let parsed = loader.parse_inline_form(
             form,
             std::path::Path::new("."),
-            self.heap.clone(),
+            &self.heap,
             &can_load_library,
         )?;
 

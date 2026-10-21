@@ -221,14 +221,13 @@ where
     use patina_interpreter::format_write_tagged;
 
     prepare_backend(interp.backend(), opts, None);
-    let heap = interp.backend().heap().clone();
     let _ctrl_c = CtrlC::for_program(interp);
     for expr in &opts.eval_exprs {
         match interp.eval_program_owned(expr) {
             Ok(value) => {
                 let v = interp.raw_value(&value);
                 if v != patina_core::TaggedValue::UNSPECIFIED {
-                    println!("{}", format_write_tagged(v, &heap));
+                    println!("{}", format_write_tagged(v, interp.backend().heap()));
                 }
             }
             Err(e) => {
@@ -445,27 +444,38 @@ where
     B::Error: HasSourceLocation,
 {
     let backend = interp.backend();
-    let heap = backend.heap().clone();
     let input = patina_runtime::Port::stdin();
-    run_program_stream(&input, &heap, "<stdin>", keep_going, |datum, source_map| {
-        // The crate allows the re-entry rule (its Cargo.toml); this driver
-        // loop states its reason anyway, as `Interpreter::run_forms` does.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the outermost entry for each form, so the backend's loop may collect. \
-                      `run_program_stream` holds the reader, whose unread text and tokens are \
-                      not heap values, the input port (a Rust handle), and the source map, \
-                      keyed by raw bits it never dereferences and pruned of freed slots before \
-                      each read (docs/GC_DESIGN.md §9.1). The datum is not read after the call"
-        )]
-        let evaluated = backend.eval_with_source_map(datum, backend.global_env(), source_map);
-        evaluated.map(|_| ()).map_err(|e| {
-            let diagnostic = e.diagnostic();
-            patina_runtime::exit_status::note_if_interrupt(&diagnostic);
-            patina_runtime::diagnostic::emit(diagnostic);
-            format_error_with_source(&e, &source_map.borrow())
-        })
-    })
+    // Each form is read in a context on the backend's heap, made for the
+    // read: the run keeps no heap of its own (#707).
+    let with_cx = |read: &mut dyn for<'gc> FnMut(&mut patina_core::Cx<'gc>)| {
+        patina_core::NoGcScope::with_cx(backend.heap(), |cx| read(cx))
+    };
+    run_program_stream(
+        &input,
+        with_cx,
+        "<stdin>",
+        keep_going,
+        |datum, source_map| {
+            // The crate allows the re-entry rule (its Cargo.toml); this driver
+            // loop states its reason anyway, as `Interpreter::run_forms` does.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the outermost entry for each form, so the backend's loop may collect. \
+                          `run_program_stream` holds the reader, whose unread text and tokens \
+                          are not heap values, the input port (a Rust handle), and the source \
+                          map, keyed by raw bits it never dereferences and pruned of freed \
+                          slots before each read (docs/GC_DESIGN.md §9.1). The datum is not \
+                          read after the call"
+            )]
+            let evaluated = backend.eval_with_source_map(datum, backend.global_env(), source_map);
+            evaluated.map(|_| ()).map_err(|e| {
+                let diagnostic = e.diagnostic();
+                patina_runtime::exit_status::note_if_interrupt(&diagnostic);
+                patina_runtime::diagnostic::emit(diagnostic);
+                format_error_with_source(&e, &source_map.borrow())
+            })
+        },
+    )
 }
 
 /// A VM interpreter that traces each instruction to stderr as it runs, with
@@ -603,7 +613,6 @@ fn run_repl_vm(opts: &CliOptions) {
 
     let interp = Interpreter::new(VmBackend::new());
     prepare_backend(interp.backend(), opts, None);
-    let heap = interp.backend().heap().clone();
 
     println!("Patina Scheme R7RS Interpreter");
     println!("Version {}", env!("CARGO_PKG_VERSION"));
@@ -648,7 +657,8 @@ fn run_repl_vm(opts: &CliOptions) {
         match result {
             Ok(value) => {
                 let value = interp.raw_value(&value);
-                (value != TaggedValue::UNSPECIFIED).then(|| format_tagged(value, &heap.borrow()))
+                (value != TaggedValue::UNSPECIFIED)
+                    .then(|| format_tagged(value, &interp.backend().heap().borrow()))
             }
             Err(e) => Some(format!(
                 "Error: {}",

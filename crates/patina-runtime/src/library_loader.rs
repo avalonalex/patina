@@ -28,8 +28,9 @@ use std::rc::{Rc, Weak};
 pub trait LibraryLoader {
     /// Load a library with the given name, its values on `heap`: the heap
     /// of the global environment, so that importing its exports needs no
-    /// conversion. An environment keeps no handle to its heap (#704), so a
-    /// load is always given the one it allocates on.
+    /// conversion. An environment keeps no handle to its heap (#704), and
+    /// neither does a loader, so a load is lent the one it allocates on
+    /// (#707).
     ///
     /// Returns the loaded Library or an error if loading fails.
     /// The loader is responsible for:
@@ -41,7 +42,7 @@ pub trait LibraryLoader {
         &self,
         name: &[String],
         search_paths: &[PathBuf],
-        heap: SharedHeap,
+        heap: &SharedHeap,
     ) -> Result<Library, LibraryError>;
 
     /// Check if this loader can handle the given library name
@@ -175,11 +176,9 @@ pub struct ParsedLibrary {
     /// Import specifications (will need to be resolved)
     pub imports: Vec<ImportSet>,
 
-    /// Library body expressions (need evaluation) as TaggedValues
+    /// Library body expressions (need evaluation) as TaggedValues, on the
+    /// heap the loader was lent: it keeps no handle to it (#707).
     pub body: Vec<TaggedValue>,
-
-    /// The heap containing the body TaggedValues
-    pub heap: SharedHeap,
 
     /// Export specifications
     pub exports: Vec<ExportSpec>,
@@ -198,21 +197,21 @@ impl ParsedLibrary {
     /// Build a parsed library, installing the GC defer guard described above.
     ///
     /// The heap is required, not optional: the body's forms live in it, and a
-    /// library built without one would carry no guard at all (#624).
+    /// library built without one would carry no guard at all (#624). It is
+    /// borrowed for the guard, and not kept (#707).
     pub fn new(
         name: Vec<String>,
         imports: Vec<ImportSet>,
         body: Vec<TaggedValue>,
-        heap: SharedHeap,
+        heap: &SharedHeap,
         exports: Vec<ExportSpec>,
         source: Option<PathBuf>,
     ) -> Self {
-        let _gc_defer = patina_core::GcDeferGuard::holding(&heap);
+        let _gc_defer = patina_core::GcDeferGuard::holding(heap);
         Self {
             name,
             imports,
             body,
-            heap,
             exports,
             source,
             _gc_defer,
@@ -229,7 +228,6 @@ impl ParsedLibrary {
             name,
             imports,
             body,
-            heap: _,
             exports,
             source,
             _gc_defer: guard,
@@ -252,7 +250,6 @@ impl ParsedLibrary {
             name,
             imports,
             body: _,
-            heap: _,
             exports,
             source,
             _gc_defer: _,
@@ -371,7 +368,7 @@ pub trait EvaluatingLibraryLoader {
         &self,
         name: &[String],
         search_paths: &[PathBuf],
-        heap: SharedHeap,
+        heap: &SharedHeap,
         can_load_library: &dyn Fn(&[String]) -> bool,
     ) -> Result<ParsedLibrary, LibraryError> {
         debug_assert!(
@@ -480,7 +477,7 @@ impl LibraryLoaderRegistry {
         &self,
         name: &[String],
         search_paths: &[PathBuf],
-        heap: SharedHeap,
+        heap: &SharedHeap,
     ) -> Result<Option<Library>, LibraryError> {
         for loader in &self.simple_loaders {
             if loader.can_load(name) {
@@ -555,7 +552,7 @@ impl LibraryLoaderRegistry {
         &self,
         name: &[String],
         search_paths: &[PathBuf],
-        heap: SharedHeap,
+        heap: &SharedHeap,
         can_load_library: &dyn Fn(&[String]) -> bool,
     ) -> Result<Option<ParsedLibrary>, LibraryError> {
         for loader in &self.evaluating_loaders {
@@ -652,7 +649,7 @@ mod tests {
             &self,
             name: &[String],
             _search_paths: &[PathBuf],
-            _heap: SharedHeap,
+            _heap: &SharedHeap,
         ) -> Result<Library, LibraryError> {
             if self.can_load(name) {
                 Ok(Library::new(name.to_vec()))
@@ -670,7 +667,7 @@ mod tests {
     fn test_registry_empty() {
         let registry = LibraryLoaderRegistry::new();
         let result =
-            registry.try_simple_load_with_heap(&["test".to_string()], &[], new_shared_heap());
+            registry.try_simple_load_with_heap(&["test".to_string()], &[], &new_shared_heap());
         assert!(matches!(result, Ok(None)));
     }
 
@@ -683,7 +680,7 @@ mod tests {
         registry.add_loader(Box::new(loader));
 
         let result =
-            registry.try_simple_load_with_heap(&["test".to_string()], &[], new_shared_heap());
+            registry.try_simple_load_with_heap(&["test".to_string()], &[], &new_shared_heap());
         assert!(matches!(result, Ok(Some(_))));
     }
 
@@ -707,7 +704,7 @@ mod tests {
         // Should find foo with first loader
         assert!(
             registry
-                .try_simple_load_with_heap(&["foo".to_string()], &[], new_shared_heap())
+                .try_simple_load_with_heap(&["foo".to_string()], &[], &new_shared_heap())
                 .unwrap()
                 .is_some()
         );
@@ -715,7 +712,7 @@ mod tests {
         // Should find bar with second loader
         assert!(
             registry
-                .try_simple_load_with_heap(&["bar".to_string()], &[], new_shared_heap())
+                .try_simple_load_with_heap(&["bar".to_string()], &[], &new_shared_heap())
                 .unwrap()
                 .is_some()
         );
@@ -723,7 +720,7 @@ mod tests {
         // Should not find baz
         assert!(
             registry
-                .try_simple_load_with_heap(&["baz".to_string()], &[], new_shared_heap())
+                .try_simple_load_with_heap(&["baz".to_string()], &[], &new_shared_heap())
                 .unwrap()
                 .is_none()
         );
