@@ -51,7 +51,8 @@ jobs:
     # that compile, which `--lib --tests` above does not build:
     # `#[derive(Trace)]`'s two (#686), on `patina_core::Trace`; the funnel's
     # seal (#708), on `patina_core::heap::Interior`; and the brand's (#703,
-    # #704, #709), in core, primitives, the frontend and macros.
+    # #704, #709), in core, primitives, the frontend and macros. The
+    # embedding API's (#710) run with the interpreter's doctests, below.
     # docs/TEST_ORGANIZATION.md, "Compile-time refusals", lists every case.
     - name: Compile-time checks
       run: cargo test -p patina-core -p patina-macros -p patina-primitives -p patina-frontend --doc

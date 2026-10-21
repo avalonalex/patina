@@ -122,6 +122,40 @@ pub trait Backend {
     fn define(&self, env: &Rc<Environment>, name: &str, value: TaggedValue) {
         env.define(name, value);
     }
+
+    /// Apply the procedure `f` to `args` as a top-level form: a driver
+    /// entry, as [`Self::eval`] is, which may collect while the callee runs,
+    /// and in which a continuation captured behaves as one captured in a form
+    /// does (#710). The words are a host's handles' (`Interpreter::call`),
+    /// which root them through the call.
+    ///
+    /// The default evaluates `((quote f) (quote arg) …)` in the global
+    /// environment, so it depends on what `quote` is bound to there. Both
+    /// machines apply without consulting a binding: they build the
+    /// application as `CoreExpr`, not as a datum to expand.
+    fn call(&self, f: TaggedValue, args: &[TaggedValue]) -> Result<TaggedValue, Self::Error> {
+        let mut words = Vec::with_capacity(args.len() + 1);
+        words.push(f);
+        words.extend_from_slice(args);
+        let form = patina_core::NoGcScope::cross_all(self.heap(), &words, |cx, values| {
+            let quote = cx.intern_symbol("quote");
+            let quoted: Vec<_> = values
+                .iter()
+                .map(|&v| {
+                    let datum = cx.alloc_pair(v, patina_core::Value::NULL);
+                    cx.alloc_pair(quote, datum)
+                })
+                .collect();
+            cx.list_from_iter(quoted).tagged()
+        });
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the call's own entry, outermost, so the backend's run may collect: holds the \
+                      form, not read after the call, whose words the host's handles root"
+        )]
+        let value = self.eval_global(form);
+        value
+    }
 }
 
 #[cfg(test)]
