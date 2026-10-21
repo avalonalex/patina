@@ -48,8 +48,8 @@
 
 use patina_core::GcMode;
 use patina_core::tagged_value::TaggedValue;
+use patina_interpreter::format_write_tagged;
 use patina_interpreter::{Interpreter, InterpreterError, TreeWalkInterpreter, TreeWalker};
-use patina_primitives::primitives::io::datum_writer::format_write_tagged;
 use patina_runtime::Backend;
 use patina_vm::VmBackend;
 

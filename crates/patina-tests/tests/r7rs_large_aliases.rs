@@ -9,8 +9,8 @@
 // The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
 #![allow(deprecated)]
 
+use patina_interpreter::format_write_tagged;
 use patina_interpreter::{Interpreter, TreeWalkInterpreter};
-use patina_primitives::primitives::io::datum_writer::format_write_tagged;
 use patina_tree_walker::Evaluator;
 use patina_vm::VmBackend;
 

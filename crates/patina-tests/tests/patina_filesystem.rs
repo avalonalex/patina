@@ -5,8 +5,8 @@
 #![allow(deprecated)]
 
 use patina_core::{NativeFs, OverlayFs};
+use patina_interpreter::format_write_tagged;
 use patina_interpreter::{Backend, Interpreter, TreeWalkInterpreter};
-use patina_primitives::primitives::io::datum_writer::format_write_tagged;
 use patina_vm::VmBackend;
 use std::sync::Arc;
 

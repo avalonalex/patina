@@ -13,7 +13,7 @@ fn command_line<B: Backend>(interp: &Interpreter<B>) -> String {
     let value = interp
         .eval_program("(import (scheme process-context)) (command-line)")
         .unwrap();
-    patina_primitives::primitives::io::datum_writer::format_write_tagged(value, interp.heap())
+    patina_interpreter::format_write_tagged(value, interp.heap())
 }
 
 /// Same-backend instances must be independent too: a per-backend or
@@ -89,10 +89,7 @@ fn configured_command_line_reaches_library_bodies_eval_and_load() {
                 file.display()
             ))
             .unwrap();
-        let result = patina_primitives::primitives::io::datum_writer::format_write_tagged(
-            value,
-            interp.heap(),
-        );
+        let result = patina_interpreter::format_write_tagged(value, interp.heap());
         assert_eq!(
             result,
             r#"(("outer.scm" "argument") ("outer.scm" "argument") ("outer.scm" "argument"))"#

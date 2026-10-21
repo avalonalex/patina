@@ -20,10 +20,7 @@ fn run<B: Backend>(interpreter: &Interpreter<B>, program: &str) -> String {
     let value = interpreter
         .eval_program(program)
         .unwrap_or_else(|e| panic!("{program}: {e}"));
-    patina_primitives::primitives::io::datum_writer::format_display_tagged(
-        value,
-        interpreter.heap(),
-    )
+    patina_interpreter::format_display_tagged(value, interpreter.heap())
 }
 
 #[test]

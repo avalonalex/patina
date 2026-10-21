@@ -734,8 +734,8 @@ impl<'a> CpsEvaluator<'a> {
             })
         } else {
             // No handler - propagate to Rust level
+            use crate::eval::format_display_tagged;
             use patina_core::ExceptionKind;
-            use patina_primitives::primitives::io::datum_writer::format_display_tagged;
             let heap = &self.evaluator.heap;
             // An interrupt no handler took, raised again by a declining
             // `guard`, leaves as the interrupt it is, for the runner that
@@ -798,9 +798,7 @@ impl<'a> CpsEvaluator<'a> {
         let message_opt = heap.borrow().get_string_contents(args[0]);
         let message = match message_opt {
             Some(m) => m,
-            None => patina_primitives::primitives::io::datum_writer::format_display_tagged(
-                args[0], heap,
-            ),
+            None => crate::eval::format_display_tagged(args[0], heap),
         };
 
         // Remaining arguments are irritants - already TaggedValue!

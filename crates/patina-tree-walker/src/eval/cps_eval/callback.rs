@@ -12,11 +12,10 @@
 use super::CpsEvaluator;
 use super::types::{ExceptionHandler, PromptFrame};
 use crate::eval::error::EvalError;
-use patina_core::{DynamicWindRecord, Environment, FileSystem, Library, SharedHeap, TaggedValue};
+use patina_core::{DynamicWindRecord, Environment, Library, TaggedValue};
 use patina_primitives::ApplyContext;
 use patina_runtime::HasDiagnostic;
 use std::rc::Rc;
-use std::sync::Arc;
 
 pub(crate) struct CallbackContext<'c, 'a, 's> {
     pub cps: &'c CpsEvaluator<'a>,
@@ -76,7 +75,7 @@ impl<'a> CallbackContext<'_, 'a, '_> {
         let import_sets = import_sets
             .iter()
             .map(|&set| {
-                patina_core::NoGcScope::with_cx(self.heap(), |cx| {
+                patina_core::NoGcScope::with_cx(&self.cps.evaluator.heap, |cx| {
                     let set = literals.value(cx, set);
                     patina_frontend::LibraryDefinition::parse_import_set_tagged(set, cx)
                 })
@@ -124,10 +123,6 @@ fn unhandled_is_final(result: Result<TaggedValue, EvalError>) -> Result<TaggedVa
 }
 
 impl ApplyContext for CallbackContext<'_, '_, '_> {
-    fn heap(&self) -> &SharedHeap {
-        self.cps.evaluator.heap()
-    }
-
     /// The evaluator's own: a step's call, inside the step (#706).
     fn call_cx(
         &self,
@@ -168,10 +163,6 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
         step: patina_primitives::StepFn<'_>,
     ) -> Result<patina_primitives::TaggedStep, EvalError> {
         self.cps.evaluator.step_cx(args, step)
-    }
-
-    fn fs(&self) -> &Arc<dyn FileSystem> {
-        self.cps.evaluator.fs()
     }
 
     #[expect(
@@ -253,17 +244,16 @@ pub(super) fn expand_for_eval(
     env: &Rc<Environment>,
     context: &CallbackContext<'_, '_, '_>,
 ) -> Result<(patina_core::CoreExpr, patina_core::LiteralPool), EvalError> {
-    let desugarer =
-        patina_frontend::Desugarer::with_env(env.clone()).with_fs(evaluator.fs().clone());
+    let desugarer = patina_frontend::Desugarer::with_env(env.clone()).with_fs(evaluator.fs.clone());
     // The datum's literals, rooted until the CPS tree holds them (#705).
-    let literals = patina_core::LiteralPool::new(&evaluator.heap().borrow());
+    let literals = patina_core::LiteralPool::new(&evaluator.heap.borrow());
     #[expect(
         clippy::disallowed_methods,
         reason = "the import callback loads libraries during the expansion, which holds the datum \
                   and the partial expansion: values of the context the expansion runs in \
                   (`NoGcScope::cross`), beneath which nothing collects"
     )]
-    let core_expr = patina_core::NoGcScope::cross(evaluator.heap(), [expr], |cx, [form]| {
+    let core_expr = patina_core::NoGcScope::cross(&evaluator.heap, [expr], |cx, [form]| {
         desugarer.desugar_with_imports(
             form,
             cx,

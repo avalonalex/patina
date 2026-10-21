@@ -152,11 +152,12 @@ pub type CxHandler =
   (`PrimitiveRegistry::cx_handler`), with no `ApplyContext` and no `Step`
   between, since it can neither call back nor suspend. A higher-order or
   resumable primitive's call pays about 10 instructions for the check.
-- **Without a machine**, an embedder's own `ApplyContext`, `call_cx`'s
-  default crosses each word through a handle.
+- **Without a machine**, an embedder's own `ApplyContext` makes each context
+  itself, beneath a `NoGcScope`, each word crossing through a handle
+  (`NoGcScope::cross_all`), as the registry's test `Embedder` does.
 - **Instance data** comes through the context's instance (`Cx::instance`):
-  the command line, the features, and the file system that `file-exists?`,
-  `delete-file` and the directory procedures ask (`Instance::fs`).
+  the command line, the features, and the file system that every primitive
+  opening, reading or listing a file asks (`Instance::fs`).
 - **Stores** go through the funnel (`Cx::store`, the ranges), and a record's
   field through its `RecordField`.
 - **The datum writer** reads an object's kind through `Cx::get_object` and
@@ -177,9 +178,12 @@ pub type CxHandler =
   comparator, `force`, `call-with-values`, `call-with-port`,
   `%parameterize-swap!` and the environment procedures. `force` stores through
   `PromiseBox`, and `%parameterize-swap!` through `ParamValue`.
-- **Still on the heap:** `ApplyContext`'s defaults, which cross words through
-  handles for a context with no machine, and `run_synchronously`'s posted
-  collection. They are what is left of #706.
+- **No heap in `patina-primitives`** (#706): a primitive reaches the heap
+  only through its context. `ApplyContext` hands out neither the heap nor the
+  file system, and every context comes from the machine (`call_cx`,
+  `step_cx`). A host that holds a word crosses it into a context to write it
+  (`patina_interpreter::format_write_tagged`), as a machine does for an error
+  message.
 
 ---
 
@@ -202,7 +206,7 @@ frontend pipeline and compiles direct-style (no CPS transform).
 
 | Component | Shared? | Notes |
 |-----------|---------|-------|
-| `TaggedValue` / `SharedHeap` | Yes | Same type throughout |
+| `TaggedValue` / `SharedHeap` | Yes | Same types throughout the machines and hosts; a primitive sees only its context's values (§6) |
 | `CoreExpr` IR | Yes | VM compilation source |
 | Frontend (lexer/parser/desugarer) | Yes | Unchanged |
 | Library system | Yes | Backend-agnostic |

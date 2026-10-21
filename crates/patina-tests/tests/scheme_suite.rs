@@ -255,10 +255,7 @@ fn run_on<B: Backend>(
         let value = interp
             .eval_program(&format!("({accessor} %suite-runner)"))
             .map_err(|e| format!("[{label}] could not read {accessor}: {e}"))?;
-        let text = patina_primitives::primitives::io::datum_writer::format_display_tagged(
-            value,
-            interp.heap(),
-        );
+        let text = patina_interpreter::format_display_tagged(value, interp.heap());
         *slot = text
             .trim()
             .parse()

@@ -132,7 +132,6 @@ use patina_core::{AssertNoGc, CollectKind, GC_CHECK};
 use patina_primitives::{TaggedCallArgs, TaggedStep};
 use patina_runtime::HasDiagnostic;
 use std::rc::Rc;
-use std::sync::Arc;
 
 /// Call a compiled closure whose code id was resolved by the dispatcher.
 ///
@@ -880,10 +879,7 @@ fn handle_control_primitive(
                 let as_string = state.heap().borrow().get_string_contents(args[0]);
                 match as_string {
                     Some(s) => s,
-                    None => patina_primitives::primitives::io::datum_writer::format_display_tagged(
-                        args[0],
-                        state.heap(),
-                    ),
+                    None => display_word(state.heap(), args[0]),
                 }
             };
             let irritants = args[1..].to_vec();
@@ -1017,7 +1013,6 @@ pub(super) fn vm_raise_value(
         Ok(())
     } else {
         // No handler — format and propagate as Rust error
-        use patina_primitives::primitives::io::datum_writer::format_display_tagged;
         // An interrupt no handler took, whether a poll raised it or a
         // declining `guard` raised it again, leaves as the interrupt it is,
         // for the runner that ends a script on one (#701).
@@ -1029,7 +1024,7 @@ pub(super) fn vm_raise_value(
         if interrupt {
             return Err(VmError::Interrupt);
         }
-        let display = format_display_tagged(exception, state.heap());
+        let display = display_word(state.heap(), exception);
         // Deliberately the same wording whether or not the raise was
         // continuable — the variant's `Display` supplies it. Continuability is
         // an implementation detail once nothing handles it, and since
@@ -1952,6 +1947,15 @@ fn parameter_set_call(
     state.parameter_set()
 }
 
+/// `display` of a word on the VM's heap, for an error message: the word
+/// crosses into a context as a host's does (`NoGcScope::cross`), and the
+/// datum writer writes it there (#706).
+fn display_word(heap: &SharedHeap, tv: TaggedValue) -> String {
+    patina_core::NoGcScope::cross(heap, [tv], |cx, [v]| {
+        patina_primitives::primitives::io::datum_writer::format_display(cx, v)
+    })
+}
+
 fn eval_to_vm_error(e: patina_primitives::EvalError) -> VmError {
     VmError::Runtime {
         message: e.to_string(),
@@ -2457,16 +2461,6 @@ impl Reentry {
 }
 
 impl patina_primitives::ApplyContext for VmApplyContext {
-    fn heap(&self) -> &SharedHeap {
-        // SAFETY: pointer is valid for the lifetime of the primitive call.
-        unsafe { (*self.state).heap() }
-    }
-
-    fn fs(&self) -> &Arc<dyn patina_core::FileSystem> {
-        // SAFETY: pointer is valid for the lifetime of the primitive call.
-        unsafe { (*self.state).fs() }
-    }
-
     #[expect(
         clippy::disallowed_methods,
         reason = "holds `args` until the call returns: a closure callee gets them copied into \

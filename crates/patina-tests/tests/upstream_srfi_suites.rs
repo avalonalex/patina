@@ -35,7 +35,7 @@ mod common;
 
 use common::repo_root;
 use patina_interpreter::Interpreter;
-use patina_primitives::primitives::io::datum_writer::format_display_tagged;
+use patina_interpreter::format_display_tagged;
 use patina_runtime::Backend;
 use std::path::PathBuf;
 
