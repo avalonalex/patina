@@ -349,12 +349,15 @@ impl<'a> CpsEvaluator<'a> {
                 // Thunk has returned a value. The promise's box is looked up
                 // now, by object — see the variant's doc comment.
                 let heap = &self.evaluator.heap;
-                let cell = heap.borrow().get_promise(promise).expect("still a promise");
+                let now = heap
+                    .borrow()
+                    .promise_state(promise)
+                    .expect("still a promise");
 
                 // The thunk may have forced this very promise re-entrantly;
                 // R7RS 7.3 keeps the value it left ("unless (promise-done?
                 // promise)") and discards the thunk's result.
-                if let patina_core::PromiseState::Forced(cached) = *cell.borrow() {
+                if let patina_core::PromiseState::Forced(cached) = now {
                     return Ok(StepResult::InvokeContinuation {
                         cont: *original_cont,
                         value: cached,
@@ -384,8 +387,19 @@ impl<'a> CpsEvaluator<'a> {
                     );
                 }
 
-                // Cache the result (non-promise value)
-                *cell.borrow_mut() = patina_core::PromiseState::Forced(value);
+                // Cache the result (non-promise value), through the funnel,
+                // counted as the VM's own `force` is (#708).
+                // SAFETY: the promise this continuation holds and the value
+                // the thunk answered: live words of this heap, and nothing
+                // collects inside this step.
+                let (box_of, forced) = unsafe {
+                    (
+                        patina_core::Value::from_tagged(promise),
+                        patina_core::Value::from_tagged(value),
+                    )
+                };
+                heap.borrow_mut()
+                    .store(patina_core::MachinePromiseBox(box_of), forced);
 
                 // Continue with the forced value
                 Ok(StepResult::InvokeContinuation {

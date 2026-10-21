@@ -3,8 +3,11 @@
 //!
 //! A slot names a value field of a heap object: a pair's car or cdr, a
 //! vector's element, a mutable cell's value, a record's field, a VM
-//! closure's free variable, a promise's box, a parameter's value (two
-//! slots, which the census tells apart).
+//! closure's free variable, a promise's box, a parameter's value. A field
+//! the census counts at more than one site has a slot for each: a
+//! parameter's value after a converter, and the machines' own vector and
+//! promise stores (#708). The trusted crates, which hold words, write through
+//! [`Heap::store`].
 //! [`Cx::store`] writes one; [`Cx::store_range`] and [`Cx::fill_range`]
 //! write a run of a vector's elements (addition C4); [`Fresh`] takes the
 //! initializing stores into an object no one else has seen yet.
@@ -89,6 +92,18 @@ pub struct ClosureFree<'gc>(pub Value<'gc>, pub usize);
 #[derive(Clone, Copy, Debug)]
 pub struct PromiseBox<'gc>(pub Value<'gc>);
 
+/// A vector's element, stored by the VM's inline `vector-set!`:
+/// [`VectorElem`]'s field, which the GC census counts apart, at
+/// `vm_vector_set` (#708).
+#[derive(Clone, Copy, Debug)]
+pub struct MachineVectorElem<'gc>(pub Value<'gc>, pub usize);
+
+/// A promise's box, stored by a machine's own `force` (the VM's
+/// `force_stub`, the tree-walker's CPS `force`): [`PromiseBox`]'s field,
+/// which the GC census counts apart, at `promise_force_vm` (#708).
+#[derive(Clone, Copy, Debug)]
+pub struct MachinePromiseBox<'gc>(pub Value<'gc>);
+
 /// A parameter object's current value.
 #[derive(Clone, Copy, Debug)]
 pub struct ParamValue<'gc>(pub Value<'gc>);
@@ -106,6 +121,8 @@ impl sealed::Sealed for CellValue<'_> {}
 impl sealed::Sealed for RecordField<'_> {}
 impl sealed::Sealed for ClosureFree<'_> {}
 impl sealed::Sealed for PromiseBox<'_> {}
+impl sealed::Sealed for MachineVectorElem<'_> {}
+impl sealed::Sealed for MachinePromiseBox<'_> {}
 impl sealed::Sealed for ParamValue<'_> {}
 impl sealed::Sealed for ConvertedParamValue<'_> {}
 
@@ -137,11 +154,25 @@ impl<'gc> Slot<'gc> for PairCdr<'gc> {
 impl<'gc> Slot<'gc> for VectorElem<'gc> {
     fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
         let VectorElem(vector, index) = self;
-        if !vector.is_vector() || index >= heap.vector_len(vector.tagged()) {
-            no_such_slot("a vector element of a non-vector, or past its end");
-        }
-        heap.vector_set(vector.tagged(), index, v);
+        write_vector_elem(heap, vector, index, v, Site::VectorSet);
     }
+}
+
+impl<'gc> Slot<'gc> for MachineVectorElem<'gc> {
+    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
+        let MachineVectorElem(vector, index) = self;
+        write_vector_elem(heap, vector, index, v, Site::VmVectorSet);
+    }
+}
+
+/// Store `v` into the vector `vector`'s element `index`, counted in the
+/// census at `site`.
+#[inline]
+fn write_vector_elem(heap: &mut Heap, vector: Value<'_>, index: usize, v: TaggedValue, site: Site) {
+    if !vector.is_vector() || index >= heap.vector_len(vector.tagged()) {
+        no_such_slot("a vector element of a non-vector, or past its end");
+    }
+    heap.vector_store(site, vector.tagged(), index, v);
 }
 
 impl<'gc> Slot<'gc> for CellValue<'gc> {
@@ -179,13 +210,25 @@ impl<'gc> Slot<'gc> for ClosureFree<'gc> {
 
 impl<'gc> Slot<'gc> for PromiseBox<'gc> {
     fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
-        let Some(cell) = heap.get_promise(self.0.tagged()) else {
-            no_such_slot("a promise's box of a non-promise");
-        };
-        check_storable(v, "promise");
-        census::store(Site::PromiseForcePrimitive, Some(self.0.tagged()), v);
-        *cell.borrow_mut() = PromiseState::Forced(v);
+        write_promise(heap, self.0, v, Site::PromiseForcePrimitive);
     }
+}
+
+impl<'gc> Slot<'gc> for MachinePromiseBox<'gc> {
+    fn write(self, heap: &mut Heap, v: TaggedValue, _: sealed::Token) {
+        write_promise(heap, self.0, v, Site::PromiseForceVm);
+    }
+}
+
+/// Make the promise `promise` forced, with `v`, counted in the census at
+/// `site`.
+fn write_promise(heap: &mut Heap, promise: Value<'_>, v: TaggedValue, site: Site) {
+    let Some(cell) = heap.get_promise(promise.tagged()) else {
+        no_such_slot("a promise's box of a non-promise");
+    };
+    check_storable(v, "promise");
+    census::store(site, Some(promise.tagged()), v);
+    *cell.borrow_mut() = PromiseState::Forced(v);
 }
 
 impl<'gc> Slot<'gc> for ParamValue<'gc> {
@@ -212,6 +255,18 @@ fn write_parameter(heap: &mut Heap, param: Value<'_>, v: TaggedValue, site: Site
     match values.last_mut() {
         Some(top) => *top = v,
         None => values.push(v),
+    }
+}
+
+impl Heap {
+    /// Write `v` into `slot`: the funnel [`Cx::store`] is, for the trusted
+    /// crates, which make its values from the words they hold
+    /// (`Value::from_tagged`): the VM's inline `vector-set!`, its
+    /// `WriteCell` and `StoreClosure`, the machines' own `force` and the
+    /// tree-walker's parameter call (#708).
+    #[inline]
+    pub fn store<'gc, S: Slot<'gc>>(&mut self, slot: S, v: Value<'gc>) {
+        slot.write(self, v.tagged(), sealed::Token(()));
     }
 }
 

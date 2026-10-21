@@ -58,7 +58,7 @@ impl<'a> CpsEvaluator<'a> {
                 Some(p) => (Some(p), None, None),
                 None => match heap_ref.get_continuation(proc_tagged) {
                     Some(k) => (None, Some(k), None),
-                    None => (None, None, heap_ref.get_parameter(proc_tagged)),
+                    None => (None, None, heap_ref.parameter_parts(proc_tagged)),
                 },
             }
         };
@@ -340,7 +340,7 @@ impl<'a> CpsEvaluator<'a> {
                 );
             }
             self.jump_to_continuation(val_tagged, k, cont_env, prompt_stack, dynamic_winds)
-        } else if let Some((values, _converter)) = param_opt {
+        } else if let Some((current, _converter)) = param_opt {
             // Setting one, `(p v)`, is `%parameter-set!`, whose converter is a
             // call this machine makes rather than one from Rust (#478).
             let set_index = (args.len() == 1)
@@ -363,7 +363,7 @@ impl<'a> CpsEvaluator<'a> {
             }
             // Parameters are callable - pass TaggedValue args directly
             self.apply_parameter(
-                values,
+                current,
                 args,
                 cont,
                 cont_env,
@@ -1195,7 +1195,7 @@ impl<'a> CpsEvaluator<'a> {
     #[allow(clippy::too_many_arguments)]
     fn apply_parameter(
         &self,
-        values: Rc<std::cell::RefCell<Vec<TaggedValue>>>,
+        current: Option<TaggedValue>,
         args: Vec<TaggedValue>,
         cont: ContValue,
         cont_env: ContEnv,
@@ -1208,9 +1208,8 @@ impl<'a> CpsEvaluator<'a> {
         // (param val)  => `%parameter-set!`, dispatched before this is reached
         let result_tagged = match args.len() {
             0 => {
-                // Get current value (top of stack) - already TaggedValue
-                let stack = values.borrow();
-                *stack.last().ok_or_else(|| {
+                // The current value (top of stack), read by value (#708)
+                current.ok_or_else(|| {
                     EvalError::InvalidSyntax("parameter stack is empty".to_string())
                 })?
             }

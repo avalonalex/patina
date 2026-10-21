@@ -83,7 +83,7 @@ pub type SharedHeap = Rc<RefCell<Heap>>;
 /// Contains (values_stack, converter) where:
 /// - `values_stack`: The stack of parameter values (most recent on top)
 /// - `converter`: Optional converter procedure for the parameter
-pub type ParameterData = (Rc<RefCell<Vec<TaggedValue>>>, Option<TaggedValue>);
+pub(crate) type ParameterData = (Rc<RefCell<Vec<TaggedValue>>>, Option<TaggedValue>);
 
 /// Whether the stale-reference checks are compiled in (#621): every debug
 /// build, and a release build with `patina-core`'s `gc-check` feature, which
@@ -1019,10 +1019,23 @@ impl Heap {
     /// Set vector element (for vector-set!)
     #[inline(always)]
     pub fn vector_set(&mut self, ptr: TaggedValue, index: usize, value: TaggedValue) {
+        self.vector_store(crate::census::Site::VectorSet, ptr, index, value);
+    }
+
+    /// [`Self::vector_set`], counted in the census at `site`: the funnel's
+    /// vector stores, the VM's inline `vector-set!` apart (#708).
+    #[inline(always)]
+    pub(crate) fn vector_store(
+        &mut self,
+        site: crate::census::Site,
+        ptr: TaggedValue,
+        index: usize,
+        value: TaggedValue,
+    ) {
         debug_assert!(ptr.is_vector());
         self.vector_checks.check("vector", ptr);
         check_storable(value, "vector");
-        crate::census::store(crate::census::Site::VectorSet, Some(ptr), value);
+        crate::census::store(site, Some(ptr), value);
         self.vectors[ptr.heap_index() as usize][index] = value;
     }
 
@@ -2123,10 +2136,12 @@ impl Heap {
         }
     }
 
-    /// Get the record type and fields from a TaggedValue, if it is a Record
+    /// Get the record type and fields from a TaggedValue, if it is a Record.
+    /// Crate-private, as the funnel's: a record's field is written through
+    /// [`RecordField`](crate::RecordField) (#708).
     #[inline]
     #[allow(clippy::type_complexity)]
-    pub fn get_record(
+    pub(crate) fn get_record(
         &self,
         tv: TaggedValue,
     ) -> Option<(
@@ -2162,9 +2177,12 @@ impl Heap {
 
     /// Get the Parameter fields from a TaggedValue, if it is one
     ///
-    /// Returns (values_stack, converter) tuple.
+    /// Returns (values_stack, converter) tuple. Crate-private, as the
+    /// funnel's: outside core a parameter is read by value
+    /// ([`Self::parameter_parts`]) and written through
+    /// [`ParamValue`](crate::ParamValue) (#708).
     #[inline]
-    pub fn get_parameter(&self, tv: TaggedValue) -> Option<ParameterData> {
+    pub(crate) fn get_parameter(&self, tv: TaggedValue) -> Option<ParameterData> {
         if !tv.is_object() {
             return None;
         }
@@ -2174,9 +2192,13 @@ impl Heap {
         }
     }
 
-    /// Get the Promise from a TaggedValue, if it is one
+    /// Get the Promise from a TaggedValue, if it is one. Crate-private, as
+    /// the funnel's: outside core a promise is read by value
+    /// ([`Self::promise_state`]) and written through
+    /// [`PromiseBox`](crate::PromiseBox) or
+    /// [`MachinePromiseBox`](crate::MachinePromiseBox) (#708).
     #[inline]
-    pub fn get_promise(
+    pub(crate) fn get_promise(
         &self,
         tv: TaggedValue,
     ) -> Option<std::rc::Rc<std::cell::RefCell<PromiseState>>> {
@@ -2185,6 +2207,37 @@ impl Heap {
         }
         match self.get_object(tv) {
             HeapObjectData::Promise(p) => Some(p.clone()),
+            _ => None,
+        }
+    }
+
+    /// The state of the promise `tv`, copied out, or `None` if `tv` is none.
+    #[inline]
+    pub fn promise_state(&self, tv: TaggedValue) -> Option<PromiseState> {
+        if !tv.is_object() {
+            return None;
+        }
+        match self.get_object(tv) {
+            HeapObjectData::Promise(p) => Some(*p.borrow()),
+            _ => None,
+        }
+    }
+
+    /// The parameter object `tv`'s current value and its converter, read
+    /// rather than borrowed, or `None` if `tv` is none. The value is `None`
+    /// for an empty stack, which no parameter object has.
+    #[inline]
+    pub fn parameter_parts(
+        &self,
+        tv: TaggedValue,
+    ) -> Option<(Option<TaggedValue>, Option<TaggedValue>)> {
+        if !tv.is_object() {
+            return None;
+        }
+        match self.get_object(tv) {
+            HeapObjectData::Parameter { values, converter } => {
+                Some((values.borrow().last().copied(), *converter))
+            }
             _ => None,
         }
     }

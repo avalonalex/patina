@@ -316,4 +316,34 @@ mod tests {
         let result = eval_str(&backend, "(+ 1 2 3)").unwrap();
         assert_eq!(result.as_fixnum(), Some(6));
     }
+
+    /// A parameter called through the detached context is applied in direct
+    /// style, which reads its value and stores a new one through the funnel,
+    /// after its converter if it has one (#708).
+    #[test]
+    fn test_tree_walker_detached_parameter_call() {
+        use patina_primitives::ApplyContext;
+        let backend = TreeWalker::new();
+        eval_str(&backend, "(define p (make-parameter 1))").unwrap();
+        eval_str(
+            &backend,
+            "(define q (make-parameter 1 (lambda (x) (* x 10))))",
+        )
+        .unwrap();
+        let p = eval_str(&backend, "p").unwrap();
+        let q = eval_str(&backend, "q").unwrap();
+        let evaluator = backend.evaluator();
+        evaluator
+            .apply_proc(p, vec![TaggedValue::fixnum(5)])
+            .unwrap();
+        evaluator
+            .apply_proc(q, vec![TaggedValue::fixnum(5)])
+            .unwrap();
+        assert_eq!(
+            evaluator.apply_proc(p, vec![]).unwrap().as_fixnum(),
+            Some(5)
+        );
+        assert_eq!(eval_str(&backend, "(p)").unwrap().as_fixnum(), Some(5));
+        assert_eq!(eval_str(&backend, "(q)").unwrap().as_fixnum(), Some(50));
+    }
 }

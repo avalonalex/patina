@@ -420,20 +420,14 @@ fn try_call_parameter(
     func_val: TaggedValue,
     args: &[TaggedValue],
 ) -> Option<Result<TaggedValue, VmError>> {
-    let heap = state.heap().borrow();
-    let (values, _converter) = heap.get_parameter(func_val)?;
-    drop(heap);
+    let (current, _converter) = state.heap().borrow().parameter_parts(func_val)?;
     if !args.is_empty() {
         return Some(Err(VmError::ArityMismatch {
             expected: "0 or 1".into(),
             got: args.len(),
         }));
     }
-    let stack = values.borrow();
-    Some(Ok(stack
-        .last()
-        .copied()
-        .unwrap_or(TaggedValue::UNSPECIFIED)))
+    Some(Ok(current.unwrap_or(TaggedValue::UNSPECIFIED)))
 }
 
 /// Outlined error constructor — `#[cold]` keeps the formatting machinery
@@ -756,8 +750,7 @@ fn handle_control_primitive(
                 });
             }
             let obj = args[0];
-            let cell = state.heap().borrow().get_promise(obj);
-            let state_now = cell.as_deref().map(|cell| *cell.borrow());
+            let state_now = state.heap().borrow().promise_state(obj);
             match state_now {
                 None => state.set_reg(dst, obj),
                 Some(PromiseState::Forced(value)) => state.set_reg(dst, value),
@@ -2254,14 +2247,13 @@ fn force_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
 pub(super) fn resume_force(state: &mut VmState, base: usize) -> Result<(), VmError> {
     let promise = state.reg_at(base, force_step::PROMISE);
     let result = state.reg_at(base, force_step::RESULT);
-    let cell = state
+    let now = state
         .heap()
         .borrow()
-        .get_promise(promise)
+        .promise_state(promise)
         .ok_or_else(|| VmError::Runtime {
             message: "force: the promise being forced is gone".into(),
         })?;
-    let now = *cell.borrow();
     let settled = match now {
         // The thunk forced this promise re-entrantly: that value stands, and
         // this thunk's result is dropped (R7RS 7.3, "unless promise-done?").
@@ -2272,12 +2264,11 @@ pub(super) fn resume_force(state: &mut VmState, base: usize) -> Result<(), VmErr
                 // other shares this one's, so either forced later sees one
                 // value (`Heap::promise_update`).
                 state.heap().borrow_mut().promise_update(promise, result);
-                let cell = state
+                let next = state
                     .heap()
                     .borrow()
-                    .get_promise(promise)
+                    .promise_state(promise)
                     .expect("still one");
-                let next = *cell.borrow();
                 match next {
                     PromiseState::Forced(value) => Some(value),
                     PromiseState::Delayed(thunk) => {
@@ -2286,12 +2277,19 @@ pub(super) fn resume_force(state: &mut VmState, base: usize) -> Result<(), VmErr
                     }
                 }
             } else {
-                patina_core::census::store(
-                    patina_core::census::Site::PromiseForceVm,
-                    Some(promise),
-                    result,
-                );
-                *cell.borrow_mut() = PromiseState::Forced(result);
+                // SAFETY: the stub frame's registers: live words of this
+                // heap, and nothing collects before the store.
+                let (promise, value) = unsafe {
+                    (
+                        patina_core::Value::from_tagged(promise),
+                        patina_core::Value::from_tagged(result),
+                    )
+                };
+                // Through the funnel, counted at `promise_force_vm` (#708).
+                state
+                    .heap()
+                    .borrow_mut()
+                    .store(patina_core::MachinePromiseBox(promise), value);
                 Some(result)
             }
         }

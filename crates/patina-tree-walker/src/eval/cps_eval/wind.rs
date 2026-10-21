@@ -179,12 +179,11 @@ impl<'a> CpsEvaluator<'a> {
     ) -> Result<StepResult, EvalError> {
         let heap = &self.evaluator.heap;
 
-        // Try to extract promise from TaggedValue
-        let promise_opt = heap.borrow().get_promise(value_tagged);
+        // The promise's state, read by value (#708)
+        let promise_opt = heap.borrow().promise_state(value_tagged);
 
-        if let Some(promise_ref) = promise_opt {
-            let state = promise_ref.borrow();
-            match *state {
+        if let Some(state) = promise_opt {
+            match state {
                 patina_core::PromiseState::Forced(v_tagged) => {
                     // Already forced - return cached TaggedValue directly
                     Ok(StepResult::InvokeContinuation {
@@ -198,9 +197,7 @@ impl<'a> CpsEvaluator<'a> {
                     })
                 }
                 patina_core::PromiseState::Delayed(thunk_tagged) => {
-                    // Need to force - call the thunk
-                    drop(state); // Release borrow before calling
-
+                    // Need to force - call the thunk.
                     // Create a continuation that will cache the result
                     let force_cont = ContValue::ForceCache {
                         promise: value_tagged,
