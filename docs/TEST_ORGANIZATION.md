@@ -857,9 +857,7 @@ cargo test --package patina-tests --test scheme_suite
 | macros | `Compiler` | a slice held across a compilation | E0502 |
 | interpreter | `Interpreter::with` | a value leaving `with` (#710) | a lifetime error, no code |
 | interpreter | `Interpreter::call` | a call made inside `with`, so a value from `with` passed to `call` there (#710) | E0499 |
-
-A host primitive keeping its argument in a `static` comes with #710's host
-primitives.
+| interpreter | `PrimSpec` | a host primitive keeping its argument in a `static` (#710) | E0277 |
 
 `patina-compat` has none of its own. It reads in words inside its own context
 (`sexp::parse_all`), and none of its API takes or answers a value.

@@ -265,6 +265,33 @@ impl Default for TreeWalker {
     }
 }
 
+impl patina_primitives::HostPrimitives for TreeWalker {
+    fn register_host_primitive(
+        &mut self,
+        library: &[String],
+        primitive: patina_primitives::PrimitiveFn,
+    ) -> Result<(), patina_runtime::RegisterError> {
+        let (name, arity) = (primitive.name, primitive.arity.clone());
+        let qualified: Rc<str> = Rc::from(primitive.qualified_name());
+        self.evaluator
+            .library_registry
+            .borrow()
+            .check_host_export(library, name)?;
+        let evaluator =
+            Rc::get_mut(&mut self.evaluator).ok_or(patina_runtime::RegisterError::Running)?;
+        let index = evaluator.primitive_registry.register(primitive);
+        let procedure = patina_core::Procedure::primitive(name, arity, qualified, Some(index));
+        // The library's namespace roots it from the export on, and nothing
+        // collects before.
+        let value = evaluator.heap.borrow_mut().alloc_procedure(procedure);
+        evaluator
+            .library_registry
+            .borrow_mut()
+            .export_from_host_library(library, name, value, &evaluator.heap);
+        Ok(())
+    }
+}
+
 impl Backend for TreeWalker {
     type Error = EvalError;
 

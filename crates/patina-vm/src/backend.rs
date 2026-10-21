@@ -914,6 +914,33 @@ impl Drop for VmBackend {
     }
 }
 
+impl patina_primitives::HostPrimitives for VmBackend {
+    fn register_host_primitive(
+        &mut self,
+        library: &[String],
+        primitive: patina_primitives::PrimitiveFn,
+    ) -> Result<(), patina_runtime::RegisterError> {
+        let (name, arity) = (primitive.name, primitive.arity.clone());
+        let qualified: Rc<str> = Rc::from(primitive.qualified_name());
+        self.library_registry
+            .borrow()
+            .check_host_export(library, name)?;
+        let index = self
+            .state
+            .borrow_mut()
+            .register_primitive(primitive)
+            .ok_or(patina_runtime::RegisterError::Running)?;
+        let procedure = patina_core::Procedure::primitive(name, arity, qualified, Some(index));
+        // The library's namespace roots it from the export on, and nothing
+        // collects before.
+        let value = self.heap.borrow_mut().alloc_procedure(procedure);
+        self.library_registry
+            .borrow_mut()
+            .export_from_host_library(library, name, value, &self.heap);
+        Ok(())
+    }
+}
+
 impl Backend for VmBackend {
     type Error = VmBackendError;
 

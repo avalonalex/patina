@@ -391,6 +391,33 @@ pub(crate) fn expect_arity<T>(args: &[T], n: usize) -> Result<(), EvalError> {
     Ok(())
 }
 
+/// A machine a host registers its primitives in (#710): both backends are
+/// one, and `Interpreter::register_primitive` asks for one.
+pub trait HostPrimitives {
+    /// Add `primitive` to the machine's registry, and export it from the
+    /// host library `library`, whose name `primitive.library` is, joined with
+    /// dots: a program reaches it by importing that library. Between
+    /// evaluations only.
+    fn register_host_primitive(
+        &mut self,
+        library: &[String],
+        primitive: PrimitiveFn,
+    ) -> Result<(), patina_runtime::RegisterError>;
+}
+
+/// The helper class a primitive declares for the JIT (`PRD/GC_PRD.md`
+/// §11.5, decision 13): whether it may block. No machine reads it yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrimClass {
+    /// Never blocks. Its context can neither collect nor call Scheme, so a
+    /// `Leaf` may still allocate: the JIT treats every host primitive as
+    /// allocating, whatever its class.
+    Leaf,
+    /// May block, or calls back into the program: a resumable primitive
+    /// always is one.
+    Transfer,
+}
+
 pub struct PrimitiveFn {
     pub library: &'static str,
     pub name: &'static str,
@@ -398,6 +425,9 @@ pub struct PrimitiveFn {
     #[allow(dead_code)]
     pub help: &'static str,
     pub handler: PrimitiveHandler,
+    /// The class a host declared at registration (#710); a built-in
+    /// primitive's follows from its handler ([`PrimitiveFn::class`]).
+    pub declared_class: Option<PrimClass>,
 }
 
 impl PrimitiveFn {
@@ -415,6 +445,7 @@ impl PrimitiveFn {
             arity,
             help,
             handler: PrimitiveHandler::Cx(handler),
+            declared_class: None,
         }
     }
 
@@ -431,6 +462,7 @@ impl PrimitiveFn {
             arity,
             help,
             handler: PrimitiveHandler::HigherOrder(handler),
+            declared_class: None,
         }
     }
 
@@ -451,7 +483,27 @@ impl PrimitiveFn {
             arity,
             help,
             handler: PrimitiveHandler::Resumable { start, resume },
+            declared_class: None,
         }
+    }
+
+    /// This primitive with the class a host declared (#710).
+    pub fn with_class(mut self, class: PrimClass) -> Self {
+        self.declared_class = Some(class);
+        self
+    }
+
+    /// The primitive's helper class: the one a host declared, or for a
+    /// built-in primitive, until stage 6, what its handler says. One that
+    /// takes the context cannot run Scheme or collect, so it is a `Leaf`;
+    /// one that calls back is a `Transfer`.
+    pub fn class(&self) -> PrimClass {
+        self.declared_class.unwrap_or(match self.handler {
+            PrimitiveHandler::Cx(_) => PrimClass::Leaf,
+            PrimitiveHandler::HigherOrder(_) | PrimitiveHandler::Resumable { .. } => {
+                PrimClass::Transfer
+            }
+        })
     }
 
     pub fn qualified_name(&self) -> String {
@@ -510,7 +562,9 @@ impl PrimitiveRegistry {
         }
     }
 
-    pub fn register(&mut self, primitive: PrimitiveFn) {
+    /// Register `primitive`, answering its index: a new one is appended,
+    /// and one of a name already registered replaces that entry in place.
+    pub fn register(&mut self, primitive: PrimitiveFn) -> usize {
         let qualified_name = primitive.qualified_name();
         let index = match self.by_qualified.get(&qualified_name) {
             Some(&existing) => {
@@ -527,6 +581,7 @@ impl PrimitiveRegistry {
         self.name_index
             .entry(self.entries[index].name)
             .or_insert(index);
+        index
     }
 
     pub fn get(&self, qualified_name: &str) -> Option<&PrimitiveFn> {

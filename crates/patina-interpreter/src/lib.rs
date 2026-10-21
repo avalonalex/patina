@@ -75,7 +75,58 @@ pub use patina_frontend::{
 pub use patina_frontend::prune_freed_locations;
 pub use patina_ir::CoreExpr;
 use patina_runtime::HasDiagnostic;
-pub use patina_runtime::{Arity, Backend, Environment, EvalError, Procedure};
+pub use patina_runtime::{Arity, Backend, Environment, EvalError, Procedure, RegisterError};
+
+/// A host primitive's procedure (`PRD/GC_PRD.md` §11.3's `Prim`): it reads,
+/// allocates and stores through the context the machine makes for its call,
+/// and its arguments and value are values of that context (#710).
+pub use patina_primitives::CxHandler as Prim;
+pub use patina_primitives::{
+    ApplyContext, CallArgs, HostPrimitives, PrimClass, ResumableResume, ResumableStart, Step,
+};
+
+/// What [`Interpreter::register_primitive`] registers (#710): the procedure,
+/// the arguments it takes, and the helper class the JIT will read, `Leaf` for
+/// one that never blocks and `Transfer` for one that may.
+///
+/// A primitive's arguments are values of its call's context, so it cannot
+/// keep one past the call (#709). What it keeps is plain data:
+///
+/// ```
+/// use std::sync::Mutex;
+/// use patina_core::{Cx, Value};
+/// use patina_interpreter::{EvalError, Prim};
+///
+/// static LAST: Mutex<Option<i64>> = Mutex::new(None);
+///
+/// fn remember<'gc>(_: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+///     *LAST.lock().unwrap() = args[0].as_fixnum();
+///     Ok(args[0])
+/// }
+/// let _: Prim = remember;
+/// ```
+///
+/// Its argument kept in a `static`:
+///
+/// ```compile_fail,E0277
+/// use std::sync::Mutex;
+/// use patina_core::{Cx, Value};
+/// use patina_interpreter::{EvalError, Prim};
+///
+/// static LAST: Mutex<Option<Value<'static>>> = Mutex::new(None);
+///
+/// fn remember<'gc>(_: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+///     *LAST.lock().unwrap() = Some(args[0]);
+///     Ok(args[0])
+/// }
+/// let _: Prim = remember;
+/// ```
+#[derive(Clone)]
+pub struct PrimSpec {
+    pub f: Prim,
+    pub arity: Arity,
+    pub class: PrimClass,
+}
 #[cfg(feature = "tree-walker")]
 pub use patina_tree_walker::{Evaluator, TreeWalker};
 #[cfg(feature = "vm")]
@@ -1221,6 +1272,99 @@ impl<B: Backend> Interpreter<B> {
 /// ```
 #[cfg(feature = "tree-walker")]
 pub type TreeWalkInterpreter = Interpreter<TreeWalker>;
+
+/// Host primitives (#710), on a backend that takes them: both machines do.
+impl<B: Backend + HostPrimitives> Interpreter<B> {
+    /// Register the host primitive `name`, exported from the library `lib`,
+    /// which a program then imports to call it (#710). The first registration
+    /// in `lib` makes the library, and a later one adds to it; a program
+    /// that imported `lib` before reaches only what was registered then.
+    ///
+    /// The primitive is called as a built-in one is: through a context the
+    /// machine makes for the call, beneath which nothing collects and nothing
+    /// calls Scheme, so it may allocate and store but never call back. One
+    /// that needs to call a procedure is resumable
+    /// ([`Interpreter::register_resumable`]).
+    ///
+    /// Refused for a library of the bundled namespaces (`scheme`, `srfi`,
+    /// `patina`), for one loaded otherwise or that a search path finds, and
+    /// for a name `lib` already exports. A primitive's name is kept for the
+    /// interpreter's life.
+    ///
+    /// ```
+    /// # #[cfg(feature = "vm")]
+    /// # {
+    /// # use patina_interpreter::VmInterpreter;
+    /// use patina_core::{Cx, Value};
+    /// use patina_interpreter::{Arity, EvalError, PrimClass, PrimSpec};
+    ///
+    /// fn add<'gc>(_: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+    ///     match (args[0].as_fixnum(), args[1].as_fixnum()) {
+    ///         (Some(a), Some(b)) => Ok(Value::fixnum(a + b)),
+    ///         _ => Err(EvalError::TypeError("host-add: expected fixnums".into())),
+    ///     }
+    /// }
+    ///
+    /// let mut interp = VmInterpreter::new_vm();
+    /// # interp.backend().add_library_search_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib"));
+    /// let spec = PrimSpec { f: add, arity: Arity::Exact(2), class: PrimClass::Leaf };
+    /// interp.register_primitive(&["host", "math"], "host-add", spec).unwrap();
+    /// let sum = interp.eval_program_owned("(import (host math)) (host-add 1 2)").unwrap();
+    /// assert_eq!(interp.display_tagged(&sum), "3");
+    /// # }
+    /// ```
+    pub fn register_primitive(
+        &mut self,
+        lib: &[&str],
+        name: &str,
+        spec: PrimSpec,
+    ) -> Result<(), RegisterError> {
+        let library: Vec<String> = lib.iter().map(|part| part.to_string()).collect();
+        let primitive = patina_primitives::PrimitiveFn::new_cx(
+            kept(library.join(".")),
+            kept(name.to_string()),
+            spec.arity,
+            "",
+            spec.f,
+        )
+        .with_class(spec.class);
+        self.backend.register_host_primitive(&library, primitive)
+    }
+
+    /// Register the resumable host primitive `name`, exported from `lib`
+    /// (#710): a primitive that calls a procedure by asking the machine to.
+    /// `start` runs on the arguments, and `resume` each time a call it asked
+    /// for (`Step::Call`) returns, so a continuation captured in the callee
+    /// and re-entered after the primitive returned resumes it, as chibi and
+    /// Gauche resume such a call (#471). Its class is `Transfer`. Refused as
+    /// [`Interpreter::register_primitive`] is.
+    pub fn register_resumable(
+        &mut self,
+        lib: &[&str],
+        name: &str,
+        arity: Arity,
+        start: ResumableStart,
+        resume: ResumableResume,
+    ) -> Result<(), RegisterError> {
+        let library: Vec<String> = lib.iter().map(|part| part.to_string()).collect();
+        let primitive = patina_primitives::PrimitiveFn::new_resumable(
+            kept(library.join(".")),
+            kept(name.to_string()),
+            arity,
+            "",
+            start,
+            resume,
+        )
+        .with_class(PrimClass::Transfer);
+        self.backend.register_host_primitive(&library, primitive)
+    }
+}
+
+/// `s` for the interpreter's life: the registry names a primitive by a
+/// `&'static str`, so a host's name is kept once, at its registration.
+fn kept(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
 
 // Specialized implementation for TreeWalker backend
 #[cfg(feature = "tree-walker")]
