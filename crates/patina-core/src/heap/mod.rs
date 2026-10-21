@@ -83,7 +83,7 @@ pub type SharedHeap = Rc<RefCell<Heap>>;
 /// Contains (values_stack, converter) where:
 /// - `values_stack`: The stack of parameter values (most recent on top)
 /// - `converter`: Optional converter procedure for the parameter
-pub(crate) type ParameterData = (Rc<RefCell<Vec<TaggedValue>>>, Option<TaggedValue>);
+pub(crate) type ParameterData = (Rc<Interior<Vec<TaggedValue>>>, Option<TaggedValue>);
 
 /// Whether the stale-reference checks are compiled in (#621): every debug
 /// build, and a release build with `patina-core`'s `gc-check` feature, which
@@ -204,9 +204,77 @@ pub enum PromiseState {
     Forced(TaggedValue),
 }
 
+/// A payload of a heap object that changes after the object is made: a
+/// record's fields, a parameter's value stack, a promise's state, a cell's
+/// value and an ephemeron's pair. Only core reaches inside. A store goes
+/// through the funnel ([`Cx::store`](crate::Cx::store), [`Heap::store`]),
+/// and a read through an accessor that answers by value
+/// ([`Heap::promise_state`], [`Heap::parameter_parts`]).
+///
+/// Code outside core can match a [`HeapObjectData`] on its kind, as the
+/// datum writer does, but cannot borrow its payload (#708):
+///
+/// ```compile_fail,E0624
+/// use patina_core::TaggedValue;
+/// use patina_core::heap::{Heap, HeapObjectData, PromiseState};
+///
+/// fn force_by_hand(heap: &Heap, promise: TaggedValue, value: TaggedValue) {
+///     if let HeapObjectData::Promise(state) = heap.get_object(promise) {
+///         *state.borrow_mut() = PromiseState::Forced(value);
+///     }
+/// }
+/// ```
+///
+/// Nor a record's fields:
+///
+/// ```compile_fail,E0624
+/// use patina_core::TaggedValue;
+/// use patina_core::heap::{Heap, HeapObjectData};
+///
+/// fn set_by_hand(heap: &Heap, record: TaggedValue, value: TaggedValue) {
+///     if let HeapObjectData::Record { fields, .. } = heap.get_object(record) {
+///         fields.borrow_mut()[0] = value;
+///     }
+/// }
+/// ```
+///
+/// Nor a parameter's values:
+///
+/// ```compile_fail,E0624
+/// use patina_core::TaggedValue;
+/// use patina_core::heap::{Heap, HeapObjectData};
+///
+/// fn install_by_hand(heap: &Heap, parameter: TaggedValue, value: TaggedValue) {
+///     if let HeapObjectData::Parameter { values, .. } = heap.get_object(parameter) {
+///         values.borrow_mut().push(value);
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct Interior<T>(RefCell<T>);
+
+impl<T> Interior<T> {
+    #[inline]
+    pub(crate) fn new(value: T) -> Self {
+        Interior(RefCell::new(value))
+    }
+
+    #[inline]
+    pub(crate) fn borrow(&self) -> std::cell::Ref<'_, T> {
+        self.0.borrow()
+    }
+
+    #[inline]
+    pub(crate) fn borrow_mut(&self) -> std::cell::RefMut<'_, T> {
+        self.0.borrow_mut()
+    }
+}
+
 /// Generic heap object data
 ///
-/// This enum holds the actual data for objects that use TAG_OBJECT.
+/// This enum holds the actual data for objects that use TAG_OBJECT. A
+/// payload that changes after the object is made goes in an [`Interior`],
+/// which only core can borrow (#708).
 ///
 /// Adding a variant? The GC tracer's exhaustive match in
 /// `heap/gc.rs::trace_object_children` will fail to compile until you add an
@@ -242,7 +310,7 @@ pub enum HeapObjectData {
     RecordType(Rc<crate::record_type::RecordTypeDescriptor>),
     Record {
         record_type: Rc<crate::record_type::RecordTypeDescriptor>,
-        fields: Rc<RefCell<Vec<TaggedValue>>>,
+        fields: Rc<Interior<Vec<TaggedValue>>>,
     },
     Identifier {
         name: Rc<str>,
@@ -252,10 +320,10 @@ pub enum HeapObjectData {
     },
     Continuation(Rc<crate::continuation::CpsContinuation>),
     Parameter {
-        values: Rc<RefCell<Vec<TaggedValue>>>,
+        values: Rc<Interior<Vec<TaggedValue>>>,
         converter: Option<TaggedValue>,
     },
-    Promise(Rc<RefCell<PromiseState>>),
+    Promise(Rc<Interior<PromiseState>>),
     Library(Rc<crate::library::Library>),
     Values(Vec<TaggedValue>),
     EnvironmentSpecifier {
@@ -267,7 +335,7 @@ pub enum HeapObjectData {
     /// A mutable cell used to box variables that are `set!` after being captured
     /// by a VM closure. The cell holds the current value and is shared by
     /// reference among all closures that captured the same binding.
-    MutableCell(RefCell<TaggedValue>),
+    MutableCell(Interior<TaggedValue>),
     /// SRFI 124 ephemeron: a key/datum pair whose key the collector holds
     /// *weakly*, and whose datum it keeps alive only while the key is.
     ///
@@ -280,7 +348,7 @@ pub enum HeapObjectData {
     /// legitimately be `#f` and such a pair is not broken until collected.
     /// Behind a `RefCell` because breaking happens during a collection, when
     /// the heap is otherwise immutable to the mutator.
-    Ephemeron(RefCell<Option<(TaggedValue, TaggedValue)>>),
+    Ephemeron(Interior<Option<(TaggedValue, TaggedValue)>>),
     /// A VM bytecode closure: code id + captured free variables + globals env.
     VmClosure {
         /// The VM's `CodeObjectId`, as its raw `u64`, to avoid a direct
@@ -953,7 +1021,7 @@ impl Heap {
 
     /// Set car of a pair (for set-car!)
     #[inline(always)]
-    pub fn set_car(&mut self, ptr: TaggedValue, value: TaggedValue) {
+    pub(crate) fn set_car(&mut self, ptr: TaggedValue, value: TaggedValue) {
         debug_assert!(ptr.is_pair());
         self.pair_checks.check("pair", ptr);
         check_storable(value, "pair");
@@ -963,7 +1031,7 @@ impl Heap {
 
     /// Set cdr of a pair (for set-cdr!)
     #[inline(always)]
-    pub fn set_cdr(&mut self, ptr: TaggedValue, value: TaggedValue) {
+    pub(crate) fn set_cdr(&mut self, ptr: TaggedValue, value: TaggedValue) {
         debug_assert!(ptr.is_pair());
         self.pair_checks.check("pair", ptr);
         check_storable(value, "pair");
@@ -1018,7 +1086,7 @@ impl Heap {
 
     /// Set vector element (for vector-set!)
     #[inline(always)]
-    pub fn vector_set(&mut self, ptr: TaggedValue, index: usize, value: TaggedValue) {
+    pub(crate) fn vector_set(&mut self, ptr: TaggedValue, index: usize, value: TaggedValue) {
         self.vector_store(crate::census::Site::VectorSet, ptr, index, value);
     }
 
@@ -1047,7 +1115,7 @@ impl Heap {
     }
 
     /// Get a mutable slice of the vector
-    pub fn vector_slice_mut(&mut self, ptr: TaggedValue) -> &mut [TaggedValue] {
+    pub(crate) fn vector_slice_mut(&mut self, ptr: TaggedValue) -> &mut [TaggedValue] {
         debug_assert!(ptr.is_vector());
         self.vector_checks.check("vector", ptr);
         &mut self.vectors[ptr.heap_index() as usize]
@@ -1096,7 +1164,7 @@ impl Heap {
     /// string's length is fixed once allocated, so its payload is what it was
     /// charged (`heap/account.rs`).
     #[inline(always)]
-    pub fn get_string_chars_mut(&mut self, ptr: TaggedValue) -> &mut [char] {
+    pub(crate) fn get_string_chars_mut(&mut self, ptr: TaggedValue) -> &mut [char] {
         debug_assert!(ptr.is_string());
         self.string_checks.check("string", ptr);
         &mut self.strings[ptr.heap_index() as usize]
@@ -1209,15 +1277,16 @@ impl Heap {
         self.alloc_object(HeapObjectData::RecordType(rtd))
     }
 
-    /// Allocate a native record instance
+    /// Allocate a native record instance, its fields taken by value: only
+    /// core writes them afterwards ([`Interior`], #708).
     pub fn alloc_record(
         &mut self,
         record_type: Rc<crate::record_type::RecordTypeDescriptor>,
-        fields: Rc<RefCell<Vec<TaggedValue>>>,
+        fields: Vec<TaggedValue>,
     ) -> TaggedValue {
         self.alloc_object(HeapObjectData::Record {
             record_type,
-            fields,
+            fields: Rc::new(Interior::new(fields)),
         })
     }
 
@@ -1327,18 +1396,24 @@ impl Heap {
         self.alloc_object(HeapObjectData::Continuation(k))
     }
 
-    /// Allocate a native Parameter object
+    /// Allocate a native Parameter object whose value is `init`, with
+    /// `converter` if it has one. Only core writes its value afterwards
+    /// ([`Interior`], #708).
     pub fn alloc_parameter(
         &mut self,
-        values: Rc<RefCell<Vec<TaggedValue>>>,
+        init: TaggedValue,
         converter: Option<TaggedValue>,
     ) -> TaggedValue {
-        self.alloc_object(HeapObjectData::Parameter { values, converter })
+        self.alloc_object(HeapObjectData::Parameter {
+            values: Rc::new(Interior::new(vec![init])),
+            converter,
+        })
     }
 
-    /// Allocate a native Promise object
-    pub fn alloc_promise(&mut self, state: Rc<RefCell<PromiseState>>) -> TaggedValue {
-        self.alloc_object(HeapObjectData::Promise(state))
+    /// Allocate a native Promise object in `state`. Only core writes its
+    /// state afterwards ([`Interior`], #708).
+    pub fn alloc_promise(&mut self, state: PromiseState) -> TaggedValue {
+        self.alloc_object(HeapObjectData::Promise(Rc::new(Interior::new(state))))
     }
 
     /// R7RS 7.3's `promise-update!`: forcing the `delay-force` promise
@@ -1348,6 +1423,9 @@ impl Heap {
     /// forced in constant space. Both boxes are looked up *now*, by object:
     /// a force nested inside the thunk may already have re-pointed either
     /// promise, and a box captured before the thunk ran can be stale.
+    ///
+    /// The one store into a heap object that is not a funnel slot's, so it
+    /// stays public for the machines' `force`, beside `Heap::store` (#708).
     pub fn promise_update(&mut self, outer: TaggedValue, inner: TaggedValue) {
         let (outer_cell, inner_state) = match (self.get_promise(outer), self.get_promise(inner)) {
             (Some(o), Some(i)) => (o, *i.borrow()),
@@ -1494,7 +1572,7 @@ impl Heap {
     /// *broken* — both fields are cleared, so the datum cannot keep anything
     /// alive through a dead key.
     pub fn alloc_ephemeron(&mut self, key: TaggedValue, datum: TaggedValue) -> TaggedValue {
-        self.alloc_object(HeapObjectData::Ephemeron(RefCell::new(Some((key, datum)))))
+        self.alloc_object(HeapObjectData::Ephemeron(Interior::new(Some((key, datum)))))
     }
 
     /// What `tv` is, as an ephemeron, in one lookup.
@@ -1551,7 +1629,7 @@ impl Heap {
     /// Allocate a `MutableCell` containing `val`.
     pub fn alloc_mutable_cell(&mut self, val: TaggedValue) -> TaggedValue {
         check_storable(val, "cell");
-        self.alloc_object(HeapObjectData::MutableCell(RefCell::new(val)))
+        self.alloc_object(HeapObjectData::MutableCell(Interior::new(val)))
     }
 
     /// Read the value inside a `MutableCell`.
@@ -1571,7 +1649,7 @@ impl Heap {
     ///
     /// Returns `false` if `ptr` does not point to a `MutableCell`.
     #[inline]
-    pub fn write_mutable_cell(&self, ptr: TaggedValue, val: TaggedValue) -> bool {
+    pub(crate) fn write_mutable_cell(&self, ptr: TaggedValue, val: TaggedValue) -> bool {
         if !ptr.is_object() {
             return false;
         }
@@ -1720,7 +1798,7 @@ impl Heap {
     /// Returns `false` if `closure` is not a `VmClosure` or the slot is out
     /// of range.
     #[inline]
-    pub fn set_vm_closure_free_var(
+    pub(crate) fn set_vm_closure_free_var(
         &mut self,
         closure: TaggedValue,
         slot: usize,
@@ -1831,7 +1909,9 @@ impl Heap {
         object
     }
 
-    /// Get object data reference
+    /// Get object data reference. A payload that changes is in an
+    /// [`Interior`], which only core can borrow: outside core a match names
+    /// the kind, and the accessors read the payload by value (#708).
     #[inline(always)]
     pub fn get_object(&self, ptr: TaggedValue) -> &HeapObjectData {
         debug_assert!(ptr.is_object());
@@ -2150,7 +2230,7 @@ impl Heap {
         tv: TaggedValue,
     ) -> Option<(
         &Rc<crate::record_type::RecordTypeDescriptor>,
-        &Rc<RefCell<Vec<TaggedValue>>>,
+        &Rc<Interior<Vec<TaggedValue>>>,
     )> {
         if !tv.is_object() {
             return None;
@@ -2202,10 +2282,7 @@ impl Heap {
     /// [`PromiseBox`](crate::PromiseBox) or
     /// [`MachinePromiseBox`](crate::MachinePromiseBox) (#708).
     #[inline]
-    pub(crate) fn get_promise(
-        &self,
-        tv: TaggedValue,
-    ) -> Option<std::rc::Rc<std::cell::RefCell<PromiseState>>> {
+    pub(crate) fn get_promise(&self, tv: TaggedValue) -> Option<Rc<Interior<PromiseState>>> {
         if !tv.is_object() {
             return None;
         }
@@ -3291,20 +3368,6 @@ impl Heap {
                 true
             }
             _ => false,
-        }
-    }
-
-    /// Get mutable access to native heap bytevector bytes. A slice, not the
-    /// `Vec`, for the reason [`Heap::get_string_chars_mut`] gives.
-    pub fn get_bytevector_mut(&mut self, tv: TaggedValue) -> Option<&mut [u8]> {
-        if !tv.is_object() {
-            return None;
-        }
-        self.object_checks.check("object", tv);
-        let obj = &mut self.objects[tv.heap_index() as usize];
-        match obj {
-            HeapObjectData::Bytevector(bytes) => Some(bytes.as_mut_slice()),
-            _ => None,
         }
     }
 
