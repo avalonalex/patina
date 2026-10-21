@@ -490,9 +490,10 @@ tree-walker), each a near-copy of the others, and when the guard lived at the
 call sites one of them was missed — bootstrap died on the first collection.
 The guard therefore lives on **`ParsedLibrary` itself**: it holds unevaluated
 `body` forms that no root provider can see, so it carries a `GcDeferGuard` for
-as long as it exists. A fourth loading path is now safe by construction, and
-the placement is also correct for a `ParsedLibrary` held beyond a single
-loading call, which a call-site guard would get wrong. See §11 on why the
+as long as it exists. It keeps the guard and not the heap, which the loaders
+borrow for the call (#707). A fourth loading path is now safe by
+construction, and the placement is also correct for a `ParsedLibrary` held
+beyond a single loading call, which a call-site guard would get wrong. See §11 on why the
 debug build is the lane that localizes failures like this one.
 
 Since #677 a load is rooted instead, so that it may collect. The backends'

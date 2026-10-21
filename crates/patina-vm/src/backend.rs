@@ -551,12 +551,8 @@ impl VmBackend {
             patina_frontend::cond_expand::library_available(&instance, lib_name)
         };
         let loader = SchemeLibraryLoader::new(self.state.borrow().fs().clone());
-        let parsed = loader.parse_inline_form(
-            form,
-            std::path::Path::new("."),
-            heap.clone(),
-            &can_load_library,
-        )?;
+        let parsed =
+            loader.parse_inline_form(form, std::path::Path::new("."), &heap, &can_load_library)?;
 
         let loading = LibraryRegistry::begin_loading_scoped(
             &self.library_registry,
@@ -639,7 +635,7 @@ impl VmBackend {
         // Try simple (Rust) loaders first
         let rust_result = {
             let loaders = self.loader_registry.borrow();
-            loaders.try_simple_load_with_heap(name, &search_paths, heap.clone())?
+            loaders.try_simple_load_with_heap(name, &search_paths, &heap)?
         };
 
         let lib = if let Some(lib) = rust_result {
@@ -656,7 +652,7 @@ impl VmBackend {
                 loaders.try_parse_with_heap_and_library_checker(
                     name,
                     &search_paths,
-                    heap.clone(),
+                    &heap,
                     &can_load_library,
                 )?
             };
