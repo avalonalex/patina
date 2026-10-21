@@ -86,7 +86,6 @@ use crate::registry::PrimitiveFn;
 use crate::registry::PrimitiveRegistry;
 use crate::registry::Step;
 use patina_core::CollectKind;
-use patina_core::TaggedValue;
 use patina_core::{Cx, Value};
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
@@ -117,21 +116,26 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 
 /// Ask the machine for a full collection at this call. Nothing to keep
 /// across it.
-fn gc(_ctx: &dyn ApplyContext, _args: &[TaggedValue]) -> Result<Step, EvalError> {
+fn gc<'gc>(
+    _cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    _args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
     Ok(Step::Collect {
         kind: CollectKind::Major,
-        state: TaggedValue::UNSPECIFIED,
+        state: Value::UNSPECIFIED,
     })
 }
 
 /// The collection has run, or been posted where collection is deferred:
 /// `(gc)`'s value is unspecified either way.
-fn gc_done(
+fn gc_done<'gc>(
+    _cx: &mut Cx<'gc>,
     _ctx: &dyn ApplyContext,
-    _state: TaggedValue,
-    _collected: TaggedValue,
-) -> Result<Step, EvalError> {
-    Ok(Step::Done(TaggedValue::UNSPECIFIED))
+    _state: Value<'gc>,
+    _collected: Value<'gc>,
+) -> Result<Step<'gc>, EvalError> {
+    Ok(Step::Done(Value::UNSPECIFIED))
 }
 
 fn gc_stats<'gc>(cx: &mut Cx<'gc>, _args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {

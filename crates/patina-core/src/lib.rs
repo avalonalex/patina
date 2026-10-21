@@ -89,8 +89,8 @@ pub use environment::{
 pub use error::{ErrorDetail, ErrorKind, ExceptionKind, ExceptionObject, SourceLocation};
 pub use heap::PromiseState;
 pub use heap::cx::{
-    CellValue, ClosureFree, Cx, Fresh, PairCar, PairCdr, ParamValue, PromiseBox, PromiseView,
-    RecordField, Slot, VectorElem,
+    CellValue, ClosureFree, ConvertedParamValue, Cx, Fresh, PairCar, PairCdr, ParamValue,
+    PromiseBox, PromiseView, RecordField, Slot, VectorElem,
 };
 pub use instance::Instance;
 pub use library::Library;

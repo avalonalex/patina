@@ -129,7 +129,7 @@ use patina_core::heap::{PromiseState, SharedHeap};
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{AssertNoGc, CollectKind, GC_CHECK};
-use patina_primitives::{CallArgs, Step};
+use patina_primitives::{TaggedCallArgs, TaggedStep};
 use patina_runtime::HasDiagnostic;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -1810,11 +1810,12 @@ fn resume_stub(state: &mut VmState, argc: usize) -> Result<Rc<CodeObject>, VmErr
 }
 
 /// The code object a resumable primitive's collection runs in
-/// ([`Step::Collect`], #639): `CollectAtCall` / `ResumePrimitive` /
-/// `Return`. The frame suspends the caller at the call's return pc and holds
-/// the primitive's state while the collection runs, so a primitive that
-/// collects and then tries again (#607) keeps its arguments rooted here; the
-/// value goes to the caller when the primitive is resumed and done.
+/// ([`patina_primitives::Step::Collect`], #639): `CollectAtCall` /
+/// `ResumePrimitive` / `Return`. The frame suspends the caller at the call's
+/// return pc and holds the primitive's state while the collection runs, so a
+/// primitive that collects and then tries again (#607) keeps its arguments
+/// rooted here; the value goes to the caller when the primitive is resumed
+/// and done.
 ///
 /// # State contract
 ///
@@ -1980,7 +1981,7 @@ enum StubWork {
     /// Call `callee` with `args` ([`resume_stub`]).
     Call {
         callee: TaggedValue,
-        args: CallArgs,
+        args: TaggedCallArgs,
         /// Whether `callee` is a `Step::Eval`'s closure
         /// ([`resume_step::EVAL`]).
         eval: bool,
@@ -1998,11 +1999,11 @@ enum StubWork {
 /// out of one is returned as the sentinel. Leaves no frame pushed.
 fn vm_step(
     state: &mut VmState,
-    step: Result<Step, patina_primitives::EvalError>,
+    step: Result<TaggedStep, patina_primitives::EvalError>,
 ) -> Result<VmStep, VmError> {
     Ok(match step.map_err(eval_to_vm_error)? {
-        Step::Done(value) => VmStep::Done(value),
-        Step::Call {
+        TaggedStep::Done(value) => VmStep::Done(value),
+        TaggedStep::Call {
             callee,
             args,
             state: kept,
@@ -2014,11 +2015,11 @@ fn vm_step(
             },
             kept,
         }),
-        Step::Collect { kind, state: kept } => VmStep::Suspend(Suspension {
+        TaggedStep::Collect { kind, state: kept } => VmStep::Suspend(Suspension {
             work: StubWork::Collect(kind),
             kept,
         }),
-        Step::Eval {
+        TaggedStep::Eval {
             expr,
             env,
             state: kept,
@@ -2050,7 +2051,7 @@ fn vm_step(
             VmStep::Suspend(Suspension {
                 work: StubWork::Call {
                     callee,
-                    args: CallArgs::new(),
+                    args: TaggedCallArgs::new(),
                     eval: true,
                 },
                 kept,
@@ -2557,6 +2558,17 @@ impl patina_primitives::ApplyContext for VmApplyContext {
     ) -> Result<TaggedValue, patina_primitives::EvalError> {
         // SAFETY: pointer is valid for the lifetime of the primitive call.
         unsafe { (*self.state).call_cx(handler, args) }
+    }
+
+    /// A resumable primitive's half, in the context the machine makes for
+    /// it, as [`Self::call_cx`] makes one (#706).
+    fn step_cx(
+        &self,
+        args: &[TaggedValue],
+        step: patina_primitives::StepFn<'_>,
+    ) -> Result<TaggedStep, patina_primitives::EvalError> {
+        // SAFETY: pointer is valid for the lifetime of the primitive call.
+        unsafe { (*self.state).step_cx(args, step) }
     }
 }
 

@@ -4,7 +4,7 @@
 //! primitives like `force`, `make-parameter`, `member` with custom comparator)
 //! use this trait to remain backend-agnostic.
 
-use crate::registry::CxHandler;
+use crate::registry::{CxHandler, StepFn, TaggedStep};
 use patina_runtime::EvalError;
 use patina_runtime::{Environment, FileSystem, Library, SharedHeap, TaggedValue};
 use std::rc::Rc;
@@ -59,6 +59,16 @@ pub trait ApplyContext {
         patina_core::NoGcScope::cross_all(self.heap(), args, |cx, args| {
             handler(cx, args).map(patina_core::Value::tagged)
         })
+    }
+
+    /// Run `step`, one half of a resumable primitive, in a context over
+    /// `args` (#706): how the registry starts one and resumes it. Its step
+    /// leaves the context as words ([`Step::tagged`](crate::Step::tagged)).
+    ///
+    /// The machines override this as they do [`Self::call_cx`]. The default,
+    /// for a context with no machine, crosses each word through a handle.
+    fn step_cx(&self, args: &[TaggedValue], step: StepFn<'_>) -> Result<TaggedStep, EvalError> {
+        patina_core::NoGcScope::cross_all(self.heap(), args, |cx, args| step(cx, args))
     }
 }
 

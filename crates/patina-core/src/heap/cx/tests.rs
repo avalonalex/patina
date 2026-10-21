@@ -89,6 +89,8 @@ fn every_slot_kind_stores_through_the_funnel() {
         let param = cx.alloc_parameter(Value::fixnum(0), None);
         cx.store(ParamValue(param), Value::fixnum(7));
         assert_eq!(cx.parameter_value(param), Some(Value::fixnum(7)));
+        cx.store(ConvertedParamValue(param), Value::fixnum(8));
+        assert_eq!(cx.parameter_value(param), Some(Value::fixnum(8)));
         assert_eq!(cx.parameter_converter(param), Some(None));
     });
 }

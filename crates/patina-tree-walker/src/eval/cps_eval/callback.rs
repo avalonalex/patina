@@ -137,6 +137,16 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
         self.cps.evaluator.call_cx(handler, args)
     }
 
+    /// The evaluator's own: a step's resumable primitive, inside the step
+    /// (#706).
+    fn step_cx(
+        &self,
+        args: &[TaggedValue],
+        step: patina_primitives::StepFn<'_>,
+    ) -> Result<patina_primitives::TaggedStep, EvalError> {
+        self.cps.evaluator.step_cx(args, step)
+    }
+
     fn fs(&self) -> &Arc<dyn FileSystem> {
         self.cps.evaluator.fs()
     }

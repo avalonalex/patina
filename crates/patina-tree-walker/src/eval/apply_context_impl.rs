@@ -37,6 +37,29 @@ impl ApplyContext for Evaluator {
         }
     }
 
+    /// A resumable primitive's half, in a context made as [`Self::call_cx`]
+    /// makes one (#706).
+    fn step_cx(
+        &self,
+        args: &[TaggedValue],
+        step: patina_primitives::StepFn<'_>,
+    ) -> Result<patina_primitives::TaggedStep, EvalError> {
+        // SAFETY: as `call_cx`'s. A resumable primitive's half answers a step
+        // rather than calling back, and a nested trampoline it starts, as
+        // `eval`'s check does in expanding a form, keeps a `NoGcScope`:
+        // nothing collects while it runs. Its arguments are the call's, or the
+        // state and result its `ResumePrimitive` continuation held.
+        unsafe {
+            patina_core::heap::cx::enter_call(
+                &self.heap,
+                &self.mutator,
+                &self.instance,
+                args,
+                |cx, args| step(cx, args),
+            )
+        }
+    }
+
     fn fs(&self) -> &Arc<dyn FileSystem> {
         &self.fs
     }

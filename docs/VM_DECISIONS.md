@@ -126,8 +126,9 @@ for the design, root inventory, safe-point protocol, and staging.
 ## 6. Primitives: Shared `patina-primitives` Crate
 
 **Decision:** ~315 primitives in `patina-primitives` that take the context
-(shared by tree-walker and VM). ~20 higher-order and resumable primitives use
-the `ApplyContext` trait, which each backend provides.
+(shared by tree-walker and VM). 12 resumable primitives start and resume with
+the context too, and ~10 higher-order ones use the `ApplyContext` trait, which
+each backend provides.
 
 **The signature is the context's** (#706; `PRD/GC_PRD.md` §11.3's `Prim`).
 Every primitive that calls nothing back takes the context. The kind that took
@@ -161,12 +162,18 @@ pub type CxHandler =
 - **The datum writer** reads an object's kind through `Cx::get_object` and
   its values through the context's accessors. Its `_tagged` entry points
   cross a word in for a host (`NoGcScope::cross`).
-- **Still on the heap:** the higher-order and resumable primitives, through
+- **A resumable primitive** starts and resumes with the context, and answers
+  a `Step<'gc>` of its values. The step leaves the context as words
+  (`Step::tagged`, `TaggedStep`), for the machine to keep where its collector
+  sees them. The registry makes the context through `ApplyContext::step_cx`,
+  and hands the half the `ApplyContext` beside it, which `load` asks for the
+  interaction environment. A parameter's value is stored through the funnel's
+  `ParamValue`, or after a converter its twin `ConvertedParamValue`, which the
+  GC census counts apart.
+- **Still on the heap:** the higher-order primitives, through
   `ApplyContext::heap`. They are `member` and `assoc` with a comparator,
-  `force`, `call-with-values`, `(gc)`, `eval`, `load` and the environment
-  procedures, the parameters, `call-with-port`, the file opens and
-  `call-with-input-file` and `call-with-output-file`. They are what is left of
-  #706.
+  `force`, `call-with-values`, `call-with-port`, `%parameterize-swap!` and the
+  environment procedures. They are what is left of #706.
 
 ---
 

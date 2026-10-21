@@ -11,7 +11,9 @@
 use crate::apply_context::ApplyContext;
 use crate::registry::{PrimitiveFn, PrimitiveRegistry, Step, done_with_result};
 use patina_core::port::out_of_descriptors;
-use patina_core::{CollectKind, CoreExpr, CoreExprKind, TaggedValue, core_syntax::CoreForm};
+use patina_core::{
+    CollectKind, CoreExpr, CoreExprKind, Cx, TaggedValue, Value, core_syntax::CoreForm,
+};
 use patina_frontend::{Desugarer, LibraryDefinition};
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
@@ -95,15 +97,15 @@ fn primitive_environment(
 /// Reject core definitions before desugaring: define-syntax installs its
 /// transformer during expansion. Follow the binding so aliases cannot bypass
 /// the immutable-environment check, and a procedure named define still works.
-fn is_definition_tagged(tv: TaggedValue, heap: &patina_core::Heap, env: &Environment) -> bool {
-    if !tv.is_pair() {
+fn is_definition<'gc>(cx: &Cx<'gc>, form: Value<'gc>, env: &Environment) -> bool {
+    if !form.is_pair() {
         return false;
     }
-    let form = heap
-        .get_symbol_or_identifier_name(heap.car(tv))
-        .and_then(|name| env.get(name))
-        .and_then(|value| heap.get_core_syntax(value));
-    matches!(form, Some(CoreForm::Define | CoreForm::DefineSyntax))
+    let binding = cx
+        .get_symbol_or_identifier_name(cx.car(form))
+        .and_then(|name| cx.lookup(env, &name));
+    let core = binding.and_then(|value| cx.get_core_syntax(value));
+    matches!(core, Some(CoreForm::Define | CoreForm::DefineSyntax))
 }
 
 /// Macros such as define-values can expand to a sequence of definitions.
@@ -129,7 +131,11 @@ fn has_top_level_definition(expr: &CoreExpr) -> bool {
 /// a run of its own from Rust, so a continuation captured in it carries the
 /// caller: re-entered after `eval` has returned, it returns from `eval`
 /// again (#477).
-fn primitive_eval(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, EvalError> {
+fn primitive_eval<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "eval expects 2 arguments".to_string(),
@@ -137,24 +143,15 @@ fn primitive_eval(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
         });
     }
 
-    let heap = ctx.heap();
-
-    // Extract environment from specifier (using heap method, no Value conversion)
-    let (env, mutable) = {
-        let heap_ref = heap.borrow();
-        match heap_ref.get_environment_specifier(args[1]) {
-            Some((env, mutable)) => (env.clone(), mutable),
-            None => {
-                return Err(EvalError::TypeError(format!(
-                    "eval: expected environment, got {}",
-                    heap_ref.type_name(args[1])
-                )));
-            }
-        }
+    let Some((env, mutable)) = cx.get_environment_specifier(args[1]) else {
+        return Err(EvalError::TypeError(format!(
+            "eval: expected environment, got {}",
+            cx.type_name(args[1])
+        )));
     };
 
     // Check if this is a definition
-    if is_definition_tagged(args[0], &heap.borrow(), &env) && !mutable {
+    if is_definition(cx, args[0], &env) && !mutable {
         return Err(EvalError::InvalidSyntax(
             "eval: cannot define in immutable environment".to_string(),
         ));
@@ -165,17 +162,16 @@ fn primitive_eval(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
     // in a spliced form can provide syntax needed to expand its later forms
     // (#435), and expanding twice can also install a transformer twice.
     if !mutable {
-        let desugarer = Desugarer::with_env(env.clone()).with_fs(ctx.fs().clone());
+        let desugarer = Desugarer::with_env(env.clone()).with_fs(cx.instance().fs());
         // Its literals are never read: the tree is only searched for a
         // definition, and dropped with the pool.
-        let literals = patina_core::LiteralPool::new(&heap.borrow());
-        let core_expr = patina_core::NoGcScope::cross(heap, [args[0]], |cx, [form]| {
-            desugarer.desugar_tagged(form, cx, &literals)
-        })
-        .map_err(|e| {
-            EvalError::InvalidSyntax(format!("eval: failed to desugar expression: {e}"))
-                .with_diagnostic(e.diagnostic())
-        })?;
+        let literals = cx.literal_pool();
+        let core_expr = desugarer
+            .desugar_tagged(args[0], cx, &literals)
+            .map_err(|e| {
+                EvalError::InvalidSyntax(format!("eval: failed to desugar expression: {e}"))
+                    .with_diagnostic(e.diagnostic())
+            })?;
         if has_top_level_definition(&core_expr) {
             return Err(EvalError::InvalidSyntax(
                 "eval: cannot define in immutable environment".to_string(),
@@ -186,7 +182,7 @@ fn primitive_eval(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
     Ok(Step::Eval {
         expr: args[0],
         env,
-        state: TaggedValue::UNSPECIFIED,
+        state: Value::UNSPECIFIED,
     })
 }
 
@@ -665,7 +661,11 @@ mod load_state {
 /// `open-input-file`. The state it keeps is a pair of the file name and the
 /// environment specifier, which [`load_resume`] tells apart from the vector
 /// it keeps between forms ([`load_state`]).
-fn primitive_load(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, EvalError> {
+fn primitive_load<'gc>(
+    cx: &mut Cx<'gc>,
+    ctx: &dyn ApplyContext,
+    args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
             expected: "load expects 1 or 2 arguments".to_string(),
@@ -673,59 +673,56 @@ fn primitive_load(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
         });
     }
 
-    let heap = ctx.heap();
-
     // Extract filename string
-    let filename = {
-        let heap_ref = heap.borrow();
-        heap_ref.get_string_contents(args[0]).ok_or_else(|| {
-            EvalError::TypeError(format!(
-                "load: expected string filename, got {}",
-                heap_ref.type_name(args[0])
-            ))
-        })?
-    };
+    let filename = cx.get_string_contents(args[0]).ok_or_else(|| {
+        EvalError::TypeError(format!(
+            "load: expected string filename, got {}",
+            cx.type_name(args[0])
+        ))
+    })?;
 
     // The environment to evaluate in, as a specifier the state can hold.
     let env_spec = if args.len() == 2 {
-        let heap_ref = heap.borrow();
-        if heap_ref.get_environment_specifier(args[1]).is_none() {
+        if cx.get_environment_specifier(args[1]).is_none() {
             return Err(EvalError::TypeError(format!(
                 "load: expected environment, got {}",
-                heap_ref.type_name(args[1])
+                cx.type_name(args[1])
             )));
         }
         args[1]
     } else {
-        ctx.interaction_environment().mutable_specifier(ctx.heap())
+        // The machine's, which on the VM, inside a library's body, is the
+        // library's: why `load` takes the `ApplyContext` beside the context.
+        cx.mutable_specifier(&ctx.interaction_environment())
     };
 
-    match read_source(ctx, &filename) {
+    match read_source(cx, &filename) {
         Err(e) if out_of_descriptors(&e) => {
-            let state = heap.borrow_mut().alloc_pair(args[0], env_spec);
+            let state = cx.alloc_pair(args[0], env_spec);
             Ok(Step::Collect {
                 kind: CollectKind::Major,
                 state,
             })
         }
-        content => load_forms(ctx, filename, env_spec, content),
+        content => load_forms(cx, filename, env_spec, content),
     }
 }
 
 /// Read `load`'s file whole.
-fn read_source(ctx: &dyn ApplyContext, filename: &str) -> std::io::Result<String> {
-    ctx.fs().read_to_string(std::path::Path::new(filename))
+fn read_source(cx: &Cx<'_>, filename: &str) -> std::io::Result<String> {
+    cx.instance()
+        .fs()
+        .read_to_string(std::path::Path::new(filename))
 }
 
 /// `load` with its file read, or the error the read failed with, which is
 /// raised: parse the forms, keep them in the state, and evaluate the first.
-fn load_forms(
-    ctx: &dyn ApplyContext,
+fn load_forms<'gc>(
+    cx: &mut Cx<'gc>,
     filename: String,
-    env_spec: TaggedValue,
+    env_spec: Value<'gc>,
     content: std::io::Result<String>,
-) -> Result<Step, EvalError> {
-    let heap = ctx.heap();
+) -> Result<Step<'gc>, EvalError> {
     let content = content.map_err(|e| {
         EvalError::IOError(format!("load: cannot open '{}': {}", filename, e))
             .with_diagnostic(Diagnostic::new(DiagnosticKind::Io, e.to_string()).at_path(&filename))
@@ -744,27 +741,22 @@ fn load_forms(
             )
         })?;
     let mut forms = Vec::new();
-    let error = patina_core::NoGcScope::with_cx(heap, |cx| {
-        loop {
-            match parser.parse_next(cx) {
-                Ok(Some(expr)) => forms.push(expr.tagged()),
-                Ok(None) => break None,
-                Err(e) => break Some(parse_error(&e)),
-            }
+    let error = loop {
+        match parser.parse_next(cx) {
+            Ok(Some(expr)) => forms.push(expr),
+            Ok(None) => break None,
+            Err(e) => break Some(parse_error(&e)),
         }
-    });
-
-    let state = {
-        let mut heap = heap.borrow_mut();
-        let forms = heap.list_from_iter(forms);
-        let error = match error {
-            Some(message) => heap.alloc_string(message),
-            None => TaggedValue::FALSE,
-        };
-        let path = heap.alloc_string(filename);
-        heap.alloc_vector(vec![forms, error, env_spec, path])
     };
-    load_next(ctx, state, TaggedValue::UNSPECIFIED)
+
+    let forms = cx.list_from_iter(forms);
+    let error = match error {
+        Some(message) => cx.alloc_string(message),
+        None => Value::FALSE,
+    };
+    let path = cx.alloc_string(filename);
+    let state = cx.alloc_vector(vec![forms, error, env_spec, path]);
+    load_next(cx, state)
 }
 
 /// `load` resumed. After the collection its read asked for, `state` is the
@@ -772,59 +764,43 @@ fn load_forms(
 /// or not the machine collected, as the opens do, so that a second failure
 /// raises the error the system gives. Otherwise a form has returned, and
 /// `state` is the vector of [`load_state`]: carry on with the next.
-fn load_resume(
-    ctx: &dyn ApplyContext,
-    state: TaggedValue,
-    value: TaggedValue,
-) -> Result<Step, EvalError> {
-    let retry = ctx.heap().borrow().try_pair(state);
-    let Some((name, env_spec)) = retry else {
-        return load_next(ctx, state, value);
+fn load_resume<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    state: Value<'gc>,
+    _value: Value<'gc>,
+) -> Result<Step<'gc>, EvalError> {
+    let Some((name, env_spec)) = cx.try_pair(state) else {
+        return load_next(cx, state);
     };
-    let filename = ctx
-        .heap()
-        .borrow()
+    let filename = cx
         .get_string_contents(name)
         .ok_or_else(|| EvalError::InternalError("load: lost its file name".into()))?;
-    let content = read_source(ctx, &filename);
-    load_forms(ctx, filename, env_spec, content)
+    let content = read_source(cx, &filename);
+    load_forms(cx, filename, env_spec, content)
 }
 
 /// `load`'s next step: evaluate the next form of its file, raise the parse
 /// error that ends them, or finish. What a form returned is not used.
-fn load_next(
-    ctx: &dyn ApplyContext,
-    state: TaggedValue,
-    _result: TaggedValue,
-) -> Result<Step, EvalError> {
-    let heap = ctx.heap();
-    let (forms, error, env_spec) = {
-        let heap = heap.borrow();
-        (
-            heap.vector_ref(state, load_state::FORMS),
-            heap.vector_ref(state, load_state::ERROR),
-            heap.vector_ref(state, load_state::ENV),
-        )
-    };
-    let next = heap.borrow().try_pair(forms);
-    if let Some((expr, rest)) = next {
-        heap.borrow_mut().vector_set(state, load_state::FORMS, rest);
-        let env = heap
-            .borrow()
+fn load_next<'gc>(cx: &mut Cx<'gc>, state: Value<'gc>) -> Result<Step<'gc>, EvalError> {
+    let forms = cx.vector_ref(state, load_state::FORMS);
+    let error = cx.vector_ref(state, load_state::ERROR);
+    let env_spec = cx.vector_ref(state, load_state::ENV);
+    if let Some((expr, rest)) = cx.try_pair(forms) {
+        cx.vector_set(state, load_state::FORMS, rest);
+        let (env, _) = cx
             .get_environment_specifier(env_spec)
-            .map(|(env, _)| env.clone())
             .ok_or_else(|| EvalError::InternalError("load: lost its environment".into()))?;
         return Ok(Step::Eval { expr, env, state });
     }
-    if let Some(message) = heap.borrow().get_string_contents(error) {
-        let path = heap
-            .borrow()
-            .get_string_contents(heap.borrow().vector_ref(state, load_state::PATH))
+    if let Some(message) = cx.get_string_contents(error) {
+        let path = cx
+            .get_string_contents(cx.vector_ref(state, load_state::PATH))
             .unwrap();
         let diagnostic = Diagnostic::new(DiagnosticKind::Parse, &message).at_path(path);
         return Err(EvalError::InvalidSyntax(message).with_diagnostic(diagnostic));
     }
-    Ok(Step::Done(TaggedValue::UNSPECIFIED))
+    Ok(Step::Done(Value::UNSPECIFIED))
 }
 
 /// (interaction-environment) → environment-specifier
