@@ -234,7 +234,6 @@ mod tests {
     use crate::tagged_value::TaggedValue;
     use crate::{Environment, RootProvider, SlotVisitor};
     use std::cell::Cell;
-    use std::cell::RefCell;
     use std::rc::Rc;
 
     /// A control: a test that must panic with `$expected` in a check build.
@@ -451,7 +450,7 @@ mod tests {
         {
             let mut heap = Heap::new();
             let mut promise = || {
-                heap.alloc_promise(Rc::new(RefCell::new(PromiseState::Forced(TaggedValue::NULL))))
+                heap.alloc_promise(PromiseState::Forced(TaggedValue::NULL))
             };
             let (outer, inner) = (promise(), promise());
             collect(&mut heap, &[outer]);
@@ -469,7 +468,7 @@ mod tests {
         "stale object reference, slot 1 generation 0 (now 1): freed and reused since this value was made",
         {
             let promise = |heap: &mut Heap| {
-                heap.alloc_promise(Rc::new(RefCell::new(PromiseState::Forced(TaggedValue::NULL))))
+                heap.alloc_promise(PromiseState::Forced(TaggedValue::NULL))
             };
             let mut heap = Heap::new();
             let (outer, inner) = (promise(&mut heap), promise(&mut heap));
@@ -524,15 +523,6 @@ mod tests {
         {
             let (mut heap, dead) = freed(bytevector);
             heap.bytevector_u8_set(dead, 0, 9);
-        }
-    );
-
-    control!(
-        get_bytevector_mut_of_a_freed_bytevector,
-        "use-after-free: object slot 0 was reclaimed by the GC",
-        {
-            let (mut heap, dead) = freed(bytevector);
-            heap.get_bytevector_mut(dead);
         }
     );
 

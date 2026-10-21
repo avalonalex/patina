@@ -1424,7 +1424,7 @@ impl<'h> GcVisitor<'h> {
     }
 
     /// Trace a promise's payload, forced or not.
-    pub(crate) fn visit_promise(&mut self, promise: &RefCell<PromiseState>) {
+    pub(crate) fn visit_promise(&mut self, promise: &super::Interior<PromiseState>) {
         match *promise.borrow() {
             PromiseState::Delayed(tv) | PromiseState::Forced(tv) => self.visit(tv),
         }
@@ -2806,7 +2806,7 @@ mod tests {
                     num_bigint::BigInt::from(1) << 100,
                     num_bigint::BigInt::from(3),
                 )),
-                heap.alloc_record(rtd, Rc::new(RefCell::new(vec![TaggedValue::NULL; 2]))),
+                heap.alloc_record(rtd, vec![TaggedValue::NULL; 2]),
                 heap.alloc_exception(
                     crate::error::ExceptionKind::Custom("kind".into()),
                     "message".into(),
@@ -3637,10 +3637,10 @@ mod tests {
     }
 
     #[test]
-    fn shared_record_fields_with_live_holder_survive() {
+    fn record_fields_with_live_holder_survive() {
         let mut heap = Heap::new();
         let field_val = heap.alloc_pair(TaggedValue::fixnum(7), TaggedValue::NULL);
-        let fields = Rc::new(RefCell::new(vec![field_val]));
+        let fields = vec![field_val];
         let rtd = Rc::new(crate::record_type::RecordTypeDescriptor {
             id: 0,
             name: Rc::from("point"),

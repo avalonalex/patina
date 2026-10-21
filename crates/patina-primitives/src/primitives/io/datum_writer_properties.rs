@@ -7,7 +7,7 @@ use super::*;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::ToPrimitive;
-use patina_core::{Heap, SharedHeap, new_shared_heap};
+use patina_core::{Heap, NoGcScope, SharedHeap, Value, new_shared_heap};
 use patina_frontend::Parser;
 use proptest::prelude::*;
 use proptest::test_runner::RngSeed;
@@ -224,29 +224,30 @@ proptest! {
     #[test]
     fn shared_and_cyclic_graphs_round_trip(nodes in prop::collection::vec((any::<bool>(), any::<bool>(), any::<u8>(), any::<i32>()), 1..9)) {
         let heap = new_shared_heap();
-        let value = {
-            let mut h = heap.borrow_mut();
+        // Built through a context, whose stores go through the funnel, as a
+        // program's do (#708).
+        let value = NoGcScope::with_cx(&heap, |cx| {
             let refs: Vec<_> = nodes.iter().map(|(vector, _, _, _)| {
-                if *vector { h.alloc_vector_fill(3, TaggedValue::NULL) }
-                else { h.alloc_pair(TaggedValue::NULL, TaggedValue::NULL) }
+                if *vector { cx.alloc_vector_fill(3, Value::NULL) }
+                else { cx.alloc_pair(Value::NULL, Value::NULL) }
             }).collect();
             for (index, &(vector, through_car, edge, n)) in nodes.iter().enumerate() {
                 let next = refs[(index + 1) % refs.len()];
                 if vector {
-                    h.vector_set(refs[index], 0, TaggedValue::fixnum(n.into()));
-                    h.vector_set(refs[index], 1, next);
-                    h.vector_set(refs[index], 2, refs[usize::from(edge) % refs.len()]);
+                    cx.vector_set(refs[index], 0, Value::fixnum(n.into()));
+                    cx.vector_set(refs[index], 1, next);
+                    cx.vector_set(refs[index], 2, refs[usize::from(edge) % refs.len()]);
                 } else if through_car {
-                    h.set_car(refs[index], next);
-                    h.set_cdr(refs[index], TaggedValue::fixnum(n.into()));
+                    cx.set_car(refs[index], next);
+                    cx.set_cdr(refs[index], Value::fixnum(n.into()));
                 } else {
-                    h.set_car(refs[index], TaggedValue::fixnum(n.into()));
-                    h.set_cdr(refs[index], next);
+                    cx.set_car(refs[index], Value::fixnum(n.into()));
+                    cx.set_cdr(refs[index], next);
                 }
             }
-            let shared = h.alloc_vector(vec![TaggedValue::fixnum(17)]);
-            h.alloc_vector(vec![refs[0], refs[0], shared, shared])
-        };
+            let shared = cx.alloc_vector(vec![Value::fixnum(17)]);
+            cx.alloc_vector(vec![refs[0], refs[0], shared, shared]).tagged()
+        });
         for writer in [format_write_tagged, format_write_shared_tagged] {
             let text = writer(value, &heap);
             let result = read_back(value, &text, &heap);

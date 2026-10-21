@@ -435,9 +435,10 @@ impl<'gc> Cx<'gc> {
         self.heap.borrow().source(v.tagged()).cloned()
     }
 
-    /// [`Heap::get_object`], borrowed. Transitional: the datum writer and the
-    /// parser match on the object's kind, and its words are raw. #706
-    /// replaces it with a view of the kind.
+    /// [`Heap::get_object`], borrowed: for the datum writer, which matches on
+    /// the object's kind. Its words are raw, and a payload that changes is
+    /// in an [`Interior`](crate::heap::Interior), which a match can name but
+    /// not borrow (#708).
     #[inline]
     pub fn get_object(&self, v: Value<'gc>) -> Ref<'_, HeapObjectData> {
         Ref::map(self.heap.borrow(), |h| h.get_object(v.tagged()))
@@ -454,10 +455,7 @@ impl<'gc> Cx<'gc> {
         fields: Vec<Value<'gc>>,
     ) -> Value<'gc> {
         let words = fields.into_iter().map(Value::tagged).collect();
-        let r = self
-            .heap
-            .borrow_mut()
-            .alloc_record(rtd, Rc::new(RefCell::new(words)));
+        let r = self.heap.borrow_mut().alloc_record(rtd, words);
         self.brand(r)
     }
 
@@ -497,10 +495,10 @@ impl<'gc> Cx<'gc> {
         init: Value<'gc>,
         converter: Option<Value<'gc>>,
     ) -> Value<'gc> {
-        let r = self.heap.borrow_mut().alloc_parameter(
-            Rc::new(RefCell::new(vec![init.tagged()])),
-            converter.map(Value::tagged),
-        );
+        let r = self
+            .heap
+            .borrow_mut()
+            .alloc_parameter(init.tagged(), converter.map(Value::tagged));
         self.brand(r)
     }
 
@@ -537,10 +535,7 @@ impl<'gc> Cx<'gc> {
             PromiseView::Delayed(thunk) => PromiseState::Delayed(thunk.tagged()),
             PromiseView::Forced(value) => PromiseState::Forced(value.tagged()),
         };
-        let r = self
-            .heap
-            .borrow_mut()
-            .alloc_promise(Rc::new(RefCell::new(state)));
+        let r = self.heap.borrow_mut().alloc_promise(state);
         self.brand(r)
     }
 

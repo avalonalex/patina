@@ -7,14 +7,13 @@
 //! `environment.rs` and `library.rs`; the backends' records are tested on
 //! their own backend.
 
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use super::gc::{Collector, MarkSweepCollector, RootProvider, SlotVisitor};
 use super::sentinels::Sentinels;
 use super::trace::Trace;
-use super::{Heap, HeapObjectData, PromiseState, SharedHeap, new_shared_heap};
+use super::{Heap, HeapObjectData, Interior, PromiseState, SharedHeap, new_shared_heap};
 use crate::compiled_macro::{CompiledMacro, CompiledRule, LiteralId, Pattern, Template};
 use crate::cont_value::{ContEnv, ContValue, ExceptionHandler, PromptFrame};
 use crate::continuation::{CpsContinuation, WindRecord};
@@ -577,7 +576,7 @@ fn record_fields() {
     objects_keep_their_sentinels(|_, heap, s| {
         vec![HeapObjectData::Record {
             record_type: Rc::new(RecordTypeDescriptor::new("r", vec!["a".into(), "b".into()])),
-            fields: Rc::new(RefCell::new(vec![
+            fields: Rc::new(Interior::new(vec![
                 s.pair(heap, "HeapObjectData::Record.fields"),
                 s.object(heap, "HeapObjectData::Record.fields"),
             ])),
@@ -589,7 +588,7 @@ fn record_fields() {
 fn parameter_values_and_converter() {
     objects_keep_their_sentinels(|_, heap, s| {
         vec![HeapObjectData::Parameter {
-            values: Rc::new(RefCell::new(vec![
+            values: Rc::new(Interior::new(vec![
                 s.pair(heap, "HeapObjectData::Parameter.values"),
             ])),
             converter: Some(s.vector(heap, "HeapObjectData::Parameter.converter")),
@@ -604,8 +603,8 @@ fn promise_states() {
         let delayed = s.pair(heap, "HeapObjectData::Promise: PromiseState::Delayed");
         let forced = s.string(heap, "HeapObjectData::Promise: PromiseState::Forced");
         vec![
-            HeapObjectData::Promise(Rc::new(RefCell::new(PromiseState::Delayed(delayed)))),
-            HeapObjectData::Promise(Rc::new(RefCell::new(PromiseState::Forced(forced)))),
+            HeapObjectData::Promise(Rc::new(Interior::new(PromiseState::Delayed(delayed)))),
+            HeapObjectData::Promise(Rc::new(Interior::new(PromiseState::Forced(forced)))),
         ]
     });
 }
@@ -634,7 +633,7 @@ fn environment_specifier_environment() {
 #[test]
 fn mutable_cell_contents() {
     objects_keep_their_sentinels(|_, heap, s| {
-        vec![HeapObjectData::MutableCell(RefCell::new(
+        vec![HeapObjectData::MutableCell(Interior::new(
             s.object(heap, "HeapObjectData::MutableCell"),
         ))]
     });
@@ -662,7 +661,7 @@ fn ephemeron_datum_under_a_live_key() {
     let mut s = Sentinels::new(&mut heap);
     let key = s.pair(&mut heap, "HeapObjectData::Ephemeron key, rooted elsewhere");
     let datum = s.vector(&mut heap, "HeapObjectData::Ephemeron datum");
-    let ephemeron = heap.alloc_object(HeapObjectData::Ephemeron(RefCell::new(Some((key, datum)))));
+    let ephemeron = heap.alloc_object(HeapObjectData::Ephemeron(Interior::new(Some((key, datum)))));
     collect_from(&mut heap, &[ephemeron, key]);
     s.assert_survived(&heap);
 }

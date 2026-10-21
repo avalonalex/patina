@@ -102,10 +102,8 @@ fn the_heap_stores_through_the_funnel() {
     let heap = new_shared_heap();
     let mut h = heap.borrow_mut();
     let vector = h.alloc_vector(vec![TaggedValue::FALSE; 2]);
-    let promise = h.alloc_promise(Rc::new(RefCell::new(PromiseState::Delayed(
-        TaggedValue::FALSE,
-    ))));
-    let param = h.alloc_parameter(Rc::new(RefCell::new(vec![TaggedValue::fixnum(0)])), None);
+    let promise = h.alloc_promise(PromiseState::Delayed(TaggedValue::FALSE));
+    let param = h.alloc_parameter(TaggedValue::fixnum(0), None);
     // SAFETY: each word was allocated above, on this heap, which nothing
     // collects here.
     let (vector_v, promise_v, param_v) = unsafe {

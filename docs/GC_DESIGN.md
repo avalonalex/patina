@@ -1141,7 +1141,8 @@ beside today's `SharedHeap` surface until they do.
     (`get_bigint`, `get_exception`, `get_port`) or borrowed
     (`get_string_chars`, `vector_slice`, `get_symbol_name`);
   - records, parameters and promises are read and written as values, not
-    through their `Rc` payloads;
+    through their `Rc` payloads, which only core can borrow: a payload that
+    changes is in an `Interior` (#708);
   - `get_string_chars_mut` gives way to `string_fill` and `string_copy_chars`.
 - **Checked.** Debug and `gc-check` builds count the live contexts on the
   carrier (`Mutator::live_cx`), and `GcController::collect` asserts that none
