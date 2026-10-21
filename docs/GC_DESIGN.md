@@ -1143,7 +1143,10 @@ beside today's `SharedHeap` surface until they do.
   - records, parameters and promises are read and written as values, not
     through their `Rc` payloads, which only core can borrow: a payload that
     changes is in an `Interior` (#708);
-  - `get_string_chars_mut` gives way to `string_fill` and `string_copy_chars`.
+  - `string_fill` and `string_copy_chars` write a string in place: the
+    heap hands out no `&mut` into a vector, string or bytevector, and
+    `vector_slice_mut`, `get_string_chars_mut` and `get_bytevector_mut`
+    are gone (#708).
 - **Checked.** Debug and `gc-check` builds count the live contexts on the
   carrier (`Mutator::live_cx`), and `GcController::collect` asserts that none
   is live.

@@ -15,10 +15,10 @@
 //! is measured by a function of its own, on a path of its own (below).
 //!
 //! **Payloads do not grow after allocation**, so no growth is charged.
-//! Vectors, strings and bytevectors never hand out their `Vec`: vectors and
-//! strings hand out slices (`vector_slice_mut`, `get_string_chars_mut`), and a
-//! bytevector is written in place (`bytevector_u8_set`,
-//! `bytevector_copy_into`), so their capacity is fixed by the type system; a record's field count and a
+//! Vectors, strings and bytevectors hand out no `&mut` into their payload,
+//! and so never their `Vec`: each is written in place (`vector_set`,
+//! `string_set_char`, `bytevector_u8_set`, and their range forms), so their
+//! capacity is fixed by the type system; a record's field count and a
 //! closure's free variables are fixed at construction, and the heap writes
 //! them in place; the other payloads charged — a bignum's limbs, an
 //! exception's message and irritants, a `values` object, a symbol's name, an

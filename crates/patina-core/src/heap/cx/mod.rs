@@ -225,13 +225,14 @@ impl<'gc> Cx<'gc> {
         Ref::map(self.heap.borrow(), |h| h.get_string_chars(s.tagged()))
     }
 
-    /// `string-fill!`'s write: `ch` into `range` of the string `s`. Panics if
-    /// `s` is no string or the range exceeds it; the caller checks both first.
-    /// It replaces `Heap::get_string_chars_mut`, which handed out
-    /// `&mut [char]` into the heap.
+    /// `string-fill!`'s write: `ch` into `range` of the string `s`, in place,
+    /// where nothing hands out a `&mut` into the heap (#708). Panics if `s`
+    /// is no string or the range exceeds it; the caller checks both first.
     pub fn string_fill(&mut self, s: Value<'gc>, ch: char, range: std::ops::Range<usize>) {
         assert!(s.is_string(), "Cx::string_fill: not a string");
-        self.heap.borrow_mut().get_string_chars_mut(s.tagged())[range].fill(ch);
+        self.heap
+            .borrow_mut()
+            .string_fill_chars(s.tagged(), range, ch);
     }
 
     /// `string-copy!`'s write: `chars` into the string `s` from `at`. Panics
@@ -239,8 +240,9 @@ impl<'gc> Cx<'gc> {
     /// both first.
     pub fn string_copy_chars(&mut self, s: Value<'gc>, at: usize, chars: &[char]) {
         assert!(s.is_string(), "Cx::string_copy_chars: not a string");
-        self.heap.borrow_mut().get_string_chars_mut(s.tagged())[at..at + chars.len()]
-            .copy_from_slice(chars);
+        self.heap
+            .borrow_mut()
+            .string_copy_chars(s.tagged(), at, chars);
     }
 
     /// [`Heap::get_symbol_name`], as a borrow tied to `&self`.
