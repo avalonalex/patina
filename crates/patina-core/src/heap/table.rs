@@ -8,7 +8,10 @@
 //! needs a lock. Behind one wrapper from the start, that is one change in one
 //! place, not a hunt through every table for the cells it picked.
 
+#[cfg(not(feature = "threaded"))]
 use std::cell::{RefCell, RefMut};
+#[cfg(feature = "threaded")]
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// A table the heap keeps in Rust, behind the wrapper every such table takes:
 /// plain in the default build, and the one place a `threaded` build puts a
@@ -22,15 +25,25 @@ use std::cell::{RefCell, RefMut};
 /// One access at a time: an access inside another panics, a read inside a
 /// read as well. A `RefCell` would allow that read and a lock would deadlock
 /// on it, so the default build fails where a threaded one would hang.
+///
+/// Under `threaded` the table is behind a `Mutex` (#711): the lock body only,
+/// which no lane runs before stage 9. An access waits for one another
+/// carrier holds; the default build's panic is what finds a nested one.
 #[derive(Default)]
 pub struct HeapTable<T> {
+    #[cfg(not(feature = "threaded"))]
     state: RefCell<T>,
+    #[cfg(feature = "threaded")]
+    state: Mutex<T>,
 }
 
 impl<T> HeapTable<T> {
     pub const fn new(state: T) -> Self {
         Self {
+            #[cfg(not(feature = "threaded"))]
             state: RefCell::new(state),
+            #[cfg(feature = "threaded")]
+            state: Mutex::new(state),
         }
     }
 
@@ -48,6 +61,16 @@ impl<T> HeapTable<T> {
         f(&mut self.access())
     }
 
+    #[cfg(feature = "threaded")]
+    #[inline]
+    #[track_caller]
+    fn access(&self) -> MutexGuard<'_, T> {
+        // A panic inside an access leaves the table as it was written, as
+        // the default build's `RefCell` does.
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    #[cfg(not(feature = "threaded"))]
     #[inline]
     #[track_caller]
     fn access(&self) -> RefMut<'_, T> {
@@ -72,6 +95,9 @@ mod tests {
         assert_eq!(table.with(|list| list.iter().sum::<i32>()), 6);
     }
 
+    // The default build's: under `threaded`, a nested access waits on the
+    // lock its own access holds.
+    #[cfg(not(feature = "threaded"))]
     #[test]
     #[should_panic(expected = "accessed while an access to it is open")]
     fn a_read_inside_a_read_panics() {
@@ -79,6 +105,9 @@ mod tests {
         table.with(|_| table.with(|_| ()));
     }
 
+    // The default build's: under `threaded`, a nested access waits on the
+    // lock its own access holds.
+    #[cfg(not(feature = "threaded"))]
     #[test]
     #[should_panic(expected = "accessed while an access to it is open")]
     fn a_change_inside_a_read_panics() {

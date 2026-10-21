@@ -142,6 +142,31 @@ fn stored_a_retired_register(into: &str) -> ! {
     )
 }
 
+/// Write `value` into a word of the arenas: where the funnel's stores land
+/// (#711). A plain store in the default build. Under `threaded` it is a
+/// relaxed atomic one, so that a carrier reading the word sees some value
+/// written to it, never a torn one (§18.2's memory model). Nothing runs that
+/// build before stage 9, and `--all-features` clippy lints it.
+#[inline(always)]
+fn store_word(word: &mut TaggedValue, value: TaggedValue) {
+    #[cfg(not(feature = "threaded"))]
+    {
+        *word = value;
+    }
+    #[cfg(feature = "threaded")]
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        const {
+            assert!(std::mem::align_of::<TaggedValue>() == std::mem::align_of::<AtomicU64>());
+        }
+        // SAFETY: a `TaggedValue` is a `u64` (`repr(transparent)`), aligned
+        // as an `AtomicU64` is (asserted above), and the word is borrowed
+        // mutably, so nothing else reaches it during the store.
+        let word = unsafe { AtomicU64::from_ptr(std::ptr::from_mut(word).cast::<u64>()) };
+        word.store(value.raw(), Ordering::Relaxed);
+    }
+}
+
 /// Create a new shared heap
 pub fn new_shared_heap() -> SharedHeap {
     Rc::new(RefCell::new(Heap::new()))
@@ -1027,7 +1052,7 @@ impl Heap {
         self.pair_checks.check("pair", ptr);
         check_storable(value, "pair");
         crate::census::store(crate::census::Site::SetCar, Some(ptr), value);
-        self.pairs[ptr.heap_index() as usize].0 = value;
+        store_word(&mut self.pairs[ptr.heap_index() as usize].0, value);
     }
 
     /// Set cdr of a pair (for set-cdr!)
@@ -1037,7 +1062,7 @@ impl Heap {
         self.pair_checks.check("pair", ptr);
         check_storable(value, "pair");
         crate::census::store(crate::census::Site::SetCdr, Some(ptr), value);
-        self.pairs[ptr.heap_index() as usize].1 = value;
+        store_word(&mut self.pairs[ptr.heap_index() as usize].1, value);
     }
 
     // =========================================================================
@@ -1105,7 +1130,7 @@ impl Heap {
         self.vector_checks.check("vector", ptr);
         check_storable(value, "vector");
         crate::census::store(site, Some(ptr), value);
-        self.vectors[ptr.heap_index() as usize][index] = value;
+        store_word(&mut self.vectors[ptr.heap_index() as usize][index], value);
     }
 
     /// Get a slice of the vector
@@ -1124,7 +1149,7 @@ impl Heap {
         debug_assert!(ptr.is_vector());
         self.vector_checks.check("vector", ptr);
         check_storable(value, "vector");
-        self.vectors[ptr.heap_index() as usize][index] = value;
+        store_word(&mut self.vectors[ptr.heap_index() as usize][index], value);
     }
 
     // =========================================================================
@@ -1830,7 +1855,7 @@ impl Heap {
             Some(HeapObjectData::VmClosure { free_vars, .. }) if slot < free_vars.len() => {
                 check_storable(val, "closure's free variable");
                 crate::census::store(crate::census::Site::ClosureFreeVar, Some(closure), val);
-                free_vars[slot] = val;
+                store_word(&mut free_vars[slot], val);
                 true
             }
             _ => false,

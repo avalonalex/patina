@@ -1701,6 +1701,43 @@ it back on resume: as a value, once primitives take a context (#706).
 
 ---
 
+### 9.8 The memory model, and who synchronizes (#711)
+
+`PRD/GC_PRD.md` §18.2 states the memory model at stage 3, for a build with
+more than one carrier, which no lane runs before stage 9:
+- **No crash, no tearing and no uninitialized object.** A program that races
+  on a Scheme object may read any value written to it, but never a mix of two
+  writes, never an object before its initializing stores, and never a crash.
+- **Every read returns some written value.**
+- **Happens-before only through mutexes, condition variables, thread start
+  and join.** Nothing else orders one thread's plain write for another.
+
+**Who synchronizes** (rule 9):
+- **State implemented in Rust synchronizes itself:** ports, tables,
+  registries, promise forcing, the source map. In the default build it is
+  plain, behind one wrapper (`HeapTable`, #687), which the threaded build
+  puts its lock in.
+- **Structures built in Scheme do not synchronize:** hashtables, records,
+  vectors. Their users lock them, as in Chez.
+
+**The `threaded` feature** (`patina-core`) compiles the accessor bodies such
+a build needs. Nothing runs it before stage 9, enabling it needs decision 7,
+and `--all-features` clippy lints it.
+- **The `Mutator`'s own words** are atomics, read and written relaxed, at the
+  offsets §14 fixes (`heap/mutator.rs`'s `words`). The words other threads
+  write were atomics already.
+- **The funnel's word stores** land through `store_word`, a relaxed atomic
+  store, so a reader never sees a torn word.
+- **`HeapTable` is behind a `Mutex`.** A nested access, which the default
+  build's `RefCell` panics on, waits on its own lock there, so the default
+  build is where a nested one is found.
+- **No metadata accessors exist yet.** The arena heap keeps no metadata
+  bytes; the accessors come with the new heap.
+
+**C11:** the types every carrier shares are `Send + Sync`, asserted in one
+test (`crates/patina-tests/tests/carrier_types.rs`): the `InterruptHandle`
+(#701) and the `PrimitiveRegistry` (#710).
+
 ## 10. Staging
 
 Collection is gated at runtime rather than by a Cargo feature (§6): the

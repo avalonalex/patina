@@ -41,14 +41,94 @@
 //! - **Servicing.** A poll whose `reg_limit` reads 0 services what is
 //!   posted, then restores the limit through [`Mutator::set_limit`]. Its
 //!   fence makes a Dekker pair with a remote post, so no request is ever lost.
+//!
+//! **Under `threaded`** (#711, `PRD/GC_PRD.md` §18.1), the owner's words are
+//! atomics too, read and written relaxed, at the same offsets: [`words`].
 
-use std::cell::Cell;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering, fence};
 
 use super::interrupt::{InterruptCell, InterruptHandle};
+
+/// The types of the words only their carrier writes. In the default build
+/// each is a `Cell`. Under `threaded` it is an atomic of the same size and
+/// alignment, read and written relaxed, with the `Cell`'s methods, so the
+/// layout the offset assertions check is the same in either build. No lane
+/// runs the threaded build before stage 9 (§18.1), and `--all-features`
+/// clippy lints it.
+#[cfg(not(feature = "threaded"))]
+mod words {
+    pub type Usize = std::cell::Cell<usize>;
+    pub type U32 = std::cell::Cell<u32>;
+    pub type I32 = std::cell::Cell<i32>;
+    pub type Bool = std::cell::Cell<bool>;
+    pub type Ptr<T> = std::cell::Cell<*mut T>;
+}
+
+#[cfg(feature = "threaded")]
+#[allow(
+    dead_code,
+    reason = "the reserved words' accessors, used as each word's stage takes it up"
+)]
+mod words {
+    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicUsize, Ordering};
+
+    macro_rules! word {
+        ($name:ident, $atomic:ty, $t:ty) => {
+            #[derive(Debug, Default)]
+            #[repr(transparent)]
+            pub struct $name($atomic);
+
+            impl $name {
+                pub const fn new(value: $t) -> Self {
+                    Self(<$atomic>::new(value))
+                }
+
+                #[inline]
+                pub fn get(&self) -> $t {
+                    self.0.load(Ordering::Relaxed)
+                }
+
+                #[inline]
+                pub fn set(&self, value: $t) {
+                    self.0.store(value, Ordering::Relaxed);
+                }
+
+                #[inline]
+                pub fn replace(&self, value: $t) -> $t {
+                    self.0.swap(value, Ordering::Relaxed)
+                }
+            }
+        };
+    }
+
+    word!(Usize, AtomicUsize, usize);
+    word!(U32, AtomicU32, u32);
+    word!(I32, AtomicI32, i32);
+    word!(Bool, AtomicBool, bool);
+
+    #[derive(Debug)]
+    #[repr(transparent)]
+    pub struct Ptr<T>(AtomicPtr<T>);
+
+    impl<T> Ptr<T> {
+        pub const fn new(value: *mut T) -> Self {
+            Self(AtomicPtr::new(value))
+        }
+
+        #[inline]
+        pub fn get(&self) -> *mut T {
+            self.0.load(Ordering::Relaxed)
+        }
+
+        #[inline]
+        pub fn set(&self, value: *mut T) {
+            self.0.store(value, Ordering::Relaxed);
+        }
+    }
+}
 
 /// The events a poll services, one bit each (`PRD/GC_PRD.md` §12). Today
 /// only [`GC_MAJOR`](event::GC_MAJOR) is posted; the others are named here
@@ -92,18 +172,18 @@ pub mod event {
 #[derive(Debug)]
 pub struct Mutator {
     /// 0x00. The allocation buffer's next free byte (5a).
-    ap: Cell<usize>,
+    ap: words::Usize,
     /// 0x08. The allocation buffer's end (5a).
-    alloc_limit: Cell<usize>,
+    alloc_limit: words::Usize,
     /// 0x10. The metadata table's bias, a per-heap constant the barrier's
     /// fast path loads once (7).
     meta_bias: usize,
     /// 0x18. The store buffer's next free entry (7).
-    remset_cur: Cell<*mut usize>,
+    remset_cur: words::Ptr<usize>,
     /// 0x20. The store buffer's soft limit (7).
-    remset_soft: Cell<*mut usize>,
+    remset_soft: words::Ptr<usize>,
     /// 0x28. The running green thread's register-stack top (4d).
-    reg_top: Cell<*mut u64>,
+    reg_top: words::Ptr<u64>,
     /// 0x30. The poll word: zero while an event is posted. A frame entry
     /// will compare the register-stack top against it (§12), so it is the
     /// stack's limit otherwise. Until stage 4d gives the VM a reserved stack
@@ -113,20 +193,20 @@ pub struct Mutator {
     /// 0x38. Events posted from outside the owner, by `fetch_or`.
     event: AtomicU32,
     /// 0x3C. Events the owner posted.
-    pending: Cell<u32>,
+    pending: words::U32,
     /// 0x40. Tick mode's poll count (SRFI 18's deterministic scheduler).
-    ticks: Cell<i32>,
+    ticks: words::I32,
     /// 0x44. The barrier's mode, read by slow paths only (7).
     barrier_mode: u8,
     /// 0x45. `Running`, `AtSafepoint` or `InSafeRegion`, for the
     /// stop-the-world protocol under N carriers.
     safepoint_state: AtomicU8,
     /// 0x48. The running green thread (9).
-    thread: Cell<*mut ()>,
+    thread: words::Ptr<()>,
     /// 0x50. The heap's shared part, for helpers (5a).
     heap: *const (),
     /// 0x58. A `Leaf` helper's error, and the `Oom` status (§8).
-    status: Cell<u32>,
+    status: words::U32,
     /// 0x60. Reserved (C1): rule 4's standalone-fence variant, if stage 6
     /// chooses it (§18.2).
     fenced_ap: usize,
@@ -136,13 +216,13 @@ pub struct Mutator {
     handshake: AtomicU32,
     /// 0x74. The open [`NoGcScope`](crate::NoGcScope)s. A collection runs
     /// only at depth 0 (`PRD/GC_PRD.md` §11.3). Rust's alone.
-    no_gc_depth: Cell<u32>,
+    no_gc_depth: words::U32,
     /// 0x78. Whether the carrier's [`GcDriver`](crate::GcDriver) is held:
     /// one per carrier (C2). Rust's alone.
-    driver_out: Cell<bool>,
+    driver_out: words::Bool,
     /// 0x7C. The live [`Cx`](crate::Cx)s, counted in check builds only
     /// ([`GC_CHECK`](crate::GC_CHECK)). Rust's alone.
-    live_cx: Cell<u32>,
+    live_cx: words::U32,
 }
 
 // The ABI (§14): each offset, the size and the alignment, checked as the
@@ -186,27 +266,27 @@ impl Mutator {
     /// A carrier with nothing posted and every reserved word zero.
     pub fn new() -> Self {
         Self {
-            ap: Cell::new(0),
-            alloc_limit: Cell::new(0),
+            ap: words::Usize::new(0),
+            alloc_limit: words::Usize::new(0),
             meta_bias: 0,
-            remset_cur: Cell::new(std::ptr::null_mut()),
-            remset_soft: Cell::new(std::ptr::null_mut()),
-            reg_top: Cell::new(std::ptr::null_mut()),
+            remset_cur: words::Ptr::new(std::ptr::null_mut()),
+            remset_soft: words::Ptr::new(std::ptr::null_mut()),
+            reg_top: words::Ptr::new(std::ptr::null_mut()),
             reg_limit: AtomicUsize::new(Self::NO_LIMIT),
             event: AtomicU32::new(0),
-            pending: Cell::new(0),
-            ticks: Cell::new(0),
+            pending: words::U32::new(0),
+            ticks: words::I32::new(0),
             barrier_mode: 0,
             safepoint_state: AtomicU8::new(0),
-            thread: Cell::new(std::ptr::null_mut()),
+            thread: words::Ptr::new(std::ptr::null_mut()),
             heap: std::ptr::null(),
-            status: Cell::new(0),
+            status: words::U32::new(0),
             fenced_ap: 0,
             quiesce_epoch: 0,
             handshake: AtomicU32::new(0),
-            no_gc_depth: Cell::new(0),
-            driver_out: Cell::new(false),
-            live_cx: Cell::new(0),
+            no_gc_depth: words::U32::new(0),
+            driver_out: words::Bool::new(false),
+            live_cx: words::U32::new(0),
         }
     }
 
