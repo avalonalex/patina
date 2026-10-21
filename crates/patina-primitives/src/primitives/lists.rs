@@ -419,16 +419,8 @@ pub(super) fn member<'gc>(
                 None => break,
             };
 
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "holds `obj`, `compare_proc` and the list cursor across each comparator \
-                          call. Deferred: under a machine, by the nested run's `NoGcScope`, \
-                          which has no driver and cannot collect; on the tree-walker's \
-                          detached `ApplyContext for Evaluator`, by that context's \
-                          `GcDeferGuard::holding`. Reached only by importing `(patina internal \
-                          lists)`: the `(scheme base)` `member` calls its comparator as a frame \
-                          (#471)"
-            )]
+            // Reached only by importing `(patina internal lists)`: the
+            // `(scheme base)` `member` calls its comparator as a frame (#471).
             let result = ctx.apply_in(cx, compare_proc, &[obj, car_tv])? != Value::FALSE;
 
             if result {
@@ -574,16 +566,8 @@ pub(super) fn assoc<'gc>(
             // Get (entry_car, _) from entry pair
             let entry_car_tv = cx.try_pair(entry).map(|(c, _)| c);
             if let Some(entry_car_tv) = entry_car_tv {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "holds `obj`, `compare_proc` and the alist cursor across each \
-                              comparator call. Deferred: under a machine, by the nested run's \
-                              `NoGcScope`, which has no driver and cannot collect; on the \
-                              tree-walker's detached `ApplyContext for Evaluator`, by that \
-                              context's `GcDeferGuard::holding`. Reached only by importing \
-                              `(patina internal lists)`: the `(scheme base)` `assoc` calls its \
-                              comparator as a frame (#471)"
-                )]
+                // Reached only by importing `(patina internal lists)`: the
+                // `(scheme base)` `assoc` calls its comparator as a frame (#471).
                 let result = ctx.apply_in(cx, compare_proc, &[obj, entry_car_tv])? != Value::FALSE;
 
                 if result {

@@ -127,15 +127,10 @@ fn force_value<'gc>(
             Some(PromiseView::Delayed(thunk)) => thunk,
         };
 
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "holds `obj`, the promise it updates afterwards, across the thunk's call. \
-                      Both machines intercept `force` (the VM's `force_stub`, the tree-walker's \
-                      `apply_force`), so this registry fallback runs only where neither does: \
-                      the VM's unit tests (`install_primitives`), dispatched by a loop whose \
-                      nested run defers, and the tree-walker's detached `ApplyContext for \
-                      Evaluator`, whose `GcDeferGuard::holding` defers it (#622)"
-        )]
+        // Both machines intercept `force` (the VM's `force_stub`, the
+        // tree-walker's `apply_force`), so this registry fallback runs only
+        // where neither does: the VM's unit tests (`install_primitives`), and
+        // the tree-walker's detached `ApplyContext for Evaluator`.
         let result = ctx.apply_in(cx, thunk, &[])?;
 
         if let PromiseView::Forced(value) = cx.promise_state(obj).expect("still a promise") {

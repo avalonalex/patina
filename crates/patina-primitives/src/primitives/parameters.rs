@@ -235,16 +235,8 @@ fn read_parameter<'gc>(
 ) -> Result<Value<'gc>, EvalError> {
     match cx.parameter_value(param) {
         Some(value) => Ok(value),
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "holds `param`, and `parameterize_swap` above it holds the parameter and \
-                      value lists and the old values read so far (`params`, `vals`, `olds`), \
-                      across the call of a parameter-like procedure that is not a parameter \
-                      object. Deferred: under a machine, by the `NoGcScope` of the nested run \
-                      the call starts, which has no driver and cannot collect; on the \
-                      tree-walker's detached `ApplyContext for Evaluator`, by that context's \
-                      `GcDeferGuard::holding`. Stage 4a ends this call (PRD/GC_PRD.md §11.3)"
-        )]
+        // A parameter-like procedure that is not a parameter object, read by
+        // calling it. Stage 4a ends this call (PRD/GC_PRD.md §11.3).
         None => ctx.apply_in(cx, param, &[]),
     }
 }
@@ -262,20 +254,9 @@ fn install_parameter<'gc>(
         cx.store(ParamValue(param), value);
         return Ok(());
     }
-    // Not a parameter object: the assignment *is* the validation.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "`parameterize_swap` above it holds `params`, `vals` and `olds` across the \
-                  call of a parameter-like procedure that is not a parameter object, which \
-                  validates the value by being set; once an earlier `install` has \
-                  overwritten a parameter object's top, `olds` holds the only reference to \
-                  its old value. Deferred: under a machine, by the `NoGcScope` of the nested \
-                  run the call starts, which has no driver and cannot collect; on \
-                  the tree-walker's detached `ApplyContext for Evaluator`, by that context's \
-                  `GcDeferGuard::holding`. Stage 4a ends this call (PRD/GC_PRD.md §11.3)"
-    )]
-    let assigned = ctx.apply_in(cx, param, &[value]);
-    assigned.map(|_| ())
+    // Not a parameter object: the assignment *is* the validation. Stage 4a
+    // ends this call (PRD/GC_PRD.md §11.3).
+    ctx.apply_in(cx, param, &[value]).map(|_| ())
 }
 
 /// Register parameter primitives with the registry
