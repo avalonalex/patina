@@ -407,9 +407,11 @@ pub struct Fresh<'m, 'gc> {
 impl<'gc> Fresh<'_, 'gc> {
     /// Initialize element `index`. Panics past the end.
     pub fn init(&mut self, index: usize, v: Value<'gc>) {
-        let mut heap = self.cx.heap.borrow_mut();
-        check_storable(v.tagged(), "vector");
-        heap.vector_slice_mut(self.object.tagged())[index] = v.tagged();
+        let object = self.object.tagged();
+        self.cx
+            .heap
+            .borrow_mut()
+            .vector_init(object, index, v.tagged());
     }
 
     /// The initialized object.

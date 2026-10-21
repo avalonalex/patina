@@ -1114,11 +1114,16 @@ impl Heap {
         &self.vectors[ptr.heap_index() as usize]
     }
 
-    /// Get a mutable slice of the vector
-    pub(crate) fn vector_slice_mut(&mut self, ptr: TaggedValue) -> &mut [TaggedValue] {
+    /// An initializing store into element `index` of a vector no one else
+    /// has seen yet: [`Fresh::init`](crate::Fresh::init)'s write. Checked as
+    /// a store is, and not counted in the census, which counts the stores
+    /// into objects already made. Panics past the end.
+    #[inline]
+    pub(crate) fn vector_init(&mut self, ptr: TaggedValue, index: usize, value: TaggedValue) {
         debug_assert!(ptr.is_vector());
         self.vector_checks.check("vector", ptr);
-        &mut self.vectors[ptr.heap_index() as usize]
+        check_storable(value, "vector");
+        self.vectors[ptr.heap_index() as usize][index] = value;
     }
 
     // =========================================================================
@@ -1160,14 +1165,27 @@ impl Heap {
         &self.strings[ptr.heap_index() as usize]
     }
 
-    /// Get mutable access to string characters. A slice, not the `Vec`: a
-    /// string's length is fixed once allocated, so its payload is what it was
-    /// charged (`heap/account.rs`).
-    #[inline(always)]
-    pub(crate) fn get_string_chars_mut(&mut self, ptr: TaggedValue) -> &mut [char] {
+    /// Write `ch` into `range` of a native heap string, in place:
+    /// `string-fill!`'s write. Panics past the end.
+    #[inline]
+    pub(crate) fn string_fill_chars(
+        &mut self,
+        ptr: TaggedValue,
+        range: std::ops::Range<usize>,
+        ch: char,
+    ) {
         debug_assert!(ptr.is_string());
         self.string_checks.check("string", ptr);
-        &mut self.strings[ptr.heap_index() as usize]
+        self.strings[ptr.heap_index() as usize][range].fill(ch);
+    }
+
+    /// Write `chars` into a native heap string from `at`, in place:
+    /// `string-copy!`'s write. Panics past the end.
+    #[inline]
+    pub(crate) fn string_copy_chars(&mut self, ptr: TaggedValue, at: usize, chars: &[char]) {
+        debug_assert!(ptr.is_string());
+        self.string_checks.check("string", ptr);
+        self.strings[ptr.heap_index() as usize][at..at + chars.len()].copy_from_slice(chars);
     }
 
     /// Set a single character in a native heap string

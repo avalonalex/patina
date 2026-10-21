@@ -383,11 +383,11 @@ mod tests {
     );
 
     control!(
-        vector_slice_mut_of_a_freed_vector,
+        vector_init_of_a_freed_vector,
         "use-after-free: vector slot 0 was reclaimed by the GC",
         {
             let (mut heap, dead) = freed(vector);
-            heap.vector_slice_mut(dead);
+            heap.vector_init(dead, 0, TaggedValue::NULL);
         }
     );
 
@@ -402,11 +402,20 @@ mod tests {
     );
 
     control!(
-        get_string_chars_mut_of_a_freed_string,
+        string_fill_chars_of_a_freed_string,
         "use-after-free: string slot 0 was reclaimed by the GC",
         {
             let (mut heap, dead) = freed(string);
-            heap.get_string_chars_mut(dead);
+            heap.string_fill_chars(dead, 0..1, 'x');
+        }
+    );
+
+    control!(
+        string_copy_chars_into_a_freed_string,
+        "use-after-free: string slot 0 was reclaimed by the GC",
+        {
+            let (mut heap, dead) = freed(string);
+            heap.string_copy_chars(dead, 0, &['x']);
         }
     );
 
@@ -731,6 +740,16 @@ mod tests {
             let mut heap = Heap::new();
             let v = vector(&mut heap);
             heap.vector_set(v, 0, TaggedValue::DEAD_SLOT);
+        }
+    );
+
+    control!(
+        vector_init_of_a_retired_register_panics,
+        "store of a retired register into a vector",
+        {
+            let mut heap = Heap::new();
+            let v = vector(&mut heap);
+            heap.vector_init(v, 0, TaggedValue::DEAD_SLOT);
         }
     );
 
