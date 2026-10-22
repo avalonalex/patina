@@ -1380,7 +1380,7 @@ invocation's module. That `expect` is fulfilled by every later invocation in
 the crate too, so the lint alone would pass a new one; a test in
 `crates/patina-interpreter/src/reentry_lint_control.rs` reads each crate's
 sources and fails when the statics they declare differ from the ones its
-crate root names.
+crate root names. The rest of C9 is in §9.8.
 
 **Where `unsafe` code may be (#698).** Unsafe heap access is confined to
 `patina-core`, `patina-vm` and `patina-tree-walker`, the trusted island of
@@ -1733,6 +1733,25 @@ and `--all-features` clippy lints it.
   build is where a nested one is found.
 - **No metadata accessors exist yet.** The arena heap keeps no metadata
   bytes; the accessors come with the new heap.
+
+**C9:** three checks keep state that more than one carrier could not share
+from growing.
+- **No new `thread_local!`**, by #622's clippy rule and its listed statics
+  (§7).
+- **No `static mut`** in any crate. Nothing is listed.
+- **No `Rc`, `RefCell`, `Cell` or `Interior` in a heap payload but the
+  listed ones.** The ones `HeapObjectData` holds are listed by variant and
+  field (`SHARED_PAYLOADS`). Rule 3 of §18.2 takes them out by stage 5, and
+  each comes off the list as its payload goes. A new one fails the test
+  until it is listed, so it is added on purpose: before stage 5, a payload
+  that changes after the object is made has no home but an `Interior`. The
+  scan reads each payload's type as written, so a type that wraps one in a
+  struct of its own is beyond it.
+
+The last two are tests in
+`crates/patina-interpreter/src/reentry_lint_control.rs`, each with a positive
+control: a synthetic declaration for the first, a synthetic enum for the
+second.
 
 **C11:** the types every carrier shares are `Send + Sync`, asserted in one
 test (`crates/patina-tests/tests/carrier_types.rs`): the `InterruptHandle`
