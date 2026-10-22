@@ -53,6 +53,28 @@ impl Default for ContEnv {
     }
 }
 
+impl Drop for ContEnvNode {
+    /// #617's rule, for the chain a program's recursion builds (#725). A
+    /// continuation's environment holds the continuation it returns to,
+    /// whose own environment holds the next, so the chain is as deep as the
+    /// recursion. Dropped at once, it recursed a level at a time, and 300,000
+    /// levels overflowed the main thread's stack: abandoned by an escape or
+    /// an uncaught error, or freed with a continuation object a collection
+    /// found dead. With no room left, the children go to `drop_deep`, which
+    /// finishes on a new segment.
+    fn drop(&mut self) {
+        let ContEnvNode::Entry { value, rest, .. } = self else {
+            return;
+        };
+        if crate::walk::has_stack_room() {
+            return;
+        }
+        let value = std::mem::replace(value, ContValue::Halt);
+        let rest = std::mem::replace(rest, Rc::new(ContEnvNode::Empty));
+        crate::walk::drop_deep((value, rest));
+    }
+}
+
 thread_local! {
     /// The one `Empty` node every empty `ContEnv` shares.
     ///
