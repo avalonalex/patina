@@ -136,7 +136,6 @@ pub type ConstIdx = u16;    // index into CodeObject::constants
 | `LoadImmediate` | `dst: Reg, val: TaggedValue` | `dst ← val` (fixnum/bool/char/null inline) |
 | `Move` | `dst: Reg, src: Reg` | `dst ← src` (register copy, covers local loads) |
 | `LoadClosure` | `dst: Reg, slot: u16` | `dst ← current_closure.free_vars[slot]` |
-| `StoreClosure` | `slot: u16, src: Reg` | `current_closure.free_vars[slot] ← src` |
 | `LoadGlobal` | `dst: Reg, name: Symbol` | `dst ← globals[name]` (error if unbound) |
 | `StoreGlobal` | `name: Symbol, src: Reg` | `globals[name] ← src` |
 

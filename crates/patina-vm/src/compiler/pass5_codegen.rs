@@ -332,8 +332,7 @@ fn written_register(instruction: &Instruction) -> Option<u16> {
         | CallWithValues { dst, .. }
         | AbortToPrompt { dst, .. }
         | CaptureComposable { dst, .. } => Some(dst),
-        StoreClosure { .. }
-        | StoreGlobal { .. }
+        StoreGlobal { .. }
         | WriteCell { .. }
         | Jump { .. }
         | JumpIf { .. }
