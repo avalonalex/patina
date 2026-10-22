@@ -703,11 +703,8 @@ fn handle_control_primitive(
             // a machine. An after thunk that escapes abandons the exit as it
             // would any jump, and one that calls `exit` starts a new travel
             // from where this one had got to (#336).
-            let status = patina_runtime::exit_status::requested_status(args).map_err(|e| {
-                VmError::Runtime {
-                    message: e.to_string(),
-                }
-            })?;
+            let status =
+                patina_runtime::exit_status::requested_status(args).map_err(eval_to_vm_error)?;
             // The target's handle is held only here until the jump writes it.
             let window = AssertNoGc::new(state.heap());
             let target = state.alloc_vm_continuation(VmContinuation {
@@ -1102,6 +1099,7 @@ pub(super) fn classify_error(err: &VmError) -> (patina_core::ExceptionKind, Stri
                 .to_string();
             (kind, msg)
         }
+        VmError::Primitive(e) => e.to_exception(),
         VmError::SchemeException { message } => (ExceptionKind::Error, message.clone()),
         VmError::Interrupt => (ExceptionKind::Interrupt, err.to_string()),
         // Unwrap location wrapper and classify the inner error.
@@ -1949,11 +1947,14 @@ fn display_word(heap: &SharedHeap, tv: TaggedValue) -> String {
     })
 }
 
+/// A primitive's error as the VM raises it (#744). Out of line and cold: it
+/// runs only when a primitive fails, and its clone of the error sat in the
+/// primitive call's hot path otherwise.
+#[cold]
+#[inline(never)]
 fn eval_to_vm_error(e: patina_primitives::EvalError) -> VmError {
-    VmError::Runtime {
-        message: e.to_string(),
-    }
-    .with_diagnostic(e.diagnostic())
+    let diagnostic = e.diagnostic();
+    VmError::Primitive(Box::new(e.without_diagnostic().clone())).with_diagnostic(diagnostic)
 }
 
 /// A resumable primitive's step as this machine takes it: a value, or work
@@ -3896,7 +3897,5 @@ fn call_primitive_proc(
     state
         .primitive_registry()
         .apply_cached(qualified_name, registry_index, args, &ctx)
-        .map_err(|e| VmError::Runtime {
-            message: e.to_string(),
-        })
+        .map_err(eval_to_vm_error)
 }

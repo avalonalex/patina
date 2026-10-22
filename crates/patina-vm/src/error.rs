@@ -64,6 +64,14 @@ pub enum VmError {
     #[error("runtime error: {message}")]
     Runtime { message: String },
 
+    /// A primitive's error, kept whole so that the condition it raises is
+    /// the one the tree-walker raises for it: the kind from its variant, the
+    /// message without a display prefix (#744). Displayed as `Runtime` was,
+    /// and boxed, so that `VmError`, which every instruction's `Result`
+    /// carries, stays its size.
+    #[error("runtime error: {0}")]
+    Primitive(Box<patina_primitives::EvalError>),
+
     /// A Scheme exception that wasn't caught by any handler.
     #[error("unhandled exception: {message}")]
     SchemeException { message: String },
