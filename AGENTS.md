@@ -262,7 +262,7 @@ Test crates, the REPL and test and example targets are exempt (`clippy.toml`'s h
 - Scheme implementations: `lib/scheme/<name>/<file>.scm`
 
 **New heap object type:**
-1. Add variant to `HeapObjectData` in `crates/patina-core/src/heap/mod.rs`. A payload that changes after the object is made goes in an `Interior`, which only core can borrow: a store into it is a funnel slot (`Cx::store`), and a read an accessor that answers by value (#708).
+1. Add variant to `HeapObjectData` in `crates/patina-core/src/heap/mod.rs`. A payload that changes after the object is made goes in an `Interior`, which only core can borrow: a store into it is a funnel slot (`Cx::store`), and a read an accessor that answers by value (#708). A payload holding an `Interior`, `Rc`, `RefCell` or `Cell` is shared state that stage 5 takes out, and goes on `SHARED_PAYLOADS` in `crates/patina-interpreter/src/reentry_lint_control.rs`, whose test fails until it is listed (C9, #711).
 2. Add type predicate + accessor on `Heap`
 3. Add display in `crates/patina-core/src/debug_format.rs`
 4. Update GC tracing/root handling and test collection in both backends; read `docs/GC_DESIGN.md`.
