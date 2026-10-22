@@ -117,7 +117,7 @@ pub const GC_CHECK: bool = cfg!(any(debug_assertions, feature = "gc-check"));
 ///
 /// It guards every store through the funnel (`Cx::store`, `Heap::store` and
 /// `try_store`, `Fresh::init`), which since #708 the VM's inline
-/// `vector-set!`, `WriteCell` and `StoreClosure` take too; the mutators the
+/// `vector-set!` and `WriteCell` take too; the mutators the
 /// funnel writes through (`set_car`, `set_cdr`, `vector_set`,
 /// `write_mutable_cell`, `set_vm_closure_free_var`); and the constructors the
 /// VM moves register values into the heap through: `alloc_pair`, and with it

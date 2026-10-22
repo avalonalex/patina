@@ -102,6 +102,6 @@ pub struct VmClosure {
     /// The compiled code for this closure.
     pub code_id: CodeObjectId,
     /// Captured values indexed by closure slot.
-    /// Slot index corresponds to the `slot` operand in `LoadClosure`/`StoreClosure`.
+    /// Slot index corresponds to the `slot` operand in `LoadClosure`.
     pub free_vars: Vec<TaggedValue>,
 }

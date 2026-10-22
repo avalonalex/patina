@@ -119,9 +119,6 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
         Instruction::LoadClosure { dst, slot } => {
             format!("LoadClosure  r{} ← closure[{}]", dst, slot)
         }
-        Instruction::StoreClosure { slot, src } => {
-            format!("StoreClosure closure[{}] ← r{}", slot, src)
-        }
         Instruction::LoadGlobal { dst, name } => {
             format!("LoadGlobal   r{} ← globals[{}]", dst, name)
         }

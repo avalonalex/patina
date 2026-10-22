@@ -318,8 +318,8 @@ impl Heap {
 
     /// [`Heap::store`], for a slot that may not exist: `false`, with nothing
     /// written, if it does not. For a machine whose own check of the holder
-    /// would repeat the funnel's: the VM's inline `vector-set!`, `WriteCell`
-    /// and `StoreClosure` (#708).
+    /// would repeat the funnel's: the VM's inline `vector-set!` and
+    /// `WriteCell` (#708).
     #[inline]
     pub fn try_store<'gc, S: Slot<'gc>>(&mut self, slot: S, v: Value<'gc>) -> bool {
         slot.write(self, v.tagged(), sealed::Token(())).is_ok()

@@ -1956,37 +1956,6 @@ fn dispatch_one_instruction(
             state.set_reg_at(base, dst, val);
         }
 
-        Instruction::StoreClosure { slot, src } => {
-            let val = state.reg_at(base, src);
-            let closure = state
-                .execution
-                .frames()
-                .last()
-                .and_then(CallFrame::closure)
-                .ok_or_else(|| VmError::Runtime {
-                    message: "StoreClosure in non-closure frame".into(),
-                })?;
-            // SAFETY: the frame's closure and the instruction's operand,
-            // live words of this heap, and nothing collects inside the
-            // instruction.
-            let (closure, val) = unsafe {
-                (
-                    patina_core::Value::from_tagged(closure),
-                    patina_core::Value::from_tagged(val),
-                )
-            };
-            // Through the funnel (#708), which checks the slot.
-            let stored = state
-                .heap
-                .borrow_mut()
-                .try_store(patina_core::ClosureFree(closure, slot as usize), val);
-            if !stored {
-                return Err(VmError::Runtime {
-                    message: format!("closure slot {} out of range", slot),
-                });
-            }
-        }
-
         Instruction::LoadGlobal { dst, ref name } => {
             // Per-site inline cache (Track P P4): see `GlobalCacheEntry`.
             let globals = frame_globals(state);

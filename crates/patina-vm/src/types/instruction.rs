@@ -92,12 +92,6 @@ pub enum Instruction {
     /// `dst ← current_closure.free_vars[slot]`
     LoadClosure { dst: Reg, slot: u16 },
 
-    /// `current_closure.free_vars[slot] ← src`
-    ///
-    /// Used for `set!` on mutable captured variables. The slot holds a
-    /// `MutableCell` heap pointer; this instruction writes through the cell.
-    StoreClosure { slot: u16, src: Reg },
-
     /// `dst ← globals[name]`  (error if unbound)
     LoadGlobal { dst: Reg, name: Symbol },
 
