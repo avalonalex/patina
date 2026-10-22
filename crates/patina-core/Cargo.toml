@@ -56,3 +56,9 @@ gc-census = []
 # enable it, and resolver 2 keeps a dev-dependency's features out of normal
 # builds, so no build that ships can name a collector entry point.
 test-support = []
+
+# The threaded build's accessor bodies (#711; `PRD/GC_PRD.md` §18.1): the
+# Mutator's own words as atomics, the funnel's word stores as relaxed atomic
+# ones, and `HeapTable` behind a lock. Bodies only: nothing runs it before
+# stage 9, enabling it needs decision 7, and `--all-features` clippy lints it.
+threaded = []
