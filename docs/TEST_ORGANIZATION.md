@@ -1322,7 +1322,12 @@ Run alone, each workload gets medians with bootstrap 95% intervals. With
 `target/benchmark-runs/worktrees/` that is removed afterwards unless
 `--keep-base`) or `--base DIR` (a checkout), every round runs base, branch,
 base. Each side's binary runs over its own `lib/`, and a run whose sides
-print different answers fails. A ratio is the branch over the mean of its
+print different answers fails. Each side runs from a copy, staged with its
+`lib/`, its examples and its workspace manifest under the run's scratch
+directory, at roots of the same depth and length, removed when the run ends.
+A binary's startup walks its root's path in every library lookup. Run from
+its worktree, four components deeper than the checkout, a base of the same
+sources counted `startup` 1.1% and `libload3` 0.3% more instructions (#763). A ratio is the branch over the mean of its
 round's two base runs, taken as a geomean over rounds, with a bootstrap 95%
 interval per workload and on the geomean over workloads. A difference under
 2% is judged in instructions or cycles, never in wall time. Each round draws
