@@ -164,16 +164,23 @@ print({'empty': '', 'nan': 'BENCH_OK nan', 'zero': 'BENCH_OK 0', 'negative': 'BE
     # ------------------------------------------------------------ gc mode
 
     def fake_checkout(self, root, answer='42'):
-        """A release binary at root/target/release/patina that writes a GC log
-        (two paced collections, then the epilogue's two forced ones) and the
-        epilogue's final readings."""
+        """A checkout at root: a workspace manifest, a lib/, and a release
+        binary at target/release/patina that writes a GC log (two paced
+        collections, then the epilogue's two forced ones) and the epilogue's
+        final readings. The binary logs the checkout it was made in, where it
+        ran from, and whether a lib/ sat at that root."""
+        (root / 'lib/scheme').mkdir(parents=True, exist_ok=True)
+        (root / 'lib/scheme/base.sld').write_text('(define-library (scheme base))\n')
+        (root / 'Cargo.toml').write_text('[workspace]\n')
         binary = root / 'target/release/patina'
         binary.parent.mkdir(parents=True, exist_ok=True)
         binary.write_text(f'''#!/usr/bin/env python3
 import json, os, pathlib, sys
+exe = pathlib.Path(__file__).absolute()
 with pathlib.Path(os.environ['FAKE_ROOT'], 'gc-calls.jsonl').open('a') as log:
     log.write(json.dumps({{'root': {str(root)!r}, 'argv': sys.argv[1:], 'pad': len(os.environ['PATINA_BENCH_PAD']),
-                          'isolated': os.environ.get('PATINA_ISOLATED_LIBRARIES')}}) + '\\n')
+                          'isolated': os.environ.get('PATINA_ISOLATED_LIBRARIES'), 'exe': str(exe),
+                          'lib': (exe.parents[2] / 'lib/scheme/base.sld').is_file()}}) + '\\n')
 assert '(gc-stats)' in pathlib.Path(sys.argv[-1]).read_text()
 pathlib.Path(os.environ['PATINA_GC_LOG']).write_text(
     'heap,number,start_us,reason,pause_us,mark_us\\n1,1,1000,bytes,300,200\\n1,2,50000,bytes,700,600\\n'
@@ -223,6 +230,16 @@ sys.exit(status)
         calls = self.gc_calls()
         self.assertEqual([c['root'] for c in calls], [str(self.base), str(self.root), str(self.base)] * 3)
         self.assertTrue(all(c['isolated'] == '1' for c in calls))
+        # Each side ran from a copy with its lib/, at sibling roots of the same
+        # length (#763), which the run removed afterwards.
+        exes = {c['root']: Path(c['exe']) for c in calls}
+        base_exe, branch_exe = exes[str(self.base)], exes[str(self.root)]
+        self.assertNotEqual(base_exe, branch_exe)
+        self.assertEqual(len(str(base_exe)), len(str(branch_exe)))
+        self.assertEqual(base_exe.parents[3], branch_exe.parents[3])
+        self.assertEqual(base_exe.parents[3].name, 'roots')
+        self.assertTrue(all(c['lib'] for c in calls))
+        self.assertEqual(list((self.root / 'target/benchmark-runs').glob('*/scratch/roots')), [])
         pads = [c['pad'] for c in calls]
         self.assertTrue(all(len(set(pads[i:i + 3])) == 1 for i in range(0, 9, 3)), pads)
         report = json.loads(self.reports()[0].read_text())
@@ -240,6 +257,13 @@ sys.exit(status)
                          (854658, ['crates/x.rs:212:25'], None))
         self.assertEqual(row['wall_s_ratio'], [1.0, 1.0, 1.0])
         self.assertEqual('instructions_ratio' in row, sys.platform == 'darwin')
+
+    def test_gc_without_a_base_runs_the_checkout_s_own_binary(self):
+        self.gc_setup()
+        result = self.run_script('run_gc_benchmarks.sh', '--workload', 'escape1000', '--rounds', '1')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        [exe] = {Path(c['exe']).resolve() for c in self.gc_calls()}
+        self.assertEqual(exe, (self.root / 'target/release/patina').resolve())
 
     def test_gc_fails_without_a_success_report_when_the_sides_disagree(self):
         self.gc_setup()

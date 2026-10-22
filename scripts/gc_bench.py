@@ -20,6 +20,12 @@ The environment's size is drawn at random per round and shared by the
 round's runs (#653): the VM's speed on tight loops depends on where the stack
 lands, and a fixed size measures each build at one layout.
 
+A comparison runs each side from a copy staged under the run's scratch
+directory, at roots of the same depth and length (#763): a binary's startup
+walks its root's path in every library lookup, and run from its worktree, four
+components deeper than the checkout, a base of the same sources counted
+`startup` 1.1% more instructions.
+
 The Larceny-derived workloads are LGPL and are not vendored: they run from
 the Larceny checkout (LARCENY_DIR, by default ~/Project/reference/larceny),
 as scripts/run_larceny_tests.sh does, and are reported as skipped without it.
@@ -44,6 +50,9 @@ GC = ROOT / 'crates/patina-tests/bench_programs/gc'
 MMU_WINDOWS_MS = (1, 2, 5, 10, 20, 50, 100)
 PAD_MAX = 4096
 SIDES_ABA = ('base', 'branch', 'base')
+# Each side's staged root, one character each, so both roots have the same
+# depth and length (#763).
+STAGED_ROOTS = {'base': 'a', 'branch': 'b'}
 
 EPILOGUE = """
 (import (patina debug))
@@ -366,6 +375,28 @@ def build_side(label, root, env):
             'example': example}
 
 
+def stage_side(side, scratch):
+    """`side`, to run from a copy under scratch/roots/: its binary, its lib/,
+    its workspace manifest, by which a binary finds that lib/, and its
+    examples as they are asked for (#763)."""
+    root = scratch / 'roots' / STAGED_ROOTS[side['label']]
+    shutil.rmtree(root, ignore_errors=True)
+    checkout = Path(side['root'])
+    (root / 'target/release').mkdir(parents=True)
+    shutil.copy2(checkout / 'Cargo.toml', root / 'Cargo.toml')
+    shutil.copytree(checkout / 'lib', root / 'lib')
+    binary = root / 'target/release/patina'
+    shutil.copy2(side['binary'], binary)
+
+    def example(name):
+        staged = root / 'target/release/examples' / name
+        if not staged.exists():
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(side['example'](name), staged)
+        return str(staged)
+    return dict(side, binary=str(binary), example=example)
+
+
 def base_checkout(revision, directory):
     """A detached worktree of `revision` under `directory`, reused when it
     is already at that revision."""
@@ -528,8 +559,10 @@ def gc_mode(args, directory, env):
                 root, base_sha = base_checkout(args.base, ROOT / 'target/benchmark-runs/worktrees')
                 worktree = None if args.keep_base else root
             sides['base'] = build_side('base', root, env)
+            sides = {label: stage_side(side, scratch) for label, side in sides.items()}
         rows, skipped, failed = measure(args, workloads, sides, scratch)
     finally:
+        shutil.rmtree(scratch / 'roots', ignore_errors=True)
         # A base worktree builds its own target/, a gigabyte or more.
         if worktree:
             subprocess.run(['git', 'worktree', 'remove', '--force', str(worktree)], cwd=ROOT, check=False)
