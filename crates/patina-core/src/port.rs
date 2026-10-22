@@ -1135,7 +1135,8 @@ impl Port {
         }
     }
 
-    /// Check if a byte is ready to be read (without blocking)
+    /// Whether a byte read would not wait: R7RS 6.13.2 counts end of file as
+    /// ready, since a read there answers the eof object at once (#741).
     pub fn u8_ready(&self) -> io::Result<bool> {
         if self.direction != PortDirection::Input {
             return Err(io::Error::new(
@@ -1146,7 +1147,8 @@ impl Port {
 
         let mut data = self.data.borrow_mut();
         match &mut *data {
-            PortData::Bytevector(b) => Ok(b.position < b.content.len()),
+            // A read of an in-memory port never waits.
+            PortData::Bytevector(_) => Ok(true),
             PortData::Stdio(StdioKind::Stdin) => {
                 // For stdin, we'd need platform-specific non-blocking check
                 // For now, assume always ready (conservative)
@@ -1158,8 +1160,10 @@ impl Port {
             )),
             PortData::File(fp) => {
                 if let FileHandle::Input(ref mut reader) = fp.handle {
-                    let buf = reader.fill_buf()?;
-                    Ok(!buf.is_empty())
+                    // The buffer comes back empty only at end of file: a read
+                    // waits on neither.
+                    reader.fill_buf()?;
+                    Ok(true)
                 } else {
                     Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
@@ -1282,7 +1286,9 @@ impl Port {
         }
     }
 
-    /// Check if a character is ready to be read (without blocking)
+    /// Whether a character read would not wait: R7RS 6.13.2 counts end of
+    /// file as ready, since a read there answers the eof object at once
+    /// (#741).
     pub fn char_ready(&self) -> io::Result<bool> {
         if self.direction != PortDirection::Input {
             return Err(io::Error::new(
@@ -1297,9 +1303,9 @@ impl Port {
 
         let mut data = self.data.borrow_mut();
         match &mut *data {
-            PortData::String(s) => Ok(s.position < s.content.len()),
+            // A read of an in-memory port never waits.
+            PortData::String(_) => Ok(true),
             PortData::Stdio(StdioKind::Stdin) => {
-                // For string ports, always ready if not at EOF
                 // For stdin, we'd need platform-specific non-blocking check
                 // For now, assume always ready (conservative)
                 Ok(true)
@@ -1310,9 +1316,10 @@ impl Port {
             )),
             PortData::File(fp) => {
                 if let FileHandle::Input(ref mut reader) = fp.handle {
-                    // Check if buffer has data available
-                    let buf = reader.fill_buf()?;
-                    Ok(!buf.is_empty())
+                    // The buffer comes back empty only at end of file: a read
+                    // waits on neither.
+                    reader.fill_buf()?;
+                    Ok(true)
                 } else {
                     Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
@@ -1320,11 +1327,7 @@ impl Port {
                     ))
                 }
             }
-            // Mirrors the String arm above: ready iff data remains. Note the
-            // whole family (String/File/u8_ready too) returns false at EOF,
-            // where R7RS 6.13.2 says #t (a read would not block — it returns
-            // the EOF object); a fix belongs to all arms at once, not here.
-            PortData::Bytevector(b) => Ok(b.position < b.content.len()),
+            PortData::Bytevector(_) => Ok(true),
             PortData::Closed => Err(io::Error::new(
                 io::ErrorKind::NotConnected,
                 "port is closed",
@@ -1924,13 +1927,15 @@ mod tests {
 
     #[test]
     fn test_pushback_char_ready_and_take() {
+        // A string port is ready at its end (#741), with text pushed back
+        // and once that text is taken.
         let port = Port::new_input_string(String::new());
-        assert!(!port.char_ready().unwrap());
+        assert!(port.char_ready().unwrap());
         port.set_pushback("z".to_string());
         assert!(port.char_ready().unwrap());
         assert_eq!(port.take_pushback(), "z".to_string());
         assert_eq!(port.take_pushback(), String::new());
-        assert!(!port.char_ready().unwrap());
+        assert!(port.char_ready().unwrap());
     }
 
     /// Every standard input port reads the one stream, so text one of them
@@ -2161,7 +2166,8 @@ mod tests {
         assert_eq!(port.read_u8().unwrap(), Some(1));
         assert!(port.u8_ready().unwrap());
         assert_eq!(port.read_u8().unwrap(), Some(2));
-        assert!(!port.u8_ready().unwrap()); // EOF
+        // At end of file too, where a read does not wait (#741).
+        assert!(port.u8_ready().unwrap());
     }
 
     #[test]
@@ -2183,10 +2189,8 @@ mod tests {
         assert_eq!(port.read_line().unwrap(), Some("B\n".to_string()));
         assert_eq!(port.read_line().unwrap(), Some("rest".to_string()));
         assert_eq!(port.read_char().unwrap(), None);
-        // Pins consistency with the sibling arms, not R7RS: 6.13.2 wants #t
-        // at EOF, and every in-memory arm predates this one in saying false.
-        // Flip this together with them if that family-wide deviation is fixed.
-        assert!(!port.char_ready().unwrap());
+        // Ready at end of file, as R7RS 6.13.2 asks of every arm (#741).
+        assert!(port.char_ready().unwrap());
 
         // A multi-byte character decodes whole, not byte-by-byte.
         let port = Port::new_input_bytevector("λx".as_bytes().to_vec());
