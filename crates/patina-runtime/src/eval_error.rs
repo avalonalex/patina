@@ -222,6 +222,95 @@ impl EvalError {
         }
     }
 
+    /// The condition this error raises in Scheme: its kind, and the message
+    /// `error-object-message` answers, with no display prefix. Both machines
+    /// raise an error through it (#744): the kind comes from the variant, so
+    /// a type error is never a file error however its message reads, and
+    /// only an I/O error's message is searched for a file's, and a syntax
+    /// error's for a parse's.
+    pub fn to_exception(&self) -> (ExceptionKind, String) {
+        match self.without_diagnostic() {
+            // Lookup errors
+            EvalError::UndefinedVariable(name) => (
+                ExceptionKind::Error,
+                format!("Undefined variable: {}", name),
+            ),
+
+            // Application errors
+            EvalError::NotAProcedure(desc) => {
+                (ExceptionKind::Error, format!("Not a procedure: {}", desc))
+            }
+
+            // Arity errors
+            EvalError::WrongArity { expected, actual } => (
+                ExceptionKind::Error,
+                format!(
+                    "Wrong number of arguments: expected {}, got {}",
+                    expected, actual
+                ),
+            ),
+
+            // Type errors
+            EvalError::TypeError(msg) => (ExceptionKind::Error, msg.clone()),
+
+            // Domain errors
+            EvalError::DivisionByZero => (ExceptionKind::Error, "Division by zero".to_string()),
+
+            // Bounds errors
+            EvalError::IndexOutOfBounds(msg) => (ExceptionKind::Error, msg.clone()),
+
+            // I/O errors - classify as file-error when appropriate
+            EvalError::IOError(msg) => {
+                let kind = if msg.contains("Cannot open")
+                    || msg.contains("Cannot delete")
+                    || msg.contains("Cannot read")
+                    || msg.contains("Cannot write")
+                    || msg.contains("No such file")
+                    || msg.contains("file")
+                {
+                    ExceptionKind::FileError
+                } else {
+                    ExceptionKind::Error
+                };
+                (kind, msg.clone())
+            }
+
+            // Syntax/read errors
+            EvalError::InvalidSyntax(msg) => {
+                let kind = if msg.contains("read:") || msg.contains("parse") {
+                    ExceptionKind::ReadError
+                } else {
+                    ExceptionKind::Error
+                };
+                (kind, msg.clone())
+            }
+
+            // A posted interrupt, raised at a poll (#701)
+            EvalError::Interrupt => (ExceptionKind::Interrupt, "interrupted".to_string()),
+
+            // Already a Scheme exception - use its kind
+            EvalError::SchemeException {
+                kind,
+                message,
+                irritants_display: _,
+            } => (kind.clone(), message.clone()),
+
+            // Located error: include location in exception message
+            EvalError::WithLocation { error, location } => {
+                let detail = error.to_error_detail();
+                let msg = format!("{} at {}", detail.message, location);
+                (detail.kind.to_exception_kind(), msg)
+            }
+
+            // Not catchable on the tree-walker, which never asks; the VM catches
+            // a primitive's, as an ordinary error with its display.
+            error @ (EvalError::WithDiagnostic { .. }
+            | EvalError::InternalError(_)
+            | EvalError::ContinuationEscape
+            | EvalError::DesugarError(_)) => (ExceptionKind::Error, error.to_string()),
+        }
+    }
+
     /// Convert to ErrorDetail for rich error reporting
     pub fn to_error_detail(&self) -> ErrorDetail {
         if let Self::WithDiagnostic { error, .. } = self {

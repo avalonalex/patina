@@ -38,7 +38,7 @@
 ;; `docs/TEST_ORGANIZATION.md` has the mechanism.
 
 (import (scheme base) (scheme write) (scheme file) (scheme read)
-        (scheme eval) (scheme repl) (srfi 64))
+        (scheme eval) (scheme load) (scheme repl) (srfi 64))
 
 ;; `(scheme stream)` is imported only where it is used. It backs one row, that
 ;; row is scoped to Patina, and it is R7RS-large Red rather than R7RS-small —
@@ -521,6 +521,20 @@
   (guard (ex ((read-error? ex) 'read-error) ((error-object? ex) 'other-error))
     (read (open-input-string "1.2.3"))))
 
+;; A type error is not a `file-error?` because its message names a file: the
+;; kind comes from what the error is, not from the words of its message, on
+;; both backends (#744). chibi 0.12 and Gauche 0.9.15 answer the same.
+(test-equal "a type error that names a file is not a file-error"
+  '(error error error error error)
+  (map (lambda (thunk)
+         (guard (ex ((file-error? ex) 'file-error) ((error-object? ex) 'error))
+           (thunk)))
+       (list (lambda () (file-exists? 'x))
+             (lambda () (delete-file 'x))
+             (lambda () (open-input-file 5))
+             (lambda () (open-output-file 'x))
+             (lambda () (load 5)))))
+
 ;; **Scoped to Patina, because its premise is.** The text of a runtime error
 ;; message is ours to choose — R7RS says nothing about it — so this row pins our
 ;; wording rather than a portable claim, and elsewhere reports a skip rather
@@ -529,6 +543,21 @@
 (test-equal "our type-error message survives into the error object"
   "car expects a pair"
   (guard (ex ((error-object? ex) (error-object-message ex))) (car 'not-a-pair)))
+
+;; Scoped the same way: a primitive's message carries no prefix naming its
+;; kind, on either backend (#744). The VM used to keep its error's display:
+;; `I/O error: Cannot open …`, `Invalid syntax: eval: …`.
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "a primitive's error message carries no prefix naming its kind" '(#f #f)
+  (let ((prefixed?
+         (lambda (prefix thunk)
+           (let ((m (guard (ex ((error-object? ex) (error-object-message ex))) (thunk))))
+             (and (>= (string-length m) (string-length prefix))
+                  (string=? (substring m 0 (string-length prefix)) prefix))))))
+    (list (prefixed? "I/O error: "
+                     (lambda () (open-input-file "/nonexistent/path/that/does/not/exist")))
+          (prefixed? "Invalid syntax: "
+                     (lambda () (eval '(define z 1) (environment '(scheme base))))))))
 
 
 ;; **From `larceny_families.rs`'s "What `base` found once it ran" section.**
