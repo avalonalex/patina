@@ -28,7 +28,7 @@
 ;; Rust originals wrote them as arguments to `list`, whose evaluation order is
 ;; unspecified, and chibi evaluates arguments right to left.
 
-(import (scheme base) (scheme read) (scheme write) (srfi 64))
+(import (scheme base) (scheme file) (scheme read) (scheme write) (srfi 64))
 
 (test-begin "ports")
 
@@ -399,6 +399,26 @@
 (test-equal "u8-ready? accepts the current binary input" #t
   (guard (ex (else #f))
     (parameterize ((current-input-port (open-input-bytevector #u8(1)))) (u8-ready?))))
+
+;; R7RS 6.13.2: at end of file `char-ready?` and `u8-ready?` answer #t, since
+;; a read there answers the eof object without waiting (#741). /dev/null is a
+;; file at its end from the start, and the same path as one read to its end.
+(test-equal "char-ready? at the end of a string port, empty or drained" '(#t #t)
+  (let ((drained (open-input-string "a")))
+    (read-char drained)
+    (list (char-ready? (open-input-string "")) (char-ready? drained))))
+(test-equal "u8-ready? at the end of a bytevector port, empty or drained" '(#t #t)
+  (let ((drained (open-input-bytevector #u8(1))))
+    (read-u8 drained)
+    (list (u8-ready? (open-input-bytevector #u8())) (u8-ready? drained))))
+(test-equal "char-ready? at the end of a file" #t
+  (let* ((p (open-input-file "/dev/null")) (ready (char-ready? p)))
+    (close-port p)
+    ready))
+(test-equal "u8-ready? at the end of a binary file" #t
+  (let* ((p (open-binary-input-file "/dev/null")) (ready (u8-ready? p)))
+    (close-port p)
+    ready))
 (test-equal "read-bytevector uses current input and stops at EOF" '(#u8(1 2) #t)
   (parameterize ((current-input-port (open-input-bytevector #u8(1 2))))
     (let* ((a (read-bytevector 3)) (b (read-bytevector 1))) (list a (eof-object? b)))))
