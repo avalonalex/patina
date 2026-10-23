@@ -540,6 +540,21 @@ impl<'gc> Cx<'gc> {
             .map(|(rtd, _)| Rc::clone(rtd))
     }
 
+    /// Whether `v` is a record of the type `rtd`, a record-type object: the
+    /// two descriptors compared by identity, with no allocation (#736). An
+    /// `rtd` that is no record type answers `false`.
+    #[inline]
+    pub fn is_record_of(&self, v: Value<'gc>, rtd: Value<'gc>) -> bool {
+        let heap = self.heap.borrow();
+        match (
+            heap.get_record(v.tagged()),
+            heap.get_record_type(rtd.tagged()),
+        ) {
+            (Some((record_type, _)), Some(expected)) => Rc::ptr_eq(record_type, expected),
+            _ => false,
+        }
+    }
+
     /// How many fields the record `v` has, or `None` if `v` is no record.
     #[inline]
     pub fn record_len(&self, v: Value<'gc>) -> Option<usize> {

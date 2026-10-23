@@ -124,6 +124,166 @@ fn record_type_of<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'g
     }
 }
 
+/// The error for `v`, given where a record of the type `rtd` was asked for:
+/// an accessor's, a modifier's or a predicate's argument (#736).
+fn not_of_type<'gc>(cx: &Cx<'gc>, who: &str, v: Value<'gc>, rtd: Value<'gc>) -> EvalError {
+    let Some(expected) = cx.get_record_type(rtd) else {
+        return EvalError::TypeError(format!(
+            "{who}: expected record-type, got {}",
+            cx.type_name(rtd)
+        ));
+    };
+    let got = match cx.record_type_of(v) {
+        Some(actual) => format!("a {} record", actual.name),
+        None => cx.type_name(v).to_string(),
+    };
+    EvalError::TypeError(format!(
+        "{who}: expected a {} record, got {got}",
+        expected.name
+    ))
+}
+
+/// %record-of?: Whether obj is a record of the type rtd, compared by
+/// identity with no allocation: a predicate's whole body (#736)
+///
+/// (%record-of? obj rtd) => boolean
+fn record_of_p<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+    if args.len() != 2 {
+        return Err(EvalError::WrongArity {
+            expected: "%record-of? expects 2 arguments".to_string(),
+            actual: args.len(),
+        });
+    }
+    if cx.is_record_of(args[0], args[1]) {
+        return Ok(Value::TRUE);
+    }
+    if !cx.is_record_type(args[1]) {
+        return Err(not_of_type(cx, "%record-of?", args[0], args[1]));
+    }
+    Ok(Value::FALSE)
+}
+
+/// %make-record-from: A record of the type rtd whose fields at `indices`, a
+/// vector of field indices, hold the values in order, and whose other
+/// fields are unspecified: a constructor's whole body, given its arguments
+/// (#736)
+///
+/// (%make-record-from rtd indices value ...) => record
+fn make_record_from<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+    if args.len() < 2 {
+        return Err(EvalError::WrongArity {
+            expected: "%make-record-from expects at least 2 arguments".to_string(),
+            actual: args.len(),
+        });
+    }
+    let Some(rtd) = cx.get_record_type(args[0]) else {
+        return Err(EvalError::TypeError(format!(
+            "%make-record-from: expected record-type, got {}",
+            cx.type_name(args[0])
+        )));
+    };
+    if !args[1].is_vector() {
+        return Err(EvalError::TypeError(format!(
+            "%make-record-from: expected vector of field indices, got {}",
+            cx.type_name(args[1])
+        )));
+    }
+    let values = &args[2..];
+    let mut fields = vec![Value::UNSPECIFIED; rtd.fields.len()];
+    {
+        let indices = cx.vector_slice(args[1]);
+        if indices.len() != values.len() {
+            return Err(EvalError::InvalidSyntax(format!(
+                "%make-record-from: {} field indices for {} values",
+                indices.len(),
+                values.len()
+            )));
+        }
+        for (position, (index, value)) in indices.iter().zip(values).enumerate() {
+            let slot = index
+                .is_fixnum()
+                .then(|| index.as_fixnum_unchecked())
+                .and_then(|i| usize::try_from(i).ok())
+                .and_then(|i| fields.get_mut(i));
+            let Some(slot) = slot else {
+                return Err(EvalError::InvalidSyntax(format!(
+                    "%make-record-from: index {position} names no field of record type {}",
+                    rtd.name
+                )));
+            };
+            *slot = *value;
+        }
+    }
+    Ok(cx.alloc_record(rtd, fields))
+}
+
+/// The type and the index an accessor's or modifier's key pairs, `(rtd . index)`:
+/// the one value it captures, so that its call runs as many of the VM's
+/// instructions as an unchecked one did. A second captured variable was a
+/// load more, about 180 instructions of the processor's (#736).
+fn field_key<'gc>(
+    cx: &Cx<'gc>,
+    who: &str,
+    key: Value<'gc>,
+) -> Result<(Value<'gc>, usize), EvalError> {
+    if key.is_pair() {
+        let index = cx.cdr(key);
+        if index.is_fixnum() {
+            return Ok((cx.car(key), index.as_fixnum_unchecked() as usize));
+        }
+    }
+    Err(EvalError::TypeError(format!(
+        "{who}: expected a field key, got {}",
+        cx.type_name(key)
+    )))
+}
+
+/// %record-field: Read the field `key` names from a record of its type: an
+/// accessor's whole body (#736)
+///
+/// (%record-field record key) => value
+fn record_field<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+    if args.len() != 2 {
+        return Err(EvalError::WrongArity {
+            expected: "%record-field expects 2 arguments".to_string(),
+            actual: args.len(),
+        });
+    }
+    let (rtd, index) = field_key(cx, "%record-field", args[1])?;
+    if !cx.is_record_of(args[0], rtd) {
+        return Err(not_of_type(cx, "%record-field", args[0], rtd));
+    }
+    cx.record_ref(args[0], index).ok_or_else(|| {
+        EvalError::InvalidSyntax(format!("%record-field: no field at index {index}"))
+    })
+}
+
+/// %record-field-set!: Write the field `key` names in a record of its type:
+/// a modifier's whole body (#736)
+///
+/// (%record-field-set! record key value) => unspecified
+fn record_field_set<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+    if args.len() != 3 {
+        return Err(EvalError::WrongArity {
+            expected: "%record-field-set! expects 3 arguments".to_string(),
+            actual: args.len(),
+        });
+    }
+    let (rtd, index) = field_key(cx, "%record-field-set!", args[1])?;
+    if !cx.is_record_of(args[0], rtd) {
+        return Err(not_of_type(cx, "%record-field-set!", args[0], rtd));
+    }
+    if index >= cx.record_len(args[0]).unwrap_or_default() {
+        return Err(EvalError::InvalidSyntax(format!(
+            "%record-field-set!: no field at index {index}"
+        )));
+    }
+    // The funnel's record field: it counts the store in the census
+    // (`Site::RecordSet`) and checks what it stores (#708).
+    cx.store(RecordField(args[0], index), args[2]);
+    Ok(Value::UNSPECIFIED)
+}
+
 /// %make-record: Create a new record instance
 ///
 /// (%make-record rtd field-values-vector) => record
@@ -417,5 +577,37 @@ pub fn register(registry: &mut PrimitiveRegistry) {
         Arity::Exact(3),
         "Write a field in a record by index.",
         record_set,
+    ));
+
+    registry.register(PrimitiveFn::new_cx(
+        "scheme.base",
+        "%record-of?",
+        Arity::Exact(2),
+        "Returns #t if obj is a record of the given type.",
+        record_of_p,
+    ));
+
+    registry.register(PrimitiveFn::new_cx(
+        "scheme.base",
+        "%make-record-from",
+        Arity::Min(2),
+        "Create a record of the given type, the values at the given field indices.",
+        make_record_from,
+    ));
+
+    registry.register(PrimitiveFn::new_cx(
+        "scheme.base",
+        "%record-field",
+        Arity::Exact(2),
+        "Read the field a (type . index) key names, from a record of that type.",
+        record_field,
+    ));
+
+    registry.register(PrimitiveFn::new_cx(
+        "scheme.base",
+        "%record-field-set!",
+        Arity::Exact(3),
+        "Write the field a (type . index) key names, in a record of that type.",
+        record_field_set,
     ));
 }

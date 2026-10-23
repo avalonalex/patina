@@ -34,6 +34,12 @@ pub fn build_internal_records(
         ("%make-record", Arity::Exact(2)),
         ("%record-ref", Arity::Exact(2)),
         ("%record-set!", Arity::Exact(3)),
+        // define-record-type's predicate, constructor, accessors and
+        // modifiers, which check a record's type (#736)
+        ("%record-of?", Arity::Exact(2)),
+        ("%make-record-from", Arity::Min(2)),
+        ("%record-field", Arity::Exact(2)),
+        ("%record-field-set!", Arity::Exact(3)),
     ];
 
     for (name, arity) in &primitives {
