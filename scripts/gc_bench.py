@@ -311,6 +311,24 @@ def timing_command():
     return ([perf, *PERF_EVENTS] if perf else []) + [time, '-v']
 
 
+def interpreter_command(binary, backend, program, args):
+    """`binary` running `program` on `backend`, with the workload's `args`.
+    The census mode builds its command here too (#777)."""
+    return [str(binary)] + (['--tree-walker'] if backend == 'tree-walker' else []) + [str(program)] + list(args)
+
+
+def descriptor_limit(workload):
+    """A `preexec_fn` lowering the descriptor limit to the workload's
+    `nofile`, or None when it sets none."""
+    nofile = workload.get('nofile')
+    if not nofile:
+        return None
+
+    def limit():
+        resource.setrlimit(resource.RLIMIT_NOFILE, (nofile, resource.getrlimit(resource.RLIMIT_NOFILE)[1]))
+    return limit
+
+
 def run_one(side, workload, backend, scratch, pad, timeout):
     """One run of `workload` on `side` ({'binary', 'root', 'example'}):
     its metrics, or an exception describing the failure."""
@@ -324,18 +342,13 @@ def run_one(side, workload, backend, scratch, pad, timeout):
     if workload['kind'] == 'example':
         command = [side['example'](workload['source'])] + args
     else:
-        command = [side['binary']] + (['--tree-walker'] if backend == 'tree-walker' else []) + [str(program)] + args
-    nofile = workload.get('nofile')
-
-    def limits():
-        if nofile:
-            resource.setrlimit(resource.RLIMIT_NOFILE, (nofile, resource.getrlimit(resource.RLIMIT_NOFILE)[1]))
+        command = interpreter_command(side['binary'], backend, program, args)
 
     # Its own session, so that a timeout kills the interpreter under time(1).
     with open(stdin or os.devnull) as input_file:
         process = subprocess.Popen(timing_command() + command, cwd=cwd, env=env, stdin=input_file,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                   start_new_session=True, preexec_fn=limits)
+                                   start_new_session=True, preexec_fn=descriptor_limit(workload))
         try:
             stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:

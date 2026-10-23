@@ -1384,15 +1384,21 @@ is an empty inline function, and the shipped build is unchanged.
 
 `scripts/run_gc_census.sh` (the `census` mode of `scripts/benchmarks.py`,
 in `scripts/gc_census.py`) builds that binary into `target/gc-census`, away
-from the main build. It runs each GBS workload under the default trigger
-and at each nursery size, with #648's log beside the census, and prints the
-rows of #647's measurement table that the census answers:
+from the main build. It runs each workload of the sets it is given (the GBS
+by default) on each backend `gbs.json` lists for it, under the default
+trigger and at each nursery size, with #648's log beside the census. A
+tree-walker run's files carry `-tw` after the workload's name
+(`samedepth1000-tw-default.txt`). It applies a workload's `nofile` as the
+`gc` mode does, and skips the `example` workloads, whose binaries it does
+not build (#777). For each backend apart, it prints the rows of #647's
+measurement table that the census answers:
 
 - bytes against the headered layout;
 - object sizes and the allocation mix;
 - survival at 64 K allocations;
 - the store mix;
-- live peaks and the deepest stack;
+- live peaks, and the VM's deepest stack (the tree-walker gives the census
+  no stack shape);
 - the collector's rates.
 
 The census takes a lock per allocation and per store, about doubling run
@@ -1403,6 +1409,7 @@ side by side.
 ```bash
 ./scripts/run_gc_census.sh                                    # the GBS, every configuration
 ./scripts/run_gc_census.sh --workload deeprec --config default --config s64K
+./scripts/run_gc_census.sh --set tw --config default          # the tree-walker workloads
 cargo test -p patina-repl --test gc_census --features patina-core/gc-census
 ```
 

@@ -4,10 +4,11 @@ the GC benchmark set, and the rows of #647's measurement table it answers.
 It builds the release binary with `patina-core`'s `gc-census` feature into
 its own target directory (target/gc-census, so the main build is left
 alone) and runs each workload of crates/patina-tests/bench_programs/gc/
-gbs.json once under the default trigger and once under each nursery size
-of PATINA_GC_STRESS (16 K to 4 M allocations), with the census on
-(crates/patina-core/src/census.rs) and #648's PATINA_GC_LOG beside it.
-From the summaries and logs it computes:
+gbs.json, on each backend it lists (#777), once under the default trigger
+and once under each nursery size of PATINA_GC_STRESS (16 K to 4 M
+allocations), with the census on (crates/patina-core/src/census.rs) and
+#648's PATINA_GC_LOG beside it. From the summaries and logs it computes,
+for each backend apart:
 
 - the bytes of today's layout against the headered layout of
   PRD/GC_PRD.md §6, by the byte account's charge and by the study's
@@ -42,7 +43,9 @@ CLASSES = ['pair', 'vector', 'string', 'flonum', 'closure', 'cell', 'identifier'
 HEAP_SITES = ['set_car', 'set_cdr', 'vector_set', 'vm_vector_set', 'write_mutable_cell',
               'set_vm_closure_free_var', 'promise_update', 'break_ephemeron', 'record_set',
               'parameter_install', 'parameter_install_converted', 'promise_force_prim', 'promise_force_vm']
-V_REAL, V_CELL, V_CLOSURE = 2, 21, 23
+V_REAL, V_PROCEDURE, V_CELL, V_CLOSURE = 2, 7, 21, 23
+# A tree-walker run's name: the workload's, with this after it.
+TW_SUFFIX = '-tw'
 # A representative length per length bucket, for the study's estimator.
 BUCKET_MID = [0, 1, 2, 3, 4, 6.5, 12.5, 24.5, 48.5, 96.5, 192.5, 640, 4608, 10000]
 VIEW_64K = 2
@@ -140,8 +143,36 @@ def live_objects(r):
     return r['live_pairs'] + r['live_vectors'] + r['live_strings'] + r['live_objects']
 
 
-def rows(results):
-    """#647's census rows from {workload: {config: {'summary', 'log', 'gclog'}}}."""
+def run_name(name, backend):
+    """A run's name, which its files are named by: the workload's on the
+    VM, and with TW_SUFFIX on the tree-walker, so that a workload both
+    backends run gets a run on each."""
+    return name + (TW_SUFFIX if backend == 'tree-walker' else '')
+
+
+def split_run_name(run):
+    """(workload, backend) of a run's name. A run from before #777 has no
+    suffix and ran on the VM, whatever its workload lists."""
+    if run.endswith(TW_SUFFIX):
+        return run[:-len(TW_SUFFIX)], 'tree-walker'
+    return run, 'vm'
+
+
+def rows_by_backend(results):
+    """#647's rows for each backend with a default run, from {run:
+    {config: run}}: each from its own backend's runs alone, keyed by
+    workload, so that a run of the `tw` set adds nothing to the VM's."""
+    split = {}
+    for run, configs in results.items():
+        name, backend = split_run_name(run)
+        split.setdefault(backend, {})[name] = configs
+    return {backend: rows(split[backend], backend) for backend in ('vm', 'tree-walker')
+            if backend in split and any(r.get('default') for r in split[backend].values())}
+
+
+def rows(results, backend='vm'):
+    """#647's census rows from one backend's {workload: {config:
+    {'summary', 'log', 'gclog'}}}."""
     names = [n for n in results if results[n].get('default')]
     default = {n: results[n]['default']['summary'] for n in names}
     out = {}
@@ -161,7 +192,10 @@ def rows(results):
     # The mix, by count.
     allocations = sum(d['alloc_total'] for d in default.values())
     out['allocations'] = allocations
-    out['mix_closures'] = sum(d['obj_variant'][V_CLOSURE] for d in default.values()) / allocations
+    # A tree-walker closure is a `Procedure`, as a primitive is: the
+    # bootstrap's few hundred primitives are counted with them.
+    closure = V_CLOSURE if backend == 'vm' else V_PROCEDURE
+    out['mix_closures'] = sum(d['obj_variant'][closure] for d in default.values()) / allocations
     out['mix_pairs'] = sum(d['alloc_by_arena'][0] for d in default.values()) / allocations
     out['mix_flonums'] = sum(d['obj_variant'][V_REAL] for d in default.values()) / allocations
     out['mix_vectors'] = sum(d['alloc_by_arena'][1] for d in default.values()) / allocations
@@ -203,7 +237,10 @@ def rows(results):
         if not log:
             continue
         out['live_peak'][n] = max(r['live_bytes'] for r in log)
-        out['stack'][n] = (max(r['frames'] for r in log), max(r['regs'] for r in log))
+        if backend == 'vm':
+            # The census counts the VM's frames and registers; the
+            # tree-walker gives it no stack shape, and its columns are 0.
+            out['stack'][n] = (max(r['frames'] for r in log), max(r['regs'] for r in log))
         if len(gclog) == len(log):
             # Per slot and per live object over the large collections only,
             # where a collection's fixed costs (the roots, the bootstrap's
@@ -265,19 +302,20 @@ def report_lines(r):
 
 # ---------------------------------------------------------------- running
 
-def run_one(binary, workload, config, prepared, out, timeout):
-    """One census run of a workload `prepared` by `gc_bench.prepare`: its
-    summary, census log and GC log, or an error."""
+def run_one(binary, workload, backend, config, prepared, out, timeout):
+    """One census run of a workload `prepared` by `gc_bench.prepare`, on
+    `backend`: its summary, census log and GC log, or an error."""
     program, args, stdin, cwd, check = prepared
-    stem = out / f'{workload["name"]}-{config}'
+    stem = out / f'{run_name(workload["name"], backend)}-{config}'
     env = {k: v for k, v in os.environ.items() if not k.startswith('PATINA_')}
     env.update(PATINA_ISOLATED_LIBRARIES='1', PATINA_GC_CENSUS='1', PATINA_GC_CENSUS_OUT=f'{stem}.txt',
                PATINA_GC_CENSUS_LOG=f'{stem}.csv', PATINA_GC_LOG=f'{stem}.gc.csv')
     if CONFIGS[config]:
         env['PATINA_GC_STRESS'] = str(CONFIGS[config])
     with open(stdin or os.devnull) as input_file:
-        result = subprocess.run([str(binary), str(program), *args], cwd=cwd, env=env, stdin=input_file,
-                                capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(gc_bench.interpreter_command(binary, backend, program, args), cwd=cwd, env=env,
+                                stdin=input_file, capture_output=True, text=True, timeout=timeout,
+                                preexec_fn=gc_bench.descriptor_limit(workload))
     Path(f'{stem}.stdout').write_text(result.stdout + result.stderr)
     if result.returncode != 0:
         raise RuntimeError(f'exited {result.returncode}: {result.stderr.strip()[-300:]}')
@@ -285,6 +323,14 @@ def run_one(binary, workload, config, prepared, out, timeout):
         raise RuntimeError(f'wrong result: {result.stdout.strip()[-300:]}')
     return {'summary': parse_summary(Path(f'{stem}.txt').read_text()),
             'log': parse_csv(Path(f'{stem}.csv')), 'gclog': parse_csv(Path(f'{stem}.gc.csv'))}
+
+
+def print_rows(measured):
+    """Each backend's rows under its name."""
+    for backend, r in measured.items():
+        print(f'{backend}:')
+        for line in report_lines(r):
+            print(f'  {line}')
 
 
 def census_mode(args, directory, env):
@@ -299,15 +345,27 @@ def census_mode(args, directory, env):
     results, skipped, failed = {}, {}, {}
     jobs = []
     for workload in workloads:
-        # Written once: the configurations run it side by side.
-        try:
-            prepared = gc_bench.prepare(workload, directory / 'scratch' / workload['name'], epilogue='')
-        except gc_bench.Skip as reason:
-            skipped[workload['name']] = str(reason)
+        name = workload['name']
+        if name.endswith(TW_SUFFIX):
+            raise ValueError(f'{name}: a workload\'s name cannot end in {TW_SUFFIX}, which names a tree-walker run')
+        if workload['kind'] == 'example':
+            # Its own binary, which the census does not build; and the
+            # census measures only a process's first heap, which is not
+            # what an example (`many-heaps`) is for.
+            skipped[name] = 'an example program, which the census does not build'
             continue
-        jobs += [(workload, config, prepared) for config in configs]
+        # Written once: its backends and configurations run it side by
+        # side, in one scratch directory (#795).
+        try:
+            prepared = gc_bench.prepare(workload, directory / 'scratch' / name, epilogue='')
+        except gc_bench.Skip as reason:
+            skipped[name] = str(reason)
+            continue
+        jobs += [(workload, backend, config, prepared) for backend in workload.get('backends', ['vm'])
+                 for config in configs]
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
-        futures = {pool.submit(run_one, binary, w, c, s, out, args.timeout): (w['name'], c) for w, c, s in jobs}
+        futures = {pool.submit(run_one, binary, w, b, c, s, out, args.timeout): (run_name(w['name'], b), c)
+                   for w, b, c, s in jobs}
         for future in concurrent.futures.as_completed(futures):
             name, config = futures[future]
             try:
@@ -320,18 +378,17 @@ def census_mode(args, directory, env):
         print(f'SKIPPED {name}: {reason}')
     for name, reason in failed.items():
         print(f'FAILED {name}: {reason}')
-    measured = rows(results) if any(r.get('default') for r in results.values()) else None
-    if measured:
-        for line in report_lines(measured):
-            print(line)
+    measured = rows_by_backend(results)
+    print_rows(measured)
     summaries = {n: {c: r['summary'] for c, r in v.items()} for n, v in results.items()}
     return dict(kind='census', configs=configs, binary_features=['patina-core/gc-census'], skipped=skipped,
-                failed=failed, measurements=measured or {}, summaries=summaries), bool(failed)
+                failed=failed, measurements=measured, summaries=summaries), bool(failed)
 
 
 def load(out):
     """The results of a finished run from its census directory
-    (`target/benchmark-runs/<stamp>/census`), to analyze again."""
+    (`target/benchmark-runs/<stamp>/census`), to analyze again, by run
+    name (`run_name`)."""
     results = {}
     for summary in sorted(out.glob('*.txt')):
         name, _, config = summary.stem.rpartition('-')
@@ -346,5 +403,4 @@ def load(out):
 
 if __name__ == '__main__':
     import sys
-    for line in report_lines(rows(load(Path(sys.argv[1])))):
-        print(line)
+    print_rows(rows_by_backend(load(Path(sys.argv[1]))))
