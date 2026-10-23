@@ -32,9 +32,9 @@
 ;; The clause walker. `reraise` is the expression to run when no clause
 ;; matches.
 ;;
-;; Not exported, which is the *minority* choice here: `%define-field-accessors`,
-;; `%make-constructor` and `%parameterize-swap!` are all exported from
-;; `(scheme base)` despite being macro internals. Keeping this one out is
+;; Not exported, which is the *minority* choice here: `%define-field-accessors`
+;; and `%parameterize-swap!` are both exported from `(scheme base)` despite
+;; being macro internals. Keeping this one out is
 ;; deliberate and verified — `guard`'s template resolves it hygienically at the
 ;; definition site, checked through `(only (scheme base) guard raise)` and
 ;; `(prefix (scheme base) s:)`. Export it only if a resolution failure forces

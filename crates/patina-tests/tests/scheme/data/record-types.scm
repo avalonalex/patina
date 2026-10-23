@@ -212,6 +212,69 @@
     (set-partial-z! p 3)
     (list (partial-x p) (partial-y p) (partial-z p))))
 
+;; ── A wrong type, a wrong count (#736) ─────────────────────────────────────
+
+;; R7RS §5.5 makes an accessor or a modifier applied to a record of another
+;; type "an error", and Patina signals one, as chibi and Gauche do. A
+;; constructor's arguments are its formals, so a wrong count is a wrong-arity
+;; call.
+(test-equal "an accessor refuses a record of another type" 'error
+  (guard (e ((error-object? e) 'error))
+    (point-x (kons 1 2))))
+
+(test-equal "a modifier refuses a record of another type, and leaves it as it was"
+  '(error 1)
+  (let ((p (make-point 1 2)))
+    (list (guard (e ((error-object? e) 'error)) (set-kar! p 3))
+          (point-x p))))
+
+(test-equal "a constructor refuses too few arguments and too many" '(error error)
+  (list (guard (e ((error-object? e) 'error)) (make-point 1))
+        (guard (e ((error-object? e) 'error)) (make-point 1 2 3))))
+
+;; R7RS forbids only a repeated field name, so a field may share its type's
+;; name.
+(define-record-type same-name
+  (make-same-name same-name)
+  same-name?
+  (same-name same-name-value))
+
+(test-equal "a field named as its type" 7
+  (same-name-value (make-same-name 7)))
+
+;; Nor may a field's name meet a variable of the expansion. srfi-19's
+;; `(make-time type nanosecond second)` is the shape: with the fields as the
+;; constructor's formals, `type` made the expansion's references to its own
+;; `type` ambiguous (#771).
+(define-record-type <time>
+  (make-time type nanosecond second)
+  time?
+  (type time-type)
+  (nanosecond time-nanosecond)
+  (second time-second))
+
+(test-equal "a field named as a variable of the expansion" '(utc 5 7)
+  (let ((t (make-time 'utc 5 7)))
+    (list (time-type t) (time-nanosecond t) (time-second t))))
+
+;; Each variable Patina's expansion binds, as a field, in a constructor of
+;; ten fields, whose formals the expansion makes in three steps.
+(define-record-type <own>
+  (make-own type indices v1 v2 v3 v4 field record value obj)
+  own?
+  (type own-type) (indices own-indices) (v1 own-v1) (v2 own-v2) (v3 own-v3)
+  (v4 own-v4) (field own-field set-own-field!) (record own-record)
+  (value own-value set-own-value!) (obj own-obj))
+
+(test-equal "fields named as each variable of the expansion"
+  '(#t 1 2 3 4 5 6 70 8 90 10)
+  (let ((o (make-own 1 2 3 4 5 6 7 8 9 10)))
+    (set-own-field! o 70)
+    (set-own-value! o 90)
+    (list (own? o) (own-type o) (own-indices o) (own-v1 o) (own-v2 o)
+          (own-v3 o) (own-v4 o) (own-field o) (own-record o) (own-value o)
+          (own-obj o))))
+
 ;; ── Identity and equality ──────────────────────────────────────────────────
 
 (test-equal "a record is eq? and eqv? to itself and to no other" '(#t #f #t #f)

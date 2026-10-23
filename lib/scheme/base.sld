@@ -178,6 +178,7 @@
     %record-type-of %record-type-name %record-type-fields
     %record-type-field-index
     %make-record %record-ref %record-set!
+    %record-of? %make-record-from %record-field %record-field-set!
 
     ;; ============================================================
     ;; Derived forms (defined in Scheme via include)
@@ -199,7 +200,7 @@
     ;; From base/records.scm
     define-record-type
     ;; Internal: needed for define-record-type macro expansion
-    %make-constructor %define-field-accessors
+    %define-field-accessors
 
     ;; ============================================================
     ;; Syntactic keywords (from (patina internal syntax))
