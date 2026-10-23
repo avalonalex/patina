@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import resource
 import shutil
 import subprocess
 import sys
@@ -277,14 +278,17 @@ sys.exit(status)
         failed = list((self.root / 'target/benchmark-runs').glob('*/failed-report.json'))
         self.assertEqual(len(failed), 1)
 
-    def test_census_runs_each_configuration_with_the_census_on(self):
+    def census_binary(self):
+        """A fake census binary: it logs its arguments, environment and
+        descriptor limit, and writes one small summary and its two logs."""
         binary = self.root / 'target/gc-census/release/patina'
         binary.parent.mkdir(parents=True)
         binary.write_text('''#!/usr/bin/env python3
-import json, os, pathlib, sys
+import json, os, pathlib, resource, sys
 with pathlib.Path(os.environ['FAKE_ROOT'], 'census-calls.jsonl').open('a') as log:
     log.write(json.dumps({'stress': os.environ.get('PATINA_GC_STRESS'), 'census': os.environ['PATINA_GC_CENSUS'],
-                          'program': sys.argv[-1]}) + '\\n')
+                          'argv': sys.argv[1:], 'out': os.environ['PATINA_GC_CENSUS_OUT'],
+                          'nofile': resource.getrlimit(resource.RLIMIT_NOFILE)[0]}) + '\\n')
 z = [0] * 14
 pathlib.Path(os.environ['PATINA_GC_CENSUS_OUT']).write_text('\\n'.join([
     'collections 1', 'alloc_total 10', 'alloc_by_arena [10, 0, 0, 0]', 'bytes_by_arena [160, 0, 0, 0]',
@@ -299,10 +303,20 @@ pathlib.Path(os.environ['PATINA_GC_LOG']).write_text(
 print('300000')
 ''')
         binary.chmod(0o755)
+
+    def census_calls(self):
+        """The fake census binary's calls, each with the program it ran."""
+        calls = [json.loads(line) for line in (self.root / 'census-calls.jsonl').read_text().splitlines()]
+        for call in calls:
+            call['program'] = next(a for a in call['argv'] if a.endswith('.scm'))
+        return calls
+
+    def test_census_runs_each_configuration_with_the_census_on(self):
+        self.census_binary()
         result = self.run_script('run_gc_census.sh', '--workload', 'deeprec', '--config', 'default',
                                  '--config', 's64K', '--jobs', '1')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        calls = [json.loads(line) for line in (self.root / 'census-calls.jsonl').read_text().splitlines()]
+        calls = self.census_calls()
         self.assertEqual(sorted(str(c['stress']) for c in calls), ['65536', 'None'])
         self.assertTrue(all(c['census'] == '1' for c in calls))
         # The census runs the program alone, without the gc mode's epilogue.
@@ -310,8 +324,68 @@ print('300000')
         self.assertNotIn('gc-stats', program)
         report = json.loads(self.reports()[0].read_text())
         self.assertEqual(report['kind'], 'census')
-        self.assertEqual(report['measurements']['survival']['deeprec']['s64K'], 0.1)
+        self.assertEqual(report['measurements']['vm']['survival']['deeprec']['s64K'], 0.1)
         self.assertIn('live heaps (headered): deeprec 0 MB', result.stdout)
+
+    def test_census_runs_each_workload_on_each_of_its_backends(self):
+        # #777: the census ran every workload on the VM, its `tw` rows too.
+        self.census_binary()
+        result = self.run_script('run_gc_census.sh', '--workload', 'deeprec', '--workload', 'tw-deeprec',
+                                 '--workload', 'samedepth1000', '--config', 'default', '--jobs', '1')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        runs = {}
+        for call in self.census_calls():
+            argv, program = call['argv'], call['program']
+            backend = 'tree-walker' if '--tree-walker' in argv else 'vm'
+            # The flag before the program, and the workload's arguments
+            # after it: tw-deeprec passes its depth.
+            args = ['200000'] if Path(program).stem == 'tw-deeprec' else []
+            self.assertEqual(argv, (['--tree-walker'] if backend == 'tree-walker' else []) + [program] + args)
+            runs.setdefault(Path(program).stem, []).append((backend, Path(call['out']).name))
+        self.assertEqual(runs['deeprec'], [('vm', 'deeprec-default.txt')])
+        self.assertEqual(runs['tw-deeprec'], [('tree-walker', 'tw-deeprec-tw-default.txt')])
+        self.assertEqual(sorted(runs['samedepth1000']), [('tree-walker', 'samedepth1000-tw-default.txt'),
+                                                         ('vm', 'samedepth1000-default.txt')])
+        report = json.loads(self.reports()[0].read_text())
+        self.assertEqual(sorted(report['summaries']),
+                         ['deeprec', 'samedepth1000', 'samedepth1000-tw', 'tw-deeprec-tw'])
+        # Each backend's rows count its own runs alone.
+        measured = report['measurements']
+        self.assertEqual(sorted(measured['vm']['survival']), ['deeprec', 'samedepth1000'])
+        self.assertEqual(sorted(measured['tree-walker']['survival']), ['samedepth1000', 'tw-deeprec'])
+        self.assertEqual(measured['vm']['allocations'], 20)
+        self.assertEqual(measured['tree-walker']['allocations'], 20)
+        self.assertIn('tree-walker:', result.stdout)
+
+    def test_census_skips_examples_and_keeps_a_workload_s_descriptor_limit(self):
+        self.census_binary()
+        # A soft limit other than port-churn's, so that an inherited one
+        # cannot pass for it.
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (512, hard))
+        self.addCleanup(resource.setrlimit, resource.RLIMIT_NOFILE, (soft, hard))
+        result = self.run_script('run_gc_census.sh', '--workload', 'many-heaps', '--workload', 'port-churn',
+                                 '--config', 'default', '--jobs', '1')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('SKIPPED many-heaps', result.stdout)
+        [call] = self.census_calls()
+        program = call['program']
+        self.assertEqual(Path(program).stem, 'port-churn')
+        # Its output file, in the workload's scratch directory.
+        self.assertEqual(call['argv'], [program, str(Path(program).parent / 'port-churn.txt')])
+        self.assertEqual(call['nofile'], 1024)
+
+    def test_census_refuses_a_workload_named_like_a_tree_walker_run(self):
+        self.census_binary()
+        path = self.root / 'crates/patina-tests/bench_programs/gc/gbs.json'
+        table = json.loads(path.read_text())
+        deeprec = next(w for w in table['workloads'] if w['name'] == 'deeprec')
+        table['workloads'].append(dict(deeprec, name='deeprec-tw'))
+        path.write_text(json.dumps(table))
+        result = self.run_script('run_gc_census.sh', '--workload', 'deeprec-tw', '--config', 'default')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('names a tree-walker run', result.stderr)
+        self.assertFalse((self.root / 'census-calls.jsonl').exists())
 
 
 class GcArithmetic(unittest.TestCase):
@@ -380,6 +454,8 @@ class GcArithmetic(unittest.TestCase):
         table = json.loads((self.gc.GC / 'gbs.json').read_text())['workloads']
         names = [w['name'] for w in table]
         self.assertEqual(len(names), len(set(names)))
+        # The census names a tree-walker run so (#777).
+        self.assertEqual([n for n in names if n.endswith('-tw')], [])
         gbs = [w['name'] for w in table if 'gbs' in w['sets']]
         self.assertEqual(gbs, ['nboyer', 'deriv', 'gcbench', 'destruc', 'quicksort', 'gcold', 'mperm', 'queue3',
                                'fibfp', 'mbrot', 'nucleic', 'ctak', 'fibc', 'generator', 'deeprec', 'libload',
@@ -485,6 +561,46 @@ class GcCensusArithmetic(unittest.TestCase):
         self.assertEqual((rates['sweep_ns_per_slot'], rates['mark_ns_per_live'], rates['deep_mark_mean_us']),
                          (2.0, 3.0, 302))
         self.assertTrue(any('deeprec 200,000 frames' in line for line in self.census.report_lines(r)))
+
+    def test_each_backend_s_rows_count_its_own_runs(self):
+        parse = self.census.parse_summary
+        vm = parse(self.summary(pairs=600, closures=300, flonums=100))
+        tw = parse(self.summary(pairs=600, closures=0, flonums=100))
+        tw['obj_variant'][self.census.V_PROCEDURE] = 300
+        tw['alloc_total'] += 300
+        run = lambda d: {'default': {'summary': d, 'log': [], 'gclog': []}}
+        # `tw-fib`, unsuffixed, is a run from before #777: it ran on the VM.
+        r = self.census.rows_by_backend({'a-tw': run(tw), 'a': run(vm), 'tw-fib': run(vm)})
+        self.assertEqual(list(r), ['vm', 'tree-walker'])
+        self.assertEqual(sorted(r['vm']['survival']), ['a', 'tw-fib'])
+        self.assertEqual(sorted(r['tree-walker']['survival']), ['a'])
+        self.assertEqual((r['vm']['allocations'], r['tree-walker']['allocations']), (2000, 1000))
+        # A tree-walker closure is a `Procedure`; the VM's is a `VmClosure`.
+        self.assertAlmostEqual(r['vm']['mix_closures'], 0.3)
+        self.assertAlmostEqual(r['tree-walker']['mix_closures'], 0.3)
+        # Only the VM's census log has a stack shape.
+        log = [{'live_bytes': 1, 'frames': 0, 'regs': 0}]
+        for backend, stack in (('vm', {'a': (0, 0)}), ('tree-walker', {})):
+            r = self.census.rows({'a': {'default': {'summary': tw, 'log': log, 'gclog': []}}}, backend)
+            self.assertEqual((r['stack'], r['live_peak']), (stack, {'a': 1}))
+        # A backend without a default run, its own failed, has no rows.
+        self.assertEqual(list(self.census.rows_by_backend({'a': run(vm), 'a-tw': {'s64K': run(tw)['default']}})),
+                         ['vm'])
+        self.assertEqual(self.census.rows_by_backend({'a': {'s64K': run(vm)['default']}}), {})
+        self.assertEqual(self.census.rows_by_backend({}), {})
+
+    def test_a_finished_run_reloads_by_run_name(self):
+        with tempfile.TemporaryDirectory() as out:
+            out = Path(out)
+            for stem in ('a-default', 'a-tw-default', 'a-tw-s64K', 'tw-fib-tw-default'):
+                (out / f'{stem}.txt').write_text(self.summary())
+            (out / 'a-tw-default.stdout').write_text('')
+            results = self.census.load(out)
+        self.assertEqual(sorted(results), ['a', 'a-tw', 'tw-fib-tw'])
+        self.assertEqual(sorted(results['a-tw']), ['default', 's64K'])
+        self.assertEqual(self.census.split_run_name('tw-fib-tw'), ('tw-fib', 'tree-walker'))
+        self.assertEqual(self.census.split_run_name('a'), ('a', 'vm'))
+        self.assertEqual(self.census.run_name('a', 'tree-walker'), 'a-tw')
 
     def test_the_study_s_estimate_of_today_s_bytes(self):
         d = self.census.parse_summary(self.summary(pairs=10, closures=1, flonums=0))
