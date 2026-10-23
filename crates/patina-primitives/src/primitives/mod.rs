@@ -43,7 +43,6 @@ pub fn register_all(registry: &mut PrimitiveRegistry) {
     vectors::register(registry);
     values::register(registry);
     io::register(registry);
-    debug::register(registry);
     ephemeron::register(registry);
     lazy::register(registry);
     parameters::register(registry);
@@ -54,4 +53,8 @@ pub fn register_all(registry: &mut PrimitiveRegistry) {
     eval::register(registry);
     exceptions::register(registry);
     gc::register(registry);
+    // Last, where the tree-walker registered these before #742, so that every
+    // other primitive keeps its index. Registered after `io`, they moved the
+    // tree-walker's instructions by 0.3% on `tw-fib` and `tw-nboyer`.
+    debug::register(registry);
 }

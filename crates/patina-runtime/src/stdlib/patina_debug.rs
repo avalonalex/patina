@@ -2,6 +2,11 @@
 //!
 //! Provides debugging primitives for Patina development and troubleshooting.
 //! This library is automatically loaded in REPL mode for convenience.
+//!
+//! Every export is registered for both backends (#742). `debug-enable`,
+//! `debug-disable`, `debug-clear`, `debug-status` and `debug-mode` left it:
+//! no backend ever implemented them (owner decision, 2026-10-22), and a
+//! debugger that does brings them back.
 
 use crate::Arity;
 use crate::Environment;
@@ -15,11 +20,6 @@ pub fn build_patina_debug(
 ) -> Vec<String> {
     let library_name = vec!["patina".to_string(), "debug".to_string()];
 
-    env.define_primitive(heap, "debug-enable", Arity::Min(1), library_name.clone());
-    env.define_primitive(heap, "debug-disable", Arity::Min(1), library_name.clone());
-    env.define_primitive(heap, "debug-clear", Arity::Exact(0), library_name.clone());
-    env.define_primitive(heap, "debug-status", Arity::Exact(0), library_name.clone());
-    env.define_primitive(heap, "debug-mode", Arity::Exact(1), library_name.clone());
     env.define_primitive(
         heap,
         "macro-debug-mode",
@@ -32,11 +32,6 @@ pub fn build_patina_debug(
 
     // Return list of exported identifiers
     vec![
-        "debug-enable".to_string(),
-        "debug-disable".to_string(),
-        "debug-clear".to_string(),
-        "debug-status".to_string(),
-        "debug-mode".to_string(),
         "macro-debug-mode".to_string(),
         "library?".to_string(),
         "gc".to_string(),
