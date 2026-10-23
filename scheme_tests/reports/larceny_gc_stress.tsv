@@ -21,10 +21,10 @@
 # flonum fails one more assertion than on arm64 (flonum.sld:693, #634), with
 # or without stress, so on macOS arm64 the lane reports flonum as "not the
 # collector". Every other row and every collection count held on both.
-r7rs-vm	base	fail	1086	1094	531
+r7rs-vm	base	fail	1086	1094	507
 r7rs-vm	box	pass	10	10	4
 r7rs-vm	case-lambda	pass	5	5	3
-r7rs-vm	char	pass	139	139	1107
+r7rs-vm	char	pass	139	139	841
 r7rs-vm	charset	pass	93	93	1218
 r7rs-vm	comparator	pass	158	158	115
 r7rs-vm	complex	fail	68	69	41
@@ -34,9 +34,9 @@ r7rs-vm	file	fail	70	75	44
 r7rs-vm	flonum	fail	1278	1280	289
 r7rs-vm	generator	pass	49	49	126
 r7rs-vm	hash-table	pass	82	82	1460
-r7rs-vm	ideque	pass	114	114	4772
-r7rs-vm	ilist	fail	337	345	885
-r7rs-vm	inexact	pass	592	592	352
+r7rs-vm	ideque	pass	114	114	2540
+r7rs-vm	ilist	fail	337	345	419
+r7rs-vm	inexact	pass	592	592	296
 r7rs-vm	lazy	pass	33	33	6836
 r7rs-vm	list	fail	171	172	223
 r7rs-vm	list-queue	pass	40	40	36
@@ -45,15 +45,15 @@ r7rs-vm	lseq	pass	109	109	108
 r7rs-vm	process-context	pass	2	2	1
 r7rs-vm	read	pass	44	44	60
 r7rs-vm	repl	pass	10	10	11
-r7rs-vm	rlist	pass	82	82	436
+r7rs-vm	rlist	pass	82	82	269
 r7rs-vm	set	truncated	16	16	132
 r7rs-vm	sort	pass	2562	2562	696
-r7rs-vm	stream	pass	81	81	32446
+r7rs-vm	stream	pass	81	81	15646
 r7rs-vm	text	pass	1069	1069	25883
 r7rs-vm	time	-	-	2	4
 r7rs-vm	vector	pass	103	103	71
 r7rs-vm	write	fail	60	63	95
-r7rs-tree-walker	base	fail	1086	1094	506
+r7rs-tree-walker	base	fail	1086	1094	502
 r7rs-tree-walker	box	pass	10	10	4
 r7rs-tree-walker	case-lambda	pass	5	5	3
 r7rs-tree-walker	char	pass	139	139	1107
@@ -66,9 +66,9 @@ r7rs-tree-walker	file	fail	70	75	42
 r7rs-tree-walker	flonum	fail	1278	1280	255
 r7rs-tree-walker	generator	pass	49	49	112
 r7rs-tree-walker	hash-table	pass	82	82	1226
-r7rs-tree-walker	ideque	pass	114	114	4268
-r7rs-tree-walker	ilist	fail	337	345	761
-r7rs-tree-walker	inexact	pass	592	592	330
+r7rs-tree-walker	ideque	pass	114	114	2508
+r7rs-tree-walker	ilist	fail	337	345	397
+r7rs-tree-walker	inexact	pass	592	592	298
 r7rs-tree-walker	lazy	pass	33	33	6836
 r7rs-tree-walker	list	fail	171	172	201
 r7rs-tree-walker	list-queue	pass	40	40	32
@@ -77,17 +77,17 @@ r7rs-tree-walker	lseq	pass	109	109	99
 r7rs-tree-walker	process-context	pass	2	2	1
 r7rs-tree-walker	read	pass	44	44	59
 r7rs-tree-walker	repl	pass	10	10	11
-r7rs-tree-walker	rlist	pass	82	82	385
+r7rs-tree-walker	rlist	pass	82	82	266
 r7rs-tree-walker	set	truncated	16	16	108
 r7rs-tree-walker	sort	pass	2562	2562	619
-r7rs-tree-walker	stream	pass	81	81	29025
+r7rs-tree-walker	stream	pass	81	81	15637
 r7rs-tree-walker	text	pass	1069	1069	25369
 r7rs-tree-walker	time	-	-	2	4
 r7rs-tree-walker	vector	pass	103	103	67
 r7rs-tree-walker	write	fail	60	63	92
-r6rs-vm	arithmetic/fixnums	pass	3379	3379	5378
-r6rs-vm	base	fail	2026	2035	1813
-r6rs-vm	bytevectors	pass	469	469	574
+r6rs-vm	arithmetic/fixnums	pass	3379	3379	5352
+r6rs-vm	base	fail	2026	2035	1631
+r6rs-vm	bytevectors	pass	469	469	534
 r6rs-vm	control	pass	11	11	5
 r6rs-vm	enums	pass	26	26	171
 r6rs-vm	eval	pass	2	2	1
@@ -102,8 +102,8 @@ r6rs-vm	r5rs	pass	71	71	27
 r6rs-vm	sorting	pass	4	4	8
 r6rs-vm	unicode	pass	118	118	126
 r6rs-tree-walker	arithmetic/fixnums	pass	3379	3379	5300
-r6rs-tree-walker	base	fail	2026	2035	1735
-r6rs-tree-walker	bytevectors	pass	469	469	528
+r6rs-tree-walker	base	fail	2026	2035	1636
+r6rs-tree-walker	bytevectors	pass	469	469	512
 r6rs-tree-walker	control	pass	11	11	5
 r6rs-tree-walker	enums	pass	26	26	144
 r6rs-tree-walker	eval	pass	2	2	1
