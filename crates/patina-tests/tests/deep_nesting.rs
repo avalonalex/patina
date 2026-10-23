@@ -257,3 +257,55 @@ fn a_program_nested_past_the_limit_is_refused_before_it_runs() {
         }
     });
 }
+
+/// How deep the recursions below go: the depth at which the tree-walker
+/// aborted on the main thread's 8 MiB (#725).
+const DEEP_RECURSION: usize = 300_000;
+
+/// A recursion `DEEP_RECURSION` deep, ended by `end`: each pending `(+ 1 [])`
+/// is a continuation that holds the next.
+fn deep_recursion(end: &str) -> String {
+    format!(
+        "(import (scheme base) (patina debug))\n\
+         (define (deep n k) (if (= n {DEEP_RECURSION}) {end} (+ 1 (deep (+ n 1) k))))\n"
+    )
+}
+
+/// A continuation chain as deep as the recursion that built it, abandoned at
+/// once, is dropped on a stack grown for it, as a deep tree is (#725). The
+/// tree-walker's drop recursed once per level, and an escape out of 300,000
+/// levels aborted the process.
+#[test]
+fn an_escape_out_of_a_deep_recursion_drops_its_continuation_chain() {
+    on_small_stack(|| {
+        let program = deep_recursion("(k 'escaped)") + "(call/cc (lambda (k) (deep 0 k)))";
+        assert_runs(&program, "escaped", "an escape out of a deep recursion");
+    });
+}
+
+/// The same chain, abandoned by an error nothing catches.
+#[test]
+fn an_uncaught_error_in_a_deep_recursion_drops_its_continuation_chain() {
+    on_small_stack(|| {
+        let program = deep_recursion("(car '())") + "(deep 0 #f)";
+        for (backend, outcome) in on_both_backends(&program) {
+            let error = outcome.expect_err("the recursion ends in an error");
+            assert!(
+                error.contains("car expects a pair"),
+                "an uncaught error in a deep recursion on the {backend}: {error}"
+            );
+        }
+    });
+}
+
+/// A `guard` keeps the chain alive in the continuation its handler captured,
+/// so the drop comes when a collection frees that continuation: the abort
+/// waited for it.
+#[test]
+fn a_collection_that_frees_a_deep_continuation_drops_its_chain() {
+    on_small_stack(|| {
+        let program = deep_recursion("(car '())")
+            + "(define answer (guard (e (#t 'caught)) (deep 0 #f)))\n(gc)\nanswer";
+        assert_runs(&program, "caught", "a guard, then a collection");
+    });
+}
