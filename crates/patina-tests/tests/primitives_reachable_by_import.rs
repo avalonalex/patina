@@ -58,6 +58,12 @@ use std::collections::{BTreeMap, BTreeSet};
 /// imports it, and it does so by the internal name.
 const RUST_SIDE_LIBRARIES: &[&[&str]] = &[&["patina", "internal", "chars"]];
 
+/// Libraries built in Rust that a program imports by name, which no `.sld`
+/// under `lib/` declares, so `shipped_libraries` cannot find them for the
+/// second test below. `(patina debug)` exported seven names no VM registry
+/// entry backed, five of them no backend's, until #742.
+const RUST_BUILT_PUBLIC_LIBRARIES: &[&[&str]] = &[&["patina", "debug"]];
+
 #[test]
 fn every_registered_primitive_is_reachable_by_some_import() {
     let mut registry = patina_primitives::PrimitiveRegistry::new();
@@ -198,7 +204,13 @@ fn every_exported_primitive_can_be_dispatched() {
     let mut failed_to_load: Vec<String> = Vec::new();
     let mut checked = 0usize;
     let mut libraries = 0usize;
-    for library in shipped_libraries(&repo_root().join("lib")) {
+    let rust_built = RUST_BUILT_PUBLIC_LIBRARIES
+        .iter()
+        .map(|name| name.iter().map(|part| part.to_string()).collect());
+    for library in shipped_libraries(&repo_root().join("lib"))
+        .into_iter()
+        .chain(rust_built)
+    {
         // Not skipped: a library that stops loading contributes no exports, so
         // silently continuing would let this pass *because* something broke.
         let lib = match evaluator.load_library(&library) {

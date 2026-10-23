@@ -11,7 +11,7 @@
      (if test (begin body ...)))))
 
 ;; Enable macro expansion debug tracing
-(debug-enable 'expand)
+(macro-debug-mode 'on)
 
 ;; Now watch the macro expansion happen!
 ;; The debug output will show:
@@ -20,9 +20,9 @@
 
 ;; Example 1: Simple expansion
 (when #t 42)
-;; Debug output shows:
-;; [MACRO] Expanding macro 'when': (when #t 42)
-;; [MACRO]   Expanded to: (if #t (begin 42))
+;; Debug output shows, among its lines:
+;; [MACRO] Expanding macro: when
+;; [MACRO] Result: (if #t (begin 42))
 ;; Result: 42
 
 ;; Example 2: Multiple body forms
@@ -36,18 +36,12 @@
 ;; Result: #<unspecified>
 
 ;; Disable debug tracing
-(debug-disable 'expand)
+(macro-debug-mode 'off)
 
 ;; Now this won't show debug output
 (when #t 100)
 ;; Result: 100 (no debug output)
 
-;; You can also check what debug stages are enabled
-(debug-status)
-;; Result: ()
-
-;; Or enable all debug stages at once (verbose!)
-;; (debug-mode 'all)
-
-;; Or turn off all debugging
-;; (debug-mode 'off)
+;; You can also ask whether tracing is on
+(macro-debug-mode 'status)
+;; Result: disabled

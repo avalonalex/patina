@@ -1,14 +1,11 @@
 //! Primitive procedures dispatcher and installation
 //!
 //! All backend-agnostic primitives are implemented in the `patina-primitives` crate
-//! and registered via `patina_primitives::register_all()`.
-//!
-//! Tree-walker-specific primitives (debug utilities) are in `debug.rs`.
+//! and registered via `patina_primitives::register_all()`, `(patina debug)`'s
+//! among them (#742).
 //!
 //! Note: `map` and `for-each` are implemented in Scheme (lib/scheme/base/higher_order.scm)
 //! for proper CPS compatibility with call/cc.
-
-mod debug;
 
 use patina_core::TaggedValue;
 use patina_runtime::Procedure;
@@ -56,8 +53,5 @@ impl Evaluator {
     pub(super) fn register_all_primitives(registry: &mut patina_primitives::PrimitiveRegistry) {
         // Register all backend-agnostic primitives from patina-primitives crate
         patina_primitives::register_all(registry);
-
-        // Register tree-walker-specific debug primitives
-        debug::register(registry);
     }
 }

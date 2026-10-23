@@ -6,8 +6,37 @@
 // The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
 #![allow(deprecated)]
 
+mod common;
+
 use patina_interpreter::TreeWalkInterpreter;
 use patina_runtime::Library;
+
+/// Every export of `(patina debug)`, called on both backends (#742). Of the
+/// nine names it exported, the VM had no primitive for seven, and neither
+/// backend for five of those.
+#[test]
+fn every_export_of_patina_debug_runs_on_both_backends() {
+    common::assert_program_eval_to(
+        "(import (scheme base) (patina debug))
+         (list (macro-debug-mode 'status) (library? 42) (begin (gc) 'collected) (list? (gc-stats)))",
+        "(disabled #f collected #t)",
+    );
+}
+
+/// The five `debug-*` names left the library, since no backend implemented
+/// them (owner decision on #742): an import of one fails at the import.
+#[test]
+fn the_debug_names_without_an_implementation_are_not_exported() {
+    for name in [
+        "debug-enable",
+        "debug-disable",
+        "debug-clear",
+        "debug-status",
+        "debug-mode",
+    ] {
+        common::assert_program_eval_error(&format!("(import (only (patina debug) {name}))"));
+    }
+}
 
 #[test]
 fn test_library_value_creation() {

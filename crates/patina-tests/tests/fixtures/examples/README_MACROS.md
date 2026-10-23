@@ -16,10 +16,10 @@ All examples use only built-in primitives and work in the REPL.
 
 ### `macro_debug.scm`
 Demonstrates the debug tracing system for macro expansion:
-- How to enable/disable macro expansion tracing with `debug-enable`/`debug-disable`
+- How to turn macro expansion tracing on and off with `(macro-debug-mode 'on)` and `'off`
 - Shows the `[MACRO]` debug output format
 - Illustrates original form vs expanded form
-- Examples of `debug-status` and `debug-mode` commands
+- How to ask whether it is on, with `(macro-debug-mode 'status)`
 
 ## Usage
 
@@ -37,7 +37,7 @@ To see how macros expand:
 
 ```scheme
 ;; Enable macro expansion tracing
-(debug-enable 'expand)
+(macro-debug-mode 'on)
 
 ;; Define and use a macro
 (define-syntax when
