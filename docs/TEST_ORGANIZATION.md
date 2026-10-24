@@ -1390,8 +1390,11 @@ trigger and at each nursery size, with #648's log beside the census. A
 tree-walker run's files carry `-tw` after the workload's name
 (`samedepth1000-tw-default.txt`). It applies a workload's `nofile` as the
 `gc` mode does, and skips the `example` workloads, whose binaries it does
-not build (#777). For each backend apart, it prints the rows of #647's
-measurement table that the census answers:
+not build (#777). Each run has a scratch directory of its own, and a
+workload's runs, on each backend and configuration, must print the same
+answer, as the `gc` mode's sides must, unless its output holds timings
+(`timing_output`) (#795). For each backend apart, it prints the rows of
+#647's measurement table that the census answers:
 
 - bytes against the headered layout;
 - object sizes and the allocation mix;

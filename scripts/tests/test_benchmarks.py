@@ -287,7 +287,7 @@ sys.exit(status)
 import json, os, pathlib, resource, sys
 with pathlib.Path(os.environ['FAKE_ROOT'], 'census-calls.jsonl').open('a') as log:
     log.write(json.dumps({'stress': os.environ.get('PATINA_GC_STRESS'), 'census': os.environ['PATINA_GC_CENSUS'],
-                          'argv': sys.argv[1:], 'out': os.environ['PATINA_GC_CENSUS_OUT'],
+                          'argv': sys.argv[1:], 'out': os.environ['PATINA_GC_CENSUS_OUT'], 'cwd': os.getcwd(),
                           'nofile': resource.getrlimit(resource.RLIMIT_NOFILE)[0]}) + '\\n')
 z = [0] * 14
 pathlib.Path(os.environ['PATINA_GC_CENSUS_OUT']).write_text('\\n'.join([
@@ -300,7 +300,14 @@ pathlib.Path(os.environ['PATINA_GC_CENSUS_LOG']).write_text(
     'arena_strings,arena_objects\\n160,3,30,1,0,0,0,10,0,0,0\\n')
 pathlib.Path(os.environ['PATINA_GC_LOG']).write_text(
     'roots_us,mark_us,weak_us,prune_us,sweep_us\\n1,1,0,0,1\\n')
-print('300000')
+# Each workload's own answer, the same on each of its runs; or, for the
+# comparison's tests, one that moves with the configuration or the backend,
+# or a Larceny workload's timing line.
+mode = os.environ['MODE']
+program = pathlib.Path(next(a for a in sys.argv if a.endswith('.scm')))
+print({'answer-by-stress': os.environ.get('PATINA_GC_STRESS', 'default'),
+       'answer-by-backend': str('--tree-walker' in sys.argv),
+       'larceny-elapsed': 'Elapsed time: ' + os.environ.get('PATINA_GC_STRESS', 'default')}.get(mode, program.stem))
 ''')
         binary.chmod(0o755)
 
@@ -371,9 +378,67 @@ print('300000')
         [call] = self.census_calls()
         program = call['program']
         self.assertEqual(Path(program).stem, 'port-churn')
-        # Its output file, in the workload's scratch directory.
+        # Its output file, in the run's scratch directory.
         self.assertEqual(call['argv'], [program, str(Path(program).parent / 'port-churn.txt')])
         self.assertEqual(call['nofile'], 1024)
+
+    def test_census_gives_each_run_its_own_scratch_directory(self):
+        # #795: a workload's runs shared one, so a file workload's runs
+        # wrote over each other's file.
+        self.census_binary()
+        result = self.run_script('run_gc_census.sh', '--workload', 'port-churn', '--workload', 'samedepth1000',
+                                 '--config', 'default', '--config', 's64K', '--jobs', '2')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.census_calls()
+        self.assertEqual(len(calls), 6)
+        programs = [call['program'] for call in calls]
+        self.assertEqual(len(set(programs)), 6)
+        files = [call['argv'][-1] for call in calls if Path(call['program']).stem == 'port-churn']
+        self.assertEqual(len(set(files)), 2)
+        for call in calls:
+            # Each in its run's own directory, <run>-<config>, and run from
+            # its run/ there, where the Larceny io workloads write outputs/.
+            run = Path(call['out']).stem
+            self.assertEqual(Path(call['program']).parent.name, run)
+            self.assertEqual(Path(call['cwd']).resolve(), (Path(call['program']).parent / 'run').resolve())
+
+    def test_census_fails_when_a_workload_s_runs_print_different_answers(self):
+        self.census_binary()
+        result = self.run_script('run_gc_census.sh', '--workload', 'deeprec', '--config', 'default',
+                                 '--config', 's64K', '--jobs', '1', mode='answer-by-stress')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('FAILED deeprec: the runs printed different answers', result.stdout)
+        self.assertEqual(self.reports(), [])
+        self.assertEqual(len(list((self.root / 'target/benchmark-runs').glob('*/failed-report.json'))), 1)
+
+    def test_census_compares_a_workload_s_answers_across_its_backends(self):
+        self.census_binary()
+        result = self.run_script('run_gc_census.sh', '--workload', 'samedepth1000', '--config', 'default',
+                                 '--jobs', '1', mode='answer-by-backend')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('FAILED samedepth1000: the runs printed different answers', result.stdout)
+        self.assertEqual(self.reports(), [])
+
+    def test_census_does_not_compare_a_timing_workload_s_answers(self):
+        self.census_binary()
+        result = self.run_script('run_gc_census.sh', '--workload', 'ephem-chain-16k-forward', '--config', 'default',
+                                 '--config', 's64K', '--jobs', '1', mode='answer-by-stress')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(self.census_calls()), 2)
+
+    def test_census_does_not_compare_a_larceny_workload_s_timings(self):
+        self.census_binary()
+        # A checkout with nboyer's two sources; its input is Patina's text.
+        larceny = self.root / 'larceny'
+        r7rs = larceny / 'test/Benchmarking/R7RS'
+        (r7rs / 'src').mkdir(parents=True)
+        (r7rs / 'inputs').mkdir()
+        (r7rs / 'src/nboyer.scm').write_text('(define x 1)\n')
+        (r7rs / 'src/common.scm').write_text('(define y 2)\n')
+        result = self.run_script('run_gc_census.sh', '--workload', 'nboyer', '--config', 'default', '--config', 's64K',
+                                 '--jobs', '1', mode='larceny-elapsed', env={'LARCENY_DIR': str(larceny)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(self.census_calls()), 2)
 
     def test_census_refuses_a_workload_named_like_a_tree_walker_run(self):
         self.census_binary()
