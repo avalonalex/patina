@@ -304,7 +304,8 @@ def report_lines(r):
 
 def run_one(binary, workload, backend, config, prepared, out, timeout):
     """One census run of a workload `prepared` by `gc_bench.prepare`, on
-    `backend`: its summary, census log and GC log, or an error."""
+    `backend`: its summary, census log and GC log, and what it printed where
+    the workload's answer is its output, or an error."""
     program, args, stdin, cwd, check = prepared
     stem = out / f'{run_name(workload["name"], backend)}-{config}'
     env = {k: v for k, v in os.environ.items() if not k.startswith('PATINA_')}
@@ -322,7 +323,24 @@ def run_one(binary, workload, backend, config, prepared, out, timeout):
     if check == 'larceny' and ('ERROR' in result.stdout or 'Elapsed time' not in result.stdout):
         raise RuntimeError(f'wrong result: {result.stdout.strip()[-300:]}')
     return {'summary': parse_summary(Path(f'{stem}.txt').read_text()),
-            'log': parse_csv(Path(f'{stem}.csv')), 'gclog': parse_csv(Path(f'{stem}.gc.csv'))}
+            'log': parse_csv(Path(f'{stem}.csv')), 'gclog': parse_csv(Path(f'{stem}.gc.csv')),
+            'output': result.stdout.strip() if check == 'output' else None}
+
+
+def different_answers(workload, results):
+    """Why a workload's runs, on its backends and configurations, printed
+    different answers, or None; as the gc mode compares its sides', and
+    never for a workload whose output holds timings."""
+    answers = {}
+    for backend in workload.get('backends', ['vm']):
+        run = run_name(workload['name'], backend)
+        for config, r in results.get(run, {}).items():
+            if r['output'] is not None:
+                answers.setdefault(r['output'], []).append(f'{run} {config}')
+    if len(answers) < 2 or workload.get('timing_output'):
+        return None
+    return 'the runs printed different answers: ' + '; '.join(
+        f'{", ".join(runs)}: {answer[-80:]!r}' for answer, runs in answers.items())
 
 
 def print_rows(measured):
@@ -336,7 +354,7 @@ def print_rows(measured):
 def census_mode(args, directory, env):
     """benchmarks.py census: build, run every workload under every
     configuration, print the rows; the report's fields and whether any run
-    failed."""
+    failed or any workload's runs printed different answers."""
     workloads = gc_bench.load_workloads(args.set or ['gbs'], args.workload)
     configs = args.config or list(CONFIGS)
     binary = build(env)
@@ -354,15 +372,17 @@ def census_mode(args, directory, env):
             # what an example (`many-heaps`) is for.
             skipped[name] = 'an example program, which the census does not build'
             continue
-        # Written once: its backends and configurations run it side by
-        # side, in one scratch directory (#795).
+        # Each run in a directory of its own, since they run side by side:
+        # a workload that writes a file there through `{scratch}` had its
+        # runs write over each other's (#795).
         try:
-            prepared = gc_bench.prepare(workload, directory / 'scratch' / name, epilogue='')
+            jobs += [(workload, backend, config,
+                      gc_bench.prepare(workload, directory / 'scratch' / f'{run_name(name, backend)}-{config}',
+                                       epilogue=''))
+                     for backend in workload.get('backends', ['vm']) for config in configs]
         except gc_bench.Skip as reason:
             skipped[name] = str(reason)
             continue
-        jobs += [(workload, backend, config, prepared) for backend in workload.get('backends', ['vm'])
-                 for config in configs]
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
         futures = {pool.submit(run_one, binary, w, b, c, s, out, args.timeout): (run_name(w['name'], b), c)
                    for w, b, c, s in jobs}
@@ -374,6 +394,10 @@ def census_mode(args, directory, env):
             except (RuntimeError, subprocess.TimeoutExpired, OSError) as error:
                 failed[f'{name} {config}'] = str(error)
                 print(f'{name} {config}: FAILED {error}', flush=True)
+    for workload in workloads:
+        reason = different_answers(workload, results)
+        if reason:
+            failed[workload['name']] = reason
     for name, reason in skipped.items():
         print(f'SKIPPED {name}: {reason}')
     for name, reason in failed.items():
