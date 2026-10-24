@@ -22,7 +22,9 @@ for each backend apart:
   live object), from the census log joined to the GC log.
 
 The census changes timing (each allocation and store takes a lock), so it
-answers counts and shapes; the gc mode answers times.
+answers counts and shapes; the gc mode answers times. Its runs are held to a
+memory budget in all (MemoryBudget, #797), since a stress configuration does
+not collect for size.
 """
 import concurrent.futures
 import csv
@@ -30,8 +32,10 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import statistics
 import subprocess
+import threading
 
 import gc_bench
 
@@ -302,10 +306,128 @@ def report_lines(r):
 
 # ---------------------------------------------------------------- running
 
-def run_one(binary, workload, backend, config, prepared, out, timeout):
+# The share of the machine's memory the census's runs may hold in all, and
+# how often it is read.
+BUDGET_SHARE = 0.5
+BUDGET_POLL_S = 0.02
+
+
+def size(n):
+    return f'{n / 2**30:.2f} GiB' if n >= 2**30 else f'{n / 2**20:.0f} MiB' if n >= 2**20 else f'{n} B'
+
+
+def default_memory_budget():
+    return int(BUDGET_SHARE * gc_bench.physical_memory())
+
+
+class MemoryBudget:
+    """The census's runs held to a memory budget in all (#797). A stress
+    configuration collects every N allocations, whatever their size, so a
+    workload of large objects holds all it allocates there: `io-string`
+    passes 3 GiB in under half a second at s64K, and four such runs side by
+    side took a 24 GiB machine to a kernel panic. A monitor reads each live
+    run's footprint every BUDGET_POLL_S and, while they hold more than the
+    budget, kills the largest until the rest fit, and each killed run then
+    reports it. The budget is one
+    total, not a share per run: the default census's own runs reach 5 GiB
+    each at s4M, but together held at most about 6 GiB.
+
+    `read(pid)` answers (now, peak so far) or None; `kill(process)` signals
+    a run's Popen."""
+
+    def __init__(self, limit, read=gc_bench.footprints, kill=lambda process: process.send_signal(signal.SIGKILL)):
+        self.limit, self.read, self.kill = limit, read, kill
+        self.lock = threading.Lock()
+        self.runs = {}
+        # The most the live runs held together at one reading.
+        self.peak_total = 0
+        # Once closed, by the census's end or a failed monitor, every run
+        # still registered is killed, and so is any registered after.
+        self.closed = None
+        self.error = None
+        self.stopped = threading.Event()
+        self.monitor = threading.Thread(target=self.watch, daemon=True)
+
+    def __enter__(self):
+        self.monitor.start()
+        return self
+
+    def __exit__(self, kind, error, trace):
+        self.stopped.set()
+        self.monitor.join()
+        # Normally no run is left; after an interrupt, none outlives the
+        # monitor.
+        self.close('killed: the census stopped while it ran')
+        if self.error and not kind:
+            raise self.error
+
+    def watch(self):
+        try:
+            while not self.stopped.wait(BUDGET_POLL_S):
+                self.check()
+        except Exception as error:
+            # A monitor that died would enforce nothing.
+            self.error = error
+            self.close(f'killed: the memory budget\'s monitor failed ({error!r})')
+
+    def close(self, reason):
+        with self.lock:
+            self.closed = self.closed or reason
+            left = [p for p, run in self.runs.items() if not run['killed']]
+            for process in left:
+                self.runs[process]['killed'] = self.closed
+        for process in left:
+            self.kill(process)
+
+    def register(self, process, label):
+        with self.lock:
+            self.runs[process] = {'label': label, 'peak': 0, 'killed': self.closed}
+            if not self.closed:
+                return
+        self.kill(process)
+
+    def finish(self, process):
+        """(the most the kernel saw the run hold, why it was killed or
+        None)."""
+        with self.lock:
+            run = self.runs.pop(process)
+        return run['peak'], run['killed']
+
+    def check(self):
+        """One reading: past the budget, the largest live runs are killed
+        until the rest are within it, and no longer counted while they die."""
+        with self.lock:
+            processes = list(self.runs)
+        readings = {p: self.read(p.pid) for p in processes}
+        victims = []
+        with self.lock:
+            live = {}
+            for process, reading in readings.items():
+                run = self.runs.get(process)
+                if run is None or reading is None:
+                    continue
+                now, peak = reading
+                run['peak'] = max(run['peak'], peak)
+                if not run['killed']:
+                    live[process] = now
+            total = sum(live.values())
+            self.peak_total = max(self.peak_total, total)
+            while live and sum(live.values()) > self.limit:
+                largest = max(live, key=live.get)
+                self.runs[largest]['killed'] = (
+                    f'killed at {size(live.pop(largest))}: the census\'s runs held {size(total)} in all, past its '
+                    f'memory budget of {size(self.limit)} (--memory-budget; a stress configuration does not '
+                    f'collect for size, #797)')
+                victims.append(largest)
+        for process in victims:
+            self.kill(process)
+
+
+def run_one(binary, workload, backend, config, prepared, out, timeout, budget):
     """One census run of a workload `prepared` by `gc_bench.prepare`, on
-    `backend`: its summary, census log and GC log, and what it printed where
-    the workload's answer is its output, or an error."""
+    `backend`, held to `budget`: its summary, census log and GC log, what it
+    printed where the workload's answer is its output, and its peak
+    footprint; or an error."""
     program, args, stdin, cwd, check = prepared
     stem = out / f'{run_name(workload["name"], backend)}-{config}'
     env = {k: v for k, v in os.environ.items() if not k.startswith('PATINA_')}
@@ -314,17 +436,30 @@ def run_one(binary, workload, backend, config, prepared, out, timeout):
     if CONFIGS[config]:
         env['PATINA_GC_STRESS'] = str(CONFIGS[config])
     with open(stdin or os.devnull) as input_file:
-        result = subprocess.run(gc_bench.interpreter_command(binary, backend, program, args), cwd=cwd, env=env,
-                                stdin=input_file, capture_output=True, text=True, timeout=timeout,
-                                preexec_fn=gc_bench.descriptor_limit(workload))
-    Path(f'{stem}.stdout').write_text(result.stdout + result.stderr)
-    if result.returncode != 0:
-        raise RuntimeError(f'exited {result.returncode}: {result.stderr.strip()[-300:]}')
-    if check == 'larceny' and ('ERROR' in result.stdout or 'Elapsed time' not in result.stdout):
-        raise RuntimeError(f'wrong result: {result.stdout.strip()[-300:]}')
+        process = subprocess.Popen(gc_bench.interpreter_command(binary, backend, program, args), cwd=cwd, env=env,
+                                   stdin=input_file, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   preexec_fn=gc_bench.descriptor_limit(workload))
+        budget.register(process, stem.name)
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            raise
+        finally:
+            peak, killed = budget.finish(process)
+    Path(f'{stem}.stdout').write_text(stdout + stderr)
+    # The budget's reason, where the run died of its signal: one that ended
+    # between the reading and the signal ran to its end.
+    if killed and process.returncode == -signal.SIGKILL:
+        raise RuntimeError(killed)
+    if process.returncode != 0:
+        raise RuntimeError(f'exited {process.returncode}: {stderr.strip()[-300:]}')
+    if check == 'larceny' and ('ERROR' in stdout or 'Elapsed time' not in stdout):
+        raise RuntimeError(f'wrong result: {stdout.strip()[-300:]}')
     return {'summary': parse_summary(Path(f'{stem}.txt').read_text()),
             'log': parse_csv(Path(f'{stem}.csv')), 'gclog': parse_csv(Path(f'{stem}.gc.csv')),
-            'output': result.stdout.strip() if check == 'output' else None}
+            'output': stdout.strip() if check == 'output' else None, 'peak_footprint': peak}
 
 
 def different_answers(workload, results):
@@ -383,21 +518,33 @@ def census_mode(args, directory, env):
         except gc_bench.Skip as reason:
             skipped[name] = str(reason)
             continue
-    with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
-        futures = {pool.submit(run_one, binary, w, b, c, s, out, args.timeout): (run_name(w['name'], b), c)
+    limit = default_memory_budget() if args.memory_budget is None else int(args.memory_budget * 2**30)
+    if gc_bench.footprints(os.getpid()) is None:
+        print('memory budget not enforced: this platform gives no process footprint', flush=True)
+    else:
+        print(f'memory budget: {size(limit)} for the runs in all (--memory-budget)', flush=True)
+    with MemoryBudget(limit) as budget, concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
+        futures = {pool.submit(run_one, binary, w, b, c, s, out, args.timeout, budget): (run_name(w['name'], b), c)
                    for w, b, c, s in jobs}
-        for future in concurrent.futures.as_completed(futures):
-            name, config = futures[future]
-            try:
-                results.setdefault(name, {})[config] = future.result()
-                print(f'{name} {config}: done', flush=True)
-            except (RuntimeError, subprocess.TimeoutExpired, OSError) as error:
-                failed[f'{name} {config}'] = str(error)
-                print(f'{name} {config}: FAILED {error}', flush=True)
+        try:
+            for future in concurrent.futures.as_completed(futures):
+                name, config = futures[future]
+                try:
+                    result = results.setdefault(name, {})[config] = future.result()
+                    print(f'{name} {config}: done, peak {size(result["peak_footprint"])}', flush=True)
+                except (RuntimeError, subprocess.TimeoutExpired, OSError) as error:
+                    failed[f'{name} {config}'] = str(error)
+                    print(f'{name} {config}: FAILED {error}', flush=True)
+        except BaseException:
+            # Interrupted: start no other run. The budget's exit then kills
+            # any still running, so none outlives its monitor.
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
     for workload in workloads:
         reason = different_answers(workload, results)
         if reason:
             failed[workload['name']] = reason
+    print(f'memory: the runs held at most {size(budget.peak_total)} in all, of a budget of {size(limit)}')
     for name, reason in skipped.items():
         print(f'SKIPPED {name}: {reason}')
     for name, reason in failed.items():
@@ -405,8 +552,10 @@ def census_mode(args, directory, env):
     measured = rows_by_backend(results)
     print_rows(measured)
     summaries = {n: {c: r['summary'] for c, r in v.items()} for n, v in results.items()}
+    peaks = {n: {c: r['peak_footprint'] for c, r in v.items()} for n, v in results.items()}
     return dict(kind='census', configs=configs, binary_features=['patina-core/gc-census'], skipped=skipped,
-                failed=failed, measurements=measured, summaries=summaries), bool(failed)
+                failed=failed, measurements=measured, summaries=summaries, memory_budget=limit,
+                memory_peak_total=budget.peak_total, peak_footprints=peaks), bool(failed)
 
 
 def load(out):
