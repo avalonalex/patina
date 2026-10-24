@@ -1409,6 +1409,31 @@ time, so it answers counts and shapes, and the `gc` mode answers times. The
 whole GBS at six configurations takes about 6 minutes here with four runs
 side by side.
 
+**The memory budget (#797).** A stress configuration collects every N
+allocations, whatever their size, so a workload of large objects holds all
+it allocates between collections. At `s4M`, run alone, `ctak` peaks at 5.1
+GiB of footprint, `fibc` at 4.5, `gcold` at 3.0 and `pingpong1000` at 6.2,
+where under the default trigger each peaks at 72 MiB or less. `io-string`
+passes 3 GiB in under half a second at `s64K`, and four `io-string` runs
+side by side once took a 24 GiB machine to a kernel panic. So the runner
+reads each live run's footprint every 20 ms: macOS's physical footprint,
+which counts compressed pages, or Linux's resident size and swap. While the
+runs hold more than the budget in all, it kills the largest until the rest
+fit. A killed run fails the census, with its size and the total, and an
+interrupted census kills the runs it started. The report gives each
+finished run's peak, the most the kernel saw it hold (`peak_footprints`),
+and the most the runs held together at one reading (`memory_peak_total`).
+The budget is one total, half of physical memory, and `--memory-budget GIB`
+sets another: a share per run would be below the default census's own `s4M`
+peaks, while its runs together held at most 6.1 GiB here, four side by
+side. A smaller `--jobs` helps only a run that fails for its neighbours. A
+run that passes the budget alone fails at any `--jobs`: `io-string` from
+`s64K`, whose 39 GiB come in 196 K allocations, so three collections at
+most, and `ctakdeep` at `s1M` and `s4M`, 18 GiB with no collection. Those
+runs cannot finish on this machine until #797's second step decides what a
+stress configuration means for large garbage; the census fails them rather
+than taking the machine down.
+
 ```bash
 ./scripts/run_gc_census.sh                                    # the GBS, every configuration
 ./scripts/run_gc_census.sh --workload deeprec --config default --config s64K

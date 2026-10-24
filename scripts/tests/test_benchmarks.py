@@ -305,6 +305,27 @@ pathlib.Path(os.environ['PATINA_GC_LOG']).write_text(
 # or a Larceny workload's timing line.
 mode = os.environ['MODE']
 program = pathlib.Path(next(a for a in sys.argv if a.endswith('.scm')))
+if mode == 'grow-deeprec':
+    # Runs of large garbage under a stress configuration: deeprec grows to
+    # 250 MiB and waits to be killed; the others, once it grows, hold
+    # 150 MiB a while and finish. Neither passes 358 MiB alone; together
+    # they do.
+    import time
+    growing = pathlib.Path(os.environ['FAKE_ROOT'], 'growing')
+    if program.stem == 'deeprec':
+        growing.write_text('')
+        grown = b'\\x01' * (250 * 2**20)
+        time.sleep(10)
+    else:
+        deadline = time.time() + 10
+        while not growing.exists() and time.time() < deadline:
+            time.sleep(0.01)
+        grown = b'\\x01' * (150 * 2**20)
+        time.sleep(1.5)
+if mode == 'hang' and program.stem == 'deeprec':
+    import time
+    time.sleep(8)
+    pathlib.Path(os.environ['FAKE_ROOT'], 'hang-finished').write_text('')
 print({'answer-by-stress': os.environ.get('PATINA_GC_STRESS', 'default'),
        'answer-by-backend': str('--tree-walker' in sys.argv),
        'larceny-elapsed': 'Elapsed time: ' + os.environ.get('PATINA_GC_STRESS', 'default')}.get(mode, program.stem))
@@ -332,6 +353,10 @@ print({'answer-by-stress': os.environ.get('PATINA_GC_STRESS', 'default'),
         report = json.loads(self.reports()[0].read_text())
         self.assertEqual(report['kind'], 'census')
         self.assertEqual(report['measurements']['vm']['survival']['deeprec']['s64K'], 0.1)
+        # Half of the machine's memory, for the runs together.
+        sys.path.insert(0, str(SOURCE / 'scripts'))
+        import gc_bench
+        self.assertEqual(report['memory_budget'], int(0.5 * gc_bench.physical_memory()))
         self.assertIn('live heaps (headered): deeprec 0 MB', result.stdout)
 
     def test_census_runs_each_workload_on_each_of_its_backends(self):
@@ -439,6 +464,43 @@ print({'answer-by-stress': os.environ.get('PATINA_GC_STRESS', 'default'),
                                  '--jobs', '1', mode='larceny-elapsed', env={'LARCENY_DIR': str(larceny)})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(len(self.census_calls()), 2)
+
+    def test_census_kills_the_largest_run_past_its_memory_budget(self):
+        # #797: four runs of large garbage side by side took a 24 GiB
+        # machine to a kernel panic.
+        self.census_binary()
+        result = self.run_script('run_gc_census.sh', '--workload', 'deeprec', '--workload', 'libload',
+                                 '--config', 'default', '--jobs', '2', '--memory-budget', '0.35',
+                                 mode='grow-deeprec')
+        self.assertNotEqual(result.returncode, 0)
+        # The larger of the two runs alive at the reading, and only it.
+        self.assertIn('FAILED deeprec default: killed at', result.stdout)
+        self.assertIn('past its memory budget of 358 MiB', result.stdout)
+        self.assertIn('libload default: done', result.stdout)
+        [run] = (self.root / 'target/benchmark-runs').glob('*/')
+        report = json.loads((run / 'failed-report.json').read_text())
+        self.assertEqual(sorted(report['failed']), ['deeprec default'])
+        # Killed, not left to finish its sleep and print.
+        self.assertEqual((run / 'census/deeprec-default.stdout').read_text(), '')
+        self.assertEqual(report['memory_budget'], int(0.35 * 2**30))
+        self.assertGreater(report['peak_footprints']['libload']['default'], 150 * 2**20)
+        self.assertGreater(report['memory_peak_total'], int(0.35 * 2**30))
+
+    def test_census_refuses_a_memory_budget_that_is_not_a_positive_number(self):
+        for value in ('0', '-1', 'nan', 'inf'):
+            result = self.run_script('run_gc_census.sh', '--workload', 'deeprec', '--memory-budget', value)
+            self.assertNotEqual(result.returncode, 0, value)
+            self.assertIn('--memory-budget must be a positive number of GiB', result.stderr)
+        self.assertFalse((self.root / 'cargo-args.json').exists())
+
+    def test_census_stops_a_run_at_its_timeout(self):
+        self.census_binary()
+        result = self.run_script('run_gc_census.sh', '--workload', 'deeprec', '--config', 'default',
+                                 '--timeout', '1', mode='hang')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('FAILED deeprec default: ', result.stdout)
+        self.assertIn('timed out after 1', result.stdout)
+        self.assertFalse((self.root / 'hang-finished').exists())
 
     def test_census_refuses_a_workload_named_like_a_tree_walker_run(self):
         self.census_binary()
@@ -666,6 +728,131 @@ class GcCensusArithmetic(unittest.TestCase):
         self.assertEqual(self.census.split_run_name('tw-fib-tw'), ('tw-fib', 'tree-walker'))
         self.assertEqual(self.census.split_run_name('a'), ('a', 'vm'))
         self.assertEqual(self.census.run_name('a', 'tree-walker'), 'a-tw')
+
+    class Run:
+        def __init__(self, pid):
+            self.pid = pid
+
+    @staticmethod
+    def reader(sizes, peaks=None):
+        """A footprint reader over `sizes` (now) and `peaks` (peak so far)."""
+        peaks = peaks if peaks is not None else {}
+        return lambda pid: None if sizes.get(pid) is None else (sizes[pid], peaks.get(pid, sizes[pid]))
+
+    def budget(self, limit, sizes, peaks=None):
+        killed = []
+        budget = self.census.MemoryBudget(limit, read=self.reader(sizes, peaks), kill=lambda r: killed.append(r.pid))
+        runs = {pid: self.Run(pid) for pid in sizes}
+        for run in runs.values():
+            budget.register(run, f'run {run.pid}')
+        return budget, runs, killed
+
+    def test_the_memory_budget_kills_the_largest_run_once(self):
+        sizes = {1: 300, 2: 500, 3: 100}
+        budget, runs, killed = self.budget(800, sizes)
+        budget.check()
+        # 900 in all, past 800: the largest goes.
+        self.assertEqual(killed, [2])
+        self.assertEqual(budget.peak_total, 900)
+        # It is no longer counted while it dies: 400 in all.
+        budget.check()
+        self.assertEqual(killed, [2])
+        self.assertEqual(budget.finish(runs[1]), (300, None))
+        peak, reason = budget.finish(runs[2])
+        self.assertEqual(peak, 500)
+        self.assertIn('held 900 B in all', reason)
+        # A run whose size cannot be read is never killed for it.
+        sizes[3] = None
+        budget.check()
+        self.assertEqual(budget.finish(runs[3]), (100, None))
+
+    def test_one_reading_kills_as_many_runs_as_the_budget_needs(self):
+        budget, runs, killed = self.budget(500, {1: 300, 2: 500, 3: 400})
+        budget.check()
+        # 1,200 in all: the largest leaves 700, still past 500, so the next.
+        self.assertEqual(killed, [2, 3])
+
+    def test_a_run_s_peak_is_the_most_it_held(self):
+        sizes, peaks = {1: 300}, {1: 350}
+        budget, runs, killed = self.budget(1000, sizes, peaks)
+        budget.check()
+        sizes[1], peaks[1] = 100, 120
+        budget.check()
+        self.assertEqual(budget.finish(runs[1]), (350, None))
+
+    def test_the_monitor_keeps_killing_while_the_runs_stay_past_the_budget(self):
+        import time
+        sizes = {1: 600, 2: 300}
+        killed = []
+        with self.census.MemoryBudget(800, read=self.reader(sizes), kill=lambda r: killed.append(r.pid)) as budget:
+            for pid in sizes:
+                budget.register(self.Run(pid), f'run {pid}')
+            # A reading kills 1 and leaves 300; then 2 grows past the
+            # budget alone, for a later reading.
+            deadline = time.monotonic() + 5
+            while not killed and time.monotonic() < deadline:
+                time.sleep(0.005)
+            self.assertEqual(killed, [1])
+            sizes[2] = 900
+            while len(killed) < 2 and time.monotonic() < deadline:
+                time.sleep(0.005)
+            self.assertEqual(killed, [1, 2])
+
+    def test_no_run_outlives_the_budget(self):
+        killed = []
+        budget = self.census.MemoryBudget(1000, read=self.reader({1: 10, 2: 10}), kill=lambda r: killed.append(r.pid))
+        run = self.Run(1)
+        with budget:
+            budget.register(run, 'run 1')
+        # Its exit kills a run still registered, after an interrupt.
+        self.assertEqual(killed, [1])
+        self.assertIn('the census stopped', budget.finish(run)[1])
+        # And one registered after is killed at once.
+        budget.register(self.Run(2), 'run 2')
+        self.assertEqual(killed, [1, 2])
+
+    def test_a_failed_monitor_kills_its_runs_and_fails_the_census(self):
+        import time
+        def read(pid):
+            raise OSError('no reading')
+        killed = []
+        with self.assertRaises(OSError):
+            with self.census.MemoryBudget(1000, read=read, kill=lambda r: killed.append(r.pid)) as budget:
+                budget.register(self.Run(1), 'run 1')
+                deadline = time.monotonic() + 2
+                while not killed and time.monotonic() < deadline:
+                    time.sleep(0.005)
+                # Killed when the monitor fails, not only at the census's end.
+                self.assertEqual(killed, [1])
+        self.assertEqual(killed, [1])
+
+    def test_a_live_process_s_footprint_and_the_machine_s_memory(self):
+        sys.path.insert(0, str(SOURCE / 'scripts'))
+        import gc_bench
+        now, peak = gc_bench.footprints(os.getpid())
+        self.assertGreater(now, 1 << 20)
+        self.assertGreaterEqual(peak, now)
+        child = subprocess.Popen([sys.executable, '-c', 'pass'])
+        child.wait()
+        self.assertIsNone(gc_bench.footprints(child.pid))
+        self.assertGreater(gc_bench.physical_memory(), 1 << 30)
+        self.assertEqual(self.census.default_memory_budget(), int(0.5 * gc_bench.physical_memory()))
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'the physical footprint is macOS\'s')
+    def test_the_footprint_is_not_the_resident_size(self):
+        # A file mapping read in is resident but no part of the footprint,
+        # which counts what the process owns, compressed pages included.
+        import mmap
+        sys.path.insert(0, str(SOURCE / 'scripts'))
+        import gc_bench
+        with tempfile.TemporaryFile() as f:
+            f.write(b'\x02' * (64 << 20))
+            f.flush()
+            before, _ = gc_bench.footprints(os.getpid())
+            with mmap.mmap(f.fileno(), 64 << 20, prot=mmap.PROT_READ) as mapping:
+                self.assertEqual(sum(mapping[i] for i in range(0, 64 << 20, 4096)), 2 * (64 << 20) // 4096)
+                after, _ = gc_bench.footprints(os.getpid())
+        self.assertLess(after - before, 16 << 20)
 
     def test_the_study_s_estimate_of_today_s_bytes(self):
         d = self.census.parse_summary(self.summary(pairs=10, closures=1, flonums=0))

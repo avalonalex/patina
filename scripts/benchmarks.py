@@ -240,11 +240,17 @@ def main(argv=None):
     sub.add_argument('--config', action='append', choices=list(gc_census.CONFIGS),
                      help='default or a nursery size (repeatable; default all six)')
     sub.add_argument('--jobs', type=int, default=4, help='runs side by side (default 4)')
+    sub.add_argument('--memory-budget', type=float, metavar='GIB',
+                     help='memory the runs may hold in all; past it the largest is killed and reported '
+                          '(default 50%% of physical memory, #797)')
     sub.add_argument('--timeout', type=float, default=1800, help='seconds per run')
     sub.add_argument('--output', help='also save JSON here; must not already exist')
     args = parser.parse_args(argv)
     if args.kind == 'gc' and args.rounds < 1:
         parser.error('--rounds must be at least 1')
+    if args.kind == 'census' and args.memory_budget is not None and not (math.isfinite(args.memory_budget)
+                                                                        and args.memory_budget > 0):
+        parser.error('--memory-budget must be a positive number of GiB')
     if args.kind == 'criterion' and args.backend not in ('vm', 'tree-walker'):
         parser.error('PATINA_BENCH_BACKEND must be vm or tree-walker')
     output = Path(args.output).resolve() if args.output else None
