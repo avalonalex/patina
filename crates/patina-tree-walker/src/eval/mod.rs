@@ -135,7 +135,9 @@ impl Evaluator {
         Self::with_fs_and_gc_mode(Arc::new(patina_core::NativeFs), mode)
     }
 
-    fn with_fs_and_gc_mode(
+    /// [`Self::with_gc_mode`] over a custom filesystem. Not an interface.
+    #[doc(hidden)]
+    pub fn with_fs_and_gc_mode(
         fs: Arc<dyn patina_core::FileSystem>,
         mode: patina_core::GcMode,
     ) -> Self {
@@ -559,15 +561,22 @@ impl Evaluator {
                 patina_frontend::cond_expand::library_available(&instance, lib_name)
             };
 
-            let parsed = {
-                let loaders = self.loader_registry.borrow();
-                loaders.try_parse_with_heap_and_library_checker(
-                    name,
-                    &search_paths,
-                    &self.heap,
-                    &can_load_library,
-                )?
-            };
+            // A read that ran out of descriptors collects where this load
+            // may and parses again (#783); a nested load posts the
+            // collection, and its failure stands. Nothing in this frame is a
+            // heap value: the parse's are garbage until it returns.
+            let parsed = patina_runtime::library_loader::parse_again_after_collecting(
+                || self.collect_for_loader(),
+                || {
+                    let loaders = self.loader_registry.borrow();
+                    loaders.try_parse_with_heap_and_library_checker(
+                        name,
+                        &search_paths,
+                        &self.heap,
+                        &can_load_library,
+                    )
+                },
+            )?;
 
             match parsed {
                 // Parse succeeded, now evaluate
@@ -680,12 +689,28 @@ impl Evaluator {
             patina_frontend::cond_expand::library_available(&instance, lib_name)
         };
         let loader = SchemeLibraryLoader::new(self.fs.clone());
-        let parsed = loader.parse_inline_form(
-            form,
-            std::path::Path::new("."),
-            &self.heap,
-            &can_load_library,
-        )?;
+        let parse = |form| {
+            loader.parse_inline_form(
+                form,
+                std::path::Path::new("."),
+                &self.heap,
+                &can_load_library,
+            )
+        };
+        let parsed = match parse(form) {
+            // A read that ran out of descriptors collects and parses again
+            // (#783). The datum is a word in this frame, so a handle roots it
+            // across the collection, and the parse reads it back.
+            Err(error @ patina_runtime::LibraryError::OutOfDescriptors(_)) => {
+                let held = self.heap.borrow().hold(form);
+                if !self.collect_for_loader() {
+                    return Err(error);
+                }
+                let form = self.heap.borrow().held(&held);
+                parse(form)?
+            }
+            parsed => parsed?,
+        };
 
         let loading = LibraryRegistry::begin_loading_scoped(
             &self.library_registry,
@@ -712,6 +737,12 @@ impl Evaluator {
     /// Anywhere else the running trampoline's own safe points service it.
     pub(crate) fn collect_if_pending(&self) {
         cps_eval::CpsEvaluator::new(self).collect_if_pending();
+    }
+
+    /// The collection a library read that ran out of descriptors asks for
+    /// (`CpsEvaluator::collect_for_loader`, #783). Returns whether it ran.
+    fn collect_for_loader(&self) -> bool {
+        cps_eval::CpsEvaluator::new(self).collect_for_loader()
     }
 
     /// Evaluate a parsed library

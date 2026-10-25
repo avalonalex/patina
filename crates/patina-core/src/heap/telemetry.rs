@@ -39,7 +39,8 @@ pub enum CollectReason {
     /// waited for the next safe point that may collect (`Heap::defer_collection`).
     Posted,
     /// At the call that asked for it: `(gc)`, or an open that ran out of
-    /// descriptors (`Step::Collect`, #639).
+    /// descriptors (`Step::Collect`, #639), or a library read that did
+    /// (`collect_for_loader`, #783).
     Call,
 }
 

@@ -140,6 +140,18 @@ fn top_level_head(
 /// Error label for a `define-library` form that has no backing file.
 const INLINE_SOURCE_LABEL: &str = "<inline define-library>";
 
+/// What a read the loader made reports: [`LibraryError::OutOfDescriptors`]
+/// where it ran out of file descriptors, which the backend may collect for
+/// and parse again (#783), and [`LibraryError::IoError`] for any other
+/// failure, each with `message`.
+fn read_error(error: &std::io::Error, message: String) -> LibraryError {
+    if patina_core::port::out_of_descriptors(error) {
+        LibraryError::OutOfDescriptors(message)
+    } else {
+        LibraryError::IoError(message)
+    }
+}
+
 impl SchemeLibraryLoader {
     /// Parse an inline `(define-library ...)` form into a `ParsedLibrary`.
     ///
@@ -282,9 +294,10 @@ impl SchemeLibraryLoader {
         can_load_library: &dyn Fn(&[String]) -> bool,
     ) -> Result<ParsedLibrary, LibraryError> {
         // Read the file
-        let content = self.fs.read_to_string(&path).map_err(|e| {
-            LibraryError::IoError(format!("Failed to read {}: {}", path.display(), e))
-        })?;
+        let content = self
+            .fs
+            .read_to_string(&path)
+            .map_err(|e| read_error(&e, format!("Failed to read {}: {}", path.display(), e)))?;
 
         // Parse the .sld header directly as TaggedValue on the shared heap
         let mut parser = crate::Parser::new_program(&content, &path.display().to_string(), false)
@@ -379,11 +392,10 @@ impl SchemeLibraryLoader {
 
                         // Cycle detection using canonical paths
                         let canonical = self.fs.canonicalize(&file_path).map_err(|e| {
-                            LibraryError::IoError(format!(
-                                "Failed to resolve path {}: {}",
-                                file_path.display(),
-                                e
-                            ))
+                            read_error(
+                                &e,
+                                format!("Failed to resolve path {}: {}", file_path.display(), e),
+                            )
                         })?;
 
                         if !included_files.insert(canonical.clone()) {
@@ -418,11 +430,10 @@ impl SchemeLibraryLoader {
 
                         // Cycle detection using canonical paths
                         let canonical = self.fs.canonicalize(&file_path).map_err(|e| {
-                            LibraryError::IoError(format!(
-                                "Failed to resolve path {}: {}",
-                                file_path.display(),
-                                e
-                            ))
+                            read_error(
+                                &e,
+                                format!("Failed to resolve path {}: {}", file_path.display(), e),
+                            )
                         })?;
 
                         if !included_files.insert(canonical.clone()) {
@@ -468,12 +479,15 @@ impl SchemeLibraryLoader {
         heap: &SharedHeap,
     ) -> Result<(), LibraryError> {
         let content = self.fs.read_to_string(path).map_err(|e| {
-            LibraryError::IoError(format!(
-                "Failed to read include-library-declarations file {}: {} (from {})",
-                path.display(),
-                e,
-                source_file.display()
-            ))
+            read_error(
+                &e,
+                format!(
+                    "Failed to read include-library-declarations file {}: {} (from {})",
+                    path.display(),
+                    e,
+                    source_file.display()
+                ),
+            )
         })?;
 
         // Parse all expressions directly as TaggedValues on the shared heap
@@ -599,12 +613,15 @@ impl SchemeLibraryLoader {
         heap: &SharedHeap,
     ) -> Result<Vec<TaggedValue>, LibraryError> {
         let content = self.fs.read_to_string(path).map_err(|e| {
-            LibraryError::IoError(format!(
-                "Failed to read include file {}: {} (from {})",
-                path.display(),
-                e,
-                source_file.display()
-            ))
+            read_error(
+                &e,
+                format!(
+                    "Failed to read include file {}: {} (from {})",
+                    path.display(),
+                    e,
+                    source_file.display()
+                ),
+            )
         })?;
 
         // Create parser with shared heap — TaggedValues go directly on global heap

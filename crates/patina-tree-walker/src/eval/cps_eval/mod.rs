@@ -213,6 +213,34 @@ impl<'a> CpsEvaluator<'a> {
         }
     }
 
+    /// The collection a library read that ran out of file descriptors asks
+    /// for, before the loader parses again (#783): the same root set as
+    /// [`Self::collect_if_pending`]'s, where the load may collect, with the
+    /// carrier's driver, no trampoline running and no `NoGcScope` open, but
+    /// whether or not one is pending and in every mode, as an open's is
+    /// (`GcController::collect_at_call`). A load a running trampoline asks
+    /// for finds the driver held, and posts the collection and counts it
+    /// (`deferred-collections`), as a load beneath a `NoGcScope` does.
+    /// Returns whether a collection ran.
+    pub(crate) fn collect_for_loader(&self) -> bool {
+        let evaluator = self.evaluator;
+        let heap = &evaluator.heap;
+        let kind = patina_core::CollectKind::Major;
+        let Some(mut driver) = GcDriver::acquire(heap) else {
+            GcController::post_at_call(heap, kind);
+            return false;
+        };
+        let collected =
+            GcController::collect_at_call(&evaluator.gc, &mut driver, kind, |collect| {
+                collect(&[evaluator])
+            });
+        if collected {
+            heap.borrow_mut()
+                .finish_collection(std::time::Duration::ZERO);
+        }
+        collected
+    }
+
     /// A collection a resumable primitive asked for at its call
     /// (`StepResult::CollectAtCall`, #639): the same root set as
     /// [`Self::maybe_collect`]'s, with `step` — the suspended call, its

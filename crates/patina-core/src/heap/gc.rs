@@ -358,7 +358,9 @@ pub(crate) trait Collector {
 /// take it for their extent:
 /// - the VM's `execute` and `execute_in`, which lend it to the loop they run;
 /// - the tree-walker's run of a form, from outside any run;
-/// - the loaders where a library's load ends at the top level (point B).
+/// - the loaders where a library's load ends at the top level (point B);
+/// - the loaders where a library read ran out of descriptors, for one
+///   collection before the load parses again (`collect_for_loader`, #783).
 ///
 /// Every other entry into a loop is nested: it has no driver, and runs under
 /// a [`NoGcScope`]. Not `Clone`, since the capability is unique. Until stage
@@ -724,7 +726,8 @@ pub enum CollectKind {
 /// not-collecting side into a collecting one (#626).
 #[derive(Clone, Copy, Debug)]
 pub enum GcMode {
-    /// Collect only when `(gc)` has been called. **Testing lanes only**
+    /// Collect only when `(gc)` has been called, or an open or a library
+    /// read has run out of descriptors (#607, #783). **Testing lanes only**
     /// (`PATINA_GC=0`): the differential suite needs a no-collection
     /// reference run to diff the collecting modes against. Not a supported
     /// user configuration — Patina always runs with GC.
@@ -852,8 +855,8 @@ impl GcController {
     /// as its lanes' pinned collection counts assume. Every mode that
     /// collects on its own counts descriptor pressure too (#607,
     /// `heap/account.rs`); `PATINA_GC=0` does not, so its reference run
-    /// collects only where `(gc)` or an open that ran out of descriptors
-    /// asks to.
+    /// collects only where `(gc)`, or an open or a library read that ran
+    /// out of descriptors (#607, #783), asks to.
     pub fn current_threshold(&self) -> GcThreshold {
         let threshold = match self.mode {
             GcMode::Off => return GcThreshold::NEVER,
@@ -1029,8 +1032,10 @@ impl GcController {
     /// machine calls it at a poll of its own, with the caller suspended at
     /// the call's return pc and every live value where `with_roots` finds
     /// it: the VM in `resume_stub`'s frame (`CollectAtCall`), the tree-walker
-    /// at the top of its trampoline (`StepResult::CollectAtCall`). Returns
-    /// whether a collection ran.
+    /// at the top of its trampoline (`StepResult::CollectAtCall`). The
+    /// loaders call it too, outside any run, with a driver they take, when a
+    /// library read ran out of descriptors (`collect_for_loader`, #783).
+    /// Returns whether a collection ran.
     ///
     /// It collects where a safe point may: with the driver, which only the
     /// outermost loop has, and at depth 0, with no [`NoGcScope`] open — no

@@ -1177,8 +1177,22 @@ allocation-triggered one, as in chibi and Gauche; in a library body that an
 `import` inside a `begin` loads, under the expansion's guard, where
 collection is deferred, the first `EMFILE` raises, the documented limit,
 while the same body loaded by a bare `import` collects at the open and opens
-the file (#677). GC-time flushing is observable, so these stay out of the
-byte-identical differential lane.
+the file (#677). At `ulimit -n 64`, the library loader collects and reads
+again too (#783): a bare `import` of a library that includes its body, a
+library another loads after its own imports filled the table, and a
+top-level `define-library` that imports one or includes a file each load.
+Where a load cannot collect, an `import` inside a `begin` and
+`environment`, the loader's first `EMFILE` raises with one deferred
+collection counted, and an `include` form, in a program or in a library's
+body, raises. GC-time flushing is
+observable, so these stay out of the byte-identical differential lane.
+`crates/patina-tests/tests/loader_descriptors.rs` fails one loader call at a
+time in process, over a filesystem that answers `EMFILE` or
+`PermissionDenied` once: the `.sld` read, and an `include` or
+`include-library-declarations` file's path resolution and read, under
+`GcMode::Off` so that the counts are exact. Each `EMFILE` costs one
+collection and the library loads; a second failure after it raises, with
+that one collection; a refused read raises at once.
 `escape_from_primitive.rs` re-enters continuations captured around an open
 that collected and retried, over a filesystem whose descriptor table it caps
 (`ScarceFs`), so that the stress lane runs it without a limit on its process.

@@ -78,6 +78,17 @@ impl TreeWalker {
         }
     }
 
+    /// [`Self::with_gc_mode`] over a custom filesystem. Not an interface.
+    #[doc(hidden)]
+    pub fn with_fs_and_gc_mode(
+        fs: std::sync::Arc<dyn patina_core::FileSystem>,
+        mode: patina_core::GcMode,
+    ) -> Self {
+        TreeWalker {
+            evaluator: Rc::new(Evaluator::with_fs_and_gc_mode(fs, mode)),
+        }
+    }
+
     /// Create a tree-walker from an existing evaluator
     ///
     /// This is useful for tests that need to configure the evaluator
@@ -126,7 +137,8 @@ impl TreeWalker {
                 reason = "the backend's top level, so the load may collect (#677). Holds the \
                           `define-library` datum, not read after the call: the library's body \
                           forms are in its `ParsedLibrary`, under its `GcDeferGuard::holding`, \
-                          until its registry entry roots them"
+                          until its registry entry roots them, and a parse it repeats after a \
+                          collection reads the datum from a handle it holds (#783)"
             )]
             self.evaluator
                 .eval_inline_define_library(expr)

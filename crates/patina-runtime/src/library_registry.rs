@@ -104,6 +104,15 @@ pub enum LibraryError {
     /// I/O error while reading library file
     IoError(String),
 
+    /// A read the loader made ran out of file descriptors (`EMFILE` or
+    /// `ENFILE`, `patina_core::port::out_of_descriptors`): the `.sld` file, an
+    /// `include` or `include-library-declarations` file, or the path
+    /// resolution of either. Reported as [`LibraryError::IoError`] is; a
+    /// backend that may collect where the load runs collects and parses the
+    /// library once more ([`crate::library_loader::parse_again_after_collecting`],
+    /// #783).
+    OutOfDescriptors(String),
+
     /// Parse error in library file
     ParseError { file: String, message: String },
 
@@ -233,7 +242,7 @@ impl std::fmt::Display for LibraryError {
             LibraryError::InvalidName(msg) => {
                 write!(f, "Invalid library name: {}", msg)
             }
-            LibraryError::IoError(msg) => {
+            LibraryError::IoError(msg) | LibraryError::OutOfDescriptors(msg) => {
                 write!(f, "I/O error: {}", msg)
             }
             LibraryError::ParseError { file, message } => {

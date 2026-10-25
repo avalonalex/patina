@@ -38,6 +38,28 @@
 //! dead writes out its buffer as it closes it, which every collection, the
 //! one `(gc)` asks for and one the allocations trigger, does.
 //!
+//! The library loader, measured 2026-10-25 with chibi 0.12.0
+//! (`chibi-scheme -A lib`) and Gauche 0.9.15 (`gosh -r7 -A lib`) at
+//! `ulimit -n 64`, once a program has filled the table with ports and
+//! dropped them, against Patina before #783:
+//!
+//! | Program | chibi | Gauche | Patina before |
+//! |---|---|---|---|
+//! | a bare `import` of a library that includes its body | `42` | system error | I/O error |
+//! | `(import (foo outer))`, whose first import fills the table | `(#t 42)` | system error | I/O error |
+//! | a top-level `define-library` importing it, or including a file | no top-level `define-library` | system error | I/O error |
+//! | `(begin (import (foo bar)))` | `42` | system error | I/O error |
+//! | `(environment '(foo bar))` under a `guard` | `42` | file error | an error, not a file error |
+//! | a program's `(include …)` | `42` | system error | `include: cannot read` |
+//!
+//! Since #783 the first three load on both backends, as chibi's first two
+//! do (chibi takes no top-level `define-library`). The last three are where
+//! the load cannot collect, and stay a documented limit, as does an
+//! `include` form in a library's body, read as the body expands: Gauche
+//! loads that one, reading it before the library's imports run, and chibi
+//! resolves a body's `include` against the working directory, so it is no
+//! oracle there.
+//!
 //! GC-time flushing is observable, so these stay outside the byte-identical
 //! differential lane, `scripts/run_gc_differential.sh`, which compares the
 //! chibi suite's output alone.
@@ -68,8 +90,8 @@ fn dropping(opener: &str, file: &str, count: usize) -> String {
 }
 
 /// The GC modes each run is made in: the default, and the reference run of
-/// the differential lanes, which collects only where `(gc)` or an open that
-/// ran out of descriptors asks.
+/// the differential lanes, which collects only where `(gc)`, or an open or a
+/// library read that ran out of descriptors (#783), asks.
 const MODES: [(&str, &[(&str, &str)]); 2] =
     [("default", &[]), ("PATINA_GC=0", &[("PATINA_GC", "0")])];
 
@@ -106,6 +128,24 @@ fn run(
     program: &str,
     libraries: &[(&str, &str)],
 ) -> String {
+    let (status, stdout, stderr) = output(backend, limit, envs, program, libraries, &[]);
+    assert!(
+        status.success(),
+        "patina {backend:?} at ulimit -n {limit} {envs:?} failed: {status}\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    stdout
+}
+
+/// As [`run`], with `flags` before the program: the run's exit status, its
+/// stdout and its stderr.
+fn output(
+    backend: &[&str],
+    limit: u32,
+    envs: &[(&str, &str)],
+    program: &str,
+    libraries: &[(&str, &str)],
+    flags: &[&str],
+) -> (std::process::ExitStatus, String, String) {
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("data.txt"), "hello\n").unwrap();
     std::fs::write(dir.path().join("program.scm"), program).unwrap();
@@ -115,6 +155,7 @@ fn run(
         std::fs::write(path, text).unwrap();
     }
     let mut args = backend.to_vec();
+    args.extend_from_slice(flags);
     args.extend(["-A", "lib", "program.scm"]);
     let mut command = patina_command(dir.path(), &args, &[]);
     command
@@ -125,14 +166,11 @@ fn run(
     let output = limited(command, limit)
         .output()
         .expect("spawn patina under a shell");
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    assert!(
-        output.status.success(),
-        "patina {args:?} at ulimit -n {limit} {envs:?} failed: {}\nstdout: {stdout}\nstderr: {}",
+    (
         output.status,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    stdout.trim().to_owned()
+        String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
 }
 
 /// The issue's rows, and the binary opens beside them: every one finishes,
@@ -437,4 +475,155 @@ fn a_library_a_bare_import_loads_collects_at_its_open() {
 ",
         "((opened 0) #\\h)",
     );
+}
+
+/// `(foo bar)`, which includes its body, `(exhaust now)`, whose body fills
+/// the table with ports and drops them, `(foo outer)`, which imports both in
+/// that order, and `(foo body-include)`, whose body's `include` form comes
+/// after its imports filled the table (#783).
+const LOADER_LIBRARIES: [(&str, &str); 5] = [
+    (
+        "foo/body-include.sld",
+        "(define-library (foo body-include) (import (scheme base) (exhaust now)) (export v)
+  (begin (include \"bar-body.scm\") (define v (list exhausted bar-value))))",
+    ),
+    (
+        "foo/bar.sld",
+        "(define-library (foo bar) (import (scheme base)) (export bar-value) (include \"bar-body.scm\"))",
+    ),
+    ("foo/bar-body.scm", "(define bar-value 42)\n"),
+    (
+        "exhaust/now.sld",
+        "(define-library (exhaust now)
+  (import (scheme base) (scheme file))
+  (export exhausted)
+  (begin
+    (define held '())
+    (define (exhaust!)
+      (let loop ()
+        (let ((p (guard (e ((file-error? e) #f)) (open-input-file \"data.txt\"))))
+          (when p (set! held (cons p held)) (loop))))
+      (set! held '()))
+    (exhaust!)
+    (define exhausted #t)))",
+    ),
+    (
+        "foo/outer.sld",
+        "(define-library (foo outer)
+  (import (scheme base) (exhaust now) (foo bar))
+  (export outer-value)
+  (begin (define outer-value (list exhausted bar-value))))",
+    ),
+];
+
+/// A program's opening: it fills the table with ports and drops them, so a
+/// collection would close them all, and records `deferred-collections`.
+const EXHAUSTED: &str =
+    "(import (scheme base) (scheme file) (scheme write) (scheme eval) (patina debug))
+(define (stat key) (cdr (assq key (gc-stats))))
+(define held '())
+(define (exhaust!)
+  (let loop ()
+    (let ((p (guard (e ((file-error? e) #f)) (open-input-file \"data.txt\"))))
+      (when p (set! held (cons p held)) (loop))))
+  (set! held '()))
+(exhaust!)
+(define before (stat 'deferred-collections))
+";
+
+/// The library loader reads as `load` does: a read that runs out of
+/// descriptors collects where the load may and parses the library again,
+/// its `include` files' reads covered too (#783). A bare `import`, a library
+/// another loads after its own imports filled the table, and a top-level
+/// `define-library` that imports one or includes a file each load, in every
+/// GC mode, on both backends. Until #783 each raised the read's I/O error.
+#[test]
+fn the_loader_collects_and_reads_again_when_descriptors_ran_out() {
+    for (program, expected) in [
+        (
+            format!("{EXHAUSTED}(import (foo bar))\n(write bar-value)\n"),
+            "42",
+        ),
+        (
+            "(import (scheme base) (scheme write) (foo outer))\n(write outer-value)\n".to_owned(),
+            "(#t 42)",
+        ),
+        (
+            format!(
+                "{EXHAUSTED}(define-library (local) (import (scheme base) (foo bar)) (export v) \
+                 (begin (define v bar-value)))\n(import (local))\n(write v)\n"
+            ),
+            "42",
+        ),
+        (
+            format!(
+                "{EXHAUSTED}(define-library (local) (import (scheme base)) (export bar-value) \
+                 (include \"lib/foo/bar-body.scm\"))\n(import (local))\n(write bar-value)\n"
+            ),
+            "42",
+        ),
+    ] {
+        for backend in BOTH_BACKENDS {
+            for (mode, envs) in MODES {
+                assert_eq!(
+                    run(backend, 64, envs, &program, &LOADER_LIBRARIES),
+                    expected,
+                    "{backend:?} {mode}: {program}"
+                );
+            }
+        }
+    }
+}
+
+/// The documented limit, narrowed: where the load cannot collect, the
+/// loader's first `EMFILE` raises. An `import` met inside a `begin` loads
+/// beneath the expansion's guard (point C), and `environment` on a nested
+/// loop; each posts its collection and counts it in `deferred-collections`,
+/// once, and the read's error stands. An `include` form reads during its
+/// expansion, under the same guard, in a program and in a library's body,
+/// and raises as before, a limit decision 7 on #782 recommends keeping.
+/// chibi loads the first three; Gauche raises a system error, or for
+/// `environment` a file error, and loads the library-body row.
+#[test]
+fn where_a_load_cannot_collect_the_loader_s_first_emfile_raises() {
+    let begin = format!(
+        "{EXHAUSTED}(begin (import (foo bar)))\n(write (- (stat 'deferred-collections) before))\n"
+    );
+    let environment = format!(
+        "{EXHAUSTED}(write (list (guard (e (#t (if (file-error? e) 'file-error 'error))) \
+         (environment '(foo bar)) 'loaded) (- (stat 'deferred-collections) before)))\n"
+    );
+    let include = format!("{EXHAUSTED}(include \"lib/foo/bar-body.scm\")\n(write bar-value)\n");
+    let body_include = "(import (scheme base) (scheme write) (foo body-include))\n(write v)\n";
+    for backend in BOTH_BACKENDS {
+        for (mode, envs) in MODES {
+            let case = format!("{backend:?} {mode}");
+            let (status, stdout, stderr) =
+                output(backend, 64, envs, &begin, &LOADER_LIBRARIES, &["-k"]);
+            assert!(!status.success(), "{case}: {stdout}");
+            assert!(
+                stderr.contains("I/O error: Failed to read") && stderr.contains("bar.sld"),
+                "{case}: {stderr}"
+            );
+            assert_eq!(stdout, "1", "{case}: {stderr}");
+            assert_eq!(
+                run(backend, 64, envs, &environment, &LOADER_LIBRARIES),
+                "(error 1)",
+                "{case}"
+            );
+            let (status, _, stderr) = output(backend, 64, envs, &include, &LOADER_LIBRARIES, &[]);
+            assert!(!status.success(), "{case}");
+            assert!(
+                stderr.contains("include: cannot read 'lib/foo/bar-body.scm'"),
+                "{case}: {stderr}"
+            );
+            let (status, _, stderr) =
+                output(backend, 64, envs, body_include, &LOADER_LIBRARIES, &[]);
+            assert!(!status.success(), "{case}");
+            assert!(
+                stderr.contains("include: cannot read") && stderr.contains("bar-body.scm"),
+                "{case}: {stderr}"
+            );
+        }
+    }
 }
