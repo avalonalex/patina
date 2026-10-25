@@ -30,6 +30,7 @@ The Larceny-derived workloads are LGPL and are not vendored: they run from
 the Larceny checkout (LARCENY_DIR, by default ~/Project/reference/larceny),
 as scripts/run_larceny_tests.sh does, and are reported as skipped without it.
 """
+import ctypes
 import functools
 import hashlib
 import json
@@ -42,6 +43,7 @@ import resource
 import shutil
 import signal
 import statistics
+import struct
 import subprocess
 import sys
 
@@ -309,6 +311,44 @@ def timing_command():
         return [time, '-l']
     perf = perf_usable()
     return ([perf, *PERF_EVENTS] if perf else []) + [time, '-v']
+
+
+def physical_memory():
+    """The machine's physical memory, in bytes."""
+    return os.sysconf('SC_PHYS_PAGES') * os.sysconf('SC_PAGE_SIZE')
+
+
+@functools.cache
+def libproc():
+    return ctypes.CDLL('/usr/lib/libproc.dylib')
+
+
+def footprints(pid):
+    """A live process's memory now and its peak so far, in bytes, or None
+    once it has exited or where the platform gives none (#797). On macOS its
+    physical footprint, which counts compressed pages as /usr/bin/time -l's
+    peak does, and the lifetime peak the kernel keeps of it; on Linux its
+    resident size and its peak resident size (VmHWM), each with its swap."""
+    if sys.platform == 'darwin':
+        info = ctypes.create_string_buffer(512)
+        # proc_pid_rusage(pid, RUSAGE_INFO_V4, &info): rusage_info_v4 is a
+        # 16-byte UUID and then uint64s, ri_phys_footprint the 8th and
+        # ri_lifetime_max_phys_footprint the 29th (sys/resource.h).
+        if libproc().proc_pid_rusage(ctypes.c_int(pid), ctypes.c_int(4), info) != 0:
+            return None
+        return (struct.unpack_from('<Q', info.raw, 16 + 7 * 8)[0],
+                struct.unpack_from('<Q', info.raw, 16 + 28 * 8)[0])
+    try:
+        status = Path(f'/proc/{pid}/status').read_text()
+    except OSError:
+        return None
+    kib = {}
+    for line in status.splitlines():
+        key, _, value = line.partition(':')
+        if key in ('VmRSS', 'VmHWM', 'VmSwap'):
+            kib[key] = int(value.split()[0])
+    swap = kib.get('VmSwap', 0)
+    return 1024 * (kib.get('VmRSS', 0) + swap), 1024 * (kib.get('VmHWM', 0) + swap)
 
 
 def interpreter_command(binary, backend, program, args):
