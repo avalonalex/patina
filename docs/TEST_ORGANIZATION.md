@@ -1285,7 +1285,17 @@ stage is judged by (`PRD/GC_PRD.md` §16). The sets:
   fragmentation, small heaps, ports, `parameterize`, the two loops that must
   poll every iteration under stress, #606's 500 large vectors, #609's
   ephemeron chain in both orders, and `many-heaps`, 300 interpreters in one
-  process (the `many_heaps` example of `patina-interpreter`).
+  process (the `many_heaps` example of `patina-interpreter`). And
+  `libload-point-c`, on both backends: libload's libraries imported inside a
+  top-level `begin`, a load met inside a form, which defers its collection
+  to the form's end (point C, #658). It is the load decision 9 on #782
+  recommends GC stage 4c's memory gate measure, at about 524 MiB of
+  footprint on the VM and 916 MiB on the tree-walker today, in one deferral
+  window of 275.5 MiB and 617.7 MiB (#787). It checks its own premise under
+  the default trigger, one collection and a window of at least 250 MiB, and
+  fails once the load stops deferring, so a change to loading shows as a
+  failure, not a smaller number. A PR that shrinks the window while the load
+  still defers re-pins that floor.
 - **barrier**: the six barrier programs.
 - **io**: #642's workloads.
 - **load**: #644's workloads, among them a generated program of 2,500
@@ -1333,7 +1343,7 @@ interval per workload and on the geomean over workloads. A difference under
 2% is judged in instructions or cycles, never in wall time. Each round draws
 the environment's size at random, the same for all its runs (#653): the
 VM's cycles depend on where the stack lands. Ten rounds is the default.
-The whole default set, 66 measurements, takes about 2 minutes a round on
+The whole default set, 68 measurements, takes about 2 minutes a round on
 one build here; a comparison takes three times that.
 
 ```bash
@@ -1366,6 +1376,16 @@ and it records:
   judged in the actual heap and in virtual nurseries of 16 K to 4 M
   allocations, which also gives old-to-young edges and their distinct
   holders per interval.
+- **Provenance**, at each collection before the sweep prunes it:
+  `Heap.syntax_sources`'s keys by kind (pairs, vectors, strings,
+  identifiers and other objects), the keys the prune keeps, and the
+  distinct entries all the keys and the identifier keys share: an entry is
+  an `Rc<SourceLocation>`, which `inherit_source` gives a copy (#787). At
+  point C (`run_gc_census.sh --workload libload-point-c --config default`),
+  4,555,543 keys share 1,557,999 entries, the 2,184,313 identifier keys
+  635,605 of them, and the prune keeps about 2,500. GC stage 4c replaces the
+  table with per-document ones (#791), and sets its memory threshold from
+  the identifier keys and their entries.
 - **Other counts:** identity- and `equal-hash`, continuation copies, and
   the VM's stack at each safe point.
 

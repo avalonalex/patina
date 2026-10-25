@@ -816,3 +816,215 @@ fn program_annotations_do_not_escape_as_scheme_data() {
         assert_eq!(stdout, "(#t #t #t #t #t #t #t #t #t)");
     }
 }
+
+/// That `stderr` reports `source:line:column`, quotes that line of
+/// `program` with `carets` carets under the reported span, and then ends
+/// with the expansion `chain` line, or has none.
+fn assert_located(
+    stderr: &str,
+    source: &str,
+    program: &str,
+    (line, column, carets): (usize, usize, usize),
+    chain: Option<&str>,
+) {
+    let lines: Vec<&str> = stderr.lines().collect();
+    let at = format!("  at {source}:{line}:{column}");
+    let i = lines
+        .iter()
+        .position(|l| *l == at)
+        .unwrap_or_else(|| panic!("no `{at}` in:\n{stderr}"));
+    let text = program.lines().nth(line - 1).unwrap();
+    assert_eq!(
+        lines.get(i + 1).copied(),
+        Some(format!("{line:>4} | {text}").as_str()),
+        "{stderr}"
+    );
+    assert_eq!(
+        lines.get(i + 2).copied(),
+        Some(format!("{}{}", " ".repeat(7 + column - 1), "^".repeat(carets)).as_str()),
+        "{stderr}"
+    );
+    match chain {
+        Some(chain) => assert_eq!(lines.last().copied(), Some(chain), "{stderr}"),
+        None => assert!(!stderr.contains("macro expansion"), "{stderr}"),
+    }
+}
+
+/// Each case's program: `(import (scheme base))`, then one form per line.
+fn program_of(lines: &[&str]) -> String {
+    format!("(import (scheme base))\n{}\n", lines.join("\n"))
+}
+
+/// Where the VM reports a run-time error, and what the excerpt marks (#787).
+/// GC stage 4c moves provenance from `Heap.syntax_sources` onto identifiers,
+/// and from 4c.6 a list is located by its head identifier (#792). These
+/// cases pin what a user sees before that lands. Each says whether 4c keeps
+/// it or which decision on #782 loses it. The tree-walker reports no
+/// location for a run-time error today, so these are the VM's.
+#[test]
+fn run_time_errors_are_located_at_their_forms_on_the_vm() {
+    let dir = tempfile::tempdir().unwrap();
+    for (lines, at, chain) in [
+        // Kept: an application form in a procedure body.
+        (&["(define (f) (car 5))", "(f)"][..], (2, 13, 7), None),
+        // Kept: a subform a macro substitutes, under the use's chain.
+        (
+            &[
+                "(define-syntax wrap (syntax-rules () ((_ e) (let ((t 1)) e))))",
+                "(define (k) (wrap (car 5)))",
+                "(k)",
+            ][..],
+            (3, 19, 7),
+            Some("  macro expansion chain: wrap → let"),
+        ),
+        // Kept (decision 16): a form a template introduces reports the
+        // call site.
+        (
+            &[
+                "(define-syntax bad (syntax-rules () ((_ x) (car x))))",
+                "(define (h) (bad 5))",
+                "(h)",
+            ][..],
+            (3, 13, 7),
+            Some("  macro expansion: bad"),
+        ),
+        // Kept: an identifier-headed form inside a lambda-headed one.
+        (
+            &["((lambda (v) (vector-ref v 9)) (vector))"][..],
+            (2, 14, 16),
+            None,
+        ),
+        // Kept: a vector literal as an argument; the application is located.
+        (&["(vector-ref #(1 2) 9)"][..], (2, 1, 21), None),
+        // Lost (decision 12): a head that is a call.
+        (&["(define (g) 5)", "((g) 1)"][..], (3, 1, 7), None),
+        // Lost (decision 12): a head that is a vector literal.
+        (&["(define (f) (#(1 2) 0))", "(f)"][..], (2, 13, 10), None),
+        // Lost (decision 12): a head that is a string literal.
+        (&["(define (f) (\"ab\" 0))", "(f)"][..], (2, 13, 8), None),
+    ] {
+        let program = program_of(lines);
+        fs::write(dir.path().join("program.scm"), &program).unwrap();
+        let (_, _, stderr, ok) = run(dir.path(), &[], &["program.scm"], None);
+        assert!(!ok, "{program}");
+        assert_located(&stderr, "program.scm", &program, at, chain);
+    }
+}
+
+/// Where both backends report an expansion error or an unbound reference,
+/// which the tree-walker locates as the VM does (#787): the cases GC stage
+/// 4c must keep, each saying why.
+#[test]
+fn expansion_errors_and_references_are_located_on_both_backends() {
+    let dir = tempfile::tempdir().unwrap();
+    for backend in BOTH_BACKENDS {
+        for (lines, at, chain) in [
+            // Kept: an unbound reference in a procedure body.
+            (&["(define (f) (nope 5))", "(f)"][..], (2, 14, 4), None),
+            // Kept (decision 16): a reference a template introduces reports
+            // the template's text.
+            (
+                &[
+                    "(define-syntax bad (syntax-rules () ((_ x) (nope x))))",
+                    "(define (h) (bad 5))",
+                    "(h)",
+                ][..],
+                (2, 45, 4),
+                Some("  macro expansion: bad"),
+            ),
+            // Kept (decision 16): a desugar error in a macro's output reports
+            // the call site.
+            (
+                &[
+                    "(define-syntax bad (syntax-rules () ((_ x) (if))))",
+                    "(define (h) (bad 5))",
+                ][..],
+                (3, 13, 7),
+                Some("  macro expansion: bad"),
+            ),
+            // Kept: a reference inside a form whose head is a call.
+            (
+                &["(define (g) 5)", "(define (k) ((g) nope2))", "(k)"][..],
+                (3, 18, 5),
+                None,
+            ),
+            // Kept: `,x` outside a quasiquote, whose head 4c.6 makes a
+            // written identifier.
+            (&["(define x 1)", "  ,x"][..], (3, 3, 2), None),
+            // Kept, as `,x`.
+            (&["(define x (list 1))", "  ,@x"][..], (3, 3, 3), None),
+        ] {
+            let program = program_of(lines);
+            fs::write(dir.path().join("program.scm"), &program).unwrap();
+            let (_, _, stderr, ok) = run(dir.path(), backend, &["program.scm"], None);
+            assert!(!ok, "{backend:?}: {program}");
+            assert_located(&stderr, "program.scm", &program, at, chain);
+        }
+    }
+}
+
+/// A location whose text the input stream has dropped keeps its line and
+/// column and quotes nothing: the program is read from standard input, and
+/// its last form comes after more than `SOURCE_TEXT_KEPT` (1 MiB) of text.
+/// Standard input quotes the template's line until then, and a file read
+/// whole keeps it. Decision 17 on #782 recommends keeping this answer, and
+/// 4c.5's compaction test starts from it (#787).
+///
+/// Kept: data built at run time and given to `eval` reports no location and
+/// no expansion chain, before 4c and after. It is the contrast for decision
+/// 11, which loses the quoted datum's location
+/// (`an_error_in_the_hundredth_eval_of_a_datum_reports_as_the_first`).
+#[test]
+fn a_dropped_line_keeps_its_location_and_built_data_has_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let short = program_of(&[
+        "(define-syntax bad (syntax-rules () ((_ x) (nope x))))",
+        "(bad 5)",
+    ]);
+    let mut program = program_of(&["(define-syntax bad (syntax-rules () ((_ x) (nope x))))"]);
+    program.push_str(&format!("#t ;{}\n", "x".repeat(1000)).repeat(1100));
+    program.push_str("(bad 5)\n");
+    fs::write(dir.path().join("program.scm"), &program).unwrap();
+    let built = "(import (scheme base) (scheme eval) (scheme repl))\n\
+        (eval (list 'case 3 (list (list 1 2) ''a) (list (list 3) (list 'missing 5)) (list 'else ''c))\n      \
+        (interaction-environment))\n";
+    fs::write(dir.path().join("built.scm"), built).unwrap();
+    for backend in BOTH_BACKENDS {
+        let (_, _, stderr, ok) = run(dir.path(), backend, &[], Some(&short));
+        assert!(!ok, "{backend:?}");
+        assert_located(
+            &stderr,
+            "<stdin>",
+            &short,
+            (2, 45, 4),
+            Some("  macro expansion: bad"),
+        );
+        let (_, _, stderr, ok) = run(dir.path(), backend, &[], Some(&program));
+        assert!(!ok, "{backend:?}");
+        let lines: Vec<&str> = stderr.lines().collect();
+        let at = lines
+            .iter()
+            .position(|l| *l == "  at <stdin>:2:45")
+            .unwrap_or_else(|| panic!("{backend:?}: {stderr}"));
+        assert_eq!(
+            &lines[at + 1..],
+            ["  macro expansion: bad"],
+            "{backend:?}: {stderr}"
+        );
+        let (_, _, stderr, ok) = run(dir.path(), backend, &["program.scm"], None);
+        assert!(!ok, "{backend:?}");
+        assert_located(
+            &stderr,
+            "program.scm",
+            &program,
+            (2, 45, 4),
+            Some("  macro expansion: bad"),
+        );
+        let (_, _, stderr, ok) = run(dir.path(), backend, &["built.scm"], None);
+        assert!(!ok, "{backend:?}");
+        assert!(
+            stderr.contains("missing") && !stderr.contains("  at ") && !stderr.contains("macro"),
+            "{backend:?}: {stderr}"
+        );
+    }
+}

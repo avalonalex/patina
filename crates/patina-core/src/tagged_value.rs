@@ -470,7 +470,9 @@ impl TaggedValue {
     /// Crate-private, as the index constructors are: raw bits from anywhere
     /// but a value the heap made would be a reference without the heap's
     /// stamp (`heap/check.rs`). The `syntax_sources` prune in sweep, which
-    /// reads only the index, is the one caller.
+    /// reads only the tag and index, not the stamp, is the one caller in a
+    /// shipped build; a `gc-census` build's count of the same table's keys
+    /// reads them the same way (#787).
     #[inline(always)]
     pub(crate) fn from_raw(raw: u64) -> Self {
         Self(raw)

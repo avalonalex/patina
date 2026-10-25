@@ -131,6 +131,26 @@
 (test-equal "a keyword renamed on import works under its new name" 2
   (blk 1 2))
 
+;; ── The quote abbreviation is quote's binding ──────────────────────────────
+;;
+;; `'x` reads as `(quote x)`, and its head resolves where it is read, as the
+;; written form's would. GC stage 4c moves where the reader records a location
+;; and makes the abbreviation's head a written identifier (4c.6, #792); these
+;; rows pin the answers that move must keep (#787). The VM, the tree-walker,
+;; chibi 0.12 and Gauche 0.9.15 agree on both, measured 2026-10-24. A rebound
+;; `unquote` is a different matter, recognised by its spelling today (#778).
+
+(test-equal "a rebound quote takes the abbreviation" -5
+  (let ((quote -)) '5))
+
+;; The template's `'x` is the macro's `quote`, which the use site's binding
+;; does not capture. `let-syntax.scm`'s "nor is its abbreviation" holds the
+;; same under a use-site `let-syntax` of `quote`.
+(define-syntax quote-template (syntax-rules () ((_ x) 'x)))
+
+(test-equal "a template's abbreviation keeps the macro's quote" 5
+  (let ((quote -)) (quote-template 5)))
+
 ;; ── Syntax that is not in value position ───────────────────────────────────
 
 ;; Quoted data is data: it desugars to a literal and never reaches the check.
