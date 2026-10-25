@@ -13,8 +13,13 @@
 //! - `PATINA_GC_CENSUS_OUT`: the summary, one `key value` line per figure,
 //!   written at exit (standard error when unset);
 //! - `PATINA_GC_CENSUS_LOG`: one CSV line per collection, the survival of
-//!   what was allocated since the previous one, the live objects and the
-//!   VM's stack at the safe point;
+//!   what was allocated since the previous one, the live objects, the VM's
+//!   stack at the safe point, and `syntax_sources` before its prune (#787):
+//!   its keys by kind (`src_pairs`, `src_vectors`, `src_strings`,
+//!   `src_identifiers`, `src_objects`), the keys the prune keeps
+//!   (`src_kept`), and the distinct entries, the `Rc<SourceLocation>`s
+//!   `inherit_source` shares, of all keys and of the identifier keys
+//!   (`src_entries`, `src_identifier_entries`);
 //! - `PATINA_GC_CENSUS_HEAPS`: appends `exe total=… max_live=…
 //!   live_at_exit=…` at exit, the heaps this process made, whether or not
 //!   `PATINA_GC_CENSUS` is set.
@@ -800,6 +805,15 @@ pub(crate) mod imp {
         pub dead_old_bytes: u64,
         pub ages: [u64; 8],
         pub arena_len: [u64; 4],
+        /// `syntax_sources`'s keys: pairs, vectors, strings, identifiers
+        /// and other objects (#787).
+        pub sources: [u64; 5],
+        /// Of them, the keys the prune keeps: their values are marked.
+        pub sources_kept: u64,
+        /// The distinct entries the keys share, each an
+        /// `Rc<SourceLocation>`, and those the identifier keys share.
+        pub source_entries: u64,
+        pub source_identifier_entries: u64,
         pub scan_us: u64,
     }
 
@@ -881,6 +895,10 @@ pub(crate) mod imp {
                     for age in 0..8 {
                         let _ = write!(header, ",age{age}");
                     }
+                    header.push_str(
+                        ",src_pairs,src_vectors,src_strings,src_identifiers,src_objects,src_kept,\
+                         src_entries,src_identifier_entries",
+                    );
                     let _ = writeln!(log, "{header}");
                 }
             }
@@ -931,6 +949,14 @@ pub(crate) mod imp {
                 for a in 0..8 {
                     let _ = write!(line, ",{}", scan.ages[a]);
                 }
+                for n in scan.sources {
+                    let _ = write!(line, ",{n}");
+                }
+                let _ = write!(
+                    line,
+                    ",{},{},{}",
+                    scan.sources_kept, scan.source_entries, scan.source_identifier_entries
+                );
                 let _ = writeln!(log, "{line}");
             }
             s.collections += 1;

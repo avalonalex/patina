@@ -150,7 +150,7 @@ impl MarkBits {
     /// arena, so the two are not one function; what this buys is that a reader
     /// cannot disagree with a writer about which arena a tag belongs to, or
     /// about what the fall-through means.
-    fn is_marked(&self, tv: TaggedValue) -> Option<bool> {
+    pub(super) fn is_marked(&self, tv: TaggedValue) -> Option<bool> {
         if tv.is_pair() {
             Some(self.pairs.get(tv.heap_index() as usize))
         } else if tv.is_vector() {

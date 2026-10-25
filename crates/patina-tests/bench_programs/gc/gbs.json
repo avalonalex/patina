@@ -658,6 +658,19 @@
    ]
   },
   {
+   "name": "libload-point-c",
+   "group": "loading",
+   "kind": "patina",
+   "source": "probes/libload-point-c.scm",
+   "sets": [
+    "probes"
+   ],
+   "backends": [
+    "vm",
+    "tree-walker"
+   ]
+  },
+  {
    "name": "macroprog",
    "group": "loading",
    "kind": "generated",

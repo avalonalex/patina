@@ -1,6 +1,7 @@
 //! The heap's side of the GC census (#651, `crate::census`): each
 //! allocation's kind and sizes, and the survival scan a collection runs
-//! between marking and sweeping. Compiled only with the `gc-census` feature.
+//! between marking and sweeping, with its count of `syntax_sources`'s keys
+//! (#787). Compiled only with the `gc-census` feature.
 
 use super::account::{OBJECT_SLOT_BYTES, PAIR_SLOT_BYTES, STRING_SLOT_BYTES, VECTOR_SLOT_BYTES};
 use super::gc::MarkBits;
@@ -8,6 +9,8 @@ use super::{Heap, HeapObjectData};
 use crate::census::imp::{self, Arena, Scan, Variant, round8, string_bytes, vector_bytes};
 use crate::tagged_value::TaggedValue;
 use num_bigint::BigInt;
+use std::collections::HashSet;
+use std::rc::Rc;
 use std::time::Instant;
 
 /// An object's variant, its length (free variables, fields, values), and
@@ -159,7 +162,48 @@ impl Heap {
                 (bytes, imp::class_of(Arena::Object, variant))
             },
         );
+        self.census_sources(&mut scan, marks);
         scan.scan_us = start.elapsed().as_micros() as u64;
         imp::collected(scan);
+    }
+
+    /// `syntax_sources`'s keys by kind, the distinct locations they share,
+    /// and how many the prune that follows keeps: what GC stage 4c's
+    /// per-document tables replace (#787, #791). Run before the sweep's
+    /// prune, so every key is a value of an occupied slot.
+    fn census_sources(&self, scan: &mut Scan, marks: &MarkBits) {
+        let mut entries = HashSet::new();
+        let mut identifier_entries = HashSet::new();
+        for (&bits, location) in &self.syntax_sources {
+            // The prune reads its keys the same way, by their tag and index.
+            let value = TaggedValue::from_raw(bits);
+            let kind = if value.is_pair() {
+                0
+            } else if value.is_vector() {
+                1
+            } else if value.is_string() {
+                2
+            } else if value.is_object()
+                && matches!(
+                    self.objects.get(value.heap_index() as usize),
+                    Some(HeapObjectData::Identifier { .. })
+                )
+            {
+                3
+            } else {
+                4
+            };
+            scan.sources[kind] += 1;
+            let entry = Rc::as_ptr(location);
+            entries.insert(entry);
+            if kind == 3 {
+                identifier_entries.insert(entry);
+            }
+            if marks.is_marked(value) == Some(true) {
+                scan.sources_kept += 1;
+            }
+        }
+        scan.source_entries = entries.len() as u64;
+        scan.source_identifier_entries = identifier_entries.len() as u64;
     }
 }

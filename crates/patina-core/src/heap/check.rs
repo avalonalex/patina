@@ -40,7 +40,9 @@
 //!   with the generation the slot had *before* it was freed, so that a
 //!   `SourceMap` key (the raw bits of the value as it was made) still
 //!   matches the report that prunes it;
-//! - the `syntax_sources` prune, which reads only the index.
+//! - the `syntax_sources` prune, which reads only the tag and index, and,
+//!   in a `gc-census` build, the census's count of the same keys (#787),
+//!   which reads them the same way and keeps no value.
 //!
 //! `TaggedValue::from_raw` has no other caller, and it and the index
 //! constructors (`TaggedValue::pair` and the rest) are crate-private, so no

@@ -68,6 +68,9 @@
 ;; all passing on both Patina backends. Chibi and Gauche pass all four.
 ;; Two more (2026-09-14) for a literal compared against a macro-introduced
 ;; top-level binding, where the two backends disagreed: 34 total.
+;; Two more (2026-10-24, #787) for `quote` as a literal, written out and
+;; abbreviated: 36 total, all passing on both Patina backends. Chibi and
+;; Gauche pass both, and each keeps its one registered difference.
 ;;
 ;; ── Where the rest of `hygiene.rs` went ─────────────────────────────────────
 ;;
@@ -287,6 +290,24 @@
                        (let ((k 99))
                          (n k)))))))
     (m anything)))
+
+;; ── `quote` as a literal, written out or abbreviated ───────────────────────
+;;
+;; `'a` reads as `(quote a)`, so a literal `quote` matches both, and an input
+;; that is not a quote form falls through. Bound at the use site, the input's
+;; `quote` is no longer the literal's, whichever way it was written. GC stage
+;; 4c changes how the reader records the abbreviation (4c.6, #792); these rows
+;; pin what it must keep (#787). The VM, the tree-walker, chibi 0.12 and
+;; Gauche 0.9.15 agree, measured 2026-10-24.
+(define-syntax quote-literal
+  (syntax-rules (quote) ((_ (quote x)) (list 'matched 'x)) ((_ y) 'other)))
+
+(test-equal "a literal quote matches the abbreviation and the written form"
+  '((matched a) (matched a) other)
+  (list (quote-literal 'a) (quote-literal (quote a)) (quote-literal a)))
+
+(test-equal "a use-site quote matches the literal in neither" '(other other)
+  (let ((quote -)) (list (quote-literal 'a) (quote-literal (quote a)))))
 
 ;; ── `_`, which is a pattern token until it is a literal ─────────────────────
 ;;

@@ -33,7 +33,10 @@
 ;;   Gauche                    23 pass, 2 fail — registered as an oracle defect
 ;;
 ;; Re-measured 2026-09-11 with the last section's six rows: both backends and
-;; chibi 31 pass, Gauche 29 pass and the same 2 fail.
+;; chibi 31 pass, Gauche 29 pass and the same 2 fail. With the abbreviated
+;; sibling of family 33's row (2026-10-24, #787): both backends and chibi
+;; 36 pass, Gauche 32 pass and 4 fail, those 2 and two later rows, all four
+;; registered.
 ;;
 ;; **Gauche lets a template-generated `let-syntax` capture its own sibling.**
 ;; The two rows it fails are the generated form; the row directly beneath them,
@@ -273,6 +276,17 @@
   'hello
   (let-syntax ((quote (syntax-rules () ((_ x) 'captured))))
     (mq hello)))
+
+;; The same with the template's quote abbreviated, which reads as the written
+;; form, `(quote d)`. GC stage 4c makes the abbreviation's head a written
+;; identifier (4c.6, #792); this row pins what it must keep (#787). The VM,
+;; the tree-walker, chibi 0.12 and Gauche 0.9.15 answer `hello`, measured
+;; 2026-10-24.
+(define-syntax mq-abbreviated (syntax-rules () ((_ d) 'd)))
+
+(test-equal "nor is its abbreviation" 'hello
+  (let-syntax ((quote (syntax-rules () ((_ x) 'captured))))
+    (mq-abbreviated hello)))
 
 ;; ── Where the definition-site binding comes from ────────────────────────────
 ;;
