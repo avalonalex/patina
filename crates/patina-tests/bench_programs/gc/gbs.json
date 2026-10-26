@@ -562,6 +562,24 @@
    ]
   },
   {
+   "name": "display-fallback",
+   "group": "io",
+   "kind": "patina",
+   "source": "probes/display-fallback.scm",
+   "sets": [
+    "io"
+   ]
+  },
+  {
+   "name": "parameterize-port",
+   "group": "io",
+   "kind": "patina",
+   "source": "probes/parameterize-port.scm",
+   "sets": [
+    "io"
+   ]
+  },
+  {
    "name": "io-cat",
    "group": "io",
    "kind": "larceny-r7rs",

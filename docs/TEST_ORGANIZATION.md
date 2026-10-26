@@ -1311,7 +1311,11 @@ stage is judged by (`PRD/GC_PRD.md` §16). The sets:
   failure, not a smaller number. A PR that shrinks the window while the load
   still defers re-pins that floor.
 - **barrier**: the six barrier programs.
-- **io**: #642's workloads.
+- **io**: #642's workloads, and two probes of the current-port fallback
+  (decision 6 on #782): `display-fallback`, `display`, `write-char` and
+  `write` with no port argument under a `parameterize` of the current
+  output port, and `parameterize-port`, `parameterize` over
+  `current-output-port` around a one-character write.
 - **load**: #644's workloads, among them a generated program of 2,500
   definitions.
 - **tw**: a tree-walker subset.
@@ -1365,7 +1369,7 @@ interval per workload and on the geomean over workloads. A difference under
 2% is judged in instructions or cycles, never in wall time. Each round draws
 the environment's size at random, the same for all its runs (#653): the
 VM's cycles depend on where the stack lands. Ten rounds is the default.
-The whole default set, 68 measurements, takes about 2 minutes a round on
+The whole default set, 70 measurements, takes about 2 minutes a round on
 one build here; a comparison takes three times that.
 
 ```bash
