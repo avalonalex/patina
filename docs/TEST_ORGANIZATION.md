@@ -1326,6 +1326,14 @@ and the run completes. Their inputs are kept in `gbs.json` as a replacement
 count or as a Patina-authored input, never as copied input files. Larceny's
 GC programs run behind `shims/larceny-gc-prefix.scm`.
 
+A probe reads its arguments once, before its loop (#802). `(command-line)`
+makes a new list of new strings at every call, the program's path among
+them (#593), so a loop that calls it also measures the path the run starts
+from. Four probes read their count in their loop test, and spent 16–54% of
+their instructions there. Against one pair of builds, `string-ports` read
+anywhere from −0.21% to +0.85% as the run's directory grew by up to 32
+characters.
+
 Every program ends with an epilogue of two `(gc)` calls and a reading of
 `(gc-stats)`. Each run records:
 

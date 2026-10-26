@@ -1,9 +1,10 @@
 ;; display and write to a string port in a loop: the port path.
 (import (scheme base) (scheme write) (scheme process-context))
 (define (arg k default) (if (> (length (command-line)) k) (string->number (list-ref (command-line) k)) default))
+(define n (arg 1 400000))
 (define out (open-output-string))
 (let loop ((i 0))
-  (when (< i (arg 1 400000))
+  (when (< i n)
     (display i out) (write-char #\space out) (write "s" out)
     (when (= 0 (modulo i 1000)) (get-output-string out) (set! out (open-output-string)))
     (loop (+ i 1))))
