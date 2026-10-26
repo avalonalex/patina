@@ -267,7 +267,8 @@ impl<'gc> Cx<'gc> {
     }
 
     /// The interpreter's metadata: the command line, the features, the file
-    /// system and the library query.
+    /// system and the library query; and its current ports (#618), which a
+    /// port-less `display` reads here, with no borrow of the heap.
     #[inline]
     pub fn instance(&self) -> &'gc Instance {
         self.instance

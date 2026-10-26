@@ -156,8 +156,11 @@ pub type CxHandler =
   itself, beneath a `NoGcScope`, each word crossing through a handle
   (`NoGcScope::cross_all`), as the registry's test `Embedder` does.
 - **Instance data** comes through the context's instance (`Cx::instance`):
-  the command line, the features, and the file system that every primitive
-  opening, reading or listing a file asks (`Instance::fs`).
+  the command line, the features, the file system that every primitive
+  opening, reading or listing a file asks (`Instance::fs`), and the current
+  input, output and error ports, which a port-taking primitive called
+  without its port uses (`Instance::current_port`, #618). A primitive keeps
+  no port of its own.
 - **Stores** go through the funnel (`Cx::store`, the ranges), and a record's
   field through its `RecordField`.
 - **The datum writer** reads an object's kind through `Cx::get_object` and

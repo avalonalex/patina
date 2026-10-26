@@ -146,8 +146,8 @@
     (list caught av bv)))
 
 ;; The same property when the *install* raises rather than the converter. This
-;; is the failure the standard ports have, since they are procedures over a
-;; thread-local that validate on assignment. #70 put every program write behind
+;; is the failure the standard ports have, since they are procedures over the
+;; interpreter's port slots that validate on assignment. #70 put every program write behind
 ;; it: a leak here sent all later output to `sink` for the rest of the run.
 ;;
 ;; **Scoped to Patina, because its premise is.** Whether assigning a non-port to

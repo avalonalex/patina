@@ -30,8 +30,9 @@
 ;; So every new value is converted before the wind is entered, and install and
 ;; restore both move raw values through `%parameterize-swap!` — which is also
 ;; transactional, because not everything `parameterize` accepts is a parameter
-;; *object*: the standard ports are procedures over a thread-local, so they
-;; have no converter to run early and validate on assignment instead. See its
+;; *object*: the standard ports are procedures over the interpreter's port
+;; slots, so they have no converter to run early and validate on assignment
+;; instead. See its
 ;; doc comment in `patina-primitives`.
 (define-syntax parameterize
   (syntax-rules ()

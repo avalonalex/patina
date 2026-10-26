@@ -8,20 +8,39 @@
 //! held. A [`Cx`](crate::Cx) carries an `Instance` instead, so code that
 //! takes a `Cx` reaches it without the heap.
 //!
+//! The current input, output and error ports are the interpreter's too
+//! (#618). They were thread-local statics, so every interpreter on a thread
+//! shared them, and one that redirected its output redirected the others'.
+//! They are Rust ports, not heap values, so they are not GC data either, and
+//! here they leave `Heap`'s layout alone, which a field of its own can move
+//! in cycles (#685).
+//!
 //! **Until #707 the heap holds the interpreter's `Instance`** by `Rc`
 //! ([`Heap::instance`](crate::Heap::instance)), and is its one owner of
 //! record: code with no `Cx` yet reads it through the heap's accessors, and
 //! a boundary that holds the heap makes a `Cx` with it (#704). #707 moves it
 //! to the hosts. Shared, it is set through `&self`: the backends name
 //! themselves and their file system at construction, the hosts set the
-//! command line, the runtime installs its library query.
+//! command line, the runtime installs its library query, and the current-port
+//! procedures install the current ports.
 
 use std::cell::{Cell, Ref, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::features::{FeatureRegistry, LibraryAvailability};
+use crate::port::Port;
 use crate::vfs::{FileSystem, NativeFs};
+
+/// One of an interpreter's three current ports (#618): what
+/// `current-input-port`, `current-output-port` and `current-error-port`
+/// answer, and what a port-taking procedure called without its port uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CurrentPort {
+    Input,
+    Output,
+    Error,
+}
 
 /// One interpreter's metadata. See the [module docs](self).
 pub struct Instance {
@@ -39,19 +58,61 @@ pub struct Instance {
     fs: RefCell<Arc<dyn FileSystem>>,
     /// The runtime's non-loading query for `cond-expand`'s `(library …)`.
     library_availability: RefCell<Option<Rc<dyn LibraryAvailability>>>,
+    /// The current input, output and error ports, indexed by [`CurrentPort`]
+    /// (#618). `parameterize` installs into them through the one-argument
+    /// call of `current-output-port` and the others.
+    current_ports: RefCell<[Rc<Port>; 3]>,
+    /// The standard ports the slots start at, made with the instance, each
+    /// the interpreter's own object: what [`Instance::reset_current_ports`]
+    /// puts back. Kept, so that a reset makes no port: making a standard
+    /// input port reads standard input's thread-locals
+    /// (`crate::port::Port::stdin`), which a teardown during the thread's
+    /// exit would find destroyed.
+    standard_ports: [Rc<Port>; 3],
 }
 
 impl Instance {
     /// An instance over `fs`, with the command line `("patina")`, never the
-    /// host process's flags, the default features and no library query.
+    /// host process's flags, the default features, no library query, and
+    /// standard ports of its own as its current ports.
     pub fn new(fs: Arc<dyn FileSystem>) -> Self {
+        let standard_ports = [Port::stdin(), Port::stdout(), Port::stderr()];
         Self {
             command_line: RefCell::new(vec!["patina".to_owned()]),
             features: RefCell::new(FeatureRegistry::new()),
             features_read: Cell::new(false),
             fs: RefCell::new(fs),
             library_availability: RefCell::new(None),
+            current_ports: RefCell::new(standard_ports.clone()),
+            standard_ports,
         }
+    }
+
+    /// The current port `which`, cloned, so the caller holds no borrow of
+    /// the instance while it reads or writes through it. Inlined: a
+    /// primitive calls it from another crate on every port-less `display`
+    /// and `read-char`.
+    #[inline]
+    pub fn current_port(&self, which: CurrentPort) -> Rc<Port> {
+        Rc::clone(&self.current_ports.borrow()[which as usize])
+    }
+
+    /// Install `port` as the current port `which`. The slot's hold on the
+    /// port it replaces is dropped once the slot is released, so that if it
+    /// was the last one, a file port writes itself out with nothing borrowed.
+    pub fn set_current_port(&self, which: CurrentPort, port: Rc<Port>) {
+        let replaced =
+            std::mem::replace(&mut self.current_ports.borrow_mut()[which as usize], port);
+        drop(replaced);
+    }
+
+    /// Put the standard ports back as the current ports: what
+    /// [`Heap::teardown`](crate::Heap::teardown) does, so that a file port
+    /// left current is dropped, and so written out, with the heap's other
+    /// ports (#618).
+    pub fn reset_current_ports(&self) {
+        let replaced = self.current_ports.replace(self.standard_ports.clone());
+        drop(replaced);
     }
 
     /// Scheme's command line.
@@ -138,6 +199,40 @@ mod tests {
         let instance = Instance::default();
         instance.set_command_line("prog".into(), vec![]);
         assert_eq!(&*instance.command_line(), ["prog".to_string()]);
+    }
+
+    /// Each instance has its own three ports, and one that installs a port
+    /// installs it in its own slot only (#618).
+    #[test]
+    fn each_instance_keeps_its_own_current_ports() {
+        let a = Instance::default();
+        let b = Instance::default();
+        let standard = [CurrentPort::Input, CurrentPort::Output, CurrentPort::Error];
+        for which in standard {
+            assert!(!Rc::ptr_eq(&a.current_port(which), &b.current_port(which)));
+        }
+        let b_output = b.current_port(CurrentPort::Output);
+        let sink = Port::new_output_string();
+        a.set_current_port(CurrentPort::Output, Rc::clone(&sink));
+        assert!(Rc::ptr_eq(&a.current_port(CurrentPort::Output), &sink));
+        assert!(Rc::ptr_eq(&b.current_port(CurrentPort::Output), &b_output));
+    }
+
+    /// A reset puts back the instance's own standard ports and lets go of
+    /// the ones it replaces.
+    #[test]
+    fn a_reset_puts_the_standard_ports_back() {
+        let instance = Instance::default();
+        let output = instance.current_port(CurrentPort::Output);
+        let sink = Port::new_output_string();
+        instance.set_current_port(CurrentPort::Output, Rc::clone(&sink));
+        assert_eq!(Rc::strong_count(&sink), 2);
+        instance.reset_current_ports();
+        assert_eq!(Rc::strong_count(&sink), 1);
+        assert!(Rc::ptr_eq(
+            &instance.current_port(CurrentPort::Output),
+            &output
+        ));
     }
 
     #[test]
