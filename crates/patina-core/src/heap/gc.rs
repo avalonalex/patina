@@ -1917,7 +1917,9 @@ impl Heap {
     /// cycles while the heap runs: here every slot is freed, the
     /// environments let go of the heap, and each port flushes and closes as
     /// it drops. The payloads give back what they charged with no heap
-    /// borrow, as they do in any sweep.
+    /// borrow, as they do in any sweep. The interpreter's current ports go
+    /// back to its standard ones first (#618), so a file port left current
+    /// is let go of too, and written out with the rest.
     ///
     /// What is left is an empty heap, every slot free and the interned
     /// symbols and core forms forgotten with them, since nothing marks them
@@ -1929,6 +1931,7 @@ impl Heap {
     /// frees nothing. It is not a collection, and leaves the count of them as
     /// it was.
     pub fn teardown(&mut self) {
+        self.instance.reset_current_ports();
         self.symbol_table.clear();
         self.core_syntax_table.clear();
         self.handles = HandleTable::new(self.telemetry.heap_id);

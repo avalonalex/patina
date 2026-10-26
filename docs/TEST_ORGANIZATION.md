@@ -976,6 +976,28 @@ The port case runs the test binary again as the embedding host, in a child
 process, so that nothing but the drop can write the port: the CLI's own exit
 path flushes every open port, and a host does not go through it.
 
+`patina-tests/tests/current_ports.rs` holds each interpreter to current ports
+of its own (#618), in the same shape: the test binary runs again as the host,
+with `(from stdin)` on its standard input and `--nocapture`, since a standard
+output port writes through `print!`, which libtest captures otherwise. On
+four pairs of interpreters (both on the VM, both on the tree-walker, and the
+two mixed), when A redirects or closes its current ports:
+
+- B's `display` reaches standard output, and A's string port stays empty;
+- B's `(read)` reads standard input, not A's string port;
+- C, made after A's redirection, writes to standard output;
+- B still writes to standard output after A's `parameterize` is left by an
+  uncaught error, or after A closes its current output port;
+- a file port A left current is written out when A is dropped, read back on
+  the same thread while the host still holds A's heap, so that only
+  teardown's reset of the current ports can have let go of it.
+
+Each redirection is also checked in A: its own `read` and `display` use the
+port it installed, so a case cannot pass because the redirection did
+nothing. Two checks hold what stays the same within one interpreter: two
+`(current-output-port)` reads are not `eq?`, until #608, and a port-less
+`flush-output-port` flushes the current output port.
+
 `patina-tests/tests/owned_handles.rs` holds the handles a host keeps values
 through to rooting them, on both backends (#605):
 
@@ -1311,7 +1333,11 @@ stage is judged by (`PRD/GC_PRD.md` §16). The sets:
   failure, not a smaller number. A PR that shrinks the window while the load
   still defers re-pins that floor.
 - **barrier**: the six barrier programs.
-- **io**: #642's workloads.
+- **io**: #642's workloads, and two probes of the current-port fallback
+  (decision 6 on #782): `display-fallback`, `display`, `write-char` and
+  `write` with no port argument under a `parameterize` of the current
+  output port, and `parameterize-port`, `parameterize` over
+  `current-output-port` around a one-character write.
 - **load**: #644's workloads, among them a generated program of 2,500
   definitions.
 - **tw**: a tree-walker subset.
@@ -1365,7 +1391,7 @@ interval per workload and on the geomean over workloads. A difference under
 2% is judged in instructions or cycles, never in wall time. Each round draws
 the environment's size at random, the same for all its runs (#653): the
 VM's cycles depend on where the stack lands. Ten rounds is the default.
-The whole default set, 68 measurements, takes about 2 minutes a round on
+The whole default set, 70 measurements, takes about 2 minutes a round on
 one build here; a comparison takes three times that.
 
 ```bash

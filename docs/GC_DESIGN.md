@@ -1105,7 +1105,9 @@ beside today's `SharedHeap` surface until they do.
   and stores take `&mut Cx`. A bulk read is a `Ref` tied to the `&Cx` borrow,
   so holding one across an allocation is a borrow-checker error rather than a
   `BorrowMutError`. It carries the interpreter's `Instance`: the command line,
-  the features, the file system and the library query. Until #707 moves it to
+  the features, the file system, the library query, and the current input,
+  output and error ports (#618), which a port-less `display` reads with no
+  borrow of the heap. Until #707 moves it to
   the hosts, the heap holds the interpreter's `Rc<Instance>`, so a boundary
   that holds the heap can make a context (#704).
 
@@ -1480,7 +1482,10 @@ through the heap, and it is freed with its owner's last handle. Each heap's
 owner, the VM backend or the tree-walker's `Evaluator`, still runs
 `Heap::teardown` from its `Drop`: a sweep with nothing marked, which
 tombstones every slot while the owner still holds the heap, so every
-environment payload drops and each port flushes and closes as it drops. The
+environment payload drops and each port flushes and closes as it drops. It
+first puts the interpreter's standard ports back as its current ports
+(`Instance::reset_current_ports`, #618), so a file port left current drops
+and is written out with the rest. The
 interned symbols and core forms go with their slots. Values do not outlive
 their interpreter: one kept past it names a freed slot, which a check build
 refuses as a use after free (§4.5). The hosts' handles go with their table,

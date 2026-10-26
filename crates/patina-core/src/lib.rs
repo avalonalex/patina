@@ -92,7 +92,7 @@ pub use heap::cx::{
     CellValue, ClosureFree, ConvertedParamValue, Cx, Fresh, MachinePromiseBox, MachineVectorElem,
     PairCar, PairCdr, ParamValue, PromiseBox, PromiseView, RecordField, Slot, VectorElem,
 };
-pub use instance::Instance;
+pub use instance::{CurrentPort, Instance};
 pub use library::Library;
 pub use literal_pool::{Lit, LiteralPool};
 pub use port::{Port, PortData, PortDirection, PortKind, StdioKind, StringPortData};

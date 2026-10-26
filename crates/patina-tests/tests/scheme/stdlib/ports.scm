@@ -208,8 +208,8 @@
 ;; They used to be plain zero-argument procedures, so `parameterize` rejected
 ;; them outright — the one failure in SRFI 158's upstream suite, which defines
 ;; its own `with-input-from-string` in exactly those terms. Why writing the
-;; backing thread-local *is* rebinding is explained above the three procedures
-;; in `patina-primitives/src/primitives/io/ports.rs`.
+;; interpreter's backing slot *is* rebinding is explained above the three
+;; procedures in `patina-primitives/src/primitives/io/ports.rs`.
 ;;
 ;; Restoration is asserted by where output *lands*, never by port identity:
 ;; `(current-output-port)` allocates a fresh wrapper per call, so `eq?` on two

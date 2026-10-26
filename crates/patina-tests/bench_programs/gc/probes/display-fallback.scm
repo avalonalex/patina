@@ -1,0 +1,15 @@
+;; display, write-char and write with no port argument, under a parameterize
+;; of the current output port: the current-port fallback (#618, #608).
+(import (scheme base) (scheme write) (scheme process-context))
+(define (arg k default) (if (> (length (command-line)) k) (string->number (list-ref (command-line) k)) default))
+(define n (arg 1 400))
+(let outer ((j 0))
+  (when (< j n)
+    (parameterize ((current-output-port (open-output-string)))
+      (let inner ((i 0))
+        (when (< i 1000)
+          (display i) (write-char #\space) (write "s")
+          (inner (+ i 1)))))
+    (outer (+ j 1))))
+(display "ok")
+(newline)

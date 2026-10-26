@@ -177,8 +177,9 @@ fn parameter_converter<'gc>(
 /// And it is transactional: if an install fails, the ones already done are
 /// undone before the error escapes. That matters because not every
 /// parameter-like thing is a parameter *object* — the standard ports are
-/// procedures over a thread-local (see `io/ports.rs`), so they validate their
-/// argument on assignment and have no converter to run first. Installing them
+/// procedures over the interpreter's current-port slots (see `io/ports.rs`),
+/// so they validate their argument on assignment and have no converter to run
+/// first. Installing them
 /// one after another inside a `dynamic-wind`'s before-thunk meant a failure
 /// partway left the earlier ones installed with no after-thunk to undo them:
 /// `(parameterize ((current-output-port sink) (current-input-port 5)) …)` sent

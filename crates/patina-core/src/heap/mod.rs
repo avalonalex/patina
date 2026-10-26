@@ -530,7 +530,8 @@ pub struct Heap {
     /// feature set through each `Desugarer` construction site instead,
     /// missed four, and left `(features)` disagreeing with `cond-expand`.)
     /// Here by `Rc`, so a boundary can make a `Cx` with it (#704), until #707
-    /// moves it to the hosts.
+    /// moves it to the hosts. It also holds the interpreter's current ports
+    /// (#618), which [`Heap::teardown`] puts back to the standard ones.
     instance: Rc<crate::instance::Instance>,
 
     /// Free list for pairs (indices of freed pairs)

@@ -9,51 +9,10 @@
 //!
 //! Each takes the context (#706), and finds a port argument through it
 //! (`Cx::get_port`, an `Rc` of the port, holding no borrow of the heap).
-use patina_core::{Cx, Value};
+use patina_core::{CurrentPort, Cx, Value};
 use patina_runtime::EvalError;
 use patina_runtime::{Port, PortDirection};
-use std::cell::RefCell;
 use std::rc::Rc;
-
-// =============================================================================
-// Thread-local storage for current ports
-// =============================================================================
-
-thread_local! {
-    static CURRENT_INPUT_PORT: RefCell<Rc<Port>> = RefCell::new(Port::stdin());
-    static CURRENT_OUTPUT_PORT: RefCell<Rc<Port>> = RefCell::new(Port::stdout());
-    static CURRENT_ERROR_PORT: RefCell<Rc<Port>> = RefCell::new(Port::stderr());
-}
-
-/// Get the current input port
-pub fn get_current_input_port() -> Rc<Port> {
-    CURRENT_INPUT_PORT.with(|p| p.borrow().clone())
-}
-
-/// Get the current output port
-pub fn get_current_output_port() -> Rc<Port> {
-    CURRENT_OUTPUT_PORT.with(|p| p.borrow().clone())
-}
-
-/// Get the current error port
-pub fn get_current_error_port() -> Rc<Port> {
-    CURRENT_ERROR_PORT.with(|p| p.borrow().clone())
-}
-
-/// Set the current input port (for dynamic rebinding)
-pub fn set_current_input_port(port: Rc<Port>) {
-    CURRENT_INPUT_PORT.with(|p| *p.borrow_mut() = port);
-}
-
-/// Set the current output port (for dynamic rebinding)
-pub fn set_current_output_port(port: Rc<Port>) {
-    CURRENT_OUTPUT_PORT.with(|p| *p.borrow_mut() = port);
-}
-
-/// Set the current error port (for dynamic rebinding)
-pub fn set_current_error_port(port: Rc<Port>) {
-    CURRENT_ERROR_PORT.with(|p| *p.borrow_mut() = port);
-}
 
 // =============================================================================
 // Helper functions for getting ports from arguments
@@ -77,7 +36,7 @@ pub(super) fn get_output_port<'gc>(
             None => Err(EvalError::TypeError("expected a port".to_string())),
         }
     } else {
-        Ok(get_current_output_port())
+        Ok(cx.instance().current_port(CurrentPort::Output))
     }
 }
 
@@ -98,7 +57,7 @@ pub(super) fn get_input_port<'gc>(
             None => Err(EvalError::TypeError("expected a port".to_string())),
         }
     } else {
-        Ok(get_current_input_port())
+        Ok(cx.instance().current_port(CurrentPort::Input))
     }
 }
 
@@ -370,11 +329,12 @@ pub(super) fn get_output_bytevector<'gc>(
 // `parameterize` (`lib/scheme/base/parameters.scm`) drives a parameter through
 // the object itself — `(p)` to read the current value, `(p v)` to install one,
 // `(p old)` from `dynamic-wind`'s after-thunk to restore it. So accepting the
-// setter arity is not a shortcut around the dynamic binding: the thread-local
-// *is* the binding, and writing it is what every other primitive that calls
-// `get_current_output_port()` observes. A Scheme-level rebinding that left the
-// thread-local alone would be the broken version, because `display` with no
-// port argument reads the thread-local and would ignore it.
+// setter arity is not a shortcut around the dynamic binding: the interpreter's
+// slot (`Instance::current_port`, #618) *is* the binding, and writing it is
+// what every other primitive that falls back to the current port observes. A
+// Scheme-level rebinding that left the slot alone would be the broken
+// version, because `display` with no port argument reads the slot and would
+// ignore it.
 //
 // Written out three times rather than shared: each has to exist anyway as its
 // own `fn` (the registry takes bare fn pointers, not closures), so factoring
@@ -389,10 +349,13 @@ pub(super) fn current_input_port<'gc>(
     args: &[Value<'gc>],
 ) -> Result<Value<'gc>, EvalError> {
     match args {
-        [] => Ok(cx.alloc_port(get_current_input_port())),
+        [] => {
+            let port = cx.instance().current_port(CurrentPort::Input);
+            Ok(cx.alloc_port(port))
+        }
         [_] => {
             let port = get_input_port(cx, args, 0)?;
-            set_current_input_port(port);
+            cx.instance().set_current_port(CurrentPort::Input, port);
             Ok(Value::UNSPECIFIED)
         }
         _ => Err(EvalError::WrongArity {
@@ -408,10 +371,13 @@ pub(super) fn current_output_port<'gc>(
     args: &[Value<'gc>],
 ) -> Result<Value<'gc>, EvalError> {
     match args {
-        [] => Ok(cx.alloc_port(get_current_output_port())),
+        [] => {
+            let port = cx.instance().current_port(CurrentPort::Output);
+            Ok(cx.alloc_port(port))
+        }
         [_] => {
             let port = get_output_port(cx, args, 0)?;
-            set_current_output_port(port);
+            cx.instance().set_current_port(CurrentPort::Output, port);
             Ok(Value::UNSPECIFIED)
         }
         _ => Err(EvalError::WrongArity {
@@ -427,10 +393,13 @@ pub(super) fn current_error_port<'gc>(
     args: &[Value<'gc>],
 ) -> Result<Value<'gc>, EvalError> {
     match args {
-        [] => Ok(cx.alloc_port(get_current_error_port())),
+        [] => {
+            let port = cx.instance().current_port(CurrentPort::Error);
+            Ok(cx.alloc_port(port))
+        }
         [_] => {
             let port = get_output_port(cx, args, 0)?;
-            set_current_error_port(port);
+            cx.instance().set_current_port(CurrentPort::Error, port);
             Ok(Value::UNSPECIFIED)
         }
         _ => Err(EvalError::WrongArity {
@@ -566,7 +535,7 @@ pub(super) fn flush_output_port<'gc>(
     }
 
     let port = if args.is_empty() {
-        get_current_output_port()
+        cx.instance().current_port(CurrentPort::Output)
     } else {
         match cx.get_port(args[0]) {
             Some(p) => {
