@@ -771,11 +771,28 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   beside the name, as chibi's does, whose read is `open-input-file`'s. The
   collection runs in every mode, `PATINA_GC=0` included. Where collection
   is deferred (§7) it is posted instead and the second attempt fails as the
-  first did: there the first `EMFILE` raises, a documented limit that
-  GC_PRD stage 2 narrows. The loader's own reads of library and `include`
-  files do not retry, nor does `directory-files`'s read of a directory:
-  chibi's `opendir` does not retry either, and its `directory-files`
-  answers `'()` where Patina's raises the file error.
+  first did: there the first `EMFILE` raises, a documented limit.
+
+  The library loader reads the same way (#783). A read of a library's
+  `.sld` file, of an `include` or `include-library-declarations` file, or
+  their path resolution, that runs out of descriptors is
+  `LibraryError::OutOfDescriptors`. Where the load may collect, as at
+  point B, the backend runs one collection and parses the library again
+  from its beginning (`patina_runtime::library_loader::parse_again_after_collecting`,
+  each backend's `collect_for_loader`). That covers a bare top-level
+  `import` and a top-level `define-library`, and the libraries they import
+  in turn, whose importers' loading entries root what they hold (#677). An
+  inline `define-library`'s datum is rooted across the collection by a
+  handle. Where the load cannot collect, it posts the collection and counts
+  it, and the first `EMFILE` raises: an `import` met inside a form (point
+  C), a load from a nested loop (`eval`, `environment`), or one beneath a
+  `GcDeferGuard`. An `include` or `include-ci` form, in a program or in a
+  library's body, reads during its expansion, under the expansion's guard,
+  and raises too, as does `directory-files`'s read of a directory: chibi's
+  `opendir` does not retry either, and its `directory-files` answers `'()`
+  where Patina's raises the file error. The loader's retry covers the
+  `include` and `include-library-declarations` declarations it reads
+  itself, not the forms a body expands.
 
   The rest of what sits behind those `Rc`s is still charged only as
   slots: a string port's buffer, the frames above the one a tree-walker
@@ -819,7 +836,7 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   | Mode | Selected by | Behavior |
   |------|-------------|----------|
   | On (default) | — | adaptive threshold above: `max(8 MiB, 2·L)` bytes |
-  | Off | `PATINA_GC=0` *(testing lanes only — the no-collection reference run the differential suite diffs against, §11)* | collect only when `(gc)` has been called, or an open has run out of descriptors (#607); no descriptor pressure |
+  | Off | `PATINA_GC=0` *(testing lanes only — the no-collection reference run the differential suite diffs against, §11)* | collect only when `(gc)` has been called, or an open or a library read has run out of descriptors (#607, #783); no descriptor pressure |
   | Stress | `PATINA_GC_STRESS[=n]` | collect once `n` allocations (default 1) have happened, whatever their size, **bypassing the adaptive `2·L` floor**; it still counts allocations, so the stress lanes' pinned counts do not depend on the byte account |
   | Zeal | `PATINA_GC_ZEAL=entry` *(the zeal lane, §11 item 7)* | collect at **every** outermost safe point, allocation or not: the threshold is 0, so the collection that lowers the pending flag re-installs it and raises the flag again. Any other value panics; `entry` is GC_PRD §14's name, and the PRD's other zeal modes come with the redesign |
 
@@ -922,8 +939,9 @@ with `Heap::finish_collection` once its own work after the collection is
 done: the VM's code release, timed; nothing on the tree-walker. A record
 holds the **reason** — `bytes` (the trigger), `stress`, `zeal`,
 `descriptors`, `posted` (a collection asked for where collection was
-deferred, run at a later safe point) or `call` (`(gc)`, an open retried
-after `EMFILE`, at the call that asked) — read from the counts at the
+deferred, run at a later safe point) or `call` (`(gc)`, an open or a
+library read retried after `EMFILE`, at the call that asked) — read from
+the counts at the
 collection, so the allocation path decides nothing new; the **phase times**
 of roots, marking, the weak fixpoint, the providers' `sweep_weak`, the heap's
 sweep and the backend's work after it, whose sum is the pause; the bytes
@@ -1028,8 +1046,10 @@ placement + deferral:
      `GcDriver::acquire` answers `None` while it is. The driver entries take
      it: the VM's `execute` and `execute_in`, which lend it to the loop they
      run (`VmState::driver`); the tree-walker's run of a form, which keeps it
-     in a local; and both loaders' point B (`collect_if_pending`). An entry
-     that finds it held runs beneath another driver, and is nested.
+     in a local; both loaders' point B (`collect_if_pending`); and both
+     loaders' collection before a library is parsed again after a read ran
+     out of descriptors (`collect_for_loader`, #783, §6). An entry that finds
+     it held runs beneath another driver, and is nested.
    - **`NoGcScope`.** Every other entry into a loop is nested and passes no
      driver: the VM's `execute_nested` and `run_apply_proc`, the
      tree-walker's callback runs, and a form's run beneath another run. A
@@ -1173,7 +1193,9 @@ instruction:
   (`StepRoots`), then invokes the continuation with whether it collected.
 
 Both go through `GcController::collect_at_call` with the running loop's
-driver, a poll site like a safe point. It asserts that no `AssertNoGc` scope
+driver, a poll site like a safe point. The loaders' collection after a read
+ran out of descriptors (§6) calls it too, outside any loop, with the driver
+it takes. It asserts that no `AssertNoGc` scope
 is open, and collects only at depth 0, in every mode, `PATINA_GC=0` included.
 A nested loop has no driver, and posts through `GcController::post_at_call`.
 Anywhere else it posts the collection (`Heap::defer_collection`), which the

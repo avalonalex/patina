@@ -107,8 +107,10 @@ The architecture is designed to support future exploration:
 - **Garbage collection is stop-the-world.** A non-moving mark-and-sweep
   collector runs on both backends, after `max(8 MiB, 2 × live)` bytes of
   allocation, or once `min(128, ulimit -n / 4)` file ports opened since the
-  last collection are still open; an open that runs out of descriptors
-  collects and tries again. `(gc)` and `(gc-stats)` in `(patina debug)`
+  last collection are still open; an open, `load` and the library
+  loader, where a library loads outside a form, collect and try again when
+  they run out of descriptors (an `include` form, read as it expands, does
+  not). `(gc)` and `(gc-stats)` in `(patina debug)`
   give manual control; `(gc-stats)` reports `live-bytes`,
   `bytes-allocated`, `bytes-reclaimed`, `committed-bytes`,
   `external-bytes` and descriptor pressure beside its arena counts

@@ -12,7 +12,9 @@
 
 use crate::compiler::compile_with_qq_resolving;
 use crate::error::VmError;
-use crate::runtime::vm_state::{collect_if_pending, define_global, import_export};
+use crate::runtime::vm_state::{
+    collect_for_loader, collect_if_pending, define_global, import_export,
+};
 use crate::runtime::{VmState, execute, execute_in};
 use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
@@ -20,7 +22,7 @@ use patina_core::heap::SharedHeap;
 use patina_core::tagged_value::TaggedValue;
 use patina_frontend::{Desugarer, SchemeLibraryLoader};
 use patina_runtime::HasDiagnostic;
-use patina_runtime::library_loader::{ImportSet, build_library};
+use patina_runtime::library_loader::{ImportSet, build_library, parse_again_after_collecting};
 use patina_runtime::library_registry::{LibraryError, Loading};
 use patina_runtime::{
     Backend, Library, LibraryLoaderRegistry, LibraryRegistry, RustLibraryLoader, stdlib,
@@ -188,7 +190,9 @@ impl VmBackend {
         Self::with_fs_and_gc_mode(std::sync::Arc::new(patina_core::NativeFs), mode)
     }
 
-    fn with_fs_and_gc_mode(
+    /// [`Self::with_gc_mode`] over a custom filesystem. Not an interface.
+    #[doc(hidden)]
+    pub fn with_fs_and_gc_mode(
         fs: std::sync::Arc<dyn patina_core::FileSystem>,
         mode: patina_core::GcMode,
     ) -> Self {
@@ -280,7 +284,8 @@ impl VmBackend {
                 reason = "the backend's top level, so the load may collect (#677). Holds the \
                           `define-library` datum, not read after the call: the library's body \
                           forms are in its `ParsedLibrary`, under its `GcDeferGuard::holding`, \
-                          until its registry entry roots them"
+                          until its registry entry roots them, and a parse it repeats after a \
+                          collection reads the datum from a handle it holds (#783)"
             )]
             self.eval_inline_define_library(expr).map_err(|e| {
                 VmBackendError::Runtime {
@@ -601,8 +606,23 @@ impl VmBackend {
             patina_frontend::cond_expand::library_available(&instance, lib_name)
         };
         let loader = SchemeLibraryLoader::new(self.state.borrow().fs().clone());
-        let parsed =
-            loader.parse_inline_form(form, std::path::Path::new("."), &heap, &can_load_library)?;
+        let parse = |form| {
+            loader.parse_inline_form(form, std::path::Path::new("."), &heap, &can_load_library)
+        };
+        let parsed = match parse(form) {
+            // A read that ran out of descriptors collects and parses again
+            // (#783). The datum is a word in this frame, so a handle roots it
+            // across the collection, and the parse reads it back.
+            Err(error @ LibraryError::OutOfDescriptors(_)) => {
+                let held = heap.borrow().hold(form);
+                if !self.collect_for_loader() {
+                    return Err(error);
+                }
+                let form = heap.borrow().held(&held);
+                parse(form)?
+            }
+            parsed => parsed?,
+        };
 
         let loading = LibraryRegistry::begin_loading_scoped(
             &self.library_registry,
@@ -697,15 +717,21 @@ impl VmBackend {
                 patina_frontend::cond_expand::library_available(&instance, lib_name)
             };
 
-            let parsed = {
-                let loaders = self.loader_registry.borrow();
-                loaders.try_parse_with_heap_and_library_checker(
-                    name,
-                    &search_paths,
-                    &heap,
-                    &can_load_library,
-                )?
-            };
+            // A read that ran out of descriptors collects where this load
+            // may and parses again (#783). Nothing in this frame is a heap
+            // value: the parse's are garbage until it returns.
+            let parsed = parse_again_after_collecting(
+                || self.collect_for_loader(),
+                || {
+                    let loaders = self.loader_registry.borrow();
+                    loaders.try_parse_with_heap_and_library_checker(
+                        name,
+                        &search_paths,
+                        &heap,
+                        &can_load_library,
+                    )
+                },
+            )?;
 
             match parsed {
                 Some(parsed) => self.evaluate_parsed_library(parsed, &loading)?,
@@ -880,6 +906,23 @@ impl VmBackend {
     fn collect_if_pending(&self) {
         if let Ok(mut state) = self.state.try_borrow_mut() {
             collect_if_pending(&mut state);
+        }
+    }
+
+    /// The collection a library read that ran out of descriptors asks for
+    /// (`vm_state::collect_for_loader`, #783). Inside a run, which borrows
+    /// the state, it is posted and counted for the run's safe points.
+    /// Returns whether a collection ran.
+    fn collect_for_loader(&self) -> bool {
+        match self.state.try_borrow_mut() {
+            Ok(mut state) => collect_for_loader(&mut state),
+            Err(_) => {
+                patina_core::GcController::post_at_call(
+                    &self.heap,
+                    patina_core::CollectKind::Major,
+                );
+                false
+            }
         }
     }
 }

@@ -992,10 +992,17 @@ pub(super) fn vm_load_library(
                 &search_paths,
                 &heap,
                 &can_load_library,
-            )?
+            )
         };
+        // Every load here runs where collection is deferred, beneath a
+        // nested loop or a holder's guard: a read that ran out of
+        // descriptors posts its collection and counts it, and its failure
+        // stands (#783).
+        if let Err(LibraryError::OutOfDescriptors(_)) = &parsed {
+            GcController::post_at_call(&heap, CollectKind::Major);
+        }
 
-        match parsed {
+        match parsed? {
             Some(parsed) => vm_evaluate_parsed_library(state, parsed)?,
             None => return Err(LibraryError::not_found_in(name, &search_paths)),
         }
@@ -1758,6 +1765,35 @@ pub(crate) fn collect_if_pending(state: &mut VmState) {
     if maybe_collect(state, &mut driver) {
         state.after_collection();
     }
+}
+
+/// The collection a library read that ran out of file descriptors asks for,
+/// before the loader parses again (#783): run where the load may collect,
+/// with the carrier's driver, outside any run, and with no `NoGcScope` open,
+/// as point B's [`collect_if_pending`] does, but whether or not one is
+/// pending and in every mode, as an open's is (`GcController::collect_at_call`).
+/// With no driver to take, or beneath a `NoGcScope`, it is posted and counted
+/// (`deferred-collections`). Returns whether a collection ran.
+pub(crate) fn collect_for_loader(state: &mut VmState) -> bool {
+    let Some(mut driver) = GcDriver::acquire(&state.heap) else {
+        GcController::post_at_call(&state.heap, CollectKind::Major);
+        return false;
+    };
+    if state.mutator.no_gc_depth() == 0 {
+        patina_core::census::stack_shape(
+            state.execution.frames().len(),
+            state.execution.registers().len(),
+        );
+        state.execution.retire_registers();
+    }
+    let collected =
+        GcController::collect_at_call(&state.gc, &mut driver, CollectKind::Major, |collect| {
+            collect(&[&*state])
+        });
+    if collected {
+        state.after_collection();
+    }
+    collected
 }
 
 /// A collection a resumable primitive asked for at its call (`Step::Collect`,

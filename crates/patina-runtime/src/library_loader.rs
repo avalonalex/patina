@@ -612,6 +612,33 @@ impl Default for LibraryLoaderRegistry {
 /// ```
 pub type RustLibraryBuilder = fn(Vec<String>, Rc<Environment>, &SharedHeap) -> Vec<String>;
 
+/// `parse`'s result, parsing once more where it ran out of file descriptors
+/// and `collect` ran a collection (#783), whose sweep closes the
+/// descriptors of the file ports nothing reaches: as an open primitive does
+/// after `Step::Collect` (#607). `collect` answers whether it collected;
+/// where the load cannot collect, it posts the collection and counts it
+/// (`deferred-collections`), and the first failure stands. A second failure,
+/// or any other, is reported as it is.
+///
+/// The parse starts again from the library's beginning, so a read of an
+/// `include` or `include-library-declarations` file made during it is
+/// covered too; what the first attempt allocated is garbage by then.
+pub fn parse_again_after_collecting<T>(
+    collect: impl FnOnce() -> bool,
+    mut parse: impl FnMut() -> Result<T, LibraryError>,
+) -> Result<T, LibraryError> {
+    match parse() {
+        Err(error @ LibraryError::OutOfDescriptors(_)) => {
+            if collect() {
+                parse()
+            } else {
+                Err(error)
+            }
+        }
+        result => result,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
