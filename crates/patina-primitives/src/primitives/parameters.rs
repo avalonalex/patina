@@ -102,9 +102,10 @@ pub(super) fn parameter_convert<'gc>(
             args: smallvec![value],
             state: Value::UNSPECIFIED,
         },
-        // No converter, or not a parameter object at all — the standard ports
-        // are parameter-like procedures whose validation only happens on
-        // assignment, and `%parameterize-swap!` is what makes that safe.
+        // No converter, or not a parameter object at all: a parameter-like
+        // procedure a program wrote validates on assignment, and
+        // `%parameterize-swap!`'s undo is what makes that safe. The standard
+        // ports have converters since #608, so they convert here.
         None => Step::Done(value),
     })
 }
@@ -176,14 +177,16 @@ fn parameter_converter<'gc>(
 ///
 /// And it is transactional: if an install fails, the ones already done are
 /// undone before the error escapes. That matters because not every
-/// parameter-like thing is a parameter *object* — the standard ports are
-/// procedures over the interpreter's current-port slots (see `io/ports.rs`),
-/// so they validate their argument on assignment and have no converter to run
-/// first. Installing them
-/// one after another inside a `dynamic-wind`'s before-thunk meant a failure
-/// partway left the earlier ones installed with no after-thunk to undo them:
-/// `(parameterize ((current-output-port sink) (current-input-port 5)) …)` sent
-/// every later write to `sink` forever.
+/// parameter-like thing is a parameter *object*: a procedure a program wrote
+/// to act as one validates its argument on assignment and has no converter to
+/// run first. Installing such things one after another inside a
+/// `dynamic-wind`'s before-thunk meant a failure partway left the earlier ones
+/// installed with no after-thunk to undo them: when the standard ports were
+/// such procedures, `(parameterize ((current-output-port sink)
+/// (current-input-port 5)) …)` sent every later write to `sink` forever.
+/// They are parameter objects since #608, whose converters `parameterize` runs
+/// before the wind; a raw install into one is still checked (`install_parameter`),
+/// since a program can call this primitive itself.
 pub(super) fn parameterize_swap<'gc>(
     cx: &mut Cx<'gc>,
     ctx: &dyn ApplyContext,
@@ -252,6 +255,12 @@ fn install_parameter<'gc>(
     value: Value<'gc>,
 ) -> Result<(), EvalError> {
     if cx.is_parameter(param) {
+        // A standard port parameter holds a port facing its way on every
+        // write (#608), which the cached current port relies on; this raw
+        // install skips the converter, so it checks here.
+        if let Some(which) = cx.standard_port_parameter(param) {
+            super::io::check_current_port(cx, which, value)?;
+        }
         cx.store(ParamValue(param), value);
         return Ok(());
     }

@@ -928,8 +928,9 @@ macro_rules! gc_shared_tests {
 
         #[test]
         fn collection_while_parameterize_swaps_a_parameter_like_procedure() {
-            // `parameterize` accepts a parameter-like procedure — the
-            // standard ports are some — and `%parameterize-swap!` reads and
+            // `parameterize` accepts a parameter-like procedure — one a
+            // program writes, as `p` and `q` are here; the standard ports were
+            // some until #608 — and `%parameterize-swap!` reads and
             // sets one by calling it from Rust (`ApplyContext::apply_proc`),
             // on a nested loop. `q`'s setter asks for a collection while the
             // swap holds `p`'s old value in its Rust `olds` vector, which no
@@ -950,6 +951,51 @@ macro_rules! gc_shared_tests {
                 (list inside held)
                 "#,
                 "(new (old 1 2))",
+            );
+        }
+
+        #[test]
+        fn a_current_port_whose_slot_was_reused_gets_its_own_writes() {
+            // #608's hazard: a port redirected into, dropped and collected
+            // frees its slot, a new port can take the slot, and a cache of
+            // the current port keyed on its word would then answer the dead
+            // one. The cache holds the port itself, refreshed at every
+            // assignment of the parameter, so each write reaches the port it
+            // was meant for. A one-argument set makes no wind closures, so
+            // the next port is the likeliest to take the freed slot; a
+            // `parameterize` round follows each. The check builds stamp a
+            // slot's generation into its words, which would hide a word-keyed
+            // cache's mistake, so a plain release run of this test is the one
+            // that could see it.
+            assert_gc_eval_to(
+                r#"
+                (import (scheme base) (scheme write) (patina debug))
+                (define saved (current-output-port))
+                (define (set-round i)
+                  (let ((p (open-output-string)))
+                    (current-output-port p)
+                    (display i)
+                    (current-output-port saved)
+                    (get-output-string p)))
+                (define (parameterize-round i)
+                  (let ((q (open-output-string)))
+                    (parameterize ((current-output-port q)) (display i))
+                    (get-output-string q)))
+                (let loop ((i 0) (missed '()))
+                  (if (= i 300)
+                      (reverse missed)
+                      (begin
+                        (gc)
+                        (let* ((a (set-round i))
+                               (_ (gc))
+                               (b (parameterize-round i))
+                               (want (number->string i)))
+                          (loop (+ i 1)
+                                (if (and (string=? a want) (string=? b want))
+                                    missed
+                                    (cons (list i a b) missed)))))))
+                "#,
+                "()",
             );
         }
 

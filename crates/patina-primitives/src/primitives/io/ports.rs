@@ -4,7 +4,7 @@
 //! - Port predicates: port?, input-port?, output-port?, etc.
 //! - String ports: open-input-string, open-output-string, get-output-string
 //! - Bytevector ports: open-input-bytevector, open-output-bytevector, get-output-bytevector
-//! - Current ports: current-input-port, current-output-port, current-error-port
+//! - The current ports' converters (the ports themselves are parameter objects)
 //! - Port closing: close-port, close-input-port, close-output-port
 //!
 //! Each takes the context (#706), and finds a port argument through it
@@ -323,89 +323,47 @@ pub(super) fn get_output_bytevector<'gc>(
 // Current Ports
 // =============================================================================
 
-// These three are **parameter objects**, as R7RS §6.13.1 requires, not plain
-// procedures: each reads with no argument and installs with one.
-//
-// `parameterize` (`lib/scheme/base/parameters.scm`) drives a parameter through
-// the object itself — `(p)` to read the current value, `(p v)` to install one,
-// `(p old)` from `dynamic-wind`'s after-thunk to restore it. So accepting the
-// setter arity is not a shortcut around the dynamic binding: the interpreter's
-// slot (`Instance::current_port`, #618) *is* the binding, and writing it is
-// what every other primitive that falls back to the current port observes. A
-// Scheme-level rebinding that left the slot alone would be the broken
-// version, because `display` with no port argument reads the slot and would
-// ignore it.
-//
-// Written out three times rather than shared: each has to exist anyway as its
-// own `fn` (the registry takes bare fn pointers, not closures), so factoring
-// the body out moved it behind three function-pointer parameters without
-// removing a function. The setter arm defers to this file's existing port
-// validator for the right direction, whose "argument absent, use the current
-// port" branch cannot be reached from here.
+// `current-input-port`, `current-output-port` and `current-error-port` are
+// parameter objects, as R7RS §6.13.1 requires, made once per heap and each
+// holding one port object (`Heap::standard_port_parameters`, #608), so a read
+// answers the object installed, and two reads are `eq?`. These are their
+// converters: `parameterize` runs one before it installs anything
+// (`%parameter-convert`), and a one-argument call runs it before it assigns
+// (`%parameter-set!`). Each answers its argument itself, never a new object,
+// and raises what the procedures they replace raised for a non-port or a
+// port facing the wrong way.
 
-/// (current-input-port) / (current-input-port port)
-pub(super) fn current_input_port<'gc>(
+/// `current-input-port`'s converter: its argument, if an input port.
+pub(super) fn input_port_converter<'gc>(
     cx: &mut Cx<'gc>,
     args: &[Value<'gc>],
 ) -> Result<Value<'gc>, EvalError> {
-    match args {
-        [] => {
-            let port = cx.instance().current_port(CurrentPort::Input);
-            Ok(cx.alloc_port(port))
-        }
-        [_] => {
-            let port = get_input_port(cx, args, 0)?;
-            cx.instance().set_current_port(CurrentPort::Input, port);
-            Ok(Value::UNSPECIFIED)
-        }
-        _ => Err(EvalError::WrongArity {
-            expected: "current-input-port expects 0 or 1 arguments".to_string(),
-            actual: args.len(),
-        }),
-    }
+    check_current_port(cx, CurrentPort::Input, args[0])?;
+    Ok(args[0])
 }
 
-/// (current-output-port) / (current-output-port port)
-pub(super) fn current_output_port<'gc>(
+/// `current-output-port`'s and `current-error-port`'s converter: its
+/// argument, if an output port.
+pub(super) fn output_port_converter<'gc>(
     cx: &mut Cx<'gc>,
     args: &[Value<'gc>],
 ) -> Result<Value<'gc>, EvalError> {
-    match args {
-        [] => {
-            let port = cx.instance().current_port(CurrentPort::Output);
-            Ok(cx.alloc_port(port))
-        }
-        [_] => {
-            let port = get_output_port(cx, args, 0)?;
-            cx.instance().set_current_port(CurrentPort::Output, port);
-            Ok(Value::UNSPECIFIED)
-        }
-        _ => Err(EvalError::WrongArity {
-            expected: "current-output-port expects 0 or 1 arguments".to_string(),
-            actual: args.len(),
-        }),
-    }
+    check_current_port(cx, CurrentPort::Output, args[0])?;
+    Ok(args[0])
 }
 
-/// (current-error-port) / (current-error-port port)
-pub(super) fn current_error_port<'gc>(
-    cx: &mut Cx<'gc>,
-    args: &[Value<'gc>],
-) -> Result<Value<'gc>, EvalError> {
-    match args {
-        [] => {
-            let port = cx.instance().current_port(CurrentPort::Error);
-            Ok(cx.alloc_port(port))
-        }
-        [_] => {
-            let port = get_output_port(cx, args, 0)?;
-            cx.instance().set_current_port(CurrentPort::Error, port);
-            Ok(Value::UNSPECIFIED)
-        }
-        _ => Err(EvalError::WrongArity {
-            expected: "current-error-port expects 0 or 1 arguments".to_string(),
-            actual: args.len(),
-        }),
+/// Whether `value` may be the current port `which`: a port, facing the way
+/// `which` does. The converters' check, and `%parameterize-swap!`'s when it
+/// installs into a standard port parameter raw, so that no write leaves one
+/// holding anything else.
+pub(crate) fn check_current_port<'gc>(
+    cx: &Cx<'gc>,
+    which: CurrentPort,
+    value: Value<'gc>,
+) -> Result<(), EvalError> {
+    match which {
+        CurrentPort::Input => get_input_port(cx, &[value], 0).map(drop),
+        CurrentPort::Output | CurrentPort::Error => get_output_port(cx, &[value], 0).map(drop),
     }
 }
 

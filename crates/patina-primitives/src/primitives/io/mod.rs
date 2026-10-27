@@ -19,6 +19,8 @@ mod read;
 mod text_input;
 mod text_output;
 
+pub(crate) use ports::check_current_port;
+
 use crate::registry::PrimitiveFn;
 use crate::registry::PrimitiveRegistry;
 use patina_runtime::Arity;
@@ -135,29 +137,24 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::get_output_bytevector,
     ));
 
-    // Current ports
+    // The current ports' converters. The ports are parameter objects, made
+    // once per heap (`Heap::standard_port_parameters`, #608); these two
+    // stand where their procedures stood, so later primitives' indices move
+    // by one, not three.
     registry.register(PrimitiveFn::new_cx(
         "scheme.base",
-        "current-input-port",
-        Arity::Range(0, 1),
-        "Returns the current input port; with an argument, installs one (R7RS parameter).",
-        ports::current_input_port,
+        "%input-port-converter",
+        Arity::Exact(1),
+        "current-input-port's converter: its argument, if an input port.",
+        ports::input_port_converter,
     ));
 
     registry.register(PrimitiveFn::new_cx(
         "scheme.base",
-        "current-output-port",
-        Arity::Range(0, 1),
-        "Returns the current output port; with an argument, installs one (R7RS parameter).",
-        ports::current_output_port,
-    ));
-
-    registry.register(PrimitiveFn::new_cx(
-        "scheme.base",
-        "current-error-port",
-        Arity::Range(0, 1),
-        "Returns the current error port; with an argument, installs one (R7RS parameter).",
-        ports::current_error_port,
+        "%output-port-converter",
+        Arity::Exact(1),
+        "current-output-port's and current-error-port's converter: its argument, if an output port.",
+        ports::output_port_converter,
     ));
 
     // Port operations

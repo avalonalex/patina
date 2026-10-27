@@ -103,3 +103,29 @@ fn test_an_error_in_the_thunk_still_restores_the_port() {
         "\"after\"",
     );
 }
+
+/// One port, one object (#608): every read of `current-output-port` answers
+/// the object installed, at the top level, inside `with-output-to-file` and
+/// inside a `parameterize` given a file port. #608's first program, whole,
+/// as chibi 0.12.0 and Gauche 0.9.15 answer it; a suite file cannot make the
+/// files it opens.
+#[test]
+fn one_port_one_object() {
+    let dir = TempDir::new().expect("temp dir");
+    let out = scratch(&dir, "eq-out.txt");
+    let redirected = scratch(&dir, "eq2.txt");
+    assert_program_eval_to(
+        &format!(
+            r#"(import (scheme base) (scheme write) (scheme file))
+               (define p (open-output-file "{out}"))
+               (list (eq? (current-output-port) (current-output-port))
+                     (let ((q #f))
+                       (with-output-to-file "{redirected}"
+                         (lambda () (set! q (eq? (current-output-port) (current-output-port)))))
+                       q)
+                     (eq? p p)
+                     (parameterize ((current-output-port p)) (eq? (current-output-port) p)))"#
+        ),
+        "(#t #t #t #t)",
+    );
+}

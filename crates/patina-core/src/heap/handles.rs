@@ -37,11 +37,13 @@ use super::gc::RootSet;
 use super::table::HeapTable;
 use crate::Trace;
 use crate::environment::Environment;
+use crate::instance::CurrentPort;
 use crate::tagged_value::TaggedValue;
 
 /// One heap's handles: the values and environments its hosts keep, each
 /// rooted until its handle is dropped, and the environments it traces for
-/// as long as their hosts hold them.
+/// as long as their hosts hold them. With them, the heap's three standard
+/// port parameters (#608), which the heap keeps for the interpreter.
 ///
 /// Its trace (derived, #686) is the table's part of the root set, which
 /// `GcVisitor::new` visits beside the intern tables on either backend: every
@@ -64,6 +66,13 @@ pub struct HandleTable {
         reason = "providers, which the collector traces itself, each through its own trace (#682)"
     )]
     root_set: Rc<RootSet>,
+    /// The parameter objects `current-input-port`, `current-output-port` and
+    /// `current-error-port` are bound to, indexed by [`CurrentPort`] (#608):
+    /// made once per heap, on `(patina internal io)`'s first build
+    /// (`Heap::standard_port_parameters`), and rooted here for the heap's
+    /// life, so a second build binds the same three. `None` on a heap no
+    /// backend set up. Here and not on `Heap`, for `root_set`'s reason.
+    standard_ports: HeapTable<Option<[TaggedValue; 3]>>,
 }
 
 #[derive(Trace)]
@@ -100,12 +109,39 @@ impl HandleTable {
                 tracked: Vec::new(),
             }),
             root_set: Rc::default(),
+            standard_ports: HeapTable::new(None),
         })
     }
 
     /// The root providers registered with the heap.
     pub(crate) fn root_set(&self) -> &Rc<RootSet> {
         &self.root_set
+    }
+
+    /// The heap's standard port parameters, once made.
+    pub(crate) fn standard_ports(&self) -> Option<[TaggedValue; 3]> {
+        self.standard_ports.with(|ports| *ports)
+    }
+
+    /// Record the heap's standard port parameters, made once.
+    pub(crate) fn set_standard_ports(&self, parameters: [TaggedValue; 3]) {
+        self.standard_ports.with_mut(|ports| {
+            debug_assert!(ports.is_none(), "the standard port parameters made twice");
+            *ports = Some(parameters);
+        });
+    }
+
+    /// Which standard port parameter `word` is, if it is one. Compared by
+    /// the whole word, generation stamp and all: the three are rooted for
+    /// the heap's life, so no other object ever takes their slots.
+    #[inline]
+    pub(crate) fn standard_port_parameter(&self, word: TaggedValue) -> Option<CurrentPort> {
+        self.standard_ports.with(|ports| {
+            let ports = ports.as_ref()?;
+            [CurrentPort::Input, CurrentPort::Output, CurrentPort::Error]
+                .into_iter()
+                .find(|&which| ports[which as usize] == word)
+        })
     }
 
     /// A claim on a new entry holding `entry`.
@@ -363,6 +399,17 @@ mod tests {
         let tracked_value = s.object(h, "HandleTable.entries.tracked[0]");
         let held = env_holding_on(h, bound);
         let tracked = env_holding_on(h, tracked_value);
+        // Parameter objects, so that their values survive only if the field
+        // is visited, not merely marked.
+        let standard = [
+            "HandleTable.standard_ports[Input]",
+            "HandleTable.standard_ports[Output]",
+            "HandleTable.standard_ports[Error]",
+        ]
+        .map(|field| {
+            let value = s.pair(h, field);
+            h.alloc_parameter(value, None)
+        });
         heap.handles = Rc::new(HandleTable {
             heap_id: 0,
             entries: HeapTable::new(Entries {
@@ -371,6 +418,7 @@ mod tests {
                 tracked: vec![Rc::downgrade(&tracked)],
             }),
             root_set: Rc::default(),
+            standard_ports: HeapTable::new(Some(standard)),
         });
         collect_only(&mut heap, |_| {});
         s.assert_survived(&heap);

@@ -145,10 +145,13 @@
          (bv (p-rejecting)))
     (list caught av bv)))
 
-;; The same property when the *install* raises rather than the converter. This
-;; is the failure the standard ports have, since they are procedures over the
-;; interpreter's port slots that validate on assignment. #70 put every program write behind
-;; it: a leak here sent all later output to `sink` for the rest of the run.
+;; The same property when the port is the one rejected. This was the failure
+;; the standard ports had when they were procedures that validated on
+;; assignment, so the *install* raised: #70 put every program write behind
+;; it, and a leak here sent all later output to `sink` for the rest of the
+;; run. Since #608 they are parameter objects whose converters check the
+;; port, so this row raises in `current-input-port`'s converter, before
+;; anything is installed; the row after it keeps the install's undo covered.
 ;;
 ;; **Scoped to Patina, because its premise is.** Whether assigning a non-port to
 ;; `current-input-port` raises at all is implementation-specific — chibi accepts
@@ -174,6 +177,25 @@
          (_ (write-string "visible"))
          (leaked (string-length (get-output-string sink))))
     (list caught leaked)))
+
+;; The install's own undo, which the row above stopped reaching when the
+;; standard ports became parameter objects (#608): `parameterize` over two
+;; parameter-like procedures a program wrote, which take a value on
+;; assignment and have no converter, the second raising as it is assigned.
+;; The first is put back before the error escapes. One binding before the
+;; failing one: with more, the VM loses the undo under a `guard` (#781),
+;; which #784 closes with this path. Scoped to Patina and reported as a skip
+;; elsewhere, as the row above is: R7RS makes `parameterize` of anything but a
+;; parameter object an error, and chibi raises.
+(define like-a-value 'a0)
+(define (like-a . v) (if (null? v) like-a-value (set! like-a-value (car v))))
+(define (like-b . v) (if (null? v) 'b0 (error "no")))
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "an install that raises puts back the ones before it" '(caught a0)
+  (let* ((caught (guard (e (#t 'caught))
+                   (parameterize ((like-a 'a1) (like-b 'b1)) 'body)))
+         (av (like-a)))
+    (list caught av)))
 
 ;; The converter runs once per `parameterize`, not once per entry — what
 ;; converting outside the wind buys beyond the two bugs above. A continuation

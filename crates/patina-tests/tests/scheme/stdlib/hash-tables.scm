@@ -129,4 +129,12 @@
             (list (s69:hash-table-ref/default h a '?)
                   (s69:hash-table-ref/default h b '?))))))
 
+;; A port read twice from its parameter is one object (#608), so a table
+;; keyed by `eq?` finds it. When each read made a new object around the same
+;; port, the second read was a key the table had never seen.
+(test-equal "an eq? table keyed by the current output port finds it" 'found
+  (let ((ht (s69:make-hash-table eq?)))
+    (s69:hash-table-set! ht (current-output-port) 'found)
+    (s69:hash-table-ref/default ht (current-output-port) 'missing)))
+
 (test-end)
