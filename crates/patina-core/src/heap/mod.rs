@@ -1464,31 +1464,30 @@ impl Heap {
     /// standard port, the one its current-port slot starts with
     /// ([`Instance::current_port`]), so the slots and the parameters agree
     /// from the start; the store funnel keeps them so (`write_parameter`).
-    /// The initial port is valid, so no converter runs on it. The input
-    /// parameter's converter is `input_converter`, the other two's
-    /// `output_converter`: registry primitives, which core does not know, so
-    /// the caller, `(patina internal io)`'s builder, makes them, and a later
-    /// call's go unused. All of it in one `&mut Heap` call, with the words
+    /// The initial port is valid, so no converter runs on it. `converters`
+    /// are the three parameters' converters, in [`CurrentPort`]'s order:
+    /// registry primitives, which core does not know, so the caller,
+    /// `(patina internal io)`'s builder, makes them, and a later call's go
+    /// unused. All of it in one `&mut Heap` call, with the words
     /// rooted before it returns, so no collection meets them unrooted.
     ///
     /// [`CurrentPort`]: crate::CurrentPort
     /// [`Instance::current_port`]: crate::Instance::current_port
     pub fn standard_port_parameters(
         &mut self,
-        input_converter: Rc<crate::procedure::Procedure>,
-        output_converter: Rc<crate::procedure::Procedure>,
+        converters: [Rc<crate::procedure::Procedure>; 3],
     ) -> [TaggedValue; 3] {
         if let Some(parameters) = self.handles.standard_ports() {
             return parameters;
         }
-        let input = self.alloc_procedure(input_converter);
-        let output = self.alloc_procedure(output_converter);
+        let [input, output, error] = converters;
         let parameters = [
             (crate::CurrentPort::Input, input),
             (crate::CurrentPort::Output, output),
-            (crate::CurrentPort::Error, output),
+            (crate::CurrentPort::Error, error),
         ]
         .map(|(which, converter)| {
+            let converter = self.alloc_procedure(converter);
             let port = self.alloc_port(self.instance.current_port(which));
             self.alloc_parameter(port, Some(converter))
         });

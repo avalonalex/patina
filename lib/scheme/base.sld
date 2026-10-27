@@ -172,7 +172,7 @@
     ;; exports is unreachable (`primitives_reachable_by_import`).
     %parameter-convert %parameterize-swap! %parameter-set!
     ;; The current ports' converters, for the same reason (#608).
-    %input-port-converter %output-port-converter
+    %input-port-converter %output-port-converter %error-port-converter
 
     ;; === Record types (§5.5) ===
     ;; Internal primitives for define-record-type macro

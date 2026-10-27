@@ -342,13 +342,21 @@ pub(super) fn input_port_converter<'gc>(
     Ok(args[0])
 }
 
-/// `current-output-port`'s and `current-error-port`'s converter: its
-/// argument, if an output port.
+/// `current-output-port`'s converter: its argument, if an output port.
 pub(super) fn output_port_converter<'gc>(
     cx: &mut Cx<'gc>,
     args: &[Value<'gc>],
 ) -> Result<Value<'gc>, EvalError> {
     check_current_port(cx, CurrentPort::Output, args[0])?;
+    Ok(args[0])
+}
+
+/// `current-error-port`'s converter: its argument, if an output port.
+pub(super) fn error_port_converter<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    check_current_port(cx, CurrentPort::Error, args[0])?;
     Ok(args[0])
 }
 

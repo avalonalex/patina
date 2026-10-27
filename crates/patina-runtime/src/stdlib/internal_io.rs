@@ -105,10 +105,14 @@ pub fn build_internal_io(
         let qualified = Rc::from(format!("{}/{}", library_name.join("."), name));
         patina_core::Procedure::primitive(name, Arity::Exact(1), qualified, None)
     };
-    let parameters = heap.borrow_mut().standard_port_parameters(
-        converter("%input-port-converter"),
-        converter("%output-port-converter"),
-    );
+    let converters = [
+        "%input-port-converter",
+        "%output-port-converter",
+        "%error-port-converter",
+    ];
+    let parameters = heap
+        .borrow_mut()
+        .standard_port_parameters(converters.map(converter));
     let names = [
         "current-input-port",
         "current-output-port",
@@ -120,10 +124,7 @@ pub fn build_internal_io(
     }
     // Their converters, as the parameters hold them: a registered primitive
     // that no library exports is unreachable (`primitives_reachable_by_import`).
-    for (name, parameter) in [
-        ("%input-port-converter", parameters[0]),
-        ("%output-port-converter", parameters[1]),
-    ] {
+    for (name, parameter) in converters.into_iter().zip(parameters) {
         let converter = heap
             .borrow()
             .parameter_parts(parameter)

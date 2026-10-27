@@ -138,9 +138,10 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // The current ports' converters. The ports are parameter objects, made
-    // once per heap (`Heap::standard_port_parameters`, #608); these two
-    // stand where their procedures stood, so later primitives' indices move
-    // by one, not three.
+    // once per heap (`Heap::standard_port_parameters`, #608); the three
+    // stand where the three procedures stood, so no later primitive's index
+    // moves. A shift of one moved `string-ports`' cycles by about 1% with
+    // the same instructions.
     registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "%input-port-converter",
@@ -153,8 +154,16 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         "scheme.base",
         "%output-port-converter",
         Arity::Exact(1),
-        "current-output-port's and current-error-port's converter: its argument, if an output port.",
+        "current-output-port's converter: its argument, if an output port.",
         ports::output_port_converter,
+    ));
+
+    registry.register(PrimitiveFn::new_cx(
+        "scheme.base",
+        "%error-port-converter",
+        Arity::Exact(1),
+        "current-error-port's converter: its argument, if an output port.",
+        ports::error_port_converter,
     ));
 
     // Port operations
