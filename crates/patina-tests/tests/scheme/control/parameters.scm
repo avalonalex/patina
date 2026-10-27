@@ -157,8 +157,8 @@
 ;; `current-input-port` raises at all is implementation-specific — chibi accepts
 ;; it, so the `guard` never fires there and the row would report a difference
 ;; that is about port validation, not about `parameterize`. The property itself
-;; is portable and the converter row above covers it; this one covers the path
-;; where the *install* is what fails. `write-string` rather than `display`
+;; is portable, and the converter row above covers it; this one holds it for
+;; the standard ports, whose converters are port checks. `write-string` rather than `display`
 ;; because `(scheme base)` exports it and `(scheme write)` is where `display`
 ;; lives — chibi warns about the undefined reference even though the row never
 ;; runs there, which is how this file's import set stays honest.
@@ -169,7 +169,7 @@
 ;; exist to prevent.
 (define sink (open-output-string))
 (cond-expand (patina) (else (test-skip 1)))
-(test-equal "an install that raises leaves no binding changed" '(caught 0)
+(test-equal "a rejected port leaves no binding changed" '(caught 0)
   (let* ((caught (guard (e (#t 'caught))
                    (parameterize ((current-output-port sink)
                                   (current-input-port 5))
@@ -183,8 +183,9 @@
 ;; parameter-like procedures a program wrote, which take a value on
 ;; assignment and have no converter, the second raising as it is assigned.
 ;; The first is put back before the error escapes. One binding before the
-;; failing one: with more, the VM loses the undo under a `guard` (#781),
-;; which #784 closes with this path. Scoped to Patina and reported as a skip
+;; failing one: with more, the VM puts back only the innermost of them when
+;; the error leaves through a `guard` or an escape (#781), which #784 closes
+;; by moving the install and its undo into Scheme. Scoped to Patina and reported as a skip
 ;; elsewhere, as the row above is: R7RS makes `parameterize` of anything but a
 ;; parameter object an error, and chibi raises.
 (define like-a-value 'a0)

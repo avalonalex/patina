@@ -15,6 +15,10 @@
 ;;   - `(srfi 69)`'s own `hash` on inexact and non-rational keys, and an `eq?`
 ;;     table hashing by identity, which the suite never calls.
 ;;
+;; And one row for #608, found against chibi and Gauche rather than by review:
+;; an `eq?` table keyed by the current output port, which found nothing while
+;; each read of the port made a new object.
+;;
 ;; `(scheme hash-table)`'s export list is checked against `(srfi 125)`'s by
 ;; `r7rs_large_aliases.rs`, in both directions — a stronger check than
 ;; sampling bindings here.

@@ -102,8 +102,10 @@ fi
 # at 15 as the target gained tests, and rooted_loading pinned, then re-pinned
 # that day for its three tests of a bare top-level import; cps_features's and
 # owned_handles's re-pinned that day too, for #680's tests of where the
-# tree-walker binds its temporaries; gc_tree_walker's and gc_vm's re-pinned
-# 2026-10-26 for #608's test of a current port whose slot was reused)
+# tree-walker binds its temporaries; gc_tree_walker's and gc_vm's test
+# counts re-pinned 2026-10-26 for #608's test of a current port whose slot
+# was reused, and their counts re-measured that day, its 600 `(gc)`s among
+# them, the minimums left as they were)
 TARGETS=(
     "callability 16 31 11"                    # 62 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -111,8 +113,8 @@ TARGETS=(
     "ephemerons 16 289 30"                    # 578 (204)
     "escape_from_primitive 16 480 13"         # 960 (74)
     "finished_forms_release_code 16 1450 9"   # 2901 (13)
-    "gc_tree_walker 16 11421 20"              # 22851 (55)
-    "gc_vm 16 8001 24"                        # 16012 (66)
+    "gc_tree_walker 16 11421 20"              # 24174 (658)
+    "gc_vm 16 8001 24"                        # 17308 (666)
     "host_environments 16 43788 11"           # 87576 (11)
     "hygiene_matrix 16 400 14"                # 804 (2)
     "interpreter_api 16 138 27"               # 277 (4)

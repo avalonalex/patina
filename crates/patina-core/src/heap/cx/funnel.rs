@@ -113,7 +113,12 @@ pub struct MachineVectorElem<'gc>(pub Value<'gc>, pub usize);
 #[derive(Clone, Copy, Debug)]
 pub struct MachinePromiseBox<'gc>(pub Value<'gc>);
 
-/// A parameter object's current value.
+/// A parameter object's current value. Into one of the standard port
+/// parameters (`Heap::standard_port_parameter`), the value must be a port
+/// facing that parameter's way (#608): the store refreshes the cached
+/// current port from it, and a debug build panics on anything else. The
+/// writers in the workspace check first: the converters, and
+/// `%parameterize-swap!`. A host that writes one raw checks too.
 #[derive(Clone, Copy, Debug)]
 pub struct ParamValue<'gc>(pub Value<'gc>);
 

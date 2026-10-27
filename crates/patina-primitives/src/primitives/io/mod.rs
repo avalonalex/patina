@@ -3,7 +3,7 @@
 //! This module implements R7RS I/O operations organized into submodules:
 //! - Port predicates: port?, input-port?, output-port?, etc.
 //! - String ports: open-input-string, open-output-string, get-output-string
-//! - Current ports: current-input-port, current-output-port, current-error-port
+//! - The current ports' converters (the ports are parameter objects, #608)
 //! - EOF handling: eof-object?, eof-object
 //! - Text I/O: display, write, newline, read-char, peek-char, char-ready?
 //! - Binary I/O: read-u8, peek-u8, write-u8, read-bytevector, write-bytevector

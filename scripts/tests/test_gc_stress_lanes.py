@@ -163,7 +163,7 @@ class Lanes(unittest.TestCase):
     def test_per_pr_lane_fails_a_run_that_did_not_run_every_test(self):
         result = self.run_script('run_gc_stress_tests.sh', mode='filtered')
         self.assert_lane_fails(result, '2 test(s) filtered out')
-        self.assertIn('1 test(s) passed, pinned 23', result.stdout)
+        self.assertIn('1 test(s) passed, pinned 24', result.stdout)
 
     def test_per_pr_lane_fails_a_failing_target(self):
         result = self.run_script('run_gc_stress_tests.sh', mode='fail')
