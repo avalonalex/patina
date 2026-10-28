@@ -3,7 +3,7 @@
 //! This module implements R7RS I/O operations organized into submodules:
 //! - Port predicates: port?, input-port?, output-port?, etc.
 //! - String ports: open-input-string, open-output-string, get-output-string
-//! - Current ports: current-input-port, current-output-port, current-error-port
+//! - The current ports' converters (the ports are parameter objects, #608)
 //! - EOF handling: eof-object?, eof-object
 //! - Text I/O: display, write, newline, read-char, peek-char, char-ready?
 //! - Binary I/O: read-u8, peek-u8, write-u8, read-bytevector, write-bytevector
@@ -18,6 +18,8 @@ mod ports;
 mod read;
 mod text_input;
 mod text_output;
+
+pub(crate) use ports::check_current_port;
 
 use crate::registry::PrimitiveFn;
 use crate::registry::PrimitiveRegistry;
@@ -135,29 +137,33 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ports::get_output_bytevector,
     ));
 
-    // Current ports
+    // The current ports' converters. The ports are parameter objects, made
+    // once per heap (`Heap::standard_port_parameters`, #608); the three
+    // stand where the three procedures stood, so no later primitive's index
+    // moves. A shift of one moved `string-ports`' cycles by about 1% with
+    // the same instructions.
     registry.register(PrimitiveFn::new_cx(
         "scheme.base",
-        "current-input-port",
-        Arity::Range(0, 1),
-        "Returns the current input port; with an argument, installs one (R7RS parameter).",
-        ports::current_input_port,
+        "%input-port-converter",
+        Arity::Exact(1),
+        "current-input-port's converter: its argument, if an input port.",
+        ports::input_port_converter,
     ));
 
     registry.register(PrimitiveFn::new_cx(
         "scheme.base",
-        "current-output-port",
-        Arity::Range(0, 1),
-        "Returns the current output port; with an argument, installs one (R7RS parameter).",
-        ports::current_output_port,
+        "%output-port-converter",
+        Arity::Exact(1),
+        "current-output-port's converter: its argument, if an output port.",
+        ports::output_port_converter,
     ));
 
     registry.register(PrimitiveFn::new_cx(
         "scheme.base",
-        "current-error-port",
-        Arity::Range(0, 1),
-        "Returns the current error port; with an argument, installs one (R7RS parameter).",
-        ports::current_error_port,
+        "%error-port-converter",
+        Arity::Exact(1),
+        "current-error-port's converter: its argument, if an output port.",
+        ports::error_port_converter,
     ));
 
     // Port operations

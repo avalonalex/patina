@@ -207,13 +207,10 @@
 
 ;; They used to be plain zero-argument procedures, so `parameterize` rejected
 ;; them outright — the one failure in SRFI 158's upstream suite, which defines
-;; its own `with-input-from-string` in exactly those terms. Why writing the
-;; interpreter's backing slot *is* rebinding is explained above the three
-;; procedures in `patina-primitives/src/primitives/io/ports.rs`.
-;;
-;; Restoration is asserted by where output *lands*, never by port identity:
-;; `(current-output-port)` allocates a fresh wrapper per call, so `eq?` on two
-;; reads is #f regardless.
+;; its own `with-input-from-string` in exactly those terms. Since #608 each is
+;; a parameter object holding one port object, with a converter that checks
+;; the port (`patina-primitives/src/primitives/io/ports.rs`), so a read
+;; answers the object installed, and two reads are `eq?`.
 
 (test-equal "parameterize rebinds the current input port" 'a
   (parameterize ((current-input-port (open-input-string "a b c"))) (read)))
@@ -259,9 +256,41 @@
         (input-port? (current-input-port))
         (output-port? (current-error-port))))
 
-;; Patina's standard ports also accept one argument, the setter `parameterize`
-;; uses, and that must not turn them into procedures that accept anything: a
-;; non-port, and a port facing the wrong way, are rejected. Scoped to Patina,
+;; One object per port (#608): a read answers the object installed, as chibi
+;; 0.12.0 and Gauche 0.9.15 do (measured 2026-10-23). Before, each read made a
+;; new object around the same port, so none of these held.
+(test-equal "two reads of each standard port are the same object" '(#t #t #t)
+  (list (eq? (current-input-port) (current-input-port))
+        (eq? (current-output-port) (current-output-port))
+        (eq? (current-error-port) (current-error-port))))
+
+(test-equal "eqv? and equal? agree with eq? on the current port" '(#t #t)
+  (list (eqv? (current-output-port) (current-output-port))
+        (equal? (current-output-port) (current-output-port))))
+
+(test-equal "inside parameterize the current port is the port given" '(#t #t)
+  (let ((p (open-output-string)))
+    (parameterize ((current-output-port p))
+      (list (eq? (current-output-port) p)
+            (eq? (current-output-port) (current-output-port))))))
+
+(test-equal "after parameterize each standard port is the object it was"
+  '(#t #t #t)
+  (let ((in (current-input-port))
+        (out (current-output-port))
+        (err (current-error-port)))
+    (parameterize ((current-input-port (open-input-string ""))
+                   (current-output-port (open-output-string))
+                   (current-error-port (open-output-string)))
+      'inside)
+    (list (eq? (current-input-port) in)
+          (eq? (current-output-port) out)
+          (eq? (current-error-port) err))))
+
+;; Patina's standard ports also accept one argument, an assignment through
+;; their converter, as any parameter object does (`%parameter-set!`), and that
+;; must not turn them into procedures that accept anything: a non-port, and a
+;; port facing the wrong way, are rejected. Scoped to Patina,
 ;; and skipped rather than registered elsewhere: R7RS gives a parameter object
 ;; no arguments, and chibi 0.12 and Gauche 0.9.15 both treat the call as a
 ;; setter that accepts a non-port, which rebinds the port SRFI 64 itself

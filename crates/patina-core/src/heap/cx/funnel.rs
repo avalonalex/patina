@@ -113,7 +113,12 @@ pub struct MachineVectorElem<'gc>(pub Value<'gc>, pub usize);
 #[derive(Clone, Copy, Debug)]
 pub struct MachinePromiseBox<'gc>(pub Value<'gc>);
 
-/// A parameter object's current value.
+/// A parameter object's current value. Into one of the standard port
+/// parameters (`Heap::standard_port_parameter`), the value must be a port
+/// facing that parameter's way (#608): the store refreshes the cached
+/// current port from it, and a debug build panics on anything else. The
+/// writers in the workspace check first: the converters, and
+/// `%parameterize-swap!`. A host that writes one raw checks too.
 #[derive(Clone, Copy, Debug)]
 pub struct ParamValue<'gc>(pub Value<'gc>);
 
@@ -301,7 +306,32 @@ fn write_parameter(
         Some(top) => *top = v,
         None => values.push(v),
     }
+    drop(values);
+    if let Some(which) = heap.standard_port_parameter(param.tagged()) {
+        refresh_current_port(heap, which, v);
+    }
     Ok(())
+}
+
+/// A standard port parameter's value just became `v`: the interpreter's
+/// current-port slot `which`, which a port-less `display` reads, becomes
+/// `v`'s port (#608). Every write of a parameter's value comes through the
+/// funnel, so the slot is the port its parameter holds, always: it holds
+/// the port by its `Rc`, never by its word, so a word reused by a later
+/// object cannot make it answer the wrong port. The writers validate first
+/// (the converters, and `%parameterize-swap!` for the three), so `v` is a
+/// port facing the right way; a `v` that is no port leaves the slot alone.
+#[cold]
+#[inline(never)]
+fn refresh_current_port(heap: &Heap, which: crate::CurrentPort, v: TaggedValue) {
+    let port = heap.get_port(v).cloned();
+    debug_assert!(
+        port.is_some(),
+        "a standard port parameter set to a non-port"
+    );
+    if let Some(port) = port {
+        heap.instance().set_current_port(which, port);
+    }
 }
 
 impl Heap {

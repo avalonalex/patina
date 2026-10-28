@@ -4,6 +4,10 @@
 //! which is what changed when the two moved from Rust primitives to Scheme
 //! (`lib/scheme/file/redirect.scm`). A `call/cc` escape out of the thunk used
 //! to crash the VM outright. History in `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
+//!
+//! Two more hold the standard ports themselves (#608): one port is one
+//! object, across a redirection to a file, and a raw install into a standard
+//! port is checked.
 
 mod common;
 use common::{assert_program_eval_to, scratch_path as scratch};
@@ -101,5 +105,53 @@ fn test_an_error_in_the_thunk_still_restores_the_port() {
                (get-output-string sink)"#
         ),
         "\"after\"",
+    );
+}
+
+/// One port, one object (#608): every read of `current-output-port` answers
+/// the object installed, at the top level, inside `with-output-to-file` and
+/// inside a `parameterize` given a file port. #608's first program, whole,
+/// as chibi 0.12.0 and Gauche 0.9.15 answer it; a suite file cannot make the
+/// files it opens.
+#[test]
+fn one_port_one_object() {
+    let dir = TempDir::new().expect("temp dir");
+    let out = scratch(&dir, "eq-out.txt");
+    let redirected = scratch(&dir, "eq2.txt");
+    assert_program_eval_to(
+        &format!(
+            r#"(import (scheme base) (scheme write) (scheme file))
+               (define p (open-output-file "{out}"))
+               (list (eq? (current-output-port) (current-output-port))
+                     (let ((q #f))
+                       (with-output-to-file "{redirected}"
+                         (lambda () (set! q (eq? (current-output-port) (current-output-port)))))
+                       q)
+                     (eq? p p)
+                     (parameterize ((current-output-port p)) (eq? (current-output-port) p)))"#
+        ),
+        "(#t #t #t #t)",
+    );
+}
+
+/// `%parameterize-swap!` installs raw, past the converter, and a program can
+/// call it, since `(scheme base)` exports it. For the standard ports it
+/// checks the port itself, so each holds a port facing its way on every write
+/// (#608), which the port-less fallback's cached port relies on.
+#[test]
+fn a_raw_install_into_a_standard_port_is_checked() {
+    assert_program_eval_to(
+        r#"(import (scheme base))
+           (define (refused thunk) (guard (e (#t 'refused)) (thunk) 'installed))
+           (list (refused (lambda () (%parameterize-swap! (list current-output-port) (list 5))))
+                 (refused (lambda ()
+                            (%parameterize-swap! (list current-output-port)
+                                                 (list (open-input-string "")))))
+                 (refused (lambda ()
+                            (%parameterize-swap! (list current-input-port)
+                                                 (list (open-output-string)))))
+                 (output-port? (current-output-port))
+                 (input-port? (current-input-port)))"#,
+        "(refused refused refused #t #t)",
     );
 }

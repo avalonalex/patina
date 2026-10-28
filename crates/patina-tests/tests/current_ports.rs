@@ -117,9 +117,8 @@ fn pair<A: Backend, B: Backend>(
     );
     report("after-raise", pair, &run(&a, "(get-output-string s)"));
 
-    // 5. A closes its current output port; B's display still works. And a
-    // current-port read still makes a new port object each call, so `eq?`
-    // answers #f, until #608 gives each port one object.
+    // 5. A closes its current output port; B's display still works. And
+    // each port is one object (#608), so two reads of B's are `eq?`.
     let a = new_a();
     let b = new_b();
     report(
@@ -271,7 +270,7 @@ fn two_interpreters_on_one_thread_keep_their_own_current_ports() {
         assert_eq!(answer("closed"), "closed", "{pair}: A closes its port");
         assert_eq!(answer("after-close"), "written", "{pair}: B's display");
         on_stdout(format!("after the close {pair}"));
-        assert_eq!(answer("identity"), "#f", "{pair}: two current-port reads");
+        assert_eq!(answer("identity"), "#t", "{pair}: two current-port reads");
         assert_eq!(
             answer("dropped"),
             format!("{:?}", format!("left current {pair}")),

@@ -27,12 +27,6 @@ pub fn build_internal_io(
         ("binary-port?", Arity::Exact(1)),
         ("input-port-open?", Arity::Exact(1)),
         ("output-port-open?", Arity::Exact(1)),
-        // === Current ports ===
-        // R7RS 6.13.1: parameter objects, so they take an optional value to
-        // install as well as no argument to read.
-        ("current-input-port", Arity::Range(0, 1)),
-        ("current-output-port", Arity::Range(0, 1)),
-        ("current-error-port", Arity::Range(0, 1)),
         // === Port operations ===
         ("close-port", Arity::Exact(1)),
         ("close-input-port", Arity::Exact(1)),
@@ -100,6 +94,43 @@ pub fn build_internal_io(
     let mut exports = Vec::new();
     for (name, arity) in &primitives {
         env.define_primitive(heap, name, arity.clone(), library_name.clone());
+        exports.push(name.to_string());
+    }
+
+    // === Current ports ===
+    // R7RS §6.13.1: parameter objects, each holding one port object (#608).
+    // The heap makes them once and keeps them, so a second build binds the
+    // same three.
+    let converter = |name: &'static str| {
+        let qualified = Rc::from(format!("{}/{}", library_name.join("."), name));
+        patina_core::Procedure::primitive(name, Arity::Exact(1), qualified, None)
+    };
+    let converters = [
+        "%input-port-converter",
+        "%output-port-converter",
+        "%error-port-converter",
+    ];
+    let parameters = heap
+        .borrow_mut()
+        .standard_port_parameters(converters.map(converter));
+    let names = [
+        "current-input-port",
+        "current-output-port",
+        "current-error-port",
+    ];
+    for (name, parameter) in names.into_iter().zip(parameters) {
+        env.define(name, parameter);
+        exports.push(name.to_string());
+    }
+    // Their converters, as the parameters hold them: a registered primitive
+    // that no library exports is unreachable (`primitives_reachable_by_import`).
+    for (name, parameter) in converters.into_iter().zip(parameters) {
+        let converter = heap
+            .borrow()
+            .parameter_parts(parameter)
+            .and_then(|(_, converter)| converter)
+            .expect("a standard port parameter has its converter");
+        env.define(name, converter);
         exports.push(name.to_string());
     }
 

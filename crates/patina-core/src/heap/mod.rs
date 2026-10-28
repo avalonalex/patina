@@ -1455,6 +1455,53 @@ impl Heap {
         })
     }
 
+    /// The parameter objects `current-input-port`, `current-output-port` and
+    /// `current-error-port` are, indexed by [`CurrentPort`] (#608): made on
+    /// the first call, and the same three on every later one, as
+    /// [`Heap::core_syntax`] makes each marker once.
+    ///
+    /// Each holds one port object, made here around the interpreter's
+    /// standard port, the one its current-port slot starts with
+    /// ([`Instance::current_port`]), so the slots and the parameters agree
+    /// from the start; the store funnel keeps them so (`write_parameter`).
+    /// The initial port is valid, so no converter runs on it. `converters`
+    /// are the three parameters' converters, in [`CurrentPort`]'s order:
+    /// registry primitives, which core does not know, so the caller,
+    /// `(patina internal io)`'s builder, makes them, and a later call's go
+    /// unused. All of it in one `&mut Heap` call, with the words
+    /// rooted before it returns, so no collection meets them unrooted.
+    ///
+    /// [`CurrentPort`]: crate::CurrentPort
+    /// [`Instance::current_port`]: crate::Instance::current_port
+    pub fn standard_port_parameters(
+        &mut self,
+        converters: [Rc<crate::procedure::Procedure>; 3],
+    ) -> [TaggedValue; 3] {
+        if let Some(parameters) = self.handles.standard_ports() {
+            return parameters;
+        }
+        let [input, output, error] = converters;
+        let parameters = [
+            (crate::CurrentPort::Input, input),
+            (crate::CurrentPort::Output, output),
+            (crate::CurrentPort::Error, error),
+        ]
+        .map(|(which, converter)| {
+            let converter = self.alloc_procedure(converter);
+            let port = self.alloc_port(self.instance.current_port(which));
+            self.alloc_parameter(port, Some(converter))
+        });
+        self.handles.set_standard_ports(parameters);
+        parameters
+    }
+
+    /// Which of the heap's standard port parameters `value` is, if it is one
+    /// ([`Heap::standard_port_parameters`]).
+    #[inline]
+    pub fn standard_port_parameter(&self, value: TaggedValue) -> Option<crate::CurrentPort> {
+        self.handles.standard_port_parameter(value)
+    }
+
     /// Allocate a native Promise object in `state`. Only core writes its
     /// state afterwards ([`Interior`], #708).
     pub fn alloc_promise(&mut self, state: PromiseState) -> TaggedValue {

@@ -994,9 +994,26 @@ two mixed), when A redirects or closes its current ports:
 
 Each redirection is also checked in A: its own `read` and `display` use the
 port it installed, so a case cannot pass because the redirection did
-nothing. Two checks hold what stays the same within one interpreter: two
-`(current-output-port)` reads are not `eq?`, until #608, and a port-less
-`flush-output-port` flushes the current output port.
+nothing. Two checks hold within one interpreter: two
+`(current-output-port)` reads are `eq?`, one port being one object since
+#608, and a port-less `flush-output-port` flushes the current output port.
+
+The standard ports as parameter objects (#608) are held in four places.
+`stdlib/ports.scm`'s standard-ports section and `stdlib/hash-tables.scm`
+hold two reads of a standard port to one object, inside and after
+`parameterize` too, and an `eq?` table keyed by one to find it, as chibi and
+Gauche answer. `with_file_redirection.rs`'s `one_port_one_object` runs #608's
+program with file ports, which a suite file cannot open, and
+`a_raw_install_into_a_standard_port_is_checked` holds `%parameterize-swap!`,
+which installs past the converter, to the port check. And
+`gc_shared_tests!`'s
+`a_current_port_whose_slot_was_reused_gets_its_own_writes`, under the stress
+lane on both backends, holds the port-less fallback's cache to the port its
+parameter holds across 300 rounds of redirecting into a port, dropping it
+and collecting, so that the next port can take the freed slot. A check build
+stamps a slot's generation into its words, which would hide a cache keyed on
+the word, so only a plain release run could catch that mistake; no lane runs
+one, and #608's PR ran it once.
 
 `patina-tests/tests/owned_handles.rs` holds the handles a host keeps values
 through to rooting them, on both backends (#605):

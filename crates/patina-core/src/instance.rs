@@ -13,7 +13,11 @@
 //! shared them, and one that redirected its output redirected the others'.
 //! They are Rust ports, not heap values, so they are not GC data either, and
 //! here they leave `Heap`'s layout alone, which a field of its own can move
-//! in cycles (#685).
+//! in cycles (#685). Since #608 the three are parameter objects in the heap
+//! (`Heap::standard_port_parameters`), and these slots cache the port each
+//! holds, which a port-taking procedure called without its port reads with
+//! no borrow of the heap; the store funnel refreshes a slot whenever its
+//! parameter is assigned.
 //!
 //! **Until #707 the heap holds the interpreter's `Instance`** by `Rc`
 //! ([`Heap::instance`](crate::Heap::instance)), and is its one owner of
@@ -21,8 +25,8 @@
 //! a boundary that holds the heap makes a `Cx` with it (#704). #707 moves it
 //! to the hosts. Shared, it is set through `&self`: the backends name
 //! themselves and their file system at construction, the hosts set the
-//! command line, the runtime installs its library query, and the current-port
-//! procedures install the current ports.
+//! command line, the runtime installs its library query, and the store
+//! funnel keeps the current ports.
 
 use std::cell::{Cell, Ref, RefCell};
 use std::rc::Rc;
@@ -34,7 +38,7 @@ use crate::vfs::{FileSystem, NativeFs};
 
 /// One of an interpreter's three current ports (#618): what
 /// `current-input-port`, `current-output-port` and `current-error-port`
-/// answer, and what a port-taking procedure called without its port uses.
+/// hold, and what a port-taking procedure called without its port uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CurrentPort {
     Input,
@@ -59,8 +63,11 @@ pub struct Instance {
     /// The runtime's non-loading query for `cond-expand`'s `(library …)`.
     library_availability: RefCell<Option<Rc<dyn LibraryAvailability>>>,
     /// The current input, output and error ports, indexed by [`CurrentPort`]
-    /// (#618). `parameterize` installs into them through the one-argument
-    /// call of `current-output-port` and the others.
+    /// (#618): the port each standard port parameter holds, cached (#608).
+    /// Only the store funnel writes them while the interpreter runs
+    /// (`write_parameter`), so each is its parameter's port; teardown puts
+    /// the standard ones back. The error port's slot has no reader, since no
+    /// procedure falls back to the error port; it is kept with the others.
     current_ports: RefCell<[Rc<Port>; 3]>,
     /// The standard ports the slots start at, made with the instance, each
     /// the interpreter's own object: what [`Instance::reset_current_ports`]
@@ -97,10 +104,13 @@ impl Instance {
         Rc::clone(&self.current_ports.borrow()[which as usize])
     }
 
-    /// Install `port` as the current port `which`. The slot's hold on the
-    /// port it replaces is dropped once the slot is released, so that if it
-    /// was the last one, a file port writes itself out with nothing borrowed.
-    pub fn set_current_port(&self, which: CurrentPort, port: Rc<Port>) {
+    /// Install `port` as the current port `which`: the store funnel's
+    /// refresh, when the standard port parameter `which` is assigned (#608).
+    /// Crate-private, so the slot cannot drift from its parameter. The
+    /// slot's hold on the port it replaces is dropped once the slot is
+    /// released, so that if it was the last one, a file port writes itself
+    /// out with nothing borrowed.
+    pub(crate) fn set_current_port(&self, which: CurrentPort, port: Rc<Port>) {
         let replaced =
             std::mem::replace(&mut self.current_ports.borrow_mut()[which as usize], port);
         drop(replaced);
@@ -110,7 +120,7 @@ impl Instance {
     /// [`Heap::teardown`](crate::Heap::teardown) does, so that a file port
     /// left current is dropped, and so written out, with the heap's other
     /// ports (#618).
-    pub fn reset_current_ports(&self) {
+    pub(crate) fn reset_current_ports(&self) {
         let replaced = self.current_ports.replace(self.standard_ports.clone());
         drop(replaced);
     }

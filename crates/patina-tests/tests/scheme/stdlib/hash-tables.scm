@@ -15,6 +15,10 @@
 ;;   - `(srfi 69)`'s own `hash` on inexact and non-rational keys, and an `eq?`
 ;;     table hashing by identity, which the suite never calls.
 ;;
+;; And one row for #608, found against chibi and Gauche rather than by review:
+;; an `eq?` table keyed by the current output port, which found nothing while
+;; each read of the port made a new object.
+;;
 ;; `(scheme hash-table)`'s export list is checked against `(srfi 125)`'s by
 ;; `r7rs_large_aliases.rs`, in both directions — a stronger check than
 ;; sampling bindings here.
@@ -128,5 +132,13 @@
             (s69:hash-table-set! h b 'B)
             (list (s69:hash-table-ref/default h a '?)
                   (s69:hash-table-ref/default h b '?))))))
+
+;; A port read twice from its parameter is one object (#608), so a table
+;; keyed by `eq?` finds it. When each read made a new object around the same
+;; port, the second read was a key the table had never seen.
+(test-equal "an eq? table keyed by the current output port finds it" 'found
+  (let ((ht (s69:make-hash-table eq?)))
+    (s69:hash-table-set! ht (current-output-port) 'found)
+    (s69:hash-table-ref/default ht (current-output-port) 'missing)))
 
 (test-end)

@@ -617,6 +617,13 @@ impl<'gc> Cx<'gc> {
         Some(converter.map(|w| self.brand(w)))
     }
 
+    /// Which of the heap's standard port parameters `v` is, if it is one
+    /// ([`Heap::standard_port_parameter`], #608).
+    #[inline]
+    pub fn standard_port_parameter(&self, v: Value<'gc>) -> Option<crate::CurrentPort> {
+        self.heap.borrow().standard_port_parameter(v.tagged())
+    }
+
     /// A promise in `state`.
     pub fn alloc_promise(&mut self, state: PromiseView<'gc>) -> Value<'gc> {
         let state = match state {
