@@ -342,6 +342,24 @@
     (let ((r (call/cc (lambda (o) (set! out o) (set! again #t) (k #f)))))
       (list r (car b1) (car b2)))))
 
+;; …and the same when the first entry failed: its setter raised, the handler
+;; put the earlier binding back and a `guard` caught the error. The undo that
+;; ran then does not stand for the re-entered install: were it to, the escape
+;; would put nothing back and leave `later`.
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "…and one whose first entry failed does too" '(escaped old1 old2)
+  (let* ((b1 (list 'old1)) (p1 (make-setter b1))
+         (b2 (list 'old2)) (k #f) (out #f) (again #f)
+         (p2 (lambda v
+               (if (null? v)
+                   (car b2)
+                   (begin (call/cc (lambda (c) (if (not k) (set! k c))))
+                          (if again (out 'escaped) (raise 'rejected)))))))
+    (guard (e (#t #f)) (parameterize ((p1 'new1) (p2 'new2)) 'body))
+    (set-car! b1 'later)
+    (let ((r (call/cc (lambda (o) (set! out o) (set! again #t) (k #f)))))
+      (list r (car b1) (car b2)))))
+
 ;; The converter runs once per `parameterize`, not once per entry — what
 ;; converting outside the wind buys beyond the two bugs above. A continuation
 ;; that re-enters the body re-installs the value; it must not re-convert it.

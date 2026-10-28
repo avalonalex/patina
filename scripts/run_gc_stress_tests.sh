@@ -110,9 +110,9 @@ fi
 # the shared tests and an uncaught install's undo joining callability, all
 # three counts re-measured, callability's now with fresh interpreters
 # bootstrapping under stress, the minimums left; callability's re-measured
-# again that day for its handler count)
+# again that day for its handler count and the rewritten Scheme loop)
 TARGETS=(
-    "callability 16 31 12"                    # 1498 (0)
+    "callability 16 31 12"                    # 1495 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
     "cps_features 16 530 3"                   # 1060 (2)
     "ephemerons 16 289 30"                    # 578 (204)

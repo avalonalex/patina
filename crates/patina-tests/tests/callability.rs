@@ -473,11 +473,12 @@ fn a_body_of_only_define_syntax_is_rejected_before_the_program_runs() {
 /// runs no after thunk (#776), so the undo cannot wait for one. With an outer
 /// handler that returns from the `raise`, the error is the one that return
 /// raises, uncaught, and the bindings are put back too. That handler runs
-/// twice: for the setter's condition, which the undo passes on with
-/// `raise-continuable`, and for the error its return raises in the setter's
-/// dynamic environment, where it is still installed, as a `guard` that
-/// declines passes a condition on. The tree-walker ran it twice before #784
-/// too; the VM, once. Unguarded, so no `.scm` file can state it.
+/// twice: for the setter's condition, which the undo handler passes on with
+/// `raise-continuable`, and for the error the undo handler's return raises,
+/// in that handler's dynamic environment (R7RS §6.11), where the outer
+/// handler is the current one, as when a `guard` that declines passes a
+/// condition on. The tree-walker ran it twice before #784 too; the VM, once.
+/// Unguarded, so no `.scm` file can state it.
 #[test]
 fn an_uncaught_failed_install_puts_back_the_earlier_bindings() {
     fn carry_on<B: patina_interpreter::Backend>(

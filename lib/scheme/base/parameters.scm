@@ -48,37 +48,52 @@
   (if (not (%parameter-install! p v))
       (p v)))
 
+;; Put back the bindings in `done`, records `(p old new)`, each to what
+;; `pick` takes from its record: `cadr` to undo, `caddr` to install again.
+(define (%parameterize-put! done pick)
+  (for-each (lambda (d) (%parameterize-install! (car d) (pick d))) done))
+
+;; Install `v` into `p`, with `done` the bindings already made, innermost
+;; first. An install that does not return puts them back. On an error, the
+;; handler puts them back before passing the condition on, so an outer
+;; handler, and a program that leaves the error uncaught, sees them put back;
+;; if that handler answers and the setter returns, they are installed again.
+;; On an escape the after thunk puts them back. Each entry into the install
+;; resets `ok` and `undone`, so a re-entered install runs the same way
+;; whether its first entry finished or failed: a setter that escapes puts the
+;; bindings in `done` back, and one that returns leaves them as they are.
+(define (%parameterize-install-one! p v done)
+  (define ok #f)
+  (define undone #f)
+  (define (undo!)
+    (if (not undone)
+        (begin (set! undone #t) (%parameterize-put! done cadr))))
+  (dynamic-wind
+    (lambda () (set! ok #f) (set! undone #f))
+    (lambda ()
+      (with-exception-handler
+        (lambda (e) (undo!) (raise-continuable e))
+        (lambda () (%parameterize-install! p v)))
+      (if undone
+          (begin (set! undone #f) (%parameterize-put! (reverse done) caddr)))
+      (set! ok #t))
+    (lambda () (if (not ok) (undo!)))))
+
 ;; Install `vals` into `params` one by one, left to right, answering the
 ;; values they held: what `%parameterize-swap!` does, for a list with a
-;; procedure a program wrote. An install that does not return puts back the
-;; bindings already made, innermost first. On an error, the handler puts them
-;; back before passing the condition on, so an outer handler, and a program
-;; that leaves the error uncaught, sees them put back; if that handler answers
-;; and the setter returns, they are installed again. On an escape the after
-;; thunk puts them back. `ok` is set false each time the install is entered,
-;; so a re-entered setter that escapes undoes too.
+;; procedure a program wrote. Written with `if`, internal definitions and one
+;; `let`, not `let*`, `when` and a named `let`: `(scheme base)` expands this
+;; file at every start, where on the VM those cost about 27 M instructions,
+;; and left every collection 150 K more to do, and these cost 3.6 M and 10 K
+;; (#784).
 (define (%parameterize-each params vals)
-  (let loop ((ps params) (vs vals) (done '()))
+  (define (loop ps vs done)
     (if (null? ps)
         (map cadr (reverse done))
-        (let* ((p (car ps)) (v (car vs)) (old (p)) (ok #f) (undone #f))
-          (define (undo!)
-            (unless undone
-              (set! undone #t)
-              (for-each (lambda (d) (%parameterize-install! (car d) (cadr d))) done)))
-          (dynamic-wind
-            (lambda () (set! ok #f))
-            (lambda ()
-              (with-exception-handler
-                (lambda (e) (undo!) (raise-continuable e))
-                (lambda () (%parameterize-install! p v)))
-              (when undone
-                (set! undone #f)
-                (for-each (lambda (d) (%parameterize-install! (car d) (caddr d)))
-                          (reverse done)))
-              (set! ok #t))
-            (lambda () (unless ok (undo!))))
-          (loop (cdr ps) (cdr vs) (cons (list p old v) done))))))
+        (let ((p (car ps)) (v (car vs)) (old ((car ps))))
+          (%parameterize-install-one! p v done)
+          (loop (cdr ps) (cdr vs) (cons (list p old v) done)))))
+  (loop params vals '()))
 
 (define-syntax parameterize
   (syntax-rules ()
