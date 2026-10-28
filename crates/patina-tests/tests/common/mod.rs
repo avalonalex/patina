@@ -937,8 +937,9 @@ macro_rules! gc_shared_tests {
             // comparator's `(gc)` must be deferred, not run: each counts a
             // deferred collection and collects nothing, in every mode, and
             // the walk's next step reads the list whole. With the nested
-            // loops' deferral gone, the collection frees the list and a check
-            // build panics. The internal library's `member` is called
+            // loops' deferral gone, the collection runs with `member`'s
+            // context live, and a check build panics there, before it frees
+            // the list. The internal library's `member` is called
             // directly: `(scheme base)`'s is Scheme and calls its comparator
             // as the machine calls any procedure (#471), and since #784 so
             // does `parameterize` over a procedure a program wrote, which was
@@ -970,11 +971,13 @@ macro_rules! gc_shared_tests {
             // no argument and set with one: since #784 it sets them from
             // Scheme (`%parameterize-each`), so the setter is a frame of the
             // machine, and its `(gc)` collects at its call, deferring
-            // nothing, while the old value `p` held is a value Scheme holds.
-            // It used to be called from Rust, on a nested loop, while
-            // `%parameterize-swap!` held that value in a Rust vector, so the
-            // `(gc)` was deferred and counted. Collecting only where `(gc)`
-            // asks, so that no other collection falls between the reads.
+            // nothing: on the install, while the old value `p` held is a
+            // value only Scheme holds, and on the restore. It used to be
+            // called from Rust, on a nested loop, while `%parameterize-swap!`
+            // held that value in a Rust vector, so the `(gc)` was deferred
+            // and counted. Each call's counts are kept, the install's first.
+            // Collecting only where `(gc)` asks, so that no other collection
+            // falls between the reads.
             assert_eq!(
                 $eval_gc_off(
                     r#"
@@ -982,19 +985,20 @@ macro_rules! gc_shared_tests {
                     (define (stat key) (cdr (assq key (gc-stats))))
                     (define held (list 'old 1 2))
                     (define (p . v) (if (null? v) held (set! held (car v))))
-                    (define counts #f)
+                    (define counts '())
                     (define (q . v)
                       (if (null? v)
                           'q-old
                           (let ((c (stat 'collections)) (d (stat 'deferred-collections)))
                             (gc)
-                            (set! counts (list (- (stat 'collections) c)
-                                               (- (stat 'deferred-collections) d))))))
+                            (set! counts (cons (list (- (stat 'collections) c)
+                                                     (- (stat 'deferred-collections) d))
+                                               counts)))))
                     (define inside (parameterize ((p 'new) (q 'q-new)) held))
-                    (list inside held counts)
+                    (list inside held (reverse counts))
                     "#
                 ),
-                "(new (old 1 2) (1 0))",
+                "(new (old 1 2) ((1 0) (1 0)))",
             );
         }
 

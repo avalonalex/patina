@@ -472,8 +472,12 @@ fn a_body_of_only_define_syntax_is_rejected_before_the_program_runs() {
 /// whose handler undoes before it passes the condition on; an uncaught error
 /// runs no after thunk (#776), so the undo cannot wait for one. With an outer
 /// handler that returns from the `raise`, the error is the one that return
-/// raises, uncaught, and the bindings are put back too. Unguarded, so no
-/// `.scm` file can state it.
+/// raises, uncaught, and the bindings are put back too. That handler runs
+/// twice: for the setter's condition, which the undo passes on with
+/// `raise-continuable`, and for the error its return raises in the setter's
+/// dynamic environment, where it is still installed, as a `guard` that
+/// declines passes a condition on. The tree-walker ran it twice before #784
+/// too; the VM, once. Unguarded, so no `.scm` file can state it.
 #[test]
 fn an_uncaught_failed_install_puts_back_the_earlier_bindings() {
     fn carry_on<B: patina_interpreter::Backend>(
@@ -486,16 +490,17 @@ fn an_uncaught_failed_install_puts_back_the_earlier_bindings() {
         let mut answers = Vec::new();
         for program in [
             "(parameterize ((p1 'new1) (p2 'new2)) 'body) (list held1 held2)",
-            "(with-exception-handler (lambda (e) 42)
+            "(define calls 0)
+             (with-exception-handler (lambda (e) (set! calls (+ calls 1)) 42)
                (lambda () (parameterize ((p1 'new1) (p2 'new2)) 'body)))
-             (list held1 held2)",
+             (list held1 held2 calls)",
         ] {
             let owned = interp.eval_program_resilient_owned(program);
             answers.push(interp.display_tagged(&owned));
         }
         answers.try_into().unwrap()
     }
-    let expected = ["(old1 old2)", "(old1 old2)"];
+    let expected = ["(old1 old2)", "(old1 old2 2)"];
     assert_eq!(carry_on(common::vm_interpreter()), expected);
     assert_eq!(carry_on(common::tree_walker_interpreter()), expected);
 }

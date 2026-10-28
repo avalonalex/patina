@@ -209,8 +209,9 @@
 
 (cond-expand (patina) (else (test-skip 1)))
 (test-equal "a procedure in the binding position is set and restored" '(new old)
-  (let* ((box (list 'old)) (q (make-setter box)))
-    (list (parameterize ((q 'new)) (car box)) (car box))))
+  (let* ((box (list 'old)) (q (make-setter box))
+         (inside (parameterize ((q 'new)) (car box))))
+    (list inside (car box))))
 
 ;; The parameter object is converted once, before the wind, and installed and
 ;; restored raw: two converter calls, one for `make-parameter`.
@@ -319,6 +320,27 @@
       (set! results (cons (list r held) results)))
     (if (< n 2) (begin (set! n (+ n 1)) (k #f)))
     (list (reverse results) (reverse log))))
+
+;; The same, with an earlier binding, the program setting it after the form,
+;; and the setter escaping when re-entered: the earlier binding is put back to
+;; its value before the form, as the form's exit puts it back when the
+;; re-entered install finishes. Each entry into the install counts it as not
+;; yet done; were the first entry's finish to stand, the escape would undo
+;; nothing and leave `later`.
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "a re-entered setter that escapes puts the earlier binding back" '(escaped old1 old2)
+  (let* ((b1 (list 'old1)) (p1 (make-setter b1))
+         (b2 (list 'old2)) (k #f) (out #f) (again #f)
+         (p2 (lambda v
+               (if (null? v)
+                   (car b2)
+                   (begin (call/cc (lambda (c) (if (not k) (set! k c))))
+                          (if again (out 'escaped))
+                          (set-car! b2 (car v)))))))
+    (parameterize ((p1 'new1) (p2 'new2)) 'body)
+    (set-car! b1 'later)
+    (let ((r (call/cc (lambda (o) (set! out o) (set! again #t) (k #f)))))
+      (list r (car b1) (car b2)))))
 
 ;; The converter runs once per `parameterize`, not once per entry — what
 ;; converting outside the wind buys beyond the two bugs above. A continuation

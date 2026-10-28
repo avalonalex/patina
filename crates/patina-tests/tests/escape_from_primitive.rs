@@ -38,8 +38,13 @@
 //! with its result. `eval` and `load` are resumable too since #477: each hands
 //! the machine a datum to evaluate (`Step::Eval`), which the VM compiles into
 //! a closure for the stub frame to call and the tree-walker runs on the
-//! trampoline it is on, so no primitive left calls back into the program
-//! from Rust.
+//! trampoline it is on. `parameterize` calls a procedure a program wrote to
+//! act as a parameter from Scheme since #784, so no primitive a program
+//! reaches through `(scheme base)` calls back into the program from Rust.
+//! The internal libraries' originals that the Scheme versions replaced,
+//! `(patina internal lists)`'s `member` and `assoc` with a comparator and
+//! `(patina internal io)`'s `call-with-port`, still do, on a nested loop
+//! beneath their context.
 //!
 //! # The tree-walker's side, closed 2026-09-10
 //!

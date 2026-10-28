@@ -219,7 +219,7 @@ pub(super) fn parameterize_swap<'gc>(
 /// raw, past its converter, and answer `#t`; for anything else, install
 /// nothing and answer `#f`. `%parameterize-each`'s install of a parameter
 /// object in a list with procedures a program wrote, so that no converter
-/// runs a second time (DESIGN H.5, #784). Checked as the swap checks: a
+/// runs a second time (#784). Checked as the swap checks: a
 /// standard port parameter takes only a port facing its way (#608).
 pub(super) fn parameter_install<'gc>(
     cx: &mut Cx<'gc>,
