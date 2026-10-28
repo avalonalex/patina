@@ -54,18 +54,17 @@
   (for-each (lambda (d) (%parameterize-install! (car d) (pick d))) done))
 
 ;; Install `v` into `p`, with `done` the bindings already made, innermost
-;; first. An install that does not return puts them back. On an error, the
-;; handler puts them back before passing the condition on, so an outer
-;; handler, and a program that leaves the error uncaught, sees them put back;
-;; if that handler answers and the setter returns, they are installed again.
-;; On an escape the after thunk puts them back. An install entered again
-;; finds them out of force: its own undo put them back, when a `guard` whose
-;; clauses declined re-raises where the condition was raised (R7RS §4.2.7)
-;; or an escaped setter is resumed, or whatever left the install since did,
-;; as the form's exit does. So every entry but the first counts them as put
-;; back: a setter that escapes puts nothing back, and one that returns
-;; installs them again, so that the body runs with every binding in force,
-;; however the first entry ended.
+;; first. A continuation can enter the install from anywhere, so its
+;; boundaries set `done` outright, as `dynamic-wind` does, rather than work
+;; out where it stands:
+;;   - every entry but the first installs `done` again;
+;;   - while the handler passes a condition on, `done` is put back, on every
+;;     entry into it, so an outer handler sees it put back, and a `guard`
+;;     whose clauses decline, re-raising where the condition was raised
+;;     (R7RS §4.2.7), changes no binding;
+;;   - a setter that returns installs `done` again, if it was put back;
+;;   - an exit before the setter returns puts `done` back.
+;; `undone` says `done` is put back, so that nothing puts it back twice.
 (define (%parameterize-install-one! p v done)
   (define entered #f)
   (define ok #f)
@@ -73,16 +72,18 @@
   (define (undo!)
     (if (not undone)
         (begin (set! undone #t) (%parameterize-put! done cadr))))
+  (define (redo!)
+    (set! undone #f)
+    (%parameterize-put! (reverse done) caddr))
   (dynamic-wind
     (lambda ()
       (set! ok #f)
-      (if entered (set! undone #t) (set! entered #t)))
+      (if entered (redo!) (set! entered #t)))
     (lambda ()
       (with-exception-handler
-        (lambda (e) (undo!) (raise-continuable e))
+        (lambda (e) (dynamic-wind undo! (lambda () (raise-continuable e)) (lambda () #f)))
         (lambda () (%parameterize-install! p v)))
-      (if undone
-          (begin (set! undone #f) (%parameterize-put! (reverse done) caddr)))
+      (if undone (redo!))
       (set! ok #t))
     (lambda () (if (not ok) (undo!)))))
 
@@ -92,7 +93,7 @@
 ;; `let`, not `let*`, `when`, `unless` and a named `let`: `(scheme base)`
 ;; expands this file at every start, where on the VM those cost about 28 M
 ;; instructions, and left every collection 140 K more to do, and these cost
-;; 3.8 M and 7 K (#784; the expander's cost in depth is #667).
+;; about 4 M and 10 K (#784; the expander's cost in depth is #667).
 (define (%parameterize-each params vals)
   (define (loop ps vs done)
     (if (null? ps)
