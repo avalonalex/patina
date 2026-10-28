@@ -358,11 +358,9 @@
     (list (reverse results) (reverse log))))
 
 ;; The same, with an earlier binding, the program setting it after the form,
-;; and the setter escaping when re-entered. Entering the install again
-;; installs the earlier binding again, and the escape puts it back to its
-;; value before the form: within the install the earlier bindings are in
-;; force, and an exit before the setter returns puts them back, on every
-;; entry.
+;; and the setter escaping when re-entered: the escape puts the earlier
+;; binding back to its value before the form, as an exit before the setter
+;; returns does on every entry.
 (cond-expand (patina) (else (test-skip 1)))
 (test-equal "a re-entered setter that escapes puts the earlier binding back" '(escaped old1 old2)
   (let* ((b1 (list 'old1)) (p1 (make-setter b1))
@@ -431,10 +429,10 @@
 
 ;; A continuation entering the install from code that left an earlier
 ;; binding in force: from the form's restore, whose own undo, as the setter
-;; restoring `p2` jumps away, puts `d` back to its inner value. Entering the
-;; install installs `d` again, and the escape puts it back to its value
-;; before the form, where a flag inferring that the form's exit had restored
-;; `d` would leave it at `new1`.
+;; restoring `p2` jumps away, puts `d` back to its inner value. The entry
+;; counts `d` as put back, which it is not; the escape puts it back to its
+;; value before the form all the same, since an exit puts back whatever the
+;; install counts.
 (cond-expand (patina) (else (test-skip 1)))
 (test-equal "a jump from the restore into the install puts the earlier binding back"
   '(escaped old1 old2 ((reentered new1 old2)))
@@ -460,11 +458,12 @@
 
 ;; …and from the install's own undo: the third setter escapes, and while the
 ;; after thunk puts the earlier bindings back, `p2`'s setter jumps into the
-;; third install before `p1` is put back. The install puts both in force
-;; again, as the log shows, and the setter's escape puts both back.
+;; third install before `p1` is put back. The re-entered install finds them
+;; as the interrupted undo left them, as the log shows, and the setter's
+;; escape puts both back.
 (cond-expand (patina) (else (test-skip 1)))
 (test-equal "a jump from an install's undo back into it puts the earlier bindings back"
-  '(escaped old1 old2 old3 ((jump-from-undo new1 old2) (reentered new1 new2)))
+  '(escaped old1 old2 old3 ((jump-from-undo new1 old2) (reentered new1 old2)))
   (let* ((b1 (list 'old1)) (p1 (make-setter b1))
          (b2 (list 'old2)) (b3 (list 'old3))
          (k #f) (out #f) (jumped #f) (log '())
@@ -488,6 +487,50 @@
                  (set! out o)
                  (parameterize ((p1 'new1) (p2 'new2) (p3 'new3)) 'body)))))
       (list r (car b1) (car b2) (car b3) (reverse log)))))
+
+;; The handler puts the earlier bindings back however the install was
+;; entered: here from the restore, which had left `d` in force, the
+;; re-entered setter asks, and the handler beyond it sees `d` put back.
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "after a jump from the restore the handler sees the earlier binding put back"
+  '(answered-out old1 old2 ((handler old1)))
+  (let* ((d (make-parameter 'old1))
+         (b2 (list 'old2)) (k #f) (out #f) (restoring #f) (jumped #f) (seen '()))
+    (define p2
+      (lambda v
+        (if (null? v)
+            (car b2)
+            (let ((x (car v)))
+              (if (and restoring (not jumped))
+                  (begin (set-car! b2 x) (set! jumped #t) (k #f))
+                  (begin
+                    (call/cc (lambda (c) (if (not k) (set! k c))))
+                    (if jumped (raise-continuable 'ask))
+                    (set-car! b2 x)))))))
+    (with-exception-handler
+      (lambda (e) (set! seen (cons (list 'handler (d)) seen)) (out 'answered-out))
+      (lambda ()
+        (let ((r (call/cc
+                   (lambda (o)
+                     (set! out o)
+                     (parameterize ((d 'new1) (p2 'new2)) (set! restoring #t) 'body)))))
+          (list r (d) (car b2) (reverse seen)))))))
+
+;; A setter that raises inside a `parameterize` of its own over an earlier
+;; binding: as the error leaves, that inner form restores the earlier binding
+;; to its value inside the outer one, after the handler had put it back. The
+;; exit puts it back again, so the `guard` finds it as before the form. The
+;; same shape with the current output port: a setter that writes its
+;; complaint to the error port through `parameterize`.
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "a setter's own parameterize does not leave an earlier binding in force"
+  '((caught rejected) old1 old2)
+  (let* ((b1 (list 'old1)) (p1 (make-setter b1))
+         (b2 (list 'old2))
+         (p2 (lambda v (if (null? v) (car b2) (parameterize ((p1 'x)) (raise 'rejected))))))
+    (let ((caught (guard (e (#t (list 'caught e)))
+                    (parameterize ((p1 'new1) (p2 'new2)) 'body))))
+      (list caught (car b1) (car b2)))))
 
 ;; The converter runs once per `parameterize`, not once per entry — what
 ;; converting outside the wind buys beyond the two bugs above. A continuation

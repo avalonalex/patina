@@ -54,38 +54,39 @@
   (for-each (lambda (d) (%parameterize-install! (car d) (pick d))) done))
 
 ;; Install `v` into `p`, with `done` the bindings already made, innermost
-;; first. A continuation can enter the install from anywhere, so its
-;; boundaries set `done` outright, as `dynamic-wind` does, rather than work
-;; out where it stands:
-;;   - every entry but the first installs `done` again;
-;;   - while the handler passes a condition on, `done` is put back, on every
-;;     entry into it, so an outer handler sees it put back, and a `guard`
-;;     whose clauses decline, re-raising where the condition was raised
-;;     (R7RS §4.2.7), changes no binding;
-;;   - a setter that returns installs `done` again, if it was put back;
-;;   - an exit before the setter returns puts `done` back.
-;; `undone` says `done` is put back, so that nothing puts it back twice.
+;; first. A program's setters run inside this bookkeeping, and can raise,
+;; escape, run a `parameterize` of their own or capture a continuation
+;; there, so putting `done` back is never skipped:
+;;   - the handler puts it back before passing a condition on, so an outer
+;;     handler sees it put back, and a `guard` whose clauses decline,
+;;     re-raising where the condition was raised (R7RS §4.2.7), changes no
+;;     binding;
+;;   - an exit before the setter returns puts it back;
+;;   - every entry but the first counts it as put back, since whatever left
+;;     the install since may have put it back, as the form's exit does;
+;;   - a setter that returns installs it again if it was put back.
+;; `undone` says whether a returning setter installs `done` again; where it
+;; errs, the cost is setter calls, an install of what is already in force.
+;; A re-install that is itself interrupted is #810 and #811.
 (define (%parameterize-install-one! p v done)
   (define entered #f)
   (define ok #f)
   (define undone #f)
-  (define (undo!)
-    (if (not undone)
-        (begin (set! undone #t) (%parameterize-put! done cadr))))
-  (define (redo!)
-    (set! undone #f)
-    (%parameterize-put! (reverse done) caddr))
+  (define (put-back!)
+    (set! undone #t)
+    (%parameterize-put! done cadr))
   (dynamic-wind
     (lambda ()
       (set! ok #f)
-      (if entered (redo!) (set! entered #t)))
+      (if entered (set! undone #t) (set! entered #t)))
     (lambda ()
       (with-exception-handler
-        (lambda (e) (dynamic-wind undo! (lambda () (raise-continuable e)) (lambda () #f)))
+        (lambda (e) (put-back!) (raise-continuable e))
         (lambda () (%parameterize-install! p v)))
-      (if undone (redo!))
+      (if undone
+          (begin (set! undone #f) (%parameterize-put! (reverse done) caddr)))
       (set! ok #t))
-    (lambda () (if (not ok) (undo!)))))
+    (lambda () (if (not ok) (put-back!)))))
 
 ;; Install `vals` into `params` one by one, left to right, answering the
 ;; values they held: what `%parameterize-swap!` does, for a list with a
