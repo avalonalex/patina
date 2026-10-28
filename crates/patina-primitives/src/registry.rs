@@ -82,7 +82,7 @@ use std::rc::Rc;
 /// ```
 pub type CxHandler = for<'gc> fn(&mut Cx<'gc>, &[Value<'gc>]) -> Result<Value<'gc>, EvalError>;
 
-/// Handler for a higher-order primitive (10 of them): one that calls back
+/// Handler for a higher-order primitive (9 of them): one that calls back
 /// into the evaluator from Rust ([`ApplyContext::apply_in`]) or loads a
 /// library. It takes the context (#706), and the machine's [`ApplyContext`]
 /// beside it to call back through. Its values stay live across a call back,

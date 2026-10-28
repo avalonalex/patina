@@ -134,15 +134,18 @@ fn one_port_one_object() {
     );
 }
 
-/// `%parameterize-swap!` installs raw, past the converter, and a program can
-/// call it, since `(scheme base)` exports it. For the standard ports it
-/// checks the port itself, so each holds a port facing its way on every write
-/// (#608), which the port-less fallback's cached port relies on.
+/// `%parameterize-swap!` and `%parameter-install!` install raw, past the
+/// converter, and a program can call them, since `(scheme base)` exports
+/// them. For the standard ports they check the port themselves, so each holds
+/// a port facing its way on every write (#608), which the port-less
+/// fallback's cached port relies on. The swap checks every binding before it
+/// installs any (#784), so a refused list installs nothing.
 #[test]
 fn a_raw_install_into_a_standard_port_is_checked() {
     assert_program_eval_to(
         r#"(import (scheme base))
            (define (refused thunk) (guard (e (#t 'refused)) (thunk) 'installed))
+           (define out (current-output-port))
            (list (refused (lambda () (%parameterize-swap! (list current-output-port) (list 5))))
                  (refused (lambda ()
                             (%parameterize-swap! (list current-output-port)
@@ -150,8 +153,17 @@ fn a_raw_install_into_a_standard_port_is_checked() {
                  (refused (lambda ()
                             (%parameterize-swap! (list current-input-port)
                                                  (list (open-output-string)))))
+                 (refused (lambda ()
+                            (%parameterize-swap! (list current-output-port current-input-port)
+                                                 (list (open-output-string) 5))))
+                 (eq? (current-output-port) out)
+                 (refused (lambda () (%parameter-install! current-output-port 5)))
+                 (refused (lambda ()
+                            (%parameter-install! current-error-port (open-input-string ""))))
+                 (refused (lambda ()
+                            (%parameter-install! current-input-port (open-output-string))))
                  (output-port? (current-output-port))
                  (input-port? (current-input-port)))"#,
-        "(refused refused refused #t #t)",
+        "(refused refused refused refused #t refused refused refused #t #t)",
     );
 }

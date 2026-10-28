@@ -182,12 +182,11 @@
 ;; standard ports became parameter objects (#608): `parameterize` over two
 ;; parameter-like procedures a program wrote, which take a value on
 ;; assignment and have no converter, the second raising as it is assigned.
-;; The first is put back before the error escapes. One binding before the
-;; failing one: with more, the VM puts back only the innermost of them when
-;; the error leaves through a `guard` or an escape (#781), which #784 closes
-;; by moving the install and its undo into Scheme. Scoped to Patina and reported as a skip
-;; elsewhere, as the row above is: R7RS makes `parameterize` of anything but a
-;; parameter object an error, and chibi raises.
+;; The first is put back before the error escapes. The undo is Scheme's,
+;; `%parameterize-each` in `lib/scheme/base/parameters.scm` (#784). Scoped to
+;; Patina and reported as a skip elsewhere, as the row above is: R7RS makes
+;; `parameterize` of anything but a parameter object an error, and chibi
+;; raises; so are the rows after it, which hold the rest of that loop.
 (define like-a-value 'a0)
 (define (like-a . v) (if (null? v) like-a-value (set! like-a-value (car v))))
 (define (like-b . v) (if (null? v) 'b0 (error "no")))
@@ -197,6 +196,129 @@
                    (parameterize ((like-a 'a1) (like-b 'b1)) 'body)))
          (av (like-a)))
     (list caught av)))
+
+;; ── Procedures in the binding position, through Scheme (#784) ─────────────
+;;
+;; A list with a procedure a program wrote goes through `%parameterize-each`,
+;; which reads each binding with `(p)` and sets it with `(p v)`, a call the
+;; machine makes; a parameter object in the same list is installed raw. Each
+;; row's procedures are its own: `make-setter` makes one over a box, which
+;; answers it with no argument and sets it with one. Every row is scoped to
+;; Patina, as the row above is.
+(define (make-setter box) (lambda v (if (null? v) (car box) (set-car! box (car v)))))
+
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "a procedure in the binding position is set and restored" '(new old)
+  (let* ((box (list 'old)) (q (make-setter box)))
+    (list (parameterize ((q 'new)) (car box)) (car box))))
+
+;; The parameter object is converted once, before the wind, and installed and
+;; restored raw: two converter calls, one for `make-parameter`.
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "a mixed list converts its parameter object once" '((10 new) 2 old 2)
+  (let* ((calls 0)
+         (d (make-parameter 1 (lambda (x) (set! calls (+ calls 1)) (* x 2))))
+         (box (list 'old))
+         (q (make-setter box)))
+    (let ((inside (parameterize ((d 5) (q 'new)) (list (d) (car box)))))
+      (list inside (d) (car box) calls))))
+
+;; #781: three earlier bindings, a parameter object among them, then a setter
+;; that raises. Every one is put back, as the tree-walker and Gauche did; the
+;; VM's Rust undo put back only the innermost under a `guard` or an escape.
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "a failed install puts back every earlier binding" '((caught rejected) old1 oldd old2)
+  (let* ((b1 (list 'old1)) (p1 (make-setter b1))
+         (b2 (list 'old2)) (p2 (make-setter b2))
+         (d (make-parameter 'oldd))
+         (bad (lambda v (if (null? v) 'old3 (raise 'rejected)))))
+    (let ((caught (guard (e (#t (list 'caught e)))
+                    (parameterize ((p1 'new1) (d 'newd) (p2 'new2) (bad 'new3)) 'body))))
+      (list caught (car b1) (d) (car b2)))))
+
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "…and one that escapes does too" '(escaped old1 oldd old2)
+  (let* ((b1 (list 'old1)) (p1 (make-setter b1))
+         (b2 (list 'old2)) (p2 (make-setter b2))
+         (d (make-parameter 'oldd)))
+    (let ((r (call/cc
+               (lambda (esc)
+                 (let ((bad (lambda v (if (null? v) 'old3 (esc 'escaped)))))
+                   (parameterize ((p1 'new1) (d 'newd) (p2 'new2) (bad 'new3)) 'body))))))
+      (list r (car b1) (d) (car b2)))))
+
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "a setter that escapes leaves no binding changed" '(escaped old1 old2)
+  (let* ((b1 (list 'old1)) (p1 (make-setter b1))
+         (b2 (list 'old2)))
+    (let ((r (call/cc
+               (lambda (esc)
+                 (let ((p2 (lambda v (if (null? v) (car b2) (esc 'escaped)))))
+                   (parameterize ((p1 'new1) (p2 'new2)) 'body))))))
+      (list r (car b1) (car b2)))))
+
+;; A raise the setter's handler answers lets the install go on: the earlier
+;; binding is put back while the outer handler runs, and installed again once
+;; the setter returns.
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "a setter's answered raise lets the install go on" '((new1 (new2 42)) old1 (old2 42))
+  (let* ((b1 (list 'old1)) (p1 (make-setter b1))
+         (b2 (list 'old2))
+         (p2 (lambda v (if (null? v) (car b2) (set-car! b2 (list (car v) (raise-continuable 'ask)))))))
+    (with-exception-handler
+      (lambda (e) 42)
+      (lambda ()
+        (let ((inside (parameterize ((p1 'new1) (p2 'new2)) (list (car b1) (car b2)))))
+          (list inside (car b1) (car b2)))))))
+
+;; What the outer handler sees of the earlier binding, on the install and
+;; then on the restore: the binding as it was before the setter ran. The Rust
+;; undo left it installed while the handler ran, which answered (new1 old1).
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "the outer handler sees the earlier binding put back" '(old1 new1)
+  (let* ((b1 (list 'old1)) (p1 (make-setter b1))
+         (b2 (list 'old2))
+         (p2 (lambda v (if (null? v) (car b2) (set-car! b2 (list (car v) (raise-continuable 'ask))))))
+         (seen '()))
+    (with-exception-handler
+      (lambda (e) (set! seen (cons (car b1) seen)) 42)
+      (lambda () (parameterize ((p1 'new1) (p2 'new2)) 'body)))
+    (reverse seen)))
+
+;; A setter that raises on the restore: the undo puts back the values the
+;; restore was replacing, so both bindings keep their inner values.
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "a setter that raises on the restore leaves the inner values" '((caught no-restore) new1 new2)
+  (let* ((b1 (list 'old1)) (p1 (make-setter b1))
+         (b2 (list 'old2)) (restoring #f)
+         (p2 (lambda v
+               (cond ((null? v) (car b2))
+                     (restoring (raise 'no-restore))
+                     (else (set-car! b2 (car v)))))))
+    (let ((caught (guard (e (#t (list 'caught e)))
+                    (parameterize ((p1 'new1) (p2 'new2)) (set! restoring #t) 'body))))
+      (list caught (car b1) (car b2)))))
+
+;; A continuation captured in the setter, re-entered twice after the
+;; `parameterize` returned, runs the rest of the install again, the body and
+;; the restore. The setter used to be called from Rust, whose frame no
+;; continuation can return into (#471): the VM raised "parameter and value
+;; lists differ in length", and the tree-walker abandoned the form.
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "a continuation captured in a setter runs the install again"
+  '(((new old) (new old) (new old)) (new old new old new old))
+  (let ((held 'old) (log '()) (k #f) (results '()) (n 0))
+    (define (q . v)
+      (if (null? v)
+          held
+          (begin
+            (call/cc (lambda (c) (if (not k) (set! k c))))
+            (set! log (cons (car v) log))
+            (set! held (car v)))))
+    (let ((r (parameterize ((q 'new)) held)))
+      (set! results (cons (list r held) results)))
+    (if (< n 2) (begin (set! n (+ n 1)) (k #f)))
+    (list (reverse results) (reverse log))))
 
 ;; The converter runs once per `parameterize`, not once per entry — what
 ;; converting outside the wind buys beyond the two bugs above. A continuation

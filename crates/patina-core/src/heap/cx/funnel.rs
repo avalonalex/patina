@@ -118,7 +118,8 @@ pub struct MachinePromiseBox<'gc>(pub Value<'gc>);
 /// facing that parameter's way (#608): the store refreshes the cached
 /// current port from it, and a debug build panics on anything else. The
 /// writers in the workspace check first: the converters, and
-/// `%parameterize-swap!`. A host that writes one raw checks too.
+/// `%parameterize-swap!` and `%parameter-install!`. A host that writes one
+/// raw checks too.
 #[derive(Clone, Copy, Debug)]
 pub struct ParamValue<'gc>(pub Value<'gc>);
 
@@ -319,7 +320,7 @@ fn write_parameter(
 /// funnel, so the slot is the port its parameter holds, always: it holds
 /// the port by its `Rc`, never by its word, so a word reused by a later
 /// object cannot make it answer the wrong port. The writers validate first
-/// (the converters, and `%parameterize-swap!` for the three), so `v` is a
+/// (the converters, and the raw installs for the three), so `v` is a
 /// port facing the right way; a `v` that is no port leaves the slot alone.
 #[cold]
 #[inline(never)]

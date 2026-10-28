@@ -57,4 +57,7 @@ pub fn register_all(registry: &mut PrimitiveRegistry) {
     // other primitive keeps its index. Registered after `io`, they moved the
     // tree-walker's instructions by 0.3% on `tw-fib` and `tw-nboyer`.
     debug::register(registry);
+    // Primitives added since go after them, for the same reason: an index
+    // shift of one cost `string-ports` about 1% in cycles (#608).
+    parameters::register_last(registry);
 }

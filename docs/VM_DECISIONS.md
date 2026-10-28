@@ -125,8 +125,8 @@ for the design, root inventory, safe-point protocol, and staging.
 
 ## 6. Primitives: Shared `patina-primitives` Crate
 
-**Decision:** ~337 primitives in `patina-primitives`, shared by tree-walker
-and VM, each taking the context. The 12 resumable and 10 higher-order ones take
+**Decision:** ~338 primitives in `patina-primitives`, shared by tree-walker
+and VM, each taking the context. The 12 resumable and 9 higher-order ones take
 the `ApplyContext` trait beside it, which each backend provides.
 
 **The signature is the context's** (#706; `PRD/GC_PRD.md` §11.3's `Prim`).
@@ -178,9 +178,13 @@ pub type CxHandler =
   `ApplyContext` beside it (`ApplyContext::apply_in`), whose answer is a value
   of the context. What it holds across the call stays live: the call runs on a
   nested loop, which cannot collect. They are `member` and `assoc` with a
-  comparator, `force`, `call-with-values`, `call-with-port`,
-  `%parameterize-swap!` and the environment procedures. `force` stores through
-  `PromiseBox`, and `%parameterize-swap!` through `ParamValue`.
+  comparator, `force`, `call-with-values`, `call-with-port` and the
+  environment procedures. `force` stores through `PromiseBox`.
+- **`parameterize`'s primitives call nothing** (#784): `%parameterize-swap!`
+  and `%parameter-install!` take the context alone and store through
+  `ParamValue`. A list with a procedure a program wrote to act as a parameter
+  goes through Scheme (`%parameterize-each`), which calls it as the machine
+  calls any procedure.
 - **No heap in `patina-primitives`** (#706): a primitive reaches the heap
   only through its context. `ApplyContext` hands out neither the heap nor the
   file system, and every context comes from the machine (`call_cx`,
@@ -214,7 +218,7 @@ frontend pipeline and compiles direct-style (no CPS transform).
 | Frontend (lexer/parser/desugarer) | Yes | Unchanged |
 | Library system | Yes | Backend-agnostic |
 | `Backend` trait | Yes | VM implements same trait |
-| `patina-primitives` (~337 prims) | Yes | Shared crate; each machine makes the context every primitive takes (§6) |
+| `patina-primitives` (~338 prims) | Yes | Shared crate; each machine makes the context every primitive takes (§6) |
 | CPS transform / `CpsExpr` | No | VM compiles direct-style |
 
 ---

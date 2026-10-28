@@ -29,6 +29,9 @@ pub fn build_internal_params(
         // What `(p v)` is on both backends: the converter, then the install,
         // with the converter a call the machine makes (#478).
         ("%parameter-set!", Arity::Exact(2)),
+        // `parameterize`'s raw install of one parameter object, for a list
+        // with procedures a program wrote (#784).
+        ("%parameter-install!", Arity::Exact(2)),
     ];
 
     for (name, arity) in &primitives {

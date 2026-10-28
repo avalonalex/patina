@@ -105,16 +105,20 @@ fi
 # tree-walker binds its temporaries; gc_tree_walker's and gc_vm's test
 # counts re-pinned 2026-10-26 for #608's test of a current port whose slot
 # was reused, and their counts re-measured that day, its 600 `(gc)`s among
-# them, the minimums left as they were)
+# them, the minimums left as they were; gc_vm's and callability's test counts
+# re-pinned 2026-10-27 for #784, the comparator `member` control moving into
+# the shared tests and an uncaught install's undo joining callability, all
+# three counts re-measured, callability's now with fresh interpreters
+# bootstrapping under stress, the minimums left)
 TARGETS=(
-    "callability 16 31 11"                    # 62 (0)
+    "callability 16 31 12"                    # 1496 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
     "cps_features 16 530 3"                   # 1060 (2)
     "ephemerons 16 289 30"                    # 578 (204)
     "escape_from_primitive 16 480 13"         # 960 (74)
     "finished_forms_release_code 16 1450 9"   # 2901 (13)
-    "gc_tree_walker 16 11421 20"              # 24174 (658)
-    "gc_vm 16 8001 24"                        # 17308 (666)
+    "gc_tree_walker 16 11421 20"              # 24151 (658)
+    "gc_vm 16 8001 25"                        # 17314 (667)
     "host_environments 16 43788 11"           # 87576 (11)
     "hygiene_matrix 16 400 14"                # 804 (2)
     "interpreter_api 16 138 27"               # 277 (4)
