@@ -58,18 +58,25 @@
 ;; handler puts them back before passing the condition on, so an outer
 ;; handler, and a program that leaves the error uncaught, sees them put back;
 ;; if that handler answers and the setter returns, they are installed again.
-;; On an escape the after thunk puts them back. Each entry into the install
-;; resets `ok` and `undone`, so a re-entered install runs the same way
-;; whether its first entry finished or failed: a setter that escapes puts the
-;; bindings in `done` back, and one that returns leaves them as they are.
+;; On an escape the after thunk puts them back. An install entered again
+;; finds them out of force: its own undo put them back, when a `guard` whose
+;; clauses declined re-raises where the condition was raised (R7RS §4.2.7)
+;; or an escaped setter is resumed, or whatever left the install since did,
+;; as the form's exit does. So every entry but the first counts them as put
+;; back: a setter that escapes puts nothing back, and one that returns
+;; installs them again, so that the body runs with every binding in force,
+;; however the first entry ended.
 (define (%parameterize-install-one! p v done)
+  (define entered #f)
   (define ok #f)
   (define undone #f)
   (define (undo!)
     (if (not undone)
         (begin (set! undone #t) (%parameterize-put! done cadr))))
   (dynamic-wind
-    (lambda () (set! ok #f) (set! undone #f))
+    (lambda ()
+      (set! ok #f)
+      (if entered (set! undone #t) (set! entered #t)))
     (lambda ()
       (with-exception-handler
         (lambda (e) (undo!) (raise-continuable e))
@@ -82,10 +89,10 @@
 ;; Install `vals` into `params` one by one, left to right, answering the
 ;; values they held: what `%parameterize-swap!` does, for a list with a
 ;; procedure a program wrote. Written with `if`, internal definitions and one
-;; `let`, not `let*`, `when` and a named `let`: `(scheme base)` expands this
-;; file at every start, where on the VM those cost about 27 M instructions,
-;; and left every collection 150 K more to do, and these cost 3.6 M and 10 K
-;; (#784).
+;; `let`, not `let*`, `when`, `unless` and a named `let`: `(scheme base)`
+;; expands this file at every start, where on the VM those cost about 28 M
+;; instructions, and left every collection 140 K more to do, and these cost
+;; 3.8 M and 7 K (#784; the expander's cost in depth is #667).
 (define (%parameterize-each params vals)
   (define (loop ps vs done)
     (if (null? ps)
