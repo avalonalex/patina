@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-09-28 08:12:02\
+**Generated:** 2026-10-28 07:07:12\
 **Backend:** VM\
 **Lane:** tests/scheme (R7RS-small + Red edition)\
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -9,8 +9,8 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 
 | | |
 |---|---|
-| Suites fully passing | 24 of 33 |
-| Assertions passed | 8508 of 8536 (99.7%) |
+| Suites fully passing | 25 of 33 |
+| Assertions passed | 8509 of 8536 (99.7%) |
 | Suites cut short by a top-level error | 1 |
 | Suites not reaching a tally | 0 |
 
@@ -22,9 +22,9 @@ A top-level form of the suite's run program raised, and the program carried on t
 
 | Suite | Tally | Message |
 |---|---|---|
-| set | 16 of 16 passed | `Error: runtime error: Type error: %record-ref: expected record, got procedure` |
+| set | 16 of 16 passed | `Error: runtime error: Type error: %record-field: expected a comparator record, got procedure` |
 
-## Assertion failures (28 in 8 suites)
+## Assertion failures (27 in 7 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
@@ -42,10 +42,6 @@ Each entry links to the test case; the name after it is the procedure the assert
 ### complex — 1 of 69 failed
 
 - [complex.body.scm:89](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/complex.body.scm#L89) — `log`
-
-### ephemeron — 1 of 6 failed
-
-- [ephemeron.sld:69](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/ephemeron.sld#L69) — `map`
 
 ### file — 5 of 75 failed
 
@@ -92,7 +88,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | comparator | pass | 158 | 158 |
 | complex | fail | 68 | 69 |
 | cxr | pass | 28 | 28 |
-| ephemeron | fail | 5 | 6 |
+| ephemeron | pass | 6 | 6 |
 | eval | pass | 5 | 5 |
 | file | fail | 70 | 75 |
 | flonum | fail | 1279 | 1280 |

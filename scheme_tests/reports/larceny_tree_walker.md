@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-09-28 08:19:31\
+**Generated:** 2026-10-28 07:12:49\
 **Backend:** tree-walker\
 **Lane:** tests/scheme (R7RS-small + Red edition)\
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -22,7 +22,7 @@ A top-level form of the suite's run program raised, and the program carried on t
 
 | Suite | Tally | Message |
 |---|---|---|
-| set | 16 of 16 passed | `Error: Type error: %record-ref: expected record, got procedure` |
+| set | 16 of 16 passed | `Error: Type error: %record-field: expected a comparator record, got procedure` |
 
 ## Assertion failures (28 in 8 suites)
 
