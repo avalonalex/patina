@@ -104,8 +104,8 @@ pub(super) fn parameter_convert<'gc>(
         },
         // No converter, or not a parameter object at all: a parameter-like
         // procedure a program wrote validates on assignment, and
-        // `%parameterize-swap!`'s undo is what makes that safe. The standard
-        // ports have converters since #608, so they convert here.
+        // `%parameterize-each`'s undo is what makes that safe (#784). The
+        // standard ports have converters since #608, so they convert here.
         None => Step::Done(value),
     })
 }
@@ -164,32 +164,25 @@ fn parameter_converter<'gc>(
 }
 
 /// `(%parameterize-swap! params vals)` — install `vals` into `params`,
-/// returning the values they held.
+/// returning the values they held, or `#f`, installing nothing, if one of
+/// `params` is not a parameter object.
 ///
-/// Used for both halves of `parameterize`'s wind: the before-thunk keeps the
-/// list it returns, the after-thunk hands that list straight back.
+/// Used for both halves of `parameterize`'s wind: the before thunk keeps the
+/// list it returns, the after thunk hands that list straight back. It installs
+/// *raw*, so restoring does not run the converter a second time on a value
+/// that converter already produced, which doubled a `(lambda (x) (* x 2))` on
+/// the way out and made a `number->string` raise.
 ///
-/// Two things it does that a `for-each` of the ordinary setter did not.
-///
-/// It installs *raw*, so restoring does not run the converter a second time on
-/// a value that converter already produced — which doubled a `(lambda (x) (* x
-/// 2))` on the way out and made a `number->string` raise.
-///
-/// And it is transactional: if an install fails, the ones already done are
-/// undone before the error escapes. That matters because not every
-/// parameter-like thing is a parameter *object*: a procedure a program wrote
-/// to act as one validates its argument on assignment and has no converter to
-/// run first. Installing such things one after another inside a
-/// `dynamic-wind`'s before-thunk meant a failure partway left the earlier ones
-/// installed with no after-thunk to undo them: when the standard ports were
-/// such procedures, `(parameterize ((current-output-port sink)
-/// (current-input-port 5)) …)` sent every later write to `sink` forever.
-/// They are parameter objects since #608, whose converters `parameterize` runs
-/// before the wind; a raw install into one is still checked (`install_parameter`),
-/// since a program can call this primitive itself.
+/// It calls nothing (#784). Everything is checked before anything is
+/// installed: each binding must be a parameter object, and a standard port
+/// parameter's value a port facing its way (#608), since a program can call
+/// this primitive itself; so an install cannot fail partway, and there is
+/// nothing to undo. A procedure a program wrote to act as a parameter is not
+/// one: for a list with one, the swap answers `#f` and `parameterize` runs
+/// `%parameterize-each` (`lib/scheme/base/parameters.scm`), which calls it
+/// as the machine calls any procedure, and undoes in Scheme.
 pub(super) fn parameterize_swap<'gc>(
     cx: &mut Cx<'gc>,
-    ctx: &dyn ApplyContext,
     args: &[Value<'gc>],
 ) -> Result<Value<'gc>, EvalError> {
     let [params_list, vals_list] = args[..] else {
@@ -209,64 +202,59 @@ pub(super) fn parameterize_swap<'gc>(
             "%parameterize-swap!: parameter and value lists differ in length".to_string(),
         ));
     }
-
-    let mut olds: Vec<Value<'gc>> = Vec::with_capacity(params.len());
-    for (i, (&param, &val)) in params.iter().zip(vals.iter()).enumerate() {
-        let old = read_parameter(cx, ctx, param)?;
-        match install_parameter(cx, ctx, param, val) {
-            Ok(()) => olds.push(old),
-            Err(e) => {
-                // Innermost first, so the undo mirrors the install. A value
-                // that was current a moment ago cannot fail its own
-                // validation; if putting one back escapes anyway, that escape
-                // outranks the error being unwound.
-                for (j, &done) in params[..i].iter().enumerate().rev() {
-                    install_parameter(cx, ctx, done, olds[j])?;
-                }
-                return Err(e);
-            }
+    for (&param, &value) in params.iter().zip(vals.iter()) {
+        if !check_raw_install(cx, param, value)? {
+            return Ok(Value::FALSE);
         }
+    }
+    let mut olds: Vec<Value<'gc>> = Vec::with_capacity(params.len());
+    for (&param, &value) in params.iter().zip(vals.iter()) {
+        olds.push(cx.parameter_value(param).unwrap_or(Value::UNSPECIFIED));
+        cx.store(ParamValue(param), value);
     }
     Ok(cx.list_from_iter(olds))
 }
 
-/// A parameter's current value — read from the object, or by calling it, for
-/// the parameter-like procedures that are not objects.
-fn read_parameter<'gc>(
+/// `(%parameter-install! p v)` — store `v` into the parameter object `p`
+/// raw, past its converter, and answer `#t`; for anything else, install
+/// nothing and answer `#f`. `%parameterize-each`'s install of a parameter
+/// object in a list with procedures a program wrote, so that no converter
+/// runs a second time (#784). Checked as the swap checks: a
+/// standard port parameter takes only a port facing its way (#608).
+pub(super) fn parameter_install<'gc>(
     cx: &mut Cx<'gc>,
-    ctx: &dyn ApplyContext,
-    param: Value<'gc>,
+    args: &[Value<'gc>],
 ) -> Result<Value<'gc>, EvalError> {
-    match cx.parameter_value(param) {
-        Some(value) => Ok(value),
-        // A parameter-like procedure that is not a parameter object, read by
-        // calling it. Stage 4a ends this call (PRD/GC_PRD.md §11.3).
-        None => ctx.apply_in(cx, param, &[]),
+    let [param, value] = args[..] else {
+        return Err(EvalError::WrongArity {
+            expected: "2".to_string(),
+            actual: args.len(),
+        });
+    };
+    if !check_raw_install(cx, param, value)? {
+        return Ok(Value::FALSE);
     }
+    cx.store(ParamValue(param), value);
+    Ok(Value::TRUE)
 }
 
-/// Install `value`, bypassing the converter for a real parameter object:
-/// through the funnel ([`ParamValue`], #706), which the GC census counts at
-/// `parameter_install`.
-fn install_parameter<'gc>(
-    cx: &mut Cx<'gc>,
-    ctx: &dyn ApplyContext,
+/// Whether `value` may be installed raw into `param`: `false` if `param` is
+/// no parameter object, the port check's error if it is a standard port
+/// parameter and `value` no port facing its way (#608), `true` otherwise.
+/// The standard ports' cached current port relies on the check (the store
+/// funnel's `refresh_current_port`).
+fn check_raw_install<'gc>(
+    cx: &Cx<'gc>,
     param: Value<'gc>,
     value: Value<'gc>,
-) -> Result<(), EvalError> {
-    if cx.is_parameter(param) {
-        // A standard port parameter holds a port facing its way on every
-        // write (#608), which the cached current port relies on; this raw
-        // install skips the converter, so it checks here.
-        if let Some(which) = cx.standard_port_parameter(param) {
-            super::io::check_current_port(cx, which, value)?;
-        }
-        cx.store(ParamValue(param), value);
-        return Ok(());
+) -> Result<bool, EvalError> {
+    if !cx.is_parameter(param) {
+        return Ok(false);
     }
-    // Not a parameter object: the assignment *is* the validation. Stage 4a
-    // ends this call (PRD/GC_PRD.md §11.3).
-    ctx.apply_in(cx, param, &[value]).map(|_| ())
+    if let Some(which) = cx.standard_port_parameter(param) {
+        super::io::check_current_port(cx, which, value)?;
+    }
+    Ok(true)
 }
 
 /// Register parameter primitives with the registry
@@ -301,11 +289,28 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         parameter_set,
         parameter_set_converted,
     ));
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_cx(
         "scheme.base",
         "%parameterize-swap!",
         Arity::Exact(2),
-        "Installs a list of values into a list of parameters, returning the values they held.",
+        "Installs a list of values into a list of parameter objects, returning the values they held, or #f if one is not a parameter object.",
         parameterize_swap,
+    ));
+}
+
+/// Register `%parameter-install!`, after every other primitive
+/// (`register_all`), so that no other primitive's index moves: an index
+/// shift of one cost `string-ports` about 1% in cycles at the same
+/// instructions (#608).
+pub(super) fn register_last(registry: &mut super::PrimitiveRegistry) {
+    use crate::registry::PrimitiveFn;
+    use patina_runtime::Arity;
+
+    registry.register(PrimitiveFn::new_cx(
+        "scheme.base",
+        "%parameter-install!",
+        Arity::Exact(2),
+        "Stores a value into a parameter object raw, past its converter, answering #t, or #f for anything else.",
+        parameter_install,
     ));
 }

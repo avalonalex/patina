@@ -463,3 +463,45 @@ fn a_body_of_only_define_syntax_is_rejected_before_the_program_runs() {
         "Body must contain at least one expression",
     );
 }
+
+/// An install that raises uncaught, in a `parameterize` over procedures a
+/// program wrote, puts back the binding already made before the error leaves
+/// the form, with nothing around it to catch it: the program carries on, as
+/// `-k` does, and the next form reads both procedures at their old values.
+/// The loop that installs them is Scheme since #784 (`%parameterize-each`),
+/// whose handler undoes before it passes the condition on; an uncaught error
+/// runs no after thunk (#776), so the undo cannot wait for one. With an outer
+/// handler that returns from the `raise`, the error is the one that return
+/// raises, uncaught, and the bindings are put back too. That handler runs
+/// twice: for the setter's condition, which the undo handler passes on with
+/// `raise-continuable`, and for the error the undo handler's return raises,
+/// in that handler's dynamic environment (R7RS §6.11), where the outer
+/// handler is the current one, as when a `guard` that declines passes a
+/// condition on. The tree-walker ran it twice before #784 too; the VM, once.
+/// Unguarded, so no `.scm` file can state it.
+#[test]
+fn an_uncaught_failed_install_puts_back_the_earlier_bindings() {
+    fn carry_on<B: patina_interpreter::Backend>(
+        interp: patina_interpreter::Interpreter<B>,
+    ) -> [String; 2] {
+        let setters = "(import (scheme base))
+            (define held1 'old1) (define (p1 . v) (if (null? v) held1 (set! held1 (car v))))
+            (define held2 'old2) (define (p2 . v) (if (null? v) held2 (raise 'rejected)))";
+        interp.eval_program_owned(setters).unwrap();
+        let mut answers = Vec::new();
+        for program in [
+            "(parameterize ((p1 'new1) (p2 'new2)) 'body) (list held1 held2)",
+            "(define calls 0)
+             (with-exception-handler (lambda (e) (set! calls (+ calls 1)) 42)
+               (lambda () (parameterize ((p1 'new1) (p2 'new2)) 'body)))
+             (list held1 held2 calls)",
+        ] {
+            let owned = interp.eval_program_resilient_owned(program);
+            answers.push(interp.display_tagged(&owned));
+        }
+        answers.try_into().unwrap()
+    }
+    let expected = ["(old1 old2)", "(old1 old2 2)"];
+    assert_eq!(carry_on(common::vm_interpreter()), expected);
+    assert_eq!(carry_on(common::tree_walker_interpreter()), expected);
+}

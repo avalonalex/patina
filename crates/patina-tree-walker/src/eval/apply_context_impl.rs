@@ -82,7 +82,7 @@ impl ApplyContext for Evaluator {
     /// Evaluator` (`Interpreter::evaluator()`), with no machine loop above
     /// it, so nothing would defer the run it starts. A primitive applied here
     /// calls back through this same context and holds its own values in Rust
-    /// meanwhile (`member`'s list, `%parameterize-swap!`'s old values), so
+    /// meanwhile (a comparator `member`'s list), so
     /// each method defers as a holder for its extent, as a machine's nested
     /// loop defers beneath a primitive (#622).
     fn apply_proc(

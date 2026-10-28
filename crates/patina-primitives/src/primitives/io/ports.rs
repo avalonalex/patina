@@ -361,9 +361,9 @@ pub(super) fn error_port_converter<'gc>(
 }
 
 /// Whether `value` may be the current port `which`: a port, facing the way
-/// `which` does. The converters' check, and `%parameterize-swap!`'s when it
-/// installs into a standard port parameter raw, so that no write leaves one
-/// holding anything else.
+/// `which` does. The converters' check, and `%parameterize-swap!`'s and
+/// `%parameter-install!`'s when they install into a standard port parameter
+/// raw, so that no write leaves one holding anything else.
 pub(crate) fn check_current_port<'gc>(
     cx: &Cx<'gc>,
     which: CurrentPort,

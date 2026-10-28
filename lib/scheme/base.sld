@@ -170,7 +170,7 @@
     ;; Internal primitives for the parameterize macro, exported for the same
     ;; reason the record ones below are: a registered primitive no library
     ;; exports is unreachable (`primitives_reachable_by_import`).
-    %parameter-convert %parameterize-swap! %parameter-set!
+    %parameter-convert %parameterize-swap! %parameter-set! %parameter-install!
     ;; The current ports' converters, for the same reason (#608).
     %input-port-converter %output-port-converter %error-port-converter
 

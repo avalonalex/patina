@@ -32,13 +32,15 @@
 ;; The clause walker. `reraise` is the expression to run when no clause
 ;; matches.
 ;;
-;; Not exported, which is the *minority* choice here: `%define-field-accessors`
-;; and `%parameterize-swap!` are both exported from `(scheme base)` despite
-;; being macro internals. Keeping this one out is
-;; deliberate and verified — `guard`'s template resolves it hygienically at the
-;; definition site, checked through `(only (scheme base) guard raise)` and
-;; `(prefix (scheme base) s:)`. Export it only if a resolution failure forces
-;; the issue.
+;; Not exported, and verified: `guard`'s template resolves it hygienically at
+;; the definition site, checked through `(only (scheme base) guard raise)` and
+;; `(prefix (scheme base) s:)`. So do `define-record-type`'s
+;; `%record-constructor` and `%record-field-indices` (#736) and
+;; `parameterize`'s `%parameterize-each` (#784). The macro internals that are
+;; exported are either older, as `%define-field-accessors` is, or registered
+;; primitives, as `%parameterize-swap!` is, which `(scheme base)` exports
+;; because a primitive no library exports cannot be reached. Export this one
+;; only if a resolution failure forces the issue.
 (define-syntax %guard-aux
   (syntax-rules (else =>)
     ;; No clauses at all. R7RS 7.1.3 allows it (`(guard (<identifier>

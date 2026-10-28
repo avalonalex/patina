@@ -1004,8 +1004,9 @@ hold two reads of a standard port to one object, inside and after
 `parameterize` too, and an `eq?` table keyed by one to find it, as chibi and
 Gauche answer. `with_file_redirection.rs`'s `one_port_one_object` runs #608's
 program with file ports, which a suite file cannot open, and
-`a_raw_install_into_a_standard_port_is_checked` holds `%parameterize-swap!`,
-which installs past the converter, to the port check. And
+`a_raw_install_into_a_standard_port_is_checked` holds `%parameterize-swap!`
+and `%parameter-install!`, which install past the converter, to the port
+check, and the swap to installing nothing when one binding is refused. And
 `gc_shared_tests!`'s
 `a_current_port_whose_slot_was_reused_gets_its_own_writes`, under the stress
 lane on both backends, holds the port-less fallback's cache to the port its

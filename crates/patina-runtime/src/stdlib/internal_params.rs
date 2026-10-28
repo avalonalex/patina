@@ -23,12 +23,17 @@ pub fn build_internal_params(
         ("make-parameter", Arity::Range(1, 2)),
         // Used by the `parameterize` macro, which has to convert every new
         // value before entering its `dynamic-wind` and then install and
-        // restore raw ones (R7RS §4.2.6). Not exported to users.
+        // restore raw ones (R7RS §4.2.6). `(scheme base)` exports them, since
+        // a registered primitive no library exports is unreachable
+        // (`primitives_reachable_by_import`), so a program can call them.
         ("%parameter-convert", Arity::Exact(2)),
         ("%parameterize-swap!", Arity::Exact(2)),
         // What `(p v)` is on both backends: the converter, then the install,
         // with the converter a call the machine makes (#478).
         ("%parameter-set!", Arity::Exact(2)),
+        // `parameterize`'s raw install of one parameter object, for a list
+        // with procedures a program wrote (#784).
+        ("%parameter-install!", Arity::Exact(2)),
     ];
 
     for (name, arity) in &primitives {

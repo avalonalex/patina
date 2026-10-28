@@ -703,7 +703,7 @@ pub fn assert_eval_with_scheme_char(expr: &str, expected: &str) {
 /// `$eval` is a `fn(&str) -> String` that evaluates a program and `write`s the
 /// result: `eval_program_tree_walker` or `eval_program_vm`. `$eval_gc_off` is
 /// the same backend collecting only when `(gc)` asks
-/// (`eval_program_tree_walker_gc_off`, `eval_program_vm_gc_off`), for the two
+/// (`eval_program_tree_walker_gc_off`, `eval_program_vm_gc_off`), for the three
 /// tests that need to know when collections run: they must pass under the
 /// stress lanes' `PATINA_GC_STRESS` too, which a backend made from the
 /// environment obeys (#626).
@@ -927,30 +927,78 @@ macro_rules! gc_shared_tests {
         }
 
         #[test]
-        fn collection_while_parameterize_swaps_a_parameter_like_procedure() {
-            // `parameterize` accepts a parameter-like procedure — one a
-            // program writes, as `p` and `q` are here; the standard ports were
-            // some until #608 — and `%parameterize-swap!` reads and
-            // sets one by calling it from Rust (`ApplyContext::apply_proc`),
-            // on a nested loop. `q`'s setter asks for a collection while the
-            // swap holds `p`'s old value in its Rust `olds` vector, which no
-            // root provider sees: `p` has already been set to `new`, so
-            // nothing else names the list. Only the nested loop's deferral
-            // keeps it alive until the outer loop, which collects once the
-            // swap has returned the old values as a list. With that deferral
-            // gone, the list is freed, the after-thunk puts a dangling value
-            // back into `held`, and reading it panics in a check build
-            // (#624).
+        fn collection_inside_a_comparator_the_internal_member_calls() {
+            // A Rust primitive that calls a procedure back runs it on a
+            // nested loop (`ApplyContext::apply_in`) and keeps its own state
+            // in Rust locals meanwhile: here `(patina internal lists)`'s
+            // `member` walks, with the program's comparator, a fresh list
+            // that no root provider sees once the call's arguments have been
+            // taken apart (the VM retires their registers at the call). The
+            // comparator's `(gc)` must be deferred, not run: each counts a
+            // deferred collection and collects nothing, in every mode, and
+            // the walk's next step reads the list whole. With the nested
+            // loops' deferral gone, the collection runs with `member`'s
+            // context live, and a check build panics there, before it frees
+            // the list. The internal library's `member` is called
+            // directly: `(scheme base)`'s is Scheme and calls its comparator
+            // as the machine calls any procedure (#471), and since #784 so
+            // does `parameterize` over a procedure a program wrote, which was
+            // this test's other half. This was a tree-walker test until #784.
             assert_gc_eval_to(
                 r#"
-                (import (patina debug))
-                (define held (list 'old 1 2))
-                (define (p . v) (if (null? v) held (set! held (car v))))
-                (define (q . v) (if (null? v) 'q-old (gc)))
-                (define inside (parameterize ((p 'new) (q 'q-new)) held))
-                (list inside held)
+                (import (patina debug) (only (patina internal lists) member))
+                (define (stat key) (cdr (assq key (gc-stats))))
+                (define inside '())
+                (define found
+                  (member 3 (list 1 2 3 4)
+                    (lambda (x y)
+                      (let ((c (stat 'collections)) (d (stat 'deferred-collections)))
+                        (gc)
+                        (set! inside
+                              (cons (list (- (stat 'collections) c)
+                                          (- (stat 'deferred-collections) d))
+                                    inside)))
+                      (= x y))))
+                (list found (reverse inside))
                 "#,
-                "(new (old 1 2))",
+                "((3 4) ((0 1) (0 1) (0 1)))",
+            );
+        }
+
+        #[test]
+        fn a_collection_in_a_parameter_like_setter_runs_at_its_call() {
+            // `parameterize` over procedures a program wrote, which read with
+            // no argument and set with one: since #784 it sets them from
+            // Scheme (`%parameterize-each`), so the setter is a frame of the
+            // machine, and its `(gc)` collects at its call, deferring
+            // nothing: on the install, while the old value `p` held is a
+            // value only Scheme holds, and on the restore. It used to be
+            // called from Rust, on a nested loop, while `%parameterize-swap!`
+            // held that value in a Rust vector, so the `(gc)` was deferred
+            // and counted. Each call's counts are kept, the install's first.
+            // Collecting only where `(gc)` asks, so that no other collection
+            // falls between the reads.
+            assert_eq!(
+                $eval_gc_off(
+                    r#"
+                    (import (patina debug))
+                    (define (stat key) (cdr (assq key (gc-stats))))
+                    (define held (list 'old 1 2))
+                    (define (p . v) (if (null? v) held (set! held (car v))))
+                    (define counts '())
+                    (define (q . v)
+                      (if (null? v)
+                          'q-old
+                          (let ((c (stat 'collections)) (d (stat 'deferred-collections)))
+                            (gc)
+                            (set! counts (cons (list (- (stat 'collections) c)
+                                                     (- (stat 'deferred-collections) d))
+                                               counts)))))
+                    (define inside (parameterize ((p 'new) (q 'q-new)) held))
+                    (list inside held (reverse counts))
+                    "#
+                ),
+                "(new (old 1 2) ((1 0) (1 0)))",
             );
         }
 

@@ -1305,12 +1305,16 @@ The positive controls make each check panic on purpose:
 and `crates/patina-tests/tests/gc_protocol.rs` (a poll inside a window, on each
 backend). CI's release GC lane runs them on its `gc-check` build, and runs
 the balance control once more in the plain release build, the one build
-where only that check is compiled in. Two tests
-show the deferral itself is load-bearing: `parameterize` over a
-parameter-like procedure that calls `(gc)` while `%parameterize-swap!` holds
-an old value in Rust (both backends, `gc_shared_tests!`), and
-`collection_inside_higher_order_primitive` (`gc_tree_walker.rs`). With the
-nested loops' deferral disabled, both fail.
+where only that check is compiled in. One test
+shows the deferral itself is load-bearing, on both backends:
+`gc_shared_tests!`'s
+`collection_inside_a_comparator_the_internal_member_calls`, whose
+comparator calls `(gc)` while `(patina internal lists)`'s `member` holds a
+list only its Rust locals reach. With the nested loops' deferral disabled,
+it fails on both. Until #784 `parameterize` over a procedure a program wrote
+was a second, while `%parameterize-swap!` called it from Rust and held its
+old value; that loop is Scheme now, whose setter's `(gc)` collects at its
+call (`a_collection_in_a_parameter_like_setter_runs_at_its_call`).
 
 **Review rule.** A comment that argues "no safe point here" comes with an
 `AssertNoGc` at the same lines (AGENTS.md). An argued window with no scope is a
@@ -1357,7 +1361,7 @@ that is safe:
 - the state is in the machine: a frame it pushed, `Step::Call` and
   `resume_stub`;
 - the call runs on a nested loop that defers: every `apply_proc` a primitive
-  makes from a machine's dispatch, `%parameterize-swap!`'s among them. The
+  makes from a machine's dispatch, a comparator `member`'s among them. The
   tree-walker's detached `ApplyContext for Evaluator`, which an embedder
   reaches through `Interpreter::evaluator()` with no loop above it, defers
   the same calls with a holder's guard in each of its methods, and so covers
