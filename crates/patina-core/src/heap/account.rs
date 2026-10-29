@@ -539,10 +539,11 @@ impl SharedCounts {
 /// place in descriptor pressure's count. [`Heap::charge_file_port`] makes
 /// one when the port gets its heap object, and the port's data holds it
 /// beside the file, so both go together: when the port is closed, or when
-/// its last `Rc` drops. A collection that finds the port's object dead and
-/// holds its last `Rc` takes the charge out at classification, before it
-/// settles L, while the heap is borrowed mutably, so giving it back needs
-/// no heap borrow; the drain after the collection closes the file (#785).
+/// its last `Rc` drops. A collection that finds the port's objects dead,
+/// with its every `Rc` held by their queued entries, takes the charge out at
+/// classification, before it settles L, while the heap is borrowed mutably,
+/// so giving it back needs no heap borrow; the drain after the collection
+/// closes the file (#785).
 #[derive(Debug)]
 pub(crate) struct FilePortCharge {
     counts: Rc<SharedCounts>,

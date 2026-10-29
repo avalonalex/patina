@@ -502,7 +502,8 @@ impl super::Heap {
         }
     }
 
-    /// The last collection's pause, its backend's part included.
+    /// The last collection's pause, the work after it included: the drain's
+    /// and the backend's (#785).
     pub fn last_pause(&self) -> Duration {
         self.telemetry.last_pause
     }

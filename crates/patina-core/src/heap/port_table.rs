@@ -369,7 +369,7 @@ mod tests {
         assert!(table.remove(&[again]).1.is_empty());
     }
 
-    /// Only the ports the table holds the last `Rc` of give up their charge
+    /// Only the ports whose every `Rc` the queued entries hold give up their charge
     /// at classification; a string port has none to give.
     #[test]
     fn a_port_another_owner_keeps_keeps_its_charge() {

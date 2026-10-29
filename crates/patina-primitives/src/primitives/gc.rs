@@ -208,10 +208,11 @@ fn gc_stats<'gc>(cx: &mut Cx<'gc>, _args: &[Value<'gc>]) -> Result<Value<'gc>, E
         .collect();
 
     // What the collections cost and how long they waited (#648): pauses in
-    // microseconds, the backend's work after each included; the minimum
-    // mutator utilisation at 10 ms; K16's two high-water marks, each with
-    // the site of the deferral window that set it, or #f; and the process's
-    // resident size and CPU time, or #f where they cannot be read.
+    // microseconds, the work after each (the drain's and the backend's)
+    // included; the minimum mutator utilisation at 10 ms; K16's two
+    // high-water marks, each with the site of the deferral window that set
+    // it, or #f; and the process's resident size and CPU time, or #f where
+    // they cannot be read.
     let micros = |d: std::time::Duration| Value::fixnum(d.as_micros() as i64);
     let bytes = |n: u64| Value::fixnum(n as i64);
     let wait = cx.wait_high_water();

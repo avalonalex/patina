@@ -13,9 +13,9 @@
 //!   the ephemeron fixpoint and its break included, and before the sweep
 //!   reuses the mark bits: an entry whose object is unmarked moves from the
 //!   registered list to the queue, so it is never classified again once its
-//!   slot is reused. A queued port the table holds the last `Rc` of gives up
-//!   its charge there, so the L the sweep settles counts no dead file port,
-//!   as when the sweep dropped it.
+//!   slot is reused. A queued port whose every `Rc` the queued entries hold,
+//!   counted per port, gives up its charge there, so the L the sweep settles
+//!   counts no dead file port, as when the sweep dropped it.
 //! - **The drain** ([`finalize_after_collection`]) runs in both collection
 //!   entries, `GcController::safe_point` and `collect_at_call`, once the
 //!   collection has returned and the heap's borrow with it: before Scheme

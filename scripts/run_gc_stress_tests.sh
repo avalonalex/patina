@@ -113,8 +113,10 @@ fi
 # again that day for its handler count and the rewritten Scheme loop;
 # escape_from_primitive's test count re-pinned 2026-10-29 for #785's test of
 # where a dead file port is written out, which sets its own modes and adds 18
-# collections either way, and its counts re-measured that day, the minimum
-# left as it was)
+# collections either way, and its counts re-measured that day: the other 13
+# tests' 6334, up from 960 since #677 let library loads collect (2026-10-10),
+# which no re-pin had recorded; the minimum left at half the count from
+# before then)
 TARGETS=(
     "callability 16 31 12"                    # 1496 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)

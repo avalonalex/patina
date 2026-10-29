@@ -834,9 +834,9 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   `descriptor-collections`; Off never does. The port's `FilePortData` holds
   a `FilePortCharge` beside the file, which gives both back when the file
   closes — at `close-port`, or when the port's last `Rc` drops — or, earlier,
-  when a collection finds the port's object dead and its entry holds that
-  last `Rc` (classification, §4.6), through the shared counts, with no heap
-  borrow. Sweep starts the
+  when a collection finds the port's objects dead and their queued entries
+  hold its every `Rc` (classification, §4.6), through the shared counts,
+  with no heap borrow. Sweep starts the
   count again after the arenas, so a port it found live counts toward no
   later collection: the charge records the cycle it was made in, and a
   close takes a port off the count only if it was opened since. A loop that
