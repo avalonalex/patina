@@ -2268,7 +2268,7 @@ impl Heap {
     /// The port `tv` is, if it is one: its `PortTable` entry's `Rc`, cloned
     /// within one access of the table, so the caller's I/O runs after the
     /// access has ended (#785).
-    #[inline]
+    #[inline(always)]
     pub fn get_port(&self, tv: TaggedValue) -> Option<Rc<crate::port::Port>> {
         if !tv.is_object() {
             return None;

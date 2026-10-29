@@ -98,7 +98,7 @@ impl PortTable {
     }
 
     /// The port of `owner`, the object whose slot holds `id`.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn get(&self, id: PortId, owner: TaggedValue) -> Rc<Port> {
         self.entries.with(|entries| {
             match entries.ports.get(id.0 as usize).and_then(Option::as_ref) {

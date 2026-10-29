@@ -398,8 +398,10 @@ impl<'gc> Cx<'gc> {
 
     /// [`Heap::get_port`]: the port `v` is, its `Rc` cloned out of the
     /// heap's `PortTable`, so the caller reads or writes it after the access
-    /// has ended (#785).
-    #[inline]
+    /// has ended (#785). Always inlined: every port operation calls it, and
+    /// left to itself the compiler called it out of line once the table's
+    /// read made it longer, about 8 instructions a call more.
+    #[inline(always)]
     pub fn get_port(&self, v: Value<'gc>) -> Option<Rc<Port>> {
         self.heap.borrow().get_port(v.tagged())
     }
