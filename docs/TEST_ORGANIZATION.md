@@ -1135,9 +1135,10 @@ under zeal took 882–920 s on the VM alone (2026-10-01), and
 Each check has a positive control, a test that must panic with the check's
 message, and the release GC lane runs them in its `gc-check` build:
 `stale_references.rs`, `gc_protocol.rs` and `retired_registers.rs` in
-`patina-tests`, and `patina-core`'s `heap::check::` and
-`heap::gc::tests::protocol::`. A build without the checks reports them
-ignored. `crates/patina-repl/tests/gc_zeal.rs` is the control for zeal
+`patina-tests`, and `patina-core`'s `heap::check::`,
+`heap::gc::tests::protocol::` and the port table's owner check
+(`heap::port_table::tests::a_check_build_refuses_an_id_read_through_another_object`,
+#785). A build without the checks reports them ignored. `crates/patina-repl/tests/gc_zeal.rs` is the control for zeal
 itself, in every build: a loop that allocates nothing collects at every
 iteration under zeal and hardly at all at stress 1. It runs in `ci.yml`'s Test
 Suite, not against the zeal lane's binary, so the lane runs the same loop on
