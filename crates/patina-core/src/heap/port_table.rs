@@ -15,10 +15,13 @@
 //! A dead object's entry lets go of its `Rc`, and the port flushes and
 //! closes when that was the last.
 //!
-//! The sweep takes a dead object's entry out, after the object arena's
-//! sweep, and drops the ports once the access has ended: where the slot's
-//! tombstone dropped them before the table existed, so a dead port is still
-//! written out and closed by the collection that finds it.
+//! A dead object's entry leaves the table in one of two ways. A file
+//! port's, whose drop flushes and closes a file, is the `FinalRegistry`'s
+//! (`heap/finalize.rs`): the collection that finds the object dead queues
+//! it, and the drain after the collection takes it out and drops the port,
+//! with no heap borrow and no table access open. Every other port's drop
+//! does no I/O, and the sweep takes its entry out, after the object arena's
+//! sweep, and drops the port once the access has ended.
 //!
 //! The heap keeps one table for its life, on its `HandleTable`, by `Rc`, so
 //! that #786's registry of open-file tables can hold it weakly; teardown
@@ -28,8 +31,8 @@
 
 use std::rc::Rc;
 
-use super::GC_CHECK;
 use super::table::HeapTable;
+use super::{FilePortCharge, GC_CHECK};
 use crate::port::Port;
 use crate::tagged_value::TaggedValue;
 
@@ -38,6 +41,18 @@ use crate::tagged_value::TaggedValue;
 /// number, so no id names an entry it was not given.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortId(u32);
+
+impl PortId {
+    /// The entry's number: its id in the `FinalRegistry`.
+    pub(crate) fn number(self) -> u32 {
+        self.0
+    }
+
+    /// The id the `FinalRegistry` names by `number`.
+    pub(crate) fn from_number(number: u32) -> Self {
+        PortId(number)
+    }
+}
 
 /// One heap's ports. See the [module docs](self).
 pub(crate) struct PortTable {
@@ -50,6 +65,9 @@ struct Entries {
     ports: Vec<Option<Rc<Port>>>,
     /// The free entries, reused before the list grows.
     free: Vec<u32>,
+    /// Whether each entry is the `FinalRegistry`'s: a file port's, which
+    /// the drain takes out rather than the sweep.
+    finalized: Vec<bool>,
     /// In a check build, the word each entry's object was allocated as,
     /// which a read compares with the word it was given, as the arenas'
     /// generation stamps are compared (#621): an id that does not name its
@@ -67,17 +85,20 @@ impl PortTable {
         })
     }
 
-    /// An entry for `port`, which the object about to be allocated names.
-    pub(crate) fn insert(&self, port: Rc<Port>) -> PortId {
+    /// An entry for `port`, which the object about to be allocated names:
+    /// the `FinalRegistry`'s if `finalized`, which the caller registers.
+    pub(crate) fn insert(&self, port: Rc<Port>, finalized: bool) -> PortId {
         self.entries.with_mut(|entries| {
             let id = match entries.free.pop() {
                 Some(id) => {
                     entries.ports[id as usize] = Some(port);
+                    entries.finalized[id as usize] = finalized;
                     id
                 }
                 None => {
                     let id = u32::try_from(entries.ports.len()).expect("more than 2^32 ports");
                     entries.ports.push(Some(port));
+                    entries.finalized.push(finalized);
                     if GC_CHECK {
                         entries.owners.push(TaggedValue::DEAD_SLOT);
                     }
@@ -125,26 +146,77 @@ impl PortTable {
     }
 
     /// Take out the entries `ids` names, whose objects the sweep just freed,
-    /// and free them. Their ports are answered, for the caller to drop once
-    /// the access has ended (`HeapTable`'s rule): a file port whose `Rc` was
-    /// the last flushes and closes as it drops.
-    pub(crate) fn remove(&self, ids: &[PortId]) -> Vec<Rc<Port>> {
+    /// and free them, except the `FinalRegistry`'s, which the drain takes
+    /// out. Their ports are answered, for the caller to drop once the access
+    /// has ended (`HeapTable`'s rule). In a check build the registry's
+    /// entries among `ids` are answered too, for the sweep to check that the
+    /// collection queued them.
+    pub(crate) fn remove(&self, ids: &[PortId]) -> (Vec<Rc<Port>>, Vec<PortId>) {
+        if ids.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        self.entries.with_mut(|entries| {
+            let mut ports = Vec::with_capacity(ids.len());
+            let mut finalized = Vec::new();
+            for &id in ids {
+                if entries.finalized[id.0 as usize] {
+                    if GC_CHECK {
+                        finalized.push(id);
+                    }
+                } else {
+                    ports.push(entries.free(id));
+                }
+            }
+            (ports, finalized)
+        })
+    }
+
+    /// Take out the `FinalRegistry`'s entries `ids` names, which it queued,
+    /// and free them: the drain's part. Their ports are answered, in the
+    /// order of `ids`, for the caller to drop once the access has ended: a
+    /// file whose `Rc` was the last flushes and closes as it drops.
+    pub(crate) fn take_finalized(&self, ids: &[PortId]) -> Vec<Rc<Port>> {
         if ids.is_empty() {
             return Vec::new();
         }
         self.entries.with_mut(|entries| {
-            let mut ports = Vec::with_capacity(ids.len());
-            for &PortId(id) in ids {
-                match entries.ports[id as usize].take() {
-                    Some(port) => ports.push(port),
-                    None => free_entry_read(PortId(id)),
-                }
-                entries.free.push(id);
-                if GC_CHECK {
-                    entries.owners[id as usize] = TaggedValue::DEAD_SLOT;
-                }
-            }
+            ids.iter()
+                .map(|&id| {
+                    if !entries.finalized[id.0 as usize] {
+                        not_finalized(id);
+                    }
+                    entries.finalized[id.0 as usize] = false;
+                    entries.free(id)
+                })
+                .collect()
+        })
+    }
+
+    /// The charges of the ports whose every `Rc` the entries `ids` hold:
+    /// those the drain will close. A port can have more than one object,
+    /// each with its entry, so the entries are counted per port. Classification
+    /// takes the charges out of the ports, for the caller to drop after the
+    /// access and before the sweep settles the account, so L counts no dead
+    /// file port (#785). A port another owner keeps, a host or a live
+    /// object's entry, keeps its charge, until its last `Rc` drops.
+    pub(crate) fn take_last_charges(&self, ids: &[PortId]) -> Vec<FilePortCharge> {
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        self.entries.with(|entries| {
+            let mut ports: Vec<&Rc<Port>> = ids
+                .iter()
+                .map(|&id| match entries.ports.get(id.0 as usize) {
+                    Some(Some(port)) => port,
+                    _ => free_entry_read(id),
+                })
+                .collect();
+            ports.sort_unstable_by_key(|port| Rc::as_ptr(port));
             ports
+                .chunk_by(|a, b| Rc::ptr_eq(a, b))
+                .filter(|entries| Rc::strong_count(entries[0]) == entries.len())
+                .filter_map(|entries| entries[0].take_file_charge())
+                .collect()
         })
     }
 
@@ -156,6 +228,19 @@ impl PortTable {
 }
 
 impl Entries {
+    /// Take out the entry `id` and free it, answering its port.
+    fn free(&mut self, id: PortId) -> Rc<Port> {
+        let port = match self.ports[id.0 as usize].take() {
+            Some(port) => port,
+            None => free_entry_read(id),
+        };
+        self.free.push(id.0);
+        if GC_CHECK {
+            self.owners[id.0 as usize] = TaggedValue::DEAD_SLOT;
+        }
+        port
+    }
+
     /// A check build's comparison of `owner` with the word the entry's
     /// object was allocated as. Out of line, so the read inlines only the
     /// branch to it.
@@ -171,6 +256,15 @@ impl Entries {
             );
         }
     }
+}
+
+#[cold]
+#[inline(never)]
+fn not_finalized(id: PortId) -> ! {
+    panic!(
+        "port id {} was taken out as the finalization registry's, but its entry is not (#785)",
+        id.0
+    )
 }
 
 #[cold]
@@ -191,13 +285,14 @@ mod tests {
     fn an_entry_answers_its_port_and_a_freed_one_is_reused() {
         let table = PortTable::new();
         let first = Port::new_output_string();
-        let id = table.insert(Rc::clone(&first));
+        let id = table.insert(Rc::clone(&first), false);
         let owner = TaggedValue::object(7);
         table.set_owner(id, owner);
         assert!(Rc::ptr_eq(&table.get(id, owner), &first));
         assert_eq!(table.len(), 1);
 
-        let ports = table.remove(&[id]);
+        let (ports, finalized) = table.remove(&[id]);
+        assert!(finalized.is_empty());
         assert_eq!(ports.len(), 1);
         assert!(Rc::ptr_eq(&ports[0], &first));
         drop(ports);
@@ -205,7 +300,7 @@ mod tests {
         assert_eq!(Rc::strong_count(&first), 1, "the table let go of the port");
 
         let second = Port::new_output_string();
-        let again = table.insert(Rc::clone(&second));
+        let again = table.insert(Rc::clone(&second), false);
         assert_eq!(again, id, "a freed entry is reused before the list grows");
         table.set_owner(again, TaggedValue::object(9));
         assert!(Rc::ptr_eq(&table.port(again), &second));
@@ -219,7 +314,7 @@ mod tests {
     #[should_panic(expected = "does not name its own object's entry")]
     fn a_check_build_refuses_an_id_read_through_another_object() {
         let table = PortTable::new();
-        let id = table.insert(Port::new_output_string());
+        let id = table.insert(Port::new_output_string(), false);
         table.set_owner(id, TaggedValue::object(1));
         let _ = table.get(id, TaggedValue::object(2));
     }
@@ -246,13 +341,95 @@ mod tests {
         let _ = heap.get_port(forged);
     }
 
+    /// The sweep leaves the `FinalRegistry`'s entries for the drain, which
+    /// takes them out in the order it names them.
+    #[test]
+    fn the_sweep_leaves_a_finalized_entry_to_the_drain() {
+        let table = PortTable::new();
+        let file = Port::new_output_string();
+        let finalized = table.insert(Rc::clone(&file), true);
+        let other = table.insert(Port::new_output_string(), true);
+        let plain = table.insert(Port::new_output_string(), false);
+
+        let (ports, skipped) = table.remove(&[finalized, plain]);
+        assert_eq!(ports.len(), 1, "only the plain entry is the sweep's");
+        if GC_CHECK {
+            assert_eq!(skipped, vec![finalized]);
+        }
+        drop(ports);
+        assert_eq!(table.len(), 2);
+
+        let ports = table.take_finalized(&[other, finalized]);
+        assert!(Rc::ptr_eq(&ports[1], &file), "in the order of the ids");
+        drop(ports);
+        assert_eq!(table.len(), 0);
+        assert_eq!(Rc::strong_count(&file), 1);
+        // A freed entry reused for another port is not the registry's.
+        let again = table.insert(Port::new_output_string(), false);
+        assert!(table.remove(&[again]).1.is_empty());
+    }
+
+    /// Only the ports the table holds the last `Rc` of give up their charge
+    /// at classification; a string port has none to give.
+    #[test]
+    fn a_port_another_owner_keeps_keeps_its_charge() {
+        let fs = crate::vfs::MemoryFs::new();
+        let mut heap = crate::Heap::new();
+        let kept = Port::open_output_file("/kept", &fs).unwrap();
+        let alone = heap.alloc_port(Port::open_output_file("/alone", &fs).unwrap());
+        let shared = heap.alloc_port(Rc::clone(&kept));
+        let string = heap.alloc_port(Port::new_output_string());
+        let ids: Vec<PortId> = [alone, shared, string]
+            .into_iter()
+            .map(|port| match heap.get_object(port) {
+                crate::heap::HeapObjectData::Port(id) => *id,
+                _ => unreachable!("alloc_port answers a port object"),
+            })
+            .collect();
+        let charges = heap.handles.ports().take_last_charges(&ids);
+        assert_eq!(charges.len(), 1, "only the port nothing else holds");
+        assert_eq!(heap.open_file_ports(), 2);
+        drop(charges);
+        assert_eq!(heap.open_file_ports(), 1);
+        assert_eq!(heap.external_bytes(), crate::heap::FILE_PORT_BYTES);
+    }
+
+    /// A port with two objects, whose two entries hold its every `Rc`, gives
+    /// up its charge once when both are queued, and not when one is.
+    #[test]
+    fn a_port_whose_entries_hold_every_rc_gives_up_its_charge_once() {
+        let fs = crate::vfs::MemoryFs::new();
+        let mut heap = crate::Heap::new();
+        let port = Port::open_output_file("/twice", &fs).unwrap();
+        let ids: Vec<PortId> = [heap.alloc_port(Rc::clone(&port)), heap.alloc_port(port)]
+            .into_iter()
+            .map(|object| match heap.get_object(object) {
+                crate::heap::HeapObjectData::Port(id) => *id,
+                _ => unreachable!("alloc_port answers a port object"),
+            })
+            .collect();
+        assert!(heap.handles.ports().take_last_charges(&ids[..1]).is_empty());
+        let charges = heap.handles.ports().take_last_charges(&[ids[1], ids[0]]);
+        assert_eq!(charges.len(), 1);
+        drop(charges);
+        assert_eq!((heap.open_file_ports(), heap.external_bytes()), (0, 0));
+    }
+
+    #[test]
+    #[should_panic(expected = "is not (#785)")]
+    fn taking_out_a_plain_entry_as_finalized_panics() {
+        let table = PortTable::new();
+        let id = table.insert(Port::new_output_string(), false);
+        drop(table.take_finalized(&[id]));
+    }
+
     #[test]
     #[should_panic(expected = "names a free entry")]
     fn reading_a_freed_entry_panics() {
         let table = PortTable::new();
-        let id = table.insert(Port::new_output_string());
+        let id = table.insert(Port::new_output_string(), false);
         table.set_owner(id, TaggedValue::object(1));
-        drop(table.remove(&[id]));
+        drop(table.remove(&[id]).0);
         let _ = table.port(id);
     }
 }

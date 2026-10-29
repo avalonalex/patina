@@ -613,9 +613,10 @@ impl Default for LibraryLoaderRegistry {
 pub type RustLibraryBuilder = fn(Vec<String>, Rc<Environment>, &SharedHeap) -> Vec<String>;
 
 /// `parse`'s result, parsing once more where it ran out of file descriptors
-/// and `collect` ran a collection (#783), whose sweep closes the
-/// descriptors of the file ports nothing reaches: as an open primitive does
-/// after `Step::Collect` (#607). `collect` answers whether it collected;
+/// and `collect` ran a collection (#783), whose drain closes the
+/// descriptors of the file ports nothing reaches before the collection's
+/// entry returns (#785): as an open primitive does after `Step::Collect`
+/// (#607). `collect` answers whether it collected;
 /// where the load cannot collect, it posts the collection and counts it
 /// (`deferred-collections`), and the first failure stands. A second failure,
 /// or any other, is reported as it is.

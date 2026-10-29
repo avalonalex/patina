@@ -72,7 +72,8 @@ pub struct PhaseTimes {
     pub prune: Duration,
     /// The heap's sweep.
     pub sweep: Duration,
-    /// The backend's work after the collection (the VM's code release).
+    /// The work after the collection: the drain of its finalizers (#785),
+    /// then the backend's (the VM's code release).
     pub after: Duration,
 }
 
@@ -482,12 +483,21 @@ impl super::Heap {
         self.telemetry.unfinished = Some(record);
     }
 
+    /// The drain after the collection just run took `time` (#785): part of
+    /// its `after`, to which [`Heap::finish_collection`] adds the backend's.
+    pub(crate) fn note_finalized(&mut self, time: Duration) {
+        if let Some(record) = self.telemetry.unfinished.as_mut() {
+            record.phases.after += time;
+        }
+    }
+
     /// The backend has done its work after the collection just run, which
     /// took `after` (the VM's code release; zero on the tree-walker): count
-    /// the collection's pause, and log it (#648).
+    /// the collection's pause, its finalizers' time included (#785), and log
+    /// it (#648).
     pub fn finish_collection(&mut self, after: Duration) {
         if let Some(mut record) = self.telemetry.unfinished.take() {
-            record.phases.after = after;
+            record.phases.after += after;
             self.telemetry.finish(record);
         }
     }

@@ -28,6 +28,7 @@ pub mod attrs;
 mod census;
 mod check;
 pub mod cx;
+mod finalize;
 pub mod gc;
 pub mod handles;
 pub mod interrupt;
@@ -56,6 +57,7 @@ pub use account::{
     descriptor_pressure_threshold,
 };
 use check::SlotChecks;
+pub use finalize::teardown;
 use handles::{HandleTable, Owned, OwnedEnvironment};
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -536,7 +538,7 @@ pub struct Heap {
     /// missed four, and left `(features)` disagreeing with `cond-expand`.)
     /// Here by `Rc`, so a boundary can make a `Cx` with it (#704), until #707
     /// moves it to the hosts. It also holds the interpreter's current ports
-    /// (#618), which [`Heap::teardown`] puts back to the standard ones.
+    /// (#618), which teardown ([`teardown`]) puts back to the standard ones.
     instance: Rc<crate::instance::Instance>,
 
     /// Free list for pairs (indices of freed pairs)
@@ -1299,11 +1301,23 @@ impl Heap {
     /// here, once, whichever primitive opened it: its buffer as external
     /// bytes, and its descriptor toward descriptor pressure
     /// (`Heap::charge_file_port`, #607). It gives both back when it closes.
+    ///
+    /// An open file port's object is registered with the `FinalRegistry`
+    /// (`heap/finalize.rs`): the collection that finds it dead queues it,
+    /// and the drain after the collection drops the entry's `Rc`, which
+    /// writes the port out and closes it when it was the last (#785).
     pub fn alloc_port(&mut self, port: Rc<crate::port::Port>) -> TaggedValue {
-        port.hold_file_charge(|| self.charge_file_port());
-        let id = self.handles.ports().insert(port);
+        let file = port.hold_file_charge(|| self.charge_file_port());
+        let id = self.handles.ports().insert(port, file);
         let object = self.alloc_object(HeapObjectData::Port(id));
         self.handles.ports().set_owner(id, object);
+        if file {
+            (self.handles.finals()).register(
+                object.heap_index(),
+                finalize::FinalKind::Port,
+                id.number(),
+            );
+        }
         object
     }
 

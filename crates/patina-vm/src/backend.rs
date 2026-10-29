@@ -947,13 +947,13 @@ fn import_error(error: LibraryError) -> VmBackendError {
 /// The backend made the heap, so dropping it tears the heap down: the
 /// objects' environments hold the heap, which otherwise outlived its
 /// interpreter with everything in it, unwritten port output among it
-/// (`Heap::teardown`, #604). A heap someone still holds a borrow of is left
-/// as it is, leaking rather than freeing what the borrow may read.
+/// (`patina_core::heap::teardown`, #604). The file ports are written out
+/// once the heap's borrow is released (#785). A heap someone still holds a
+/// borrow of is left as it is, leaking rather than freeing what the borrow
+/// may read.
 impl Drop for VmBackend {
     fn drop(&mut self) {
-        if let Ok(mut heap) = self.heap.try_borrow_mut() {
-            heap.teardown();
-        }
+        patina_core::heap::teardown(&self.heap);
     }
 }
 

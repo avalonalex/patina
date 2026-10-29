@@ -555,7 +555,9 @@ pub struct FilePortData {
     /// What the port is charged while it is open: its buffer as external
     /// bytes, and its descriptor toward descriptor pressure (#607). Given to
     /// it when it gets its heap object (`Heap::alloc_port`), and dropped with
-    /// the file, when the port is closed or its last `Rc` drops. `None` for a
+    /// the file, when the port is closed or its last `Rc` drops. Taken out
+    /// earlier, by the collection that finds its object dead, when nothing
+    /// else holds the port (`Port::take_file_charge`, #785). `None` for a
     /// port that never reached the heap.
     charge: Option<FilePortCharge>,
 }
@@ -884,11 +886,27 @@ impl Port {
     /// already: `Heap::alloc_port`'s part of descriptor pressure (#607).
     /// `charge` is called only for an open file port without one, so a port
     /// that gets a second heap object, or any other port, is charged nothing.
-    pub(crate) fn hold_file_charge(&self, charge: impl FnOnce() -> FilePortCharge) {
-        if let PortData::File(file) = &mut *self.data.borrow_mut()
-            && file.charge.is_none()
-        {
+    /// Answers whether the port is an open file port, whose drop flushes
+    /// and closes the file, so that `alloc_port` registers its object with
+    /// the `FinalRegistry` (#785).
+    pub(crate) fn hold_file_charge(&self, charge: impl FnOnce() -> FilePortCharge) -> bool {
+        let PortData::File(file) = &mut *self.data.borrow_mut() else {
+            return false;
+        };
+        if file.charge.is_none() {
             file.charge = Some(charge());
+        }
+        true
+    }
+
+    /// Take an open file port's charge out of it, for a collection that
+    /// found its object dead, before the drain closes it (#785): the port
+    /// is still open, but L and descriptor pressure count it no more. `None`
+    /// for any other port, or one whose data something is using.
+    pub(crate) fn take_file_charge(&self) -> Option<FilePortCharge> {
+        match &mut *self.data.try_borrow_mut().ok()? {
+            PortData::File(file) => file.charge.take(),
+            _ => None,
         }
     }
 

@@ -79,7 +79,8 @@
 //!   reachable: a heap whose `(patina internal io)` was never built has
 //!   none, and a top-level `(current-output-port p)` leaves the standard
 //!   one to be collected. A dead port object's entry goes with the
-//!   collection that finds it.
+//!   collection that finds it: a file port's with the drain after it,
+//!   which closes the file (#785).
 //! - `open-file-ports` and `descriptor-limit`: the file ports open now,
 //!   whenever they opened, and the soft `RLIMIT_NOFILE` they count against,
 //!   or `#f` where it is unlimited or cannot be read.

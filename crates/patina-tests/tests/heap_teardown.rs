@@ -5,7 +5,8 @@
 //! 318 heaps alive at once in one test process, and a file port still
 //! reachable from a global never dropped, so what it had buffered was lost.
 //! Each backend now frees every slot when it is dropped
-//! (`patina_core::Heap::teardown`), as a sweep that found nothing live would.
+//! (`patina_core::heap::teardown`), as a sweep that found nothing live would,
+//! and then writes out and closes the file ports, with no heap borrow (#785).
 
 mod common;
 use common::{tree_walker_interpreter, vm_interpreter};
