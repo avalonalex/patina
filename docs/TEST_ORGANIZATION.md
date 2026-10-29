@@ -1224,7 +1224,10 @@ top-level `define-library` that imports one or includes a file each load.
 Where a load cannot collect, an `import` inside a `begin` and
 `environment`, the loader's first `EMFILE` raises with one deferred
 collection counted, and an `include` form, in a program or in a library's
-body, raises. GC-time flushing is
+body, raises. `(gc-stats)`'s `ports` and `open-file-ports`, read after a
+`(gc)`, read the same again after 1,000 string ports and 100 file ports are
+opened and dropped and a later form collects: the heap's `PortTable` keeps no
+entry a dead port object named (#785). GC-time flushing is
 observable, so these stay out of the byte-identical differential lane.
 `crates/patina-tests/tests/loader_descriptors.rs` fails one loader call at a
 time in process, over a filesystem that answers `EMFILE` or

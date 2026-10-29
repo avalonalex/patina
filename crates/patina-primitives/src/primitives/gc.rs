@@ -74,6 +74,12 @@
 //!   as the last collection set it.
 //! - `descriptors-since-gc` and `descriptors-trigger`: descriptor pressure's
 //!   count, above, and its threshold, `min(128, RLIMIT_NOFILE / 4)`.
+//! - `ports`: the heap's port objects' entries in its `PortTable` (#785),
+//!   string ports included, and the standard ports' objects while they are
+//!   reachable: a heap whose `(patina internal io)` was never built has
+//!   none, and a top-level `(current-output-port p)` leaves the standard
+//!   one to be collected. A dead port object's entry goes with the
+//!   collection that finds it.
 //! - `open-file-ports` and `descriptor-limit`: the file ports open now,
 //!   whenever they opened, and the soft `RLIMIT_NOFILE` they count against,
 //!   or `#f` where it is unlimited or cannot be read.
@@ -184,6 +190,7 @@ fn gc_stats<'gc>(cx: &mut Cx<'gc>, _args: &[Value<'gc>]) -> Result<Value<'gc>, E
         ("bytes-reclaimed", n(stats.bytes_reclaimed as usize)),
         ("committed-bytes", n(stats.committed_bytes)),
         ("external-bytes", n(stats.external_bytes)),
+        ("ports", n(cx.port_entries())),
         ("open-file-ports", n(cx.open_file_ports())),
         (
             "descriptor-limit",

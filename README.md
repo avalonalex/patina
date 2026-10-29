@@ -113,8 +113,8 @@ The architecture is designed to support future exploration:
   not). `(gc)` and `(gc-stats)` in `(patina debug)`
   give manual control; `(gc-stats)` reports `live-bytes`,
   `bytes-allocated`, `bytes-reclaimed`, `committed-bytes`,
-  `external-bytes` and descriptor pressure beside its arena counts
-  (`docs/GC_DESIGN.md` §6), and the pauses, the MMU at 10 ms, how much was
+  `external-bytes`, descriptor pressure and the live `ports` beside its
+  arena counts (`docs/GC_DESIGN.md` §6), and the pauses, the MMU at 10 ms, how much was
   allocated where collection was deferred, and the process's resident size
   and CPU time (§6.2). `PATINA_GC_LOG=<path>` writes a CSV line per
   collection, with its reason and phase times. Pauses are not yet bounded;

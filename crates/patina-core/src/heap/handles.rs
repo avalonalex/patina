@@ -28,11 +28,13 @@
 //! refuses to read it, whatever becomes of the heap afterwards. Dropping the
 //! table also lets go of the environments it holds, each of which holds the
 //! heap: heap, table, environment and heap again are a cycle, and teardown
-//! is what breaks it.
+//! is what breaks it. The heap's `PortTable`, which the table also holds, is
+//! not dropped: the table teardown starts takes it over (#785).
 
 use std::fmt;
 use std::rc::{Rc, Weak};
 
+use super::PortTable;
 use super::gc::RootSet;
 use super::table::HeapTable;
 use crate::Trace;
@@ -73,6 +75,16 @@ pub struct HandleTable {
     /// life, so a second build binds the same three. `None` on a heap no
     /// backend set up. Here and not on `Heap`, for `root_set`'s reason.
     standard_ports: HeapTable<Option<[TaggedValue; 3]>>,
+    /// The ports the heap's port objects stand for (#785), one table for the
+    /// heap's life: teardown's new handle table takes it over
+    /// ([`HandleTable::after_teardown`]). By its own `Rc`, so that #786's
+    /// registry of open-file tables can hold it weakly. Here and not on
+    /// `Heap`, for `root_set`'s reason.
+    #[trace(
+        skip,
+        reason = "Rust ports, which hold no value: a port's state is Rust's"
+    )]
+    ports: Rc<PortTable>,
 }
 
 #[derive(Trace)]
@@ -101,6 +113,16 @@ enum Entry {
 impl HandleTable {
     /// An empty table for the heap numbered `heap_id`.
     pub(crate) fn new(heap_id: u64) -> Rc<Self> {
+        Self::with_ports(heap_id, PortTable::new())
+    }
+
+    /// The empty table teardown starts, which keeps this one's `PortTable`:
+    /// the heap has one for its life (#785).
+    pub(crate) fn after_teardown(&self) -> Rc<Self> {
+        Self::with_ports(self.heap_id, Rc::clone(&self.ports))
+    }
+
+    fn with_ports(heap_id: u64, ports: Rc<PortTable>) -> Rc<Self> {
         Rc::new(HandleTable {
             heap_id,
             entries: HeapTable::new(Entries {
@@ -110,7 +132,14 @@ impl HandleTable {
             }),
             root_set: Rc::default(),
             standard_ports: HeapTable::new(None),
+            ports,
         })
+    }
+
+    /// The heap's ports (#785).
+    #[inline]
+    pub(crate) fn ports(&self) -> &Rc<PortTable> {
+        &self.ports
     }
 
     /// The root providers registered with the heap.
@@ -419,6 +448,7 @@ mod tests {
             }),
             root_set: Rc::default(),
             standard_ports: HeapTable::new(Some(standard)),
+            ports: PortTable::new(),
         });
         collect_only(&mut heap, |_| {});
         s.assert_survived(&heap);

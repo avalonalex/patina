@@ -16,8 +16,10 @@ use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
-/// A Scheme port for I/O operations
-#[derive(Debug, Clone)]
+/// A Scheme port for I/O operations. Not `Clone`: a port has one state, and
+/// whatever shares it shares the `Rc` the constructors answer, as a heap's
+/// `PortTable` entry does (#785).
+#[derive(Debug)]
 pub struct Port {
     /// The mode used to open the port (not disjoint Scheme port predicates).
     pub kind: PortKind,
@@ -26,14 +28,15 @@ pub struct Port {
     supports_binary: bool,
     /// Input or output
     pub direction: PortDirection,
-    /// The actual port data (shared, mutable)
-    pub data: Rc<RefCell<PortData>>,
+    /// The port's data, behind an `Rc` that exit's list of output files
+    /// holds weakly (`OUTPUT_FILES`).
+    pub(crate) data: Rc<RefCell<PortData>>,
     /// Program text fetched a line at a time, but not yet executed. Runtime
     /// reads consume it before the source; byte reads move it into raw carry.
-    /// Shared behind `Rc` so cloned ports stay in sync, like `data`, and
-    /// shared by every standard input port (see [`Port::stdin`]).
+    /// Shared behind `Rc` by every standard input port (see [`Port::stdin`]).
     pushback: Rc<RefCell<Unread>>,
-    /// Reader directives follow the input, including across cloned ports.
+    /// Reader directives follow the input, across every standard input port
+    /// too.
     fold_case: Rc<Cell<bool>>,
     position: Rc<RefCell<InputPosition>>,
 }
@@ -1799,7 +1802,7 @@ mod tests {
             Port::new_input_bytevector(text.as_bytes().to_vec()),
             Port::open_input_file("/cursor", &fs).unwrap(),
         ] {
-            let clone = (*port).clone();
+            let clone = Rc::clone(&port);
             assert_eq!(port.peek_char_at(4).unwrap(), Some('x'));
             assert_eq!(port.input_position().offset, 0);
             assert_eq!(port.read_u8().unwrap(), Some(0xce));

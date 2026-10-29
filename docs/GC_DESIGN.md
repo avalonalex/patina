@@ -279,9 +279,10 @@ Notes:
   ready while a load holds it, so a collection then waits, as each backend's
   safe point waited for it before #682.
 - Every table the heap keeps in Rust takes one wrapper, `HeapTable` (#687,
-  addition C3): the handle table's entries and the root set now, and the
-  `PortTable`, `CodeStore`, `HostPayloadTable`, `FinalRegistry` and thread
-  table as the stages that build them land. It is plain in the default build
+  addition C3): the handle table's entries, its standard port parameters, the
+  root set, the literal pool and the `PortTable` now (#785), and the
+  `CodeStore`, `HostPayloadTable`, `FinalRegistry` and thread table as the
+  stages that build them land. It is plain in the default build
   and the one place a `threaded` build puts a lock (`PRD/GC_PRD.md` §18.2,
   rule 9). Access is scoped to a closure and hands out nothing that holds the
   table, and code that is not the table's — a provider's `ready`, the drop of
@@ -325,7 +326,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs:119-180`):
 
 | Variant | Children |
 |---------|----------|
-| `BigInt`, `Rational`, `Real`, `Symbol`, `Bytevector`, `Port`, `RecordType`, `Identifier`, `Library`*, `PromptTag`, `LabelPlaceholder` | leaf |
+| `BigInt`, `Rational`, `Real`, `Symbol`, `Bytevector`, `Port` (its `PortTable` entry's number, #785), `RecordType`, `Identifier`, `Library`*, `PromptTag`, `LabelPlaceholder` | leaf |
 | `Complex` | `real`, `imag` |
 | `Exception` | each of `irritants` |
 | `Record` | `record_type` value + each of `fields` (through the `Rc<RefCell<Vec<_>>>`) |
@@ -376,9 +377,15 @@ already-free set):
    (`TaggedValue::GC_POISON`) instead.
 
 Tombstoning is not just hygiene: dropping the old `HeapObjectData` releases its
-`Rc` payloads (environments, ports, procedures) at sweep time rather than at
+`Rc` payloads (environments, procedures) at sweep time rather than at
 some future reuse of the slot. §8 shows this is what makes cycle reclamation
-work. It also closes resources (a swept `Port` drops promptly).
+work. A port's slot holds only the number of its entry in the heap's
+`PortTable` (#785), so the sweep collects the dead port objects' numbers as it
+frees their slots, takes their entries out of the table in one access once the
+object arena is swept, and drops their `Rc<Port>`s after that access, before
+it settles the byte account. A port whose last `Rc` that was flushes and
+closes then, as when its slot held it, so a swept port still closes promptly
+and L counts no dead one.
 
 Sweep completion is the "collection happened" boundary: it resets the
 allocation counter and clears any pending `(gc)` request, so alternative
@@ -525,6 +532,7 @@ expansion runs in (§7; point C of `PRD/GC_PRD.md` §11.3).
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
 | `Heap.handles` | `heap/handles.rs` | What hosts keep across evaluations, each rooted until its handle is dropped: an `Owned` handle's value (#605) — what the `eval_*_owned` methods and `Interpreter::lookup` answer, and the last value of a program the interpreter is running — and an `OwnedEnvironment`'s environment (#620), traced by `visit_env` with everything bound in it. Also the environments hosts hold by their own `Rc` and lend to the legacy pipeline, kept weakly and traced while anything holds them. Visited in `GcVisitor::new` beside the intern tables, so every collection on either backend traces them; visited, not only marked, since a handle's value can be anything. A handle holds its table weakly and keeps nothing alive |
 | `HandleTable.standard_ports` | `heap/handles.rs` | The parameter objects `current-input-port`, `current-output-port` and `current-error-port` are bound to (#608): made once per heap on `(patina internal io)`'s first build (`Heap::standard_port_parameters`), each holding one port object and its converter, and kept for the heap's life, so a second build binds the same three. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason, so its derived trace reaches it when `GcVisitor::new` visits the table; visited, not only marked, since a parameter holds its port and its converter. Pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown. The port each one holds is also cached, by `Rc`, in the interpreter's `Instance` slots, which the store funnel refreshes at every assignment of one (`write_parameter`) |
+| `HandleTable.ports` | `heap/port_table.rs` | Not a root: the heap's `PortTable` (#785), the `Rc<Port>` each port object's slot names by number, which hold Rust state and no value, so the derived trace skips the field. On the `HandleTable`, by its own `Rc`, for `root_set`'s reason and so that #786's registry can hold it weakly; the table teardown starts takes it over, so a heap keeps one for its life. The sweep takes a dead port object's entry out (§4.5). An entry need not hold its port's last `Rc`: the `Instance` holds the standard ports and caches the current ones, and a host may keep one |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
 | A compilation's `LiteralPool` | `crates/patina-core/src/literal_pool.rs` | The heap literals of the form being compiled, from its expansion until its code holds them (§9.7, #705): registered with the heap's root set for the pool's life, its entries reported as slots. Each backend drops the pool once the form is compiled, before it runs, so it never holds more than one form's quoted text |
 | Macro literals and environments | `heap/mod.rs`, `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: the literals the object holds (§9.6), and its body's `definition_env` and each `foreign_expansions` environment (§4.3) |
@@ -1487,7 +1495,9 @@ through the heap, and it is freed with its owner's last handle. Each heap's
 owner, the VM backend or the tree-walker's `Evaluator`, still runs
 `Heap::teardown` from its `Drop`: a sweep with nothing marked, which
 tombstones every slot while the owner still holds the heap, so every
-environment payload drops and each port flushes and closes as it drops. It
+environment payload drops, and every port object's entry leaves the
+`PortTable` and each port whose last `Rc` it held flushes and closes as it
+drops (§4.5, #785). It
 first puts the interpreter's standard ports back as its current ports
 (`Instance::reset_current_ports`, #618), so a file port left current drops
 and is written out with the rest. The
@@ -1496,7 +1506,9 @@ their interpreter: one kept past it names a freed slot, which a check build
 refuses as a use after free (§4.5). The hosts' handles go with their table,
 which teardown drops: a handle kept past its interpreter holds a dead
 reference, which the heap refuses to read, and dropping it does nothing
-(#605). The environments the table holds go with it; until #704 each held
+(#605). The `PortTable` does not: the table teardown starts takes it over,
+empty, so the heap keeps one for its life (#785). The environments the
+table holds go with it; until #704 each held
 the heap and closed the same cycle (#620), and
 `a_held_environment_does_not_keep_its_heap_alive` now pins that none does.
 `heap_teardown.rs` holds both backends to it, and
