@@ -768,6 +768,46 @@
    "backends": [
     "tree-walker"
    ]
+  },
+  {
+   "name": "tw-string-ports",
+   "group": "tree-walker",
+   "kind": "patina",
+   "source": "probes/string-ports.scm",
+   "sets": [
+    "tw"
+   ],
+   "backends": [
+    "tree-walker"
+   ]
+  },
+  {
+   "name": "tw-display-loop",
+   "group": "tree-walker",
+   "kind": "patina",
+   "source": "probes/display-loop.scm",
+   "sets": [
+    "tw"
+   ],
+   "backends": [
+    "tree-walker"
+   ]
+  },
+  {
+   "name": "tw-port-churn",
+   "group": "tree-walker",
+   "kind": "patina",
+   "source": "probes/port-churn.scm",
+   "sets": [
+    "tw"
+   ],
+   "args": [
+    "{scratch}/port-churn.txt"
+   ],
+   "nofile": 1024,
+   "backends": [
+    "tree-walker"
+   ]
   }
  ]
 }
