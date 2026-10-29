@@ -1048,6 +1048,12 @@ impl<'gc> Cx<'gc> {
         self.heap.borrow().open_file_ports()
     }
 
+    /// [`Heap::port_entries`](crate::Heap::port_entries) on this context's heap.
+    #[inline]
+    pub fn port_entries(&self) -> usize {
+        self.heap.borrow().port_entries()
+    }
+
     /// [`Heap::pause_max`](crate::Heap::pause_max) on this context's heap.
     #[inline]
     pub fn pause_max(&self) -> Duration {

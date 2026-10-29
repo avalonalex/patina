@@ -29,8 +29,7 @@
 //!
 //! **Shared `Rc` payloads are not charged** — a procedure's body and
 //! environment (a tree-walker closure is charged an estimate of its frame
-//! instead, below), a macro, a library, an environment specifier, a port
-//! (an open file port's buffer is charged as external bytes, below), a
+//! instead, below), a macro, a library, an environment specifier, a
 //! prompt tag, a promise's state (which `promise_update` shares between two
 //! promises), a tree-walker continuation (whose frames are `Rc` links shared
 //! with every other capture). Attributing them to one slot would charge the
@@ -56,8 +55,10 @@
 //! and not closed since. When that count reaches the installed
 //! [`GcThreshold::descriptors`], `min(128, RLIMIT_NOFILE / 4)`
 //! ([`descriptor_pressure_threshold`]), the heap posts a collection, which
-//! closes the dead ones, since a port's file closes as its payload drops in
-//! the sweep. A [`FilePortCharge`] that the port's data holds gives both back
+//! closes the dead ones: the sweep takes each dead port object's entry out
+//! of the heap's `PortTable`, and a port's file closes as its last `Rc`
+//! drops (#785). A port's slot holds only the entry's number, so its
+//! payload is charged nothing. A [`FilePortCharge`] that the port's data holds gives both back
 //! when the port closes, explicitly or by dropping, with no heap borrow. A
 //! loop that closes what it opens never reaches the descriptor threshold,
 //! though its charges still count toward the byte trigger like the
@@ -296,8 +297,10 @@ impl HeapObjectData {
             HeapObjectData::Macro { body: _, literals } => literals.len() * VALUE_BYTES,
             HeapObjectData::VmContinuationRef { id: _, bytes }
             | HeapObjectData::VmDelimitedContinuationRef { id: _, bytes } => *bytes,
-            // Nothing outside the slot.
+            // Nothing outside the slot. A port's slot holds its `PortTable`
+            // entry's number; an open file port is charged as external bytes.
             HeapObjectData::Real(_)
+            | HeapObjectData::Port(_)
             | HeapObjectData::Complex { .. }
             | HeapObjectData::LabelPlaceholder(_)
             | HeapObjectData::MutableCell(_)
@@ -309,7 +312,6 @@ impl HeapObjectData {
             // tree-walker closure's payload is charged on a path of its own
             // (`procedure_payload`), which keeps this match a leaf.
             HeapObjectData::Procedure(_)
-            | HeapObjectData::Port(_)
             | HeapObjectData::RecordType(_)
             | HeapObjectData::Continuation(_)
             | HeapObjectData::Parameter { .. }

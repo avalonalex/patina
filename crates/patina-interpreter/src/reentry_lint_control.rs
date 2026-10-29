@@ -253,7 +253,6 @@ const SHARED_PAYLOADS: &[&str] = &[
     "Macro.body",
     "MutableCell.0",
     "Parameter.values",
-    "Port.0",
     "Procedure.0",
     "Promise.0",
     "PromptTag.0",

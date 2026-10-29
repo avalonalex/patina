@@ -73,7 +73,7 @@ pub(super) fn port_p<'gc>(cx: &mut Cx<'gc>, args: &[Value<'gc>]) -> Result<Value
             actual: args.len(),
         });
     }
-    Ok(Value::boolean(cx.get_port(args[0]).is_some()))
+    Ok(Value::boolean(cx.is_port(args[0])))
 }
 
 /// (input-port? obj) - Returns #t if obj is an input port

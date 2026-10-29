@@ -33,6 +33,7 @@ pub mod handles;
 pub mod interrupt;
 pub mod mutator;
 mod numeric;
+mod port_table;
 mod root_set;
 // Sentinel values for the collector's field tests (#623): patina-core's own
 // tests, and other crates' under `test-support`.
@@ -58,6 +59,8 @@ use check::SlotChecks;
 use handles::{HandleTable, Owned, OwnedEnvironment};
 use num_bigint::BigInt;
 use num_rational::BigRational;
+pub use port_table::PortId;
+pub(crate) use port_table::PortTable;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -325,7 +328,9 @@ pub enum HeapObjectData {
         irritants: Vec<TaggedValue>,
     },
     Procedure(Rc<crate::procedure::Procedure>),
-    Port(Rc<crate::port::Port>),
+    /// A port: its entry in the heap's `PortTable`, which holds the port
+    /// itself (#785).
+    Port(PortId),
     /// A `syntax-rules` transformer: its compiled rules, and the literals
     /// they name by index (`LiteralId`), which this object holds and traces
     /// so that no `CompiledMacro` holds a word (#718).
@@ -1289,13 +1294,17 @@ impl Heap {
         self.alloc_object(HeapObjectData::Procedure(proc))
     }
 
-    /// Allocate a native port. An open file port is charged here, once,
-    /// whichever primitive opened it: its buffer as external bytes, and its
-    /// descriptor toward descriptor pressure (`Heap::charge_file_port`,
-    /// #607). It gives both back when it closes.
+    /// Allocate a native port: an entry in the heap's `PortTable` holding
+    /// `port`, and an object naming it (#785). An open file port is charged
+    /// here, once, whichever primitive opened it: its buffer as external
+    /// bytes, and its descriptor toward descriptor pressure
+    /// (`Heap::charge_file_port`, #607). It gives both back when it closes.
     pub fn alloc_port(&mut self, port: Rc<crate::port::Port>) -> TaggedValue {
         port.hold_file_charge(|| self.charge_file_port());
-        self.alloc_object(HeapObjectData::Port(port))
+        let id = self.handles.ports().insert(port);
+        let object = self.alloc_object(HeapObjectData::Port(id));
+        self.handles.ports().set_owner(id, object);
+        object
     }
 
     /// Allocate a macro object: `body`, and the `literals` its patterns and
@@ -2256,16 +2265,30 @@ impl Heap {
         }
     }
 
-    /// Get the Port from a TaggedValue, if it is one
-    #[inline]
-    pub fn get_port(&self, tv: TaggedValue) -> Option<&Rc<crate::port::Port>> {
+    /// The port `tv` is, if it is one: its `PortTable` entry's `Rc`, cloned
+    /// within one access of the table, so the caller's I/O runs after the
+    /// access has ended (#785).
+    #[inline(always)]
+    pub fn get_port(&self, tv: TaggedValue) -> Option<Rc<crate::port::Port>> {
         if !tv.is_object() {
             return None;
         }
         match self.get_object(tv) {
-            HeapObjectData::Port(p) => Some(p),
+            HeapObjectData::Port(id) => Some(self.handles.ports().get(*id, tv)),
             _ => None,
         }
+    }
+
+    /// The port of the entry `id`, for a reader that holds an object's
+    /// payload but not its word (`debug_format`).
+    pub(crate) fn port_of(&self, id: PortId) -> Rc<crate::port::Port> {
+        self.handles.ports().port(id)
+    }
+
+    /// The heap's port objects' entries in its `PortTable`, string ports
+    /// and the standard ports' included: `(gc-stats)`'s `ports` (#785).
+    pub fn port_entries(&self) -> usize {
+        self.handles.ports().len()
     }
 
     /// Get the CompiledMacro from a TaggedValue, if it is one

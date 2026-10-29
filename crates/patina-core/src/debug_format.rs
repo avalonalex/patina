@@ -501,7 +501,9 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, printer: &
                 Procedure::CpsLambda { .. } => buf.push_str("#<procedure>"),
             }
         }
-        HeapObjectData::Port(p) => write!(buf, "{}", p).unwrap(),
+        // Cloned out of the heap's `PortTable`, and formatted after the
+        // table's access has ended.
+        HeapObjectData::Port(id) => write!(buf, "{}", heap.port_of(*id)).unwrap(),
         HeapObjectData::Macro { body, .. } => write!(buf, "#<macro:{}>", body.name).unwrap(),
         // Reachable from macro-debug output and from the residual cases in
         // `patina-tests/tests/syntax_as_a_value.rs` — a marker no longer

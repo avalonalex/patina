@@ -396,10 +396,21 @@ impl<'gc> Cx<'gc> {
         Some(self.brand(word))
     }
 
-    /// [`Heap::get_port`], cloned.
-    #[inline]
+    /// [`Heap::get_port`]: the port `v` is, its `Rc` cloned out of the
+    /// heap's `PortTable`, so the caller reads or writes it after the access
+    /// has ended (#785). Always inlined: every port operation calls it, and
+    /// left to itself the compiler called it out of line once the table's
+    /// read made it longer, about 8 instructions a call more.
+    #[inline(always)]
     pub fn get_port(&self, v: Value<'gc>) -> Option<Rc<Port>> {
-        self.heap.borrow().get_port(v.tagged()).cloned()
+        self.heap.borrow().get_port(v.tagged())
+    }
+
+    /// [`Heap::is_port`]: whether `v` is a port, from its slot alone, with no
+    /// read of the heap's `PortTable`.
+    #[inline]
+    pub fn is_port(&self, v: Value<'gc>) -> bool {
+        self.heap.borrow().is_port(v.tagged())
     }
 
     /// [`Heap::get_record_type`], cloned.

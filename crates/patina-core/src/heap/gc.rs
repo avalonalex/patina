@@ -68,7 +68,6 @@ use super::account::{
     self, GcThreshold, OBJECT_SLOT_BYTES, PAIR_SLOT_BYTES, STRING_SLOT_BYTES, VECTOR_SLOT_BYTES,
 };
 use super::check::SlotChecks;
-use super::handles::HandleTable;
 use super::mutator::Carrier;
 pub use super::root_set::{RootSet, RootToken};
 use super::telemetry::{CollectReason, CollectionRecord, PhaseTimes};
@@ -1549,8 +1548,11 @@ impl<'h> GcVisitor<'h> {
             | HeapObjectData::Symbol(_)
             // Bytes.
             | HeapObjectData::Bytevector(_)
-            // Buffers, a file handle, a position and flags: `port.rs` holds
-            // no `TaggedValue`.
+            // The number of the port's entry in the heap's `PortTable`, which
+            // holds a Rust port, buffers, a file handle, a position and flags
+            // (#785). In a check build it also records each entry's owner
+            // word, which a read compares by its bits and nothing traces:
+            // tracing it would keep every port object alive.
             | HeapObjectData::Port(_)
             // An id, a name and field names.
             | HeapObjectData::RecordType(_)
@@ -1811,6 +1813,9 @@ impl Heap {
         // Moved out so the object arena's recording closure can hold it while
         // the arenas themselves are mutably borrowed.
         let mut freed_closures = self.gc_freed_closure_code_ids.take();
+        // The entries of the dead port objects, which leave the `PortTable`
+        // once the object arena is swept (#785).
+        let mut dead_ports = Vec::new();
         // The payloads of the slots freed, measured before their tombstones
         // drop them.
         let mut freed_payload = 0usize;
@@ -1868,10 +1873,20 @@ impl Heap {
                     {
                         ids.push(*code_id);
                     }
+                    if let HeapObjectData::Port(id) = old {
+                        dead_ports.push(*id);
+                    }
                 },
             ),
         };
         self.gc_freed_closure_code_ids = freed_closures;
+        // The dead objects' ports, taken out of the table in one access and
+        // dropped after it (`HeapTable`'s rule), before the account is
+        // settled: a file port whose `Rc` this was the last of flushes and
+        // closes, and gives back its charge, as when its slot's tombstone
+        // dropped it, so L counts no dead port (#785).
+        let dead_ports = self.handles.ports().remove(&dead_ports);
+        drop(dead_ports);
         #[cfg(any(debug_assertions, feature = "gc-check"))]
         assert_eq!(
             charged_closures,
@@ -1927,14 +1942,16 @@ impl Heap {
     /// a freed slot, which a check build reports as a use after free, and a
     /// later allocation finds a slot whose generation has moved on. The
     /// hosts' handles go with their table (#605): one kept past it holds a
-    /// dead reference, which the heap refuses to read. A second teardown
+    /// dead reference, which the heap refuses to read. The heap's
+    /// `PortTable` does not: the new handle table takes it over, empty
+    /// (#785). A second teardown
     /// frees nothing. It is not a collection, and leaves the count of them as
     /// it was.
     pub fn teardown(&mut self) {
         self.instance.reset_current_ports();
         self.symbol_table.clear();
         self.core_syntax_table.clear();
-        self.handles = HandleTable::new(self.telemetry.heap_id);
+        self.handles = self.handles.after_teardown();
         let collections = self.gc_collections;
         let mut marks = MarkBits::for_heap(self);
         self.sweep(&mut marks);
@@ -3218,7 +3235,7 @@ mod tests {
         // Neither a port that is not a file's nor a second heap object for
         // a file port is charged.
         heap.alloc_port(Port::new_input_string("text".into()));
-        let again = Rc::clone(heap.get_port(kept).unwrap());
+        let again = heap.get_port(kept).unwrap();
         let kept_again = heap.alloc_port(again);
         assert_eq!(held(&heap), (1, FILE_PORT_BYTES));
 
@@ -3248,6 +3265,75 @@ mod tests {
         assert_eq!(held(&heap), (1, FILE_PORT_BYTES));
         heap.get_port(opened_since).unwrap().close();
         assert_eq!(held(&heap), (0, 0));
+    }
+
+    /// A port object names its entry in the heap's `PortTable`, which holds
+    /// the port beside any other owner (#785): a host's `Rc`, as here. The
+    /// collection that finds the object dead takes the entry out, and the
+    /// port loses that one owner; a live object keeps its entry.
+    #[test]
+    fn a_dead_port_object_s_entry_leaves_the_port_table() {
+        use crate::port::Port;
+
+        let mut heap = Heap::new();
+        let host = Port::new_output_string();
+        let dead = heap.alloc_port(Rc::clone(&host));
+        let live_port = Port::new_input_string("text".into());
+        let live = heap.alloc_port(Rc::clone(&live_port));
+        assert!(Rc::ptr_eq(&heap.get_port(dead).unwrap(), &host));
+        assert_eq!(heap.port_entries(), 2);
+        assert_eq!(Rc::strong_count(&host), 2, "the host's and the entry's");
+
+        let roots = TestRoots {
+            values: vec![live],
+            ..TestRoots::default()
+        };
+        collect(&mut heap, &roots);
+        assert_eq!(heap.port_entries(), 1);
+        assert_eq!(Rc::strong_count(&host), 1, "the entry let go of the port");
+        assert!(Rc::ptr_eq(&heap.get_port(live).unwrap(), &live_port));
+        assert!(!heap.is_port(TaggedValue::fixnum(1)));
+    }
+
+    /// A dead output port is written out by the collection that finds it, as
+    /// when its slot held the port (#785): a `MemoryFs` writer commits as the
+    /// entry's `Rc`, its last, drops in the sweep.
+    #[test]
+    fn a_dead_output_port_is_written_out_by_the_sweep() {
+        use crate::port::Port;
+
+        let fs = crate::vfs::MemoryFs::new();
+        let mut heap = Heap::new();
+        let port = Port::open_output_file("/out", &fs).unwrap();
+        port.write_string("hello").unwrap();
+        heap.alloc_port(port);
+        assert_eq!(fs.get_text_file(std::path::Path::new("/out")), None);
+        collect(&mut heap, &TestRoots::default());
+        assert_eq!(
+            fs.get_text_file(std::path::Path::new("/out")).as_deref(),
+            Some("hello")
+        );
+        assert_eq!(heap.port_entries(), 0);
+        assert_eq!(heap.open_file_ports(), 0);
+    }
+
+    /// The heap keeps one `PortTable` for its life: teardown's sweep empties
+    /// it, and the handle table teardown starts takes it over (#785).
+    #[test]
+    fn teardown_keeps_the_port_table_and_empties_it() {
+        use crate::port::Port;
+
+        let mut heap = Heap::new();
+        let table = Rc::clone(heap.handles.ports());
+        let port = Port::new_output_string();
+        heap.alloc_port(Rc::clone(&port));
+        heap.teardown();
+        assert!(Rc::ptr_eq(heap.handles.ports(), &table));
+        assert_eq!(heap.port_entries(), 0);
+        assert_eq!(Rc::strong_count(&port), 1);
+        let again = heap.alloc_port(Port::new_output_string());
+        assert_eq!(heap.port_entries(), 1);
+        assert!(heap.get_port(again).is_some());
     }
 
     /// Descriptor pressure is part of every mode that collects on its own,

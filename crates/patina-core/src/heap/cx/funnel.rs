@@ -325,7 +325,7 @@ fn write_parameter(
 #[cold]
 #[inline(never)]
 fn refresh_current_port(heap: &Heap, which: crate::CurrentPort, v: TaggedValue) {
-    let port = heap.get_port(v).cloned();
+    let port = heap.get_port(v);
     debug_assert!(
         port.is_some(),
         "a standard port parameter set to a non-port"

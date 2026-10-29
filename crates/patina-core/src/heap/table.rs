@@ -2,11 +2,13 @@
 //! C3; `PRD/GC_PRD.md` §18.2, rule 9, and §18.6).
 //!
 //! The redesign gives each heap tables that Rust owns and more than one
-//! owner reaches: the handle table and the root set now, then the
-//! `PortTable` (stage 4a), the `CodeStore` (4e), the `HostPayloadTable` (4f),
-//! the `FinalRegistry` (5a) and the thread table (9). Under N carriers each
-//! needs a lock. Behind one wrapper from the start, that is one change in one
-//! place, not a hunt through every table for the cells it picked.
+//! owner reaches: the handle table, its standard port parameters, the root
+//! set, the literal pool and the `PortTable` (stage 4a, #785) now, then the
+//! `FinalRegistry` (4a, #785; its young and old lists at 5a), the
+//! `CodeStore` (4e), the `HostPayloadTable` (4f) and the thread table (9).
+//! Under N carriers each needs a lock. Behind one wrapper from the start,
+//! that is one change in one place, not a hunt through every table for the
+//! cells it picked.
 
 #[cfg(not(feature = "threaded"))]
 use std::cell::{RefCell, RefMut};

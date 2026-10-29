@@ -107,9 +107,10 @@ impl Instance {
     /// Install `port` as the current port `which`: the store funnel's
     /// refresh, when the standard port parameter `which` is assigned (#608).
     /// Crate-private, so the slot cannot drift from its parameter. The
-    /// slot's hold on the port it replaces is dropped once the slot is
-    /// released, so that if it was the last one, a file port writes itself
-    /// out with nothing borrowed.
+    /// slot's hold on the port it replaces is never that port's last: the
+    /// port's object holds it too, through the heap's `PortTable`, until a
+    /// collection finds the object dead and its sweep lets go (#785). The
+    /// funnel calls this under its `&mut Heap`.
     pub(crate) fn set_current_port(&self, which: CurrentPort, port: Rc<Port>) {
         let replaced =
             std::mem::replace(&mut self.current_ports.borrow_mut()[which as usize], port);

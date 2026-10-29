@@ -284,6 +284,39 @@ fn a_close_gives_back_what_the_open_charged() {
     }
 }
 
+/// After a collection the heap's `PortTable` holds entries only for the port
+/// objects still live, the ones dropped since staying until the next
+/// collection finds them (#785): `ports` and `open-file-ports`, read after a
+/// `(gc)`, then
+/// 1,000 string ports and 100 file ports opened and dropped, then a `(gc)`
+/// in a later form, read back at their first values. A table that kept a
+/// dead string port's entry would show only here: a string port holds no
+/// descriptor and charges no external bytes.
+#[test]
+fn a_collection_leaves_the_port_table_as_it_found_it() {
+    const PROGRAM: &str = "(import (scheme base) (scheme file) (scheme write) (patina debug))
+(define (stat key) (cdr (assq key (gc-stats))))
+(define (churn n open) (if (> n 0) (begin (open) (churn (- n 1) open))))
+(gc)
+(define before (list (stat 'ports) (stat 'open-file-ports)))
+(churn 1000 (lambda () (open-input-string \"text\")))
+(churn 100 (lambda () (open-input-file \"data.txt\")))
+(define opened (list (- (stat 'ports) (car before)) (- (stat 'open-file-ports) (cadr before))))
+(gc)
+(write (list opened (equal? before (list (stat 'ports) (stat 'open-file-ports)))))
+(newline)
+";
+    for backend in BOTH_BACKENDS {
+        for (mode, envs) in MODES {
+            assert_eq!(
+                run(backend, 1024, envs, PROGRAM, &[]),
+                "((1100 100) #t)",
+                "{backend:?} {mode}"
+            );
+        }
+    }
+}
+
 /// Each descriptor limit beside what counts against it (#663). Under
 /// `ulimit -n 200`, descriptor pressure's threshold is min(128, 200 / 4) =
 /// 50, and `#f` under `PATINA_GC=0`, which counts nothing. `open-file-ports`
