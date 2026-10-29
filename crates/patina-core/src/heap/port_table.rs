@@ -87,6 +87,7 @@ impl PortTable {
 
     /// An entry for `port`, which the object about to be allocated names:
     /// the `FinalRegistry`'s if `finalized`, which the caller registers.
+    #[inline]
     pub(crate) fn insert(&self, port: Rc<Port>, finalized: bool) -> PortId {
         self.entries.with_mut(|entries| {
             let id = match entries.free.pop() {
@@ -229,6 +230,7 @@ impl PortTable {
 
 impl Entries {
     /// Take out the entry `id` and free it, answering its port.
+    #[inline]
     fn free(&mut self, id: PortId) -> Rc<Port> {
         let port = match self.ports[id.0 as usize].take() {
             Some(port) => port,
