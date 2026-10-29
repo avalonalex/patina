@@ -54,6 +54,9 @@ struct Entries {
     /// which a read compares with the word it was given, as the arenas'
     /// generation stamps are compared (#621): an id that does not name its
     /// own object's entry panics where it is read. Empty in a plain release.
+    /// Compared by its bits, never traced: a trace through it would keep
+    /// every port object alive, in the check lanes alone. A collector that
+    /// moves objects or verifies every heap word must account for these.
     owners: Vec<TaggedValue>,
 }
 
@@ -219,6 +222,28 @@ mod tests {
         let id = table.insert(Port::new_output_string());
         table.set_owner(id, TaggedValue::object(1));
         let _ = table.get(id, TaggedValue::object(2));
+    }
+
+    /// The heap's read of a port goes through the check: a second object
+    /// naming the first one's entry, which nothing but a test can make
+    /// (`alloc_object` is the heap's own), is refused where it is read.
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "does not name its own object's entry")]
+    fn a_check_build_refuses_a_port_object_that_names_another_s_entry() {
+        use crate::heap::HeapObjectData;
+
+        let mut heap = crate::Heap::new();
+        let port = heap.alloc_port(Port::new_output_string());
+        let id = match heap.get_object(port) {
+            HeapObjectData::Port(id) => *id,
+            _ => unreachable!("alloc_port answers a port object"),
+        };
+        let forged = heap.alloc_object(HeapObjectData::Port(id));
+        let _ = heap.get_port(forged);
     }
 
     #[test]

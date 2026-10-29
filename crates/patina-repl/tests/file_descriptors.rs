@@ -284,8 +284,10 @@ fn a_close_gives_back_what_the_open_charged() {
     }
 }
 
-/// The heap's `PortTable` holds an entry for each live port object, and no
-/// more (#785): `ports` and `open-file-ports`, read after a `(gc)`, then
+/// After a collection the heap's `PortTable` holds entries only for the port
+/// objects still live, the ones dropped since staying until the next
+/// collection finds them (#785): `ports` and `open-file-ports`, read after a
+/// `(gc)`, then
 /// 1,000 string ports and 100 file ports opened and dropped, then a `(gc)`
 /// in a later form, read back at their first values. A table that kept a
 /// dead string port's entry would show only here: a string port holds no

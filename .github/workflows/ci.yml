@@ -169,7 +169,8 @@ jobs:
     # retired-register checks (#625), a DEAD_SLOT read by an instruction or a
     # call's argument copy under a deliberately wrong liveness map, and one
     # stored in the heap (the latter among the patina-core heap::check:: ones);
-    # and the port table's (#785), a port id read through another object.
+    # and the port table's (#785), a port id read through another object, at
+    # the table and through Heap::get_port.
     #
     # The defer balance is the one check every build carries, so its control
     # also runs in the plain release build, without gc-check and without

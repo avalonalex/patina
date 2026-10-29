@@ -82,7 +82,7 @@ pub struct HandleTable {
     /// `Heap`, for `root_set`'s reason.
     #[trace(
         skip,
-        reason = "Rust ports, which hold no value: a port's state is Rust's"
+        reason = "Rust ports, whose state is Rust's, and in a check build each entry's owner word, compared by its bits and never traced: tracing it would keep every port object alive"
     )]
     ports: Rc<PortTable>,
 }

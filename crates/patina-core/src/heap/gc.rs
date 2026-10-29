@@ -1549,8 +1549,10 @@ impl<'h> GcVisitor<'h> {
             // Bytes.
             | HeapObjectData::Bytevector(_)
             // The number of the port's entry in the heap's `PortTable`, which
-            // holds a Rust port, buffers, a file handle, a position and flags,
-            // and no `TaggedValue` (#785).
+            // holds a Rust port, buffers, a file handle, a position and flags
+            // (#785). In a check build it also records each entry's owner
+            // word, which a read compares by its bits and nothing traces:
+            // tracing it would keep every port object alive.
             | HeapObjectData::Port(_)
             // An id, a name and field names.
             | HeapObjectData::RecordType(_)

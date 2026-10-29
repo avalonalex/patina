@@ -532,7 +532,7 @@ expansion runs in (§7; point C of `PRD/GC_PRD.md` §11.3).
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
 | `Heap.handles` | `heap/handles.rs` | What hosts keep across evaluations, each rooted until its handle is dropped: an `Owned` handle's value (#605) — what the `eval_*_owned` methods and `Interpreter::lookup` answer, and the last value of a program the interpreter is running — and an `OwnedEnvironment`'s environment (#620), traced by `visit_env` with everything bound in it. Also the environments hosts hold by their own `Rc` and lend to the legacy pipeline, kept weakly and traced while anything holds them. Visited in `GcVisitor::new` beside the intern tables, so every collection on either backend traces them; visited, not only marked, since a handle's value can be anything. A handle holds its table weakly and keeps nothing alive |
 | `HandleTable.standard_ports` | `heap/handles.rs` | The parameter objects `current-input-port`, `current-output-port` and `current-error-port` are bound to (#608): made once per heap on `(patina internal io)`'s first build (`Heap::standard_port_parameters`), each holding one port object and its converter, and kept for the heap's life, so a second build binds the same three. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason, so its derived trace reaches it when `GcVisitor::new` visits the table; visited, not only marked, since a parameter holds its port and its converter. Pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown. The port each one holds is also cached, by `Rc`, in the interpreter's `Instance` slots, which the store funnel refreshes at every assignment of one (`write_parameter`) |
-| `HandleTable.ports` | `heap/port_table.rs` | Not a root: the heap's `PortTable` (#785), the `Rc<Port>` each port object's slot names by number, which hold Rust state and no value, so the derived trace skips the field. On the `HandleTable`, by its own `Rc`, for `root_set`'s reason and so that #786's registry can hold it weakly; the table teardown starts takes it over, so a heap keeps one for its life. The sweep takes a dead port object's entry out (§4.5). An entry need not hold its port's last `Rc`: the `Instance` holds the standard ports and caches the current ones, and a host may keep one |
+| `HandleTable.ports` | `heap/port_table.rs` | Not a root: the heap's `PortTable` (#785), the `Rc<Port>` each port object's slot names by number, which hold Rust state and no value, so the derived trace skips the field. In a check build the table also records each entry's owner word, which a read compares by its bits; it must stay untraced, or every port object would live for ever in the check lanes alone. On the `HandleTable`, by its own `Rc`, for `root_set`'s reason and so that #786's registry can hold it weakly; the table teardown starts takes it over, so a heap keeps one for its life. The sweep takes a dead port object's entry out (§4.5). An entry need not hold its port's last `Rc`: the `Instance` holds the standard ports and caches the current ones, and a host may keep one |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
 | A compilation's `LiteralPool` | `crates/patina-core/src/literal_pool.rs` | The heap literals of the form being compiled, from its expansion until its code holds them (§9.7, #705): registered with the heap's root set for the pool's life, its entries reported as slots. Each backend drops the pool once the form is compiled, before it runs, so it never holds more than one form's quoted text |
 | Macro literals and environments | `heap/mod.rs`, `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: the literals the object holds (§9.6), and its body's `definition_env` and each `foreign_expansions` environment (§4.3) |
@@ -699,8 +699,10 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   namespace — captures a namespace, whose tables are external bytes already
   (below), and is charged a frame it does not capture; and frame chains are
   missed: exact accounting is stage 4f's. Other shared `Rc`
-  payloads (procedures' bodies and environments, macros, libraries, ports,
-  tree-walker continuations) are not charged; GC_PRD §15 charges what they
+  payloads (procedures' bodies and environments, macros, libraries,
+  tree-walker continuations) are not charged, and a port has none: its slot
+  holds only its `PortTable` entry's number (#785), and an open file port's
+  buffer is charged as external bytes (below); GC_PRD §15 charges what they
   hold as **external bytes**, through `Heap::charge_external_bytes`, which
   counts toward the trigger and into L. A holder gives them back through an
   `ExternalBytes` handle (`Heap::external_bytes_handle`), which shares the
@@ -739,8 +741,9 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   (#607).** A file port's descriptor and buffer were invisible to the
   trigger, so a loop that opened files and dropped the ports ran out of
   descriptors (`EMFILE` at the 1,021st open under `ulimit -n 1024`) long
-  before a collection would have closed the dead ones, which sweep does as
-  it drops their payloads. Now `Heap::alloc_port`, which every port reaches
+  before a collection would have closed the dead ones, which the sweep does
+  as it takes their entries out of the heap's `PortTable` and drops their
+  `Rc<Port>`s (§4.5, #785). Now `Heap::alloc_port`, which every port reaches
   the program through, charges an open file port `FILE_PORT_BYTES` (8 KiB,
   its buffer's capacity) of external bytes and counts it in descriptor
   pressure: the file ports opened since the last collection and not closed
@@ -890,7 +893,11 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   2 × L)) after `bytes-since-gc`, `descriptors-trigger` (min(128,
   `RLIMIT_NOFILE` / 4)) after `descriptors-since-gc`, and `descriptor-limit`
   (the soft `RLIMIT_NOFILE`) after `open-file-ports`, the file ports open
-  now. A trigger the GC mode does not use reads `#f`. `minors` and `majors`
+  now. `ports`, just before it, counts the heap's port objects' entries in
+  its `PortTable` (#785), string ports included, and the standard ports'
+  objects while they are reachable: a dead port object keeps its entry until
+  the collection that finds it, so the count is the live ports' only right
+  after a collection. A trigger the GC mode does not use reads `#f`. `minors` and `majors`
   count collections by kind: every one is a major until a nursery.
   For a tree-walker closure, the first four count the estimate of the frame
   it captures (#637, above) as part of its payload: an estimate, not a
