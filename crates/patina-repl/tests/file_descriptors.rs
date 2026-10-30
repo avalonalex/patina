@@ -36,7 +36,9 @@
 //! on every row, and load the file.
 //! The last row was already right: the collection that finds a file port
 //! dead writes out its buffer as it closes it, which every collection, the
-//! one `(gc)` asks for and one the allocations trigger, does.
+//! one `(gc)` asks for and one the allocations trigger, does. Since #785 the
+//! drain after the collection does it, with the heap's borrow released and
+//! before the program resumes, so no answer changed.
 //!
 //! The library loader, measured 2026-10-25 with chibi 0.12.0
 //! (`chibi-scheme -A lib`) and Gauche 0.9.15 (`gosh -r7 -A lib`) at
@@ -354,7 +356,7 @@ fn each_descriptor_limit_shows_beside_its_use() {
 }
 
 /// F2 of GC_PRD §9.6: a collection that finds a file port dead writes out
-/// what was left in its buffer and closes it. Before the collection the
+/// what was left in its buffer and closes it, in the drain after it (#785). Before the collection the
 /// file is empty, after it it holds the output, both for the collection
 /// `(gc)` asks for and for one the allocations trigger. chibi and Gauche
 /// answer the same.

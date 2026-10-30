@@ -67,6 +67,10 @@
 
 // The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
 #![allow(deprecated)]
+#![expect(
+    clippy::disallowed_macros,
+    reason = "WATCHED: the heap the test's writers report on as they drop (#785)"
+)]
 
 mod common;
 use common::{assert_program_eval_to, scratch_path};
@@ -962,6 +966,268 @@ impl patina_core::FileSystem for ScarceFs {
 
     fn read_to_string(&self, path: &std::path::Path) -> std::io::Result<String> {
         let _descriptor = self.take(Ok(()))?;
+        patina_core::NativeFs.read_to_string(path)
+    }
+
+    fn canonicalize(&self, path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+        patina_core::NativeFs.canonicalize(path)
+    }
+
+    fn is_dir(&self, path: &std::path::Path) -> bool {
+        patina_core::NativeFs.is_dir(path)
+    }
+
+    fn read_dir(&self, path: &std::path::Path) -> std::io::Result<Vec<String>> {
+        patina_core::NativeFs.read_dir(path)
+    }
+
+    fn create_dir(&self, path: &std::path::Path) -> std::io::Result<()> {
+        patina_core::NativeFs.create_dir(path)
+    }
+
+    fn create_dir_all(&self, path: &std::path::Path) -> std::io::Result<()> {
+        patina_core::NativeFs.create_dir_all(path)
+    }
+
+    fn remove_dir(&self, path: &std::path::Path) -> std::io::Result<()> {
+        patina_core::NativeFs.remove_dir(path)
+    }
+
+    fn current_dir(&self) -> std::io::Result<std::path::PathBuf> {
+        patina_core::NativeFs.current_dir()
+    }
+
+    fn set_current_dir(&self, path: &std::path::Path) -> std::io::Result<()> {
+        patina_core::NativeFs.set_current_dir(path)
+    }
+}
+
+/// A dead file port is written out after the collection that finds it, not
+/// inside it (#785): its writer's drop, which a `FileSystem` other than the
+/// operating system's supplies, finds the heap not borrowed and the
+/// collection already counted, and comes before the interpreter is dropped.
+/// At a safe point's collection (allocation under stress), at one asked for
+/// at a call (`(gc)` under `PATINA_GC=0`'s mode, where nothing else
+/// collects), and, for a port a global keeps, when the interpreter is
+/// dropped, on both backends.
+#[test]
+fn a_dead_file_port_is_written_out_after_its_collection() {
+    use patina_core::GcMode;
+
+    /// Run `program` and drop the interpreter, answering what each writer
+    /// found as it dropped.
+    fn watched<B: patina_runtime::Backend>(
+        make: impl FnOnce(std::sync::Arc<dyn patina_core::FileSystem>) -> B,
+        program: &str,
+    ) -> Vec<WatchedDrop> {
+        let fs = WatchFs::new();
+        let interp = patina_interpreter::Interpreter::new(make(fs.clone()));
+        WatchFs::watch(interp.heap());
+        if let Err(e) = interp.eval_program(program) {
+            panic!("{program}: {e}");
+        }
+        fs.torn_down
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(interp);
+        fs.seen.lock().unwrap().clone()
+    }
+
+    let root = TempDir::new().expect("temp dir");
+    // An allocation interval the bootstrap crosses a few times, and the
+    // loop after the drop at least twice.
+    let stress = GcMode::Stress(4096);
+    for mode in [GcMode::Off, stress] {
+        for backend in ["VM", "tree-walker"] {
+            let dir = root.path().join(format!("{backend}-{mode}"));
+            std::fs::create_dir(&dir).expect("a directory per run");
+            let drop_port = format!(
+                r#"(define (drop-port name)
+                     (write-string name (open-output-file (string-append "{}/" name))))"#,
+                dir.display()
+            );
+            let (program, expected) = match mode {
+                GcMode::Off => (
+                    format!(
+                        "(import (scheme base) (scheme file) (patina debug))
+                         {drop_port}
+                         (drop-port \"at-call\")
+                         (gc)"
+                    ),
+                    &["at-call"][..],
+                ),
+                _ => (
+                    format!(
+                        "(import (scheme base) (scheme file))
+                         {drop_port}
+                         (drop-port \"safe-point\")
+                         (let loop ((i 0)) (when (< i 10000) (make-vector 4) (loop (+ i 1))))
+                         (define kept (open-output-file \"{}/teardown\"))
+                         (write-string \"teardown\" kept)",
+                        dir.display()
+                    ),
+                    &["safe-point", "teardown"][..],
+                ),
+            };
+            let seen = match backend {
+                "VM" => watched(
+                    |fs| patina_vm::VmBackend::with_fs_and_gc_mode(fs, mode),
+                    &program,
+                ),
+                _ => watched(
+                    |fs| patina_tree_walker::TreeWalker::with_fs_and_gc_mode(fs, mode),
+                    &program,
+                ),
+            };
+            let names: Vec<&str> = seen.iter().map(|drop| drop.name.as_str()).collect();
+            assert_eq!(names, expected, "{backend}, {mode}");
+            for drop in &seen {
+                assert!(
+                    drop.heap_free,
+                    "{backend}, {mode}: {} was written out under a heap borrow",
+                    drop.name
+                );
+                let kept = drop.name == "teardown";
+                assert_eq!(
+                    drop.torn_down,
+                    kept,
+                    "{backend}, {mode}: {} was written out {}",
+                    drop.name,
+                    if kept {
+                        "before its interpreter was dropped"
+                    } else {
+                        "only when its interpreter was dropped"
+                    }
+                );
+                if !kept {
+                    assert!(
+                        drop.collections >= 1,
+                        "{backend}, {mode}: {} was written out before its collection was counted",
+                        drop.name
+                    );
+                }
+                let text = std::fs::read_to_string(dir.join(&drop.name)).unwrap();
+                assert_eq!(text, drop.name, "{backend}, {mode}");
+            }
+            if matches!(mode, GcMode::Off) {
+                assert_eq!(
+                    seen[0].collections, 1,
+                    "{backend}: the one `(gc)` ran first"
+                );
+            }
+        }
+    }
+}
+
+thread_local! {
+    /// The heap a [`WatchFs`] writer reports on when it drops: the test's
+    /// interpreter's, held weakly so that it is dropped with it.
+    static WATCHED: std::cell::RefCell<std::rc::Weak<std::cell::RefCell<patina_core::Heap>>> =
+        const { std::cell::RefCell::new(std::rc::Weak::new()) };
+}
+
+/// The native filesystem, whose writers note, as they drop, whether the
+/// heap [`WATCHED`] names is borrowed, how many collections it has run, and
+/// whether its interpreter is being dropped.
+struct WatchFs {
+    seen: std::sync::Arc<std::sync::Mutex<Vec<WatchedDrop>>>,
+    torn_down: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// What a [`WatchFs`] writer found as it dropped.
+#[derive(Clone, Debug)]
+struct WatchedDrop {
+    name: String,
+    heap_free: bool,
+    collections: u64,
+    torn_down: bool,
+}
+
+impl WatchFs {
+    fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            seen: Default::default(),
+            torn_down: Default::default(),
+        })
+    }
+
+    fn watch(heap: &patina_core::SharedHeap) {
+        WATCHED.with(|watched| *watched.borrow_mut() = std::rc::Rc::downgrade(heap));
+    }
+}
+
+/// A [`WatchFs`] writer.
+struct Watched {
+    inner: Box<dyn patina_core::vfs::WritePort>,
+    name: String,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<WatchedDrop>>>,
+    torn_down: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for Watched {
+    fn drop(&mut self) {
+        let heap = WATCHED
+            .with(|watched| watched.borrow().upgrade())
+            .expect("the watched heap is alive while its ports drop");
+        let heap_free = heap.try_borrow_mut().is_ok();
+        let collections = heap.try_borrow().map_or(0, |heap| heap.gc_collections());
+        self.seen.lock().unwrap().push(WatchedDrop {
+            name: std::mem::take(&mut self.name),
+            heap_free,
+            collections,
+            torn_down: self.torn_down.load(std::sync::atomic::Ordering::SeqCst),
+        });
+    }
+}
+
+impl std::io::Write for Watched {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl patina_core::vfs::WritePort for Watched {
+    fn finalize(&mut self) -> std::io::Result<()> {
+        self.inner.finalize()
+    }
+}
+
+impl patina_core::FileSystem for WatchFs {
+    fn open_read(
+        &self,
+        path: &std::path::Path,
+    ) -> std::io::Result<Box<dyn patina_core::vfs::ReadPort>> {
+        patina_core::NativeFs.open_read(path)
+    }
+
+    fn open_write(
+        &self,
+        path: &std::path::Path,
+    ) -> std::io::Result<Box<dyn patina_core::vfs::WritePort>> {
+        Ok(Box::new(Watched {
+            inner: patina_core::NativeFs.open_write(path)?,
+            name: path.file_name().unwrap().to_string_lossy().into_owned(),
+            seen: std::sync::Arc::clone(&self.seen),
+            torn_down: std::sync::Arc::clone(&self.torn_down),
+        }))
+    }
+
+    fn file_exists(&self, path: &std::path::Path) -> bool {
+        patina_core::NativeFs.file_exists(path)
+    }
+
+    fn is_file(&self, path: &std::path::Path) -> bool {
+        patina_core::NativeFs.is_file(path)
+    }
+
+    fn remove_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        patina_core::NativeFs.remove_file(path)
+    }
+
+    fn read_to_string(&self, path: &std::path::Path) -> std::io::Result<String> {
         patina_core::NativeFs.read_to_string(path)
     }
 

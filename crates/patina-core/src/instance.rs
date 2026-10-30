@@ -109,18 +109,19 @@ impl Instance {
     /// Crate-private, so the slot cannot drift from its parameter. The
     /// slot's hold on the port it replaces is never that port's last: the
     /// port's object holds it too, through the heap's `PortTable`, until a
-    /// collection finds the object dead and its sweep lets go (#785). The
-    /// funnel calls this under its `&mut Heap`.
+    /// collection finds the object dead and its entry lets go, in the sweep
+    /// for a port whose drop does no I/O and in the drain after the
+    /// collection for a file port, with no heap borrow (#785). The funnel
+    /// calls this under its `&mut Heap`.
     pub(crate) fn set_current_port(&self, which: CurrentPort, port: Rc<Port>) {
         let replaced =
             std::mem::replace(&mut self.current_ports.borrow_mut()[which as usize], port);
         drop(replaced);
     }
 
-    /// Put the standard ports back as the current ports: what
-    /// [`Heap::teardown`](crate::Heap::teardown) does, so that a file port
-    /// left current is dropped, and so written out, with the heap's other
-    /// ports (#618).
+    /// Put the standard ports back as the current ports: what teardown
+    /// ([`crate::heap::teardown`]) does, so that a file port left current is
+    /// dropped, and so written out, with the heap's other ports (#618).
     pub(crate) fn reset_current_ports(&self) {
         let replaced = self.current_ports.replace(self.standard_ports.clone());
         drop(replaced);

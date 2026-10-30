@@ -227,10 +227,10 @@ pub struct GcStats {
     /// Slots reclaimed in the last collection.
     pub last_swept: ArenaCounts,
     /// Duration of the last collection in microseconds: its marking and
-    /// sweep, without the backend's work after it.
+    /// sweep, without the work after it.
     pub last_pause_micros: u128,
-    /// The phases of the last collection (#648); `after` is the backend's,
-    /// which `Heap::finish_collection` adds.
+    /// The phases of the last collection (#648); `after` is the drain's and
+    /// the backend's, which the record adds (`Heap::finish_collection`).
     pub last_phases: PhaseTimes,
 }
 
@@ -1022,6 +1022,11 @@ impl GcController {
             gc.borrow_mut().collect(&mut h, roots, false);
             collected = true;
         });
+        // With the heap's borrow released, before the machine resumes: the
+        // collection's finalizers (#785).
+        if collected {
+            super::finalize::finalize_after_collection(&driver.heap);
+        }
         collected
     }
 
@@ -1070,7 +1075,11 @@ impl GcController {
                 collected = true;
             });
         }
-        if !collected {
+        if collected {
+            // Before the call that asked for the collection runs again: an
+            // open retried finds the dead ports' descriptors closed (#785).
+            super::finalize::finalize_after_collection(&driver.heap);
+        } else {
             driver.heap.borrow_mut().defer_collection();
         }
         collected
@@ -1769,7 +1778,9 @@ impl Heap {
     /// and tombstone the slot. Tombstoning drops `Rc` payloads eagerly, which
     /// is what breaks closure ↔ environment cycles (design §8) — it is
     /// load-bearing for objects (`Rc` payloads) and vectors/strings (element
-    /// buffers). Pairs are `Copy` with nothing to drop, so a plain release
+    /// buffers). A dead port's `PortTable` entry is taken out here too,
+    /// except a file port's, which the drain after the collection takes
+    /// (`heap/finalize.rs`, #785). Pairs are `Copy` with nothing to drop, so a plain release
     /// build skips the store; a check build writes a poison value, so a
     /// stale reference that marking reaches traces nothing from the dead
     /// pair.
@@ -1814,7 +1825,8 @@ impl Heap {
         // the arenas themselves are mutably borrowed.
         let mut freed_closures = self.gc_freed_closure_code_ids.take();
         // The entries of the dead port objects, which leave the `PortTable`
-        // once the object arena is swept (#785).
+        // once the object arena is swept, except the `FinalRegistry`'s,
+        // which the drain takes out (#785).
         let mut dead_ports = Vec::new();
         // The payloads of the slots freed, measured before their tombstones
         // drop them.
@@ -1882,11 +1894,12 @@ impl Heap {
         self.gc_freed_closure_code_ids = freed_closures;
         // The dead objects' ports, taken out of the table in one access and
         // dropped after it (`HeapTable`'s rule), before the account is
-        // settled: a file port whose `Rc` this was the last of flushes and
-        // closes, and gives back its charge, as when its slot's tombstone
-        // dropped it, so L counts no dead port (#785).
-        let dead_ports = self.handles.ports().remove(&dead_ports);
+        // settled. None is a file's: those are the `FinalRegistry`'s, which
+        // classification queued and took the charges of, and which the
+        // drain drops after the collection, so L counts no dead port (#785).
+        let (dead_ports, finalized) = self.handles.ports().remove(&dead_ports);
         drop(dead_ports);
+        self.assert_finals_queued(&finalized);
         #[cfg(any(debug_assertions, feature = "gc-check"))]
         assert_eq!(
             charged_closures,
@@ -1905,9 +1918,10 @@ impl Heap {
             .through_last_gc
             .saturating_add(account.shared.since_gc.get() as u64);
         account.shared.since_gc.set(0);
-        // After the arenas, as `since_gc`: the file ports this sweep closed
-        // took themselves off the count as they dropped, and the ones it
-        // found live count toward no later collection (#607).
+        // After the arenas, as `since_gc`. The sweep closes no file port: the
+        // dead ones' charges came off at classification, before it, and the
+        // drain after the collection closes them (#785). The ones this
+        // collection found live count toward no later collection (#607).
         account.shared.start_cycle();
         // Read after the arenas are swept: external bytes that the dead
         // slots' payloads gave back as they dropped — a dead environment
@@ -1929,10 +1943,9 @@ impl Heap {
     /// held, and a file port still reachable from a global never dropped, so
     /// nothing wrote out what it had buffered. A sweep drops each freed
     /// slot's payload in place, which is how a collection breaks the same
-    /// cycles while the heap runs: here every slot is freed, the
-    /// environments let go of the heap, and each port flushes and closes as
-    /// it drops. The payloads give back what they charged with no heap
-    /// borrow, as they do in any sweep. The interpreter's current ports go
+    /// cycles while the heap runs: here every slot is freed, and the
+    /// environments let go of the heap. The payloads give back what they
+    /// charged with no heap borrow, as they do in any sweep. The interpreter's current ports go
     /// back to its standard ones first (#618), so a file port left current
     /// is let go of too, and written out with the rest.
     ///
@@ -1943,11 +1956,18 @@ impl Heap {
     /// later allocation finds a slot whose generation has moved on. The
     /// hosts' handles go with their table (#605): one kept past it holds a
     /// dead reference, which the heap refuses to read. The heap's
-    /// `PortTable` does not: the new handle table takes it over, empty
-    /// (#785). A second teardown
-    /// frees nothing. It is not a collection, and leaves the count of them as
-    /// it was.
-    pub fn teardown(&mut self) {
+    /// `PortTable` and `FinalRegistry` do not: the new handle table takes
+    /// them over (#785). A second teardown frees nothing. It is not a
+    /// collection, and leaves the count of them as it was.
+    ///
+    /// The half of [`super::teardown`] that holds the heap: every entry of
+    /// the `FinalRegistry` is queued first, so that none names a slot this
+    /// frees, and the file ports it names are written out and closed by the
+    /// drain that follows, once the borrow is released (F5, #785). So the
+    /// sweep drops every port but a file's, whose entry the drain takes.
+    /// Crate-private, so that no owner skips the drain.
+    pub(crate) fn teardown(&mut self) {
+        self.queue_every_final();
         self.instance.reset_current_ports();
         self.symbol_table.clear();
         self.core_syntax_table.clear();
@@ -2148,6 +2168,9 @@ impl Collector for MarkSweepCollector {
         heap.census_collection(&marks);
         let sweep = Instant::now();
         let marked = marks.marked();
+        // Classification, while the mark bits are complete and before the
+        // sweep reuses them (#785): timed as the sweep's.
+        heap.queue_dead_finals(&marks);
         let swept = heap.sweep(&mut marks);
         phases.sweep = sweep.elapsed();
 
@@ -3137,7 +3160,7 @@ mod tests {
         };
         let heap = Rc::downgrade(&shared);
 
-        shared.borrow_mut().teardown();
+        crate::heap::teardown(&shared);
         let stats = shared.borrow().stats();
         assert_eq!(
             (stats.pairs, stats.vectors, stats.objects, stats.symbols),
@@ -3151,7 +3174,7 @@ mod tests {
             }));
             assert!(read.is_err(), "a value read after teardown");
         }
-        shared.borrow_mut().teardown();
+        crate::heap::teardown(&shared);
         assert_eq!(shared.borrow().stats().gc_last_swept, 0);
         // A symbol is interned anew rather than at its freed slot.
         let again = shared.borrow_mut().intern_symbol("kept");
@@ -3205,7 +3228,8 @@ mod tests {
 
     /// An open file port is charged its buffer and its place in descriptor
     /// pressure when it gets its heap object, once, and gives both back when
-    /// it closes: explicitly, or by dropping in the sweep that finds it dead.
+    /// it closes, or when the collection that finds its object dead queues
+    /// it for the drain (#785).
     /// The count reaching the threshold posts a collection, once while one is
     /// pending; the collection starts the count again, and closing a port it
     /// found live gives back its bytes but takes nothing off the ports opened
@@ -3257,7 +3281,13 @@ mod tests {
         assert_eq!(
             held(&heap),
             (0, FILE_PORT_BYTES),
-            "the dead ports closed in the sweep, and the live one counts no more"
+            "the dead ports gave back their charges, and the live one counts no more"
+        );
+        heap.finalize_queued();
+        assert_eq!(
+            held(&heap),
+            (0, FILE_PORT_BYTES),
+            "the drain gives back nothing more"
         );
 
         let opened_since = open(&mut heap);
@@ -3295,11 +3325,11 @@ mod tests {
         assert!(!heap.is_port(TaggedValue::fixnum(1)));
     }
 
-    /// A dead output port is written out by the collection that finds it, as
-    /// when its slot held the port (#785): a `MemoryFs` writer commits as the
-    /// entry's `Rc`, its last, drops in the sweep.
+    /// A dead output port is written out after the collection that finds
+    /// it, not inside it (#785): a `MemoryFs` writer commits as the drain
+    /// drops the entry's `Rc`, its last.
     #[test]
-    fn a_dead_output_port_is_written_out_by_the_sweep() {
+    fn a_dead_output_port_is_written_out_by_the_drain() {
         use crate::port::Port;
 
         let fs = crate::vfs::MemoryFs::new();
@@ -3309,26 +3339,31 @@ mod tests {
         heap.alloc_port(port);
         assert_eq!(fs.get_text_file(std::path::Path::new("/out")), None);
         collect(&mut heap, &TestRoots::default());
+        assert_eq!(fs.get_text_file(std::path::Path::new("/out")), None);
+        assert_eq!((heap.port_entries(), heap.open_file_ports()), (1, 0));
+        heap.finalize_queued();
         assert_eq!(
             fs.get_text_file(std::path::Path::new("/out")).as_deref(),
             Some("hello")
         );
         assert_eq!(heap.port_entries(), 0);
-        assert_eq!(heap.open_file_ports(), 0);
     }
 
-    /// The heap keeps one `PortTable` for its life: teardown's sweep empties
-    /// it, and the handle table teardown starts takes it over (#785).
+    /// The heap keeps one `PortTable` and one `FinalRegistry` for its life:
+    /// teardown's sweep empties the table of every port but a file's, and
+    /// the handle table teardown starts takes both over (#785).
     #[test]
     fn teardown_keeps_the_port_table_and_empties_it() {
         use crate::port::Port;
 
         let mut heap = Heap::new();
         let table = Rc::clone(heap.handles.ports());
+        let finals = Rc::clone(heap.handles.finals());
         let port = Port::new_output_string();
         heap.alloc_port(Rc::clone(&port));
         heap.teardown();
         assert!(Rc::ptr_eq(heap.handles.ports(), &table));
+        assert!(Rc::ptr_eq(heap.handles.finals(), &finals));
         assert_eq!(heap.port_entries(), 0);
         assert_eq!(Rc::strong_count(&port), 1);
         let again = heap.alloc_port(Port::new_output_string());
@@ -3826,6 +3861,84 @@ mod tests {
             driver.mutate(&instance, |_cx| {
                 let mut gc = GcController::from_env();
                 gc.collect(&mut heap.borrow_mut(), &[&TestRoots::default()], false);
+            });
+        }
+
+        /// A file port's object that a safe point's collection, or one
+        /// asked for at a call, finds dead is written out by the drain the
+        /// entry runs once the collection returns, before the entry does
+        /// (#785); the drain's time is part of the record's `after`.
+        #[test]
+        fn both_collection_entries_drain_before_they_return() {
+            use crate::port::Port;
+
+            let fs = crate::vfs::MemoryFs::new();
+            let shared = new_shared_heap();
+            let gc = RefCell::new(GcController::new(GcMode::Off));
+            let mut driver = GcDriver::acquire(&shared).expect("the carrier's driver is free");
+            let dead = |path: &str| {
+                let port = Port::open_output_file(path, &fs).unwrap();
+                port.write_string(path).unwrap();
+                shared.borrow_mut().alloc_port(port);
+            };
+            let text = |path: &str| fs.get_text_file(std::path::Path::new(path));
+
+            dead("/safe-point");
+            shared.borrow_mut().request_gc();
+            assert!(GcController::safe_point(&gc, &mut driver, |collect| {
+                collect(&[&TestRoots::default()]);
+            }));
+            assert_eq!(text("/safe-point").as_deref(), Some("/safe-point"));
+
+            dead("/at-call");
+            assert!(GcController::collect_at_call(
+                &gc,
+                &mut driver,
+                CollectKind::Major,
+                |collect| collect(&[&TestRoots::default()]),
+            ));
+            assert_eq!(text("/at-call").as_deref(), Some("/at-call"));
+            let mut heap = shared.borrow_mut();
+            assert_eq!((heap.port_entries(), heap.open_file_ports()), (0, 0));
+            // The drain's time is in the record's `after`, and the backend's
+            // is added to it.
+            let record = heap.telemetry.unfinished.as_ref().expect("a record");
+            let (drain, before) = (record.phases.after, record.phases.total());
+            assert!(drain > std::time::Duration::ZERO);
+            let backend = std::time::Duration::from_millis(5);
+            heap.finish_collection(backend);
+            assert_eq!(heap.last_pause(), before + backend);
+        }
+
+        /// F4 (#785): a finalizer allocates nothing. The check's positive
+        /// control, a finalizer that allocates.
+        #[test]
+        #[cfg_attr(
+            not(any(debug_assertions, feature = "gc-check")),
+            ignore = "needs a check build"
+        )]
+        #[should_panic(expected = "a finalizer allocated")]
+        fn a_finalizer_that_allocates_panics() {
+            let shared = new_shared_heap();
+            crate::heap::finalize::finalizing(&shared, || {
+                shared
+                    .borrow_mut()
+                    .alloc_pair(TaggedValue::NULL, TaggedValue::NULL);
+            });
+        }
+
+        /// F4 (#785): a finalizer reaches no poll. The check's positive
+        /// control, a finalizer that reaches one.
+        #[test]
+        #[cfg_attr(
+            not(any(debug_assertions, feature = "gc-check")),
+            ignore = "needs a check build"
+        )]
+        #[should_panic(expected = "GC poll inside an AssertNoGc scope")]
+        fn a_finalizer_that_reaches_a_poll_panics() {
+            let shared = new_shared_heap();
+            crate::heap::finalize::finalizing(&shared, || {
+                AssertNoGcCount::of(&shared).assert_none_open();
             });
         }
 

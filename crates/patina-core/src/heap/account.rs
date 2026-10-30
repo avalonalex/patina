@@ -55,11 +55,16 @@
 //! and not closed since. When that count reaches the installed
 //! [`GcThreshold::descriptors`], `min(128, RLIMIT_NOFILE / 4)`
 //! ([`descriptor_pressure_threshold`]), the heap posts a collection, which
-//! closes the dead ones: the sweep takes each dead port object's entry out
-//! of the heap's `PortTable`, and a port's file closes as its last `Rc`
-//! drops (#785). A port's slot holds only the entry's number, so its
-//! payload is charged nothing. A [`FilePortCharge`] that the port's data holds gives both back
-//! when the port closes, explicitly or by dropping, with no heap borrow. A
+//! closes the dead ones: it queues each dead file port's object with the
+//! `FinalRegistry`, and the drain after it takes the entry out of the heap's
+//! `PortTable`, and a port's file closes as its last `Rc` drops (#785). A
+//! port's slot holds only the entry's number, so its payload is charged
+//! nothing. A [`FilePortCharge`] that the port's data holds gives both back
+//! when the port closes, explicitly or by dropping, or when the collection
+//! that queues it takes the charge out first, with no heap borrow. The
+//! rule for every kind the registry finalizes: what a queued entry holds
+//! outside the arenas leaves the external bytes at classification, before
+//! the sweep settles L, so L counts nothing dead. A
 //! loop that closes what it opens never reaches the descriptor threshold,
 //! though its charges still count toward the byte trigger like the
 //! allocations they stand for; one that drops its ports collects every
@@ -445,8 +450,9 @@ pub(super) struct SharedCounts {
     pub(super) mutator: Rc<Carrier>,
     /// Descriptor pressure (#607): the file ports opened since the last
     /// collection and not closed since. Here rather than on the heap because
-    /// a port closes by dropping, often inside a sweep, and its
-    /// [`FilePortCharge`] takes itself off with no heap borrow.
+    /// a port's charge is given back inside a collection, at classification
+    /// (#785), or wherever its last `Rc` drops, and its [`FilePortCharge`]
+    /// takes itself off with no heap borrow.
     pub(super) descriptors: Cell<usize>,
     /// The file ports open now, opened in any cycle: the use of the
     /// descriptor limit, `RLIMIT_NOFILE`, as far as the heap's ports go.
@@ -533,8 +539,11 @@ impl SharedCounts {
 /// place in descriptor pressure's count. [`Heap::charge_file_port`] makes
 /// one when the port gets its heap object, and the port's data holds it
 /// beside the file, so both go together: when the port is closed, or when
-/// its last `Rc` drops — in a sweep, usually, which holds the heap mutably,
-/// so giving it back needs no heap borrow.
+/// its last `Rc` drops. A collection that finds the port's objects dead,
+/// with its every `Rc` held by their queued entries, takes the charge out at
+/// classification, before it settles L, while the heap is borrowed mutably,
+/// so giving it back needs no heap borrow; the drain after the collection
+/// closes the file (#785).
 #[derive(Debug)]
 pub(crate) struct FilePortCharge {
     counts: Rc<SharedCounts>,
@@ -563,13 +572,16 @@ impl Drop for FilePortCharge {
 /// through which a holder charges what it holds and gives it back when it
 /// dies, with no heap borrow either way.
 ///
-/// A holder of external bytes — an environment's tables, a port's buffer —
-/// usually dies when the last `Rc` naming it drops, and that is often inside
-/// a sweep: tombstoning a dead slot drops its `Rc` payload while the sweep
-/// holds the heap mutably, so a `Drop` that borrowed the heap would panic.
-/// The handle shares the total with the heap instead, and the sweep reads it
-/// after the arenas are swept, so bytes given back by the drops a sweep
-/// causes are out of the L that collection sets. A namespace charges its
+/// A holder of external bytes, such as an environment's tables, usually dies
+/// when the last `Rc` naming it drops, and that is often inside a sweep:
+/// tombstoning a dead slot drops its `Rc` payload while the sweep holds the
+/// heap mutably, so a `Drop` that borrowed the heap would panic. The handle
+/// shares the total with the heap instead, and the sweep reads it after the
+/// arenas are swept, so bytes given back by the drops a sweep causes are out
+/// of the L that collection sets. A file port's buffer shares the total
+/// through its [`FilePortCharge`], which a collection that finds the port
+/// dead takes out at classification, under the same borrow and before the
+/// sweep settles L (#785). A namespace charges its
 /// tables as they grow (`Environment`'s `NamespaceCharge`), which can be
 /// under a heap borrow too, so a charge goes through the handle as well.
 #[derive(Debug, Clone)]

@@ -1136,10 +1136,15 @@ Each check has a positive control, a test that must panic with the check's
 message, and the release GC lane runs them in its `gc-check` build:
 `stale_references.rs`, `gc_protocol.rs` and `retired_registers.rs` in
 `patina-tests`, and `patina-core`'s `heap::check::`,
-`heap::gc::tests::protocol::` and the port table's owner checks
+`heap::gc::tests::protocol::` (F4's two among them: a finalizer that
+allocates, and one that reaches a poll, #785), the port table's owner checks
 (`heap::port_table::tests::a_check_build_refuses_…`, #785): an id read
-through another object, at the table and through `Heap::get_port`. A build
-without the checks reports them ignored. `crates/patina-repl/tests/gc_zeal.rs` is the control for zeal
+through another object, at the table and through `Heap::get_port`, and the
+finalization registry's (`heap::finalize::tests::a_check_build_refuses_…`):
+a dead entry whose object's slot was freed under it, and a port object a
+sweep frees whose entry is the registry's but was never queued, as a
+constructor that did not register it would leave. A build without the checks reports them
+ignored. `crates/patina-repl/tests/gc_zeal.rs` is the control for zeal
 itself, in every build: a loop that allocates nothing collects at every
 iteration under zeal and hardly at all at stress 1. It runs in `ci.yml`'s Test
 Suite, not against the zeal lane's binary, so the lane runs the same loop on
@@ -1241,6 +1246,21 @@ that one collection; a refused read raises at once.
 `escape_from_primitive.rs` re-enters continuations captured around an open
 that collected and retried, over a filesystem whose descriptor table it caps
 (`ScarceFs`), so that the stress lane runs it without a limit on its process.
+It also watches where a dead file port is written out (#785): over a
+filesystem whose writers note, as they drop, whether the heap is borrowed,
+how many collections it has run and whether the interpreter is being
+dropped (`WatchFs`), each file port nothing reaches is written out after the
+collection that found it and before the interpreter is dropped, with the
+heap's borrow released and the collection already counted: at a safe
+point's collection under `GcMode::Stress(4096)` and at `(gc)`'s under
+`GcMode::Off`, on both backends. A port a global keeps is written out when
+the interpreter is dropped, with no borrow either. Core's `heap::finalize::tests` hold the
+`FinalRegistry` itself (`docs/GC_DESIGN.md` §4.6): a dead file port queued
+and a rooted one not, one an ephemeron holds queued once its key dies, L
+and the external bytes leaving out the queued ports before the drain, a
+port a host keeps staying open and charged, the drain's id order, and
+teardown finalizing every entry once; `heap::gc::tests::protocol` holds both
+collection entries to draining before they return.
 
 The lanes see a missed trace edge only when no other path reaches the value,
 so the trace code has checks of its own (#623, `docs/GC_DESIGN.md` §5.4).
@@ -1282,7 +1302,9 @@ the columns: `heap` (the heap's number in the process), `number` (its
 collection count), `start_us` (since the process's first heap), `reason`
 (`bytes`, `stress`, `zeal`, `descriptors`, `posted`, `call`; `docs/GC_DESIGN.md`
 §6.2), `pause_us` and its phases `roots_us`, `mark_us`, `weak_us`,
-`prune_us`, `sweep_us` and `after_us` (each rounded down, so their sum is
+`prune_us`, `sweep_us` (classification of the finalizable objects
+included) and `after_us` (the drain of the finalizers and the backend's
+work after it, #785; each rounded down, so their sum is
 within 6 µs below the pause), `wait_us` and `wait_bytes` (from the
 collection being posted to its start; zero at a call), `allocated_bytes`
 (since the collection before), `live_bytes`, `freed_bytes`,

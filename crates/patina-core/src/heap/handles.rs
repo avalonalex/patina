@@ -23,18 +23,20 @@
 //! a forgotten `Rc` keeps its allocation.
 //!
 //! A handle holds its table weakly, so it keeps nothing alive. Teardown
-//! (`Heap::teardown`, #604) drops the table, so a handle that outlives its
+//! (`heap::teardown`, #604) drops the table, so a handle that outlives its
 //! interpreter holds a dead reference: dropping it does nothing, and the heap
 //! refuses to read it, whatever becomes of the heap afterwards. Dropping the
 //! table also lets go of the environments it holds, each of which holds the
 //! heap: heap, table, environment and heap again are a cycle, and teardown
-//! is what breaks it. The heap's `PortTable`, which the table also holds, is
-//! not dropped: the table teardown starts takes it over (#785).
+//! is what breaks it. The heap's `PortTable` and `FinalRegistry`, which the
+//! table also holds, are not dropped: the table teardown starts takes them
+//! over (#785).
 
 use std::fmt;
 use std::rc::{Rc, Weak};
 
 use super::PortTable;
+use super::finalize::FinalRegistry;
 use super::gc::RootSet;
 use super::table::HeapTable;
 use crate::Trace;
@@ -85,6 +87,15 @@ pub struct HandleTable {
         reason = "Rust ports, whose state is Rust's, and in a check build each entry's owner word, compared by its bits and never traced: tracing it would keep every port object alive"
     )]
     ports: Rc<PortTable>,
+    /// The objects the heap finalizes after the collection that finds them
+    /// dead (#785): the open file ports, today. Carried across teardown with
+    /// the `PortTable`, whose entries it names. Here and not on `Heap`, for
+    /// `root_set`'s reason.
+    #[trace(
+        skip,
+        reason = "weak by design: each entry names its object by slot index, so that a collection can find it dead"
+    )]
+    finals: Rc<FinalRegistry>,
 }
 
 #[derive(Trace)]
@@ -113,16 +124,20 @@ enum Entry {
 impl HandleTable {
     /// An empty table for the heap numbered `heap_id`.
     pub(crate) fn new(heap_id: u64) -> Rc<Self> {
-        Self::with_ports(heap_id, PortTable::new())
+        Self::with_ports(heap_id, PortTable::new(), FinalRegistry::new())
     }
 
-    /// The empty table teardown starts, which keeps this one's `PortTable`:
-    /// the heap has one for its life (#785).
+    /// The empty table teardown starts, which keeps this one's `PortTable`
+    /// and `FinalRegistry`: the heap has one of each for its life (#785).
     pub(crate) fn after_teardown(&self) -> Rc<Self> {
-        Self::with_ports(self.heap_id, Rc::clone(&self.ports))
+        Self::with_ports(
+            self.heap_id,
+            Rc::clone(&self.ports),
+            Rc::clone(&self.finals),
+        )
     }
 
-    fn with_ports(heap_id: u64, ports: Rc<PortTable>) -> Rc<Self> {
+    fn with_ports(heap_id: u64, ports: Rc<PortTable>, finals: Rc<FinalRegistry>) -> Rc<Self> {
         Rc::new(HandleTable {
             heap_id,
             entries: HeapTable::new(Entries {
@@ -133,6 +148,7 @@ impl HandleTable {
             root_set: Rc::default(),
             standard_ports: HeapTable::new(None),
             ports,
+            finals,
         })
     }
 
@@ -140,6 +156,12 @@ impl HandleTable {
     #[inline]
     pub(crate) fn ports(&self) -> &Rc<PortTable> {
         &self.ports
+    }
+
+    /// The heap's finalization registry (#785).
+    #[inline]
+    pub(crate) fn finals(&self) -> &Rc<FinalRegistry> {
+        &self.finals
     }
 
     /// The root providers registered with the heap.
@@ -449,6 +471,7 @@ mod tests {
             root_set: Rc::default(),
             standard_ports: HeapTable::new(Some(standard)),
             ports: PortTable::new(),
+            finals: FinalRegistry::new(),
         });
         collect_only(&mut heap, |_| {});
         s.assert_survived(&heap);
@@ -581,7 +604,7 @@ mod tests {
     fn teardown_lets_go_of_every_handle() {
         let shared = new_shared_heap();
         let handle = shared.borrow().hold(TaggedValue::fixnum(1));
-        shared.borrow_mut().teardown();
+        crate::heap::teardown(&shared);
         assert!(shared.borrow().handles.is_empty());
         let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             shared.borrow().held(&handle);

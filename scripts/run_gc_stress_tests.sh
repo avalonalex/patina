@@ -110,13 +110,19 @@ fi
 # the shared tests and an uncaught install's undo joining callability, all
 # three counts re-measured, callability's now with fresh interpreters
 # bootstrapping under stress, the minimums left; callability's re-measured
-# again that day for its handler count and the rewritten Scheme loop)
+# again that day for its handler count and the rewritten Scheme loop;
+# escape_from_primitive's test count re-pinned 2026-10-29 for #785's test of
+# where a dead file port is written out, which sets its own modes and adds 18
+# collections either way, and its counts re-measured that day: the other 13
+# tests' 6334, up from 960 since #677 let library loads collect (2026-10-10),
+# which no re-pin had recorded; the minimum left at half the count from
+# before then)
 TARGETS=(
     "callability 16 31 12"                    # 1496 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
     "cps_features 16 530 3"                   # 1060 (2)
     "ephemerons 16 289 30"                    # 578 (204)
-    "escape_from_primitive 16 480 13"         # 960 (74)
+    "escape_from_primitive 16 480 14"         # 6352 (92)
     "finished_forms_release_code 16 1450 9"   # 2901 (13)
     "gc_tree_walker 16 11421 20"              # 24151 (658)
     "gc_vm 16 8001 25"                        # 17314 (667)

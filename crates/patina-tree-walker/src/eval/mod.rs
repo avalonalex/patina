@@ -473,12 +473,10 @@ impl Default for Evaluator {
 }
 
 /// The evaluator made the heap, so dropping it tears the heap down, as
-/// dropping a VM backend does (`Heap::teardown`, #604).
+/// dropping a VM backend does (`patina_core::heap::teardown`, #604).
 impl Drop for Evaluator {
     fn drop(&mut self) {
-        if let Ok(mut heap) = self.heap.try_borrow_mut() {
-            heap.teardown();
-        }
+        patina_core::heap::teardown(&self.heap);
     }
 }
 
