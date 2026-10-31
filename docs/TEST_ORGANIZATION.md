@@ -1165,7 +1165,8 @@ message, and the release GC lane runs them in its `gc-check` build:
 `heap::gc::tests::protocol::` (F4's two among them: a finalizer that
 allocates, and one that reaches a poll, #785), the port table's owner checks
 (`heap::port_table::tests::a_check_build_refuses_…`, #785): an id read
-through another object, at the table and through `Heap::get_port`, and the
+through another object, at the table and through `Heap::get_port`, and a
+dead plain port's entry the sweep's pass left in the table (#818); and the
 finalization registry's (`heap::finalize::tests::a_check_build_refuses_…`):
 a dead entry whose object's slot was freed under it, and a port object a
 sweep frees whose entry is the registry's but was never queued, as a

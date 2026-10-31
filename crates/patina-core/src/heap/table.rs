@@ -56,6 +56,35 @@ impl<T> HeapTable<T> {
         f(&self.access())
     }
 
+    /// Read the table for the length of `f` without marking it borrowed,
+    /// in the default build: for the port table's read on every port
+    /// operation, where marking and unmarking the borrow cost 5 of its 15
+    /// instructions (#818). An access open when it starts panics, as
+    /// [`Self::with`]'s does; a threaded build takes the lock.
+    ///
+    /// # Safety
+    ///
+    /// `f` must not access this table, nor run anything that can: it may
+    /// read and clone out of the table and nothing else. No access can then
+    /// begin while it runs, which is what marking the borrow would refuse.
+    #[inline]
+    #[track_caller]
+    pub(crate) unsafe fn with_unguarded<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        #[cfg(not(feature = "threaded"))]
+        {
+            // SAFETY: the caller's contract: no access begins while `f`
+            // runs, so nothing changes the table under the reference.
+            match unsafe { self.state.try_borrow_unguarded() } {
+                Ok(state) => f(state),
+                Err(_) => nested_access(),
+            }
+        }
+        #[cfg(feature = "threaded")]
+        {
+            f(&self.access())
+        }
+    }
+
     /// Change the table for the length of `f`.
     #[inline]
     #[track_caller]
@@ -78,12 +107,21 @@ impl<T> HeapTable<T> {
     fn access(&self) -> RefMut<'_, T> {
         match self.state.try_borrow_mut() {
             Ok(state) => state,
-            Err(_) => panic!(
-                "a heap table accessed while an access to it is open: under a lock this nested \
-                 access would deadlock (#687)"
-            ),
+            Err(_) => nested_access(),
         }
     }
+}
+
+/// An access begun while another is open.
+#[cfg(not(feature = "threaded"))]
+#[cold]
+#[inline(never)]
+#[track_caller]
+fn nested_access() -> ! {
+    panic!(
+        "a heap table accessed while an access to it is open: under a lock this nested access \
+         would deadlock (#687)"
+    )
 }
 
 #[cfg(test)]
