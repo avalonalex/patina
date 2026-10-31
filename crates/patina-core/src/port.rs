@@ -14,7 +14,8 @@ use crate::vfs::{FileSystem, ReadPort, WritePort};
 use std::cell::{Cell, RefCell};
 use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A Scheme port for I/O operations. Not `Clone`: a port has one state, and
 /// whatever shares it shares the `Rc` the constructors answer, as a heap's
@@ -28,9 +29,8 @@ pub struct Port {
     supports_binary: bool,
     /// Input or output
     pub direction: PortDirection,
-    /// The port's data, behind an `Rc` that exit's list of output files
-    /// holds weakly (`OUTPUT_FILES`).
-    pub(crate) data: Rc<RefCell<PortData>>,
+    /// The port's data.
+    pub(crate) data: RefCell<PortData>,
     /// Program text fetched a line at a time, but not yet executed. Runtime
     /// reads consume it before the source; byte reads move it into raw carry.
     /// Shared behind `Rc` by every standard input port (see [`Port::stdin`]).
@@ -171,63 +171,35 @@ thread_local! {
     /// Raw lookahead shared by all stdin ports. Keep the consumed offset too,
     /// so reading a long buffered line byte by byte does not copy its tail.
     static STDIN_CARRY: RefCell<(Vec<u8>, usize)> = const { RefCell::new((Vec::new(), 0)) };
-
-    /// The file output ports opened on this thread, so that what a program left
-    /// in them can be written out when it ends ([`flush_open_output_files`]).
-    static OUTPUT_FILES: RefCell<OutputFiles> = const {
-        RefCell::new(OutputFiles {
-            ports: Vec::new(),
-            prune_at: OutputFiles::MIN_PRUNE_AT,
-        })
-    };
 }
 
-/// Every file output port opened on a thread, held weakly. A port that has
-/// been dropped flushed its writer as it went.
-struct OutputFiles {
-    ports: Vec<Weak<RefCell<PortData>>>,
-    /// How many entries to hold before dropping those of ports that are gone,
-    /// so the list follows the ports alive rather than every port ever opened,
-    /// at an amortised constant cost per port.
-    prune_at: usize,
-}
+/// The number the next file port takes as it opens ([`FilePortData::opened`]).
+static NEXT_FILE_PORT: AtomicU64 = AtomicU64::new(0);
 
-impl OutputFiles {
-    const MIN_PRUNE_AT: usize = 16;
-
-    fn note(&mut self, data: &Rc<RefCell<PortData>>) {
-        if self.ports.len() >= self.prune_at {
-            self.ports.retain(|port| port.strong_count() > 0);
-            self.prune_at = (2 * self.ports.len()).max(Self::MIN_PRUNE_AT);
-        }
-        self.ports.push(Rc::downgrade(data));
-    }
-}
-
-/// Write out what every file output port still open on this thread holds in
-/// its buffer, for a program that is ending, and return each port that could
-/// not be written, with the reason.
+/// Write out what every file output port still open on this thread's heaps
+/// holds in its buffer, for a program that is ending, and return each port
+/// that could not be written, with the reason.
 ///
 /// A program need not close its ports, and what it wrote to one it left open
 /// is kept, as chibi and Gauche keep it (#343). The process ends with
 /// `std::process::exit`, which runs no destructor, so a writer's buffer that
 /// nothing flushes first is lost.
+///
+/// The ports are those of every live heap's `PortTable` on the thread
+/// (`heap::port_table`, #786), written in the order they were opened, across
+/// heaps, as chibi writes them: two ports open on one file leave the later
+/// one's output over the earlier one's. A port a host kept past its object,
+/// or past its interpreter, is written out too, since the drain that let go
+/// of it noted it. A port a host opens and never gives an object belongs to
+/// no heap, and is the host's to write out.
 pub fn flush_open_output_files() -> Vec<(PathBuf, io::Error)> {
-    let ports: Vec<_> = OUTPUT_FILES.with(|files| {
-        files
-            .borrow()
-            .ports
-            .iter()
-            .filter_map(Weak::upgrade)
-            .collect()
-    });
     let mut failures = Vec::new();
-    for port in ports {
-        let mut data = port.borrow_mut();
+    for port in open_output_files_in_order() {
+        let mut data = port.data.borrow_mut();
         if let PortData::File(FilePortData {
             path,
             handle: FileHandle::Output(writer),
-            charge: _,
+            ..
         }) = &mut *data
             && let Err(error) = writer.flush()
         {
@@ -235,6 +207,24 @@ pub fn flush_open_output_files() -> Vec<(PathBuf, io::Error)> {
         }
     }
     failures
+}
+
+/// The open file output ports of the thread's live heaps, each once, in the
+/// order they were opened.
+fn open_output_files_in_order() -> Vec<Rc<Port>> {
+    let mut ports: Vec<(u64, Rc<Port>)> = crate::heap::open_output_files()
+        .into_iter()
+        .filter_map(|port| {
+            let opened = match &*port.data.borrow() {
+                PortData::File(file) => file.opened,
+                _ => return None,
+            };
+            Some((opened, port))
+        })
+        .collect();
+    ports.sort_unstable_by_key(|&(opened, _)| opened);
+    ports.dedup_by_key(|&mut (opened, _)| opened);
+    ports.into_iter().map(|(_, port)| port).collect()
 }
 
 /// The opening mode, independent of whether the port supports both kinds of I/O.
@@ -560,6 +550,10 @@ pub struct FilePortData {
     /// else holds the port (`Port::take_file_charge`, #785). `None` for a
     /// port that never reached the heap.
     charge: Option<FilePortCharge>,
+    /// The port's place among the file ports opened in the process, which
+    /// exit writes the output ones out in ([`flush_open_output_files`]):
+    /// a heap's table cannot tell it, since a freed entry is reused (#786).
+    opened: u64,
 }
 
 impl FilePortData {
@@ -568,6 +562,7 @@ impl FilePortData {
             path: PathBuf::from(path),
             handle,
             charge: None,
+            opened: NEXT_FILE_PORT.fetch_add(1, Ordering::Relaxed),
         }
     }
 }
@@ -618,7 +613,7 @@ impl Port {
             kind,
             supports_binary: !matches!(data, PortData::String(_)),
             direction,
-            data: Rc::new(RefCell::new(data)),
+            data: RefCell::new(data),
             pushback: Rc::new(RefCell::new(Unread::default())),
             fold_case: Rc::new(Cell::new(false)),
             position,
@@ -680,7 +675,7 @@ impl Port {
             kind: PortKind::Textual,
             supports_binary: true,
             direction: PortDirection::Input,
-            data: Rc::new(RefCell::new(PortData::Stdio(StdioKind::Stdin))),
+            data: RefCell::new(PortData::Stdio(StdioKind::Stdin)),
             pushback: STDIN_UNREAD.with(Rc::clone),
             fold_case: STDIN_FOLD_CASE.with(Rc::clone),
             position: STDIN_POSITION.with(Rc::clone),
@@ -788,15 +783,13 @@ impl Port {
         Ok(Self::new_output_file(PortKind::Textual, path, writer))
     }
 
-    /// A file output port, noted for [`flush_open_output_files`].
+    /// A file output port, textual or binary.
     fn new_output_file(kind: PortKind, path: &str, writer: Box<dyn WritePort>) -> Rc<Port> {
-        let port = Self::new_port(
+        Self::new_port(
             kind,
             PortDirection::Output,
             PortData::File(FilePortData::new(path, FileHandle::Output(writer))),
-        );
-        OUTPUT_FILES.with(|files| files.borrow_mut().note(&port.data));
-        port
+        )
     }
 
     /// Open a binary file for reading via the given filesystem.
@@ -2111,6 +2104,126 @@ mod tests {
         // Cleanup
         drop(port);
         let _ = fs::remove_file(temp_path);
+    }
+
+    /// Exit writes out the file ports of every live heap on the thread, each
+    /// once, in the order they were opened, across heaps (#786): `a`, opened
+    /// first on the heap made second, is written before `b`, so their file
+    /// reads `bbaa`, where the registry's order of heaps would write `b`
+    /// first and leave `aaaa`. A port with two objects is written once, a
+    /// port that a collection queued and the drain has not taken out is
+    /// written, and a closed one is not. On a thread of its own, so that no
+    /// other test's heaps are written out.
+    #[test]
+    fn exit_writes_out_every_heap_s_file_ports_in_the_order_they_were_opened() {
+        use crate::vfs::NativeFs;
+
+        std::thread::spawn(|| {
+            let dir =
+                std::env::temp_dir().join(format!("patina_exit_order_{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let open = |name: &str| {
+                Port::open_output_file(dir.join(name).to_str().unwrap(), &NativeFs).unwrap()
+            };
+            let mut first = crate::Heap::new();
+            let mut second = crate::Heap::new();
+            let a = open("shared");
+            second.alloc_port(Rc::clone(&a));
+            let b = open("shared");
+            first.alloc_port(Rc::clone(&b));
+            a.write_string("aaaa").unwrap();
+            b.write_string("bb").unwrap();
+            let twice = open("twice");
+            first.alloc_port(Rc::clone(&twice));
+            first.alloc_port(Rc::clone(&twice));
+            twice.write_string("twice").unwrap();
+            let queued = open("queued");
+            queued.write_string("queued").unwrap();
+            second.alloc_port(Rc::clone(&queued));
+            let closed = open("closed");
+            first.alloc_port(Rc::clone(&closed));
+            closed.close();
+            let expected: Vec<*const Port> = [&a, &b, &twice, &queued].map(Rc::as_ptr).to_vec();
+            drop((a, b, twice, queued, closed));
+            crate::heap::gc::Collector::collect(
+                &mut crate::heap::gc::MarkSweepCollector::new(),
+                &mut second,
+                &[],
+            );
+            assert_eq!(second.port_entries(), 2, "queued, and not yet drained");
+
+            let ports: Vec<*const Port> = open_output_files_in_order()
+                .iter()
+                .map(Rc::as_ptr)
+                .collect();
+            assert_eq!(ports, expected);
+            assert!(flush_open_output_files().is_empty());
+            let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap();
+            assert_eq!(read("shared"), "bbaa");
+            assert_eq!(read("twice"), "twice");
+            assert_eq!(read("queued"), "queued");
+            drop((first, second));
+            std::fs::remove_dir_all(&dir).unwrap();
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// A port a host keeps past its object, or past its heap's teardown,
+    /// is in no table once the drain takes its entry out, and exit still
+    /// writes it out (#786): the program the host runs may call `exit`,
+    /// which ends the process before the host could. One the host never gave
+    /// an object belongs to no heap, and exit leaves it to the host.
+    #[test]
+    fn exit_writes_out_a_port_a_host_kept_past_its_object_or_its_heap() {
+        use crate::vfs::NativeFs;
+
+        std::thread::spawn(|| {
+            let dir =
+                std::env::temp_dir().join(format!("patina_exit_released_{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let open = |name: &str| {
+                let port =
+                    Port::open_output_file(dir.join(name).to_str().unwrap(), &NativeFs).unwrap();
+                port.write_string(name).unwrap();
+                port
+            };
+            let mut heap = crate::Heap::new();
+            let past_object = open("object");
+            heap.alloc_port(Rc::clone(&past_object));
+            crate::heap::gc::Collector::collect(
+                &mut crate::heap::gc::MarkSweepCollector::new(),
+                &mut heap,
+                &[],
+            );
+            heap.finalize_queued();
+            assert_eq!(heap.port_entries(), 0, "the drain took the entry out");
+            let shared = crate::heap::new_shared_heap();
+            let past_heap = open("heap");
+            shared.borrow_mut().alloc_port(Rc::clone(&past_heap));
+            crate::heap::teardown(&shared);
+            drop(shared);
+            let never = open("never");
+
+            let ports: Vec<*const Port> = open_output_files_in_order()
+                .iter()
+                .map(Rc::as_ptr)
+                .collect();
+            assert_eq!(ports, [&past_object, &past_heap].map(Rc::as_ptr).to_vec());
+            assert!(flush_open_output_files().is_empty());
+            let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap();
+            assert_eq!(
+                (read("object"), read("heap")),
+                ("object".into(), "heap".into())
+            );
+            assert_eq!(read("never"), "", "the host's alone");
+            drop((past_object, past_heap, never));
+            assert!(open_output_files_in_order().is_empty());
+            drop(heap);
+            std::fs::remove_dir_all(&dir).unwrap();
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]

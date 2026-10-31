@@ -10,9 +10,11 @@
 ;;     rest of the unwind, and anything written in that window — a `guard`
 ;;     handler, say — disappears into it.
 ;;
-;;   - Close at all. chibi need not: it flushes open ports at exit and Patina
-;;     does not, so a port left open on a non-local exit loses whatever is
-;;     buffered. R7RS §6.13.1 permits leaving it open, not dropping the output.
+;;   - Close at all. R7RS §6.13.1 permits leaving the port open on an escape,
+;;     but a port left open is written out only when a collection finds it
+;;     dead, its interpreter is dropped or the program ends (#785, #604,
+;;     #343), so a program that reads the file back after escaping would find
+;;     what was buffered missing.
 ;;     The cost is that re-entering a continuation captured inside the thunk
 ;;     finds the port closed.
 

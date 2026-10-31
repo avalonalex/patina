@@ -79,9 +79,10 @@ pub struct HandleTable {
     standard_ports: HeapTable<Option<[TaggedValue; 3]>>,
     /// The ports the heap's port objects stand for (#785), one table for the
     /// heap's life: teardown's new handle table takes it over
-    /// ([`HandleTable::after_teardown`]). By its own `Rc`, so that #786's
-    /// registry of open-file tables can hold it weakly. Here and not on
-    /// `Heap`, for `root_set`'s reason.
+    /// ([`HandleTable::after_teardown`]). By its own `Rc`, so that the
+    /// thread's registry of tables can hold it weakly, for exit to write out
+    /// the file ports left open (#786). Here and not on `Heap`, for
+    /// `root_set`'s reason.
     #[trace(
         skip,
         reason = "Rust ports, whose state is Rust's, and in a check build each entry's owner word, compared by its bits and never traced: tracing it would keep every port object alive"

@@ -21,6 +21,23 @@
 //! `emergency-exit` follows chibi. R7RS has it skip the outstanding
 //! `dynamic-wind` after thunks, and says nothing that would make it drop the
 //! program's output.
+//!
+//! Measured 2026-10-30, with a program that opens `out.txt` twice, writes
+//! `aaaa` to the first port and `bb` to the second, and ends without closing
+//! either:
+//!
+//! | Before it opens them, the program | chibi | Gauche |
+//! |---|---|---|
+//! | does nothing else | `bbaa` in 10 runs of 10 | `bbaa` in 14 runs of 20, `aaaa` in 6 |
+//! | opens eight file ports, drops them and collects | `bbaa` in 10 runs of 10 | `bbaa` in 15 runs of 20, `aaaa` in 5 |
+//!
+//! chibi writes the ports out in the order they were opened, so the second
+//! one's output lands over the first's. Gauche writes them in the order of a
+//! weak table indexed by a hash of each port's address (`register_buffered_port`
+//! in its `src/port.c`), which varies from run to run. Patina follows chibi
+//! (#786). A heap reuses a dropped port's entry in its `PortTable`, so the
+//! table's order is not the order of opening, and each file port takes a
+//! number as it opens, which exit writes them out by.
 
 mod common;
 
@@ -136,6 +153,25 @@ fn output_left_in_an_open_file_port_is_kept_however_the_program_ends() {
             ("h", 0),
             "{backend:?} binary: {stderr}"
         );
+    }
+}
+
+/// chibi; Gauche's order varies from run to run. The eight dropped ports free
+/// entries of the heap's `PortTable`, which the two ports then reuse, the
+/// later-opened in the earlier entry.
+#[test]
+fn ports_left_open_are_written_out_in_the_order_they_were_opened() {
+    let program = "(import (scheme base) (scheme file) (patina debug))\n\
+                   (do ((i 0 (+ i 1))) ((= i 8))\n\
+                     (write-string \"x\" (open-output-file (string-append \"d\" (number->string i)))))\n\
+                   (gc)\n\
+                   (define a (open-output-file \"out.txt\"))\n\
+                   (define b (open-output-file \"out.txt\"))\n\
+                   (write-string \"aaaa\" a)\n\
+                   (write-string \"bb\" b)\n";
+    for backend in BOTH_BACKENDS {
+        let (out, code, stderr) = run(backend, &[], program, Source::File);
+        assert_eq!((out.as_str(), code), ("bbaa", 0), "{backend:?}: {stderr}");
     }
 }
 

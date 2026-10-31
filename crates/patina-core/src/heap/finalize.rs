@@ -267,7 +267,9 @@ fn run_finalizers(heap: &SharedHeap) {
 /// no access open: a file whose `Rc` was the last flushes and closes, a
 /// flush error ignored, and a `MemoryFs` writer commits. A drop, not
 /// `Port::close`, which would close a port another owner still holds: only
-/// the last `Rc`'s drop closes the file.
+/// the last `Rc`'s drop closes the file. An output port another owner holds
+/// stays open, and no table reaches it, so it is noted for exit to write out
+/// (`port_table::note_released`, #786).
 fn finalize(handles: &super::handles::HandleTable) {
     let queued = handles.finals().drain();
     if queued.is_empty() {
@@ -278,6 +280,7 @@ fn finalize(handles: &super::handles::HandleTable) {
         .map(|&(FinalKind::Port, id)| PortId::from_number(id))
         .collect();
     let ports = handles.ports().take_finalized(&ids);
+    super::port_table::note_released(&ports);
     drop(ports);
 }
 

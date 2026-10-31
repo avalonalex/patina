@@ -19,13 +19,16 @@
               `cont_value::EMPTY_CONT_ENV`, the shared empty node; `port`'s `STDIN_UNREAD`, \
               `STDIN_POSITION`, `STDIN_FOLD_CASE` and `STDIN_CARRY`, standard input's state, \
               shared on purpose by every port that reads the one standard input (per thread, so a \
-              second thread would keep a read-ahead of its own, C9), and `OUTPUT_FILES`, the open \
-              file output ports to flush at exit; `scope::SCOPE_ORIGINS` and `scope_trace::PHASE`, \
-              debugging aids; `walk::STACK_FLOOR`, where the walks of code must move to a new \
-              stack segment (#617); and, with the `gc-census` feature, `census`'s \
-              `ON_PRIMARY_THREAD`, a flag. Clippy takes this lint only at a crate root, so a new \
-              `thread_local!` in the crate goes on this list, which a test in \
-              `reentry_lint_control.rs` holds to the crate's sources (#622)"
+              second thread would keep a read-ahead of its own, C9); `heap::port_table`'s \
+              `PORT_TABLES`, every heap's `PortTable` on the thread and the open file output ports \
+              a table let go of that a host still holds, held weakly, for exit to write out the \
+              file ports left open (per thread until stage 9, an exception to `PRD/GC_PRD.md` \
+              §18.2 rule 1, #786); `scope::SCOPE_ORIGINS` and `scope_trace::PHASE`, debugging \
+              aids; `walk::STACK_FLOOR`, where the walks of code must move to a new stack segment \
+              (#617); and, with the `gc-census` feature, `census`'s `ON_PRIMARY_THREAD`, a flag. \
+              Clippy takes this lint only at a crate root, so a new `thread_local!` in the crate \
+              goes on this list, which a test in `reentry_lint_control.rs` holds to the crate's \
+              sources (#622)"
 )]
 #![cfg_attr(
     test,

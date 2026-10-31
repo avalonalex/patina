@@ -7,6 +7,16 @@
 //! Each backend now frees every slot when it is dropped
 //! (`patina_core::heap::teardown`), as a sweep that found nothing live would,
 //! and then writes out and closes the file ports, with no heap borrow (#785).
+//!
+//! An interpreter that is not dropped has its file ports written out when the
+//! process ends through `exit` (`end_process`): every heap's `PortTable` on
+//! the thread is in a registry, which forgets a dropped heap's (#786).
+
+#![expect(
+    clippy::disallowed_macros,
+    reason = "`HOST`: the interpreter a host keeps in a thread-local, which the test drops at \
+              its thread's exit, after exit's registry is destroyed (#786)"
+)]
 
 mod common;
 use common::{tree_walker_interpreter, vm_interpreter};
@@ -69,7 +79,8 @@ const EMBEDDER: &str = "PATINA_TEARDOWN_EMBEDDER";
 /// is this test binary run again in a child process, so that nothing but the
 /// drop can write the port out: when a process ends, a buffer that was never
 /// dropped is never written. The CLI flushes every open port at exit
-/// (`end_process`), and a host does not go through it.
+/// (`end_process`), and a host that returns from `main` does not go through
+/// it.
 #[test]
 fn a_dropped_interpreter_writes_out_the_file_ports_it_left_open() {
     let program = |path: &Path| {
@@ -110,6 +121,188 @@ fn a_dropped_interpreter_writes_out_the_file_ports_it_left_open() {
         let written = std::fs::read_to_string(dir.path().join(backend)).unwrap_or_default();
         assert_eq!(written, "hello", "the {backend}'s port was not written out");
     }
+}
+
+/// Set when this test binary runs itself as the embedder whose interpreter
+/// calls `exit`, naming the directory to write into; [`EXIT_CASE`] names the
+/// case.
+const EXIT_EMBEDDER: &str = "PATINA_EXIT_EMBEDDER";
+const EXIT_CASE: &str = "PATINA_EXIT_CASE";
+
+/// Each case of [`exit_flushes_every_interpreter`]: A's backend, B's, and how
+/// A's program ends.
+const EXIT_CASES: [(&str, &str, &str); 6] = [
+    ("vm", "vm", "(exit 0)"),
+    ("tree-walker", "tree-walker", "(exit 0)"),
+    ("vm", "tree-walker", "(exit 0)"),
+    ("vm", "vm", "(emergency-exit)"),
+    ("tree-walker", "tree-walker", "(emergency-exit)"),
+    ("vm", "tree-walker", "(emergency-exit)"),
+];
+
+/// Two interpreters on one thread, A and B, each leave an unclosed file
+/// output port with output in it. B stays alive, and A's program ends the
+/// process with `exit` or `emergency-exit`: both files hold their output
+/// (`PRD/GC_PRD.md` §9.6 F1, #786). The host is this test binary run again
+/// in a child process, as for [`a_dropped_interpreter_writes_out_the_file_ports_it_left_open`],
+/// and neither interpreter is dropped, so nothing but exit can write the
+/// ports out. A and B share a thread: exit reaches the exiting thread's heaps
+/// alone (decision 3 on #782).
+#[test]
+fn exit_flushes_every_interpreter() {
+    fn leave_open<B: Backend>(interp: &Interpreter<B>, path: &Path, ending: &str) {
+        let program = format!(
+            "(import (scheme base) (scheme file) (scheme process-context))
+             (define port (open-output-file {path:?}))
+             (write-string \"written\" port)
+             {ending}"
+        );
+        interp
+            .eval_program_owned(&program)
+            .expect("the program runs");
+    }
+    fn embed<A: Backend, B: Backend>(
+        a: fn() -> Interpreter<A>,
+        b: fn() -> Interpreter<B>,
+        dir: &Path,
+        ending: &str,
+    ) {
+        let b = b();
+        leave_open(&b, &dir.join("b"), "");
+        leave_open(&a(), &dir.join("a"), ending);
+        drop(b);
+        panic!("A's {ending} returned");
+    }
+    if let (Some(dir), Ok(case)) = (std::env::var_os(EXIT_EMBEDDER), std::env::var(EXIT_CASE)) {
+        let dir = Path::new(&dir);
+        let (a, b, ending) = EXIT_CASES[case.parse::<usize>().expect("a case's index")];
+        match (a, b) {
+            ("vm", "vm") => embed(vm_interpreter, vm_interpreter, dir, ending),
+            ("tree-walker", "tree-walker") => embed(
+                tree_walker_interpreter,
+                tree_walker_interpreter,
+                dir,
+                ending,
+            ),
+            ("vm", "tree-walker") => embed(vm_interpreter, tree_walker_interpreter, dir, ending),
+            _ => unreachable!("a case's backends"),
+        }
+        return;
+    }
+    for (case, (a, b, ending)) in EXIT_CASES.iter().enumerate() {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let embedder =
+            std::process::Command::new(std::env::current_exe().expect("this test binary"))
+                .env(EXIT_EMBEDDER, dir.path())
+                .env(EXIT_CASE, case.to_string())
+                .args([
+                    "--exact",
+                    "exit_flushes_every_interpreter",
+                    "--test-threads=1",
+                ])
+                .output()
+                .expect("run the embedder");
+        let what = format!("A on the {a}, B on the {b}, A ending with {ending}");
+        assert!(
+            embedder.status.success(),
+            "{what}: the embedder failed: {}\n{}{}",
+            embedder.status,
+            String::from_utf8_lossy(&embedder.stdout),
+            String::from_utf8_lossy(&embedder.stderr)
+        );
+        for port in ["a", "b"] {
+            let written = std::fs::read_to_string(dir.path().join(port)).unwrap_or_default();
+            assert_eq!(
+                written, "written",
+                "{what}: {port}'s port was not written out"
+            );
+        }
+    }
+}
+
+/// The registry of the thread's `PortTable`s follows the live interpreters
+/// (#786): 300 interpreters on each backend, each made, given an open file
+/// output port by its program and dropped, with at most two alive at a time,
+/// never leave it more than the prune slack, 16 entries. On a thread of its
+/// own, whose registry starts empty.
+#[test]
+fn the_registry_of_port_tables_prunes_dropped_interpreters() {
+    fn cycles<B: Backend>(make: fn() -> Interpreter<B>, backend: &str, dir: &Path) {
+        let mut previous = None;
+        for cycle in 0..300 {
+            let interp = make();
+            let path = dir.join(format!("{backend}-{cycle}"));
+            interp
+                .eval_program_owned(&format!(
+                    "(import (scheme base) (scheme file))
+                     (define port (open-output-file {path:?}))
+                     (write-string \"written\" port)"
+                ))
+                .expect("the program runs");
+            let entries = patina_core::heap::registered_port_tables();
+            assert!(
+                entries <= 16,
+                "the {backend}'s cycle {cycle}: {entries} entries for at most two live heaps"
+            );
+            previous = Some(interp);
+        }
+        drop(previous);
+    }
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let path = dir.path().to_owned();
+    std::thread::spawn(move || {
+        cycles(vm_interpreter, "vm", &path);
+        cycles(tree_walker_interpreter, "tree-walker", &path);
+    })
+    .join()
+    .expect("the cycles run");
+    let written = std::fs::read_to_string(dir.path().join("tree-walker-299")).unwrap();
+    assert_eq!(
+        written, "written",
+        "the last interpreter's port, written out at its drop"
+    );
+}
+
+/// An interpreter a host keeps in a thread-local, set after the thread's first
+/// use of it, is dropped at the thread's exit after exit's registry of
+/// `PortTable`s is destroyed: thread-locals are destroyed in the reverse of
+/// the order they were first used, and the interpreter's heap made the
+/// registry's first use. Its teardown, which notes for exit a file port the
+/// host still holds (#786), must not touch the destroyed registry, since a
+/// panic in a thread-local's destructor aborts the process. The port is
+/// written out when the host's `Rc`, its last owner, drops after it.
+#[test]
+fn an_interpreter_kept_in_a_thread_local_is_torn_down_at_the_thread_s_exit() {
+    use patina_core::port::Port;
+    use std::cell::RefCell;
+
+    type Kept = (
+        Interpreter<patina_vm::VmBackend>,
+        patina_core::Owned,
+        Rc<Port>,
+    );
+    thread_local! {
+        static HOST: RefCell<Option<Kept>> = const { RefCell::new(None) };
+    }
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let path = dir.path().join("kept");
+    let opened = path.clone();
+    std::thread::spawn(move || {
+        HOST.with(|host| {
+            let mut interp = vm_interpreter();
+            let port = Port::open_output_file(opened.to_str().unwrap(), &patina_core::NativeFs)
+                .expect("the file opens");
+            port.write_string("kept").expect("the port writes");
+            let object = interp.with(|cx| {
+                let object = cx.alloc_port(Rc::clone(&port));
+                cx.hold(object)
+            });
+            *host.borrow_mut() = Some((interp, object, port));
+        });
+    })
+    .join()
+    .expect("the thread exits");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "kept");
 }
 
 /// The contract teardown leaves: values do not outlive their interpreter. One

@@ -62,7 +62,9 @@ use handles::{HandleTable, Owned, OwnedEnvironment};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 pub use port_table::PortId;
-pub(crate) use port_table::PortTable;
+#[cfg(any(test, feature = "test-support"))]
+pub use port_table::registered_port_tables;
+pub(crate) use port_table::{PortTable, open_output_files};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -747,11 +749,14 @@ impl Heap {
         Self::with_capacity(0, 0, 0)
     }
 
-    /// Create a heap with pre-allocated capacity
+    /// Create a heap with pre-allocated capacity. Its `PortTable` is
+    /// registered with the thread's registry of tables, for exit to write
+    /// out the file ports a program leaves open (#786).
     pub fn with_capacity(pairs: usize, vectors: usize, strings: usize) -> Self {
         let mutator = mutator::Carrier::new();
         let telemetry = telemetry::Telemetry::new();
         let handles = HandleTable::new(telemetry.heap_id);
+        port_table::register(handles.ports());
         Self {
             syntax_sources: std::collections::HashMap::new(),
             instance: Rc::new(crate::instance::Instance::default()),

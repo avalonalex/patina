@@ -965,16 +965,42 @@ not a separate equivalence generator. Both backend examples and the rustdoc
 examples should also run when this API changes.
 
 `patina-tests/tests/heap_teardown.rs` holds dropping an interpreter to freeing
-its heap on both backends (#604). It checks three things:
+its heap on both backends (#604), and exit to writing out the file ports of
+the interpreters it does not drop (#786). It checks seven things:
 
 - the heap is gone after a program that leaves every kind of value holding an
   environment;
 - a file port a global keeps is written out when the interpreter drops;
-- a value read after the drop is reported as a use after free.
+- a value read after the drop is reported as a use after free;
+- two interpreters on one thread each leave an open file output port, one
+  stays alive, and the other's `(exit 0)` or `(emergency-exit)` writes out
+  both (`exit_flushes_every_interpreter`), on the VM, on the tree-walker and
+  with one of each;
+- the thread's registry of `PortTable`s holds at most 16 entries while 300
+  interpreters on each backend are made, given an open file port and
+  dropped, two alive at a time
+  (`the_registry_of_port_tables_prunes_dropped_interpreters`; core's
+  `the_registry_prunes_dropped_heaps` does the same over bare heaps);
+- an interpreter a host keeps in a thread-local, with a file port the host
+  holds too, is torn down at the thread's exit, after the registry's own
+  thread-local is destroyed, without aborting, and the port is written out
+  (`an_interpreter_kept_in_a_thread_local_is_torn_down_at_the_thread_s_exit`);
+- a thread that posts to each interpreter's interrupt handle while the
+  interpreter is dropped never reaches its carrier after the drop
+  (`interpreters_are_torn_down_safely_while_a_thread_posts_to_them`, #701),
+  which the release GC lane's "Teardown under posting" step runs again in
+  the `gc-check` build.
 
-The port case runs the test binary again as the embedding host, in a child
-process, so that nothing but the drop can write the port: the CLI's own exit
-path flushes every open port, and a host does not go through it.
+The drop and exit cases run the test binary again as the embedding host, in a
+child process, so that nothing but the drop, or the exit, can write the port:
+a host that returns does not go through the CLI's exit path, which writes out
+every open port, and in the exit case neither interpreter is dropped.
+`crates/patina-repl/tests/unclosed_output_ports.rs` runs the CLI to every way
+a program ends, holding each to keeping what it left in an open file port
+(#343), and to writing such ports out in the order they were opened, as
+chibi does, after eight dropped ports freed entries of the heap's `PortTable`
+that the later ports reuse (#786). Exit's writes are observable, so none of
+these is in the byte-identical differential lane.
 
 `patina-tests/tests/current_ports.rs` holds each interpreter to current ports
 of its own (#618), in the same shape: the test binary runs again as the host,
