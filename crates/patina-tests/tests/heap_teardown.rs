@@ -12,6 +12,12 @@
 //! process ends through `exit` (`end_process`): every heap's `PortTable` on
 //! the thread is in a registry, which forgets a dropped heap's (#786).
 
+#![expect(
+    clippy::disallowed_macros,
+    reason = "`HOST`: the interpreter a host keeps in a thread-local, which the test drops at \
+              its thread's exit, after exit's registry is destroyed (#786)"
+)]
+
 mod common;
 use common::{tree_walker_interpreter, vm_interpreter};
 use patina_interpreter::{Backend, Interpreter};
@@ -255,6 +261,48 @@ fn the_registry_of_port_tables_prunes_dropped_interpreters() {
         written, "written",
         "the last interpreter's port, written out at its drop"
     );
+}
+
+/// An interpreter a host keeps in a thread-local, set after the thread's first
+/// use of it, is dropped at the thread's exit after exit's registry of
+/// `PortTable`s is destroyed: thread-locals are destroyed in the reverse of
+/// the order they were first used, and the interpreter's heap made the
+/// registry's first use. Its teardown, which notes for exit a file port the
+/// host still holds (#786), must not touch the destroyed registry, since a
+/// panic in a thread-local's destructor aborts the process. The port is
+/// written out when the host's `Rc`, its last owner, drops after it.
+#[test]
+fn an_interpreter_kept_in_a_thread_local_is_torn_down_at_the_thread_s_exit() {
+    use patina_core::port::Port;
+    use std::cell::RefCell;
+
+    type Kept = (
+        Interpreter<patina_vm::VmBackend>,
+        patina_core::Owned,
+        Rc<Port>,
+    );
+    thread_local! {
+        static HOST: RefCell<Option<Kept>> = const { RefCell::new(None) };
+    }
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let path = dir.path().join("kept");
+    let opened = path.clone();
+    std::thread::spawn(move || {
+        HOST.with(|host| {
+            let mut interp = vm_interpreter();
+            let port = Port::open_output_file(opened.to_str().unwrap(), &patina_core::NativeFs)
+                .expect("the file opens");
+            port.write_string("kept").expect("the port writes");
+            let object = interp.with(|cx| {
+                let object = cx.alloc_port(Rc::clone(&port));
+                cx.hold(object)
+            });
+            *host.borrow_mut() = Some((interp, object, port));
+        });
+    })
+    .join()
+    .expect("the thread exits");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "kept");
 }
 
 /// The contract teardown leaves: values do not outlive their interpreter. One

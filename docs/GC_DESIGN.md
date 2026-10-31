@@ -503,8 +503,12 @@ Scheme resumes (`PRD/GC_PRD.md` §9.6, F2–F5). `heap/finalize.rs` holds the
   object or its interpreter: no table reaches it, and the host cannot write
   it out when the program it runs calls `exit`, which ends the process
   inside the evaluation. So the drain notes such a port in the registry,
-  weakly (`port_table::note_released`), and exit writes it out with the
-  rest. A port a host opens and never gives an object belongs to no heap,
+  weakly (`port_table::note_released`), in a list pruned of repeats as well
+  as of the dead, since a host may give one port to many heaps, and exit
+  writes it out with the rest. A heap torn down at its thread's exit, from
+  a thread-local's destructor, can find the registry destroyed already, and
+  notes nothing then: no exit can write the port out, and it flushes when
+  its last owner drops it. A port a host opens and never gives an object belongs to no heap,
   and is the host's to write out. **A limit until stage 9:** the list is per thread
   (decision 3 on #782), so exit writes out the exiting thread's heaps alone,
   and an interpreter on another thread loses what it left in its open file

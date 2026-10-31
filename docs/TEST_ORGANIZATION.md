@@ -966,7 +966,7 @@ examples should also run when this API changes.
 
 `patina-tests/tests/heap_teardown.rs` holds dropping an interpreter to freeing
 its heap on both backends (#604), and exit to writing out the file ports of
-the interpreters it does not drop (#786). It checks six things:
+the interpreters it does not drop (#786). It checks seven things:
 
 - the heap is gone after a program that leaves every kind of value holding an
   environment;
@@ -981,6 +981,10 @@ the interpreters it does not drop (#786). It checks six things:
   dropped, two alive at a time
   (`the_registry_of_port_tables_prunes_dropped_interpreters`; core's
   `the_registry_prunes_dropped_heaps` does the same over bare heaps);
+- an interpreter a host keeps in a thread-local, with a file port the host
+  holds too, is torn down at the thread's exit, after the registry's own
+  thread-local is destroyed, without aborting, and the port is written out
+  (`an_interpreter_kept_in_a_thread_local_is_torn_down_at_the_thread_s_exit`);
 - a thread that posts to each interpreter's interrupt handle while the
   interpreter is dropped never reaches its carrier after the drop
   (`interpreters_are_torn_down_safely_while_a_thread_posts_to_them`, #701),

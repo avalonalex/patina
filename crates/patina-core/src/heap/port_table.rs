@@ -41,15 +41,17 @@
 //! entries by an amortized rule ([`WeakList::push`]), so the list follows
 //! the live heaps.
 //!
-//! A table lets go of an open file port only at the drain, after a
-//! collection or at teardown, and the port then closes unless another owner
-//! holds it: a host that kept the `Rc` past the port's object, or past its
-//! interpreter. Exit cannot reach such a port through a table, and the host
-//! cannot write it out either when the program it runs calls `exit`, which
-//! ends the process from inside the evaluation. So the drain notes it in the
-//! registry too, weakly ([`note_released`]), and exit writes it out with
-//! the rest. A port a host opens and never gives an object belongs to no
-//! heap, and exit does not write it out.
+//! A heap's table lets go of an open file port only at the drain, after a
+//! collection or at the teardown every backend runs as it drops its heap
+//! (#604), and the port then closes unless another owner holds it: a host
+//! that kept the `Rc` past the port's object, or past its interpreter. Exit
+//! cannot reach such a port through a table, and the host cannot write it
+//! out either when the program it runs calls `exit`, which ends the process
+//! from inside the evaluation. So the drain notes it in the registry too,
+//! weakly ([`note_released`]), and exit writes it out with the rest. A port
+//! a host opens and never gives an object belongs to no heap, and exit does
+//! not write it out; nor one a host keeps past a heap dropped without its
+//! teardown, which no backend does.
 //!
 //! The registry is per thread, so exit writes out the exiting thread's heaps
 //! alone: an interpreter on another thread loses what it left in its open
@@ -302,10 +304,12 @@ struct Tables {
     released: WeakList<Port>,
 }
 
-/// A list of weak references that drops those that no longer upgrade once
-/// it reaches `prune_at` entries, and then holds twice the entries left, so
-/// it follows what is alive rather than everything ever added, at an
-/// amortized constant cost per entry.
+/// A list of weak references that drops those that no longer upgrade, and
+/// the repeats of one that does, once it reaches `prune_at` entries, and
+/// then holds twice the entries left, so it follows what is alive rather
+/// than everything ever added, at an amortized constant cost per entry. A
+/// port is pushed once for each drain that releases it while a host holds
+/// it, so a host that gives one port to many heaps pushes it many times.
 struct WeakList<T> {
     items: Vec<Weak<T>>,
     prune_at: usize,
@@ -324,6 +328,8 @@ impl<T> WeakList<T> {
     fn push(&mut self, item: &Rc<T>) {
         if self.items.len() >= self.prune_at {
             self.items.retain(|item| item.strong_count() > 0);
+            self.items.sort_unstable_by_key(Weak::as_ptr);
+            self.items.dedup_by(|a, b| Weak::ptr_eq(a, b));
             self.prune_at = (2 * self.items.len()).max(Self::MIN_PRUNE_AT);
         }
         self.items.push(Rc::downgrade(item));
@@ -357,12 +363,17 @@ pub(crate) fn note_released(ports: &[Rc<Port>]) {
         .filter(|entries| Rc::strong_count(entries[0]) > entries.len())
         .map(|entries| entries[0])
         .collect();
-    if !held.is_empty() {
-        PORT_TABLES.with(|tables| {
-            let mut tables = tables.borrow_mut();
-            held.into_iter().for_each(|port| tables.released.push(port));
-        });
+    if held.is_empty() {
+        return;
     }
+    // A heap torn down from a thread-local's destructor, at the thread's
+    // exit, may find the registry destroyed already, and a panic there
+    // would abort the process. No exit can write the port out then, and it
+    // flushes when its last owner drops it.
+    let _ = PORT_TABLES.try_with(|tables| {
+        let mut tables = tables.borrow_mut();
+        held.into_iter().for_each(|port| tables.released.push(port));
+    });
 }
 
 /// The file output ports of every live heap on this thread, as
@@ -607,6 +618,39 @@ mod tests {
                 previous = Some(heap);
             }
             drop(previous);
+            assert!(open_output_files().is_empty());
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// The ports the drain notes for exit follow the live ports (#786): a
+    /// host that keeps one open file port and gives it to 300 heaps in turn,
+    /// each torn down, has it noted 300 times, and the list still never
+    /// holds more than `MIN_PRUNE_AT` entries, the repeats pruned with the
+    /// dead. On a thread of its own, whose registry starts empty.
+    #[test]
+    fn the_released_ports_are_pruned_of_repeats() {
+        std::thread::spawn(|| {
+            let fs = crate::vfs::MemoryFs::new();
+            let kept = Port::open_output_file("/kept", &fs).unwrap();
+            let released = || PORT_TABLES.with(|tables| tables.borrow().released.items.len());
+            for cycle in 0..300 {
+                let heap = crate::heap::new_shared_heap();
+                heap.borrow_mut().alloc_port(Rc::clone(&kept));
+                crate::heap::teardown(&heap);
+                let entries = released();
+                assert!(
+                    (1..=WeakList::<Port>::MIN_PRUNE_AT).contains(&entries),
+                    "cycle {cycle}: {entries} entries for one kept port"
+                );
+            }
+            assert!(
+                open_output_files()
+                    .iter()
+                    .all(|port| Rc::ptr_eq(port, &kept))
+            );
+            drop(kept);
             assert!(open_output_files().is_empty());
         })
         .join()
