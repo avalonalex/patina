@@ -116,9 +116,11 @@ fi
 # collections either way, and its counts re-measured that day: the other 13
 # tests' 6334, up from 960 since #677 let library loads collect (2026-10-10),
 # which no re-pin had recorded; the minimum left at half the count from
-# before then)
+# before then; callability's test count re-pinned 2026-10-31 for #817's test
+# of #781's own shape uncaught, and its count re-measured that day, the
+# minimum left)
 TARGETS=(
-    "callability 16 31 12"                    # 1496 (0)
+    "callability 16 31 13"                    # 1554 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
     "cps_features 16 530 3"                   # 1060 (2)
     "ephemerons 16 289 30"                    # 578 (204)

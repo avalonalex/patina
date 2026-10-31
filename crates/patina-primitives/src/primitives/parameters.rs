@@ -183,10 +183,11 @@ fn parameter_converter<'gc>(
 /// not one: for a list with one, the loop is `(scheme base)`'s
 /// `%parameterize-each` (`lib/scheme/base/parameters.scm`), which calls it as
 /// the machine calls any procedure, and undoes in Scheme. The heap keeps the
-/// loop, which `(scheme base)` hands over as it loads
-/// ([`parameterize_set_each`]): a template that tested the swap's answer
-/// itself made each expansion of `parameterize` about half as dear again,
-/// and one that passed the loop to the swap about 5% (#817).
+/// loop ([`parameterize_set_each`]): `(scheme base)` sets a stub as it loads,
+/// whose first call evaluates the loop and sets it in the stub's place. A
+/// template that tested the swap's answer itself made each expansion of
+/// `parameterize` about half as dear again, and one that passed the loop to
+/// the swap about 5% (#817).
 pub(super) fn parameterize_swap<'gc>(
     cx: &mut Cx<'gc>,
     _ctx: &dyn ApplyContext,
@@ -256,9 +257,10 @@ pub(super) fn parameter_install<'gc>(
 }
 
 /// `(%parameterize-set-each! loop)` — make `loop` what `%parameterize-swap!`
-/// has the machine call for bindings that are not all parameter objects:
-/// `(scheme base)`'s `%parameterize-each`, which its body hands over as it
-/// loads (#817). The heap roots it for its life; a later `(scheme base)`
+/// has the machine call for bindings that are not all parameter objects
+/// (#817): `(scheme base)`'s stub, which its body sets as it loads, then the
+/// loop, `%parameterize-each`, which the stub's first call evaluates and sets
+/// in its own place. The heap roots it for its life; a later `(scheme base)`
 /// replaces it.
 pub(super) fn parameterize_set_each<'gc>(
     cx: &mut Cx<'gc>,

@@ -78,10 +78,11 @@ pub struct HandleTable {
     /// backend set up. Here and not on `Heap`, for `root_set`'s reason.
     standard_ports: HeapTable<Option<[TaggedValue; 3]>>,
     /// The procedure `%parameterize-swap!` has the machine call for a
-    /// `parameterize` whose bindings are not all parameter objects:
-    /// `(scheme base)`'s `%parameterize-each`, which its body hands over as
-    /// it loads (`%parameterize-set-each!`, #817), and rooted here for the
-    /// heap's life. Here rather than an argument of each swap, which made
+    /// `parameterize` whose bindings are not all parameter objects (#817):
+    /// `(scheme base)`'s stub, which its body sets as it loads
+    /// (`%parameterize-set-each!`), until the stub's first call evaluates
+    /// the loop, `%parameterize-each`, and sets that in its place. Rooted
+    /// here for the heap's life. Here rather than an argument of each swap, which made
     /// every expansion of `parameterize` about 5% dearer; and not on `Heap`,
     /// for `root_set`'s reason. `None` until `(scheme base)` has loaded.
     parameterize_each: HeapTable<Option<TaggedValue>>,
