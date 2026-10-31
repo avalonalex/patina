@@ -1524,7 +1524,7 @@ impl Heap {
     }
 
     /// `parameterize`'s loop for bindings that are not all parameter
-    /// objects, once `(scheme base)` has handed it over (#817).
+    /// objects, once its first use has compiled it (#817).
     pub fn parameterize_each(&self) -> Option<TaggedValue> {
         self.handles.parameterize_each()
     }

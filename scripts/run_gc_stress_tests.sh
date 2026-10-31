@@ -120,7 +120,7 @@ fi
 # of #781's own shape uncaught, and its count re-measured that day, the
 # minimum left)
 TARGETS=(
-    "callability 16 31 13"                    # 1554 (0)
+    "callability 16 31 13"                    # 1543 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
     "cps_features 16 530 3"                   # 1060 (2)
     "ephemerons 16 289 30"                    # 578 (204)

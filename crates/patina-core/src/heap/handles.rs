@@ -79,12 +79,11 @@ pub struct HandleTable {
     standard_ports: HeapTable<Option<[TaggedValue; 3]>>,
     /// The procedure `%parameterize-swap!` has the machine call for a
     /// `parameterize` whose bindings are not all parameter objects (#817):
-    /// `(scheme base)`'s stub, which its body sets as it loads
-    /// (`%parameterize-set-each!`), until the stub's first call evaluates
-    /// the loop, `%parameterize-each`, and sets that in its place. Rooted
-    /// here for the heap's life. Here rather than an argument of each swap, which made
-    /// every expansion of `parameterize` about 5% dearer; and not on `Heap`,
-    /// for `root_set`'s reason. `None` until `(scheme base)` has loaded.
+    /// the loop, `%parameterize-each`, which the swap has the machine
+    /// evaluate on its first use on the heap and keeps here for the heap's
+    /// life. Here rather than an argument of each swap, which made every
+    /// expansion of `parameterize` about 5% dearer; and not on `Heap`, for
+    /// `root_set`'s reason. `None` until the first use.
     parameterize_each: HeapTable<Option<TaggedValue>>,
     /// The ports the heap's port objects stand for (#785), one table for the
     /// heap's life: teardown's new handle table takes it over
@@ -199,7 +198,7 @@ impl HandleTable {
         self.parameterize_each.with(|each| *each)
     }
 
-    /// Record `parameterize`'s loop. A later `(scheme base)` replaces it.
+    /// Record `parameterize`'s loop, compiled on its first use.
     pub(crate) fn set_parameterize_each(&self, procedure: TaggedValue) {
         self.parameterize_each
             .with_mut(|each| *each = Some(procedure));

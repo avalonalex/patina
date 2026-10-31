@@ -636,7 +636,7 @@ impl<'gc> Cx<'gc> {
     }
 
     /// `parameterize`'s loop for bindings that are not all parameter
-    /// objects, once `(scheme base)` has handed it over
+    /// objects, once its first use has compiled it
     /// ([`Heap::parameterize_each`], #817).
     pub fn parameterize_each(&self) -> Option<Value<'gc>> {
         let each = self.heap.borrow().parameterize_each()?;

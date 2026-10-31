@@ -24,9 +24,6 @@
           (except (patina internal io) call-with-port)
           (patina internal records)      ; §5.5 Record types
           (patina internal params)       ; §4.2.6 Dynamic bindings
-          ;; `parameterize` loads its loop for a procedure a program wrote
-          ;; in the binding position on first use (base/parameters.scm).
-          (only (patina internal eval) eval environment)
           (patina internal system))      ; features
 
   ;; R7RS (scheme base) exports
@@ -174,7 +171,6 @@
     ;; reason the record ones below are: a registered primitive no library
     ;; exports is unreachable (`primitives_reachable_by_import`).
     %parameter-convert %parameterize-swap! %parameter-set! %parameter-install!
-    %parameterize-set-each!
     ;; The current ports' converters, for the same reason (#608).
     %input-port-converter %output-port-converter %error-port-converter
 

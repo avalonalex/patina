@@ -186,10 +186,10 @@ pub type CxHandler =
   parameter objects. A list with a procedure a program wrote to act as a
   parameter goes through Scheme: the swap, resumable since #817, has the
   machine call the loop (`%parameterize-each`), which calls such a procedure
-  as the machine calls any. The heap holds the loop (`%parameterize-set-each!`):
-  `(scheme base)` sets a stub as it loads, whose first call reads the loop
-  from a string and evaluates it, so that the template names nothing more
-  than it did before #784 and a start compiles none of the loop.
+  as the machine calls any. On its first use on a heap the swap has the
+  machine evaluate the loop (`Step::Eval`, in an environment of `(scheme
+  base)`'s exports), and the heap keeps it; so the template names nothing
+  more than it did before #784, and a start compiles none of the loop.
 - **No heap in `patina-primitives`** (#706): a primitive reaches the heap
   only through its context. `ApplyContext` hands out neither the heap nor the
   file system, and every context comes from the machine (`call_cx`,
