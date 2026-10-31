@@ -1523,6 +1523,17 @@ impl Heap {
         parameters
     }
 
+    /// `parameterize`'s loop for bindings that are not all parameter
+    /// objects, once its first use has compiled it (#817).
+    pub fn parameterize_each(&self) -> Option<TaggedValue> {
+        self.handles.parameterize_each()
+    }
+
+    /// Record `parameterize`'s loop, rooted for the heap's life (#817).
+    pub fn set_parameterize_each(&self, procedure: TaggedValue) {
+        self.handles.set_parameterize_each(procedure);
+    }
+
     /// Which of the heap's standard port parameters `value` is, if it is one
     /// ([`Heap::standard_port_parameters`]).
     #[inline]

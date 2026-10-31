@@ -183,7 +183,8 @@
 ;; parameter-like procedures a program wrote, which take a value on
 ;; assignment and have no converter, the second raising as it is assigned.
 ;; The first is put back before the error escapes. The undo is Scheme's,
-;; `%parameterize-each` in `lib/scheme/base/parameters.scm` (#784). Scoped to
+;; `%parameterize-each` in `patina-primitives`' `parameterize_each.scm` (#784,
+;; #817). Scoped to
 ;; Patina and reported as a skip elsewhere, as the row above is: R7RS makes
 ;; `parameterize` of anything but a parameter object an error, and chibi
 ;; raises; so are the rows after it, which hold the rest of that loop.

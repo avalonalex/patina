@@ -635,6 +635,20 @@ impl<'gc> Cx<'gc> {
         self.heap.borrow().standard_port_parameter(v.tagged())
     }
 
+    /// `parameterize`'s loop for bindings that are not all parameter
+    /// objects, once its first use has compiled it
+    /// ([`Heap::parameterize_each`], #817).
+    pub fn parameterize_each(&self) -> Option<Value<'gc>> {
+        let each = self.heap.borrow().parameterize_each()?;
+        Some(self.brand(each))
+    }
+
+    /// Record `parameterize`'s loop, rooted for the heap's life. A root,
+    /// not a heap object's field, so no store funnel.
+    pub fn set_parameterize_each(&mut self, procedure: Value<'gc>) {
+        self.heap.borrow().set_parameterize_each(procedure.tagged());
+    }
+
     /// A promise in `state`.
     pub fn alloc_promise(&mut self, state: PromiseView<'gc>) -> Value<'gc> {
         let state = match state {
