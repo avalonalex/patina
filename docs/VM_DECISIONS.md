@@ -180,11 +180,15 @@ pub type CxHandler =
   nested loop, which cannot collect. They are `member` and `assoc` with a
   comparator, `force`, `call-with-values`, `call-with-port` and the
   environment procedures. `force` stores through `PromiseBox`.
-- **`parameterize`'s primitives call nothing** (#784): `%parameterize-swap!`
-  and `%parameter-install!` take the context alone and store through
-  `ParamValue`. A list with a procedure a program wrote to act as a parameter
-  goes through Scheme (`%parameterize-each`), which calls it as the machine
-  calls any procedure.
+- **`parameterize`'s primitives call nothing from Rust** (#784):
+  `%parameter-install!` takes the context alone and stores through
+  `ParamValue`, and so does `%parameterize-swap!` for a list of parameter
+  objects. A list with a procedure a program wrote to act as a parameter goes
+  through Scheme: the swap, resumable, has the machine call the loop
+  (`%parameterize-each`, in `(patina internal parameterize)`), which calls
+  such a procedure as the machine calls any. The heap holds the loop, which
+  `(scheme base)` hands over as it loads (`%parameterize-set-each!`), so the
+  template names nothing more than it did before #784 (#817).
 - **No heap in `patina-primitives`** (#706): a primitive reaches the heap
   only through its context. `ApplyContext` hands out neither the heap nor the
   file system, and every context comes from the machine (`call_cx`,

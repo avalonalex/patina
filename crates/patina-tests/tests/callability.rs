@@ -505,3 +505,48 @@ fn an_uncaught_failed_install_puts_back_the_earlier_bindings() {
     assert_eq!(carry_on(common::vm_interpreter()), expected);
     assert_eq!(carry_on(common::tree_walker_interpreter()), expected);
 }
+
+/// #781's own shape, uncaught: three earlier bindings, a parameter object
+/// among them, and the fourth's setter raising. One earlier binding, as
+/// above, hides #781's defect, which put back only the innermost. Each
+/// binding is put back once, innermost first, and the parameter object raw,
+/// with no second undo; the second program records the setter calls.
+#[test]
+fn an_uncaught_failed_install_puts_back_every_earlier_binding_once() {
+    fn carry_on<B: patina_interpreter::Backend>(
+        interp: patina_interpreter::Interpreter<B>,
+    ) -> [String; 2] {
+        let setters = "(import (scheme base))
+            (define calls '())
+            (define (setter name held)
+              (lambda v
+                (if (null? v)
+                    (held)
+                    (begin (set! calls (cons (list name (car v)) calls)) (held (car v))))))
+            (define h1 'old1) (define (p1 . v) (if (null? v) h1 (set! h1 (car v))))
+            (define h2 'old2) (define (p2 . v) (if (null? v) h2 (set! h2 (car v))))
+            (define (bad . v) (if (null? v) 'old3 (raise 'rejected)))
+            (define d (make-parameter 'oldd))
+            (define q1 (setter 'q1 (lambda v (if (null? v) h1 (set! h1 (car v))))))
+            (define q2 (setter 'q2 (lambda v (if (null? v) h2 (set! h2 (car v))))))
+            (define qbad (setter 'qbad (lambda v (if (null? v) 'old3 (raise 'rejected)))))";
+        interp.eval_program_owned(setters).unwrap();
+        let mut answers = Vec::new();
+        for program in [
+            "(parameterize ((p1 'new1) (d 'newd) (p2 'new2) (bad 'new3)) 'body)
+             (list h1 (d) h2)",
+            "(parameterize ((q1 'new1) (d 'newd) (q2 'new2) (qbad 'new3)) 'body)
+             (list h1 (d) h2 (reverse calls))",
+        ] {
+            let owned = interp.eval_program_resilient_owned(program);
+            answers.push(interp.display_tagged(&owned));
+        }
+        answers.try_into().unwrap()
+    }
+    let expected = [
+        "(old1 oldd old2)",
+        "(old1 oldd old2 ((q1 new1) (q2 new2) (qbad new3) (q2 old2) (q1 old1)))",
+    ];
+    assert_eq!(carry_on(common::vm_interpreter()), expected);
+    assert_eq!(carry_on(common::tree_walker_interpreter()), expected);
+}

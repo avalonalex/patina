@@ -35,8 +35,9 @@
 ;; Not exported, and verified: `guard`'s template resolves it hygienically at
 ;; the definition site, checked through `(only (scheme base) guard raise)` and
 ;; `(prefix (scheme base) s:)`. So do `define-record-type`'s
-;; `%record-constructor` and `%record-field-indices` (#736) and
-;; `parameterize`'s `%parameterize-each` (#784). The macro internals that are
+;; `%record-constructor` and `%record-field-indices` (#736). (`parameterize`'s
+;; `%parameterize-each` was one, until its template stopped naming it, #817.)
+;; The macro internals that are
 ;; exported are either older, as `%define-field-accessors` is, or registered
 ;; primitives, as `%parameterize-swap!` is, which `(scheme base)` exports
 ;; because a primitive no library exports cannot be reached. Export this one

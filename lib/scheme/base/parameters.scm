@@ -29,80 +29,39 @@
 ;;
 ;; So every new value is converted before the wind is entered, and install and
 ;; restore both move raw values: through `%parameterize-swap!`, which calls
-;; nothing and installs nothing unless every binding is a parameter object.
-;; The standard ports are parameter objects since #608, whose converters check
-;; the port here, before anything is installed.
+;; nothing from Rust and installs nothing itself unless every binding is a
+;; parameter object. The standard ports are parameter objects since #608,
+;; whose converters check the port here, before anything is installed.
 ;;
 ;; R7RS makes anything but a parameter object in the binding position an
 ;; error; Patina accepts a procedure a program wrote to act as one, which reads
 ;; with no argument and sets with one, and which validates on assignment, with
-;; no converter to run early. For a list with one, the swap answers #f and
-;; `%parameterize-each` installs each binding in turn, calling such a
-;; procedure as the machine calls any (#784): it used to be called from Rust,
-;; which left nothing a continuation could return into (#471) and, on the
-;; VM, undid only part of a failed install (#781).
+;; no converter to run early. For a list with one, the swap has the machine
+;; call the loop the heap holds, which installs each binding in turn, calling
+;; such a procedure as the machine calls any (#784): it used to be called from
+;; Rust, which left nothing a continuation could return into (#471) and, on
+;; the VM, undid only part of a failed install (#781).
+;;
+;; `(scheme base)` expands and compiles this file at every start, and a
+;; program each `parameterize` it writes, so both are kept small (#817; the
+;; expander's cost in depth is #667). The template is the one from before
+;; #784: testing the swap's answer in it made each expansion about half as
+;; dear again, and passing the swap the loop about 5%. The loop is its own
+;; library, `(patina internal parameterize)`, since here it cost about 1.7 M
+;; instructions at every start on the VM.
 
-;; `%parameterize-each`'s install of one binding: a parameter object raw,
-;; past its converter, anything else by calling it.
-(define (%parameterize-install! p v)
-  (if (not (%parameter-install! p v))
-      (p v)))
+;; What the heap holds as the loop until the first `parameterize` over a
+;; procedure a program wrote: it loads the loop's library, hands the heap the
+;; loop in its own place, and runs it. Nothing can collect while
+;; `environment` loads the library, beneath its context, so an `EMFILE` there
+;; raises rather than collecting and reading again.
+(define (%parameterize-load-each params vals done)
+  (define each
+    (eval '%parameterize-each (environment '(patina internal parameterize))))
+  (%parameterize-set-each! each)
+  (each params vals done))
 
-;; Put back the bindings in `done`, records `(p old new)`, each to what
-;; `pick` takes from its record: `cadr` to undo, `caddr` to install again.
-(define (%parameterize-put! done pick)
-  (for-each (lambda (d) (%parameterize-install! (car d) (pick d))) done))
-
-;; Install `v` into `p`, with `done` the bindings already made, innermost
-;; first. A program's setters run inside this bookkeeping, and can raise,
-;; escape, run a `parameterize` of their own or capture a continuation
-;; there, so putting `done` back is never skipped:
-;;   - the handler puts it back before passing a condition on, so an outer
-;;     handler sees it put back, and a `guard` whose clauses decline,
-;;     re-raising where the condition was raised (R7RS §4.2.7), changes no
-;;     binding;
-;;   - an exit before the setter returns puts it back;
-;;   - every entry but the first counts it as put back, since whatever left
-;;     the install since may have put it back, as the form's exit does;
-;;   - a setter that returns installs it again if it was put back.
-;; `undone` says whether a returning setter installs `done` again; where it
-;; errs, the cost is setter calls, an install of what is already in force.
-;; A re-install that is itself interrupted is #810 and #811.
-(define (%parameterize-install-one! p v done)
-  (define entered #f)
-  (define ok #f)
-  (define undone #f)
-  (define (put-back!)
-    (set! undone #t)
-    (%parameterize-put! done cadr))
-  (dynamic-wind
-    (lambda ()
-      (set! ok #f)
-      (if entered (set! undone #t) (set! entered #t)))
-    (lambda ()
-      (with-exception-handler
-        (lambda (e) (put-back!) (raise-continuable e))
-        (lambda () (%parameterize-install! p v)))
-      (if undone
-          (begin (set! undone #f) (%parameterize-put! (reverse done) caddr)))
-      (set! ok #t))
-    (lambda () (if (not ok) (put-back!)))))
-
-;; Install `vals` into `params` one by one, left to right, answering the
-;; values they held: what `%parameterize-swap!` does, for a list with a
-;; procedure a program wrote. Written with `if`, internal definitions and one
-;; `let`, not `let*`, `when`, `unless` and a named `let`: `(scheme base)`
-;; expands this file at every start, where on the VM those cost about 28 M
-;; instructions, and left every collection 140 K more to do, and these cost
-;; about 4 M and 10 K (#784; the expander's cost in depth is #667).
-(define (%parameterize-each params vals)
-  (define (loop ps vs done)
-    (if (null? ps)
-        (map cadr (reverse done))
-        (let ((p (car ps)) (v (car vs)) (old ((car ps))))
-          (%parameterize-install-one! p v done)
-          (loop (cdr ps) (cdr vs) (cons (list p old v) done)))))
-  (loop params vals '()))
+(%parameterize-set-each! %parameterize-load-each)
 
 (define-syntax parameterize
   (syntax-rules ()
@@ -114,10 +73,7 @@
             (old-vals #f))
        (dynamic-wind
          (lambda ()
-           (set! old-vals (%parameterize-swap! params new-vals))
-           (if (not old-vals)
-               (set! old-vals (%parameterize-each params new-vals))))
+           (set! old-vals (%parameterize-swap! params new-vals)))
          (lambda () body ...)
          (lambda ()
-           (if (not (%parameterize-swap! params old-vals))
-               (%parameterize-each params old-vals))))))))
+           (%parameterize-swap! params old-vals)))))))

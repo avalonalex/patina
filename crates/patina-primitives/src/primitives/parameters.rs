@@ -164,8 +164,10 @@ fn parameter_converter<'gc>(
 }
 
 /// `(%parameterize-swap! params vals)` — install `vals` into `params`,
-/// returning the values they held, or `#f`, installing nothing, if one of
-/// `params` is not a parameter object.
+/// answering the values they held. If one of `params` is not a parameter
+/// object, it installs nothing itself, and answers what `parameterize`'s
+/// loop answers for `(params vals '())`, a call the machine makes
+/// ([`Step`]).
 ///
 /// Used for both halves of `parameterize`'s wind: the before thunk keeps the
 /// list it returns, the after thunk hands that list straight back. It installs
@@ -173,18 +175,23 @@ fn parameter_converter<'gc>(
 /// that converter already produced, which doubled a `(lambda (x) (* x 2))` on
 /// the way out and made a `number->string` raise.
 ///
-/// It calls nothing (#784). Everything is checked before anything is
-/// installed: each binding must be a parameter object, and a standard port
-/// parameter's value a port facing its way (#608), since a program can call
-/// this primitive itself; so an install cannot fail partway, and there is
-/// nothing to undo. A procedure a program wrote to act as a parameter is not
-/// one: for a list with one, the swap answers `#f` and `parameterize` runs
-/// `%parameterize-each` (`lib/scheme/base/parameters.scm`), which calls it
-/// as the machine calls any procedure, and undoes in Scheme.
+/// It calls nothing from Rust (#784). Everything is checked before anything
+/// is installed: each binding must be a parameter object, and a standard
+/// port parameter's value a port facing its way (#608), since a program can
+/// call this primitive itself; so an install cannot fail partway, and there
+/// is nothing to undo. A procedure a program wrote to act as a parameter is
+/// not one: for a list with one, the loop is `(scheme base)`'s
+/// `%parameterize-each` (`lib/scheme/base/parameters.scm`), which calls it as
+/// the machine calls any procedure, and undoes in Scheme. The heap keeps the
+/// loop, which `(scheme base)` hands over as it loads
+/// ([`parameterize_set_each`]): a template that tested the swap's answer
+/// itself made each expansion of `parameterize` about half as dear again,
+/// and one that passed the loop to the swap about 5% (#817).
 pub(super) fn parameterize_swap<'gc>(
     cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
     args: &[Value<'gc>],
-) -> Result<Value<'gc>, EvalError> {
+) -> Result<Step<'gc>, EvalError> {
     let [params_list, vals_list] = args[..] else {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -204,7 +211,17 @@ pub(super) fn parameterize_swap<'gc>(
     }
     for (&param, &value) in params.iter().zip(vals.iter()) {
         if !check_raw_install(cx, param, value)? {
-            return Ok(Value::FALSE);
+            let each = cx.parameterize_each().ok_or_else(|| {
+                EvalError::TypeError(
+                    "%parameterize-swap!: not a parameter object, and (scheme base) not loaded"
+                        .to_string(),
+                )
+            })?;
+            return Ok(Step::Call {
+                callee: each,
+                args: smallvec![params_list, vals_list, Value::NULL],
+                state: Value::UNSPECIFIED,
+            });
         }
     }
     let mut olds: Vec<Value<'gc>> = Vec::with_capacity(params.len());
@@ -212,7 +229,7 @@ pub(super) fn parameterize_swap<'gc>(
         olds.push(cx.parameter_value(param).unwrap_or(Value::UNSPECIFIED));
         cx.store(ParamValue(param), value);
     }
-    Ok(cx.list_from_iter(olds))
+    Ok(Step::Done(cx.list_from_iter(olds)))
 }
 
 /// `(%parameter-install! p v)` — store `v` into the parameter object `p`
@@ -236,6 +253,31 @@ pub(super) fn parameter_install<'gc>(
     }
     cx.store(ParamValue(param), value);
     Ok(Value::TRUE)
+}
+
+/// `(%parameterize-set-each! loop)` — make `loop` what `%parameterize-swap!`
+/// has the machine call for bindings that are not all parameter objects:
+/// `(scheme base)`'s `%parameterize-each`, which its body hands over as it
+/// loads (#817). The heap roots it for its life; a later `(scheme base)`
+/// replaces it.
+pub(super) fn parameterize_set_each<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    let [procedure] = args[..] else {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    };
+    if !cx.is_procedure(procedure) {
+        return Err(EvalError::TypeError(format!(
+            "%parameterize-set-each!: expected a procedure, got {}",
+            cx.type_name(procedure)
+        )));
+    }
+    cx.set_parameterize_each(procedure);
+    Ok(Value::UNSPECIFIED)
 }
 
 /// Whether `value` may be installed raw into `param`: `false` if `param` is
@@ -289,19 +331,20 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         parameter_set,
         parameter_set_converted,
     ));
-    registry.register(PrimitiveFn::new_cx(
+    registry.register(PrimitiveFn::new_resumable(
         "scheme.base",
         "%parameterize-swap!",
         Arity::Exact(2),
-        "Installs a list of values into a list of parameter objects, returning the values they held, or #f if one is not a parameter object.",
+        "Installs a list of values into a list of parameter objects, returning the values they held; if one is not a parameter object, returns what parameterize's loop returns for the two lists.",
         parameterize_swap,
+        done_with_result,
     ));
 }
 
-/// Register `%parameter-install!`, after every other primitive
-/// (`register_all`), so that no other primitive's index moves: an index
-/// shift of one cost `string-ports` about 1% in cycles at the same
-/// instructions (#608).
+/// Register `%parameter-install!` and `%parameterize-set-each!`, after every
+/// other primitive (`register_all`), so that no other primitive's index
+/// moves: an index shift of one cost `string-ports` about 1% in cycles at the
+/// same instructions (#608).
 pub(super) fn register_last(registry: &mut super::PrimitiveRegistry) {
     use crate::registry::PrimitiveFn;
     use patina_runtime::Arity;
@@ -312,5 +355,12 @@ pub(super) fn register_last(registry: &mut super::PrimitiveRegistry) {
         Arity::Exact(2),
         "Stores a value into a parameter object raw, past its converter, answering #t, or #f for anything else.",
         parameter_install,
+    ));
+    registry.register(PrimitiveFn::new_cx(
+        "scheme.base",
+        "%parameterize-set-each!",
+        Arity::Exact(1),
+        "Makes a procedure the loop parameterize runs for bindings that are not all parameter objects.",
+        parameterize_set_each,
     ));
 }

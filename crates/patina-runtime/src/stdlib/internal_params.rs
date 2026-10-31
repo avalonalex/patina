@@ -34,6 +34,9 @@ pub fn build_internal_params(
         // `parameterize`'s raw install of one parameter object, for a list
         // with procedures a program wrote (#784).
         ("%parameter-install!", Arity::Exact(2)),
+        // Hands `parameterize`'s loop to the heap, which the swap has the
+        // machine call for a list with a procedure a program wrote (#817).
+        ("%parameterize-set-each!", Arity::Exact(1)),
     ];
 
     for (name, arity) in &primitives {
