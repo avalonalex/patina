@@ -507,10 +507,13 @@ fn an_uncaught_failed_install_puts_back_the_earlier_bindings() {
 }
 
 /// #781's own shape, uncaught: three earlier bindings, a parameter object
-/// among them, and the fourth's setter raising. One earlier binding, as
-/// above, hides #781's defect, which put back only the innermost. Each
-/// binding is put back once, innermost first, and the parameter object raw,
-/// with no second undo; the second program records the setter calls.
+/// among them, and the fourth's setter raising. #781's defect, which put
+/// back only the innermost earlier binding, showed when a `guard` or a
+/// continuation left the install, and the uncaught form was right before
+/// #784; this pins that it stays right with three bindings, where the test
+/// above has one (#781's third box). Each binding is put back once,
+/// innermost first, with no second undo; the second program records the
+/// setter calls.
 #[test]
 fn an_uncaught_failed_install_puts_back_every_earlier_binding_once() {
     fn carry_on<B: patina_interpreter::Backend>(

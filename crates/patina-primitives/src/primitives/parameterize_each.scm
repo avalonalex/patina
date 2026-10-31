@@ -10,10 +10,10 @@
 ;;
 ;; Not a definition in `(scheme base)`, which expands and compiles every
 ;; form it holds at every start: there it cost about 2.25 M instructions a
-;; start on the VM, or as a string about 1.1 M. The swap reads this file's
-;; text, which `parameters.rs` includes, on its first use on a heap, has the
-;; machine evaluate it in an environment of `(scheme base)`'s exports, which
-;; opens no file, and keeps the procedure it answers on the heap (#817). One
+;; start on the VM, and as a string the stub read about 1 M. The swap reads
+;; this file's text, which `parameters.rs` includes, on its first use on a
+;; heap, has the machine evaluate it in an environment of `(scheme base)`'s
+;; exports, and keeps the procedure it answers on the heap (#817). One
 ;; expression, a `let ()` whose value is the loop.
 (let ()
   ;; `%parameterize-each`'s install of one binding: a parameter object raw,

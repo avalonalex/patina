@@ -269,9 +269,12 @@ fn call_each<'gc>(each: Value<'gc>, params: Value<'gc>, vals: Value<'gc>) -> Ste
 
 /// The swap's first use on a heap: have the machine evaluate the loop in an
 /// environment of `(scheme base)`'s exports, keeping the two lists for the
-/// call that follows ([`parameterize_swap_resumed`]). `(scheme base)` is
-/// loaded, as the swap is its export, so this opens no file, and no library
-/// a program defines can stand in for the loop.
+/// call that follows ([`parameterize_swap_resumed`]). Every backend's
+/// bootstrap loads `(scheme base)`, so finding it opens no file. It is found
+/// by its name, as `environment` and `scheme-report-environment` find it: a
+/// program that defines its own `(scheme base)`, a name R7RS reserves
+/// (§5.6.1), before its first `parameterize` over a procedure has the loop
+/// compiled against that library instead (#817).
 fn compile_each<'gc>(
     cx: &mut Cx<'gc>,
     ctx: &dyn ApplyContext,

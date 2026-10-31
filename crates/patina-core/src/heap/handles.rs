@@ -193,7 +193,7 @@ impl HandleTable {
     }
 
     /// `parameterize`'s loop for bindings that are not all parameter
-    /// objects, once `(scheme base)` has handed it over.
+    /// objects, once its first use has compiled it.
     pub(crate) fn parameterize_each(&self) -> Option<TaggedValue> {
         self.parameterize_each.with(|each| *each)
     }
