@@ -38,10 +38,20 @@
 //! as after one, and no table access spans Scheme, so it never meets an
 //! open one. Opening a file touches no thread-local. Nothing unregisters: a
 //! dropped heap's entry stops upgrading, and registration prunes such
-//! entries by an amortized rule ([`Tables::register`]), so the list follows
+//! entries by an amortized rule ([`WeakList::push`]), so the list follows
 //! the live heaps.
 //!
-//! The list is per thread, so exit writes out the exiting thread's heaps
+//! A table lets go of an open file port only at the drain, after a
+//! collection or at teardown, and the port then closes unless another owner
+//! holds it: a host that kept the `Rc` past the port's object, or past its
+//! interpreter. Exit cannot reach such a port through a table, and the host
+//! cannot write it out either when the program it runs calls `exit`, which
+//! ends the process from inside the evaluation. So the drain notes it in the
+//! registry too, weakly ([`note_released`]), and exit writes it out with
+//! the rest. A port a host opens and never gives an object belongs to no
+//! heap, and exit does not write it out.
+//!
+//! The registry is per thread, so exit writes out the exiting thread's heaps
 //! alone: an interpreter on another thread loses what it left in its open
 //! file ports, until the `threaded` build (stage 9) widens the list to the
 //! process (decision 3 on #782; an exception to §18.2 rule 1).
@@ -268,62 +278,109 @@ impl PortTable {
 }
 
 thread_local! {
-    /// The `PortTable` of every heap made on this thread, held weakly, for
-    /// exit to write out the file ports a program left open. See the
+    /// The `PortTable` of every heap made on this thread, and the file
+    /// output ports a table let go of while another owner kept them, each
+    /// held weakly, for exit to write out the file ports left open. See the
     /// [module docs](self#the-registry-of-tables).
     static PORT_TABLES: RefCell<Tables> = const {
         RefCell::new(Tables {
-            tables: Vec::new(),
-            prune_at: Tables::MIN_PRUNE_AT,
+            tables: WeakList::new(),
+            released: WeakList::new(),
         })
     };
 }
 
-/// The heaps' tables, held weakly. A table whose heap has been dropped no
-/// longer upgrades: its file ports were written out at teardown (#604).
+/// The heaps' tables, and the ports released from them, held weakly. A
+/// table whose heap has been dropped no longer upgrades: its file ports were
+/// written out at teardown (#604).
 struct Tables {
-    tables: Vec<Weak<PortTable>>,
-    /// How many entries to hold before dropping those of tables that are
-    /// gone, so the list follows the heaps alive rather than every heap ever
-    /// made, at an amortized constant cost per heap.
+    tables: WeakList<PortTable>,
+    /// The open file output ports whose entries the drain took out, at a
+    /// collection or at teardown, while another owner, a host, still held
+    /// them ([`note_released`]): no table reaches them any more, and exit
+    /// still writes them out.
+    released: WeakList<Port>,
+}
+
+/// A list of weak references that drops those that no longer upgrade once
+/// it reaches `prune_at` entries, and then holds twice the entries left, so
+/// it follows what is alive rather than everything ever added, at an
+/// amortized constant cost per entry.
+struct WeakList<T> {
+    items: Vec<Weak<T>>,
     prune_at: usize,
 }
 
-impl Tables {
+impl<T> WeakList<T> {
     const MIN_PRUNE_AT: usize = 16;
 
-    fn register(&mut self, table: &Rc<PortTable>) {
-        if self.tables.len() >= self.prune_at {
-            self.tables.retain(|table| table.strong_count() > 0);
-            self.prune_at = (2 * self.tables.len()).max(Self::MIN_PRUNE_AT);
+    const fn new() -> Self {
+        Self {
+            items: Vec::new(),
+            prune_at: Self::MIN_PRUNE_AT,
         }
-        self.tables.push(Rc::downgrade(table));
+    }
+
+    fn push(&mut self, item: &Rc<T>) {
+        if self.items.len() >= self.prune_at {
+            self.items.retain(|item| item.strong_count() > 0);
+            self.prune_at = (2 * self.items.len()).max(Self::MIN_PRUNE_AT);
+        }
+        self.items.push(Rc::downgrade(item));
+    }
+
+    fn upgrade(&self) -> Vec<Rc<T>> {
+        self.items.iter().filter_map(Weak::upgrade).collect()
     }
 }
 
 /// Register `table`, a new heap's, for exit: once per heap
 /// (`Heap::with_capacity`).
 pub(crate) fn register(table: &Rc<PortTable>) {
-    PORT_TABLES.with(|tables| tables.borrow_mut().register(table));
+    PORT_TABLES.with(|tables| tables.borrow_mut().tables.push(table));
+}
+
+/// Note each output port of `ports`, which the drain just took out of a
+/// table, that an owner besides `ports` still holds: a host's `Rc`, kept
+/// past the port object it was given, or past its interpreter's teardown.
+/// No table reaches such a port, so exit finds it here. A port can have two
+/// objects, each with its entry, so the `Rc`s are counted per port, as
+/// [`PortTable::take_last_charges`] counts them.
+pub(crate) fn note_released(ports: &[Rc<Port>]) {
+    let mut ports: Vec<&Rc<Port>> = ports.iter().filter(|port| port.is_output()).collect();
+    if ports.is_empty() {
+        return;
+    }
+    ports.sort_unstable_by_key(|port| Rc::as_ptr(port));
+    let held: Vec<&Rc<Port>> = ports
+        .chunk_by(|a, b| Rc::ptr_eq(a, b))
+        .filter(|entries| Rc::strong_count(entries[0]) > entries.len())
+        .map(|entries| entries[0])
+        .collect();
+    if !held.is_empty() {
+        PORT_TABLES.with(|tables| {
+            let mut tables = tables.borrow_mut();
+            held.into_iter().for_each(|port| tables.released.push(port));
+        });
+    }
 }
 
 /// The file output ports of every live heap on this thread, as
-/// [`PortTable::output_files`] answers them, for exit to write out
+/// [`PortTable::output_files`] answers them, and those the heaps released
+/// that a host still holds, for exit to write out
 /// (`crate::port::flush_open_output_files`). Each table is read in an access
 /// of its own, after the list's borrow has ended.
 pub(crate) fn open_output_files() -> Vec<Rc<Port>> {
-    let tables: Vec<Rc<PortTable>> = PORT_TABLES.with(|tables| {
-        tables
-            .borrow()
-            .tables
-            .iter()
-            .filter_map(Weak::upgrade)
-            .collect()
+    let (tables, mut released) = PORT_TABLES.with(|tables| {
+        let tables = tables.borrow();
+        (tables.tables.upgrade(), tables.released.upgrade())
     });
-    tables
+    let mut ports: Vec<Rc<Port>> = tables
         .iter()
         .flat_map(|table| table.output_files())
-        .collect()
+        .collect();
+    ports.append(&mut released);
+    ports
 }
 
 /// The entries of this thread's registry of tables, the dead ones not yet
@@ -331,7 +388,7 @@ pub(crate) fn open_output_files() -> Vec<Rc<Port>> {
 /// heaps (#786).
 #[cfg(any(test, feature = "test-support"))]
 pub fn registered_port_tables() -> usize {
-    PORT_TABLES.with(|tables| tables.borrow().tables.len())
+    PORT_TABLES.with(|tables| tables.borrow().tables.items.len())
 }
 
 impl Entries {
@@ -540,7 +597,7 @@ mod tests {
                 heap.alloc_port(Port::new_output_string());
                 let entries = registered_port_tables();
                 assert!(
-                    entries <= Tables::MIN_PRUNE_AT,
+                    entries <= WeakList::<PortTable>::MIN_PRUNE_AT,
                     "cycle {cycle}: {entries} entries for at most two live heaps"
                 );
                 let open = open_output_files();

@@ -188,9 +188,10 @@ static NEXT_FILE_PORT: AtomicU64 = AtomicU64::new(0);
 /// The ports are those of every live heap's `PortTable` on the thread
 /// (`heap::port_table`, #786), written in the order they were opened, across
 /// heaps, as chibi writes them: two ports open on one file leave the later
-/// one's output over the earlier one's. A port a host holds outside every
-/// heap's table, one it never gave an object or whose object a collection
-/// found dead, is the host's to write out.
+/// one's output over the earlier one's. A port a host kept past its object,
+/// or past its interpreter, is written out too, since the drain that let go
+/// of it noted it. A port a host opens and never gives an object belongs to
+/// no heap, and is the host's to write out.
 pub fn flush_open_output_files() -> Vec<(PathBuf, io::Error)> {
     let mut failures = Vec::new();
     for port in open_output_files_in_order() {
@@ -2162,6 +2163,63 @@ mod tests {
             assert_eq!(read("twice"), "twice");
             assert_eq!(read("queued"), "queued");
             drop((first, second));
+            std::fs::remove_dir_all(&dir).unwrap();
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// A port a host keeps past its object, or past its heap's teardown,
+    /// is in no table once the drain takes its entry out, and exit still
+    /// writes it out (#786): the program the host runs may call `exit`,
+    /// which ends the process before the host could. One the host never gave
+    /// an object belongs to no heap, and exit leaves it to the host.
+    #[test]
+    fn exit_writes_out_a_port_a_host_kept_past_its_object_or_its_heap() {
+        use crate::vfs::NativeFs;
+
+        std::thread::spawn(|| {
+            let dir =
+                std::env::temp_dir().join(format!("patina_exit_released_{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let open = |name: &str| {
+                let port =
+                    Port::open_output_file(dir.join(name).to_str().unwrap(), &NativeFs).unwrap();
+                port.write_string(name).unwrap();
+                port
+            };
+            let mut heap = crate::Heap::new();
+            let past_object = open("object");
+            heap.alloc_port(Rc::clone(&past_object));
+            crate::heap::gc::Collector::collect(
+                &mut crate::heap::gc::MarkSweepCollector::new(),
+                &mut heap,
+                &[],
+            );
+            heap.finalize_queued();
+            assert_eq!(heap.port_entries(), 0, "the drain took the entry out");
+            let shared = crate::heap::new_shared_heap();
+            let past_heap = open("heap");
+            shared.borrow_mut().alloc_port(Rc::clone(&past_heap));
+            crate::heap::teardown(&shared);
+            drop(shared);
+            let never = open("never");
+
+            let ports: Vec<*const Port> = open_output_files_in_order()
+                .iter()
+                .map(Rc::as_ptr)
+                .collect();
+            assert_eq!(ports, [&past_object, &past_heap].map(Rc::as_ptr).to_vec());
+            assert!(flush_open_output_files().is_empty());
+            let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap();
+            assert_eq!(
+                (read("object"), read("heap")),
+                ("object".into(), "heap".into())
+            );
+            assert_eq!(read("never"), "", "the host's alone");
+            drop((past_object, past_heap, never));
+            assert!(open_output_files_in_order().is_empty());
+            drop(heap);
             std::fs::remove_dir_all(&dir).unwrap();
         })
         .join()

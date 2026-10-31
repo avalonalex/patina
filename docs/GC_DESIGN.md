@@ -498,9 +498,14 @@ Scheme resumes (`PRD/GC_PRD.md` §9.6, F2–F5). `heap/finalize.rs` holds the
   out after the accesses, once, in the order the ports were opened, across
   heaps, as chibi does: a table's order is not that order once a freed
   entry is reused, so each file port takes a number as it opens
-  (`FilePortData::opened`). A port a host holds outside every table, one it
-  never gave an object or whose object a collection found dead, is the
-  host's to write out. **A limit until stage 9:** the list is per thread
+  (`FilePortData::opened`). A table lets go of an open file port only at
+  the drain, and the port closes then unless a host holds it, past its
+  object or its interpreter: no table reaches it, and the host cannot write
+  it out when the program it runs calls `exit`, which ends the process
+  inside the evaluation. So the drain notes such a port in the registry,
+  weakly (`port_table::note_released`), and exit writes it out with the
+  rest. A port a host opens and never gives an object belongs to no heap,
+  and is the host's to write out. **A limit until stage 9:** the list is per thread
   (decision 3 on #782), so exit writes out the exiting thread's heaps alone,
   and an interpreter on another thread loses what it left in its open file
   ports. The `threaded` build widens the list to the process; until then

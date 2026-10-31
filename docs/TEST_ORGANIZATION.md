@@ -966,7 +966,7 @@ examples should also run when this API changes.
 
 `patina-tests/tests/heap_teardown.rs` holds dropping an interpreter to freeing
 its heap on both backends (#604), and exit to writing out the file ports of
-the interpreters it does not drop (#786). It checks five things:
+the interpreters it does not drop (#786). It checks six things:
 
 - the heap is gone after a program that leaves every kind of value holding an
   environment;
@@ -980,7 +980,12 @@ the interpreters it does not drop (#786). It checks five things:
   interpreters on each backend are made, given an open file port and
   dropped, two alive at a time
   (`the_registry_of_port_tables_prunes_dropped_interpreters`; core's
-  `the_registry_prunes_dropped_heaps` does the same over bare heaps).
+  `the_registry_prunes_dropped_heaps` does the same over bare heaps);
+- a thread that posts to each interpreter's interrupt handle while the
+  interpreter is dropped never reaches its carrier after the drop
+  (`interpreters_are_torn_down_safely_while_a_thread_posts_to_them`, #701),
+  which the release GC lane's "Teardown under posting" step runs again in
+  the `gc-check` build.
 
 The drop and exit cases run the test binary again as the embedding host, in a
 child process, so that nothing but the drop, or the exit, can write the port:

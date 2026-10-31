@@ -39,9 +39,11 @@ fn test_the_previous_port_is_restored_after_a_normal_return() {
 /// The case that crashed the VM. Escaping past `with-output-to-file` must
 /// restore the port rather than take the process down — and the thunk's output
 /// must still reach the file, which is why the port is closed on the way out:
-/// a port left open is written out when a collection finds it dead, its
-/// interpreter is dropped or the program ends (#785, #604, #343), and the
-/// file is read here before any of them.
+/// a port left open is written out only when a collection finds it dead, its
+/// interpreter is dropped or the program ends (#785, #604, #343), so a program
+/// that read the file back after the escape would find it empty. The file is
+/// read here after the interpreters are dropped, which writes out a port left
+/// open, so the program itself asks whether the port is still open.
 #[test]
 fn test_escaping_out_of_the_thunk_restores_the_port() {
     let dir = TempDir::new().expect("temp dir");
@@ -50,15 +52,19 @@ fn test_escaping_out_of_the_thunk_restores_the_port() {
         &format!(
             r#"(import (scheme base) (scheme file) (scheme write))
                (define sink (open-output-string))
+               (define port #f)
                (parameterize ((current-output-port sink))
                  (call-with-current-continuation
                    (lambda (escape)
                      (with-output-to-file "{path}"
-                       (lambda () (display "in-file") (escape 'gone)))))
+                       (lambda ()
+                         (set! port (current-output-port))
+                         (display "in-file")
+                         (escape 'gone)))))
                  (display "after"))
-               (get-output-string sink)"#
+               (list (get-output-string sink) (output-port-open? port))"#
         ),
-        "\"after\"",
+        "(\"after\" #f)",
     );
     assert_eq!(
         std::fs::read_to_string(&path).expect("file written"),

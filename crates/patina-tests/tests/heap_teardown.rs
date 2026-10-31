@@ -73,7 +73,8 @@ const EMBEDDER: &str = "PATINA_TEARDOWN_EMBEDDER";
 /// is this test binary run again in a child process, so that nothing but the
 /// drop can write the port out: when a process ends, a buffer that was never
 /// dropped is never written. The CLI flushes every open port at exit
-/// (`end_process`), and a host does not go through it.
+/// (`end_process`), and a host that returns from `main` does not go through
+/// it.
 #[test]
 fn a_dropped_interpreter_writes_out_the_file_ports_it_left_open() {
     let program = |path: &Path| {
