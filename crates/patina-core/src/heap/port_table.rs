@@ -27,8 +27,10 @@
 //! names it, and an entry whose object is unmarked is freed
 //! ([`PortTable::take_dead_plain`]), its port dropped once the access has
 //! ended. The arena's sweep visits every dead object, and testing each for
-//! a port cost 8–9 instructions an object (#818); a check build still
-//! does, to check that the pass took out every dead port's entry.
+//! a port cost 8–9 instructions an object (#818); the pass costs about 13
+//! instructions an entry of the table instead. A check build still tests
+//! them, to check that the pass took out every dead plain port's entry and
+//! that the collection queued every dead file port's.
 //!
 //! The heap keeps one table for its life, on its `HandleTable`, by `Rc`;
 //! teardown carries it over to the handle table it starts.
@@ -194,13 +196,25 @@ impl PortTable {
     /// registry's.
     pub(crate) fn take_dead_plain(&self, mut live: impl FnMut(u32) -> bool) -> Vec<Rc<Port>> {
         self.entries.with_mut(|entries| {
+            let Entries {
+                ports,
+                free,
+                finalized,
+                owners,
+            } = entries;
             let mut dead = Vec::new();
-            for index in 0..entries.ports.len() {
-                if entries.ports[index].is_some()
-                    && !entries.finalized[index]
-                    && !live(entries.owners[index].heap_index())
-                {
-                    dead.push(entries.free(PortId(index as u32)));
+            // One step an entry, the free ones and the registry's included,
+            // with no bounds check: a pass costs the table's length.
+            for (index, ((port, &finalized), owner)) in ports
+                .iter_mut()
+                .zip(finalized.iter())
+                .zip(owners.iter_mut())
+                .enumerate()
+            {
+                if !finalized && port.is_some() && !live(owner.heap_index()) {
+                    dead.extend(port.take());
+                    free.push(index as u32);
+                    *owner = TaggedValue::DEAD_SLOT;
                 }
             }
             dead
@@ -211,7 +225,13 @@ impl PortTable {
     /// objects it freed, a plain port's entry is already free, which the
     /// pass that starts the sweep took out, and the registry's entries are
     /// answered, for the sweep to check that the collection queued them.
-    #[cfg(any(debug_assertions, feature = "gc-check"))]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check", test)),
+        expect(
+            dead_code,
+            reason = "a check build's part of the sweep, and its control's"
+        )
+    )]
     pub(crate) fn check_swept(&self, ids: &[PortId]) -> Vec<PortId> {
         self.entries.with(|entries| {
             let mut finalized = Vec::new();
@@ -465,7 +485,13 @@ fn not_finalized(id: PortId) -> ! {
 
 /// A check build's failure: the sweep freed a plain port's object whose
 /// entry the pass that starts the sweep left in the table.
-#[cfg(any(debug_assertions, feature = "gc-check"))]
+#[cfg_attr(
+    not(any(debug_assertions, feature = "gc-check", test)),
+    expect(
+        dead_code,
+        reason = "a check build's part of the sweep, and its control's"
+    )
+)]
 #[cold]
 #[inline(never)]
 fn dead_entry_kept(id: PortId) -> ! {
@@ -564,7 +590,6 @@ mod tests {
 
         let ports = table.take_dead_plain(|_| false);
         assert_eq!(ports.len(), 1, "only the plain entry is the sweep's");
-        #[cfg(any(debug_assertions, feature = "gc-check"))]
         assert_eq!(table.check_swept(&[finalized, plain]), vec![finalized]);
         drop(ports);
         assert_eq!(table.len(), 2);
@@ -614,7 +639,10 @@ mod tests {
     /// A check build's sweep refuses a dead plain port whose entry the pass
     /// left in the table, which only a pass that missed it would leave.
     #[test]
-    #[cfg(any(debug_assertions, feature = "gc-check"))]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
     #[should_panic(expected = "the sweep's pass missed a dead port")]
     fn a_check_build_refuses_a_dead_port_the_pass_left() {
         let table = PortTable::new();

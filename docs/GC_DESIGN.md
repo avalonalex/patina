@@ -388,7 +388,11 @@ in one access and drops their `Rc<Port>`s after it
 (`PortTable::take_dead_plain`, #818). The object arena's sweep does not test
 the slots it frees for a port: that test cost 8–9 instructions for every
 object freed, which on `io-cat`, one closure a character, was a quarter of
-the table's cost. A file port's drop flushes and closes its file, so it is
+the table's cost. The pass costs about 13 instructions an entry of the
+table instead, live or free, so a collection pays for the ports a heap
+holds rather than for the objects it frees: with 100,000 live string ports
+a collection costs 11.85 M instructions against `main`'s 10.55 M before
+#818, of which marking them is most. A file port's drop flushes and closes its file, so it is
 finalized after the collection instead (§4.6): the pass leaves its entry to
 the drain. A check build still collects the port objects the object arena's
 sweep frees, and asserts that the pass took out each plain one's entry and

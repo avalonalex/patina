@@ -85,7 +85,7 @@ pub struct HandleTable {
     /// `root_set`'s reason.
     #[trace(
         skip,
-        reason = "Rust ports, whose state is Rust's, and in a check build each entry's owner word, compared by its bits and never traced: tracing it would keep every port object alive"
+        reason = "Rust ports, whose state is Rust's, and each entry's owner word, by which the sweep finds a dead entry and a check build's read compares by its bits, never traced: tracing it would keep every port object alive"
     )]
     ports: Rc<PortTable>,
     /// The objects the heap finalizes after the collection that finds them
