@@ -480,6 +480,31 @@ Scheme resumes (`PRD/GC_PRD.md` §9.6, F2–F5). `heap/finalize.rs` holds the
 - **A collection that never drains**, as core's tests' through a `&mut Heap`,
   leaves its queue to the next drain or to teardown; those tests drain with
   `Heap::finalize_queued`.
+- **Exit** (`PRD/GC_PRD.md` §9.6 F1, #786). The CLI ends with
+  `std::process::exit`, which runs no destructor, so `end_process`
+  (`patina-runtime`'s `exit_status`) first writes out what the program left
+  in the file ports it never closed (`port::flush_open_output_files`, #343).
+  Every heap registers its `PortTable` once, as it is made
+  (`Heap::with_capacity`), in a `thread_local!` list that holds each table
+  weakly (`heap/port_table.rs`'s `PORT_TABLES`); opening a file touches no
+  thread-local. A dropped heap's entry stops upgrading, and registration
+  prunes such entries once the list reaches 16, then twice the entries
+  left, so the list follows the live heaps at an amortized constant cost
+  per heap made. Exit reaches each live table through its own `Rc`, never
+  through a heap, since it runs from inside a running program as well as
+  after one; no table access spans Scheme, so it never meets an open one.
+  In one access per table it takes the registry's output entries, the
+  queued ones included until the drain frees them, and it writes each port
+  out after the accesses, once, in the order the ports were opened, across
+  heaps, as chibi does: a table's order is not that order once a freed
+  entry is reused, so each file port takes a number as it opens
+  (`FilePortData::opened`). A port a host holds outside every table, one it
+  never gave an object or whose object a collection found dead, is the
+  host's to write out. **A limit until stage 9:** the list is per thread
+  (decision 3 on #782), so exit writes out the exiting thread's heaps alone,
+  and an interpreter on another thread loses what it left in its open file
+  ports. The `threaded` build widens the list to the process; until then
+  `PRD/GC_PRD.md` §18.2 rule 1 records it as an exception.
 
 The young and old lists come with 5a, `queue` with its first caller, a
 terminated thread (stage 9), and `FinalKind::HostPayload` with 4f.
@@ -611,7 +636,7 @@ expansion runs in (§7; point C of `PRD/GC_PRD.md` §11.3).
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
 | `Heap.handles` | `heap/handles.rs` | What hosts keep across evaluations, each rooted until its handle is dropped: an `Owned` handle's value (#605) — what the `eval_*_owned` methods and `Interpreter::lookup` answer, and the last value of a program the interpreter is running — and an `OwnedEnvironment`'s environment (#620), traced by `visit_env` with everything bound in it. Also the environments hosts hold by their own `Rc` and lend to the legacy pipeline, kept weakly and traced while anything holds them. Visited in `GcVisitor::new` beside the intern tables, so every collection on either backend traces them; visited, not only marked, since a handle's value can be anything. A handle holds its table weakly and keeps nothing alive |
 | `HandleTable.standard_ports` | `heap/handles.rs` | The parameter objects `current-input-port`, `current-output-port` and `current-error-port` are bound to (#608): made once per heap on `(patina internal io)`'s first build (`Heap::standard_port_parameters`), each holding one port object and its converter, and kept for the heap's life, so a second build binds the same three. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason, so its derived trace reaches it when `GcVisitor::new` visits the table; visited, not only marked, since a parameter holds its port and its converter. Pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown. The port each one holds is also cached, by `Rc`, in the interpreter's `Instance` slots, which the store funnel refreshes at every assignment of one (`write_parameter`) |
-| `HandleTable.ports` | `heap/port_table.rs` | Not a root: the heap's `PortTable` (#785), the `Rc<Port>` each port object's slot names by number, which hold Rust state and no value, so the derived trace skips the field. In a check build the table also records each entry's owner word, which a read compares by its bits; it must stay untraced, or every port object would live for ever in the check lanes alone. On the `HandleTable`, by its own `Rc`, for `root_set`'s reason and so that #786's registry can hold it weakly; the table teardown starts takes it over, so a heap keeps one for its life. The sweep takes a dead port object's entry out, and the drain after the collection a file port's (§4.5, §4.6). An entry need not hold its port's last `Rc`: the `Instance` holds the standard ports and caches the current ones, and a host may keep one |
+| `HandleTable.ports` | `heap/port_table.rs` | Not a root: the heap's `PortTable` (#785), the `Rc<Port>` each port object's slot names by number, which hold Rust state and no value, so the derived trace skips the field. In a check build the table also records each entry's owner word, which a read compares by its bits; it must stay untraced, or every port object would live for ever in the check lanes alone. On the `HandleTable`, by its own `Rc`, for `root_set`'s reason and so that exit's registry of tables can hold it weakly (§4.6, #786); the table teardown starts takes it over, so a heap keeps one for its life. The sweep takes a dead port object's entry out, and the drain after the collection a file port's (§4.5, §4.6). An entry need not hold its port's last `Rc`: the `Instance` holds the standard ports and caches the current ones, and a host may keep one |
 | `HandleTable.finals` | `heap/finalize.rs` | Not a root: the heap's `FinalRegistry` (#785, §4.6), whose entries name their objects by slot index so that a collection can find them dead, weak by design, so the derived trace skips the field. On the `HandleTable`, by its own `Rc`, beside the `PortTable` whose entries it names, and carried across teardown with it |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
 | A compilation's `LiteralPool` | `crates/patina-core/src/literal_pool.rs` | The heap literals of the form being compiled, from its expansion until its code holds them (§9.7, #705): registered with the heap's root set for the pool's life, its entries reported as slots. Each backend drops the pool once the form is compiled, before it runs, so it never holds more than one form's quoted text |

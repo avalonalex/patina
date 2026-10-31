@@ -38,8 +38,10 @@ fn test_the_previous_port_is_restored_after_a_normal_return() {
 
 /// The case that crashed the VM. Escaping past `with-output-to-file` must
 /// restore the port rather than take the process down — and the thunk's output
-/// must still reach the file, which is why the port is closed on the way out
-/// (Patina, unlike chibi, does not flush open ports at exit).
+/// must still reach the file, which is why the port is closed on the way out:
+/// a port left open is written out when a collection finds it dead, its
+/// interpreter is dropped or the program ends (#785, #604, #343), and the
+/// file is read here before any of them.
 #[test]
 fn test_escaping_out_of_the_thunk_restores_the_port() {
     let dir = TempDir::new().expect("temp dir");

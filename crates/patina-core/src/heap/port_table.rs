@@ -23,13 +23,33 @@
 //! does no I/O, and the sweep takes its entry out, after the object arena's
 //! sweep, and drops the port once the access has ended.
 //!
-//! The heap keeps one table for its life, on its `HandleTable`, by `Rc`, so
-//! that #786's registry of open-file tables can hold it weakly; teardown
-//! carries it over to the handle table it starts.
+//! The heap keeps one table for its life, on its `HandleTable`, by `Rc`;
+//! teardown carries it over to the handle table it starts.
+//!
+//! # The registry of tables
+//!
+//! Exit writes out what a program left in the file ports it never closed,
+//! whichever heap's they are (`PRD/GC_PRD.md` §9.6 F1, #786): the CLI ends
+//! with `std::process::exit`, which runs no destructor. So every heap's
+//! table is registered, once, when the heap is made ([`register`]), in a
+//! `thread_local!` list that holds each weakly ([`PORT_TABLES`]), and
+//! [`open_output_files`] reaches each live table through its own `Rc`,
+//! never through its heap: exit runs from inside a running program as well
+//! as after one, and no table access spans Scheme, so it never meets an
+//! open one. Opening a file touches no thread-local. Nothing unregisters: a
+//! dropped heap's entry stops upgrading, and registration prunes such
+//! entries by an amortized rule ([`Tables::register`]), so the list follows
+//! the live heaps.
+//!
+//! The list is per thread, so exit writes out the exiting thread's heaps
+//! alone: an interpreter on another thread loses what it left in its open
+//! file ports, until the `threaded` build (stage 9) widens the list to the
+//! process (decision 3 on #782; an exception to §18.2 rule 1).
 //!
 //! [`Cx::get_port`]: crate::Cx::get_port
 
-use std::rc::Rc;
+use std::cell::RefCell;
+use std::rc::{Rc, Weak};
 
 use super::table::HeapTable;
 use super::{FilePortCharge, GC_CHECK};
@@ -226,6 +246,92 @@ impl PortTable {
         self.entries
             .with(|entries| entries.ports.len() - entries.free.len())
     }
+
+    /// The output ports of the `FinalRegistry`'s entries: every file output
+    /// port that was open when its object was made, the dead ones a
+    /// collection queued included, until the drain takes them out. Cloned
+    /// within one access, for exit to write out after it (#786). A port with
+    /// two objects is answered twice.
+    fn output_files(&self) -> Vec<Rc<Port>> {
+        self.entries.with(|entries| {
+            entries
+                .ports
+                .iter()
+                .zip(&entries.finalized)
+                .filter_map(|(port, &finalized)| match port {
+                    Some(port) if finalized && port.is_output() => Some(Rc::clone(port)),
+                    _ => None,
+                })
+                .collect()
+        })
+    }
+}
+
+thread_local! {
+    /// The `PortTable` of every heap made on this thread, held weakly, for
+    /// exit to write out the file ports a program left open. See the
+    /// [module docs](self#the-registry-of-tables).
+    static PORT_TABLES: RefCell<Tables> = const {
+        RefCell::new(Tables {
+            tables: Vec::new(),
+            prune_at: Tables::MIN_PRUNE_AT,
+        })
+    };
+}
+
+/// The heaps' tables, held weakly. A table whose heap has been dropped no
+/// longer upgrades: its file ports were written out at teardown (#604).
+struct Tables {
+    tables: Vec<Weak<PortTable>>,
+    /// How many entries to hold before dropping those of tables that are
+    /// gone, so the list follows the heaps alive rather than every heap ever
+    /// made, at an amortized constant cost per heap.
+    prune_at: usize,
+}
+
+impl Tables {
+    const MIN_PRUNE_AT: usize = 16;
+
+    fn register(&mut self, table: &Rc<PortTable>) {
+        if self.tables.len() >= self.prune_at {
+            self.tables.retain(|table| table.strong_count() > 0);
+            self.prune_at = (2 * self.tables.len()).max(Self::MIN_PRUNE_AT);
+        }
+        self.tables.push(Rc::downgrade(table));
+    }
+}
+
+/// Register `table`, a new heap's, for exit: once per heap
+/// (`Heap::with_capacity`).
+pub(crate) fn register(table: &Rc<PortTable>) {
+    PORT_TABLES.with(|tables| tables.borrow_mut().register(table));
+}
+
+/// The file output ports of every live heap on this thread, as
+/// [`PortTable::output_files`] answers them, for exit to write out
+/// (`crate::port::flush_open_output_files`). Each table is read in an access
+/// of its own, after the list's borrow has ended.
+pub(crate) fn open_output_files() -> Vec<Rc<Port>> {
+    let tables: Vec<Rc<PortTable>> = PORT_TABLES.with(|tables| {
+        tables
+            .borrow()
+            .tables
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect()
+    });
+    tables
+        .iter()
+        .flat_map(|table| table.output_files())
+        .collect()
+}
+
+/// The entries of this thread's registry of tables, the dead ones not yet
+/// pruned among them: for the tests that hold the registry to the live
+/// heaps (#786).
+#[cfg(any(test, feature = "test-support"))]
+pub fn registered_port_tables() -> usize {
+    PORT_TABLES.with(|tables| tables.borrow().tables.len())
 }
 
 impl Entries {
@@ -415,6 +521,39 @@ mod tests {
         assert_eq!(charges.len(), 1);
         drop(charges);
         assert_eq!((heap.open_file_ports(), heap.external_bytes()), (0, 0));
+    }
+
+    /// The registry follows the live heaps (#786): 300 heaps, each made,
+    /// given an open file output port and dropped, with at most two alive at
+    /// a time, never leave it more than `MIN_PRUNE_AT` entries, and exit
+    /// finds the live heaps' ports alone. On a thread of its own, whose
+    /// registry starts empty.
+    #[test]
+    fn the_registry_prunes_dropped_heaps() {
+        std::thread::spawn(|| {
+            let fs = crate::vfs::MemoryFs::new();
+            let mut previous: Option<crate::Heap> = None;
+            for cycle in 0..300 {
+                let mut heap = crate::Heap::new();
+                let port = Port::open_output_file(&format!("/out-{cycle}"), &fs).unwrap();
+                heap.alloc_port(Rc::clone(&port));
+                heap.alloc_port(Port::new_output_string());
+                let entries = registered_port_tables();
+                assert!(
+                    entries <= Tables::MIN_PRUNE_AT,
+                    "cycle {cycle}: {entries} entries for at most two live heaps"
+                );
+                let open = open_output_files();
+                assert_eq!(open.len(), 1 + usize::from(previous.is_some()));
+                assert!(open.iter().any(|open| Rc::ptr_eq(open, &port)));
+                drop(open);
+                previous = Some(heap);
+            }
+            drop(previous);
+            assert!(open_output_files().is_empty());
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]

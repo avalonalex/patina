@@ -50,11 +50,13 @@ gc-census = []
 
 # Compile `heap::gc::collect_for_tests`, which collects outside every safe
 # point, for unit tests in other crates that drive the collector against
-# hand-built state (#624), and `heap::sentinels`, which those tests use to
-# check that every traced field kept its value (#623). Only the
-# [dev-dependencies] of patina-vm, patina-tree-walker and patina-runtime
-# enable it, and resolver 2 keeps a dev-dependency's features out of normal
-# builds, so no build that ships can name a collector entry point.
+# hand-built state (#624), `heap::sentinels`, which those tests use to
+# check that every traced field kept its value (#623), and
+# `heap::registered_port_tables`, the count of exit's registry of tables that
+# the tests holding it to the live heaps read (#786). Only the
+# [dev-dependencies] of patina-vm, patina-tree-walker, patina-runtime and
+# patina-tests enable it, and resolver 2 keeps a dev-dependency's features out
+# of normal builds, so no build that ships can name a collector entry point.
 test-support = []
 
 # The threaded build's accessor bodies (#711; `PRD/GC_PRD.md` §18.1): the
