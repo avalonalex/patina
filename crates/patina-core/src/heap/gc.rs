@@ -1559,9 +1559,10 @@ impl<'h> GcVisitor<'h> {
             | HeapObjectData::Bytevector(_)
             // The number of the port's entry in the heap's `PortTable`, which
             // holds a Rust port, buffers, a file handle, a position and flags
-            // (#785). In a check build it also records each entry's owner
-            // word, which a read compares by its bits and nothing traces:
-            // tracing it would keep every port object alive.
+            // (#785). It also records each entry's owner word, by which the
+            // sweep's pass finds a dead entry by its mark bit (#818) and a
+            // check build's read compares by its bits, and which nothing
+            // traces: tracing it would keep every port object alive.
             | HeapObjectData::Port(_)
             // An id, a name and field names.
             | HeapObjectData::RecordType(_)
@@ -1802,6 +1803,19 @@ impl Heap {
         // Before the arenas are swept: `sweep_arena` sets the free slots'
         // bits, which are not live.
         let live = marks.live_bytes();
+        // The dead objects' ports, taken out of the table by their objects'
+        // marks while the bits are complete, rather than by testing every
+        // object the arena's sweep frees for a port, which cost 8–9
+        // instructions an object (#818); and dropped after the table's
+        // access (`HeapTable`'s rule), before the account is settled. None
+        // is a file's: those are the `FinalRegistry`'s, which classification
+        // queued and took the charges of, and which the drain drops after
+        // the collection, so L counts no dead port (#785).
+        let dead_ports = self
+            .handles
+            .ports()
+            .take_dead_plain(|object| marks.objects.get(object as usize));
+        drop(dead_ports);
         // What the account holds for the tree-walker closures, which a check
         // build compares with the live ones' and the dead ones' once the
         // object arena's sweep has measured those.
@@ -1824,9 +1838,10 @@ impl Heap {
         // Moved out so the object arena's recording closure can hold it while
         // the arenas themselves are mutably borrowed.
         let mut freed_closures = self.gc_freed_closure_code_ids.take();
-        // The entries of the dead port objects, which leave the `PortTable`
-        // once the object arena is swept, except the `FinalRegistry`'s,
-        // which the drain takes out (#785).
+        // A check build's record of the dead port objects the object arena's
+        // sweep frees, whose entries the pass above took out, but the
+        // `FinalRegistry`'s, which the drain takes out (#785, #818).
+        #[cfg(any(debug_assertions, feature = "gc-check"))]
         let mut dead_ports = Vec::new();
         // The payloads of the slots freed, measured before their tombstones
         // drop them.
@@ -1885,6 +1900,7 @@ impl Heap {
                     {
                         ids.push(*code_id);
                     }
+                    #[cfg(any(debug_assertions, feature = "gc-check"))]
                     if let HeapObjectData::Port(id) = old {
                         dead_ports.push(*id);
                     }
@@ -1892,14 +1908,13 @@ impl Heap {
             ),
         };
         self.gc_freed_closure_code_ids = freed_closures;
-        // The dead objects' ports, taken out of the table in one access and
-        // dropped after it (`HeapTable`'s rule), before the account is
-        // settled. None is a file's: those are the `FinalRegistry`'s, which
-        // classification queued and took the charges of, and which the
-        // drain drops after the collection, so L counts no dead port (#785).
-        let (dead_ports, finalized) = self.handles.ports().remove(&dead_ports);
-        drop(dead_ports);
-        self.assert_finals_queued(&finalized);
+        // A check build's part: every dead plain port's entry is gone, and
+        // every dead file port was queued.
+        #[cfg(any(debug_assertions, feature = "gc-check"))]
+        {
+            let finalized = self.handles.ports().check_swept(&dead_ports);
+            self.assert_finals_queued(&finalized);
+        }
         #[cfg(any(debug_assertions, feature = "gc-check"))]
         assert_eq!(
             charged_closures,

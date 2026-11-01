@@ -128,6 +128,7 @@ impl FinalRegistry {
     /// the registry's was queued by this collection's classification, so a
     /// registration a constructor missed panics rather than leaking its
     /// descriptor until teardown.
+    #[cfg(any(debug_assertions, feature = "gc-check"))]
     fn assert_queued(&self, ids: &[PortId]) {
         if ids.is_empty() {
             return;
@@ -178,13 +179,11 @@ impl Heap {
         drop(charges);
     }
 
-    /// The sweep's part, once the object arena is swept: `finalized`, the
-    /// dead ports the sweep left to the drain, were queued (a check build's
-    /// assertion; empty elsewhere).
+    /// The sweep's part in a check build, once the object arena is swept:
+    /// `finalized`, the dead ports the sweep left to the drain, were queued.
+    #[cfg(any(debug_assertions, feature = "gc-check"))]
     pub(crate) fn assert_finals_queued(&self, finalized: &[PortId]) {
-        if GC_CHECK {
-            self.handles.finals().assert_queued(finalized);
-        }
+        self.handles.finals().assert_queued(finalized);
     }
 
     /// Teardown's part under the borrow: queue every registered entry, so
@@ -218,6 +217,7 @@ fn check_final_slot(objects: &[HeapObjectData], object: HeapIndex, kind: FinalKi
     }
 }
 
+#[cfg(any(debug_assertions, feature = "gc-check"))]
 #[cold]
 #[inline(never)]
 fn not_queued(id: PortId) -> ! {

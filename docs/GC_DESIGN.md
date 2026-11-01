@@ -381,13 +381,23 @@ Tombstoning is not just hygiene: dropping the old `HeapObjectData` releases its
 some future reuse of the slot. §8 shows this is what makes cycle reclamation
 work. A port's slot holds only the number of its entry in the heap's
 `PortTable` (#785). A port whose drop does no I/O — a string, bytevector or
-standard port — leaves the table in the sweep: it collects the dead port
-objects' numbers as it frees their slots, takes their entries out of the table
-in one access once the object arena is swept, and drops their `Rc<Port>`s
-after that access. A file port's drop flushes and closes its file, so it is
-finalized after the collection instead (§4.6): the sweep leaves its entry to
-the drain, and a check build asserts that the collection queued each one whose
-slot it frees.
+standard port — leaves the table in the sweep, as the sweep starts: each entry
+keeps the word of the object that names it, and one pass over the table, while
+the mark bits are complete, takes out the entries whose objects are unmarked
+in one access and drops their `Rc<Port>`s after it
+(`PortTable::take_dead_plain`, #818). The object arena's sweep does not test
+the slots it frees for a port: that test cost 8–9 instructions for every
+object freed, which on `io-cat`, one closure a character, was a quarter of
+the table's cost. The pass costs about 13 instructions an entry of the
+table instead, live or free, so a collection pays for the ports a heap
+holds rather than for the objects it frees: with 100,000 live string ports
+a collection costs 11.85 M instructions against `main`'s 10.55 M before
+#818, of which marking them is most. A file port's drop flushes and closes its file, so it is
+finalized after the collection instead (§4.6): the pass leaves its entry to
+the drain. A check build still collects the port objects the object arena's
+sweep frees, and asserts that the pass took out each plain one's entry and
+that the collection queued each file one's (`PortTable::check_swept`, with
+its positive control `a_check_build_refuses_a_dead_port_the_pass_left`).
 
 Sweep completion is the "collection happened" boundary: it resets the
 allocation counter and clears any pending `(gc)` request, so alternative
@@ -646,7 +656,7 @@ expansion runs in (§7; point C of `PRD/GC_PRD.md` §11.3).
 | `Heap.handles` | `heap/handles.rs` | What hosts keep across evaluations, each rooted until its handle is dropped: an `Owned` handle's value (#605) — what the `eval_*_owned` methods and `Interpreter::lookup` answer, and the last value of a program the interpreter is running — and an `OwnedEnvironment`'s environment (#620), traced by `visit_env` with everything bound in it. Also the environments hosts hold by their own `Rc` and lend to the legacy pipeline, kept weakly and traced while anything holds them. Visited in `GcVisitor::new` beside the intern tables, so every collection on either backend traces them; visited, not only marked, since a handle's value can be anything. A handle holds its table weakly and keeps nothing alive |
 | `HandleTable.parameterize_each` | `heap/handles.rs` | The procedure `%parameterize-swap!` has the machine call for a `parameterize` whose bindings are not all parameter objects (#817): the loop, `%parameterize-each`, which the swap has the machine evaluate on its first use on the heap (`Step::Eval`) and keeps for the heap's life. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason, traced by its derive; pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown |
 | `HandleTable.standard_ports` | `heap/handles.rs` | The parameter objects `current-input-port`, `current-output-port` and `current-error-port` are bound to (#608): made once per heap on `(patina internal io)`'s first build (`Heap::standard_port_parameters`), each holding one port object and its converter, and kept for the heap's life, so a second build binds the same three. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason, so its derived trace reaches it when `GcVisitor::new` visits the table; visited, not only marked, since a parameter holds its port and its converter. Pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown. The port each one holds is also cached, by `Rc`, in the interpreter's `Instance` slots, which the store funnel refreshes at every assignment of one (`write_parameter`) |
-| `HandleTable.ports` | `heap/port_table.rs` | Not a root: the heap's `PortTable` (#785), the `Rc<Port>` each port object's slot names by number, which hold Rust state and no value, so the derived trace skips the field. In a check build the table also records each entry's owner word, which a read compares by its bits; it must stay untraced, or every port object would live for ever in the check lanes alone. On the `HandleTable`, by its own `Rc`, for `root_set`'s reason and so that exit's registry of tables can hold it weakly (§4.6, #786); the table teardown starts takes it over, so a heap keeps one for its life. The sweep takes a dead port object's entry out, and the drain after the collection a file port's (§4.5, §4.6). An entry need not hold its port's last `Rc`: the `Instance` holds the standard ports and caches the current ones, and a host may keep one |
+| `HandleTable.ports` | `heap/port_table.rs` | Not a root: the heap's `PortTable` (#785), the `Rc<Port>` each port object's slot names by number, which hold Rust state and no value, so the derived trace skips the field. The table also records each entry's owner word, by which the sweep's pass finds a dead entry by its object's mark bit (#818) and which a check build's read compares by its bits; it must stay untraced, or every port object would live for ever. On the `HandleTable`, by its own `Rc`, for `root_set`'s reason and so that exit's registry of tables can hold it weakly (§4.6, #786); the table teardown starts takes it over, so a heap keeps one for its life. The sweep's pass takes a dead plain port's entry out as the sweep starts, and the drain after the collection a file port's (§4.5, §4.6). A read, on every port operation, does not mark the table borrowed (`HeapTable::with_unguarded`, #818): it clones an `Rc` and reaches nothing. An entry need not hold its port's last `Rc`: the `Instance` holds the standard ports and caches the current ones, and a host may keep one |
 | `HandleTable.finals` | `heap/finalize.rs` | Not a root: the heap's `FinalRegistry` (#785, §4.6), whose entries name their objects by slot index so that a collection can find them dead, weak by design, so the derived trace skips the field. On the `HandleTable`, by its own `Rc`, beside the `PortTable` whose entries it names, and carried across teardown with it |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
 | A compilation's `LiteralPool` | `crates/patina-core/src/literal_pool.rs` | The heap literals of the form being compiled, from its expansion until its code holds them (§9.7, #705): registered with the heap's root set for the pool's life, its entries reported as slots. Each backend drops the pool once the form is compiled, before it runs, so it never holds more than one form's quoted text |

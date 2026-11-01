@@ -7,7 +7,9 @@
 //! in Rust beside the heap, not in a payload stage 5 would have to take
 //! apart (`SHARED_PAYLOADS`, #711). The table is behind [`HeapTable`] (C3),
 //! and every read clones the `Rc` within one access, so a port operation
-//! does its I/O after the access has ended.
+//! does its I/O after the access has ended. The read, on every port
+//! operation, does not mark the table borrowed ([`HeapTable::with_unguarded`],
+//! #818), since a clone reaches nothing.
 //!
 //! An entry need not hold its port's only `Rc`. The interpreter's `Instance`
 //! holds the standard ports, and caches the current ones (#618, #608); a
@@ -20,8 +22,15 @@
 //! (`heap/finalize.rs`): the collection that finds the object dead queues
 //! it, and the drain after the collection takes it out and drops the port,
 //! with no heap borrow and no table access open. Every other port's drop
-//! does no I/O, and the sweep takes its entry out, after the object arena's
-//! sweep, and drops the port once the access has ended.
+//! does no I/O, and the sweep takes its entry out as it starts, while the
+//! mark bits are complete: each entry keeps the word of the object that
+//! names it, and an entry whose object is unmarked is freed
+//! ([`PortTable::take_dead_plain`]), its port dropped once the access has
+//! ended. The arena's sweep visits every dead object, and testing each for
+//! a port cost 8–9 instructions an object (#818); the pass costs about 13
+//! instructions an entry of the table instead. A check build still tests
+//! them, to check that the pass took out every dead plain port's entry and
+//! that the collection queued every dead file port's.
 //!
 //! The heap keeps one table for its life, on its `HandleTable`, by `Rc`;
 //! teardown carries it over to the handle table it starts.
@@ -100,13 +109,14 @@ struct Entries {
     /// Whether each entry is the `FinalRegistry`'s: a file port's, which
     /// the drain takes out rather than the sweep.
     finalized: Vec<bool>,
-    /// In a check build, the word each entry's object was allocated as,
-    /// which a read compares with the word it was given, as the arenas'
-    /// generation stamps are compared (#621): an id that does not name its
-    /// own object's entry panics where it is read. Empty in a plain release.
-    /// Compared by its bits, never traced: a trace through it would keep
-    /// every port object alive, in the check lanes alone. A collector that
-    /// moves objects or verifies every heap word must account for these.
+    /// The word each entry's object was allocated as: the sweep's pass
+    /// finds a dead plain port's entry by its object's mark bit (#818), and
+    /// a check build's read compares it with the word it was given, as the
+    /// arenas' generation stamps are compared (#621), so an id that does not
+    /// name its own object's entry panics where it is read. `DEAD_SLOT` for
+    /// a free entry. Compared by its bits, never traced: a trace through it
+    /// would keep every port object alive. A collector that moves objects
+    /// or verifies every heap word must account for these.
     owners: Vec<TaggedValue>,
 }
 
@@ -132,9 +142,7 @@ impl PortTable {
                     let id = u32::try_from(entries.ports.len()).expect("more than 2^32 ports");
                     entries.ports.push(Some(port));
                     entries.finalized.push(finalized);
-                    if GC_CHECK {
-                        entries.owners.push(TaggedValue::DEAD_SLOT);
-                    }
+                    entries.owners.push(TaggedValue::DEAD_SLOT);
                     id
                 }
             };
@@ -143,28 +151,30 @@ impl PortTable {
     }
 
     /// Record `owner`, the word the object naming `id` was allocated as.
-    /// Only a check build keeps it.
     pub(crate) fn set_owner(&self, id: PortId, owner: TaggedValue) {
-        if GC_CHECK {
-            self.entries
-                .with_mut(|entries| entries.owners[id.0 as usize] = owner);
-        }
+        self.entries
+            .with_mut(|entries| entries.owners[id.0 as usize] = owner);
     }
 
     /// The port of `owner`, the object whose slot holds `id`.
     #[inline(always)]
     pub(crate) fn get(&self, id: PortId, owner: TaggedValue) -> Rc<Port> {
-        self.entries.with(|entries| {
-            match entries.ports.get(id.0 as usize).and_then(Option::as_ref) {
-                Some(port) => {
-                    if GC_CHECK {
-                        entries.check(id, owner);
+        // SAFETY: the closure clones an `Rc` out of the table, and a check
+        // build compares two words or panics: none of it can reach the
+        // table.
+        unsafe {
+            self.entries.with_unguarded(|entries| {
+                match entries.ports.get(id.0 as usize).and_then(Option::as_ref) {
+                    Some(port) => {
+                        if GC_CHECK {
+                            entries.check(id, owner);
+                        }
+                        Rc::clone(port)
                     }
-                    Rc::clone(port)
+                    None => free_entry_read(id),
                 }
-                None => free_entry_read(id),
-            }
-        })
+            })
+        }
     }
 
     /// The port of the entry `id`, for a reader that has the object's
@@ -178,29 +188,61 @@ impl PortTable {
         })
     }
 
-    /// Take out the entries `ids` names, whose objects the sweep just freed,
-    /// and free them, except the `FinalRegistry`'s, which the drain takes
-    /// out. Their ports are answered, for the caller to drop once the access
-    /// has ended (`HeapTable`'s rule). In a check build the registry's
-    /// entries among `ids` are answered too, for the sweep to check that the
-    /// collection queued them.
-    pub(crate) fn remove(&self, ids: &[PortId]) -> (Vec<Rc<Port>>, Vec<PortId>) {
-        if ids.is_empty() {
-            return (Vec::new(), Vec::new());
-        }
+    /// The sweep's pass, as it starts, while the mark bits are complete:
+    /// take out and free every entry that is not the `FinalRegistry`'s and
+    /// whose object `live` says is dead, `live` asked the object's slot
+    /// index. Their ports are answered, for the caller to drop once the
+    /// access has ended (`HeapTable`'s rule). The drain takes out the
+    /// registry's.
+    pub(crate) fn take_dead_plain(&self, mut live: impl FnMut(u32) -> bool) -> Vec<Rc<Port>> {
         self.entries.with_mut(|entries| {
-            let mut ports = Vec::with_capacity(ids.len());
+            let Entries {
+                ports,
+                free,
+                finalized,
+                owners,
+            } = entries;
+            let mut dead = Vec::new();
+            // One step an entry, the free ones and the registry's included,
+            // with no bounds check: a pass costs the table's length.
+            for (index, ((port, &finalized), owner)) in ports
+                .iter_mut()
+                .zip(finalized.iter())
+                .zip(owners.iter_mut())
+                .enumerate()
+            {
+                if !finalized && port.is_some() && !live(owner.heap_index()) {
+                    dead.extend(port.take());
+                    free.push(index as u32);
+                    *owner = TaggedValue::DEAD_SLOT;
+                }
+            }
+            dead
+        })
+    }
+
+    /// A check build's part of the sweep: of `ids`, the entries of the port
+    /// objects it freed, a plain port's entry is already free, which the
+    /// pass that starts the sweep took out, and the registry's entries are
+    /// answered, for the sweep to check that the collection queued them.
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check", test)),
+        expect(
+            dead_code,
+            reason = "a check build's part of the sweep, and its control's"
+        )
+    )]
+    pub(crate) fn check_swept(&self, ids: &[PortId]) -> Vec<PortId> {
+        self.entries.with(|entries| {
             let mut finalized = Vec::new();
             for &id in ids {
                 if entries.finalized[id.0 as usize] {
-                    if GC_CHECK {
-                        finalized.push(id);
-                    }
-                } else {
-                    ports.push(entries.free(id));
+                    finalized.push(id);
+                } else if entries.ports[id.0 as usize].is_some() {
+                    dead_entry_kept(id);
                 }
             }
-            (ports, finalized)
+            finalized
         })
     }
 
@@ -411,9 +453,7 @@ impl Entries {
             None => free_entry_read(id),
         };
         self.free.push(id.0);
-        if GC_CHECK {
-            self.owners[id.0 as usize] = TaggedValue::DEAD_SLOT;
-        }
+        self.owners[id.0 as usize] = TaggedValue::DEAD_SLOT;
         port
     }
 
@@ -443,6 +483,25 @@ fn not_finalized(id: PortId) -> ! {
     )
 }
 
+/// A check build's failure: the sweep freed a plain port's object whose
+/// entry the pass that starts the sweep left in the table.
+#[cfg_attr(
+    not(any(debug_assertions, feature = "gc-check", test)),
+    expect(
+        dead_code,
+        reason = "a check build's part of the sweep, and its control's"
+    )
+)]
+#[cold]
+#[inline(never)]
+fn dead_entry_kept(id: PortId) -> ! {
+    panic!(
+        "port id {}: its object was swept, but its entry is still in the table: the sweep's \
+         pass missed a dead port (#818)",
+        id.0
+    )
+}
+
 #[cold]
 #[inline(never)]
 fn free_entry_read(id: PortId) -> ! {
@@ -467,8 +526,7 @@ mod tests {
         assert!(Rc::ptr_eq(&table.get(id, owner), &first));
         assert_eq!(table.len(), 1);
 
-        let (ports, finalized) = table.remove(&[id]);
-        assert!(finalized.is_empty());
+        let ports = table.take_dead_plain(|_| false);
         assert_eq!(ports.len(), 1);
         assert!(Rc::ptr_eq(&ports[0], &first));
         drop(ports);
@@ -526,12 +584,13 @@ mod tests {
         let finalized = table.insert(Rc::clone(&file), true);
         let other = table.insert(Port::new_output_string(), true);
         let plain = table.insert(Port::new_output_string(), false);
-
-        let (ports, skipped) = table.remove(&[finalized, plain]);
-        assert_eq!(ports.len(), 1, "only the plain entry is the sweep's");
-        if GC_CHECK {
-            assert_eq!(skipped, vec![finalized]);
+        for (id, object) in [(finalized, 1), (other, 2), (plain, 3)] {
+            table.set_owner(id, TaggedValue::object(object));
         }
+
+        let ports = table.take_dead_plain(|_| false);
+        assert_eq!(ports.len(), 1, "only the plain entry is the sweep's");
+        assert_eq!(table.check_swept(&[finalized, plain]), vec![finalized]);
         drop(ports);
         assert_eq!(table.len(), 2);
 
@@ -542,7 +601,54 @@ mod tests {
         assert_eq!(Rc::strong_count(&file), 1);
         // A freed entry reused for another port is not the registry's.
         let again = table.insert(Port::new_output_string(), false);
-        assert!(table.remove(&[again]).1.is_empty());
+        table.set_owner(again, TaggedValue::object(4));
+        assert_eq!(table.take_dead_plain(|_| false).len(), 1);
+    }
+
+    /// The sweep's pass takes out the plain entries whose objects are dead,
+    /// asked by each object's slot index, and leaves the live ones and the
+    /// registry's (#818).
+    #[test]
+    fn the_sweep_s_pass_takes_out_only_the_dead_plain_entries() {
+        let table = PortTable::new();
+        let ids: Vec<(PortId, u32, bool)> = [(5, false), (6, false), (7, false), (8, true)]
+            .into_iter()
+            .map(|(object, finalized)| {
+                let id = table.insert(Port::new_output_string(), finalized);
+                table.set_owner(id, TaggedValue::object(object));
+                (id, object, finalized)
+            })
+            .collect();
+        let mut asked = Vec::new();
+        let dead = table.take_dead_plain(|object| {
+            asked.push(object);
+            object == 6
+        });
+        assert_eq!(dead.len(), 2, "the entries of objects 5 and 7");
+        assert_eq!(
+            asked,
+            vec![5, 6, 7],
+            "the registry's entry is not asked about"
+        );
+        drop(dead);
+        assert_eq!(table.len(), 2);
+        assert!(table.port(ids[1].0).is_output(), "object 6's entry stays");
+        assert!(table.take_dead_plain(|object| object == 6).is_empty());
+    }
+
+    /// A check build's sweep refuses a dead plain port whose entry the pass
+    /// left in the table, which only a pass that missed it would leave.
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "the sweep's pass missed a dead port")]
+    fn a_check_build_refuses_a_dead_port_the_pass_left() {
+        let table = PortTable::new();
+        let id = table.insert(Port::new_output_string(), false);
+        table.set_owner(id, TaggedValue::object(1));
+        let _ = table.check_swept(&[id]);
     }
 
     /// Only the ports whose every `Rc` the queued entries hold give up their charge
@@ -671,7 +777,7 @@ mod tests {
         let table = PortTable::new();
         let id = table.insert(Port::new_output_string(), false);
         table.set_owner(id, TaggedValue::object(1));
-        drop(table.remove(&[id]).0);
+        drop(table.take_dead_plain(|_| false));
         let _ = table.port(id);
     }
 }
