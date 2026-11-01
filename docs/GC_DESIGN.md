@@ -322,7 +322,7 @@ Iterative worklist; immediates (fixnum, special, char) are skipped by `visit`.
 | Vector | each element |
 | String | leaf |
 
-Object arena, by `HeapObjectData` variant (`heap/mod.rs:119-180`):
+Object arena, by `HeapObjectData` variant (`heap/mod.rs`):
 
 | Variant | Children |
 |---------|----------|
