@@ -1029,10 +1029,11 @@ pub(super) fn vm_load_library(
 /// which defers until stage 4e, so this keeps `parsed`'s guard for the whole
 /// load rather than hand its body to the registry entry (#677).
 ///
-/// Instead of creating a temporary VmState, we swap `state.globals` to the
-/// library's environment, execute body expressions directly in the main
-/// state, then swap back. This ensures continuations, code objects, and
-/// closures all live in the single real execution context.
+/// Instead of creating a temporary VmState, we execute body expressions
+/// directly in the main state, each as a closure over the library's
+/// environment (`execute_nested`), with `state.globals` swapped to it for
+/// the run. This ensures continuations, code objects, and closures all live
+/// in the single real execution context.
 fn vm_evaluate_parsed_library(
     state: &mut VmState,
     parsed: patina_runtime::library_loader::ParsedLibrary,
@@ -1050,10 +1051,12 @@ fn vm_evaluate_parsed_library(
         vm_process_import_set(state, import_set, &lib_env)?;
     }
 
-    // Step 2: Swap globals to lib_env, compile + execute each body expression
-    // in the main VmState, then swap back.
-    // Closures created during execution capture lib_env as their globals
-    // (per-closure environment pointer), so no seeding or merge is needed.
+    // Step 2: compile and execute each body expression in the main VmState,
+    // as a closure whose globals are lib_env (`execute_nested`): its frames
+    // read and define the library's bindings, even when a continuation
+    // resumes them after the load (#779), and the closures they make capture
+    // lib_env too, so no seeding or merge is needed. `state.globals` is
+    // swapped to lib_env for the run as well, and swapped back after it.
 
     // Collection is already deferred for this whole function: `parsed`
     // carries a `GcDeferGuard` while it holds unevaluated body forms (see
@@ -1123,8 +1126,13 @@ fn vm_evaluate_parsed_library(
                           run: `parsed` holds `GcDeferGuard::holding`, so no collection runs. The \
                           globals `with_globals` set aside are on the machine's traced stack"
             )]
-            let result = across_reentry(state, depth_before, |s| execute_nested(s, top_id), |v| *v)
-                .map_err(Reentry::into_vm_error);
+            let result = across_reentry(
+                state,
+                depth_before,
+                |s| execute_nested(s, top_id, &lib_env),
+                |v| *v,
+            )
+            .map_err(Reentry::into_vm_error);
             state.release_unit_if_unused(top_id);
 
             result.map_err(|e| {
@@ -1190,7 +1198,7 @@ pub(super) fn vm_eval_expr(
                       machine's traced stack, and the unit's constants are in the code store, \
                       which the machine roots"
         )]
-        let result = execute_nested(state, top_id);
+        let result = execute_nested(state, top_id, env);
         state.release_unit_if_unused(top_id);
         result
     })
@@ -1351,28 +1359,56 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
 }
 
 /// [`execute`] for code compiled in `env`, an environment other than the
-/// machine's globals, such as one a host built (#620): the unit runs as a
-/// closure of no arguments whose globals are `env`, so its frames read and
-/// define `env`'s bindings, as [`eval_closure`]'s do. The frame holds the
-/// closure, which roots it and `env` while the code runs, and the run may
-/// collect as any top-level run may.
+/// machine's globals, such as one a host built (#620) or a library's, for a
+/// body form a top-level `import` loads (#779): the unit runs in
+/// [`push_frame_in`]'s frame, so its frames read and define `env`'s bindings.
+/// The frame holds its closure, which roots it and `env` while the code
+/// runs, and the run may collect as any top-level run may.
 pub fn execute_in(
     state: &mut VmState,
     code_id: CodeObjectId,
     env: &Rc<Environment>,
 ) -> Result<TaggedValue, VmError> {
-    let code = state.code_object(code_id)?;
-    {
-        // The closure is held only here until the frame takes it.
-        let _no_gc = AssertNoGc::new(&state.heap);
-        let closure = state
-            .heap
-            .borrow_mut()
-            .alloc_vm_closure(code_id.0, Vec::new(), env.clone());
-        state.note_closure_made(code_id);
-        state.execution.push_frame(code, closure, 0);
-    }
+    push_frame_in(state, code_id, env)?;
     run_top_frame(state)
+}
+
+/// Push the frame that runs the unit `code_id`, compiled in `env`, as a
+/// closure of no arguments whose globals are `env`: [`execute_in`]'s frame,
+/// and [`execute_nested`]'s. Its frames read and define `env`'s bindings, as
+/// [`eval_closure`]'s do, wherever a continuation that captured them resumes
+/// them. A frame with no closure reads the machine's globals as they are
+/// when it runs, so a library's body form re-entered after its load read the
+/// program's (#779).
+///
+/// The closure is made retired ([`Heap::RETIRED_VM_CLOSURE_CODE`]): it names
+/// no code, so nothing counts it or retires it, and it keeps no unit loaded.
+/// The frame holds its code itself, as a frame with no closure does, so the
+/// unit is let go once nothing needs it, as before (#338), and a continuation
+/// that captured the frame keeps it. Nothing calls the closure: the frame's
+/// globals are all that is read from it (`frame_globals`), since top-level
+/// code has no free variables.
+///
+/// [`Heap::RETIRED_VM_CLOSURE_CODE`]: patina_core::heap::Heap::RETIRED_VM_CLOSURE_CODE
+///
+/// # State contract
+///
+/// Allocates the closure and pushes one frame; runs no Scheme code.
+fn push_frame_in(
+    state: &mut VmState,
+    code_id: CodeObjectId,
+    env: &Rc<Environment>,
+) -> Result<(), VmError> {
+    let code = state.code_object(code_id)?;
+    // The closure is held only here until the frame takes it.
+    let _no_gc = AssertNoGc::new(&state.heap);
+    let closure = state.heap.borrow_mut().alloc_vm_closure(
+        patina_core::heap::Heap::RETIRED_VM_CLOSURE_CODE,
+        Vec::new(),
+        env.clone(),
+    );
+    state.execution.push_frame(code, closure, 0);
+    Ok(())
 }
 
 /// Run the frame [`execute`] or [`execute_in`] pushed until the stack is
@@ -1428,10 +1464,12 @@ fn run_top_frame(state: &mut VmState) -> Result<TaggedValue, VmError> {
     result
 }
 
-/// Execute a code object in the **current** `VmState`, returning to the
-/// caller's frame depth. Unlike `execute` (which always runs until the
-/// frame stack is empty), this variant is safe to call when the state
-/// already has in-flight frames (e.g. during library loading from `eval`).
+/// Execute a code object compiled in `env` in the **current** `VmState`,
+/// returning to the caller's frame depth. Unlike `execute` (which always runs
+/// until the frame stack is empty), this variant is safe to call when the
+/// state already has in-flight frames (e.g. during library loading from
+/// `eval`). The unit runs in [`push_frame_in`]'s frame, so its frames read
+/// and define `env`'s bindings wherever they are resumed (#779).
 #[expect(
     clippy::disallowed_methods,
     reason = "the state is in the machine: the frame it pushes is the run's root, and it holds \
@@ -1440,11 +1478,10 @@ fn run_top_frame(state: &mut VmState) -> Result<TaggedValue, VmError> {
 pub(super) fn execute_nested(
     state: &mut VmState,
     code_id: CodeObjectId,
+    env: &Rc<Environment>,
 ) -> Result<TaggedValue, VmError> {
     let depth_before = state.execution.frames().len();
-    let code = state.code_object(code_id)?;
-
-    state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0);
+    push_frame_in(state, code_id, env)?;
 
     // A nested entry: no driver, so the run never collects (#702).
     run_loop_until(state, depth_before, None)
@@ -1877,8 +1914,11 @@ fn attach_source_location(state: &VmState, e: VmError) -> VmError {
 /// Get the effective globals environment for the current frame.
 ///
 /// If the current frame is executing a closure, returns that closure's
-/// captured globals (the environment it was compiled against). Otherwise
-/// returns `state.globals` (for top-level code).
+/// captured globals (the environment it was compiled against): a lambda's,
+/// or the one `push_frame_in` made for top-level code compiled in another
+/// environment, a library's body form or a host environment's form.
+/// Otherwise returns `state.globals`: a program's top-level form, or a stub,
+/// which reads no global.
 pub(super) fn frame_globals(state: &VmState) -> Rc<Environment> {
     if let Some(closure) = state.execution.frames().last().and_then(CallFrame::closure)
         && let Some(globals) = state.heap.borrow().get_vm_closure_globals(closure)

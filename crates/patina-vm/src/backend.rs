@@ -757,10 +757,11 @@ impl VmBackend {
 
     /// Evaluate a parsed library (from a .sld file) using the VM.
     ///
-    /// Instead of creating a temporary VmState, we swap the main state's
-    /// globals to `lib_env`, execute body expressions directly, then swap
-    /// back. This ensures continuations, code objects, and closures all
-    /// live in the single real execution context.
+    /// Instead of creating a temporary VmState, we execute body expressions
+    /// directly in the main state, each as a closure over `lib_env`
+    /// (`execute_in`), with the main state's globals swapped to `lib_env`
+    /// for the run. This ensures continuations, code objects, and closures
+    /// all live in the single real execution context.
     ///
     /// The body and `lib_env` go into `loading`'s registry entry first,
     /// which roots them until the load ends, so the load collects where it
@@ -787,10 +788,13 @@ impl VmBackend {
             self.process_import_set(import_set, &lib_env)?;
         }
 
-        // Step 2: Swap globals to lib_env, compile + execute each body
-        // expression in the main VmState, then swap back.
-        // Closures created during execution capture lib_env as their globals
-        // (per-closure environment pointer), so no seeding or merge is needed.
+        // Step 2: compile and execute each body expression in the main
+        // VmState, as a closure whose globals are lib_env (`execute_in`): its
+        // frames read and define the library's bindings, even when a
+        // continuation resumes them after the load (#779), and the closures
+        // they make capture lib_env too, so no seeding or merge is needed.
+        // The main state's globals are swapped to lib_env for the run as
+        // well, and swapped back after it.
 
         // A relative `include` in the body resolves beside the `.sld`.
         let source = declarations.source.as_deref();
@@ -857,9 +861,10 @@ impl VmBackend {
                                   #677). Holds `lib_env` and the body's later forms, which this \
                                   load's registry entry roots; and, through `with_globals`, the \
                                   globals it set aside, on the machine's traced stack. The form's \
-                                  constants are in the loaded unit, which the code store roots"
+                                  constants are in the loaded unit, which the code store roots, \
+                                  and its frame holds the closure that holds `lib_env`"
                     )]
-                    let result = execute(state, top_id);
+                    let result = execute_in(state, top_id, &lib_env);
                     state.release_unit_if_unused(top_id);
 
                     result.map_err(|e| {

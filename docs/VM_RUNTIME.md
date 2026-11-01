@@ -77,6 +77,13 @@ stub ids, and scratch argument pool. `with_globals` scopes library/eval
 substitution on the same heap, keeps the environment it sets aside on the
 traced `saved_globals` (#677; it deferred GC while that environment lived only
 on the Rust stack), and restores it on both success and error/escape results.
+A library's body form does not rest on the swap for its own bindings: it runs
+as a closure whose globals are the library's environment (`execute_in` at a
+top-level `import`, `execute_nested` on the nested loads), so its frame
+resolves its globals against the library's wherever a continuation restores
+it (#779; §5.6). During a load the swapped globals are still read by a frame
+with no closure, a program form that a continuation resumes there, and by
+`interaction-environment` (#823).
 `import_export` still installs shared bindings and invalidates primitive fast
 paths in the same operation. Library loading keeps one machine and its existing
 re-entry protocol.
@@ -849,6 +856,19 @@ Notes on the cells that are not a plain yes:
   had already made `tail_call_value` run a primitive before popping the
   frame, as any tail callee runs, and routed a `call-with-values` consumer
   and `apply` as a value through it
+- **A restored frame resolves its globals against its own closure.** A
+  continuation restores frames, not environments, so a frame reads and
+  defines the bindings of the environment its code was compiled in through
+  the closure it holds: a lambda's frame through its closure, and top-level
+  code compiled in another environment — a library's body form, a host
+  environment's form — through a closure of no arguments over that
+  environment, made retired so that it names no code (`push_frame_in`). Only
+  a program's own top-level forms and the stubs, which resolve no name, run
+  with no closure, and read the machine's globals as they are when the frame
+  runs. A library body form re-entered after its load read the program's
+  until #779's part 1 (`test_reentering_a_library_body_form_after_the_load`
+  in `escape_from_primitive.rs`); what the rest of the body does after it is
+  part 2's.
 - **A resumable primitive's suspension touches no dynamic stack.** Its stub
   frame (`resume_stub`, or `collect_stub` for a collection, §4.5) is an
   ordinary frame over the caller, so a continuation captured in the call it

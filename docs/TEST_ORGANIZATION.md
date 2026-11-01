@@ -744,7 +744,8 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   [Track H's archived PRD](../PRD/ARCHIVE/completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md#h3--differential-generation-and-shrinking-manual-or-scheduled-lane).
 - `escape_from_primitive.rs` — escaping out of a Rust primitive's callback,
   on both backends, and re-entering continuations captured around an open
-  that ran out of descriptors, collected and retried (#607).
+  that ran out of descriptors, collected and retried (#607), or in a
+  library's body form, after its load, on every route that loads one (#779).
   `backend_divergence.rs` is gone: its rows are in
   `control/cps-features.scm`, `control/callability.scm`, `control/prompts.scm`
   and `expansion/hygiene.scm`, the open ones as backend-scoped expectations

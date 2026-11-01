@@ -667,6 +667,157 @@ fn test_reentering_a_loaded_form_after_load_returned() {
     );
 }
 
+/// Re-entering, after the load, a continuation captured by a library's body
+/// form: the rest of the form reads, assigns and defines the library's
+/// bindings, as it did during the load (#779). The VM ran the restored frame
+/// against its globals as they were then, the program's after a load and a
+/// second library's while that one loaded: a library binding the program
+/// does not import was unbound, a name the program also binds read and wrote
+/// the program's binding, and the `define` defined in the program. A body
+/// form runs as a closure whose globals are the library's environment now,
+/// as `eval`'s code does.
+///
+/// The form re-entered, `v`'s definition, is the body's last, so that what
+/// the rest of the body does after it (#779's part 2) cannot move these
+/// answers. It reads, assigns and defines in its own frame: code in a closure
+/// it made, a `let`'s body, had the library's globals already. Each route
+/// runs with and without program bindings of `hidden` and `v`: a top-level
+/// `import`, `environment`, an `eval`'d `import`, a `define-library` in the
+/// program, and a second library's body re-entering it during its own load,
+/// by a top-level `import` and by `environment`. A load through `environment`
+/// or `eval` is a form of its own, whose value nothing reads: on the VM the
+/// re-entered form returns from it a second time, with a stale value, which
+/// is part 2's.
+///
+/// Measured 2026-11-01 with chibi 0.12.0 and Gauche 0.9.15, each program
+/// writing what it answers here. chibi answers so on every route it runs: it
+/// takes no `define-library` in a script, and refuses the second library's
+/// load by `import` ("module attempted to reference itself while loading").
+/// Gauche answers so for the `define-library` in the program. Elsewhere it
+/// exits 70 with no message after the re-entry, refuses the second library's
+/// ("attempt to return from a ghost continuation"), or finds `k` unbound in
+/// its `interaction-environment` after the `eval`'d `import`; a write from
+/// inside the re-entered form shows it reading and assigning the library's
+/// `hidden`. Rust because it needs libraries on disk, and neither oracle runs
+/// every route.
+#[test]
+fn test_reentering_a_library_body_form_after_the_load() {
+    const BODY: &str = "(define hidden 0)
+        (define k #f)
+        (define (state) (list hidden v))
+        (define v (begin (set! hidden (+ 1 (call/cc (lambda (c) (set! k c) 0))))
+                         (* 2 hidden)))";
+    let root = TempDir::new().expect("temp dir");
+    let dir = root.path().join("reenter779");
+    std::fs::create_dir_all(&dir).expect("library dir");
+    std::fs::write(
+        dir.join("body.sld"),
+        format!(
+            "(define-library (reenter779 body) (import (scheme base)) (export k state)
+               (begin {BODY}))"
+        ),
+    )
+    .expect("library file");
+    std::fs::write(
+        dir.join("callk.sld"),
+        "(define-library (reenter779 callk) (import (scheme base) (reenter779 body))
+           (export callk-state)
+           (begin (define hidden 'callk)
+                  (define v 'callk)
+                  (define (callk-state) (list hidden v))
+                  (k 10)))",
+    )
+    .expect("library file");
+
+    // What the program reads of its own bindings once the form has been
+    // re-entered.
+    const READ: &str = "(guard (e (#t 'unbound)) hidden) (guard (e (#t 'unbound)) v)";
+    for (own, seen) in [
+        ("(define hidden 100) (define v 'program)", "100 program"),
+        ("", "unbound unbound"),
+    ] {
+        let reentered = format!("(1 (11 22) {seen})");
+        let routes = [
+            // A top-level `import`.
+            (
+                format!(
+                    "(import (scheme base) (reenter779 body))
+                     {own}
+                     (define n 0)
+                     (set! n (+ n 1))
+                     (if (< n 3) (k 10))
+                     (list n (state) {READ})"
+                ),
+                reentered.clone(),
+            ),
+            // `environment`.
+            (
+                format!(
+                    "(import (scheme base) (scheme eval))
+                     {own}
+                     (define n 0)
+                     (environment '(reenter779 body))
+                     (set! n (+ n 1))
+                     (if (< n 3) ((eval 'k (environment '(reenter779 body))) 10))
+                     (list n ((eval 'state (environment '(reenter779 body)))) {READ})"
+                ),
+                reentered.clone(),
+            ),
+            // An `eval`'d `import`.
+            (
+                format!(
+                    "(import (scheme base) (scheme eval) (scheme repl))
+                     {own}
+                     (define n 0)
+                     (eval '(import (reenter779 body)) (interaction-environment))
+                     (set! n (+ n 1))
+                     (if (< n 3) ((eval 'k (interaction-environment)) 10))
+                     (list n ((eval 'state (interaction-environment))) {READ})"
+                ),
+                reentered.clone(),
+            ),
+            // A `define-library` in the program.
+            (
+                format!(
+                    "(define-library (reenter779 inline) (import (scheme base)) (export k state)
+                       (begin {BODY}))
+                     (import (scheme base) (reenter779 inline))
+                     {own}
+                     (define n 0)
+                     (set! n (+ n 1))
+                     (if (< n 3) (k 10))
+                     (list n (state) {READ})"
+                ),
+                reentered.clone(),
+            ),
+            // A second library's body, loaded by a top-level `import`.
+            (
+                format!(
+                    "(import (scheme base) (reenter779 body) (reenter779 callk))
+                     {own}
+                     (list (state) (callk-state) {READ})"
+                ),
+                format!("((11 22) (callk callk) {seen})"),
+            ),
+            // A second library's body, loaded by `environment`.
+            (
+                format!(
+                    "(import (scheme base) (scheme eval) (reenter779 body))
+                     {own}
+                     (define n 0)
+                     (set! n (+ n 1))
+                     (if (< n 3) (environment '(reenter779 callk)))
+                     (list n (state) {READ})"
+                ),
+                reentered,
+            ),
+        ];
+        for (program, expected) in routes {
+            assert_library_program(root.path(), &program, &expected);
+        }
+    }
+}
+
 /// A raise in the body of a library that an `eval`'d `import` loads, caught
 /// by a `guard` around the `eval`: the handler escapes out of the load. The
 /// VM ran the rest of the library body after the escape, registered the

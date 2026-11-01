@@ -101,6 +101,67 @@ fn forms_run_one_after_another_reuse_the_store_s_slots() {
     );
 }
 
+/// A library's body form lets its code go once it has run, as a program's
+/// form does, on either loader: a top-level `import`'s, and the nested one
+/// `environment` runs. Each body form runs as a closure over the library's
+/// environment (#779), which is made retired, so it names no code and holds
+/// none: counted, it would keep every body form's code until a collection.
+#[test]
+fn a_library_body_form_lets_its_code_go_when_it_has_run() {
+    const FORMS: usize = 300;
+    let root = tempfile::TempDir::new().unwrap();
+    let dir = root.path().join("release779");
+    std::fs::create_dir(&dir).unwrap();
+    let body: String = (0..FORMS).map(|i| format!("(define v{i} {i})\n")).collect();
+    for name in ["imported", "nested"] {
+        std::fs::write(
+            dir.join(format!("{name}.sld")),
+            format!(
+                "(define-library (release779 {name}) (import (scheme base)) (export v0)
+                   (begin {body}))"
+            ),
+        )
+        .unwrap();
+    }
+    let interp = interpreter();
+    interp
+        .backend()
+        .add_library_search_path(root.path().to_path_buf());
+    interp.eval_program("(import (scheme eval))").unwrap();
+    for load in [
+        "(import (release779 imported))",
+        "(environment '(release779 nested))",
+    ] {
+        let before = loaded(&interp);
+        interp.eval_program(load).unwrap();
+        let after = loaded(&interp);
+        assert!(
+            after <= before + 1,
+            "{before} code objects before `{load}` ran {FORMS} body forms, and {after} after"
+        );
+    }
+}
+
+/// A host environment's form lets its code go once it has run, as a form of
+/// the global environment does. It runs as a closure over the environment,
+/// made retired (#779); the closure used to be counted, which kept the code
+/// of every form until a collection freed the closure.
+#[test]
+fn a_host_environment_s_form_lets_its_code_go() {
+    let interp = interpreter();
+    let env = interp.new_environment();
+    interp.eval_str_in(&env, "(+ 1 2)").unwrap();
+    let before = loaded(&interp);
+    for _ in 0..2_000 {
+        interp.eval_str_in(&env, "(+ 1 2)").unwrap();
+    }
+    let after = loaded(&interp);
+    assert!(
+        after <= before + 1,
+        "{before} code objects before 2,000 forms in a host environment, and {after} after"
+    );
+}
+
 /// Code held until a collection gives its slots back then: rounds of forms
 /// making closures, each ended by a collection, need the slots of one round.
 #[test]
