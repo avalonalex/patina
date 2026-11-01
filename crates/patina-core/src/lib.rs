@@ -65,6 +65,7 @@ pub mod procedure;
 pub mod pvref;
 pub mod record_type;
 pub mod scope;
+mod scope_index;
 pub mod scope_resolve;
 pub mod scope_trace;
 pub mod source_document;

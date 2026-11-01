@@ -110,10 +110,15 @@ ROWS = [
     Row('macro-eval-record', 'REPL', 'macro-eval.scm', {'vm': 2000, 'tree-walker': 2000}, ('record',),
         clauses=REPL),
     Row('macro-eval-let', 'REPL', 'macro-eval.scm', {'vm': 4000, 'tree-walker': 4000}, ('let',), clauses=REPL),
-    # N = 2,000: #613's time per expansion grows with the expansions before
-    # it, about 2x over the window here, clear of SS4's 1.5.
+    # N = 2,000 was chosen while #613's time per expansion grew with the
+    # expansions before it, about 2x over the window here, clear of SS4's
+    # 1.5; since its index, 1.0. SS1/vm is the retention #613 left to stage
+    # 5c: each expansion's renamed global, whose slot, name and name-index
+    # entry L counts (about 128 B), and its recorded identity and index
+    # entry, which L does not; all kept strong until 5c reclaims introduced
+    # definitions.
     Row('hidden-define', 'REPL', 'hidden-define.scm', {'vm': 2000, 'tree-walker': 2000}, clauses=REPL,
-        red={'SS1/vm': '#613', 'SS4': '#613'}),
+        red={'SS1/vm': 'stage 5c'}),
     Row('unbound-ref', 'REPL', 'unbound-ref.scm', {'vm': 4000, 'tree-walker': 4000}, clauses=REPL,
         red={'SS1': 'stage 5c', 'SS5': 'stage 5c'}),
     Row('load-repeat', 'REPL', 'load-repeat.scm', {'vm': 1000, 'tree-walker': 1000}, clauses=REPL),

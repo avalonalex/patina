@@ -253,6 +253,12 @@ impl ScopeSet {
         }
     }
 
+    /// The largest scope in the set, the one made last: what a scoped
+    /// binding is indexed under (`scope_index::ScopeIndex`).
+    pub fn largest(&self) -> Option<&ScopeId> {
+        self.scopes.last()
+    }
+
     /// Check if a specific scope is in the set
     pub fn contains(&self, scope: &ScopeId) -> bool {
         self.scopes.binary_search(scope).is_ok()
