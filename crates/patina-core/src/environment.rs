@@ -1,11 +1,13 @@
 use crate::Trace;
 use crate::heap::{ExternalBytes, Heap, SharedHeap};
 use crate::scope::ScopeSet;
+use crate::scope_index::{FRAME_INDEX_ABOVE, INDEX_ABOVE, ScopeIndex};
 use crate::scope_resolve::AmbiguousReference;
 use crate::tagged_value::TaggedValue;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-use std::cell::{Cell, OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, Ref, RefCell};
+use std::collections::hash_map::Entry;
 use std::mem::size_of;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -185,11 +187,120 @@ impl std::error::Error for ScopedSetError {
 
 /// Per spelling, the macro-introduced top-level definitions of that name:
 /// the scope set each was introduced at, and the global it was renamed to.
+type IntroducedGlobals = FxHashMap<Rc<str>, Introduced>;
+
+/// One spelling's macro-introduced top-level definitions the VM renamed, in
+/// the order they were recorded: the scope set each was introduced at, which
+/// is its identity, and the global it was renamed to.
 ///
-/// A map on the inside as well, keyed by the scope set that *is* the
-/// binding's identity. A list scanned for that key made recording `n`
-/// expansions of one spelling quadratic.
-type IntroducedGlobals = FxHashMap<Rc<str>, FxHashMap<ScopeSet, Rc<str>>>;
+/// Indexed by scope once there are more than a scan should visit
+/// ([`ScopeIndex`]), so that neither recording one nor resolving a reference
+/// visits every definition of the spelling. Each was a scan once, and each
+/// made `n` expansions of one spelling quadratic: recording, until the
+/// identities were keyed by their scope set, and resolving, until the index
+/// (#613).
+///
+/// Four words, as the map of identities it replaced was, so a namespace's
+/// charge for its table of these is what it was; the assertion below holds
+/// it there.
+#[derive(Debug, Default)]
+struct Introduced {
+    identities: Vec<(ScopeSet, Rc<str>)>,
+    index: Option<Box<ScopeIndex>>,
+}
+
+const _: () = assert!(size_of::<Introduced>() == size_of::<FxHashMap<ScopeSet, Rc<str>>>());
+
+impl Introduced {
+    /// Where the identity at exactly `scopes` is.
+    fn position(&self, scopes: &ScopeSet) -> Option<usize> {
+        match &self.index {
+            Some(index) => index
+                .exact(scopes)
+                .find(|&i| self.identities[i].0 == *scopes),
+            None => self.identities.iter().position(|(s, _)| s == scopes),
+        }
+    }
+
+    /// The global the definition at exactly `scopes` was renamed to.
+    fn get(&self, scopes: &ScopeSet) -> Option<&Rc<str>> {
+        self.position(scopes).map(|i| &self.identities[i].1)
+    }
+
+    /// Record a definition. One already recorded at the same scopes is
+    /// overwritten, which happens when one expansion is compiled twice.
+    fn record(&mut self, scopes: ScopeSet, renamed_to: Rc<str>) {
+        if let Some(i) = self.position(&scopes) {
+            self.identities[i].1 = renamed_to;
+            return;
+        }
+        if let Some(index) = &mut self.index {
+            index.push(&scopes);
+        }
+        self.identities.push((scopes, renamed_to));
+        if self.index.is_none() && self.identities.len() > INDEX_ABOVE {
+            let sets = self.identities.iter().map(|(scopes, _)| scopes);
+            self.index = Some(Box::new(ScopeIndex::of(sets)));
+        }
+    }
+
+    /// Call `f` with each definition that is a candidate for `reference`,
+    /// newest first.
+    fn for_each_candidate(&self, reference: &ScopeSet, mut f: impl FnMut(&ScopeSet, &Rc<str>)) {
+        visit_candidates(
+            &self.identities,
+            |(scopes, _)| scopes,
+            self.index.as_deref(),
+            reference,
+            |_, (scopes, renamed_to), candidate| {
+                if candidate {
+                    f(scopes, renamed_to);
+                }
+            },
+        );
+    }
+}
+
+/// Visit each of `items`, a list of bindings in the order they were made,
+/// that can be a candidate for `reference`: newest first, which is the order
+/// [`resolve_index`] wants within one environment, with its position and
+/// whether it is one.
+///
+/// Without an index that is every item. With one, it is the items
+/// [`ScopeIndex::candidates`] names, which include every candidate, so a
+/// caller that keeps the candidates keeps the same ones in the same order
+/// either way, and every answer the rule gives — which binding wins, a tie,
+/// an ambiguity and the order its rivals are reported in — is the same.
+///
+/// [`resolve_index`]: crate::scope_resolve::resolve_index
+fn visit_candidates<T>(
+    items: &[T],
+    scopes: impl Fn(&T) -> &ScopeSet,
+    index: Option<&ScopeIndex>,
+    reference: &ScopeSet,
+    mut f: impl FnMut(usize, &T, bool),
+) {
+    let mut visit = |position: usize| {
+        let item = &items[position];
+        f(
+            position,
+            item,
+            crate::scope_resolve::is_candidate(scopes(item), reference),
+        );
+    };
+    match index {
+        Some(index) => {
+            for position in index.candidates(reference) {
+                visit(position as usize);
+            }
+        }
+        None => {
+            for position in (0..items.len()).rev() {
+                visit(position);
+            }
+        }
+    }
+}
 
 /// Simple (non-scoped) binding storage: an append-only list of slots, each
 /// holding its own name, with a hash index built only for large environments.
@@ -410,10 +521,12 @@ pub enum IntroducedDefinition {
     Scoped(ScopeSet),
 }
 
-/// The tables that only a global or a library environment ever fills, kept
+/// The tables that nearly only a global or a library environment fills, kept
 /// out of line so that the environments which never do — and the tree-walker
-/// builds one per call and per `let`-bound temporary — do not carry them.
-/// `Environment::rare` has the measurement.
+/// builds one per call and per `let`-bound temporary — do not carry them. A
+/// frame comes to have them when an alias is installed in it, or when it
+/// binds more than [`FRAME_INDEX_ABOVE`] scoped bindings of one spelling
+/// (`scoped_index`). `Environment::rare` has the measurement.
 #[derive(Debug, Default, Trace)]
 struct RareTables {
     /// The identities of the macro-introduced top-level definitions compiled
@@ -439,6 +552,24 @@ struct RareTables {
         reason = "spellings, scope sets and the names of renamed globals"
     )]
     introduced_global_names: RefCell<IntroducedGlobals>,
+    /// For each spelling with more than [`INDEX_ABOVE`] scoped bindings here,
+    /// where among them a reference should look: positions in that
+    /// spelling's list in `scoped_bindings`, by scope ([`ScopeIndex`], #613).
+    ///
+    /// Here, rather than beside the list it indexes, because of what that
+    /// list's entry costs. Every frame the tree-walker builds holds a scoped
+    /// table of those entries, sized into the `CAPTURED_FRAME_BYTES` charged
+    /// to every closure it makes, so a word more per entry would be paid by
+    /// every call. Which lists are indexed is [`Environment::indexes`]'s:
+    /// a namespace's past [`INDEX_ABOVE`], a frame's past
+    /// [`FRAME_INDEX_ABOVE`]. `insert_scoped`, the one writer of the lists,
+    /// is the one writer of these, and `scoped_index` checks that an index
+    /// covers its list.
+    #[trace(
+        skip,
+        reason = "positions in `scoped_bindings`, which is traced in full"
+    )]
+    scoped_index: RefCell<FxHashMap<Rc<str>, ScopeIndex>>,
     /// Per slot, the [`Owner`] of the binding when that is not this
     /// environment; the slot itself then holds `TaggedValue::FORWARDED`.
     /// Indexed by slot and grown on demand, so `None` — or a slot past the
@@ -521,15 +652,16 @@ struct RareTables {
 /// **What is counted** ([`Environment::table_bytes`]): the environment and
 /// its out-of-line tables' box, every table's own buffer at its capacity —
 /// the slot vector once it is out of line, the name index, the scoped and
-/// alias tables, the import links, the owners, the import and relink aliases
-/// and the introduced globals — and the name of each slot, an `Rc<str>` of two counts
-/// and its bytes, counted whether or not something else shares it (an
-/// `environment` built by import has a fresh name for each of its several
-/// hundred bindings, which are most of what it holds). Not counted: what a
-/// table's entries own beyond their place in it — an alias's or a scoped
-/// binding's name, a scope set, a spelling's map of introduced globals, a
-/// list spilled out of line — and the values, which live in the arenas and
-/// are charged there. An estimate, then, of the tables a namespace fills by
+/// alias tables, the import links, the owners, the import and relink aliases,
+/// the introduced globals and the scoped bindings' indexes — and the name of
+/// each slot, an `Rc<str>` of two counts and its bytes, counted whether or
+/// not something else shares it (an `environment` built by import has a
+/// fresh name for each of its several hundred bindings, which are most of
+/// what it holds). Not counted: what a table's entries own beyond their place
+/// in it — an alias's or a scoped binding's name, a scope set, a spelling's
+/// introduced globals, a list spilled out of line, and a spelling's index
+/// ([`ScopeIndex`]) — and the values, which live in the arenas and are
+/// charged there. An estimate, then, of the tables a namespace fills by
 /// the hundred, and close for those: allocator overhead is not modelled.
 ///
 /// **When it is charged**: once when the namespace is made, and again
@@ -1088,6 +1220,7 @@ impl Environment {
         if let Some(rare) = rare.get() {
             let RareTables {
                 introduced_global_names,
+                scoped_index,
                 links,
                 import_aliases,
                 relink_aliases,
@@ -1098,9 +1231,10 @@ impl Environment {
                 namespace: _,
             } = &**rare;
             bytes += size_of::<RareTables>()
-                + hash_table_bytes::<Rc<str>, FxHashMap<ScopeSet, Rc<str>>>(
+                + hash_table_bytes::<Rc<str>, Introduced>(
                     introduced_global_names.borrow().capacity(),
                 )
+                + hash_table_bytes::<Rc<str>, ScopeIndex>(scoped_index.borrow().capacity())
                 + links.borrow().capacity() * size_of::<Option<Owner>>()
                 + hash_table_bytes::<(u64, u32), ImportAliases>(import_aliases.borrow().capacity())
                 + hash_table_bytes::<RelinkKey, Rc<str>>(relink_aliases.borrow().capacity())
@@ -1487,12 +1621,84 @@ impl Environment {
         }
     }
 
+    /// Whether this environment indexes a spelling's scoped bindings when it
+    /// has `len` of them: past [`INDEX_ABOVE`] in a namespace, past
+    /// [`FRAME_INDEX_ABOVE`] in a frame, which is why a frame of parameters
+    /// does not build one per call. The one place the thresholds are applied,
+    /// so that the writer that builds an index and the readers that consult
+    /// it agree on which lists have one. The first test is the one nearly
+    /// every list fails, so a short list costs a compare.
+    #[inline]
+    fn indexes(&self, len: usize) -> bool {
+        len > INDEX_ABOVE && (self.is_namespace() || len > FRAME_INDEX_ABOVE)
+    }
+
+    /// The index of this environment's scoped bindings of `name`, which the
+    /// caller has borrowed and which are `len` long, or `None` for a list
+    /// that is not indexed ([`indexes`]) and that a scan answers.
+    ///
+    /// An indexed list without an index, or with one that does not cover it,
+    /// is a broken invariant (`insert_scoped` builds and grows both), and
+    /// fails here in a debug build. A release build scans instead, since a
+    /// scan answers every question the index does.
+    ///
+    /// [`indexes`]: Self::indexes
+    fn scoped_index(&self, name: &str, len: usize) -> Option<Ref<'_, ScopeIndex>> {
+        if !self.indexes(len) {
+            return None;
+        }
+        let index = self.rare.get().and_then(|rare| {
+            Ref::filter_map(rare.scoped_index.borrow(), |indexes| indexes.get(name)).ok()
+        });
+        debug_assert!(
+            index.as_ref().is_some_and(|index| index.len() == len),
+            "the scoped bindings of `{name}` are {len} long, and their index covers {:?}",
+            index.as_ref().map(|index| index.len())
+        );
+        index.filter(|index| index.len() == len)
+    }
+
+    /// Where among `bindings`, this environment's scoped bindings of `name`,
+    /// the one at exactly `scopes` is. There is at most one: `insert_scoped`
+    /// overwrites a binding at a set already present.
+    fn scoped_position(
+        &self,
+        name: &str,
+        bindings: &[ScopedBinding],
+        scopes: &ScopeSet,
+    ) -> Option<usize> {
+        match self.scoped_index(name, bindings.len()) {
+            Some(index) => index.exact(scopes).find(|&i| bindings[i].scopes == *scopes),
+            None => bindings.iter().position(|b| b.scopes == *scopes),
+        }
+    }
+
+    /// Visit each of `bindings`, this environment's scoped bindings of
+    /// `name`, that can be a candidate for `reference`, newest first, through
+    /// the spelling's index when it has one ([`visit_candidates`]).
+    fn visit_scoped_candidates(
+        &self,
+        name: &str,
+        bindings: &[ScopedBinding],
+        reference: &ScopeSet,
+        f: impl FnMut(usize, &ScopedBinding, bool),
+    ) {
+        let index = self.scoped_index(name, bindings.len());
+        visit_candidates(
+            bindings,
+            |binding| &binding.scopes,
+            index.as_deref(),
+            reference,
+            f,
+        );
+    }
+
     /// The location of the scoped definition of `name` whose identity is
     /// exactly `scopes`, in this environment's own table.
     fn scoped_definition_location(&self, name: &str, scopes: &ScopeSet) -> Option<BindingLocation> {
         let table = self.scoped_bindings.borrow();
         let (spelling, bindings) = table.get_key_value(name)?;
-        let index = bindings.iter().position(|b| b.scopes == *scopes)?;
+        let index = self.scoped_position(name, bindings, scopes)?;
         Some(BindingLocation::Scoped(
             self.env_id(),
             Rc::clone(spelling),
@@ -1505,8 +1711,9 @@ impl Environment {
     /// [`scoped_definition_location`]: Self::scoped_definition_location
     fn scoped_definition_value(&self, name: &str, scopes: &ScopeSet) -> Option<TaggedValue> {
         let table = self.scoped_bindings.borrow();
-        let binding = table.get(name)?.iter().find(|b| b.scopes == *scopes)?;
-        Some(binding.tagged_value)
+        let bindings = table.get(name)?;
+        let position = self.scoped_position(name, bindings, scopes)?;
+        Some(bindings[position].tagged_value)
     }
 
     /// Assign that definition — [`scoped_definition_location`]'s write. `Err`
@@ -1521,9 +1728,10 @@ impl Environment {
         value: TaggedValue,
     ) -> Result<(), String> {
         let mut table = self.scoped_bindings.borrow_mut();
-        let binding = table
-            .get_mut(name)
-            .and_then(|bindings| bindings.iter_mut().find(|b| b.scopes == *scopes));
+        let binding = table.get_mut(name).and_then(|bindings| {
+            let position = self.scoped_position(name, bindings, scopes)?;
+            bindings.get_mut(position)
+        });
         match binding {
             Some(binding) => {
                 binding.tagged_value = value;
@@ -1550,7 +1758,7 @@ impl Environment {
             rare.introduced_global_names
                 .borrow()
                 .get(name)
-                .is_some_and(|identities| !identities.is_empty())
+                .is_some_and(|introduced| !introduced.identities.is_empty())
         });
         renamed
             || root
@@ -1600,8 +1808,8 @@ impl Environment {
 
     /// The global the macro-introduced top-level definition of `name` at
     /// exactly `scopes` was renamed to, if this environment recorded one
-    /// ([`define_introduced_global`]). A keyed lookup: the table is keyed by
-    /// the scope set so that nothing has to scan a spelling's identities.
+    /// ([`define_introduced_global`]). A probe of the spelling's index, so
+    /// that nothing has to scan its identities ([`Introduced`]).
     ///
     /// [`define_introduced_global`]: Self::define_introduced_global
     fn introduced_global(&self, name: &str, scopes: &ScopeSet) -> Option<Rc<str>> {
@@ -1642,11 +1850,11 @@ impl Environment {
     /// also defines its own global, under the name recorded here, and those
     /// are never reclaimed either.
     ///
-    /// Keyed by the scope set rather than scanned for it, which is not a
+    /// Found by the spelling's index rather than scanned for, which is not a
     /// micro-optimisation: a linear scan per insert made compiling `n`
     /// expansions of one spelling quadratic, measured at 12x main for
-    /// n = 12000. The same key makes a repeated identical `(name, scopes)`
-    /// overwrite, which happens when one expansion is compiled twice.
+    /// n = 12000. A repeated identical `(name, scopes)` overwrites, which
+    /// happens when one expansion is compiled twice (`Introduced`).
     ///
     pub fn define_introduced_global(&self, name: Rc<str>, scopes: ScopeSet, renamed_to: Rc<str>) {
         let grew = {
@@ -1656,7 +1864,7 @@ impl Environment {
                 .introduced_global_names
                 .borrow_mut();
             let capacity = table.capacity();
-            table.entry(name).or_default().insert(scopes, renamed_to);
+            table.entry(name).or_default().record(scopes, renamed_to);
             table.capacity() != capacity
         };
         if grew {
@@ -1664,43 +1872,49 @@ impl Environment {
         }
     }
 
-    /// Call `f` with every macro-introduced top-level definition of `name`:
-    /// the scope set it was introduced at, and the global it was renamed to.
+    /// Call `f` with each macro-introduced top-level definition of `name`
+    /// ([`define_introduced_global`]) that is a candidate for a reference at
+    /// `reference`: the scope set it was introduced at, and the global it was
+    /// renamed to.
     ///
     /// A callback rather than a returned collection because the caller keeps
-    /// only the candidates for one reference, and building the whole list
-    /// first meant cloning every entry — a scope set and an `Rc` apiece — on
-    /// every scoped reference to the spelling, then discarding most of them.
+    /// only the candidates for one reference, and building a list first meant
+    /// cloning every entry — a scope set and an `Rc` apiece — on every scoped
+    /// reference to the spelling.
     ///
-    /// What remains is a scan: a subset query has no better shape, so a
-    /// reference costs one visit per definition of its spelling. Measured
-    /// against a build without any of this, on a file of `n` expansions of
-    /// one macro introducing one spelling: at n = 500, indistinguishable
-    /// (0.01 s both); at n = 12000, 0.68 s against 0.12 s. The second is not
-    /// a shape real code has — it is twelve thousand expansions of a single
-    /// macro — and it is recorded so the next person to see this scan knows
-    /// it was measured rather than overlooked.
+    /// Through the spelling's index once it has more than eight definitions:
+    /// a reference probes one bucket per scope it carries, and is shown only
+    /// the definitions filed under them (`scope_index.rs`).
+    /// This was a scan, one visit per definition of the spelling for each
+    /// reference, and with the same scan of the scoped table it made `n`
+    /// expansions of one macro cost time quadratic in `n` (#613).
     ///
-    /// The order entries arrive in is unspecified, and nothing may depend on
-    /// it. Ties are what an order would decide, and there are none to decide:
-    /// each scope set appears once, and two distinct sets that are both
-    /// candidates for one reference are refused as ambiguous by
-    /// [`crate::scope_resolve::resolve_index`] rather than settled by
-    /// position.
+    /// Newest first, as `resolve_index` wants each environment's candidates.
+    /// No resolution depends on that: each scope set is recorded once, and of
+    /// two candidates for one reference [`crate::scope_resolve::resolve_index`]
+    /// takes the one that contains the other, or refuses both as ambiguous,
+    /// rather than settling them by position. What the order does decide is
+    /// how an ambiguity is reported: which binding it names as the pick (the
+    /// first of the largest), and so which rivals it lists (those the pick
+    /// does not contain), and in what order. Before #613 that followed the
+    /// identities map's unspecified order.
     ///
     /// Parents are not walked: a caller that resolves through a chain, as
     /// the VM's alpha-renaming does for a host environment and the global
     /// one above it (#620), asks each environment of it.
     ///
     /// [`define_introduced_global`]: Self::define_introduced_global
-    pub fn for_each_introduced_global(&self, name: &str, mut f: impl FnMut(&ScopeSet, &Rc<str>)) {
+    pub fn for_each_introduced_candidate(
+        &self,
+        name: &str,
+        reference: &ScopeSet,
+        f: impl FnMut(&ScopeSet, &Rc<str>),
+    ) {
         let Some(rare) = self.rare.get() else {
             return;
         };
-        if let Some(entries) = rare.introduced_global_names.borrow().get(name) {
-            for (scopes, renamed_to) in entries {
-                f(scopes, renamed_to);
-            }
+        if let Some(introduced) = rare.introduced_global_names.borrow().get(name) {
+            introduced.for_each_candidate(reference, f);
         }
     }
 
@@ -1966,6 +2180,11 @@ impl Environment {
     /// is a GC root (`for_each_gc_edge`), so re-evaluating a top-level
     /// form that expands a macro would otherwise pin one dead value per
     /// evaluation for the life of the process.
+    ///
+    /// Also the one writer of the spellings' indexes (`RareTables::
+    /// scoped_index`): a list that grows past its threshold
+    /// ([`Environment::indexes`]) gets one here, and a longer one has each new
+    /// position filed in it as it is pushed.
     fn insert_scoped(
         &self,
         name: Rc<str>,
@@ -1987,23 +2206,61 @@ impl Environment {
             // tree-walker binds each call's parameters here, in a frame, and
             // a frame's first scoped binding always allocates the table.
             let capacity = self.is_namespace().then(|| table.capacity());
-            let bindings = table.entry(name).or_default();
-            match bindings.iter_mut().find(|b| b.scopes == scopes) {
-                Some(existing) => {
-                    existing.tagged_value = value;
-                    existing.visible_by_name = visible_by_name;
+            let binding = ScopedBinding {
+                scopes,
+                tagged_value: value,
+                visible_by_name,
+            };
+            // By entry, so that the frame binding a call's parameters, which
+            // finds each spelling vacant, hashes each name once.
+            let index_grew = match table.entry(name) {
+                Entry::Vacant(vacant) => {
+                    vacant.insert(smallvec::smallvec![binding]);
+                    false
                 }
-                None => bindings.push(ScopedBinding {
-                    scopes,
-                    tagged_value: value,
-                    visible_by_name,
-                }),
-            }
-            capacity.is_some_and(|capacity| table.capacity() != capacity)
+                Entry::Occupied(mut occupied) => {
+                    match self.scoped_position(occupied.key(), occupied.get(), &binding.scopes) {
+                        Some(position) => {
+                            let existing = &mut occupied.get_mut()[position];
+                            existing.tagged_value = binding.tagged_value;
+                            existing.visible_by_name = binding.visible_by_name;
+                            false
+                        }
+                        None => {
+                            occupied.get_mut().push(binding);
+                            let (spelling, bindings) = (occupied.key(), occupied.get());
+                            self.indexes(bindings.len()) && self.index_scoped(spelling, bindings)
+                        }
+                    }
+                }
+            };
+            capacity.is_some_and(|capacity| table.capacity() != capacity) || index_grew
         };
         if grew {
             self.recharge();
         }
+    }
+
+    /// File the binding just pushed onto `bindings`, the scoped bindings of
+    /// `name`, in the spelling's index — or build the index, for a list that
+    /// has just grown past its threshold. Reports whether a namespace's table
+    /// of indexes reallocated, which it charges for.
+    fn index_scoped(&self, name: &Rc<str>, bindings: &[ScopedBinding]) -> bool {
+        let rare = self.rare.get_or_init(Default::default);
+        let mut indexes = rare.scoped_index.borrow_mut();
+        let capacity = self.is_namespace().then(|| indexes.capacity());
+        match indexes.get_mut(&**name) {
+            Some(index) => {
+                let newest = bindings.last().expect("a binding was just pushed");
+                index.push(&newest.scopes);
+                debug_assert_eq!(index.len(), bindings.len());
+            }
+            None => {
+                let sets = bindings.iter().map(|binding| &binding.scopes);
+                indexes.insert(Rc::clone(name), ScopeIndex::of(sets));
+            }
+        }
+        capacity.is_some_and(|capacity| indexes.capacity() != capacity)
     }
 
     /// Define a binding that a name-only lookup can also reach.
@@ -2110,11 +2367,16 @@ impl Environment {
             {
                 let scoped = env.scoped_bindings.borrow();
                 if let Some(bindings) = scoped.get(name) {
-                    for (index, binding) in bindings.iter().enumerate().rev() {
-                        if crate::scope_resolve::is_candidate(&binding.scopes, ref_scopes) {
-                            out.push((binding.scopes.clone(), (env, index)));
-                        }
-                    }
+                    env.visit_scoped_candidates(
+                        name,
+                        bindings,
+                        ref_scopes,
+                        |index, binding, candidate| {
+                            if candidate {
+                                out.push((binding.scopes.clone(), (env, index)));
+                            }
+                        },
+                    );
                 }
             }
             if let Some(parent) = &env.parent {
@@ -2618,21 +2880,26 @@ impl Environment {
         loop {
             let scoped = env.scoped_bindings.borrow();
             if let Some(bindings) = scoped.get(name) {
-                for binding in bindings.iter().rev() {
-                    let is_candidate =
-                        crate::scope_resolve::is_candidate(&binding.scopes, ref_scopes);
-                    if debug {
-                        println!(
-                            "[ENV]   Candidate {} ⊆ {} : {}",
-                            binding.scopes,
-                            ref_scopes,
-                            if is_candidate { "YES" } else { "NO" }
-                        );
-                    }
-                    if is_candidate {
-                        candidates.push((binding.scopes.clone(), binding.tagged_value));
-                    }
-                }
+                // A spelling's index shows only the bindings filed under the
+                // reference's scopes, so with one the debug trace lists those.
+                env.visit_scoped_candidates(
+                    name,
+                    bindings,
+                    ref_scopes,
+                    |_, binding, is_candidate| {
+                        if debug {
+                            println!(
+                                "[ENV]   Candidate {} ⊆ {} : {}",
+                                binding.scopes,
+                                ref_scopes,
+                                if is_candidate { "YES" } else { "NO" }
+                            );
+                        }
+                        if is_candidate {
+                            candidates.push((binding.scopes.clone(), binding.tagged_value));
+                        }
+                    },
+                );
             }
             drop(scoped);
             match &env.parent {
@@ -2659,7 +2926,7 @@ impl Environment {
         debug: bool,
     ) {
         // The tree-walker's case, on every scoped read: nothing recorded, so
-        // return before `for_each_introduced_global` hashes the name.
+        // return before `for_each_introduced_candidate` hashes the name.
         if self
             .rare
             .get()
@@ -2670,10 +2937,8 @@ impl Environment {
         // Collected before any value is read, so no borrow of the identity
         // table is held across a read of the bindings.
         let mut found: Vec<(ScopeSet, Rc<str>)> = Vec::new();
-        self.for_each_introduced_global(name, |scopes, renamed_to| {
-            if crate::scope_resolve::is_candidate(scopes, ref_scopes) {
-                found.push((scopes.clone(), renamed_to.clone()));
-            }
+        self.for_each_introduced_candidate(name, ref_scopes, |scopes, renamed_to| {
+            found.push((scopes.clone(), renamed_to.clone()));
         });
         for (scopes, renamed_to) in found {
             let value = self.local_value(&renamed_to);
@@ -3207,9 +3472,12 @@ mod introduced_global_tests {
         set
     }
 
+    /// Every identity recorded for `name`: the candidates for a reference
+    /// carrying every scope these tests use.
     fn recorded(env: &Environment, name: &str) -> Vec<(ScopeSet, Rc<str>)> {
+        let every_scope = scopes(&(0..256).collect::<Vec<_>>());
         let mut out = Vec::new();
-        env.for_each_introduced_global(name, |scopes, renamed| {
+        env.for_each_introduced_candidate(name, &every_scope, |scopes, renamed| {
             out.push((scopes.clone(), renamed.clone()))
         });
         out.sort_by_key(|(scopes, _)| scopes.len());
@@ -3258,6 +3526,47 @@ mod introduced_global_tests {
         );
     }
 
+    /// Past `INDEX_ABOVE` the identities are found through their index
+    /// (#613): each by its scopes, a reference inside one expansion shown
+    /// that expansion's alone, newest first for a reference that sees them
+    /// all, and an identity recorded again overwritten in place, before the
+    /// index is built and after.
+    #[test]
+    fn identities_past_the_threshold_are_found_through_the_index() {
+        let env = Environment::new();
+        let identity = |i: usize| scopes(&[1, 100 + i]);
+        for i in 0..20 {
+            env.define_introduced_global("count".into(), identity(i), format!("count #{i}").into());
+        }
+        for i in 0..20 {
+            let renamed = env.introduced_global("count", &identity(i));
+            assert_eq!(renamed.as_deref(), Some(format!("count #{i}").as_str()));
+        }
+        let mut found = Vec::new();
+        env.for_each_introduced_candidate("count", &scopes(&[1, 105, 250]), |scopes, renamed| {
+            found.push((scopes.clone(), renamed.clone()))
+        });
+        assert_eq!(found, vec![(identity(5), Rc::from("count #5"))]);
+
+        for i in [3, 17] {
+            env.define_introduced_global("count".into(), identity(i), "fresh".into());
+        }
+        assert_eq!(recorded(&env, "count").len(), 20);
+        for i in [3, 17] {
+            assert_eq!(
+                env.introduced_global("count", &identity(i)).as_deref(),
+                Some("fresh")
+            );
+        }
+
+        let every_scope = scopes(&(0..256).collect::<Vec<_>>());
+        let mut order = Vec::new();
+        env.for_each_introduced_candidate("count", &every_scope, |scopes, _| {
+            order.push(scopes.clone())
+        });
+        assert_eq!(order, (0..20).rev().map(identity).collect::<Vec<_>>());
+    }
+
     /// A child environment does not see them, which is what lets the lookup
     /// skip walking parents: only the parentless global environment records
     /// any, and the VM asserts that where it installs them.
@@ -3268,6 +3577,125 @@ mod introduced_global_tests {
         let child = Environment::with_parent(Rc::clone(&parent));
         assert!(recorded(&child, "x").is_empty());
         assert_eq!(recorded(&parent, "x").len(), 1);
+    }
+}
+
+/// A spelling with more scoped bindings than its environment's threshold is
+/// read and written through its index (#613). The hygiene properties check
+/// the candidate walks against an oracle; these check the exact-set readers,
+/// redefinition, and which environments build an index.
+#[cfg(test)]
+mod scoped_index_tests {
+    use super::*;
+
+    fn scopes(ids: &[usize]) -> ScopeSet {
+        let mut set = ScopeSet::new();
+        for id in ids {
+            set.add_scope(crate::scope::ScopeId(*id));
+        }
+        set
+    }
+
+    fn n(value: i64) -> TaggedValue {
+        TaggedValue::fixnum(value)
+    }
+
+    fn indexed_len(env: &Environment, name: &str) -> Option<usize> {
+        let len = env.scoped_bindings.borrow().get(name)?.len();
+        env.scoped_index(name, len).map(|index| index.len())
+    }
+
+    /// Redefinition overwrites in place, before the index is built and after;
+    /// a scoped alias reads, writes and locates the binding it names through
+    /// the exact-set readers; and a reference from one expansion reads its
+    /// own.
+    #[test]
+    fn an_indexed_spelling_is_found_by_its_exact_readers() {
+        let library = Rc::new(Environment::new());
+        let identity = |k: usize| scopes(&[k, 100 + k]);
+        for k in 0..12 {
+            library.define_with_scopes("count", identity(k), n(k as i64));
+        }
+        library.define_with_scopes("count", identity(2), n(-2));
+        library.define_with_scopes("count", identity(11), n(-11));
+        assert_eq!(library.scoped_bindings.borrow()["count"].len(), 12);
+        assert_eq!(indexed_len(&library, "count"), Some(12));
+        for (k, value) in [(0, 0), (2, -2), (7, 7), (11, -11)] {
+            let reference = scopes(&[k, 100 + k, 500]);
+            assert_eq!(
+                library.get_with_scopes("count", &reference).unwrap(),
+                Some(n(value))
+            );
+        }
+
+        let user = Environment::new();
+        for (alias, k) in [("oldest", 0), ("newest", 11)] {
+            user.define_scoped_alias(alias, Rc::clone(&library), "count".into(), identity(k));
+        }
+        assert_eq!(user.get("oldest"), Some(n(0)));
+        assert_eq!(user.get("newest"), Some(n(-11)));
+        user.set("oldest", n(40)).unwrap();
+        user.set("newest", n(41)).unwrap();
+        assert_eq!(
+            library.scoped_definition_value("count", &identity(0)),
+            Some(n(40))
+        );
+        assert_eq!(
+            library.scoped_definition_value("count", &identity(11)),
+            Some(n(41))
+        );
+        let located = |alias| match user.binding_location(alias) {
+            Some(BindingLocation::Scoped(id, spelling, index)) => {
+                assert_eq!((id, &*spelling), (library.env_id(), "count"));
+                index
+            }
+            other => panic!("{alias} located at {other:?}"),
+        };
+        assert_eq!((located("oldest"), located("newest")), (0, 11));
+
+        library
+            .set_with_scopes("count", &scopes(&[4, 104, 500]), n(44))
+            .unwrap();
+        assert_eq!(
+            library.scoped_definition_value("count", &identity(4)),
+            Some(n(44))
+        );
+        assert_eq!(library.scoped_bindings.borrow()["count"].len(), 12);
+    }
+
+    /// A namespace indexes a spelling past `INDEX_ABOVE`; a frame only past
+    /// `FRAME_INDEX_ABOVE`, so a call binding nine parameters of one
+    /// spelling, as a nine-formal `let-values` does, builds no index and no
+    /// out-of-line tables.
+    #[test]
+    fn a_frame_is_indexed_only_past_its_own_threshold() {
+        let root = Rc::new(Environment::new());
+        for k in 0..=INDEX_ABOVE {
+            root.define_with_scopes("x", scopes(&[k + 1]), n(k as i64));
+        }
+        assert_eq!(indexed_len(&root, "x"), Some(INDEX_ABOVE + 1));
+
+        let frame = Environment::with_parent(Rc::clone(&root));
+        for k in 0..=INDEX_ABOVE {
+            frame.define_with_scopes("x", scopes(&[1000 + k]), n(k as i64));
+        }
+        assert_eq!(indexed_len(&frame, "x"), None);
+        assert!(frame.rare.get().is_none());
+        for k in INDEX_ABOVE + 1..FRAME_INDEX_ABOVE {
+            frame.define_with_scopes("x", scopes(&[1000 + k]), n(k as i64));
+        }
+        assert_eq!(frame.scoped_bindings.borrow()["x"].len(), FRAME_INDEX_ABOVE);
+        assert_eq!(indexed_len(&frame, "x"), None);
+        frame.define_with_scopes("x", scopes(&[5000]), n(-1));
+        assert_eq!(indexed_len(&frame, "x"), Some(FRAME_INDEX_ABOVE + 1));
+        assert_eq!(
+            frame.get_with_scopes("x", &scopes(&[1003, 9999])).unwrap(),
+            Some(n(3))
+        );
+        assert_eq!(
+            frame.get_with_scopes("x", &scopes(&[5000])).unwrap(),
+            Some(n(-1))
+        );
     }
 }
 
@@ -4209,6 +4637,7 @@ mod gc_edge_tests {
             holds_temporaries: false,
             rare: OnceCell::from(Box::new(RareTables {
                 introduced_global_names: RefCell::default(),
+                scoped_index: RefCell::default(),
                 links: RefCell::new(vec![None, Some((Rc::clone(&library), owner_slot))]),
                 import_aliases: RefCell::default(),
                 relink_aliases: RefCell::default(),

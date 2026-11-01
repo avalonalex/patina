@@ -1,7 +1,8 @@
 //! Track H/H2, families 36, 38, 39. Bounded sampling, not a proof.
 //! Kernel: ordered tables of 0..12 masks over six scopes (including empty
 //! sets, duplicates and invisible candidates). Environments: 1..4 frames,
-//! 0..6 insertions/frame, nonempty scope masks, optional plain `x`, both
+//! 0..6 insertions/frame (13..47 for the indexed property's, #613), nonempty
+//! scope masks, optional plain `x`, both
 //! name-visible and scope-only bindings, and values in 0..3 (deliberate ties).
 //! Nonempty references exercise scoped resolution; plain access, aliases,
 //! compiler/desugarer integration and GC are outside this domain.
@@ -128,9 +129,15 @@ struct Frame {
 }
 
 fn frame() -> impl Strategy<Value = Frame> {
+    frame_of(0..7)
+}
+
+/// A frame of `insertions` scoped bindings of `x`, before an identical set
+/// replaces an earlier one's cell.
+fn frame_of(insertions: std::ops::Range<usize>) -> impl Strategy<Value = Frame> {
     (
         prop::option::of(0i64..3),
-        prop::collection::vec((1u8..64, 0i64..3, any::<bool>()), 0..7),
+        prop::collection::vec((1u8..64, 0i64..3, any::<bool>()), insertions),
     )
         .prop_map(|(plain, insertions)| {
             let mut bindings: Vec<(u8, i64, bool)> = Vec::new();
@@ -277,6 +284,29 @@ fn symmetry(frames: &[Frame], reference: u8) -> Result<(), TestCaseError> {
         );
     }
     Ok(())
+}
+
+/// #613: a root holding more scoped bindings of `x` than
+/// `scope_index::INDEX_ABOVE` is resolved through the spelling's index, and
+/// answers reads and writes as the oracle does. The root is a namespace (it
+/// has no parent), so it is indexed past eight; the frames below it hold at
+/// most 47 distinct sets, under `FRAME_INDEX_ABOVE`, and are scanned, long
+/// ones included. Thirteen or more insertions over 63 sets usually leave
+/// nine distinct ones or more; a root that does not is skipped.
+#[test]
+fn indexed_spellings_read_and_write_as_the_oracle_does() {
+    check(
+        (
+            frame_of(13..48),
+            prop::collection::vec(prop_oneof![frame(), frame_of(13..48)], 0..3),
+            1u8..64,
+        ),
+        |(root, below, reference)| {
+            prop_assume!(root.bindings.len() > crate::scope_index::INDEX_ABOVE);
+            let frames: Vec<Frame> = std::iter::once(root).chain(below).collect();
+            symmetry(&frames, reference)
+        },
+    );
 }
 
 #[test]

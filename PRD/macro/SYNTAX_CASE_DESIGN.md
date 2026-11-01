@@ -291,7 +291,8 @@ related.
    *identifiers*, `(name, scopes)`, taken from `Template::Symbol` and from
    scoped identifiers in `Template::Literal`. Each resolves in the definition
    environment at its own scopes — `get_with_scopes` on the tree-walker's
-   table, `for_each_introduced_global` for a VM-renamed global — and the alias
+   table, `for_each_introduced_candidate` for a VM-renamed global (named
+   `for_each_introduced_global`, and a scan of every identity, until #613) — and the alias
    installed for it names the binding found: a plain name for a plain or
    renamed global, `(name, scopes)` for a scoped one, which `alias_target`
    then reads with the scoped read rather than `get`. Rewriting stays keyed on

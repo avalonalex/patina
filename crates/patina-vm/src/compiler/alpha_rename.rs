@@ -166,10 +166,8 @@ impl RenameEnv {
         // global form's expansion defined its names there.
         let mut chain = self.global_env.as_deref();
         while let Some(env) = chain {
-            env.for_each_introduced_global(name, |scopes, unique_name| {
-                if patina_core::scope_resolve::is_candidate(scopes, ref_scopes) {
-                    candidates.push((scopes.clone(), unique_name.clone()));
-                }
+            env.for_each_introduced_candidate(name, ref_scopes, |scopes, unique_name| {
+                candidates.push((scopes.clone(), unique_name.clone()));
             });
             chain = env.parent().map(|parent| &**parent);
         }

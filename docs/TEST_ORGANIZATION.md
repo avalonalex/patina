@@ -1360,12 +1360,14 @@ fresh name to 1.2× the pinned bytes. The REPL rows declare SS1, SS4 and SS5,
 since their growth shows in L and the counts and their footprints are the
 deferred library loads' high-water (#616); the server and churn rows declare
 SS2 as well. A clause a row fails today is marked red in the runner's table
-with the issue or stage that fixes it — #613, #614, #616, #656, stage 5c —
+with the issue or stage that fixes it — #614, #616, #656, stage 5c —
 and is reported, not failed; a red clause that passes is called out for
 promotion. (#611's four rows, `macro-eval-guard` and the three
-`guard-stream` rows, were promoted when it was fixed, and the tree-walker's
+`guard-stream` rows, were promoted when it was fixed; the tree-walker's
 `peak` clauses in `peak-then-drop` and `peak-then-sparse` when #681 fixed
-#655; their SS2 clauses, red on both backends, are #616's.) Every run is
+#655, and their SS2 clauses, red on both backends, are #616's; and
+`hidden-define`'s SS4 on both backends when #613's index made its time per
+expansion flat, and its SS1 on the VM is stage 5c's.) Every run is
 watched: a timeout, a resident-size cap, a non-zero exit or a missing reading
 fails the row. The rows marked `pr` run in
 CI's R7RS Compliance job (`--quick`, about 40 s here for both backends); the
