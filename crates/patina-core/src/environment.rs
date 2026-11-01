@@ -1624,10 +1624,13 @@ impl Environment {
     /// Whether this environment indexes a spelling's scoped bindings when it
     /// has `len` of them: past [`INDEX_ABOVE`] in a namespace, past
     /// [`FRAME_INDEX_ABOVE`] in a frame, which is why a frame of parameters
-    /// does not build one per call. The one place the thresholds are applied,
-    /// so that the writer that builds an index and the readers that consult
-    /// it agree on which lists have one. The first test is the one nearly
-    /// every list fails, so a short list costs a compare.
+    /// does not build one per call. The one place the scoped table's
+    /// thresholds are applied, so that the writer that builds an index and
+    /// the readers that consult it agree on which lists have one. (The VM's
+    /// identities, `Introduced`, are recorded only in a namespace or a host's
+    /// environment, and carry their own index past [`INDEX_ABOVE`].) The
+    /// first test is the one nearly every list fails, so a short list costs a
+    /// compare.
     #[inline]
     fn indexes(&self, len: usize) -> bool {
         len > INDEX_ABOVE && (self.is_namespace() || len > FRAME_INDEX_ABOVE)
