@@ -77,6 +77,14 @@ pub struct HandleTable {
     /// life, so a second build binds the same three. `None` on a heap no
     /// backend set up. Here and not on `Heap`, for `root_set`'s reason.
     standard_ports: HeapTable<Option<[TaggedValue; 3]>>,
+    /// The procedure `%parameterize-swap!` has the machine call for a
+    /// `parameterize` whose bindings are not all parameter objects (#817):
+    /// the loop, `%parameterize-each`, which the swap has the machine
+    /// evaluate on its first use on the heap and keeps here for the heap's
+    /// life. Here rather than an argument of each swap, which made every
+    /// expansion of `parameterize` about 5% dearer; and not on `Heap`, for
+    /// `root_set`'s reason. `None` until the first use.
+    parameterize_each: HeapTable<Option<TaggedValue>>,
     /// The ports the heap's port objects stand for (#785), one table for the
     /// heap's life: teardown's new handle table takes it over
     /// ([`HandleTable::after_teardown`]). By its own `Rc`, so that the
@@ -148,6 +156,7 @@ impl HandleTable {
             }),
             root_set: Rc::default(),
             standard_ports: HeapTable::new(None),
+            parameterize_each: HeapTable::new(None),
             ports,
             finals,
         })
@@ -181,6 +190,18 @@ impl HandleTable {
             debug_assert!(ports.is_none(), "the standard port parameters made twice");
             *ports = Some(parameters);
         });
+    }
+
+    /// `parameterize`'s loop for bindings that are not all parameter
+    /// objects, once its first use has compiled it.
+    pub(crate) fn parameterize_each(&self) -> Option<TaggedValue> {
+        self.parameterize_each.with(|each| *each)
+    }
+
+    /// Record `parameterize`'s loop, compiled on its first use.
+    pub(crate) fn set_parameterize_each(&self, procedure: TaggedValue) {
+        self.parameterize_each
+            .with_mut(|each| *each = Some(procedure));
     }
 
     /// Which standard port parameter `word` is, if it is one. Compared by
@@ -462,6 +483,7 @@ mod tests {
             let value = s.pair(h, field);
             h.alloc_parameter(value, None)
         });
+        let each = s.pair(h, "HandleTable.parameterize_each");
         heap.handles = Rc::new(HandleTable {
             heap_id: 0,
             entries: HeapTable::new(Entries {
@@ -471,6 +493,7 @@ mod tests {
             }),
             root_set: Rc::default(),
             standard_ports: HeapTable::new(Some(standard)),
+            parameterize_each: HeapTable::new(Some(each)),
             ports: PortTable::new(),
             finals: FinalRegistry::new(),
         });

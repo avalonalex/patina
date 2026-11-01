@@ -18,9 +18,17 @@
 
 use crate::apply_context::ApplyContext;
 use crate::registry::{Step, done_with_result};
+use patina_core::port::Port;
 use patina_core::{ConvertedParamValue, Cx, ParamValue, Value};
+use patina_frontend::Parser;
 use patina_runtime::EvalError;
 use smallvec::smallvec;
+use std::rc::Rc;
+
+/// `parameterize`'s loop for a binding that is not a parameter object, one
+/// expression whose value is the loop: Scheme, since it calls the program's
+/// procedures, and compiled on first use rather than at every start (#817).
+const PARAMETERIZE_EACH: &str = include_str!("parameterize_each.scm");
 
 /// make-parameter primitive
 ///
@@ -164,8 +172,10 @@ fn parameter_converter<'gc>(
 }
 
 /// `(%parameterize-swap! params vals)` — install `vals` into `params`,
-/// returning the values they held, or `#f`, installing nothing, if one of
-/// `params` is not a parameter object.
+/// answering the values they held. If one of `params` is not a parameter
+/// object, it installs nothing itself, and answers what `parameterize`'s
+/// loop answers for `(params vals '())`, a call the machine makes
+/// ([`Step`]).
 ///
 /// Used for both halves of `parameterize`'s wind: the before thunk keeps the
 /// list it returns, the after thunk hands that list straight back. It installs
@@ -173,18 +183,25 @@ fn parameter_converter<'gc>(
 /// that converter already produced, which doubled a `(lambda (x) (* x 2))` on
 /// the way out and made a `number->string` raise.
 ///
-/// It calls nothing (#784). Everything is checked before anything is
-/// installed: each binding must be a parameter object, and a standard port
-/// parameter's value a port facing its way (#608), since a program can call
-/// this primitive itself; so an install cannot fail partway, and there is
-/// nothing to undo. A procedure a program wrote to act as a parameter is not
-/// one: for a list with one, the swap answers `#f` and `parameterize` runs
-/// `%parameterize-each` (`lib/scheme/base/parameters.scm`), which calls it
-/// as the machine calls any procedure, and undoes in Scheme.
+/// It calls nothing from Rust (#784). Everything is checked before anything
+/// is installed: each binding must be a parameter object, and a standard
+/// port parameter's value a port facing its way (#608), since a program can
+/// call this primitive itself; so an install cannot fail partway, and there
+/// is nothing to undo. A procedure a program wrote to act as a parameter is
+/// not one: for a list with one, the swap has the machine call a loop,
+/// `%parameterize-each` (`parameterize_each.scm`), which calls it as the
+/// machine calls any procedure, and undoes in Scheme. On its first use on a
+/// heap the swap has the machine evaluate the loop first ([`Step::Eval`]),
+/// and [`parameterize_swap_resumed`] keeps it on the heap. A template that
+/// tested the swap's answer itself made each expansion of `parameterize`
+/// about half as dear again, one that passed the loop to the swap about 5%,
+/// and the loop as `(scheme base)`'s definitions cost about 2.25 M
+/// instructions at every start (#817).
 pub(super) fn parameterize_swap<'gc>(
     cx: &mut Cx<'gc>,
+    ctx: &dyn ApplyContext,
     args: &[Value<'gc>],
-) -> Result<Value<'gc>, EvalError> {
+) -> Result<Step<'gc>, EvalError> {
     let [params_list, vals_list] = args[..] else {
         return Err(EvalError::WrongArity {
             expected: "2".to_string(),
@@ -204,7 +221,10 @@ pub(super) fn parameterize_swap<'gc>(
     }
     for (&param, &value) in params.iter().zip(vals.iter()) {
         if !check_raw_install(cx, param, value)? {
-            return Ok(Value::FALSE);
+            return Ok(match cx.parameterize_each() {
+                Some(each) => call_each(each, params_list, vals_list),
+                None => compile_each(cx, ctx, params_list, vals_list)?,
+            });
         }
     }
     let mut olds: Vec<Value<'gc>> = Vec::with_capacity(params.len());
@@ -212,7 +232,7 @@ pub(super) fn parameterize_swap<'gc>(
         olds.push(cx.parameter_value(param).unwrap_or(Value::UNSPECIFIED));
         cx.store(ParamValue(param), value);
     }
-    Ok(cx.list_from_iter(olds))
+    Ok(Step::Done(cx.list_from_iter(olds)))
 }
 
 /// `(%parameter-install! p v)` — store `v` into the parameter object `p`
@@ -236,6 +256,65 @@ pub(super) fn parameter_install<'gc>(
     }
     cx.store(ParamValue(param), value);
     Ok(Value::TRUE)
+}
+
+/// The swap's call of the loop, on its lists and no binding made yet.
+fn call_each<'gc>(each: Value<'gc>, params: Value<'gc>, vals: Value<'gc>) -> Step<'gc> {
+    Step::Call {
+        callee: each,
+        args: smallvec![params, vals, Value::NULL],
+        state: Value::UNSPECIFIED,
+    }
+}
+
+/// The swap's first use on a heap: have the machine evaluate the loop in an
+/// environment of `(scheme base)`'s exports, keeping the two lists for the
+/// call that follows ([`parameterize_swap_resumed`]). Every backend's
+/// bootstrap loads `(scheme base)`, so finding it opens no file. It is found
+/// by its name, as `environment` and `scheme-report-environment` find it: a
+/// program that defines its own `(scheme base)`, a name R7RS reserves
+/// (§5.6.1), before its first `parameterize` over a procedure has the loop
+/// compiled against that library instead (#817).
+fn compile_each<'gc>(
+    cx: &mut Cx<'gc>,
+    ctx: &dyn ApplyContext,
+    params: Value<'gc>,
+    vals: Value<'gc>,
+) -> Result<Step<'gc>, EvalError> {
+    let base = ctx.load_scheme_library(cx, &["scheme".to_string(), "base".to_string()])?;
+    let env = Rc::new(cx.new_namespace());
+    for name in base.export_names() {
+        base.import_into(&env, name, name);
+    }
+    let source = Port::new_input_string(PARAMETERIZE_EACH.to_string());
+    let expr = Parser::read_from_port(source, cx)
+        .ok()
+        .flatten()
+        .ok_or_else(|| {
+            EvalError::InternalError("%parameterize-swap!: parameterize_each.scm".to_string())
+        })?;
+    Ok(Step::Eval {
+        expr,
+        env,
+        state: cx.list_from_iter([params, vals]),
+    })
+}
+
+/// The swap once the machine has made what it asked for: with its two
+/// lists as `state`, the loop just evaluated, which the heap keeps for its
+/// life and the swap then calls; with none, the loop's answer.
+pub(super) fn parameterize_swap_resumed<'gc>(
+    cx: &mut Cx<'gc>,
+    _ctx: &dyn ApplyContext,
+    state: Value<'gc>,
+    value: Value<'gc>,
+) -> Result<Step<'gc>, EvalError> {
+    let Some((params, rest)) = cx.try_pair(state) else {
+        return Ok(Step::Done(value));
+    };
+    let vals = cx.car(rest);
+    cx.set_parameterize_each(value);
+    Ok(call_each(value, params, vals))
 }
 
 /// Whether `value` may be installed raw into `param`: `false` if `param` is
@@ -289,12 +368,13 @@ pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
         parameter_set,
         parameter_set_converted,
     ));
-    registry.register(PrimitiveFn::new_cx(
+    registry.register(PrimitiveFn::new_resumable(
         "scheme.base",
         "%parameterize-swap!",
         Arity::Exact(2),
-        "Installs a list of values into a list of parameter objects, returning the values they held, or #f if one is not a parameter object.",
+        "Installs a list of values into a list of parameter objects, returning the values they held; if one is not a parameter object, returns what parameterize's loop returns for the two lists.",
         parameterize_swap,
+        parameterize_swap_resumed,
     ));
 }
 

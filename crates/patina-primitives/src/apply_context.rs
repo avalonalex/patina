@@ -86,7 +86,8 @@ pub trait ApplyContext {
 
     /// Load a Scheme library by name, from a primitive's context: the
     /// environment procedures' (`environment`, `null-environment`,
-    /// `scheme-report-environment`). It takes the context, as
+    /// `scheme-report-environment`), and `%parameterize-swap!`'s on its first
+    /// use, for `(scheme base)` (#817). It takes the context, as
     /// [`Self::apply_in`] does: the load allocates, so a borrow of the context
     /// held across it is refused (#709).
     ///

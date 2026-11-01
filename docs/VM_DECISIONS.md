@@ -126,7 +126,7 @@ for the design, root inventory, safe-point protocol, and staging.
 ## 6. Primitives: Shared `patina-primitives` Crate
 
 **Decision:** ~338 primitives in `patina-primitives`, shared by tree-walker
-and VM, each taking the context. The 12 resumable and 9 higher-order ones take
+and VM, each taking the context. The 13 resumable and 9 higher-order ones take
 the `ApplyContext` trait beside it, which each backend provides.
 
 **The signature is the context's** (#706; `PRD/GC_PRD.md` §11.3's `Prim`).
@@ -180,11 +180,16 @@ pub type CxHandler =
   nested loop, which cannot collect. They are `member` and `assoc` with a
   comparator, `force`, `call-with-values`, `call-with-port` and the
   environment procedures. `force` stores through `PromiseBox`.
-- **`parameterize`'s primitives call nothing** (#784): `%parameterize-swap!`
-  and `%parameter-install!` take the context alone and store through
-  `ParamValue`. A list with a procedure a program wrote to act as a parameter
-  goes through Scheme (`%parameterize-each`), which calls it as the machine
-  calls any procedure.
+- **`parameterize`'s primitives call nothing from Rust** (#784):
+  `%parameter-install!` takes the context alone and stores through
+  `ParamValue`, and `%parameterize-swap!` stores through it too, for a list of
+  parameter objects. A list with a procedure a program wrote to act as a
+  parameter goes through Scheme: the swap, resumable since #817, has the
+  machine call the loop (`%parameterize-each`), which calls such a procedure
+  as the machine calls any. On its first use on a heap the swap has the
+  machine evaluate the loop (`Step::Eval`, in an environment of `(scheme
+  base)`'s exports), and the heap keeps it; so the template names nothing
+  more than it did before #784, and a start compiles none of the loop.
 - **No heap in `patina-primitives`** (#706): a primitive reaches the heap
   only through its context. `ApplyContext` hands out neither the heap nor the
   file system, and every context comes from the machine (`call_cx`,
