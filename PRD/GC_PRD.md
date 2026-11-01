@@ -121,8 +121,8 @@ Decided on 2026-10-01: rows 1, 2, 6 (priority), 7 (threading model), 12, 14, 15 
    tier; no Cranelift stack maps. Rust holds raw values freely inside a `Cx`, which cannot collect; only the driver's
    `&mut Heap` can. **One poll word:** posting an event zeroes the stack limit that every frame entry checks.
 7. **Weakness:** ephemerons resolved by key in one fixpoint; a fixed epilogue; a finalization registry; a weak symbol
-   table; GC-time port flush and `EMFILE` collect-and-retry, as chibi and Gauche do. **Continuations** are immutable
-   value-only heap objects (design A).
+   table; GC-time port flush, as chibi and Gauche do, and `EMFILE` collect-and-retry, as chibi does (Gauche does not
+   retry). **Continuations** are immutable value-only heap objects (design A).
 8. **Pacing and pauses:** throughput first (decided), so stop-the-world with no incremental or concurrent marking.
    Pacing is in bytes plus external bytes, deterministic; the whole-heap interval is `max(8 MiB, 2·L)`, L being the live
    bytes after the last major; minors and majors are budgeted in one form (a constant plus terms in frames, logged
@@ -154,13 +154,14 @@ Decided on 2026-10-01: rows 1, 2, 6 (priority), 7 (threading model), 12, 14, 15 
 14. **What users and embedders will notice.** New default limits, a behaviour change: a program whose heap grows past
     min(16 GiB, 75%·B), which today runs until the machine's memory is exhausted, raises `&heap-exhausted` unless
     `--heap-max` or `PATINA_HEAP_MAX` raises the limit (5e); the main stack is capped at min(8 GiB, 25%·B), raised by
-    `--stack-max` or `PATINA_STACK_MAX` (4d). GC-time port flushing becomes observable (4a). Semantic changes, each in
-    its own PR with its `DIVERGENCES.tsv` rows (decision 19): port `eq?` ([#608], 4a), symbol-keyed `eq?` table order
-    (5c), flonum `eq?` and flonum-keyed ephemerons (5f), deep-bound `parameterize` (9), and the six define-after-use
-    tests that flip under variant C (after stage 5). Embedders get `Owned` and environment handles, `Interpreter::call`
-    and mandatory teardown (stages 2–3), and the `Backend` trait migrates one step per stage under [#601]'s deprecation
-    convention. From stage 2 the VM evaluates in the environment it is given, as the tree-walker does, so a `define`
-    evaluated in a host environment stops landing in the global one ([#620]).
+    `--stack-max` or `PATINA_STACK_MAX` (4d). Semantic changes, each in its own PR with its `DIVERGENCES.tsv` rows
+    (decision 19): port `eq?` ([#608], 4a, with suite rows and no divergence row, since chibi and Gauche answer as
+    Patina does), symbol-keyed `eq?` table order (5c), flonum `eq?` and flonum-keyed ephemerons (5f), deep-bound
+    `parameterize` (9), and the six define-after-use tests that flip under variant C (after stage 5). Embedders get
+    `Owned` and environment handles, `Interpreter::call` and mandatory teardown (stages 2–3), and the `Backend` trait
+    migrates one step per stage under [#601]'s deprecation convention. From stage 2 the VM evaluates in the environment
+    it is given, as the tree-walker does, so a `define` evaluated in a host environment stops landing in the global one
+    ([#620]).
 
 **For the JIT.** JIT code keeps every Scheme value in the VM's register frames, tagged, at every call that can collect,
 so Cranelift stack maps are never needed. One context, the `Mutator`, sits in a pinned register (`x21` on aarch64, `r15`
@@ -436,11 +437,13 @@ and updatable; nested descriptors appear here as ordinary references). JIT code 
 through the descriptor reference it holds. Descriptors are born old, written only by initializing stores, and pushed
 on the remember-whole list (§10); inline caches live outside them, in the `CodeStore` (§11.2).
 
-**No heap object owns a Rust value** (today 19 of 28 variants carry `Drop`, and 47% of allocations [P]). Rust-owned
-resources live in per-heap side tables reached by a `u32` id (`PortTable`, `CodeStore`, the thread table,
-`HostPayloadTable` for tree-walker closures and continuations, macro bodies, libraries, namespaces of environment
-specifiers and FFI objects), each entry registered in the finalization registry (§9.6). Bignums keep inline limbs. A
-generated `const` assertion fails the build if any laid-out type needs `Drop`.
+**No heap object owns a Rust value** (today 18 of 28 variants carry `Drop`, 19 before [#785] gave a port a
+`PortTable` id; and 47% of allocations [P]). Rust-owned resources live in per-heap side tables reached by a `u32` id
+(`PortTable`, `CodeStore`, the thread table, `HostPayloadTable` for tree-walker closures and continuations, macro
+bodies, libraries, namespaces of environment specifiers and FFI objects), each entry registered in the finalization
+registry (§9.6). At 4a only an open file port registers, since its drop does I/O; a string, bytevector or standard
+port leaves the `PortTable` in the sweep (`docs/GC_DESIGN.md` §4.5). Bignums keep inline limbs. A generated `const`
+assertion fails the build if any laid-out type needs `Drop`.
 
 **One layout specification.** `declare_layouts!` (defined in `patina-gc`, invoked in `patina-core`) generates the
 `ObjectModel` implementation (`size`, `trace`, `copy`, `verify`), the debug printer, the datum writer's kind view and
@@ -616,15 +619,18 @@ from-space.
 minor, a young entry whose object was marked or forwarded moves to `old`, and one **neither forwarded nor marked** is
 queued, which is correct under sticky marking, in-place promotion and copying alike; after a major, unmarked old
 entries are queued too. A runtime may also queue an entry it knows is finished (a terminated thread, §18). Queued
-entries run in id order **after the pause and before Scheme resumes**, in the poll slow path, Rust-only (no
-allocation, no Scheme): ports flush, close and free their slot, `MemoryFs` writers commit, threads release their
-stacks, namespaces of dead environment specifiers go.
+entries run in id order **after the pause and before Scheme resumes**: inside each collection entry, once the
+collection returns and the heap borrow is released (the safe point's cold path, `collect_at_call`, and the loader's
+retry collection through it), so an open retried after `Step::Collect` finds the dead ports' descriptors closed (F3);
+never inside `collect` (§14), and F4 is asserted (decision 5 on [#782]). They are Rust-only (no allocation, no
+Scheme): ports flush, close and free their slot, `MemoryFs` writers commit, threads release their stacks, namespaces
+of dead environment specifiers go.
 
 | Rule | Content |
 |---|---|
 | F1 | `end_process` and `emergency-exit` flush every open file port of every heap on the exiting thread, in the order the ports were opened, through a per-thread weak registry of `PortTable`s that prunes dropped heaps ([#786]). Per thread until the `threaded` build (stage 9) widens the registry to the process (decision 3 on [#782]); until then an interpreter on another thread loses what it left in its open file ports, an exception to §18.2 rule 1 |
 | F2 | a collection that proves a file port dead flushes and closes it before Scheme resumes |
-| F3 | each open, unclosed file port charges 8 KiB of external bytes; opens minus closes since the last major reaching min(128, `RLIMIT_NOFILE`/4) posts a major; on `EMFILE`/`ENFILE` the open returns `Step::Collect` with the file name as its state and opens once more when resumed, as chibi does (`eval.c:1300-1323`); `load` reads again the same way ([#607]). The loader's reads (a library's `.sld`, `include` and `include-library-declarations` files, and the path resolution of the last two) collect and read again when the load runs where collection is possible (a bare top-level `import` or `define-library`, and the libraries they import in turn; #783). A load where collection is deferred (an import met mid-form, point C; a load from a nested loop), an `include` form in a program or a library's body, and opens where collection is deferred raise on the first `EMFILE`, a documented limit (`docs/GC_DESIGN.md` §6) |
+| F3 | each open, unclosed file port charges 8 KiB of external bytes; opens minus closes since the last major reaching min(128, `RLIMIT_NOFILE`/4) posts a major; on `EMFILE`/`ENFILE` the open returns `Step::Collect` with the file name as its state and opens once more when resumed, as chibi does (`eval.c:1300-1323`); `load` reads again the same way ([#607]). The loader's reads (a library's `.sld`, `include` and `include-library-declarations` files, and the path resolution of the last two) collect and read again when the load runs where collection is possible (a bare top-level `import` or `define-library`, and the libraries they import in turn; [#783]). A load where collection is deferred (an import met mid-form, point C; a load from a nested loop), an `include` form in a program or a library's body, and opens where collection is deferred raise on the first `EMFILE`, a documented limit (`docs/GC_DESIGN.md` §6) |
 | F4 | finalization runs no Scheme and allocates nothing |
 | F5 | dropping the heap finalizes every entry ([#604]) |
 | F6 | a port is one canonical object, and the `current-*-port` parameters hold it ([#608], [#618]) |
@@ -694,9 +700,10 @@ This order is a contract obligation of every collector (§14); minors restrict e
    majors) and, after majors, the catch-up sweep, the NMS sweep, block classification and decommit candidates.
 10. Statistics and pacing: L is the marked bytes plus LOS and external bytes; `bytes-reclaimed` includes released LOS
     runs; the in-pause work counters of §17.1.
-11. Release the world. Queued finalizers run at the poll before Scheme resumes; post-pause work runs in rate-limited
-    slices at later polls (an idle major completes it before its wait, §17.1). All of it is logged as non-mutator
-    intervals.
+11. Release the world. Queued finalizers run inside the collection entry, once the collection returns and its
+    heap borrow is released, before a retried open or Scheme resumes (§9.6); until 4e this falls before the VM's code
+    release, step 8 (`docs/GC_DESIGN.md` §4.6). Post-pause work runs in rate-limited slices at later polls (an idle
+    major completes it before its wait, §17.1). All of it is logged as non-mutator intervals.
 
 ### 9.10 Pause budgets
 
@@ -1682,7 +1689,7 @@ definitions at 5c cannot drop a binding that a template still reaches.
 | `large_request_after_garbage` | includes a drop-then-allocate case under `--heap-max 1G`: a 700 MiB table live at a major, then dropped, then `(make-vector 60000000)` succeeds |
 | Allocation-failure zeal (Lua `EMERGENCYGCTESTS`); a downward `--heap-max` sweep over the chibi suite | to a documented floor per backend (the startup peak plus the largest [K16](#k16) window): above it, normal output or a clean `&heap-exhausted`; below it, only the abort diagnostic naming a `NoGcScope` site |
 | Handler room | passes on both backends |
-| `descriptor_exhaustion_retries` | passes on both backends |
+| `dropped_ports_do_not_run_out_of_descriptors` (`crates/patina-repl/tests/file_descriptors.rs`) | passes on both backends |
 | 10 M-deep recursion at the default cap | passes on the VM; the tree-walker runs 1 M frames (10 M would need about 9.6 GiB) |
 | Budget detection | under a cgroup `memory.max` and under `ulimit -v`, startup succeeds with smaller reservations and `memory-budget` reports the limit |
 | Several heaps, one budget | four interpreters sharing one `MemoryBudget`, one of them growing: it raises `&heap-exhausted` while the process's footprint stays under the budget's total, and the others run on; under `ulimit -v`, every heap starts |
@@ -1800,7 +1807,7 @@ closest analogue) [A].
 
 | # | Rule | Content |
 |---|---|---|
-| 1 | Carriers and green threads are separate | §18.1; no runtime state lives in `thread_local!`. Exception until stage 9: exit's registry of `PortTable`s (F1, decision 3 on [#782]) |
+| 1 | Carriers and green threads are separate | §18.1; no runtime state lives in `thread_local!`. Exceptions until stage 9: exit's registry of `PortTable`s (F1, decision 3 on [#782]), and standard input's reader state (`STDIN_UNREAD`, `STDIN_POSITION`, `STDIN_FOLD_CASE` and `STDIN_CARRY`), since a process has one standard input (decision 8 on [#782]) |
 | 2 | Heap words have one way in | `HeapSlot`/`MetaByte` cover every access and the funnel every store; no `&` or `&mut` into heap words outlives one operation or crosses the embedding API |
 | 3 | No shared read-modify-write on a hot path | no `Rc`, `RefCell` or `Drop` payloads in heap objects; each carrier's mutable data on its own 128-byte line |
 | 4 | Publication is an invariant; stage 6 decides how it is enforced | under `threaded`: (a) every store that may make an object reachable by another carrier is ordered after that object's initializing stores, whatever the heap's `BarrierKind`; (b) the mechanism is `GcAttrs.publication` (`FenceAtAllocation \| ReleaseOnHeapStore \| FenceOnHeapStore`), separate from the generational barrier; (c) a store may skip publication only when its holder has not escaped since allocation (stored into the heap or a global cell, passed to a non-`Leaf` call, or returned); (d) a bulk range copy of heap values publishes with one store-store fence before the range, a named exception to (g); (e) Rust code loads heap references with Acquire; (f) only JIT code may rely on address dependencies, under a documented exception forbidding value speculation and equality substitution of loaded references; (g) release and acquire operations are preferred, and each standalone fence (the bulk range, C1's watermark if chosen, `set_limit`) is listed and checked by loom and the arm64 lanes, because ThreadSanitizer cannot; (h) every write of `desc.entry` (tier-up, and invalidation or tier-down back to the interpreter trampoline) is a release store, made after `install_code` has completed for the code it names, and a carrier context-synchronizes (`isb` on arm64) before it first enters code another carrier installed; stage 6 chooses where that synchronization happens |
@@ -1834,7 +1841,7 @@ marking.
 | Pacing across carriers (R32) | N allocators between collections; floating garbage | 1–2 | 1–2 | a named cause of Jane Street's 2.5-year OCaml 5 adoption (elapsed time, not effort) [A] |
 | Continuations across carriers (R21) | SRFI 18 defines them | 3–5 | 1–2 | stages 4e, 9 |
 | M:N scheduler (R26) | queues, parking, mutexes | 4–10 | 3–8 | stage 9; Loom (2017–2025), Gambit SMP (opt-in for 9 years) and Ruby's M:N (off by default) are elapsed-time records, not effort data [A] |
-| Global state, bundled libraries, tree-walker kept M:1 (R23–R25) | 19 `thread_local!`s; 3 bundled libraries with shared state (SRFI 128's comparator registry, SRFI 27's default random source, the R6RS hashtables' table of immutable copies) | 2.5–5 | 1.5–2.5 | source counts |
+| Global state, bundled libraries, tree-walker kept M:1 (R23–R25) | the `thread_local!` statics, each listed at its crate root (`every_thread_local_is_listed_at_its_crate_root`); 3 bundled libraries with shared state (SRFI 128's comparator registry, SRFI 27's default random source, the R6RS hashtables' table of immutable copies) | 2.5–5 | 1.5–2.5 | source counts |
 | Debugger, embedding, memory model (R27–R29) | all-stop; host threads attach | 4.5–7 | 2.5–4.5 | stages 2, 3; JNI [A] |
 | Native stack depth on carriers (R33): carriers spawned at the main thread's stack size; a depth guard in the expander, compiler and printer; a stack check when a host thread attaches | Rust recursion aborts the process; spawned threads get 2 MiB | 1–2 | 1–2; about 0.5 once [#617]'s guard lands (§19's "now" row), which the totals below do not credit | ~980 nested `let`s at 8 MiB, ~240 at 2 MiB [M] |
 | Promise forcing and the source map (R34): racing forcers can see `done = #t` beside the old thunk, so duplicate evaluation with one atomic publish (GHC's choice) or a CAS protocol; the source map locked or owned per document | Rust-implemented state that every carrier changes | 0.5–1.5 | 0.5–1.5 | `force` in a VM stub frame ([#476]); `Rc<RefCell<SourceMap>>`; GHC's thunk updates [A] |
@@ -1909,7 +1916,7 @@ it.
 | Per-carrier collect capability (C2) | 3 | 2–3 days | 1–2 weeks |
 | Reserve `fenced_ap`, a quiescence epoch and a handshake word in `Mutator`, and `publication` in `GcAttrs`; assert 128-byte alignment (C1, C10; §14) | 3; frozen at 6 | 1–2 days | an ABI break; 0.5–1 week |
 | Bulk-range accessors; `HeapSlot::compare_exchange` (C4, C5) | 3, 5d | 3–4 days | 1–2 weeks, and the 3.2× bulk loss |
-| A CI check against new `thread_local!` (that part brought forward by [#622]), `static mut` and heap-side `Rc`/`RefCell`/`Cell` (today's 19 `thread_local!` statics allowlisted), plus `Send`/`Sync` assertions as each type first satisfies them (C9, C11): `InterruptHandle` and `PrimitiveRegistry` at 3, `CodeBody` at 4e, `GreenThread` at 9; `HeapShared: Sync` waits for decision 7; VM-heap payloads need a separate `Send + Sync` payload trait-object type per heap kind, because tree-walker payloads stay `!Send` | 3, 4e, 9 | 1–2 days | 0.5–1 week |
+| A CI check against new `thread_local!` (that part brought forward by [#622]), `static mut` and heap-side `Rc`/`RefCell`/`Cell` (today's `thread_local!` statics allowlisted, each at its crate root), plus `Send`/`Sync` assertions as each type first satisfies them (C9, C11): `InterruptHandle` and `PrimitiveRegistry` at 3, `CodeBody` at 4e, `GreenThread` at 9; `HeapShared: Sync` waits for decision 7; VM-heap payloads need a separate `Send + Sync` payload trait-object type per heap kind, because tree-walker payloads stay `!Send` | 3, 4e, 9 | 1–2 days | 0.5–1 week |
 | The memory model of §18.2 | 3 | 1–2 days | R29, 0.5–1 week |
 | One read-mostly namespace API (C6) | 4b | 1–2 days | 1–1.5 weeks |
 | Tax re-measurement on the new representation, with global-cell and record-field loads added (a run, not a lane) | 5 exit | 2–3 days | §18.4's figure; start condition 3 |
@@ -1985,8 +1992,9 @@ ThreadSanitizer (nightly, blind to standalone fences) and arm64 lanes.
   is added to `docs/TEST_ORGANIZATION.md` when it is created. A stage that changes the contract changes §3–§18 here.
 - Behaviour changes are scored against chibi and Gauche (and Gambit for thread semantics) and recorded in
   `DIVERGENCES.tsv`.
-- Each semantic change is **its own PR**, never folded into a representation step: port identity and GC-time
-  flushing, deep-bound `parameterize`, flonum `eq?` and flonum-keyed ephemerons, a symbol's name hash, variant C.
+- Each semantic change is **its own PR**, never folded into a representation step: port identity ([#608]),
+  canonical record types (4g), deep-bound `parameterize`, flonum `eq?` and flonum-keyed ephemerons, a symbol's name
+  hash, variant C.
 - **No stage removes a safety property before its replacement has landed**: `Rc` code liveness stays until traced
   code liveness (4e); nested-loop deferral stays until the weak continuation tables are gone (4e); dead-slot clearing
   stays for good.
@@ -2011,13 +2019,13 @@ the plan stops after it.
 | 1 | Quick wins on today's collector: byte trigger, `(gc)` collects at its call, `EMFILE` collect-and-retry with descriptor pressure, the unread provenance stores deleted | 4–5 | SS1, SS2 and SS5 at forced majors (SD1); environment-specifier namespaces charged as external bytes; expansion chains of shared links, each owned by one form's expansion ([#612]; interned per document at 4c); `(gc-stats)` shows each limit beside its use | — | trigger blindness and descriptor exhaustion fixed; reclamation proofs non-vacuous; GBS ±1% | the measured blow-ups fixed now; `(gc)`'s timing independent of the poll | [#606], [#607], [#612] (part), [#615] (part), [#643] |
 | 2 | Root and boundary contract: slot visitor and the `Trace` derive for off-heap structures (§14), `CallFrame.closure` as a value, `Owned` and environment handles on the public paths that yield a value or environment, `backend()` and `evaluator()` documented as the raw layer (§11.5), heap teardown, top-level `import` and `define-library` recognized by binding, rooted loading | 6–8 (Appendix D's 5–7, plus about 1 for the derive) | `define-library` forms reach a collection point; teardown returns each dropped interpreter's memory | per-heap Rust tables behind one wrapper; loading entries record their thread (additions C3, C15) | embedder use-after-free (returned values, global reads, host environments) and teardown leak fixed; the VM evaluates in the environment it is given; no hand-written off-heap trace left; library bodies loaded through `import` collect; GBS ±1% | embedding is sound; library bodies collect; no leak; a new field cannot go untraced silently | [#604], [#605], [#610], [#614] (part), [#620] |
 | 3 | `Mutator`, the collect capability, `Cx` and the store funnel; `#![forbid(unsafe_code)]` in the safe crates (§11.3); polls at frame entry; `InterruptHandle`; `Interpreter::call` and host primitives | 10–13 | the `CoreExpr` literal pool scoped to one compilation; the embedders' external-bytes accounter | per-carrier collect capability (addition C2); reserved `Mutator` words, `GcAttrs.publication`, 128-byte alignment (C1, C10); bulk-range accessors (C4); the CI check and the first `Send`/`Sync` assertions (C9, C11); the memory model; the `threaded` feature with accessor bodies only, linted by `--all-features` clippy | ABI, compile-fail doctest, interrupt and embedding tests on both backends; `ephemerons.rs`'s three [#423] tests (§9.5); geomean ≥ 0% in instructions | the JIT ABI object exists; who may collect is a type; hosts can call Scheme and register primitives soundly; Ctrl-C stops a tight loop | — |
-| 4a | Canonical identity and ports: one object per port over a per-heap `PortTable`, and the `FinalRegistry`, whose drain finalizes a dead file port after the collection ([#785]); exit flushes through a per-thread registry of the tables ([#786]) | 4–5 | the `PortTable` registry prunes dropped heaps; the loader retries after `EMFILE` | — | `(eq? (current-output-port) (current-output-port))` ⇒ `#t`; `garbage_port_flushed_by_collection`, `descriptor_exhaustion_retries`, `one_port_one_object`, `dropped_interpreter_flushes_ports` and `exit_flushes_every_interpreter` on both backends; [#618]'s repro (two interpreters on one OS thread keep separate current ports) on both backends; I/O workloads ±1% | port semantics match the oracles; no primitive calls back for `parameterize` | [#608], [#618], [#784] |
+| 4a | Ports: one object per port over a per-heap `PortTable`, and the `FinalRegistry`, whose drain finalizes a dead file port after the collection ([#785]); exit flushes through a per-thread registry of the tables ([#786]). Canonical record types are 4g's (decision 1 on [#782]) | 4–5 | the `PortTable` registry prunes dropped heaps; the loader retries after `EMFILE` | — | `(eq? (current-output-port) (current-output-port))` ⇒ `#t`; `a_dropped_output_port_is_written_out_by_the_collection_that_finds_it`, `dropped_ports_do_not_run_out_of_descriptors` and `a_dropped_interpreter_writes_out_the_file_ports_it_left_open`, green before 4a and kept green through it, and the new `one_port_one_object` and `exit_flushes_every_interpreter`, on both backends; [#618]'s repro (two interpreters on one OS thread keep separate current ports) on both backends; I/O workloads ±1%, the `io` set with its two current-port fallback probes, `display-fallback` and `parameterize-port` (decision 6 on [#782]) | port semantics match the oracles; no primitive calls back for `parameterize` | [#783], [#618], [#608], [#784], [#785], [#786], [#817], [#818] |
 | 4b | Global cells and binding records (variant R) | 3–4 | namespaces own records and cells, placeholders weak; a variable alias stops being a name; introduced definitions strong with an indexed lookup; environment-specifier namespaces die with their specifier or last unit; redefined libraries released | one read-mostly namespace API (addition C6) | the rebinding tests and decision 3's rows answer as today; the global path neutral or better than `frame_globals` | no `Rc` clone, `RefCell` borrow or `FORWARDED` hop on the global path, and no environment held by closures | [#613], [#614] (part), [#615] (part) |
 | 4c | Identifiers as ids, inline provenance | 3–5 | document-owned location tables compacted while streaming; a weak (or per-form) scope-set table that reports which expansion scopes live identifiers carry | — | hygiene matrix 139/139; libload `malloc` peak ≤ 450 MiB; caret tests | the largest load-memory cost removed; syntax becomes `Drop`-free | [#612] (part) |
 | 4d | Frames and stacks; the `return_into` choke point for every write into a suspended frame (§11.1; it lowers the watermark from stage 7); the stack cap and its knob | 4–5 | B detected; the main-stack default min(8 GiB, 25%·B), fitted under `RLIMIT_AS`; register-stack pages returned after 2 observations | — | matrix 64/64; raise-site tests; `finished_forms_release_code.rs` 9/9; 10 M-deep recursion | a JIT-ready stack, without changing the interpreter protocol or code lifetime | — |
 | 4e | Continuations as heap objects; traced code liveness | 5–7 | the continuation plateau gone | `CodeBody: Send + Sync` asserted (addition C11) | the matrix; `finished_forms_release_code.rs` 9/9 with no collection; capture targets; a nested driver-level loop churn probe collects during the loop with a bounded heap | capture becomes byte-visible; code release no longer depends on sweep; nested loops can collect | — |
 | 4f | Tree-walker host payloads | 2–3 | tree-walker environments charged only while a payload holds them | — | tree-walker lanes; no environment-driven collection on `(fib 25)` | nothing is dropped at sweep any more | — |
-| 4g | Inline payloads | 2–3 | — | — | per-kind census | the heap is ready to move into blocks | — |
+| 4g | Inline payloads; canonical record types in the records item: a canonical `%record-type-of` first, its own semantic PR with a suite row, then `eq?`, `eqv?`, the identity hash and `equal?` comparing words, and the VM's inline `eq?` borrowing no heap (decision 1 on [#782]); the quasiquote constructors' fresh primitive per compilation stays a deferral, since no program can observe it | 2–3 | — | — | per-kind census | the heap is ready to move into blocks | — |
 | — | Stage-4 exit | ≤ 1, not in the totals | — | — | the baselines stage 5 is judged against are re-measured: the GBS, the post-load major, the I/O workloads, the steady-state lane | stage 5 is judged against what it replaces | on stage 5's issue |
 | 5 | The new heap, non-moving and whole-heap, kind by kind: 5a the `patina-gc` crate, spaces, `MarkRegion`, `NullGc`, verifier, Miri, the weak contract and its conformance suite; 5b pairs; 5c procedures and fixed-size kinds; 5d vectors, strings, bytevectors, bignums, the LOS; 5e arenas, old collector and `RefCell` deleted, pacing, decommit, `max_heap`, collect-and-retry; 5f inline flonum operations, then the final tag map and self-tagged flonums | 16–21 | 5a: the `def-getter` maker under zeal-major; 5c: the weak symbol table, name hash and old allocation (SD2), the NMS as mark-region with hole reuse, introduced definitions reclaimed, cells no longer a root region; 5e: the heap ceiling and its `RLIMIT_AS` fitting, idle trim at prompts, `notify_idle` and empty-buffer reads, per-block decommit, boost decay, SS3's counters and the phase-change clause, `memory-budget`; the nightly soak from 5 | `HeapSlot::compare_exchange` (addition C5, 5d); the tax re-measurement at the exit | lanes byte-identical per sub-stage; `large_request_after_garbage` on both backends; exit: [K9](#k9) and [K17](#k17); `large-live` reported against §9.10's budgets; 5f: [K6](#k6) | the representation win: about 2× fewer bytes, bump allocation, pauses proportional to live data, memory returned | [#609], [#616] |
 | 5g | Limits (after 5e, independent of 5f) | 3–4 (§17.3; the process budget's week is this file's estimate) | external bytes in `max_heap`; the soft target; the process budget (`MemoryBudget`); the whole-limit request check; the maximal major; the progress guard; the condition payload; the `NoGcScope` pre-entry check; the near-limit and memory-pressure hooks; the handler-room test; the limits lane | — | the limits lane green, outside the byte-identical lanes; [K19](#k19) | a program that grows gets a catchable condition naming what grew, instead of exhausting the machine | — |
@@ -2052,8 +2060,10 @@ the detail):
   `docs/TEST_ORGANIZATION.md` (zeal-entry lane, compile-fail doctests); `PRD/future/TREE_WALKER_HOOK_SYSTEM.md` §5.2 and
   §10.1 and `PRD/future/VISUAL_DEBUGGER_DESIGN.md` (`GcDeferGuard` and "no GC while paused" become `NoGcScope`,
   counted by [K16](#k16); the tier-policy flag).
-- **4a:** `docs/TEST_ORGANIZATION.md` (port-finalization tests kept outside the differential lane);
-  `DIVERGENCES.tsv`.
+- **4a:** `docs/TEST_ORGANIZATION.md` (port-finalization tests kept outside the differential lane); AGENTS.md (the
+  callback paragraph: `%parameterize-swap!` calls nothing back); README.md's Known Limitations (the loader's retry
+  after `EMFILE`, the `ports` key). No `DIVERGENCES.tsv` row: chibi and Gauche answer the port-identity rows as Patina
+  does, and the rows for a parameter-like procedure are Patina's own, with a reported skip (decision 4 on [#782]).
 - **4b:** AGENTS.md ("An import installs a binding": records over shared cells replace forwarded slots and `Owner`);
   `docs/VM_DECISIONS.md` §3 (globals through link tables); `docs/TEST_ORGANIZATION.md` (the import-policy section's
   mechanism).
@@ -2216,6 +2226,10 @@ from them on these known points before filing it:
 - Stage 2 gives handles to the public paths that yield a value or environment, host-built environments included, and
   documents `backend()` and `evaluator()` as the raw layer ([#605], [#620], §11.5), where DESIGN E.3's stage 2 adds
   handles only for the `eval_*` results and leaves host environments to 4b's namespace handle.
+- Port identity needs no `DIVERGENCES.tsv` row, since chibi and Gauche answer [#608]'s programs as Patina does, where
+  DESIGN Appendix D's row 4a updates one and ISSUES_DRAFT's #A3 adds two, `patina-defect` for chibi and Gauche;
+  canonical record types are 4g's (decision 1 on [#782]), not 4a's; and three of row 4a's tests go by other names
+  (row 4a here).
 
 [#38]: https://github.com/avalonalex/patina/pull/38
 [#47]: https://github.com/avalonalex/patina/pull/47
@@ -2275,3 +2289,6 @@ from them on these known points before filing it:
 [#782]: https://github.com/avalonalex/patina/issues/782
 [#785]: https://github.com/avalonalex/patina/issues/785
 [#786]: https://github.com/avalonalex/patina/issues/786
+[#783]: https://github.com/avalonalex/patina/issues/783
+[#817]: https://github.com/avalonalex/patina/issues/817
+[#818]: https://github.com/avalonalex/patina/issues/818
