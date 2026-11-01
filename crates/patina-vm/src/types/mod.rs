@@ -57,10 +57,10 @@ pub struct CallFrame {
     /// The closure this activation runs, a `VmClosure`, or
     /// [`CallFrame::NO_CLOSURE`] for code that runs none: a program's
     /// top-level code, which reads the machine's globals, and the stubs.
-    /// Top-level code compiled in another environment, a library's body
-    /// form or a host environment's form, runs a closure made retired whose
-    /// globals are that environment (#779). A slot like a register, and
-    /// traced as one (#682).
+    /// Top-level code compiled in another environment, such as a library's
+    /// body form or a host environment's form, runs a closure made retired
+    /// whose globals are that environment (#779). A slot like a register,
+    /// and traced as one (#682).
     pub closure: Cell<TaggedValue>,
     /// Register in the *caller's* frame where `Return` should write its result.
     /// When there is no caller (top-level), this field is unused.

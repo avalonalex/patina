@@ -745,7 +745,8 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
 - `escape_from_primitive.rs` — escaping out of a Rust primitive's callback,
   on both backends, and re-entering continuations captured around an open
   that ran out of descriptors, collected and retried (#607), or in a
-  library's body form, after its load, on every route that loads one (#779).
+  library's body form, after its load, through both of the VM's loaders
+  (#779).
   `backend_divergence.rs` is gone: its rows are in
   `control/cps-features.scm`, `control/callability.scm`, `control/prompts.scm`
   and `expansion/hygiene.scm`, the open ones as backend-scoped expectations

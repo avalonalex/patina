@@ -1360,7 +1360,8 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
 
 /// [`execute`] for code compiled in `env`, an environment other than the
 /// machine's globals, such as one a host built (#620) or a library's, for a
-/// body form a top-level `import` loads (#779): the unit runs in
+/// body form the backend's loader runs, a top-level `import`'s or a
+/// `define-library`'s in the program (#779): the unit runs in
 /// [`push_frame_in`]'s frame, so its frames read and define `env`'s bindings.
 /// The frame holds its closure, which roots it and `env` while the code
 /// runs, and the run may collect as any top-level run may.
@@ -1384,10 +1385,10 @@ pub fn execute_in(
 /// The closure is made retired ([`Heap::RETIRED_VM_CLOSURE_CODE`]): it names
 /// no code, so nothing counts it or retires it, and it keeps no unit loaded.
 /// The frame holds its code itself, as a frame with no closure does, so the
-/// unit is let go once nothing needs it, as before (#338), and a continuation
-/// that captured the frame keeps it. Nothing calls the closure: the frame's
-/// globals are all that is read from it (`frame_globals`), since top-level
-/// code has no free variables.
+/// unit is let go once nothing needs it, as a program form's is (#338), and a
+/// continuation that captured the frame keeps it. Nothing calls the closure:
+/// the frame's globals are all that is read from it (`frame_globals`), since
+/// top-level code has no free variables.
 ///
 /// [`Heap::RETIRED_VM_CLOSURE_CODE`]: patina_core::heap::Heap::RETIRED_VM_CLOSURE_CODE
 ///
@@ -1916,7 +1917,7 @@ fn attach_source_location(state: &VmState, e: VmError) -> VmError {
 /// If the current frame is executing a closure, returns that closure's
 /// captured globals (the environment it was compiled against): a lambda's,
 /// or the one `push_frame_in` made for top-level code compiled in another
-/// environment, a library's body form or a host environment's form.
+/// environment, such as a library's body form or a host environment's form.
 /// Otherwise returns `state.globals`: a program's top-level form, or a stub,
 /// which reads no global.
 pub(super) fn frame_globals(state: &VmState) -> Rc<Environment> {

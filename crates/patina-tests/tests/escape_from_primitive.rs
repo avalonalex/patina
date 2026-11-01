@@ -670,30 +670,33 @@ fn test_reentering_a_loaded_form_after_load_returned() {
 /// Re-entering, after the load, a continuation captured by a library's body
 /// form: the rest of the form reads, assigns and defines the library's
 /// bindings, as it did during the load (#779). The VM ran the restored frame
-/// against its globals as they were then, the program's after a load and a
-/// second library's while that one loaded: a library binding the program
-/// does not import was unbound, a name the program also binds read and wrote
-/// the program's binding, and the `define` defined in the program. A body
-/// form runs as a closure whose globals are the library's environment now,
-/// as `eval`'s code does.
+/// against its globals as they were then: the program's after a load, and a
+/// second library's while that one, loaded by an `import`, re-entered it
+/// (through `environment` the program's again, since the continuation leaves
+/// that load before the frame runs). So a library binding the program does
+/// not import was unbound, a name the program also binds read and wrote the
+/// program's binding, and the `define` defined in the program. A body form
+/// runs as a closure whose globals are the library's environment now, as
+/// `eval`'s code does.
 ///
 /// The form re-entered, `v`'s definition, is the body's last, so that what
 /// the rest of the body does after it (#779's part 2) cannot move these
-/// answers. It reads, assigns and defines in its own frame: code in a closure
-/// it made, a `let`'s body, had the library's globals already. Each route
-/// runs with and without program bindings of `hidden` and `v`: a top-level
-/// `import`, `environment`, an `eval`'d `import`, a `define-library` in the
-/// program, and a second library's body re-entering it during its own load,
-/// by a top-level `import` and by `environment`. A load through `environment`
-/// or `eval` is a form of its own, whose value nothing reads: on the VM the
-/// re-entered form returns from it a second time, with a stale value, which
-/// is part 2's.
+/// answers; for the same reason the second library is imported by a form of
+/// its own, which a re-entry that carried the rest of the first `import` form
+/// would not load again. The form reads, assigns and defines in its own frame:
+/// code in a closure it made, a `let`'s body, had the library's globals
+/// already. Each route runs with and without program bindings of `hidden` and
+/// `v`: a top-level `import`, `environment`, an `eval`'d `import`, a
+/// `define-library` in the program, and a second library's body re-entering
+/// it during its own load, by a top-level `import` and by `environment`. A
+/// load through `environment` or `eval` is a form of its own, whose value
+/// nothing reads: on the VM the re-entered form returns from it a second
+/// time, with a stale value, which is part 2's.
 ///
 /// Measured 2026-11-01 with chibi 0.12.0 and Gauche 0.9.15, each program
-/// writing what it answers here. chibi answers so on every route it runs: it
-/// takes no `define-library` in a script, and refuses the second library's
-/// load by `import` ("module attempted to reference itself while loading").
-/// Gauche answers so for the `define-library` in the program. Elsewhere it
+/// writing what it answers here. chibi answers so on every route but the
+/// `define-library` in the program, which it takes in no script. Gauche
+/// answers so for the `define-library` in the program. Elsewhere it
 /// exits 70 with no message after the re-entry, refuses the second library's
 /// ("attempt to return from a ghost continuation"), or finds `k` unbound in
 /// its `interaction-environment` after the `eval`'d `import`; a write from
@@ -721,11 +724,8 @@ fn test_reentering_a_library_body_form_after_the_load() {
     std::fs::write(
         dir.join("callk.sld"),
         "(define-library (reenter779 callk) (import (scheme base) (reenter779 body))
-           (export callk-state)
-           (begin (define hidden 'callk)
-                  (define v 'callk)
-                  (define (callk-state) (list hidden v))
-                  (k 10)))",
+           (export)
+           (begin (define hidden 'callk) (define v 'callk) (k 10)))",
     )
     .expect("library file");
 
@@ -793,11 +793,12 @@ fn test_reentering_a_library_body_form_after_the_load() {
             // A second library's body, loaded by a top-level `import`.
             (
                 format!(
-                    "(import (scheme base) (reenter779 body) (reenter779 callk))
+                    "(import (scheme base) (reenter779 body))
+                     (import (reenter779 callk))
                      {own}
-                     (list (state) (callk-state) {READ})"
+                     (list (state) {READ})"
                 ),
-                format!("((11 22) (callk callk) {seen})"),
+                format!("((11 22) {seen})"),
             ),
             // A second library's body, loaded by `environment`.
             (

@@ -83,7 +83,8 @@ top-level `import`, `execute_nested` on the nested loads), so its frame
 resolves its globals against the library's wherever a continuation restores
 it (#779; §5.6). During a load the swapped globals are still read by a frame
 with no closure, a program form that a continuation resumes there, and by
-`interaction-environment` (#823).
+`interaction-environment` and a one-argument `load`, which takes its
+environment from it (#823).
 `import_export` still installs shared bindings and invalidates primitive fast
 paths in the same operation. Library loading keeps one machine and its existing
 re-entry protocol.
