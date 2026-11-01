@@ -118,14 +118,18 @@ fi
 # which no re-pin had recorded; the minimum left at half the count from
 # before then; callability's test count re-pinned 2026-10-31 for #817's test
 # of #781's own shape uncaught, and its count re-measured that day, the
-# minimum left)
+# minimum left; escape_from_primitive's and finished_forms_release_code's
+# test counts re-pinned 2026-11-01 for #779's tests of a library body form
+# re-entered after its load and of the code a library's body forms and a
+# host environment's forms let go, and their counts re-measured that day,
+# the minimums left)
 TARGETS=(
     "callability 16 31 13"                    # 1543 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
     "cps_features 16 530 3"                   # 1060 (2)
     "ephemerons 16 289 30"                    # 578 (204)
-    "escape_from_primitive 16 480 14"         # 6352 (92)
-    "finished_forms_release_code 16 1450 9"   # 2901 (13)
+    "escape_from_primitive 16 480 15"         # 6951 (90)
+    "finished_forms_release_code 16 1450 11"  # 3677 (13)
     "gc_tree_walker 16 11421 20"              # 24151 (658)
     "gc_vm 16 8001 25"                        # 17314 (667)
     "host_environments 16 43788 11"           # 87576 (11)
