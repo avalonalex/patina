@@ -1,11 +1,11 @@
 # Garbage Collection Design
 
-**Status:** Describes the collector as built: stages 1–4c (PRs #4–#11, merged
-2026-08-01 to 2026-08-04 UTC) and the weak continuation tables of 2026-08-05
-(#19). The redesign that replaces it is designed and planned in
-[`PRD/GC_PRD.md`](../PRD/GC_PRD.md); this file is rewritten as that plan's
-stages land. Stage numbers here are this document's own staging (§10), not
-the redesign's.
+**Status:** Describes the collector as built today. It was first built in PRs
+#4–#11 (merged 2026-07-31 to 2026-08-03), with the weak continuation
+tables of 2026-08-05 (#19). The redesign that replaces it is designed and
+planned in [`PRD/GC_PRD.md`](../PRD/GC_PRD.md); this file is rewritten as
+that plan's stages land. Stage numbers here are the redesign's
+(`PRD/GC_PRD.md` §19).
 **Date:** 2026-07-31 (file/line references are as of this date)
 **Supersedes:** `PRD/ARCHIVE/phase1_optimization_2026_02/GC_DESIGN.md` (pre-TaggedValue, proposed `rust-gc` over the deleted `Value` enum)
 **Extends:** `PRD/TRACK_P_PERFORMANCE_PRD.md` §P6 (VM-only mark-and-sweep sketch)
@@ -51,8 +51,8 @@ Non-goals (v1):
 | 5 | Sweep pushes to the existing free lists **and tombstones the slot** | Allocation path unchanged; tombstoning drops `Rc` payloads eagerly → breaks env cycles (§8) |
 | 6 | Safe point = top of each backend's driver loop, guarded by a re-entrancy defer counter | All Rust-stack temporaries are dead or restored there (§7) |
 | 7 | Environments traced via new `Environment::for_each_value`, deduped by `Rc` pointer | Globals/bindings live in Rust `HashMap`s outside the arenas |
-| 8 | VM continuation side tables traced by `VmState`'s root provider, not the heap tracer — **weakly** since stage 5: payloads trace only for marked ref objects, dead entries are pruned | Heap only holds opaque `VmContinuationRef { id, bytes }` (`bytes` for the trigger's byte account, §6) — heap-only tracing under-approximates, strong table tracing over-approximates into a monotonic leak (§9.5) |
-| 9 | Runtime mode gate (no Cargo feature); off by default until stage 4c, adaptive-on since | Baseline behavior stayed bit-identical through differential testing at every stage; the CI lanes enforce it permanently |
+| 8 | VM continuation side tables traced by `VmState`'s root provider, not the heap tracer — **weakly** since 2026-08-05 (#19): payloads trace only for marked ref objects, dead entries are pruned | Heap only holds opaque `VmContinuationRef { id, bytes }` (`bytes` for the trigger's byte account, §6) — heap-only tracing under-approximates, strong table tracing over-approximates into a monotonic leak (§9.5) |
+| 9 | Runtime mode gate (no Cargo feature); off by default until 2026-08-03 (#11), adaptive-on since | Baseline behavior stayed bit-identical through differential testing at every stage; the CI lanes enforce it permanently |
 
 ---
 
@@ -198,10 +198,10 @@ pub trait SlotVisitor {
     fn slot(&mut self, slot: &Cell<TaggedValue>);       // precise, updatable
     fn slots(&mut self, slots: &[Cell<TaggedValue>]);   // a register file
     fn pinned(&mut self, value: TaggedValue);           // precise, never moved
-    fn env(&mut self, env: &Rc<Environment>);           // until 4b
-    fn continuation(&mut self, k: &Rc<CpsContinuation>); // until 4f
-    fn cont_env(&mut self, cont_env: &ContEnv);         // until 4f
-    fn expr_literals(&mut self, expr: &CpsExpr);        // until 4f
+    fn env(&mut self, env: &Rc<Environment>);           // its walk stays (§9.4)
+    fn continuation(&mut self, k: &Rc<CpsContinuation>); // settled when 4f starts
+    fn cont_env(&mut self, cont_env: &ContEnv);         // its walk stays
+    fn expr_literals(&mut self, expr: &CpsExpr);        // its walk stays
 }
 
 /// The collector's marker, one `SlotVisitor`: it marks a slot's value and a
@@ -293,12 +293,13 @@ Notes:
 - Borrow discipline: `collect` needs `&mut Heap`, so the caller must hold the
   single `borrow_mut()` for the whole collection — which is exactly why safe
   points must be borrow-free (§7). But `visit_env` and object-variant tracing
-  read `Rc<RefCell<...>>` interiors (env binding maps, `Record.fields`,
-  `Promise` state); those are *separate* RefCells from the heap's, so tracing
-  them under the heap borrow is fine. The one self-referential case is
-  `MutableCell(RefCell<TaggedValue>)`, which lives *inside* the object arena —
-  the tracer reads it directly through the `&mut Heap` it already holds, not
-  through a second borrow.
+  read interiors: environments' binding maps, which are `RefCell`s, and
+  `Record.fields`, `Parameter.values` and `Promise` state, each an
+  `Rc<Interior<…>>` (#708). Those are *separate* cells from the heap's, so
+  tracing them under the heap borrow is fine. `MutableCell` and `Ephemeron`
+  hold their `Interior` *inside* the object arena: the mark phase borrows it
+  under the `&Heap` that `run_mark_phase` takes, a borrow of the cell, not a
+  second borrow of the heap.
 
 ### 4.2 Mark state
 
@@ -329,9 +330,9 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs`):
 | `BigInt`, `Rational`, `Real`, `Symbol`, `Bytevector`, `Port` (its `PortTable` entry's number, #785), `RecordType`, `Identifier`, `Library`*, `PromptTag`, `LabelPlaceholder` | leaf |
 | `Complex` | `real`, `imag` |
 | `Exception` | each of `irritants` |
-| `Record` | `record_type` value + each of `fields` (through the `Rc<RefCell<Vec<_>>>`) |
+| `Record` | each of `fields` (through the `Rc<Interior<Vec<_>>>`); `record_type`, an `Rc`'d descriptor rather than a value, is not traced |
 | `Parameter` | each of `values` + `converter` |
-| `Promise` | delayed thunk / forced value (through `Rc<RefCell<PromiseState>>`) |
+| `Promise` | delayed thunk / forced value (through `Rc<Interior<PromiseState>>`) |
 | `Values` | each element |
 | `MutableCell` | inner value |
 | `VmClosure` | each of `free_vars` + **`visit_env(globals)`** |
@@ -576,7 +577,7 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 | `code_store[*].constants` | **yes** | Pinned until stage 4e makes them a descriptor's. Kept while a frame, a captured continuation or a live closure can run the code; a finished form's code is released with its constants (#338) |
 | `globals` | **yes** | `env` |
 | `saved_globals` | **yes** | `env` for each environment `with_globals` has set aside, so that a library body run under the swap may collect (#677) |
-| `continuation_store` / `delimited_continuation_store` | **weak** (stage 5) | `VmContinuation` snapshots hold full `registers` copies and frames, each with its closure, all slots as the live ones are, and wind/prompt/handler stacks, pinned as theirs are (`types/continuation.rs:59,:101`). Heap-side `VmContinuationRef { id, bytes }` is opaque (its `bytes` charges the snapshot to the trigger, §6); only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_ids` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
+| `continuation_store` / `delimited_continuation_store` | **weak** (since #19) | `VmContinuation` snapshots hold full `registers` copies and frames, each with its closure, all slots as the live ones are, and wind/prompt/handler stacks, pinned as theirs are (`types/continuation.rs:59,:101`). Heap-side `VmContinuationRef { id, bytes }` is opaque (its `bytes` charges the snapshot to the trigger, §6); only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_ids` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
 | `tracer` | yes | Pinned: `StepTracer.pre_regs`/`pre_all_regs`, copies of registers for display (`crates/patina-vm/src/tracer.rs`) |
 | `library_registry` | yes | §5.3 |
 | `primitive_registry`, `shadowed_primitives`, `fs` | no | No TaggedValues |
@@ -965,9 +966,9 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   safe point reads the `Mutator`'s poll word (one load, no `RefCell` borrow)
   and collects when a collection is posted. §6.1 has the measurements that
   forced this shape.
-- Adaptive collection is **always on** since stage 4c (before it, Off was
-  the default while the trigger still had a standing cost — see §6.1 for the
-  measurements that justified the flip). The environment variables are
+- Adaptive collection is **always on** since 2026-08-03 (#11; before it, Off
+  was the default while the trigger still had a standing cost — see §6.1 for
+  the measurements that justified the flip). The environment variables are
   **testing-lane hooks**, not supported user configuration; the grammar lives
   in `patina-core` (`GcMode::from_env`) because the variables are
   process-global and both backends must agree on them. Zeal wins over stress,
@@ -1033,11 +1034,11 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   is counted for each, and a closure that captures a namespace adds a frame
   the footprint does not hold.
 
-### 6.1 Trigger cost — measured, redesigned (stage 4a), re-measured
+### 6.1 Trigger cost — measured, redesigned (2026-08-03, #8), re-measured
 
-The stage-3 safe point re-derived policy per dispatched instruction. Measured
-on the VM (M1 Max, release, interleaved A/B/C against `main`, with a control
-binary that deletes *only* the `maybe_collect` call):
+The VM's first safe point (#6) re-derived policy per dispatched instruction.
+Measured on the VM (M1 Max, release, interleaved A/B/C against `main`, with a
+control binary that deletes *only* the `maybe_collect` call):
 
 | Lane | Cost vs `main` | Where it went |
 |------|----------------|---------------|
@@ -1049,7 +1050,7 @@ safe point *was* the whole cost — nothing else in the GC integration is
 measurable.
 
 The flaw was architectural, not micro: **the safe point asked a question whose
-answer only changes when something allocates.** Stage 4a therefore moved the
+answer only changes when something allocates.** #8 therefore moved the
 decision to where allocation happens — `Heap::note_alloc` raises a pending
 flag when its count crosses the mode-derived threshold (§6), and every
 mode's safe point collapsed to a single flag test. The flag lives outside the
@@ -1180,11 +1181,11 @@ placement + deferral:
        (#700).
      - **The limit.** The wait grows with depth times the allocation per
        level, so K16 watches it.
-   - Tree-walker (**stage 2, implemented**): top of the trampoline loop in
-     `run_trampoline` (`cps_eval/mod.rs`, the one loop every run shares since
-     2026-09-10). The entire machine state is `current_step`, which the
-     safe point passes as a transient root along with the `expr` the
-     trampoline was entered with (its literals stay live for the call).
+   - Tree-walker (#5): top of the trampoline loop in `run_trampoline`
+     (`cps_eval/mod.rs`, the one loop every run shares since 2026-09-10). The
+     entire machine state is `current_step`, which the safe point passes as a
+     transient root along with the `expr` the trampoline was entered with (its
+     literals stay live for the call).
 2. **Who may collect** (#702, `PRD/GC_PRD.md` §11.3): the holder of the
    carrier's `GcDriver`, and only at depth 0, with no `NoGcScope` open.
    - **The driver.** `GcController::safe_point` and `collect_at_call` take a
@@ -1373,9 +1374,11 @@ call left in the same register.
 **Known limitation (accepted for v1):** a long-running nested execution — e.g.
 `(map f huge-list)` where each `f` call is a nested trampoline, or a library
 loading a large body — cannot collect until it returns to the outermost loop.
-The mitigation path (stage 5+) is to root the re-entrancy boundary explicitly
-(the suspended `StepResult` / the boundary argument slice) and let nested loops
-collect; the `RootProvider` trait already accommodates this (lent providers).
+The mitigation path `PRD/ARCHIVE/GC_STAGE5_PRD.md` named (its priority 2) is
+to root the re-entrancy boundary explicitly (the suspended `StepResult` / the
+boundary argument slice) and let nested loops collect; the `RootProvider`
+trait already accommodates this (lent providers). `PRD/GC_PRD.md` §11.3 has
+the redesign's plan.
 
 **Backend coexistence:** both backends share one `SharedHeap` in mixed
 scenarios. The rule generalizes: the run that holds the carrier's driver
@@ -1615,7 +1618,7 @@ acyclic trees. When a closure cluster becomes unreachable from roots:
 pins steps 1–3 for a macro's `foreign_expansions` environment.
 
 The same argument covers `set-cdr!` pair cycles trivially (pairs own nothing)
-and `Rc`-payload variants like `Promise`/`Record` (their `Rc<RefCell<…>>`
+and `Rc`-payload variants like `Promise`/`Record` (their `Rc<Interior<…>>`
 payloads drop at tombstone time unless shared with a live holder — and a live
 holder means they were correctly marked).
 
@@ -1755,10 +1758,15 @@ This is why every `Rc`-shared structure the visitor walks has a dedup set
 `GcVisitor::visit_once` for `ContEnv` chains), and why a root provider hands
 such a structure to its `SlotVisitor` whole (`env`, `continuation`,
 `cont_env`, `expr_literals`) rather than walking it: the visitor walks it
-once however many paths reach it. **Stage 3 check:** `VmContinuation`
+once however many paths reach it. **On the VM:** `VmContinuation`
 snapshots and `CodeObject` sharing have the same potential; if a VM root
 provider comes to walk an `Rc` graph, it hands it over the same way, through
-a method of its own.
+a method of its own. The tree-walker's walks are kept: its frames remain
+`Rc<Environment>` (`PRD/GC_PRD.md` §11.4), and 4f's host payloads go on
+holding frames, continuation environments and code, so the final contract
+keeps a deduplicated walk of `env`, `cont_env` and `expr_literals`
+(`PRD/GC_PRD.md` §14). Where it declares them, and whether `continuation`
+stays with them, is settled when 4f starts.
 
 **Dedup does not bound the Rust call stack.** Larceny family 6 exposed this
 on 2026-09-12: `trace_cont_value(Local)` called `trace_cont_env`, which called
@@ -1800,7 +1808,7 @@ seeded into `MarkBits::for_heap`. The same argument applies to the symbol
 table, which `GcVisitor::new` re-marks every collection; one immortal set
 covers both.
 
-**Continuation side tables — FIXED (stage 5, 2026-08-05).** Nothing ever
+**Continuation side tables — FIXED (2026-08-05, #19).** Nothing ever
 removed entries from `continuation_store` / `delimited_continuation_store`.
 With 20 000 `call/cc` captures whose continuations are immediately discarded,
 a collection spent **1 456 µs of a 1.79 ms pause (81%) in root tracing** — and
@@ -1929,10 +1937,13 @@ from growing.
   listed ones.** The ones `HeapObjectData` holds are listed by variant and
   field (`SHARED_PAYLOADS`). Rule 3 of §18.2 takes them out by stage 5, and
   each comes off the list as its payload goes. A new one fails the test
-  until it is listed, so it is added on purpose: before stage 5, a payload
-  that changes after the object is made has no home but an `Interior`. The
-  scan reads each payload's type as written, so a type that wraps one in a
-  struct of its own is beyond it.
+  until it is listed, so it is added on purpose. A payload that changes after
+  the object is made needs none of them: every mutator store arrives with
+  `&mut Heap`, through the funnel or `Heap::promise_update`, so such a
+  payload can be a plain field, as `VmClosure.free_vars` is. The ephemeron is
+  the exception, while the mark phase breaks it under `&Heap`. The scan reads
+  each payload's type as written, so a type that wraps one in a struct of its
+  own is beyond it.
 
 The last two are tests in
 `crates/patina-interpreter/src/reentry_lint_control.rs`, each with a positive
@@ -1945,21 +1956,12 @@ test (`crates/patina-tests/tests/carrier_types.rs`): the `InterruptHandle`
 
 ## 10. Staging
 
-Collection is gated at runtime rather than by a Cargo feature (§6): the
-default build never collects unless `(gc)` is called, so the baseline lane is
-unaffected without a second compilation configuration to maintain.
+The first collector was built in PRs #4–#11 and #19 (merged 2026-07-31 to
+2026-08-05), gated at runtime rather than by a Cargo feature (§6), and
+always on since #11. The stages since are the redesign's: `PRD/GC_PRD.md` §19
+plans them, and #647 tracks them, with each stage's exit check.
 
-| Stage | Deliverable | Acceptance |
-|-------|-------------|------------|
-| **1. Core infra** ✅ *(merged 2026-07-31, PR #4)* | Mark bit-vectors, `GcVisitor`, per-variant trace rules, tombstoning sweep, `Collector`/`GcRoots` traits, `MarkSweepCollector`, alloc counter, `Environment::for_each_local_value`, `(gc)`/`(gc-stats)` primitives | Unit tests with synthetic roots: reachability, tombstone drops `Rc` payloads, free-list reuse, poison-mode assertions |
-| **2. Tree-walker integration** ✅ *(2026-07-31)* | Root providers for `Evaluator` (global env), `LibraryRegistry` (shared, in `patina-runtime`), `StepRoots` (`StepResult` + `ContValue`/`ContEnv` chains + entry `expr`) and `EscapeRoots` (`PENDING_ESCAPE`); safe point at the trampoline loop top; `GcDeferGuard` on both trampolines and the library-body loop; `GcMode` policy | **Met:** chibi suite (1194 test expressions) on the tree-walker under `PATINA_GC_STRESS=1` produced byte-identical output to baseline. Reclamation proven: a 20 000-cons workload holds ~4 000 pairs under stress vs ~24 000 unreclaimed without it. 14 integration tests in `patina-tests/tests/gc_tree_walker.rs` cover cycles, closures, continuations, `dynamic-wind`, records, nested trampolines, and a regression guard for §9.4 |
-| **3. VM integration** ✅ *(2026-08-01)* | `impl GcRoots for VmState` (registers, frames' bare closure indices, `value_buffer`, `scratch_args`, wind/prompt/handler stacks, `code_store` constants, globals, **both continuation side tables**, tracer register snapshots); safe point at the top of `run_loop_until`; `GcDeferGuard` on every dispatch loop and on both library-loading paths; `GcController` lifted to `patina-core` and shared | **Met:** VM chibi suite under `PATINA_GC_STRESS=1` byte-identical to baseline in **both** release and a debug build with the poison/`Free` assertions active (the strongest check — a missed root panics rather than passing silently). 20 004 collections on a 20 000-cons workload, arena 4 039 vs 24 047 pairs. 14 VM integration tests in `patina-tests/tests/gc_vm.rs` |
-| **4a. Trigger redesign** ✅ *(2026-08-03)* | Safe-point trigger redesign (§6.1) — the stage-4 gating item: collection decision moved to `Heap::note_alloc` (pending flag + mode-derived threshold), safe point collapsed to one flag load, `GcController::collect` re-arms the adaptive term | **Met:** interleaved A/B/C — GC-off at parity with `main` (−0.4% dispatch, −1.3% alloc-heavy) and the GC-on zero-collection penalty eliminated (−0.2% on-vs-off, was −13.7%); ~1% residual vs no-safe-point control (§6.1). Chibi suite byte-identical across baseline/stress/on lanes, both backends, release + debug poison builds |
-| **4b. Groundwork** ✅ *(2026-08-03)* | Two CI lanes (`gc-differential` release + debug-poison jobs running `scripts/run_gc_differential.sh`: stress + adaptive vs baseline, both backends, plus a reclamation proof so the lane cannot pass vacuously), SourceMap pruning hook (§9.1), liveness stress (100k-element list survives collection) and arena-reuse plateau as shared integration tests | **Met:** all lanes byte-identical locally and in CI; `cargo clippy`/`fmt` clean |
-| **4c. Always-on** ✅ *(2026-08-03)* | Adaptive threshold on unconditionally; the env vars remain only as testing-lane hooks (§6). The differential script gained a default-mode reclamation proof (200k churn crosses the floor → collections > 0, arena bounded) so the lanes verify the default itself | **Met:** all lanes byte-identical with the new default; full test suite and chibi green under GC-on; interleaved on-vs-off sanity: fib −1.05%, 10M-cons churn −1.07% — parity within the 3–7% spread |
-| **5+. Future** *(tracked in `PRD/ARCHIVE/GC_STAGE5_PRD.md`, superseded 2026-10-01 by `PRD/GC_PRD.md`)* | Pause work first: ~~weak continuation side tables~~ ✅ *(2026-08-05 — `trace_weak_ids`/`sweep_weak` fixpoint, §9.5; ctak's 4 GB blowup fixed)* + immortal set for `code_store` constants and symbols (§9.5, measured); explicit rooting of re-entrancy boundaries so nested loops can collect (§7); then `Collector` upgrades — lazy sweep, non-moving generational (sticky mark bits + write barriers on `set-car!`/`set-cdr!`/`vector-set!`/`MutableCell` stores); weak symbol table | Each behind the trait, benchmarked interleaved; differential lanes stay byte-identical |
-
-Rationale for full-arena tracing from stage 1 (vs P6's pairs+vectors-first):
+Rationale for full-arena tracing from the start (vs P6's pairs+vectors-first):
 the tracer must understand every `HeapObjectData` variant *anyway* to be safe
 (an untraced variant holding a `TaggedValue` is a use-after-free, not a
 smaller scope). Restricting the *sweep* to some arenas saves little once the
@@ -1994,8 +1996,9 @@ visitor exists, and the stress lane is the real safety net.
    tolerates a use-after-free silently (the swept slot reads back as a
    `Free`/poisoned value and surfaces later as a confusing type error at an
    unrelated call site); the debug build panics at the exact accessor with the
-   slot number, and the backtrace names the code that lost the root. Stage 3's
-   missed library-loading guard was diagnosed this way in one run.
+   slot number, and the backtrace names the code that lost the root. The VM
+   integration's missed library-loading guard (#6) was diagnosed this way in
+   one run.
 2. **Poison mode (debug):** tombstoned slots hold sentinels; accessors assert.
    Any missed root becomes a deterministic panic under stress, not a
    heisenbug. Superseded by #621's stale-reference checks (§4.5), which also
