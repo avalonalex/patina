@@ -916,9 +916,9 @@ indirection that variant C does not.
 - **Binding records.** Every name in a namespace (the global environment, a library's environment, an environment
   specifier, a host namespace) maps to an immortal `BindingRecord { cell }`: own definitions, imports, aliases and
   placeholders alike. A name a host namespace has not defined gets a child record that reads through to the global
-  namespace's, or, if a GBS A/B puts that path past the 1% gate, host units link the parent's record and re-link through
-  weak back-links (owner decision, 2026-11-01, #782). `Library.exports` maps names to cells, resolved one hop to the
-  owning cell.
+  namespace's; a GBS A/B chooses between a tag test on the global path and host opcodes, and if both miss the 1% gate,
+  host units instead link the parent's record and re-link through weak back-links (owner decision, 2026-11-01, #782).
+  `Library.exports` maps names to cells, resolved one hop to the owning cell.
 - **Link tables.** Each code unit keeps a table of record references indexed by its global operands, filled at load; a
   name with no binding yet gets a placeholder record whose cell holds `UNBOUND`. `LoadGlobal`, `StoreGlobal`,
   `Define`, and the deoptimization of `CallPrimitive` and the inline primitive opcodes take a link index; a read is
@@ -1851,6 +1851,11 @@ keeps most of the ~200 test call sites compiling unchanged.
 - **Descriptors in the arena era (S4e, S5).** From 4e until 5c a descriptor is an `objects`-arena slot with the same
   fields; it moves into the descriptor space (primitive descriptors into the immortal space) with the other
   fixed-size kinds at 5c. Every code reference is a value from 4e onwards.
+- **Continuations before stage 5 (S4e, S5).** §10 describes the final form, and what it needs from the new heap
+  arrives with stage 5: the LOS at 5d, so captures over 8 KiB stay out of one until then; collect-and-retry
+  (`try_alloc`) at 5e; the `0101` procedure with `CONT_INVOKE` at 5c and 5f, and until then invocation stays the VM's
+  control intercept. What a continuation is from 4e until stage 5 is settled with PRD decision 18 when 4e starts
+  (corrected for #782).
 - **`Drop` census (S4g, S5).** 4g's gate is per kind: no `Rc` payload left in records, promises, cells, parameters,
   identifiers, ports and continuations. The ≤ 1% census target is met at stage 5's exit, when closures, vectors,
   strings, bytevectors and bignums have left the arenas.
