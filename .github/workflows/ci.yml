@@ -124,7 +124,7 @@ jobs:
       if: ${{ !cancelled() }}
       run: python3 scripts/run_steady_state.py --quick
 
-  # The two GC lanes (docs/GC_DESIGN.md §10 stage 4b): the chibi suite must
+  # The two GC lanes (#10, docs/GC_DESIGN.md §11): the chibi suite must
   # be byte-identical with GC off, under stress, and under the adaptive mode,
   # on both backends. Both run the stale-reference checks (#621), which turn
   # a lost root into a deterministic panic at the first use of the stale

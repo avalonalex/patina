@@ -8,7 +8,7 @@ out of this file. See `docs/README.md` for maintenance and handoff guidance.
 
 Patina is an R7RS-small Scheme interpreter written in Rust. The default backend is a register-based bytecode VM (`patina-vm`). A CPS tree-walking interpreter (`patina-tree-walker`) is also available via `--tree-walker`. Verify current compliance with the test commands below.
 
-All runtime values are `TaggedValue` — NaN-boxed 8-byte `Copy` types. No `Value` enum exists (fully removed). Macros and derived forms (`let`, `cond`, `do`, etc.) are implemented in Scheme (`lib/scheme/base/*.scm`), not as special forms.
+All runtime values are `TaggedValue` — 8-byte `Copy` words with a low 3-bit tag and a 61-bit payload, heap references being arena indices (`docs/GC_DESIGN.md` §3.2). No `Value` enum exists (fully removed). Macros and derived forms (`let`, `cond`, `do`, etc.) are implemented in Scheme (`lib/scheme/base/*.scm`), not as special forms.
 
 ## Workspace Structure
 
@@ -104,7 +104,7 @@ GitHub's path-filter limits and required-check considerations.
 | Test Suite | `cargo test --all --lib --tests` on **ubuntu and macos** (`SKIP_CHIBI_TESTS=1`), then `run_gc_stress_tests.sh` on the same debug build: 16 GC- and control-relevant targets under `PATINA_GC_STRESS=16` and `scheme_suite.rs` at 4096, each with its test count and a minimum of collections pinned (#626) |
 | R7RS Compliance | `run_chibi_tests.sh` **and** `run_chibi_tests_tree_walker.sh`, then `patina-compat check-smoke` on both backends, then the steady-state lane's per-PR rows (`run_steady_state.py --quick`, #652) |
 | GC differential | `run_gc_differential.sh` on release built with `--features patina-core/gc-check` at stress 1, after the positive controls of the stale-reference checks (#621), the GC protocol checks (#624), the retired-register checks (#625), and the port table's and finalization registry's checks (#785) — the defer-balance control also in the plain release build — **and** on debug at stress 16 |
-| GC zeal (`gc-zeal.yml`, path-filtered and weekly) | `run_gc_zeal.sh` on the same release `gc-check` build — the control suite files under `PATINA_GC_ZEAL=entry`, both backends — and `finished_forms_release_code` under zeal, for changes to the VM's runtime, compiler or types, the heap or `TaggedValue`, the library loader or registry, the tree-walker's evaluator, the toolchain or the lane itself, and weekly on `main` |
+| GC zeal (`gc-zeal.yml`, path-filtered and weekly) | `run_gc_zeal.sh` on the same release `gc-check` build — the control suite files under `PATINA_GC_ZEAL=entry`, both backends — and `finished_forms_release_code` under zeal, for changes to the VM's runtime, compiler or types, the heap or `TaggedValue`, environments, libraries and import sets, the library loader or registry, either backend's `backend.rs`, the tree-walker's evaluator, the toolchain or the lane itself, and weekly on `main` |
 | Rustfmt / Clippy | `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo clippy --release --all-targets -- -D warnings` for the plain release build without the checks; `scripts/check_gc_trace_names.py`, that the trace code names every field (#623); and the GC census's tests, with its feature (#651) |
 | Suite oracles | `run_suite_oracles.sh` under chibi 0.12 and Gauche 0.9.15, pinned and built from source, against `DIVERGENCES.tsv` |
 | Nightly (`nightly.yml`, daily and when its lanes change) | `run_larceny_gc_stress.sh`, R7RS and `(r6rs ...)`, on each backend: Larceny's suites at the pinned commit under stress in the release `gc-check` build, each tally held to `scheme_tests/reports/larceny_gc_stress.tsv` (#626); and every row of the steady-state lane (`run_steady_state.py`, #652) |
@@ -151,7 +151,7 @@ issues and the archive before filing**, for the same reason.
 - `PRD/MILESTONES.md` — project history and achievements
 - `PRD/ARCHIVE/phase1_cleanup_2026_03/PHASE1_CLEANUP_PRD.md` — archived Phase 1 cleanup tracker
 - `PRD/phase1/DELIMITED_CONTINUATIONS_DESIGN.md`
-- `docs/GC_DESIGN.md` — the collector as built today, on both backends (Collector/RootProvider traits, root inventory, staging); GC is always on since GC_DESIGN's stage 4c (2026-08-03). Rewritten as the redesign's stages land
+- `docs/GC_DESIGN.md` — the collector as built today, on both backends (Collector/RootProvider traits, root inventory, staging); GC is always on since 2026-08-03 (#11). Rewritten as the redesign's stages land
 - `PRD/GC_PRD.md` — design and plan for the GC redesign: representation, MarkRegion collector, JIT contract, steady state and limits, threading readiness
 - `PRD/study/` — research records; `PRD/study/gc/` is the GC redesign study behind `PRD/GC_PRD.md`
 - `PRD/macro/SYNTAX_CASE_DESIGN.md` — syntax-case design, and the
@@ -193,8 +193,9 @@ issues and the archive before filing**, for the same reason.
   two instruments for control-flow work: §5.6's table of which dynamic state
   each transfer saves, restores or truncates, with the oracle panel (Chez,
   chibi, Gauche, Guile, Racket) that measured it, and its executable
-  counterpart `crates/patina-tests/tests/control_flow_matrix.rs` — 24 transfer
-  shapes, each naming the external implementations behind its expected answer.
+  counterpart `crates/patina-tests/tests/control_flow_matrix.rs` — 64 rows
+  (2 extent forms × 2 positions × 16 transfers), each naming the external
+  implementations behind its expected answer.
   Read both before touching `dynamic-wind`, prompts or continuations: they are
   scoreboards, and a fix that improves one row while breaking another fails
   them, which is how this area's defects have usually arrived

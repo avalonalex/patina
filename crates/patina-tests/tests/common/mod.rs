@@ -1124,9 +1124,9 @@ macro_rules! gc_shared_tests {
 
         #[test]
         fn liveness_stress_large_list_survives_collection() {
-            // The stage-4b liveness stress (design §10): a 100k-element list
-            // stays fully intact across a collection that runs while it is
-            // the only thing keeping its cells alive.
+            // The liveness stress from #10's GC groundwork: a 100k-element
+            // list stays fully intact across a collection that runs while it
+            // is the only thing keeping its cells alive.
             assert_gc_eval_to(
                 r#"
                 (import (patina debug))
@@ -1142,7 +1142,7 @@ macro_rules! gc_shared_tests {
 
         #[test]
         fn arena_plateaus_under_repeated_churn_with_gc() {
-            // The stage-4b arena-reuse proof (design §10): across 20 churn
+            // The arena-reuse proof from #10's GC groundwork: across 20 churn
             // rounds with a collection each, the pairs arena must reuse freed
             // slots rather than grow — the delta after 100k churned conses
             // stays under one round's worth — and the collections must have

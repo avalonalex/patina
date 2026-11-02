@@ -246,8 +246,10 @@ pub struct GcStats {
 ///
 /// A structure outside the heap that holds values and is shared through `Rc`
 /// is handed over whole, for the visitor to walk once however many paths
-/// reach it: an environment until stage 4b makes it binding records, and the
-/// tree-walker's continuations and code until 4f makes them host payloads.
+/// reach it: an environment, since the tree-walker's frames stay environments
+/// (`PRD/GC_PRD.md` §11.4); the tree-walker's continuation environments and
+/// code, which 4f's host payloads go on holding; and its continuations, whose
+/// walk after 4f is settled when 4f starts.
 /// §14's `host` and `ephemeron` come with the host payloads (4f) and the heap
 /// that lays an ephemeron out in words (5a).
 pub trait SlotVisitor {
@@ -732,8 +734,8 @@ pub enum GcMode {
     /// user configuration — Patina always runs with GC.
     Off,
     /// Collect on the collector's adaptive threshold, in bytes: after
-    /// `max(8 MiB, 2·L)` of allocation (#606). The default since stage 4c:
-    /// the §6.1 trigger redesign made the standing cost of an enabled
+    /// `max(8 MiB, 2·L)` of allocation (#606). The default since 2026-08-03
+    /// (#11): the §6.1 trigger redesign made the standing cost of an enabled
     /// collector indistinguishable from off, so enabling costs only the
     /// pauses themselves.
     On,

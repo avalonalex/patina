@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Date | 2026-10-01, repository `main` at `28a94f8` |
-| Status | Proposed. The owner decisions of 2026-10-01 are marked decided in §2; the other rows there are proposed defaults awaiting owner review, except the two Open rows (7a, 7b). Amended 2026-10-01 after the GC–runtime contract study ([`ANSWER.md`](study/gc/followup/contract/ANSWER.md)) and the premature-collection study ([`ANSWER.md`](study/gc/followup/premature/ANSWER.md)) |
+| Status | Proposed. The owner decisions of 2026-10-01, 2026-10-09 and 2026-11-01 are marked decided in §2; the other rows there, and the parts of 7c and 13 not yet decided, are proposed defaults awaiting owner review, except the two Open rows (7a, 7b). Amended 2026-10-01 after the GC–runtime contract study ([`ANSWER.md`](study/gc/followup/contract/ANSWER.md)) and the premature-collection study ([`ANSWER.md`](study/gc/followup/premature/ANSWER.md)) |
 | Supersedes | The stage-5 PRD (formerly under `PRD/future/`, now [`PRD/ARCHIVE/GC_STAGE5_PRD.md`](ARCHIVE/GC_STAGE5_PRD.md)); §21 says where each of its items went |
 | As built | [`docs/GC_DESIGN.md`](../docs/GC_DESIGN.md) describes the collector Patina runs today. It is rewritten as each stage lands; this file is the target and the plan |
 | Research record | [`PRD/study/gc/`](study/gc/README.md), indexed by its README: the digest (`DIGEST.md`); studies of Patina today (`understand/`), of prior art (`research/`) and of six gaps (`gaps/`); the five candidate proposals, the recommended design this file condenses ([`DESIGN.md`](study/gc/design/DESIGN.md)), its review dispositions and the issue drafts (`design/`); the follow-ups on parallelism cost ([`ANSWER.md`](study/gc/followup/parallelism/ANSWER.md)), steady state ([`SECTION.md`](study/gc/followup/steady/SECTION.md)), the GC–runtime contract ([`ANSWER.md`](study/gc/followup/contract/ANSWER.md)) and premature collection, the live values collected so far, their causes and their prevention ([`ANSWER.md`](study/gc/followup/premature/ANSWER.md)), in `followup/` |
@@ -45,9 +45,10 @@ marks an analogy from a published figure for another runtime.
 (H.1, E.2, Appendix G) points into [`PRD/study/gc/design/DESIGN.md`](study/gc/design/DESIGN.md), which keeps the
 mechanism walkthroughs, derivations, inventories and work-item detail this file leaves out. **Where DESIGN or
 `PRD/study/gc/design/ISSUES_DRAFT.md` differ from this file, this file holds**; [§22](#22-work-items) lists the known
-differences. Stage numbers are this plan's; `docs/GC_DESIGN.md`, AGENTS.md and the archived stage-5 PRD use the earlier
-GC staging (stages 1–4c, then "5+"). K*n* is a kill criterion of [§20](#20-risks-mitigations-and-kill-criteria). "The
-matrix" is `crates/patina-tests/tests/control_flow_matrix.rs` (64 rows [S]); "the hygiene matrix" is
+differences. Stage numbers are this plan's; the archived stage-5 PRD and the GC history in `PRD/MILESTONES.md`,
+`PRD/TRACK_P_PERFORMANCE_PRD.md` and `PRD/VM_OPTIMIZATION_ROADMAP.md` use the earlier GC staging (stages 1–4c, then
+"5+"). K*n* is a kill criterion of [§20](#20-risks-mitigations-and-kill-criteria). "The matrix" is
+`crates/patina-tests/tests/control_flow_matrix.rs` (64 rows [S]); "the hygiene matrix" is
 `crates/patina-tests/tests/hygiene_matrix.rs` (139 shapes).
 
 **Terms.**
@@ -96,7 +97,9 @@ matrix" is `crates/patina-tests/tests/control_flow_matrix.rs` (64 rows [S]); "th
 | Where is the research? | `PRD/study/gc/`, indexed by its README | [study README](study/gc/README.md) |
 
 Decided on 2026-10-01: rows 1, 2, 6 (priority), 7 (threading model), 12, 14, 15 (scope) and 22 of
-[§2](#2-owner-decisions). Every other row is a proposed default, except the Open rows 7a and 7b.
+[§2](#2-owner-decisions); on 2026-10-09, 13 (handles and teardown); on 2026-11-01, SD3, and 7c, 9, 13 (calls, host
+primitives and memory), 16, 19, 21 and SD1 as stages 0–3 acted on them, 7c and 13 in part. Every other row is a
+proposed default, except the Open rows 7a and 7b.
 
 1. **Representation first, collector second.** The measured costs are the representation (72 B enum slots, `Rc`
    payloads, relocating `Vec` arenas, `Rc<RefCell<Heap>>`, a sweep over the arena high-water mark), not mark-sweep:
@@ -148,20 +151,25 @@ Decided on 2026-10-01: rows 1, 2, 6 (priority), 7 (threading model), 12, 14, 15 
     measured +1.9% on today's interpreter [P] and is estimated at ≈2–5%, up to ~7%, after the redesign [I].
 13. **What it buys.** Stage 5's exit gates ([K9](#k9)), against the stage-4 baseline: GBS geomean ≥ 5% faster in cycles;
     peak RSS ≥ 30% lower on libload, gcold and queue3; queue3's max pause under 15 ms (41 ms today [P]); the post-load
-    major at most half its baseline; `Drop`-carrying allocations ≤ 1%; every class A–C steady-state row green. Later
-    gains come only behind measured gates ([K1](#k1) generations, [K3](#k3) evacuation, stage P pauses). If stage 5 runs
-    2× over its estimate, whole-heap `MarkRegion` ships and stages 7–8 wait ([K14](#k14)).
+    major at most half its baseline; `Drop`-carrying allocations ≤ 1%, vector and string arena slots counted; every
+    class A–C steady-state row green. Later gains come only behind measured gates ([K1](#k1) generations, [K3](#k3)
+    evacuation, stage P pauses). If stage 5 runs 2× over its estimate, whole-heap `MarkRegion` ships and stages 7–8
+    wait ([K14](#k14)).
 14. **What users and embedders will notice.** New default limits, a behaviour change: a program whose heap grows past
     min(16 GiB, 75%·B), which today runs until the machine's memory is exhausted, raises `&heap-exhausted` unless
     `--heap-max` or `PATINA_HEAP_MAX` raises the limit (5e); the main stack is capped at min(8 GiB, 25%·B), raised by
     `--stack-max` or `PATINA_STACK_MAX` (4d). Semantic changes, each in its own PR with its `DIVERGENCES.tsv` rows
     (decision 19): port `eq?` ([#608], 4a, with suite rows and no divergence row, since chibi and Gauche answer as
-    Patina does), symbol-keyed `eq?` table order (5c), flonum `eq?` and flonum-keyed ephemerons (5f), deep-bound
-    `parameterize` (9), and the six define-after-use tests that flip under variant C (after stage 5). Embedders get
-    `Owned` and environment handles, `Interpreter::call` and mandatory teardown (stages 2–3), and the `Backend` trait
-    migrates one step per stage under [#601]'s deprecation convention. From stage 2 the VM evaluates in the environment
-    it is given, as the tree-walker does, so a `define` evaluated in a host environment stops landing in the global one
-    ([#620]).
+    Patina does), a canonical `%record-type-of` (4g, with a suite row; decision 1 on [#782]), symbol-keyed `eq?` table
+    order (5c), flonum `eq?` and flonum-keyed ephemerons (5f), deep-bound `parameterize` (9), and the six
+    define-after-use tests that flip under variant C (after stage 5). Embedders get `Owned` and environment handles,
+    `Interpreter::call` and mandatory teardown (stages 2–3), and the `Backend` trait migrates one step per stage under
+    [#601]'s deprecation convention. From stage 2 the VM evaluates in the environment it is given, as the tree-walker
+    does, so a `define` evaluated in a host environment stops landing in the global one ([#620]). At 4b [#601]'s
+    promise is drawn: `Interpreter::heap()`, `Environment::with_parent` and `Interpreter::global_env` are deprecated,
+    the first for typed replacements such as `gc_stats()`; `Backend` gains handle methods as provided defaults; and a
+    raw frame or a deeper chain handed to the VM raises an error rather than panicking (4b's start decisions 5–7 on
+    [#782]; [§11.5](#115-embedding-api)).
 
 **For the JIT.** JIT code keeps every Scheme value in the VM's register frames, tagged, at every call that can collect,
 so Cranelift stack maps are never needed. One context, the `Mutator`, sits in a pinned register (`x21` on aarch64, `r15`
@@ -183,25 +191,32 @@ today's measured blow-ups on the current collector; 2 makes roots slot-based and
 every candidate design needs; 5 is the new heap, with limits in 5g; 6 the JIT ABI spike; 7 and 8 generations and
 evacuation behind measured gates; 9 threads readiness; P parallel marking. About 99–138 engineer-weeks in all [I],
 roughly 23–32 months for one engineer (14–21 weeks less with two, [§19](#19-stages)); 5–8 of those weeks are decision
-7c's threading additions. The figure is itemized, with no overrun factor; [K14](#k14) is its only calibration.
+7c's threading additions. The figure is itemized, with no overrun factor; [K14](#k14) is its only calibration. It
+counts stage 4 at the 23–32 weeks its rows first gave, where decision 22 on [#782] plans the stage against its
+itemized 37.5–53 [I].
 
 ## 2. Owner decisions
 
-**Needed before stages 0–3:** 7c, 19 and SD1 (stage 0), 16 and 21 (stage 1), 13 for handles (stage 2), and 9 and the
-rest of 13 (stage 3). Every other row can wait for the stage in its "Needed by" column.
+**Stages 0–3** needed 7c, 19 and SD1 (stage 0), 16 and 21 (stage 1), 13 for handles (stage 2), and 9 and the rest of
+13 (stage 3): 13's handles were decided on 2026-10-09, and the others on 2026-11-01 as those stages acted on them, 7c
+and 13 in part (decision 24 on [#782]). **Stage 4 needs** SD3 (4b), decided 2026-11-01, and 8, 15 (values), SD5 and
+SD9 (4d) and 18 (4e), which are decided when their sub-stage starts. Opening 4d's preparatory items beside 4b does not
+start 4d: only 4d's stack-cap PR waits for 8, 15 (values), SD5 and SD9 (decision 20 on [#782]). Every other row can
+wait for the stage in its "Needed by" column.
 
 **How to decide.** Change a row's Status to "Decided YYYY-MM-DD", or write the alternative chosen. A row still Proposed
 when its Needed-by stage starts blocks that stage's issue.
 
-Decided rows carry their date; the Open rows 7a and 7b have no default yet; every other row is a proposed default. The
-decision column gives the decision or default in one sentence and the section that specifies it. SD1–SD9 come from the
-steady-state study and keep their labels; SD2 is folded into decision 11.
+Decided rows carry their date, and a row decided in part names what remains; the Open rows 7a and 7b have no default
+yet; every other row is a proposed default. The decision column gives the decision or default in one sentence and the
+section that specifies it. SD1–SD9 come from the steady-state study and keep their labels; SD2 is folded into
+decision 11.
 
 | # | Decision | Status | Decision, or **proposed default** | Consequence of the alternative | Precedent | Needed by |
 |---|---|---|---|---|---|---|
 | 1 | Tree-walker role | Decided 2026-10-01 | **Kept, and allowed to lag:** whole-heap, non-moving, collecting only at its outermost trampoline, M:1 and `!Send` ([§11.4](#114-the-tree-walker-it-stays-correct-and-may-lag), [§18](#18-threading-readiness-and-future-parallelism-decision-7)) | Full parity (heap frames) would cost 6–12 weeks and make tree-walker `define`s the dominant barrier site (12.48 M on nboyer [P]) | — | — |
 | 2 | Global rebinding semantics | Decided 2026-10-01 | **Variant R at stage 4b, variant C after stage 5**, both specified in [§11.6](#116-global-bindings-under-variant-r); C is its own [§19](#19-stages) row | Staying on R costs the JIT a second dependent load per global, or `WATCHED` on record and cell. C gives one-load JIT globals and guards that recover when a program restores the procedure (today's shadow bit never clears) | C: chibi, Chez and Racket bind references at compile time | row C needs decision 3 settled first |
-| 3 | When `define` rebinds; mid-program imports | Proposed | **Case by case** over six shapes (p7, p8, p9, q1, q2/q3, d1), recorded under R at stage 0 with their `DIVERGENCES.tsv` rows ([#603]); under C most follow all the oracles and p9 follows chibi (cases: DESIGN E.2) | The oracles disagree on p9, so no single rule such as "bind at expansion time" describes C | chibi, Gauche and Chez disagree on p9 | row C (after 5) |
+| 3 | When `define` rebinds; mid-program imports | Proposed | **Case by case** over six shapes (p7, p8, p9, q1, q2/q3, d1), recorded under R at stage 0 with their `DIVERGENCES.tsv` rows ([#603]); under C most follow all the oracles, p8 follows chibi and Chez (Gauche follows the import, as R does) and p9 follows chibi (cases: DESIGN E.2) | The oracles disagree on p8 and p9, so no single rule such as "bind at expansion time" describes C | chibi, Gauche and Chez disagree on p8 and p9 | row C (after 5) |
 | 4 | Value encoding | Proposed | **61-bit fixnums, an exact heap bit, 4-bit heap tags, sign-symmetric self-tagged flonums subject to [K6](#k6), raw addresses** ([§5](#5-value-encoding)) | NaN-boxing loses 61-bit fixnums; boxed flonums keep 19.8% of allocations [P]; offset addressing adds one `add` per access | Chez (tags in the displacement); Gambit (self-tagged flonums) | 5a ([K6](#k6) before 6) |
 | 5 | Strings and bignums | Proposed | **UTF-32 inline strings (O(1) `string-set!`) and inline bignum limbs** ([§6](#6-object-model)) | UTF-8 halves string bytes but rewrites the string primitives (today's 252 heap mentions in `strings.rs`/`characters.rs` keep working under UTF-32); `num-bigint` payloads would need finalization | — | 5d |
 | 6 | Pauses: priority | Decided 2026-10-01 | **Throughput first; stop-the-world; bounded** ([§9](#9-collection), [§9.10](#910-pause-budgets)) | A hard latency target would add incremental marking through `barrier_mode`, with the barrier compiled into every heap that may run it ([§14](#14-pluggability-contract)) | Chez and Racket CS collect stop-the-world | — |
@@ -210,29 +225,29 @@ steady-state study and keep their labels; SD2 is folded into decision 11.
 | 7 | Shared-memory parallelism | Proposed, pending owner review | **Not now**; start only when [§18.7](#187-decision-record)'s four conditions hold. Parallel stop-the-world marking (stage P) does not depend on this | Shared memory now or soon costs [§18.3](#183-cost)'s figures: 38–77 engineer-weeks itemized after stages 0–9 and P [I], about 2–9 engineer-years with overrun and recovery [A, I]. Isolates for share-nothing work: 3–5 weeks after 5e [I], starting no earlier than 5g, whose `MemoryBudget` they share | the retrofit histories of [§18.3](#183-cost) (OCaml, Racket places, CPython) | [§18.7](#187-decision-record)'s trigger |
 | 7a | One threaded build or two | Open until [§18.7](#187-decision-record)'s trigger | — (one build only if the threaded build's tax is within the plan's 1% rule and its footprint within SS2's tolerance) | A higher threshold needs its own row | Chez kept a non-threaded build until 10.0 | [§18.7](#187-decision-record)'s trigger |
 | 7b | `thread-terminate!` of a thread blocked in a system call | Open until [§18.7](#187-decision-record)'s trigger | — (may it wait for the call to return?) | — | — | [§18.7](#187-decision-record)'s trigger |
-| 7c | Cheap threading additions | Proposed | **Adopt [§18.6](#186-cheap-additions-decision-7c-proposed-scheduled-in-19)'s additions** in stages 0, 2, 3, 4b, 4e, 5, 6, 9 and P: 5–8 engineer-weeks [I] during the redesign | Drop them: the redesign's total falls by 5–8 weeks, and parallelism, if ever started, costs 9–15.5 weeks more (a net loss of 1–10 weeks) | — | 0 |
+| 7c | Cheap threading additions | Decided 2026-11-01 in part, as stages 0, 2 and 3 acted on it; C6 (4b; its shape is 4b's start decision 4 on [#782]) and C11 (4e) remain | **Adopt [§18.6](#186-cheap-additions-decision-7c-scheduled-in-19)'s additions** in stages 0, 2, 3, 4b, 4e, 5, 6, 9 and P: 5–8 engineer-weeks [I] during the redesign | Drop them: the redesign's total falls by 5–8 weeks, and parallelism, if ever started, costs 9–15.5 weeks more (a net loss of 1–10 weeks) | — | 0 |
 | 8 | JIT frame model and tiers | Proposed | **Fragments are the only baseline**; every tier publishes tagged values at every suspension point; native call/ret only as a separate design if [K11](#k11) fires ([§11.2](#112-jit-frames-by-tier-the-tier-contract)) | Native call/ret needs native-stack abandonment at every `Transfer`, a depth cap and its own gates; native maps need a walker and deoptimization at capture | V8 Sparkplug; SpiderMonkey Baseline | 4d (frame header); 6 |
-| 9 | Async interrupts in JIT code | Proposed | **Yes:** free at calls, 2 instructions at back-edges, posted through a per-heap `InterruptHandle` that the REPL's SIGINT handler uses ([§12](#12-safepoints-and-polling)) | Back-edge polls go (0.3–1.9% saved in tight loops) and Ctrl-C fails in tight loops | V8 `StackGuard`; OCaml `young_limit` | 3 (`InterruptHandle`); 6 |
+| 9 | Async interrupts in JIT code | Decided 2026-11-01, as stage 3 acted on it | **Yes:** free at calls, 2 instructions at back-edges, posted through a per-heap `InterruptHandle` that the REPL's SIGINT handler uses ([§12](#12-safepoints-and-polling)) | Back-edge polls go (0.3–1.9% saved in tight loops) and Ctrl-C fails in tight loops | V8 `StackGuard`; OCaml `young_limit` | 3 (`InterruptHandle`); 6 |
 | 10 | Identity hashing | Proposed | **Side-metadata `HASHED` plus the BFG extension on move; heap-base-relative; a symbol hashes by its name** ([§9.8](#98-identity-hash)) | Pin-on-hash blocks evacuation on eq-table heaps; GC-rehashed native tables mean rewriting SRFI 69/125 in Rust | JDK compact headers (JEPs 450, 519) | 5c |
 | 11, SD2 | Weakness scope and the symbol table | Proposed | **SRFI 124 and 254 ephemerons now; SRFI 125 weak tables over ephemerons; guardians and transport cells after stage 7; a weak symbol table hashed by name** ([§9.5](#95-weak-references-and-ephemerons-with-no-on-rescans), [§17.2](#172-the-memory-contract)) | A strong symbol table, as in chibi and Gauche, keeps 32–48 B per symbol for ever, and the symbol rows of the steady-state lane become class D | Chez's weak oblist (flat at 49.4 MiB over 1 M symbols [P, Chez]) | 5a; 5c |
 | 12 | Port finalization | Decided 2026-10-01 | **Flush and close at GC; `EMFILE` collect-and-retry where collection is possible; GC timing declared observable** ([§9.6](#96-finalization-and-ports-f1f7)) | Without it F2 and F3 stay divergent from chibi and Gauche, and descriptor exhaustion stays ([#607]) | chibi; Gauche | — |
 | 13 | Embedding API: handles and teardown | Decided 2026-10-09 | **`Owned` and environment handles, rooted by a per-heap table the collector traces; each `eval_*` method gets an `_owned` twin returning `Owned`, a temporary name that the plain name takes back at 5e; a host environment keeps the meaning `Environment::with_parent` gives one, a child of the global environment; mandatory teardown** ([§11.5](#115-embedding-api)) | Scoped-only handles block long-lived host references; changing the `eval_*` return types in place breaks every host at once, against [#601]'s deprecation convention; a host environment built as a fresh namespace from import sets drops the meaning `with_parent` gives one today; without teardown every dropped interpreter leaks its heap ([#604], landed), and from 5e its reservation | Wasmtime and V8 handles | 2 |
-| 13 | Embedding API: calls, host primitives and memory | Proposed | **Branded `with`, `Interpreter::call`, branded host primitives with a declared helper class (`Leaf` or `Transfer`, never `NoAlloc`), `interrupt_handle()`, many heaps per process, `Backend` migrated one step per stage, memory hooks, and an optional `MemoryBudget` shared by several heaps** ([§11.5](#115-embedding-api), [§17.3](#173-limits)) | Without `call` a host must evaluate source text to call a procedure; without a declared class the JIT treats every host primitive as `Transfer`; a trusted host `NoAlloc` lets safe Rust that allocates corrupt the heap under JIT code (an `unsafe` host `NoAlloc` declaration, or a context type with no allocation methods, would put that obligation on the embedder or on the type checker, and would save the write-back of `ap` and the reload of `ap` and `alloc_limit` around each host-primitive call [I]) | Wasmtime and V8 | 3; 5e (`notify_idle`); 5g (near-limit and memory-pressure hooks, the shared budget) |
+| 13 | Embedding API: calls, host primitives and memory | Decided 2026-11-01 in part, as stage 3 acted on it; the `Backend` step (4b, its shape set by 4b's start decision 6 on [#782], [§11.5](#115-embedding-api)), `notify_idle` (5e) and the 5g hooks remain | **Branded `with`, `Interpreter::call`, branded host primitives with a declared helper class (`Leaf` or `Transfer`, never `NoAlloc`), `interrupt_handle()`, many heaps per process, `Backend` migrated one step per stage, memory hooks, and an optional `MemoryBudget` shared by several heaps** ([§11.5](#115-embedding-api), [§17.3](#173-limits)) | Without `call` a host must evaluate source text to call a procedure; without a declared class the JIT treats every host primitive as `Transfer`; a trusted host `NoAlloc` lets safe Rust that allocates corrupt the heap under JIT code (an `unsafe` host `NoAlloc` declaration, or a context type with no allocation methods, would put that obligation on the embedder or on the type checker, and would save the write-back of `ap` and the reload of `ap` and `alloc_limit` around each host-primitive call [I]) | Wasmtime and V8 | 3; 5e (`notify_idle`); 5g (near-limit and memory-pressure hooks, the shared budget) |
 | 14 | Dependencies; MMTk | Decided 2026-10-01, by the research the owner delegated it to: MMTk not adopted | **`patina-gc` depends on `libc` only**; loom models and any other new dependency wait for an explicit approval ([§14](#14-pluggability-contract)). Approved 2026-10-11: `syn`, `quote` and `proc-macro2` for the `Trace` derive's crate ([#686]) | An MMTk spike is 4–6 weeks, needs crate downloads, lives outside the default workspace, and MMTk's single instance per process conflicts with many heaps per process | in-tree collectors (Chez, OCaml) | 5a |
 | 15 | Footprint and limits: scope | Decided 2026-10-01 | **Limits are part of the effort, organised around steady state** ([§17](#17-steady-state-the-memory-contract-and-limits)) | — | — | — |
 | 15 | Footprint and limits: values | Proposed | **Whole-heap interval `max(8 MiB, 2·L)`, L being the live bytes after the last major; √L only for generational majors after an A/B; decommit with 2-major hysteresis; `max_heap` = min(16 GiB, 75%·B), its reservation from the heap ceiling; heaps given one `MemoryBudget` drawing these from its total; exhaustion raising `&heap-exhausted` or `&stack-exhausted`** ([§7](#7-heap-organisation), [§15](#15-heap-sizing-pacing-and-observability), [§17.3](#173-limits)). SD4–SD9 set the rest | Today only RAM limits a program, so these defaults are new limits; without a shared budget, N heaps or isolates in one process each default to 75%·B, and the process can be killed before any of them raises `&heap-exhausted`; larger ones cost VA per heap (318 heaps × 16 GiB is already about 5 TiB [P]), and none at all would need chained reservations ([K13](#k13)'s fallback, one more load in the barrier). √L without a nursery costs 1.15–2× more full marking and a 32 MiB first major [P] | .NET (75% of the container limit); Chez `heap-reserve-ratio` (decommit) | 4d; 5e; 5g |
-| 16 | Front-end sequencing | Proposed | **Unread provenance stores deleted in stage 1; identifiers as ids and inline provenance in stage 4c, before the new heap; lazy scope propagation as a parallel front-end project** ([§19](#19-stages)) | Later: libload keeps 316 MiB of provenance [P], and syntax objects keep `Drop` | — | 1 |
+| 16 | Front-end sequencing | Decided 2026-11-01, as stage 1 acted on it | **Unread provenance stores deleted in stage 1; identifiers as ids and inline provenance in stage 4c, before the new heap; lazy scope propagation as a parallel front-end project** ([§19](#19-stages)) | Later: libload keeps 316 MiB of provenance [P], and syntax objects keep `Drop` | — | 1 |
 | 17 | syntax-case timing | Proposed | **After stage 5**, with an `ExpansionContext` root provider (a literal pool and epoch-checked memos) that retires the last `NoGcScope` at point C; sooner if [K16](#k16) fires there ([§11.3](#113-rust-code-the-soundness-boundary)) | Earlier: expansion needs rooting before the funnel exists | — | after 5 |
 | 18 | Continuation end state | Proposed | **Design A** at stage 4e; C′ only if post-JIT capture-at-depth benchmarks demand it ([K15](#k15)) ([§13](#13-continuations-and-stacks)) | C′ earlier: O(1) capture sooner, at medium-high risk to the matrix | Larceny and Gambit (A); Chez (C′) | 4e |
-| 19 | Recording divergences | Proposed | **Record now the rebinding cases of decision 3 under R ([#603]); then each semantic change, in its own PR, with its oracle-scored rows** ([§19](#19-stages)'s rules) | — | — | 0 |
+| 19 | Recording divergences | Decided 2026-11-01, as stage 0 acted on it | **Record now the rebinding cases of decision 3 under R ([#603]); then each semantic change, in its own PR, with its oracle-scored rows** ([§19](#19-stages)'s rules) | — | — | 0 |
 | 20 | JIT code memory | Proposed | **Patina's own `MAP_JIT` reservation, W^X toggled only in `install_code`, replaced bodies freed by epoch, per-unit freeing through slabs under a cap** ([§9.7](#97-code-liveness-including-the-eager-release-contract), [§17.2](#172-the-memory-contract)); stage 6 freezes only the interface | `cranelift-jit`'s `JITModule` cannot free single functions, so long REPL sessions would grow | — | 6 (interface); the JIT track's first merged stage (allocator and cap) |
-| 21 | Budget order | Proposed | **Representation first** (stages 1–5), algorithms second (7–8) ([§4](#4-thesis-and-key-bets)) | Collector-first builds an algorithm on 72 B slots and `Rc` payloads that must be rewritten anyway | — | before 1 |
+| 21 | Budget order | Decided 2026-11-01, as stages 1–3 acted on it | **Representation first** (stages 1–5), algorithms second (7–8) ([§4](#4-thesis-and-key-bets)) | Collector-first builds an algorithm on 72 B slots and `Rc` payloads that must be rewritten anyway | — | before 1 |
 | 22 | Home of the design and the plan | Decided 2026-10-01 | **One PRD file, this one**, superseding the archived stage-5 PRD; `docs/GC_DESIGN.md` stays the as-built description; the research record is `PRD/study/gc/`; work-item detail lives in the stage issues ([§22](#22-work-items)) | — | — | — |
 | 23 | Threads blocked for ever | Proposed | **Rooted until they terminate**, through the scheduler's root provider, and scored by hand against Gambit and chibi on the `blocked-threads` probe (100 K threads blocked for ever on fresh mutexes nothing else reaches) ([§18.1](#181-the-m1-design-and-its-n-ready-interfaces)) | Collecting such a thread frees its stack and table entry through `FinalKind::Thread`, but diverges from both oracles (observable through Gambit's `thread-group->thread-list`, and through memory under SRFI 18 alone) and needs a `DIVERGENCES.tsv` row against each | Gambit (thread groups); chibi (its list of paused threads) | 9 |
 | 24 | Pluggability | Proposed | **One production collector, `MarkRegion`, behind `Collector<M>` and `GcAttrs`; `NullGc` only in the conformance suite; no startup-selectable collectors** ([§14](#14-pluggability-contract)) | A HotSpot-style catalogue needs per-collector emitter hooks in every tier and a test matrix per collector; HotSpot itself is retiring modes (JEPs 474, 490) | HotSpot's GC interface (JEP 304), without its catalogue | 5a |
 | 25 | A heap's policy at run time | Proposed | **Fixed for the heap's life:** its policy bits and `GcAttrs` come from `HeapConfig` at creation; a measured gate changes the default for new heaps; `install_code` refuses a body compiled against other attributes ([§9](#9-collection), [§14](#14-pluggability-contract)) | Run-time adaptivity: a flip becomes a posted `POLICY` event that invalidates every installed body (§13) and runs a major arming every pointerful granule | HotSpot fixes its barrier set when the VM starts | 6 |
-| SD1 | SS1–SS5 as acceptance criteria | Proposed | **Yes, on deterministic readings**, phased in from stage 0 as [§19](#19-stages) lists; wall-clock pauses, MMU and RSS stay nightly signals ([§17.1](#171-definition)) | Guideline only | — | 0 |
-| SD3 | Run-time cells, records, symbols | Proposed | **Mortal** (M1, [§17.2](#172-the-memory-contract)) | Immortal: about 8 KiB leaked per `environment` call, and pauses grow | — | 4b |
+| SD1 | SS1–SS5 as acceptance criteria | Decided 2026-11-01, as stage 0 acted on it | **Yes, on deterministic readings**, phased in from stage 0 as [§19](#19-stages) lists; wall-clock pauses, MMU and RSS stay nightly signals ([§17.1](#171-definition)) | Guideline only | — | 0 |
+| SD3 | Run-time cells, records, symbols | Decided 2026-11-01, its symbol part with decision 11 | **Mortal** (M1, [§17.2](#172-the-memory-contract)): run-time cells and binding records from 4b, the global and library namespaces being roots, so a specifier's or a replaced library's namespace dies with its holders; symbols with decision 11's weak table (5c) | Immortal: 274 binding records leaked per `(environment '(scheme base))` call, 8.8 KB at the final 32 B or 19.7 KB as 72 B arena slots, `env-churn` and `env-lambda` red on both backends, and pauses grow | — | 4b |
 | SD4 | What `max_heap` counts | Proposed | **External bytes included**; under a shared `MemoryBudget`, every member heap's bytes count against its total ([§17.3](#173-limits)) | Heap only (HotSpot, .NET, V8): Rust-table leaks get past the limit | — | 5e |
 | SD5 | Stacks | Proposed | **The main stack separate, default min(8 GiB, 25%·B); green-thread pages charged** ([§11.1](#111-vm-frames-and-the-stack-watermark), [§17.3](#173-limits)) | One budget for all (Gambit, Erlang, Go) | JVM, V8, OCaml | 4d |
 | SD6 | Progress guard | Proposed | **Counts majors paced at a `max_heap` or shared-budget clamp, and bytes** ([§17.3](#173-limits)) | Time-based (HotSpot, V8, Go): not deterministic | HotSpot's overhead limit, without its time term | 5g |
@@ -341,7 +356,7 @@ contract is frozen after a throwaway Cranelift spike.
 
 - **Fixnum `000`** lets a JIT add tagged words with `adds`/`b.vs`; a tagged index is a byte offset for 8-byte
   elements. **`#f` is `0x01`**, so `if` is one compare; today's specials keep their bit patterns
-  (`crates/patina-core/src/tagged_value.rs:91-110` [S]).
+  (`crates/patina-core/src/tagged_value.rs`: `TaggedValue`'s special-value constants [S]).
 - **One exact heap bit:** the barrier's value filter is one `tbz w, #2`, removing 64% of heap stores [P, store-mix
   census]. Seven kinds get primary tags, so their type tests need no header load (calls are 10–31% of dispatches [P]).
 - **Code references are values** (`1111` references to code descriptors): code liveness is ordinary marking. The aarch64
@@ -396,7 +411,7 @@ are declared raw in the layout specification, never scanned, and never a barrier
 | pair | `0100` | car, cdr | 16 |
 | procedure: VM closure | `0101` | descriptor ref, fv₀…fvₙ₋₁ | 8+8n |
 | procedure: primitive | `0101` | descriptor ref (its primitive descriptor), pad | 16; immortal, with its descriptor |
-| procedure: parameter | `0101` | descriptor ref (PARAM), converter, value vector (transitional shallow binding); from stage 9: descriptor ref, converter, global-value cell | 32 |
+| procedure: parameter | `0101` | descriptor ref (PARAM), converter, value (transitional shallow binding by swap); from stage 9: descriptor ref, converter, global-value cell | 32 |
 | procedure: continuation | `0101` | descriptor ref (CONT_INVOKE), `CONT` object | 16 |
 | procedure: tree-walker lambda | `0101` | descriptor ref (TW_LAMBDA), host id (fixnum) | 16 |
 | vector | `0110` | header(len), e₀… | 8+8n |
@@ -414,6 +429,9 @@ are declared raw in the layout specification, never scanned, and never a barrier
 | promise | `1111` | header, box → `[hdr PBOX][done (fixnum)][value-or-thunk]` (SRFI 45 sharing) | 16 + 32 |
 | values | `1111` | header(n), v₀… | 8+8n |
 | condition | `1111` | header(kind), message, irritants, extra | 32 |
+| prompt tag | `1111` | header, id (fixnum), name symbol | 32 |
+| label placeholder (parser only) | `1111` | header, label (fixnum) | 16 |
+| core syntax | `1111` | header, form (fixnum) | 16; immortal |
 | port | `1111` | header, port id (fixnum) | 16 |
 | host handle | `1111` | header(kind), host id (fixnum), optional literal vector | 16–32 |
 | environment specifier | `1111` | header, namespace id, flags | 32 |
@@ -438,18 +456,19 @@ through the descriptor reference it holds. Descriptors are born old, written onl
 on the remember-whole list (§10); inline caches live outside them, in the `CodeStore` (§11.2).
 
 **No heap object owns a Rust value** (today 18 of 28 variants carry `Drop`, 19 before [#785] gave a port a
-`PortTable` id; and 47% of allocations [P]). Rust-owned resources live in per-heap side tables reached by a `u32` id
-(`PortTable`, `CodeStore`, the thread table, `HostPayloadTable` for tree-walker closures and continuations, macro
-bodies, libraries, namespaces of environment specifiers and FFI objects), each entry registered in the finalization
-registry (§9.6). At 4a only an open file port registers, since its drop does I/O; a string, bytevector or standard
-port leaves the `PortTable` in the sweep (`docs/GC_DESIGN.md` §4.5). Bignums keep inline limbs. A generated `const`
-assertion fails the build if any laid-out type needs `Drop`.
+`PortTable` id; and 47% of allocations [P, the finalization study's `w1.scm` at `28a94f8`, vector and string slots
+counted]). Rust-owned resources live in per-heap side tables reached by a `u32` id (`PortTable`, `CodeStore`, the
+thread table, `HostPayloadTable` for tree-walker closures and continuations, macro bodies, libraries, namespaces of
+environment specifiers and FFI objects), each entry registered in the finalization registry (§9.6). At 4a only an open
+file port registers, since its drop does I/O; a string, bytevector or standard port leaves the `PortTable` in the
+sweep (`docs/GC_DESIGN.md` §4.5). Bignums keep inline limbs. A generated `const` assertion fails the build if any
+laid-out type needs `Drop`.
 
 **One layout specification.** `declare_layouts!` (defined in `patina-gc`, invoked in `patina-core`) generates the
 `ObjectModel` implementation (`size`, `trace`, `copy`, `verify`), the debug printer, the datum writer's kind view and
 the JIT offset table, as Chez's `mkgc.ss` does, so misfiling a value-bearing variant as a leaf becomes a compile error
-rather than today's use-after-free (`crates/patina-core/src/heap/mod.rs:137-141` [S]). The Rust structures that stay
-off the heap get the same guarantee from the `Trace` derive (§14).
+rather than today's use-after-free (`crates/patina-core/src/heap/mod.rs`: `HeapObjectData`'s doc comment [S]). The Rust
+structures that stay off the heap get the same guarantee from the `Trace` derive (§14).
 
 ## 7. Heap organisation
 
@@ -510,7 +529,7 @@ at returns to the top level.
 ## 8. Allocation
 
 **The contract stays: allocation never collects.** Today `note_alloc` only raises a flag
-(`crates/patina-core/src/heap/mod.rs:581-584` [S]), and 230–890 Rust functions hold unrooted values across allocation
+(`crates/patina-core/src/heap/mod.rs` [S]), and 230–890 Rust functions hold unrooted values across allocation
 and are correct only because of this. Allocation sites are never safepoints: JIT code publishes and reloads nothing
 around them, and initializing stores need no barrier (JEP 475's condition). The slow path refills, overdrafts, posts
 events and fails only at hard limits; it never collects and never runs Scheme.
@@ -606,7 +625,7 @@ from-space.
 
 | Rule | Content |
 |---|---|
-| Key liveness | `is_live(K)` holds when K is an immediate, an immortal object, already marked, or, in a minor, old (NMS objects included). **Symbol keys:** an ephemeron keeps a symbol key alive, so symbol-keyed ephemerons never break and symbol-keyed weak tables answer as today (where symbols are re-marked at every collection, `crates/patina-core/src/heap/gc.rs:449-465` [S]), although the symbol table is weak (SD2) |
+| Key liveness | `is_live(K)` holds when K is an immediate, an immortal object, already marked, or, in a minor, old (NMS objects included). **Symbol keys:** an ephemeron keeps a symbol key alive, so symbol-keyed ephemerons never break and symbol-keyed weak tables answer as today (where symbols are re-marked at every collection, `crates/patina-core/src/heap/gc.rs`: `GcVisitor::new` [S]), although the symbol table is weak (SD2) |
 | Key-indexed resolution (Whippet `gc-ephemeron.c`) | the generated trace reports an ephemeron only through `SlotVisitor::ephemeron` (§14). One whose key is not live is chained onto `pending[K]` through its link word and `KEYHINT` is set on K; marking (or copying) an object with `KEYHINT` pops the waiters and traces their values, so the work is linear in either order (today quadratic, [#609]) |
 | **An ephemeron is never older than its key or value** | ephemerons are allocated only young, never in the LOS, NMS or immortal space, and promotion is age-monotone, so a minor examines only young ephemerons and treats old and immediate keys as live; no remembered-set edge exists for ephemerons |
 | **`(gc)` is always a full major and collects at its call** | a `Transfer` primitive returning `Step::Collect(Major)`, serviced before the caller's next instruction with the caller suspended at a mapped return pc (§12). Three [#423] tests need this once the per-instruction poll goes (`crates/patina-tests/tests/ephemerons.rs`: `a_tail_call_retires_the_previous_register_window`, `a_self_tail_call_retires_its_argument_copies` and `a_continuation_does_not_resurrect_finished_temporaries` [S]), and the same file requires a dead key of any age to break after one `(gc)` (`a_datum_referring_to_its_key_does_not_retain_it`, `only_the_pairs_whose_keys_died_are_broken`, `a_pair_with_an_immediate_key_never_breaks` and `a_false_key_is_not_a_broken_pair` [S]). Inside `NoGcScope`, `(gc)` posts and counts a deferred poll |
@@ -646,14 +665,16 @@ descriptors in constants), so a unit is live if any of its descriptors is marked
 `gc_freed_closure_code_ids` and `RETIRED_VM_CLOSURE_CODE` go. Until stage 4e, `Rc` counts keep units loaded. The
 `CodeStore` references descriptors weakly.
 
-**The eager-release contract ([#338]/[#352]).** `crates/patina-tests/tests/finished_forms_release_code.rs:72-99` [S]
-runs 2,000 forms **with no collection** and requires each form's code gone as soon as the form finishes. So each unit
-carries an **`escaped` bit**, set whenever a reference to one of its descriptors can outlive the form: `MakeClosure` of
-a member; a capture over a frame of the unit; a `Step::Eval` closure; any other holder (debugger hook, profiler sample,
-tracer snapshot, JIT inline cache), which obtains descriptor references only through `CodeStore::escape`. A finished
-form whose unit never escaped is released at once (debug builds poison its descriptors' raw fields and assert nothing
-references it); an escaped unit waits for a complete major. Inline caches hold traced descriptor references (strong, or
-weak and cleared at epilogue step 5; stored as §11.2 says), so a reused address never matches a stale entry.
+**The eager-release contract ([#338]/[#352]).** `crates/patina-tests/tests/finished_forms_release_code.rs`'s
+`a_form_that_leaves_nothing_behind_lets_its_code_go`, `forms_run_one_after_another_reuse_the_store_s_slots` and
+`a_host_environment_s_form_lets_its_code_go` [S] run 2,000 forms **with no collection** and require each form's code
+gone as soon as the form finishes. So each unit carries an **`escaped` bit**, set whenever a reference to one of its
+descriptors can outlive the form: `MakeClosure` of a member; a capture over a frame of the unit; a `Step::Eval` closure;
+any other holder (debugger hook, profiler sample, tracer snapshot, JIT inline cache), which obtains descriptor
+references only through `CodeStore::escape`. A finished form whose unit never escaped is released at once (debug builds
+poison its descriptors' raw fields and assert nothing references it); an escaped unit waits for a complete major. Inline
+caches hold traced descriptor references (strong, or weak and cleared at epilogue step 5; stored as §11.2 says), so a
+reused address never matches a stale entry.
 
 **JIT bodies** go with their unit and are freed by epoch: tier-up and invalidation are `Transfer` helpers, so no native
 activation resumes a replaced body, which is freed only when the outermost driver sees no JIT activation on the native
@@ -677,9 +698,9 @@ identity-hash(v):
 Hashing relative to the heap base is identical across runs despite ASLR. **No pinning:** evacuation copies a `HASHED`
 object into `size + 16`, stores the original hash in the extension granule and sets `HASH_MOVED` (Bacon–Fink–Grove, as
 in JDK compact headers), which works for headerless objects and costs nothing for objects never hashed. SRFI 69's
-stored hashes (`lib/srfi/69/srfi-69-impl.scm:118-120` [S]) stay valid; `equal-hash`'s heap-index fallback becomes
-`identity-hash`. A symbol's hash changes from the heap index to its name hash in its own PR (it reorders symbol-keyed
-`eq?` tables).
+stored hashes (`lib/srfi/69/srfi-69-impl.scm`: `hash-by-identity` [S]) stay valid; `equal-hash`'s heap-index fallback
+becomes `identity-hash`. A symbol's hash changes from the heap index to its name hash in its own PR (it reorders
+symbol-keyed `eq?` tables).
 
 ### 9.9 The epilogue, in a fixed order
 
@@ -691,9 +712,11 @@ This order is a contract obligation of every collector (§14); minors restrict e
 3. Break the remaining pending ephemerons: key and value become `BWP`.
 4. (Later) SRFI 254 transport cells.
 5. Weak-key tables and weak inline-cache entries: rekey forwarded keys, drop dead ones.
-6. Prune the weak-id and host-payload tables; at majors also the symbol interner and the namespaces' weak entries
-   (placeholders whose cell is still `UNBOUND` and that no live link table holds; from 5c, reclaimable introduced
-   definitions, §11.6).
+6. Prune the weak-id and host-payload tables, and from 4c the scope-set table and the document location tables (an
+   identifier's scope-set id and source id never change, so an entry made since the last collection is carried only
+   by young identifiers, and a minor prunes young entries alone); at majors also the symbol interner and the
+   namespaces' weak entries (placeholders whose cell is still `UNBOUND` and that no live link table holds; from 5c,
+   reclaimable introduced definitions, judged by the live-scope report from this major's marks, §11.6).
 7. Classify the finalization registry (§9.6) and queue the dead.
 8. Code release (majors only).
 9. Queue the post-pause work: dead LOS runs (after every collection: young runs after minors, young and old after
@@ -815,20 +838,19 @@ impl<'m, 'gc> Fresh<'m, 'gc> { pub fn init(&mut self, word: u32, v: Value<'gc>);
 
 `HeapSlot::at` derives its pointer from the per-heap base (`base.with_addr(a)`), preserving provenance; debug builds
 assert in `Fresh::init` that the holder is young or pre-logged. `Heap::vector_slice_mut`, `get_string_chars_mut` and
-`get_bytevector_mut` are deleted, and records, parameters and promises, stored today through cloned `Rc` handles that
-bypass the heap (`crates/patina-primitives/src/primitives/records.rs:262`, `parameters.rs:168,267`, `lazy.rs:134` [S]),
-are written through the funnel.
+`get_bytevector_mut` went at stage 3 ([#708]), and records, parameters and promises are written through the funnel's
+`RecordField`, `ParamValue` and `PromiseBox` slots ([#706]).
 
 ## 11. Roots and rooting
 
 ### 11.1 VM frames and the stack watermark
 
 **The register stack never relocates.** Each green thread owns a fixed reservation, committed on demand: the main
-thread's defaults to min(8 GiB, 25%·B) (8 GiB holds about 60 M frames; 1.75 GiB on a 7 GB CI runner still holds
-today's 10 M-frame recursion, 1.37 GB [P]), other green threads 256 MiB, set by `PATINA_STACK_MAX`, `--stack-max` and
-`HeapConfig` (decision 15, SD5); green-thread stacks follow §18.1's stack rule. Within 1 MiB of the
-cap the frame-entry check raises a catchable `&stack-exhausted`, the last MiB being the handler's room; uncaught, it
-exits non-zero.
+thread's defaults to min(8 GiB, 25%·B) (8 GiB holds about 60 M frames; on the 7 GB macOS runner 25%·B is 1.75 GB, about
+1.63 GiB, which still holds today's 10 M-frame recursion, 1.37 GB [P]), other green threads 256 MiB, set by
+`PATINA_STACK_MAX`, `--stack-max` and `HeapConfig` (decision 15, SD5); green-thread stacks follow §18.1's stack rule.
+Within 1 MiB of the cap the frame-entry check raises a catchable `&stack-exhausted`, the last MiB being the handler's
+room; uncaught, it exits non-zero.
 
 Frames are **interleaved and position-independent**, with one header for the interpreter, JIT code and captured
 continuations:
@@ -843,19 +865,21 @@ fp+32  closure  value
 fp+40  r0 … rₙ₋₁ tagged values only, in every tier, at every suspension point (§11.2)
 ```
 
-The header is 40 B, today's `CallFrame` size; `closure` becomes a traced value. The interpreter keeps its calling
-protocol (`return_reg` in the callee's frame); prompts, handlers and winds record byte offsets from the stack base. The
-JIT delivers a result as the first `CallConv::Tail` argument of the caller's resume entry (`x2` on aarch64, `rdi` on
-x64 [S]).
+The header is 40 B, today's `CallFrame` size; `closure` becomes a traced value. `code` is a descriptor reference from
+4e; from 4d to 4e it holds the code object's address, an 8-aligned pointer that the scan reads as a fixnum and skips,
+and a per-thread side vector of `Rc<CodeObject>`, pushed and popped with frames and cloned by capture, keeps each
+frame's unit loaded (DESIGN E.5). The interpreter keeps its calling protocol (`return_reg` in the callee's frame);
+prompts, handlers and winds record byte offsets from the stack base. The JIT delivers a result as the first
+`CallConv::Tail` argument of the caller's resume entry (`x2` on aarch64, `rdi` on x64 [S]).
 
 **Frame invariants.**
 
 | # | Invariant | Content |
 |---|---|---|
-| 1 | Window initialization | every frame push, stub frames included, writes an immediate into every non-parameter slot of its window, so a window never holds a stale word from a popped frame |
-| 2 | Maps at every suspension point | the return pc of every call (including `CallPrimitive` and every inline primitive opcode, whose slow path or shadow deoptimization calls from that pc, `crates/patina-vm/src/runtime/control.rs:3467-3489` [S]); the pc after every instruction that can raise (`raise_step_stub` stays over the erroring frame while handler code runs, collects and captures, `control.rs:909-978` [S]); pc 0, where frame-entry polls are serviced; every `Transfer` helper site. The table is **dense**: a `pc → u16` map index per body (`0xFFFF` = never a suspension point) into deduplicated bitsets |
+| 1 | Window initialization | every frame push, stub frames included, writes an immediate into every non-parameter slot of its window, so a window never holds a stale word from a popped frame. Today's VM keeps words outside any frame's window in two places, which an interleaved stack cannot keep and 4d removes: `finish_wind_step` pops a wind step's stub frame and keeps its window as the only root of the step's target and value until the next step writes them (`ResumeWindJump`), and `scratch_return_reg` takes a slot past the top window, above which `call_any` then pushes the callee (`run_apply_proc`). How the wind step's target and value are rooted once the window goes waits for 4d's plan |
+| 2 | Maps at every suspension point | the return pc of every call (including `CallPrimitive` and every inline primitive opcode, whose slow path or shadow deoptimization calls from that pc, `crates/patina-vm/src/runtime/control.rs`: `exec_call_primitive`, which the slow path of `inline_primitive!` reaches [S]); the pc after every instruction that can raise (`raise_step_stub` stays over the erroring frame while handler code runs, collects and captures, `control.rs`: `vm_raise_value` and `raise_step_stub` [S]); pc 0, where frame-entry polls are serviced; every `Transfer` helper site. The table is **dense**: a `pc → u16` map index per body (`0xFFFF` = never a suspension point) into deduplicated bitsets |
 | 3 | Clearing, not skipping | the VM's root provider visits each live slot through the map, plus `code` and `closure`, and **overwrites each dead slot** with `UNSPECIFIED` (`DEAD_SLOT` in the debug-poison and zeal lanes): a wrong map can then retain garbage, which the [#423] tests catch, but never expose a freed referent. Stub frames carry an all-live map; a frame at a `0xFFFF` pc panics in debug builds and has every slot visited in release builds; debug builds assert in `reg_at` that no instruction reads a `DEAD_SLOT`; capture clears dead slots in the copy too (§13) |
-| 4 | Other readers of raw registers | the `StepTracer` (`crates/patina-vm/src/tracer.rs:269-286` [S]), watchpoints, debugger hooks and `--dump` read registers only at suspension points, where 1 and 3 make every word a value or an immediate (the datum writer renders `DEAD_SLOT` as `#<dead>`); per instruction that holds only in the interpreter, which is why attached hooks pin the interpreter tier (§11.2) |
+| 4 | Other readers of raw registers | the `StepTracer` (`crates/patina-vm/src/tracer.rs` [S]), watchpoints, debugger hooks and `--dump` read registers only at suspension points, where 1 and 3 make every word a value or an immediate (the datum writer renders `DEAD_SLOT` as `#<dead>`); per instruction that holds only in the interpreter, which is why attached hooks pin the interpreter tier (§11.2) |
 | 5 | Verifier | every frame pc reached during a scan or a capture has a map, and every visited register decodes to an immediate or a start granule |
 
 **The stack watermark (generational heaps)** is a return barrier. After a minor every frame below the executing frame is
@@ -991,10 +1015,10 @@ no-op); `RootToken` and `PinToken`, which hold a `Weak` to their table.
 spelling, and processed outside the desugarer, so library bodies collect between forms (points A and B) and inside them
 (point D, in the outermost loop); `define-library` is recognized the same way ([#610]) and its forms reach a collection
 point ([#614]). Nested VM loops stay deferred until stage 4e deletes the weak continuation tables, whose soundness rests
-on "nested loops defer" (`crates/patina-vm/src/runtime/vm_state/gc_roots.rs:21-28` [S]); then loops the VM enters from
-its own driver level may collect, and loops beneath a `Cx` stay deferred for good. Point C (an import met mid-form) and
-nested tree-walker trampolines keep `NoGcScope`. `%parameterize-swap!` stopped calling back at stage 4a ([#784]): a
-list with a procedure a program wrote goes through Scheme (`%parameterize-each`).
+on "nested loops defer" (`crates/patina-vm/src/runtime/vm_state/gc_roots.rs`: its module doc [S]); then loops the VM
+enters from its own driver level may collect, and loops beneath a `Cx` stay deferred for good. Point C (an import met
+mid-form) and nested tree-walker trampolines keep `NoGcScope`. `%parameterize-swap!` stopped calling back at stage 4a
+([#784]): a list with a procedure a program wrote goes through Scheme (`%parameterize-each`).
 
 **FFI callbacks.** A synchronous C→Scheme callback is a driver entry like `Interpreter::call`. An FFI call that may call
 back is a `Transfer`: it marshals its arguments first, holds only `Owned` handles and `PinToken`s across the C call and
@@ -1007,25 +1031,27 @@ in the interpreter tier only.
 
 Its heaps are `HeapPolicy { generational: false, evacuation: false }` **for good**: whole-heap and non-moving, sharing
 the object model, primitives, allocator and funnel, collecting only at its outermost trampoline safepoint (nested
-trampolines keep `NoGcScope`). Its `Rc<Environment>` frames, `ContValue` chains, `StepResult` fields, `CpsExpr`
-literals and the pending escape are reported by value through `SlotVisitor::pinned`, sound because nothing in its heaps
-moves. `CpsLambda`/`CpsContinuation` are host-payload ids; globals go through cells; an `Environment` is charged as
-external bytes only while a registered host payload holds it, so `(fib 25)`'s 1.09 M environments [P] never drive a
-collection. A green thread is one suspended `StepResult` (§18.1). **A red tree-walker lane blocks the stage that turned
-it red.**
+trampolines keep `NoGcScope`). Its `Rc<Environment>` frames, `ContValue` chains, `StepResult` fields, `CpsExpr` literals
+and the pending escape are reported by value through `SlotVisitor::pinned`, sound because nothing in its heaps moves;
+each one shared through `Rc` is walked once per collection, by a deduplicated walk that the final contract keeps (§14).
+`CpsLambda`/`CpsContinuation` are host-payload ids; globals go through cells; an `Environment` is charged as external
+bytes only while a registered host payload holds it, so `(fib 25)`'s 1.09 M environments [P] never drive a collection. A
+green thread is one suspended `StepResult` (§18.1). **A red tree-walker lane blocks the stage that turned it red.**
 
 ### 11.5 Embedding API
 
-*Implements decision 13: its handles and teardown decided 2026-10-09, the rest proposed.*
+*Implements decision 13: its handles and teardown decided 2026-10-09; its calls, host primitives and memory decided
+2026-11-01 in part, as stage 3 acted on them; the `Backend` step (4b, its shape set by 4b's start decision 6 on [#782]),
+`notify_idle` (5e) and the 5g hooks remain.*
 
 | Entry | Contract |
 |---|---|
-| `Interpreter::eval_*`, `interp.with` | Stage 2 gives each `eval_*` method a twin with the suffix `_owned` that returns `Owned`, and deprecates the bare-value method under [#601]'s convention; this fixes the use-after-free of an `eval_str` result read after a later collecting `eval_program` ([#605]). **The suffix is temporary:** at 5e the bare methods go and the plain names return `Owned`, the twins stay as deprecated aliases until 5g, and the final API keeps today's names. A handle is read through its interpreter (`display_tagged`, or its raw word, valid until the next evaluation), so none is read after teardown, and one used with another interpreter panics on the heap-id check, as Wasmtime panics on a store mismatch. [#605] also covers every other public path that hands the host a raw value or environment: a host reads and binds globals through handles, and `global_env()`, `backend()` and `evaluator()` are documented as the raw layer, unrooted between calls, until stages 3 and 4b replace them. The handle table traces its handles rather than only marking them. `interp.with(\|cx: &mut Cx<'gc>\| …)` is branded and takes `&mut self`, so nothing that may collect runs inside it |
-| Host environments | a rooted environment handle from [#605]'s table, in which both backends evaluate; today a host-built `Environment::with_parent` loses its bindings at a later collection, and the VM's `Backend::eval` ignores the environment it is given ([#620]). The handle keeps `with_parent`'s meaning: a child of the global environment, whose own definitions stay in it and in which every other name, a global defined later included, resolves in the global environment, as the tree-walker answers today. The VM's move to that answer is a semantic change, in its own PR. At 4b the handle becomes a namespace handle whose namespace keeps the global namespace as its parent, so a name the child has not defined reads through to the parent's binding (DESIGN E.3) |
+| `Interpreter::eval_*`, `interp.with` | Stage 2 gives each `eval_*` method a twin with the suffix `_owned` that returns `Owned`, and deprecates the bare-value method under [#601]'s convention; this fixes the use-after-free of an `eval_str` result read after a later collecting `eval_program` ([#605]). **The suffix is temporary:** at 5e the bare methods go and the plain names return `Owned`, the twins stay as deprecated aliases until 5g, and the final API keeps today's names. A handle is read through its interpreter (`display_tagged`, or its raw word, valid until the next evaluation), so none is read after teardown, and one used with another interpreter panics on the heap-id check, as Wasmtime panics on a store mismatch. [#605] also covers every other public path that hands the host a raw value or environment: a host reads and binds globals through handles, and `global_env()`, `backend()` and `evaluator()` are documented as the raw layer, unrooted between calls. 4b deprecates `global_env()` (S1, below); no step replaces `backend()` or `evaluator()`, which stay in the raw layer beside the deprecated raw forms that 5e removes (DESIGN E.3). The handle table traces its handles rather than only marking them. `interp.with(\|cx: &mut Cx<'gc>\| …)` is branded and takes `&mut self`, so nothing that may collect runs inside it |
+| Host environments | a rooted environment handle from [#605]'s table, in which both backends evaluate; today a host-built `Environment::with_parent` loses its bindings at a later collection, and the VM's `Backend::eval` ignores the environment it is given ([#620]). The handle keeps `with_parent`'s meaning: a child of the global environment, whose own definitions stay in it and in which every other name, a global defined later included, resolves in the global environment, as the tree-walker answers today. The VM's move to that answer is a semantic change, in its own PR. At 4b the handle becomes a namespace handle whose namespace keeps the global namespace as its parent, so a name the child has not defined reads through to the parent's binding (DESIGN E.3; §11.6 has the mechanism). "Host namespace" is a kind that `new_environment` sets, whose parent is the parentless global namespace; a raw frame or a deeper chain that reaches the VM gets an error rather than a panic, in a PR of its own, as a semantic change, or once the raw constructors are deprecated (4b's start decision 5 on [#782]) |
 | `Interpreter::call(&mut self, f: &Owned, args: &[Owned]) -> Result<Owned, InterpreterError<_>>` | a driver entry like `eval_*`: it may collect while the callee runs, with the arguments rooted by their handles, and a continuation captured inside it behaves as one captured inside `eval_*`. `Cx` has no `call`; a primitive needing a callback returns `Step::Call` |
 | Host primitives | `register_primitive(lib, name, PrimSpec { f: Prim, arity, class })` and `register_resumable(lib, name, arity, f)`. `class` declares the helper class the JIT reads, `Leaf` or `Transfer` (`Transfer` for one that blocks; resumable means `Transfer`). **The JIT treats every registered host primitive as allocating:** it writes `ap` back before the call and reloads `ap` and `alloc_limit` after, whatever its class, since only the runtime's own helpers in `HelperTable`, checked by the call-graph test (§16), may be `NoAlloc`. A host `Leaf` is trusted only not to block: its `Cx` can neither collect nor call Scheme. A procedure argument is called only through `Step::Call`; registration exports the primitive from the library `lib`, so a program reaches it through `import` and fast paths key on that binding, never on the spelling |
 | Memory hooks | an external-bytes accounter from stage 3 (V8's `ExternalMemoryAccounter`, Chez's phantom bytevectors); `notify_idle()` from 5e; from 5g a near-limit callback that may raise `max_heap` up to the heap ceiling and, under a shared `MemoryBudget`, no further than the budget's remaining total (V8 raises only inside its pre-reserved cage), a memory-pressure notification, and `HeapConfig`'s optional `Arc<MemoryBudget>`, shared by every heap created with it (§17.3) |
-| `Interpreter::interrupt_handle()`; `Backend` | the `InterruptHandle` of §12. The public `Backend` trait migrates one step per stage under [#601]'s deprecation convention, with `scripts/check_embedding_features.sh` green at each (detail: DESIGN E.3; the `eval_*` names follow the first row). Stage 3's step is its documentation: the trait keeps its words, documented as the raw layer, and moves to handles at 4b with the namespace handle, so an implementor migrates once (owner decision, 2026-10-21, [#710]: an `unsafe` raw-word API is out of reach of `patina-interpreter`, which forbids `unsafe`). `Interpreter::heap()` and the library loader's borrowed `&SharedHeap` stay raw with it until 4b, which settles them too (owner decision, 2026-10-21, [#707]): `with` makes and reads values, but not the telemetry and teardown state their callers read |
+| `Interpreter::interrupt_handle()`; `Backend` | the `InterruptHandle` of §12. The public `Backend` trait migrates one step per stage under [#601]'s deprecation convention, with `scripts/check_embedding_features.sh` green at each (detail: DESIGN E.3; the `eval_*` names follow the first row). Stage 3's step is its documentation: the trait keeps its words, documented as the raw layer, and gains handle methods at 4b with the namespace handle (S1, below), so an implementor migrates once (owner decision, 2026-10-21, [#710]: an `unsafe` raw-word API is out of reach of `patina-interpreter`, which forbids `unsafe`). `Interpreter::heap()` and the library loader's borrowed `&SharedHeap` stayed raw through stage 3 (owner decision, 2026-10-21, [#707]): `with` makes and reads values, but not the telemetry and teardown state their callers read. 4b takes its step in two parts (4b's start decisions 6 and 7 on [#782]). **The promise line** comes before the first records PR: one PR of documentation and deprecations draws [#601]'s promise. Inside it are `Interpreter`, `Owned` and `OwnedEnvironment`, `Backend`'s methods, and `SharedHeap` and `new_shared_heap` as opaque types; raw, promised nothing beyond their documented rules, are `Environment`'s and `Heap`'s methods, `Library`'s fields and `Desugarer`; `Environment::with_parent` and the public `hold_environment` of an arbitrary environment are deprecated, so an `OwnedEnvironment` holds only a namespace the interpreter made. With the promise, before the records and [#791], `heap()` and the loader are settled, amending the 2026-10-21 decision that they move with the trait: `heap()` is deprecated, with typed replacements (a `gc_stats()` snapshot of collections, handles, external bytes, deferred collections and ports; a way to clear a pending signal; a `#[doc(hidden)]` teardown probe), and the loader keeps its borrowed `&SharedHeap`, documented as workspace-internal and outside the promise. **S1** follows the link tables, before 4b's exit: handle methods on `Backend` as provided defaults (`eval_in`, `define_in`, `call_owned`, `global_namespace`), the old methods deprecated for callers and required of implementors until 5e; the consumer that `check_embedding_features.sh` builds implements the new methods, README says implementors get no warning, and `Interpreter::global_env` and `raw_environment` are deprecated |
 | Teardown | dropping the interpreter tears its heap down: finalizers run, ports flush, the reservation is unmapped ([#604]). Current ports belong to the interpreter, never to the OS thread ([#618]). `patina-compat`'s reader uses `Heap::new_standalone()`, with collection off and no driver. Plugins never see `HeapIndex` or the encoding |
 
 ### 11.6 Global bindings under variant R
@@ -1039,12 +1065,13 @@ oracles differ).
 
 | Element | Rule |
 |---|---|
-| Binding records | every name in a namespace (the global environment, a library's environment, an environment specifier) maps to a `BindingRecord { cell }` in the NMS: own definitions, imports and placeholders alike. `Library.exports` maps names to cells, resolved one hop to the owning cell. A variable alias stops being a name at 4b (the reference links the definition's own record); keyword aliases are deduplicated by target ([#611]) |
-| Link tables | each code unit keeps a table of record references indexed by its global operands, filled at load; a name with no binding yet gets a placeholder record whose cell holds `UNBOUND`. `LoadGlobal`, `StoreGlobal` and `Define` take a link index; a read is `link[k] → record → cell → value` |
+| Binding records | every name in a namespace (the global environment, a library's environment, an environment specifier, a host namespace) maps to a `BindingRecord { cell }`: own definitions, imports and placeholders alike. Namespaces and frames stay one type, `Environment`, with a kind (namespace, frame, temporaries) set at construction in place of `parent.is_none()` and `holds_temporaries`; a namespace keeps its records in its `RareTables`, and C6's read-mostly API is a view type over `Environment`. Records and cells move into the NMS at 5c. Their home from 4b until then waits for a spike at 4b's start: 1–2 days comparing a per-heap binding table addressed by id with records and cells as two-word pairs in the pair arena, on a global-read probe and `eval-fresh-names`, then the choice. The constraint is `eval-fresh-names`' class-D bound, 216 B a fresh name against 180 B today, which two 72 B arena objects a name would pass (about 324 B), so arena objects are the fallback only with a declared re-pin of that row until 5c (4b's start decisions 2, 4 and 5 on [#782]). `Library.exports` maps names to cells, resolved one hop to the owning cell. A variable alias stops being a name at 4b (the reference links the definition's own record); keyword aliases are deduplicated by target ([#611]) |
+| Link tables | each code unit keeps a table of record references indexed by its global operands, filled at load, placeholders included (lazy linking is rejected): a name with no binding yet gets a placeholder record whose cell holds `UNBOUND`. `LoadGlobal`, `StoreGlobal`, `Define`, and the deoptimization of `CallPrimitive` and the 20 inline primitive opcodes (`exec_call_primitive`, which looks the name up in `frame_globals` today) take a link index; a read is `link[k] → record → cell → value`. From 4b to 4e a link table is traced precisely, by id: a marked closure queues its code id through the weak-id fixpoint, as continuation ids do, and the VM traces that unit's table once per collection; frames on the stack and in live continuations report their code's table; any other holder of a unit's code at a safe point reports it, or sits under an `AssertNoGc`. Never from the code store as a root: a top-level procedure definition links its own name's record, whose cell holds a closure of the same unit, so no such unit could be released, which would block [#614]'s remainder and leak the procedures a dropped host namespace defined. If a second id kind proves awkward, the fallback is an `Rc<LinkTable>` on `VmClosure`, whose removal from `SHARED_PAYLOADS` then moves to 4e (4b's start decisions 3 and 8 and decision 26 on [#782]) |
 | Re-pointing | a `define` over an import allocates a new cell and re-points `record.cell`; a `define` over the namespace's own binding stores into its cell (R7RS's "acts like `set!`"); an import re-points `record.cell` to the exporter's cell. Earlier code holds the record, so it sees the change when the `define` runs |
-| Ownership and mortality (M1, M2) | namespaces own their records and cells; the global and library namespaces are roots, and an environment specifier's namespace is a charged host payload that dies with the specifier or its last unit ([#615]). A placeholder is a weak entry while its cell is still `UNBOUND` and no live link table holds its record. **Macro-introduced definitions stay strong at 4b**, with an indexed lookup ([#613]), because a template can be their only reference (the `def-getter` shape, §17.4). From 5c such an entry is reclaimed only when no live link table references its record **and** no live identifier carries the expansion scope that introduced it, which 4c's weak scope-set table answers. Variant C keeps these rules |
-| What goes; what stays | `GlobalCacheEntry`, the `env_id` cache, `frame_globals`, `FORWARDED`, `Owner` links and `VmClosure.globals` go. The shadow bitsets and `mark_if_*` stay: they latch when a record is re-pointed or a cell store replaces a primitive, and drive the per-site deoptimization ([#442]). Stage 4b measures the path against `frame_globals` rather than assuming a gain |
-| The JIT | under R it emits the two dependent loads, or embeds the cell with `WATCHED` on both record and cell; under C a JIT global is one load. The tree-walker reads root bindings through the same records |
+| Host namespaces | a host namespace (§11.5) gives a name it has not defined a child record that reads through to the global namespace's, so its code sees a later `define` or import there. `lookup_in` and the tree-walker's `get` create no records. Today's primitive rules stay, an exception to the latch rule below: no `CallPrimitive` is compiled through a read-through record, and a child `define` over one marks nothing. A GBS A/B chooses between a tag test on the global path and host opcodes; if both miss the 1% gate, host units instead link the parent's record and re-link through weak back-links. Whether host environments become charged namespaces is decided with the read-through record, after measuring, not as a side effect of the records item (4b's start decisions 4 and 5 on [#782]) |
+| Ownership and mortality (M1, M2) | namespaces own their records and cells; the global and library namespaces are roots, and a specifier's, a host namespace's or a replaced library's namespace dies with its holders (SD3, 4b's start decisions 1 and 5 on [#782]): a record lives while a live link table names it, and a cell while a live record names it, by marks or by counts as the records' home has it. Through 4b an environment specifier's namespace stays an `Rc<Environment>` charged by `NamespaceCharge` ([#636]) that dies with its specifier or the last unit compiled in it, as [#615]'s loop shows (flat near 19 MiB max RSS on the VM at 20,000 and 80,000 calls [P, 2026-11-01]); it becomes a host payload at 4f, which builds the `HostPayloadTable` once, or at 5c, and `EnvironmentSpecifier.env` stays on `SHARED_PAYLOADS` until then. Finalizing a dying specifier namespace through 4a's registry is priced only if the records-home spike puts records in a per-heap table (decision 26 on [#782]). A placeholder is a weak entry while its cell is still `UNBOUND` and no live link table holds its record, by marks for traced records and by counts for Rust-owned ones; if 4b runs long it stays strong until 5c, which changes no lane verdict. The tree-walker makes no placeholders (4b's start decision 8 on [#782]). **Macro-introduced definitions stay strong at 4b**, with an indexed lookup ([#613], landed), because a template can be their only reference (the `def-getter` shape, §17.4), each record keyed by identity with the scope that introduced it, so 5c can test it without a scan (4b's start decision 8 on [#782]). From 5c such an entry is reclaimed only when no live link table references its record **and** no live identifier carries the expansion scope that introduced it, which 4c's weak scope-set table answers. Variant C keeps these rules |
+| What goes; what stays | `GlobalCacheEntry`, the `env_id` cache, `frame_globals`, `FORWARDED`, `Owner` links and `VmClosure.globals` go. The shadow bitsets and `mark_if_*` stay: they latch when a record is re-pointed or a cell store replaces a primitive, and drive the per-site deoptimization ([#442]), with the host-namespace exception above. [#824]'s retired body-form closure goes with `frame_globals`, and its re-entry test stays (4b's start decision 3 on [#782]). Stage 4b measures the path against `frame_globals` rather than assuming a gain |
+| The JIT | under R it emits the two dependent loads, or embeds the cell with `WATCHED` on both record and cell; under C a JIT global is one load. The tree-walker reads root bindings through the same records, by name |
 
 **Variant C** (decision 2: after stage 5, as §19's row C; how it answers the six rebinding shapes is decision 3).
 References bind to cells at compile time, as in chibi, Chez and Racket. C deletes the records' indirection, the shadow
@@ -1056,7 +1083,7 @@ fast path only while `cell.value == expected`, keeping the tail-shape deoptimiza
 
 ## 12. Safepoints and polling
 
-*Implements decision 9 (proposed).*
+*Implements decision 9 (decided 2026-11-01, as stage 3 acted on it).*
 
 **Mutator words** (offsets in §14): `reg_limit` (`AtomicUsize`; non-zero values written only by the owner through
 `set_limit`, zero by any poster), `event` (`AtomicU32`; remote posters `fetch_or`, the owner swaps), `pending`
@@ -1095,10 +1122,10 @@ loop and need no poll.
 | return to the driver | services pending work | the same | — |
 
 **No collection sees a half-built frame**: the frame-entry check may detect an event early, but servicing waits until
-the frame is complete (today `TailCall` stages arguments in a Rust buffer, `vm_state.rs:1601-1630` [S]). The cold path
-tells a genuine stack limit from a posted event (`reg_limit == 0`). The interpreter's per-instruction `gc_pending` load
-(+1.1–1.4%, as `docs/GC_DESIGN.md` §6.1 at `28a94f8` reports; not re-run) goes in stage 3. Allocation and barrier slow
-paths only post. Zeal `entry` services an event at every poll site.
+the frame is complete (today `TailCall` stages arguments in a Rust buffer, in its arm of `dispatch_one_instruction`,
+`vm_state.rs` [S]). The cold path tells a genuine stack limit from a posted event (`reg_limit == 0`). The interpreter's
+per-instruction `gc_pending` load (+1.1–1.4%, as `docs/GC_DESIGN.md` §6.1 at `28a94f8` reports; not re-run) goes in
+stage 3. Allocation and barrier slow paths only post. Zeal `entry` services an event at every poll site.
 
 **Deterministic mode.** GC requests come only from byte thresholds and counts (§15), so the differential lanes run the
 poll code production ships. `PollKind::Tick` exists only for SRFI 18's deterministic scheduler: poll sites also
@@ -1133,17 +1160,26 @@ is a `0101` object whose descriptor is `CONT_INVOKE`, so invoking one is an ordi
 
 **Capture** is a `memcpy` of `[base, top]` into an object allocated through `try_alloc` (collect-and-retry on `Oom`,
 §8), then a pass over the copy that clears dead slots through the maps plus the `call/cc` `dst` hole (clearing that
-hole fixed a 296 MB leak, `crates/patina-vm/src/runtime/control.rs:641-654` [S]), zeroes every `ret` and clears `WM`
-flags. **The copy is value-only**, so invariant W holds and **the core traces a `T_CONT` word by word, like a vector**,
-without parsing frames; the frame and map formats stay private to the VM, and code references in captured frames keep
-their units alive by ordinary marking. Captures over 8 KiB go to the LOS, where minors release the dead ones (§9.2).
+hole fixed a 296 MB leak, `crates/patina-vm/src/runtime/control.rs`: the `CallWithCurrentContinuation` arm of
+`handle_control_primitive` [S]), zeroes every `ret` and clears `WM` flags. **The copy is value-only**, so invariant W
+holds and **the core traces a `T_CONT` word by word, like a vector**, without parsing frames; the frame and map formats
+stay private to the VM, and code references in captured frames keep their units alive by ordinary marking. Captures
+over 8 KiB go to the LOS, where minors release the dead ones (§9.2).
 
-**Cost.** Today a capture at depth 1000 costs **24 µs and about 171 KB** [P, `samedepth1000`]. Design A is estimated at
-about 88 KB per capture at that depth [I], from a continuation toy (5.0 µs and 64–80 KB in its model of today; design A
-about 5.8× below that model, with a bare `memcpy` and 24 B frames) corrected for the dead-slot pass and 40 B headers;
-stage 4e re-runs the toy with the real pass before fixing per-probe targets. **What this deletes:**
-`VmContinuationRef`, `VmDelimitedContinuationRef`, both weak side tables, the VM's `trace_weak_ids`/`sweep_weak`, and
-the rule "store touched within one dispatch", with it the reason nested VM loops must defer. **What it fixes:** captures
+**Before stage 5.** This section describes the final form, and what it needs from the new heap arrives with stage 5: the
+LOS at 5d, collect-and-retry (`try_alloc`) at 5e, and the `0101` procedure and `CONT_INVOKE` at 5c and 5f; until then
+invocation stays the VM's control intercept. What a continuation is between 4e and stage 5 is settled with decision 18
+when 4e starts.
+
+**Cost.** A capture at depth 1000 costs **about 14 µs and 160.5 KB** of `bytes-allocated` (160,536 B at `86baed1b` [P,
+`samedepth1000`]; 24 µs and about 171 KB before stage 1): 160 B a frame, 15 registers of 8 B and a 40 B header. Design A
+clears dead slots without compacting them, so its copy is the same 160 KB (15,020 registers and 1,002 headers), and its
+gain is time and exact accounting, not bytes. The continuation toy's estimate, about 88 KB a capture [I] (5.0 µs and
+64–80 KB in its model of today; design A about 5.8× below that model, with a bare `memcpy` and 24 B frames, corrected
+for the dead-slot pass and 40 B headers), assumed 4–7 registers a frame. Stage 4e re-runs the toy with the real pass
+before fixing per-probe targets, bytes included. **What this deletes:** `VmContinuationRef`,
+`VmDelimitedContinuationRef`, both weak side tables, the VM's `trace_weak_ids`/`sweep_weak`, and the rule "store touched
+within one dispatch", with it the reason nested VM loops must defer. **What it fixes:** captures
 become heap bytes, where stage 1 charges a side-table snapshot to its handle (`VmContinuationRef { id, bytes }`, [#606];
 before it, 80 K captures at depth 1000 reached 5.7 GB unseen by the trigger [P]).
 Continuations are born young and written only by initializing stores, so they need no barrier; reinstatement copies
@@ -1285,22 +1321,30 @@ On a generational heap, a host payload written other than through `store` (throu
 the contract; `PATINA_GC_VERIFY_ROOTS` catches it (§16). Tree-walker heaps never run minors (§11.4), so their payloads
 need no `store`.
 
-**Off-heap traces are generated, never written by hand.** Every `HostPayload`, and every Rust structure a root
-provider walks (`VmState`, `Library`, `Environment` until 4b, `CompiledMacro`, `CpsContinuation`, `ContValue`, the
-wind, handler and prompt records), gets its `trace` from a `Trace` derive that names every field: a field whose type
-has no `Trace` does not compile, and a field is left out only by `#[trace(skip, reason = "…")]`, so a new field cannot
-go untraced silently. `declare_layouts!` closes this gap for heap kinds (§6), not for these structures, and both
-incidents of a missed trace edge so far (two edges in [#38], one in [#47]) were in hand-written off-heap traces, the
-second hidden from every dynamic check because its values were also reachable another way. A third edge,
-`CompiledMacro.foreign_expansions`, stayed untraced until [#623] traced it (`trace_compiled_macro`, pinned by the
-sentinel test `compiled_macro_fields`). A proc-macro derive needs `syn` and `quote` as
-direct dependencies, which decision 14 held to the owner's approval, given on 2026-10-11: the derive is a proc-macro
-crate, `patina-trace-derive` ([#686]), with `proc-macro2` beside them, rather than the fallback, a `macro_rules!`
-declaration in `declare_layouts!`' style. An enum variant's `Box<Self>` chain is walked in a loop
-(`#[trace(tail)]`), since a continuation's chain is as deep as the program's recursion. It lands at stage 2 with the slot visitor, so 4b–4e reshape these
-structures under it, and 4f does not start without it: the tree-walker never moves (§11.4), so `move-all` never checks
-its payloads' traces. Until then, and for heap kinds until `declare_layouts!` (5a), [#623] names every traced field
-and tests each with a sentinel.
+**Off-heap traces are generated, never written by hand.** Every `HostPayload`, and every Rust structure a root provider
+walks (`VmState`, `Library`, `Environment`, `CompiledMacro`, `CpsContinuation`, `ContValue`, the wind, handler and
+prompt records; `Environment` stays for good as the tree-walker's frame), gets its `trace` from a `Trace` derive that
+names every field: a field whose type has no `Trace` does not compile, and a field is left out only by
+`#[trace(skip, reason = "…")]`, so a new field cannot go untraced silently. `declare_layouts!` closes this gap for heap
+kinds (§6), not for these structures, and both incidents of a missed trace edge so far (two edges in [#38], one in
+[#47]) were in hand-written off-heap traces, the second hidden from every dynamic check because its values were also
+reachable another way. A third edge, `CompiledMacro.foreign_expansions`, stayed untraced until [#623] traced it
+(`trace_compiled_macro`, pinned by the sentinel test `compiled_macro_fields`). A proc-macro derive needs `syn` and
+`quote` as direct dependencies, which decision 14 held to the owner's approval, given on 2026-10-11: the derive is a
+proc-macro crate, `patina-trace-derive` ([#686]), with `proc-macro2` beside them, rather than the fallback, a
+`macro_rules!` declaration in `declare_layouts!`' style. An enum variant's `Box<Self>` chain is walked in a loop
+(`#[trace(tail)]`), since a continuation's chain is as deep as the program's recursion. It lands at stage 2 with the
+slot visitor, so 4b–4e reshape these structures under it, and 4f does not start without it: the tree-walker never moves
+(§11.4), so `move-all` never checks its payloads' traces. Until then, and for heap kinds until `declare_layouts!` (5a),
+[#623] names every traced field and tests each with a sentinel.
+
+**The tree-walker's shared structures.** The final contract keeps a deduplicated walk, once per collection, of each
+tree-walker structure shared through `Rc`: frames (`env`), continuation environments (`cont_env`) and code literals
+(`expr_literals`). Tree-walker frames stay `Rc<Environment>` for good (decision 1, §11.4), and 4f's host payloads go on
+holding them, continuation environments and code; walked without deduplication, a persistent chain costs exponential
+time (`visit_once`'s doc: 6.8 s for one collection at nesting depth 26; `docs/GC_DESIGN.md` §9.4). `patina-gc`'s
+`SlotVisitor` above names no core type, so where these walks are declared is settled when 4f starts, and so is
+whether `continuation` stays with them.
 
 | Obligation of every `Collector` | Content |
 |---|---|
@@ -1511,7 +1555,8 @@ recording any behaviour change as an oracle-scored `DIVERGENCES.tsv` row.
 
 ## 17. Steady state, the memory contract, and limits
 
-*Implements decision 15's values and SD1–SD9 (proposed).*
+*Implements decision 15's values and SD1–SD9 (SD1 and SD3 decided 2026-11-01, SD3's symbols going with decision 11;
+the rest proposed).*
 
 A program with bounded live data should never hit a limit; one that really grows should hit one and be told what
 grew. Patina fails steady state today in the ways listed in §17.5; the design as first drafted would have made several
@@ -1534,20 +1579,20 @@ deterministic.
 | # | Clause | Test | Failing today |
 |---|---|---|---|
 | SS1 | L follows the program, not its history | L(4N) − L(N) ≤ 3N·8 B + 64 KiB | symbol churn: 192 B per symbol [P] (chibi 166, Chez 0) |
-| SS2 | Footprint ≤ F(L) | at every paced major in the window, footprint ≤ F(L) = 1.1·(L + max(8 MiB, 2·L)) + free reserve | the `environment` loop ([#615]) |
+| SS2 | Footprint ≤ F(L) | at every paced major in the window, footprint ≤ F(L) = 1.1·(L + max(8 MiB, 2·L)) + free reserve | tree-walker continuation churn ([#656]); the arenas' high-water ([#616]) |
 | SS3 | Pause work stationary | in-pause work counters (frames scanned, bytes marked, root-region words, blocks touched): the second half's maximum ≤ 2× the first half's | pauses after a dropped peak ([#616]) |
-| SS4 | Operation cost flat | mutator CPU time per cycle over [3N, 4N) ≤ 1.5× that over [N, 2N), each segment the minimum of 3 runs | macro-introduced definitions ([#613]) |
-| SS5 | Side structures bounded | each per-owner count in `(gc-stats)` at 4N within max(16, 5%) of N; byte-valued keys under SS1's bound | `symbols` per top-level `guard` ([#611]) |
+| SS4 | Operation cost flat | mutator CPU time per cycle over [3N, 4N) ≤ 1.5× that over [N, 2N), each segment the minimum of 3 runs | none since [#822] |
+| SS5 | Side structures bounded | each per-owner count in `(gc-stats)` at 4N within max(16, 5%) of N; byte-valued keys under SS1's bound. Each per-owner key is a clause, labelled red or green on its own: `SS5:symbols`, `SS5:ports`, `SS5:cells` and `SS5:binding-records`, plus a `code-units` key, which answers 0 on the tree-walker. The runner change lands on its own before 4b's mortality item, with `ports` checked from then on, and each key lands in the PR that creates its table (4b's start decision 11 on [#782]) | fresh symbols (`sym-churn`, `unbound-ref`; stage 5c) |
 
 Lane rows are classed by the audit's failure shapes: **A** a true leak (a fixed amount per cycle, for ever), **B** a
 plateau set by a trigger blind to some bytes, **C** high-water retention (memory or pause cost of a peak never given
 back), **D** live growth (a growing name set: outside the contract, kept as a cost regression check), **E** time
 growth. SS1's bound catches a 32 B-per-cycle leak (one symbol in the new heap) from N ≈ 1,000, and today's smallest
 class-A leak (192 B) with 24× margin. SS4's bound sits between flat cost (1.0) and cost proportional to history (2.33,
-the shape of every class-E row; `hidden-define` fits 2.0 at N = 2,000 [I]); timing one process's loop excludes
-start-up and library load. In F(L), 1.1 is [K3](#k3)'s pre-stage-8 fragmentation allowance and the free reserve is
-max(8 blocks, 5%). A row that declares SS2 or SS3 needs 2 paced majors in each half-window, or it fails as vacuous, as
-`bytes-reclaimed` > 0 guards the reclamation proofs.
+the shape of every class-E row; `hidden-define` fitted 2.0 at N = 2,000 [I] until [#822], and 1.0 since); timing one
+process's loop excludes start-up and library load. In F(L), 1.1 is [K3](#k3)'s pre-stage-8 fragmentation allowance and
+the free reserve is max(8 blocks, 5%). A row that declares SS2 or SS3 needs 2 paced majors in each half-window, or it
+fails as vacuous, as `bytes-reclaimed` > 0 guards the reclamation proofs.
 
 **Phase change.** Suppose live size falls from L to L′, because a peak was dropped or a deep recursion returned:
 
@@ -1561,10 +1606,12 @@ max(8 blocks, 5%). A row that declares SS2 or SS3 needs 2 paced majors in each h
 | Waits | from 5e: the REPL prompt; `notify_idle()`, and `(notify-idle)` in `(patina debug)`; entry to a read primitive whose buffer is empty, on a port that is not a regular file, through `Step::Collect` before anything is consumed. From stage 9: a thread wait with nothing runnable, and a read that blocks mid-datum once the reader lexes before it builds. Where collection is deferred, no trim runs. Under `PATINA_DETERMINISTIC=1` only the prompt and `notify_idle` qualify, because whether a pipe's buffer is empty depends on how the writer's bytes arrive. G1 used a timer for this case (JEP 346); Patina counts waits |
 | Boost decay | the livelock boost (×1.5 after two majors that each free under 1%) decays: at the first major that frees more than 10%, the target is recomputed from 2·L |
 
-**Outside the contract:** growing name or live sets (class D: a fresh top-level name costs 365 B [P], the oracles
-400–484; the lane fails a 20% regression); weak tables keyed by fresh symbols (class D: an ephemeron keeps a symbol key
-alive, decision 11, §9.5); threads blocked for ever (decision 23); partly occupied blocks before stage 8; `NoGcScope`
-windows, which may overshoot F(L) by [K16](#k16)'s bound.
+**Outside the contract:** growing name or live sets (class D: a fresh top-level name cost 365 B at `28a94f8` [P], and
+180 B at `eval-fresh-names`' pin since the steady-state lane began on 2026-10-07; the oracles 400–484; the lane fails a
+20% regression); weak tables keyed by fresh symbols (class D: an ephemeron keeps a symbol key alive, decision 11,
+§9.5); threads blocked for ever (decision 23); partly occupied blocks before stage 8; `NoGcScope` windows, which may
+overshoot F(L) by [K16](#k16)'s bound, and by more in the shapes that [K16](#k16) leaves outside its criterion for now
+(decision 10 on [#782]).
 
 ### 17.2 The memory contract
 
@@ -1580,8 +1627,8 @@ windows, which may overshoot F(L) by [K16](#k16)'s bound.
 |---|---|---|---|
 | Symbols | Reclaimed when unreferenced (SD2). Allocated old in the NMS, so only majors reclaim them, and the interner is pruned only in the major epilogue (step 6). The stored hash is a fixed-seed hash of the UTF-8 name, so a re-interned symbol hashes the same; `identity-hash` of a symbol changes from the heap index to that hash in its own PR (§9.8). An ephemeron keeps a symbol key alive, so symbol-keyed weak tables answer as today (§9.5) | 192 B per symbol [P] | 5c |
 | Global cells and binding records | Owned by namespaces; global and library namespaces are roots; placeholders weak; aliases bounded by program text; introduced definitions strong at 4b with an indexed lookup, reclaimed from 5c under §11.6's two tests; cells stop being a root region (§9.1), so pauses stop growing with cell history. Variant C keeps this | [#611]; [#613] | [#611] now; 4b own; 5c sweep |
-| Environment specifiers; redefined libraries | A namespace is a charged host payload that dies with its specifier or last unit (specifiers are immutable, so nothing defines into them); `define-library` forms get a collection point. A macro that a library's generator defines holds the generator's environment in `foreign_expansions`, traced since [#623], so the environment and its values live as long as the macro: 4b counts that edge among a replaced namespace's holders, or replaces it with one that keeps only binding locations, all that early binding reads through it | [#615]; [#614] | 1 charge; 2 collection point; 4b |
-| Provenance; scope sets | A document owns its location table and compacts it while streaming; expansion chains are interned per document; the scope-set table is weak (ids recycled) or scoped to one form, and reports which expansion scopes live identifiers still carry | [#612] | 1 chains; 4c |
+| Environment specifiers; host namespaces; redefined libraries | A specifier's namespace dies with its specifier or last unit (specifiers are immutable, so nothing defines into them). It stays an `Rc<Environment>` charged by `NamespaceCharge` ([#636]), with `EnvironmentSpecifier.env` on `SHARED_PAYLOADS`, until it becomes a host payload at 4f, or at 5c (decision 26 on [#782]). A host namespace (from 4b, a kind that `Interpreter::new_environment` sets, whose parent is the global namespace; §11.5) and a replaced library's namespace die with their holders (SD3, 4b's start decisions 1 and 5 on [#782]; §11.6). `define-library` forms get a collection point. A macro that a library's generator defines holds the generator's environment in `foreign_expansions`, traced since [#623], so the environment and its values live as long as the macro: 4b counts that edge among a replaced namespace's holders, or replaces it with one that keeps only binding locations, all that early binding reads through it | [#615]; [#614] | 1 charge; 2 collection point; 4b; 4f host payload (or 5c) |
+| Provenance; scope sets | A document owns its location table and compacts it while streaming; expansion chains are interned per document; the scope-set table is weak (ids recycled), and reports which expansion scopes live identifiers still carry | [#612] | 1 chains; 4c |
 | `CoreExpr` literal pool | Scoped to one compilation (§11.3) | — | 3 |
 | Descriptors, record types | Mark-region with hole reuse inside the NMS; [K3](#k3) reports it | steady | 5c |
 | JIT code | Freed per unit, through size-segregated slabs and a coalescing list; fragmentation shown in `GcStats`; capped; gated by `eval-lambda` and `eval-redefine`. Stage 6 is a spike on an unmerged branch, so it freezes only the interface: `install_code` and per-unit free | — | 6 interface; the JIT track's first merged stage (decision 20) |
@@ -1607,7 +1654,9 @@ up to about 27% of `max_heap`, or 4.3 GiB at 16 GiB. Beyond that the target clam
 `memory.limit_in_bytes`), never from host RAM alone (.NET uses 75% of the container limit). When `RLIMIT_AS` is set,
 the main stack, the store buffers and the JIT reservation are sized first and the heap reservation gets what remains;
 `max_heap` is clamped to that reservation; startup falls back to smaller sizes rather than failing. B is detected, and
-the main stack fitted under `RLIMIT_AS`, at stage 4d; the heap ceiling is fitted at 5e.
+the main stack fitted under `RLIMIT_AS`, at stage 4d; the heap ceiling is fitted at 5e. macOS refuses to set `RLIMIT_AS`
+(`ulimit -v` answers "Invalid argument" on macOS 27.2 [P]), so the tests that set it run on the Linux CI leg, with the
+cgroup tests; the fitting logic is unit-tested on both legs with an injected limit.
 
 **Process budget** (5g). `HeapConfig` takes an optional embedder-owned `Arc<MemoryBudget>`. Every heap created with the
 same budget draws its `max_heap`, register-stack reservations, JIT code and GC worker count from it: the B-derived
@@ -1622,7 +1671,7 @@ has its own budget, as now. It is not a singleton (§14): an embedder that wants
 | Hard heap | committed data, LOS, metadata, external bytes (SD4) | min(16 GiB, 75%·B) | `PATINA_HEAP_MAX`, `--heap-max`, `HeapConfig::max_heap` | the steps below | 5e, 5g |
 | Heap ceiling | the heap's reservation | max(`max_heap`, the default `max_heap`), within `RLIMIT_AS` | `HeapConfig::heap_ceiling` | `max_heap`, and the embedder's raise of it, stop here | 5e |
 | Soft heap | as the hard heap | off (SD8) | `PATINA_HEAP_SOFT_MAX`, `--heap-soft-max`, `HeapConfig::soft_max_heap` | clamps the target and never fails; lifts after 5 consecutive majors it clamped that each free < 2% | 5g |
-| Register stack | one thread's frames | main: min(8 GiB, 25%·B), which is 1.75 GiB on a 7 GB runner and still holds the VM's 10 M frames (1.37 GB [P]); 256 MiB per green thread | `PATINA_STACK_MAX`, `--stack-max`, `HeapConfig` | `&stack-exhausted` within 1 MiB of the cap | 4d |
+| Register stack | one thread's frames | main: min(8 GiB, 25%·B), which is 1.75 GB (about 1.63 GiB) on the 7 GB macOS runner and still holds the VM's 10 M frames (1.37 GB [P]); 256 MiB per green thread | `PATINA_STACK_MAX`, `--stack-max`, `HeapConfig` | `&stack-exhausted` within 1 MiB of the cap | 4d |
 | Stack address space | the green-thread stack reservations of one heap | set at stage 9 with §18.1's stack rule | — | `thread-start!` raises, as the thread limit does | 9 |
 | Threads | started, unterminated | charged stacks under `max_heap`; one `--stack-max` slot of address space each | optional `PATINA_MAX_THREADS` | `thread-start!` raises `&heap-exhausted` | 9 |
 | Native (Rust) stack | Rust recursion in the reader, expander, compiler and printer | the OS thread's stack (the main thread's `ulimit -s`; carriers spawned at the same size) | — | a catchable error from a depth guard; today a process abort ([#617]) | now |
@@ -1674,9 +1723,10 @@ wall-clock max pause, MMU(10 ms) and RSS series are nightly signals (median of 5
 **Oracles** are context: the target is no worse than the best oracle that is steady on the row.
 
 **Hygiene.** Stage 0 adds a hygiene-matrix maker whose introduced definition only macro templates reach: the
-`def-getter` shape, `(define secret 42)` beside a getter macro and a setter macro, with no getter procedure. It prints
-7 today on both backends, on chibi and on Gauche; from 5a it also runs under zeal-major, so reclaiming introduced
-definitions at 5c cannot drop a binding that a template still reaches.
+`def-getter` shape, `(define secret 42)` beside a getter macro and a setter macro, with no getter procedure. It prints 7
+today on both backends, on chibi and on Gauche; from 5a it also runs under zeal-major, so reclaiming introduced
+definitions at 5c cannot drop a binding that a template still reaches. 4b adds a variant with a `(gc)` between its forms
+(4b's start decision 8 on [#782]).
 
 **The limits lane** (5g, outside the byte-identical lanes):
 
@@ -1691,8 +1741,8 @@ definitions at 5c cannot drop a binding that a template still reaches.
 | Handler room | passes on both backends |
 | `dropped_ports_do_not_run_out_of_descriptors` (`crates/patina-repl/tests/file_descriptors.rs`) | passes on both backends |
 | 10 M-deep recursion at the default cap | passes on the VM; the tree-walker runs 1 M frames (10 M would need about 9.6 GiB) |
-| Budget detection | under a cgroup `memory.max` and under `ulimit -v`, startup succeeds with smaller reservations and `memory-budget` reports the limit |
-| Several heaps, one budget | four interpreters sharing one `MemoryBudget`, one of them growing: it raises `&heap-exhausted` while the process's footprint stays under the budget's total, and the others run on; under `ulimit -v`, every heap starts |
+| Budget detection | on the Linux CI leg (§17.3), under a cgroup `memory.max` and under `ulimit -v`, startup succeeds with smaller reservations and `memory-budget` reports the limit; on both legs, the fitting logic's unit tests pass under an injected limit |
+| Several heaps, one budget | four interpreters sharing one `MemoryBudget`, one of them growing: it raises `&heap-exhausted` while the process's footprint stays under the budget's total, and the others run on; under `ulimit -v`, on Linux, every heap starts |
 | Determinism replay | two runs on one machine, on Linux and on macOS, give the same collection kinds and `live-bytes` per major; across the two systems only with the JIT off, from one working directory, with `--heap-max`, `ulimit -n 1024` and `PATINA_DETERMINISTIC=1` pinned, as in every lane that compares collection sequences |
 
 **Soak:** from stage 5, a nightly hour of a REPL-like loop, slope-tested per major. Kill criteria
@@ -1707,21 +1757,23 @@ repro and fix direction; the rest have no issue because the design fixes them at
 |---|---|---|
 | A library macro with a private helper interns a new alias per top-level expansion | [#611] | now |
 | Re-evaluating a quoted `case` datum with `eval` grows memory and time without bound | [#612] | 1, 4c |
-| References to a macro-introduced top-level definition scan every earlier expansion | [#613] | ≤ 4b (indexed lookup) |
+| References to a macro-introduced top-level definition scan every earlier expansion | [#613] | 4b, its first item ([#822], the indexed lookup) |
 | A redefined library stays alive; a run of `define-library` forms never collects | [#614] | 2, 4b |
-| A loop of `(environment '(scheme base))` plateaus near 2.9 GiB | [#615] | 1, 4b |
+| A loop of `(environment '(scheme base))` plateaus near 2.9 GiB | [#615] | 1 |
 | After a dropped peak, every collection keeps the peak's sweep cost and the peak's memory stays resident | [#616] | 5e |
-| Continuation churn plateaus, because the trigger does not see capture bytes | [#606] | 1, 4e |
+| Continuation churn plateaus, because the trigger does not see capture bytes | [#606] | 1 |
 | Dropping an interpreter leaks its heap | [#604] | 2 |
 | Unreferenced symbols are never reclaimed: 192 B per symbol [P] (chibi 166, Chez 0) | no issue: fixed by design | 5c |
-| Register stacks keep a deep recursion's pages: 143 MiB on the VM and 984 MiB on the tree-walker after 1 M frames [P] | no issue: fixed by design | 4d |
-| Tree-walker environments are freed only when sweep drops their procedure, and the trigger sees them as an estimate, one frame a closure: frame chains, and frames only a continuation holds, are missed | [#637] (the estimate) | 4f |
-| Tree-walker continuation captures are invisible to the trigger: a `call/cc` loop at depth 1,000 peaks at 2.4 GB | [#656] | 4e, 4f |
+| The VM's register stack keeps a deep recursion's pages: 139 MiB resident after 1 M frames return and two `(gc)`s [P, `86baed1b`] | no issue: fixed by design | 4d |
+| On the tree-walker, the system allocator keeps the Rust memory that a deep recursion's frames and continuation links used once they are freed: 483 MiB resident of a 979 MiB peak after 1 M frames and two `(gc)`s, with `committed-bytes` at 1.4 MiB, given back by a second deep recursion [P, `86baed1b`] | [#780] | tree-walker lag (decision 1), re-measured at 4f's exit |
+| Tree-walker environments are freed only when sweep drops their procedure, and the trigger sees them as an estimate, a one-parameter frame (612 B) for each closure: frame chains and frames only a continuation holds are missed, a wide frame is charged far under what it holds (a closure over a 64-parameter frame holds about 13,660 B, where the closure and its estimate are charged 820 B, about 17× under [P, `86baed1b`]), and a frame that several closures share is charged once for each | [#637] (the estimate, closed by [#638]); the rest no issue: fixed by design | 4f |
+| Tree-walker continuation captures are invisible to the trigger: 6,000 captures at depth 1,000 make no collection and peak at 5.71 GiB footprint (RSS reads lower under memory compression), where the VM makes 107 collections and peaks at 16.3 MiB [P, `86baed1b`] | [#656] | 4f |
 | On the tree-walker, a top-level variable assigned a literal keeps its previous value reachable | [#655] | a defect, fixed on its own |
 
 ## 18. Threading readiness and future parallelism (decision 7)
 
-*Implements decisions 7 and 7c (proposed).*
+*Implements decisions 7 and 7c (7's threading model decided 2026-10-01, its shared-memory parallelism proposed; 7c
+decided 2026-11-01 in part).*
 
 **Status.** Decided: SRFI 18 ships as M:1 green threads, VM first, and the GC's interfaces are written for N carriers
 over one heap. **Proposed, pending owner review: shared-memory parallelism is not a goal now**; this section records
@@ -1834,7 +1886,7 @@ marking.
 | Non-moving heap, no `Rc`/`RefCell` payloads, allocation buffers (R1, R2, R14) | racy reads of a growing arena are undefined behaviour | 11–18 | 0.5–1 | 4 `Vec` arenas; 14 `Rc` payload kinds; stage 5 |
 | Heap API, collect capability, `VmState` split, `Send`/`Sync` (R10, R11) | a context per carrier; collection stops all | 10–17 | 3–6 | 767 borrow sites; stage 3 |
 | Atomic slots, bulk operations, publication (R12, R13) | unzeroed holes make publication a memory-safety matter | 3–6 | 2–5 | the funnel; [M] costs; stage 6 decides placement |
-| Rooting windows, time-to-safepoint (R16, R17) | a carrier that cannot stop stalls all | 5–11 | 2.5–6 | 21 `GcDeferGuard` uses; stages 2, 3, 4e |
+| Rooting windows, time-to-safepoint (R16, R17) | a carrier that cannot stop stalls all | 5–11 | 2.5–6 | `GcDeferGuard::holding` at 4 production sites (the loader's `ParsedLibrary` and 3 in the tree-walker's detached `ApplyContext`), `NoGcScope::enter` at the 2 nested-loop entries, one per backend, and about 35 context crossings outside tests (`NoGcScope::with_cx`, `cross` and `cross_all`), counted at `5b6d2956`; stages 2, 3, 4e |
 | Handshake, safe regions, blocking I/O (R15) | one `read(2)` would block every collection | 4–7 | 2–3 | ~35 blocking primitives; stage 9 |
 | Shared runtime tables: namespaces, code store, libraries, expander, ports, interner, caches (R3–R9, R22) | every carrier mutates them | 13–23 | 8–15.5 | stages 4a–4e; Racket's tax sits here [A] |
 | Parallel GC with carriers as workers; store buffers; weak references (R18–R20) | serial GC caps 8 carriers at 3.2–6.9× (Amdahl) | 5–9 | 2.5–5 | stages P, 7; OCaml [A] |
@@ -1904,10 +1956,11 @@ unchanged by N, plus:
 
 The native-stack and stack-address-space rows of §17.3 come from this analysis.
 
-### 18.6 Cheap additions (decision 7c, proposed; scheduled in §19)
+### 18.6 Cheap additions (decision 7c; scheduled in §19)
 
-These serve the decided N-ready interfaces. Adopting them is decision 7c, proposed; §19's stages and totals assume
-it.
+These serve the decided N-ready interfaces. Adopting them is decision 7c, decided 2026-11-01 in part, as stages 0, 2
+and 3 acted on it; C6 (4b; a view type over `Environment`, by 4b's start decision 4 on [#782]) and C11 (4e) remain.
+§19's stages and totals assume it.
 
 | Addition | Stage | Cost [E] | Saves [E] |
 |---|---|---|---|
@@ -1993,8 +2046,9 @@ ThreadSanitizer (nightly, blind to standalone fences) and arm64 lanes.
 - Behaviour changes are scored against chibi and Gauche (and Gambit for thread semantics) and recorded in
   `DIVERGENCES.tsv`.
 - Each semantic change is **its own PR**, never folded into a representation step: port identity ([#608]),
-  canonical record types (4g), deep-bound `parameterize`, flonum `eq?` and flonum-keyed ephemerons, a symbol's name
-  hash, variant C.
+  canonical record types (4g), the main stack's cap and `&stack-exhausted` (4d), a list located by its head identifier
+  ([#792], 4c; diagnostics only), the heap limit and `&heap-exhausted` (5e), deep-bound `parameterize`, flonum `eq?` and
+  flonum-keyed ephemerons, a symbol's name hash, variant C.
 - **No stage removes a safety property before its replacement has landed**: `Rc` code liveness stays until traced
   code liveness (4e); nested-loop deferral stays until the weak continuation tables are gone (4e); dead-slot clearing
   stays for good.
@@ -2003,10 +2057,16 @@ ThreadSanitizer (nightly, blind to standalone fences) and arm64 lanes.
   loading-path entry on [#622]'s list is rooted, guarded on its data or held in the machine; and 4e lets driver-level
   nested loops collect only once every `apply_proc` and `across_reentry` entry on that list stays deferred or holds
   its values in the machine (§11.3).
-- Embedding-API changes follow [#601]'s deprecation convention, one step per stage (stages 2 and 3).
+- Embedding-API changes follow [#601]'s deprecation convention (`docs/README.md`, "Changing the embedding API"), with
+  `scripts/check_embedding_features.sh` green at each step, at the stages §11.5 names: 2, 3, 4b, 5e and 5g.
+- **In stage 4, each PR runs the lanes it can move** (decision 23 on [#782], from [#774]): a PR that changes what is
+  allocated or charged runs `scripts/run_larceny_gc_stress.sh` on the release `gc-check` build, both backends, and
+  re-pins in the same PR only the rows that fell, never `flonum`'s tally from a Mac run ([#634]); a PR whose files lie
+  outside `gc-zeal.yml`'s path filter runs `scripts/run_gc_zeal.sh` locally on that build, or widens the filter; and a
+  sub-stage's PR runs with `--row` the steady-state rows it can move, since CI runs 7 per PR.
 - **Every stage ships measured value or stays neutral within its gate.** No geomean regression above 1% unless the
   stage declares a budget; regressions and gains under 2% are judged in instructions or cycles with confidence
-  intervals (§16). **No stage turns a green steady-state row red** ([K17](#k17)).
+  intervals (§16). **No stage turns a green steady-state clause red** without the owner ([K17](#k17)).
 
 Effort is from DESIGN Appendix D except where a row says otherwise; "Value on its own" is what the stage delivers if
 the plan stops after it.
@@ -2020,14 +2080,14 @@ the plan stops after it.
 | 2 | Root and boundary contract: slot visitor and the `Trace` derive for off-heap structures (§14), `CallFrame.closure` as a value, `Owned` and environment handles on the public paths that yield a value or environment, `backend()` and `evaluator()` documented as the raw layer (§11.5), heap teardown, top-level `import` and `define-library` recognized by binding, rooted loading | 6–8 (Appendix D's 5–7, plus about 1 for the derive) | `define-library` forms reach a collection point; teardown returns each dropped interpreter's memory | per-heap Rust tables behind one wrapper; loading entries record their thread (additions C3, C15) | embedder use-after-free (returned values, global reads, host environments) and teardown leak fixed; the VM evaluates in the environment it is given; no hand-written off-heap trace left; library bodies loaded through `import` collect; GBS ±1% | embedding is sound; library bodies collect; no leak; a new field cannot go untraced silently | [#604], [#605], [#610], [#614] (part), [#620] |
 | 3 | `Mutator`, the collect capability, `Cx` and the store funnel; `#![forbid(unsafe_code)]` in the safe crates (§11.3); polls at frame entry; `InterruptHandle`; `Interpreter::call` and host primitives | 10–13 | the `CoreExpr` literal pool scoped to one compilation; the embedders' external-bytes accounter | per-carrier collect capability (addition C2); reserved `Mutator` words, `GcAttrs.publication`, 128-byte alignment (C1, C10); bulk-range accessors (C4); the CI check and the first `Send`/`Sync` assertions (C9, C11); the memory model; the `threaded` feature with accessor bodies only, linted by `--all-features` clippy | ABI, compile-fail doctest, interrupt and embedding tests on both backends; `ephemerons.rs`'s three [#423] tests (§9.5); geomean ≥ 0% in instructions | the JIT ABI object exists; who may collect is a type; hosts can call Scheme and register primitives soundly; Ctrl-C stops a tight loop | — |
 | 4a | Ports: one object per port over a per-heap `PortTable`, and the `FinalRegistry`, whose drain finalizes a dead file port after the collection ([#785]); exit flushes through a per-thread registry of the tables ([#786]). Canonical record types are 4g's (decision 1 on [#782]) | 4–5 | the `PortTable` registry prunes dropped heaps; the loader retries after `EMFILE` | — | `(eq? (current-output-port) (current-output-port))` ⇒ `#t`; `a_dropped_output_port_is_written_out_by_the_collection_that_finds_it`, `dropped_ports_do_not_run_out_of_descriptors` and `a_dropped_interpreter_writes_out_the_file_ports_it_left_open`, green before 4a and kept green through it, and the new `one_port_one_object` and `exit_flushes_every_interpreter`, on both backends; [#618]'s repro (two interpreters on one OS thread keep separate current ports) on both backends; I/O workloads ±1%, the `io` set with its two current-port fallback probes, `display-fallback` and `parameterize-port` (decision 6 on [#782]) | port semantics match the oracles; no primitive calls back for `parameterize` | [#783], [#618], [#608], [#784], [#785], [#786], [#817], [#818] |
-| 4b | Global cells and binding records (variant R) | 3–4 | namespaces own records and cells, placeholders weak; a variable alias stops being a name; introduced definitions strong with an indexed lookup; environment-specifier namespaces die with their specifier or last unit; redefined libraries released | one read-mostly namespace API (addition C6) | the rebinding tests and decision 3's rows answer as today; the global path neutral or better than `frame_globals` | no `Rc` clone, `RefCell` borrow or `FORWARDED` hop on the global path, and no environment held by closures | [#613], [#614] (part), [#615] (part) |
-| 4c | Identifiers as ids, inline provenance | 3–5 | document-owned location tables compacted while streaming; a weak (or per-form) scope-set table that reports which expansion scopes live identifiers carry | — | hygiene matrix 139/139; libload `malloc` peak ≤ 450 MiB; caret tests | the largest load-memory cost removed; syntax becomes `Drop`-free | [#612] (part) |
-| 4d | Frames and stacks; the `return_into` choke point for every write into a suspended frame (§11.1; it lowers the watermark from stage 7); the stack cap and its knob | 4–5 | B detected; the main-stack default min(8 GiB, 25%·B), fitted under `RLIMIT_AS`; register-stack pages returned after 2 observations | — | matrix 64/64; raise-site tests; `finished_forms_release_code.rs` 9/9; 10 M-deep recursion | a JIT-ready stack, without changing the interpreter protocol or code lifetime | — |
-| 4e | Continuations as heap objects; traced code liveness | 5–7 | the continuation plateau gone | `CodeBody: Send + Sync` asserted (addition C11) | the matrix; `finished_forms_release_code.rs` 9/9 with no collection; capture targets; a nested driver-level loop churn probe collects during the loop with a bounded heap | capture becomes byte-visible; code release no longer depends on sweep; nested loops can collect | — |
-| 4f | Tree-walker host payloads | 2–3 | tree-walker environments charged only while a payload holds them | — | tree-walker lanes; no environment-driven collection on `(fib 25)` | nothing is dropped at sweep any more | — |
-| 4g | Inline payloads; canonical record types in the records item: a canonical `%record-type-of` first, its own semantic PR with a suite row, then `eq?`, `eqv?`, the identity hash and `equal?` comparing words, and the VM's inline `eq?` borrowing no heap (decision 1 on [#782]); the quasiquote constructors' fresh primitive per compilation stays a deferral, since no program can observe it | 2–3 | — | — | per-kind census | the heap is ready to move into blocks | — |
+| 4b | Global cells and binding records (variant R), with [#613]'s indexed lookup ([#822], landed) as its first item; the embedding API's 4b step (§11.5), in two parts as 4b's start decisions 6 and 7 on [#782] set it: before the records, one PR draws [#601]'s promise and deprecates `Environment::with_parent` and the public `hold_environment` of an arbitrary environment, and with it, amending the owner decision of 2026-10-21 on [#707], `Interpreter::heap()` is deprecated for typed replacements and the loader keeps its borrowed `&SharedHeap` as workspace-internal; after the link tables, `Backend` gains handle methods as provided defaults, its old ones deprecated for callers and required of implementors until 5e, and `Interpreter::global_env` and `raw_environment` are deprecated | 6–9, re-based from 3–4 (decision 22 on [#782]): the raw layer, about 1–1.5, and [#613]'s index were in no row | namespaces own records and cells, placeholders weak; a variable alias stops being a name; introduced definitions strong with an indexed lookup; environment-specifier namespaces die with their specifier or last unit; redefined libraries released | one read-mostly namespace API (addition C6) | the rebinding tests and decision 3's rows answer as today; `scripts/check_embedding_features.sh` green at each step of [#601]'s convention; the global path neutral or better than `frame_globals` in instructions with confidence intervals, base/branch/base over at least 10 rounds: the GBS against `main` (`nboyer` among it), `fib` through `--set twins`, and a `tak` workload of at least 1 s; each A/B also reports libload's `deferral-max-bytes`, and 4b's exit check re-measures [K16](#k16) on all its lanes (decision 10 on [#782]) | no `Rc` clone, `RefCell` borrow or `FORWARDED` hop on the global path, and no environment held by closures | [#613] (closed by [#822]), [#614] (its remainder), [#823] (its own PR, before the link tables) |
+| 4c | Identifiers as ids, inline provenance | 3–5 | document-owned location tables compacted while streaming; a weak scope-set table that reports which expansion scopes live identifiers carry | — | hygiene matrix 139/139; libload `malloc` peak ≤ 450 MiB; caret tests | the largest load-memory cost removed; syntax becomes `Drop`-free | [#612] (part); [#787], [#788], [#789], [#790], [#791], [#792], [#793], [#794] |
+| 4d | Frames and stacks; the `return_into` choke point for every write into a suspended frame (§11.1; it lowers the watermark from stage 7); the two places where today's VM keeps words outside any frame's window, `finish_wind_step` and `scratch_return_reg` (§11.1, invariant 1); the stack cap and its knob | 4–5; itemized 6.5–8.5, or 8–10 with work its items do not carry yet, the range chosen when 4d starts (decision 22 on [#782]) | B detected; the main-stack default min(8 GiB, 25%·B), fitted under `RLIMIT_AS` (tested on the Linux CI leg, and its fitting logic on both legs under an injected limit, §17.3); register-stack pages returned after 2 observations, and a committed-stack-bytes key beside the cap that reads them, since the steady-state clauses read committed plus external bytes and only `resident-bytes` sees the pages | — | `control_flow_matrix.rs` 64/64 and `escape_from_primitive.rs` on both backends; raise-site tests; `finished_forms_release_code.rs` 11/11; 10 M-deep recursion, its pages given back after two observations, read through that key; the call path at least neutral in instructions; map memory measured on libload | a JIT-ready stack, without changing the interpreter protocol or code lifetime | [#714] |
+| 4e | Continuations as heap objects; traced code liveness; the environment family's loads as `Step::LoadLibrary`, rooted through the registry entry, the step that decision 10 on [#782] names as the owner of their deferral window (to be reported on [#647], outside [K16](#k16)), its reach decided when 4e starts; the re-entry audit (§11.3), after which driver-level nested loops collect | 5–7 | VM captures are heap bytes; the VM's continuation plateau went at stage 1 ([#606]) | `CodeBody: Send + Sync` asserted (addition C11), which also needs 4b's link tables (the `global_cache` `Cell`s gone) and names as `Arc<str>` or symbol ids in `CodeObject.name` and the 24 instruction variants that carry an `Rc<str>` name | the matrix; `finished_forms_release_code.rs` 11/11, its three 2,000-form tests releasing each form's code with no collection, asserted outside the stress and zeal lanes; capture targets; a nested driver-level loop churn probe collects during the loop with a bounded heap | code release no longer depends on sweep; nested loops can collect | — |
+| 4f | Tree-walker host payloads: the `HostPayloadTable`, built once, here (decision 26 on [#782]), with `FinalKind::HostPayload` on [#785]'s registry; tree-walker closures and continuations as host payloads; environment-specifier namespaces move into it here, or at 5c | 2–3 | tree-walker environments charged only while a payload holds them | — | tree-walker lanes; no environment-driven collection on `(fib 25)`, which already holds (0 collections on both backends at `86baed1b` [P]) and stays as a regression guard; a wide-frame closure churn bounded, and a frame shared by ten closures charged once ([#637]'s remainder) | no tree-walker closure, continuation or frame is freed by a sweep's drop, and the frames they hold are charged while a payload holds them; from 5e nothing is dropped at a sweep, judged by [K9](#k9)'s census at stage 5's exit | [#637] (its remainder) |
+| 4g | Inline payloads; canonical record types in the records item: a canonical `%record-type-of` first, its own semantic PR with a suite row, then `eq?`, `eqv?`, the identity hash and `equal?` comparing words, and the VM's inline `eq?` borrowing no heap (decision 1 on [#782]); the quasiquote constructors' fresh primitive per compilation stays a deferral, since no program can observe it | 2–3 | — | — | per-kind census; each `SHARED_PAYLOADS` entry gone with the sub-stage that takes it out: `Port.0` at 4a ([#785], gone); `VmClosure.globals` at 4b (at 4e if 4b's link tables fall back to an `Rc<LinkTable>` on `VmClosure`); `Identifier.name` at 4c ([#790]); `Continuation.0`, `Procedure.0`'s `CpsLambda` arm and `EnvironmentSpecifier.env` at 4f (the last, or at 5c: decision 26 on [#782]); `Library.0`, with the never-allocated variant, at the stage's start; `Record.fields`, `Record.record_type`, `RecordType.0`, `Parameter.values`, `Promise.0`, `MutableCell.0`, `Macro.body`, `PromptTag.0` and `Ephemeron.0` at 4g, some among its core items at the stage's start. Judged last: after stage 4 the list holds only `Symbol.0` and the primitives' `Procedure.0`, both 5c's, and `EnvironmentSpecifier.env` if it moves at 5c | the heap is ready to move into blocks | — |
 | — | Stage-4 exit | ≤ 1, not in the totals | — | — | the baselines stage 5 is judged against are re-measured: the GBS, the post-load major, the I/O workloads, the steady-state lane | stage 5 is judged against what it replaces | on stage 5's issue |
-| 5 | The new heap, non-moving and whole-heap, kind by kind: 5a the `patina-gc` crate, spaces, `MarkRegion`, `NullGc`, verifier, Miri, the weak contract and its conformance suite; 5b pairs; 5c procedures and fixed-size kinds; 5d vectors, strings, bytevectors, bignums, the LOS; 5e arenas, old collector and `RefCell` deleted, pacing, decommit, `max_heap`, collect-and-retry; 5f inline flonum operations, then the final tag map and self-tagged flonums | 16–21 | 5a: the `def-getter` maker under zeal-major; 5c: the weak symbol table, name hash and old allocation (SD2), the NMS as mark-region with hole reuse, introduced definitions reclaimed, cells no longer a root region; 5e: the heap ceiling and its `RLIMIT_AS` fitting, idle trim at prompts, `notify_idle` and empty-buffer reads, per-block decommit, boost decay, SS3's counters and the phase-change clause, `memory-budget`; the nightly soak from 5 | `HeapSlot::compare_exchange` (addition C5, 5d); the tax re-measurement at the exit | lanes byte-identical per sub-stage; `large_request_after_garbage` on both backends; exit: [K9](#k9) and [K17](#k17); `large-live` reported against §9.10's budgets; 5f: [K6](#k6) | the representation win: about 2× fewer bytes, bump allocation, pauses proportional to live data, memory returned | [#609], [#616] |
+| 5 | The new heap, non-moving and whole-heap, kind by kind: 5a the `patina-gc` crate, spaces, `MarkRegion`, `NullGc`, verifier, Miri, the weak contract and its conformance suite; 5b pairs; 5c procedures and fixed-size kinds; 5d vectors, strings, bytevectors, bignums, records, values and 4e's continuation objects, the LOS; 5e arenas, old collector and `RefCell` deleted, pacing, decommit, `max_heap`, collect-and-retry; 5f inline flonum operations, then the final tag map and self-tagged flonums | 16–21 | 5a: the `def-getter` maker under zeal-major; 5c: the weak symbol table, name hash and old allocation (SD2), the NMS as mark-region with hole reuse, introduced definitions reclaimed, cells no longer a root region; 5e: the heap ceiling and its `RLIMIT_AS` fitting, idle trim at prompts, `notify_idle` and empty-buffer reads, per-block decommit, boost decay, SS3's counters and the phase-change clause, `memory-budget`; the nightly soak from 5 | `HeapSlot::compare_exchange` (addition C5, 5d); the tax re-measurement at the exit | lanes byte-identical per sub-stage; `large_request_after_garbage` on both backends; exit: [K9](#k9) and [K17](#k17); `large-live` reported against §9.10's budgets; 5f: [K6](#k6) | the representation win: about 2× fewer bytes, bump allocation, pauses proportional to live data, memory returned | [#609], [#616] |
 | 5g | Limits (after 5e, independent of 5f) | 3–4 (§17.3; the process budget's week is this file's estimate) | external bytes in `max_heap`; the soft target; the process budget (`MemoryBudget`); the whole-limit request check; the maximal major; the progress guard; the condition payload; the `NoGcScope` pre-entry check; the near-limit and memory-pressure hooks; the handler-room test; the limits lane | — | the limits lane green, outside the byte-identical lanes; [K19](#k19) | a program that grows gets a catchable condition naming what grew, instead of exhausting the machine | — |
 | C | Variant C (decision 2; after stage 5 and before the JIT track's first merged stage; its own PR; decision 3 settled first): the records' indirection, the shadow bitsets and `mark_if_*` deleted; per-binding guards on `cell.value == expected` for `CallPrimitive`, the inline operations and `JumpUnlessCellHolds`; JIT globals one load under `WATCHED` | about 2–3 (this file's estimate), outside the totals | — | — | the six define-after-use tests flip, with oracle-scored `DIVERGENCES.tsv` rows; `vm_callprimitive.rs`'s two set-after-use tests stay green; `run_suite_oracles.sh` green; ≤ 1% in instructions | one-load JIT globals; guards that recover when a program restores a procedure | filed when it starts |
 | 6 | JIT ABI spike and freeze, on an unmerged branch; the runtime helper table (`#[helper(class, noalloc)]`, `GcAttrs.helpers`, §11.2) | 3–5 | §11.2's fourth embedded-address case; the code-memory interface (`install_code`, per-unit free) | the publication spike, with code publication (§18.2 rule 4 (h)); the reserved words frozen | the spike answers its questions; [K6](#k6), [K7](#k7) and [K11](#k11) decided; the helper table's call-graph test (§16); `install_code` records each body's `GcAttrs` and refuses a mismatch (§14); against the Cranelift version it pins, the four facts this contract takes from the design review confirmed (prologues never save the pinned register, `Tail` results arrive in `x2`, `JITModule` has no `MAP_JIT` and frees only whole modules, single-bit tests lower to `tbz`/`tbnz`), and BTI landing pads checked | the JIT track can start without touching the GC | — |
@@ -2064,15 +2124,37 @@ the detail):
   callback paragraph: `%parameterize-swap!` calls nothing back); README.md's Known Limitations (the loader's retry
   after `EMFILE`, the `ports` key). No `DIVERGENCES.tsv` row: chibi and Gauche answer the port-identity rows as Patina
   does, and the rows for a parameter-like procedure are Patina's own, with a reported skip (decision 4 on [#782]).
-- **4b:** AGENTS.md ("An import installs a binding": records over shared cells replace forwarded slots and `Owner`);
-  `docs/VM_DECISIONS.md` §3 (globals through link tables); `docs/TEST_ORGANIZATION.md` (the import-policy section's
-  mechanism).
-- **4c:** `docs/MACRO_SYSTEM.md` (`IdentifierData`, provenance).
+- **4b:** AGENTS.md ("An import installs a binding": records over shared cells replace forwarded slots and `Owner`; and
+  the handle rule, "A host keeps a value through a handle": `global_env` and `heap()` deprecated, `OwnedEnvironment` a
+  namespace handle, the loader's borrowed heap workspace-internal, `Backend::define`); `docs/VM_DECISIONS.md` §3
+  (globals through link tables); `docs/TEST_ORGANIZATION.md` (the import-policy section's mechanism); `docs/README.md`,
+  "Changing the embedding API" (what [#601]'s promise counts as the API, and what stays raw); `docs/VM_ISA.md` §4.1 (the
+  per-site cache), §4.5 (a set bit routes the call "through `globals[name]`") and §4.7 (`Define` as
+  `globals[name] ← reg[src]`); `docs/VM_RUNTIME.md` §2.2 (`with_globals`, `saved_globals`); `docs/VM_COMPILER.md` §5.1
+  (`introduced_globals`), §7 and §9.1 (globals "looked up dynamically"); `docs/MACRO_SYSTEM.md` ([#438]'s alias as "an
+  ordinary forwarded slot", and the copy "an export `share_binding` cannot share"); README.md (the `Backend` raw-layer
+  paragraph, the migration note's `global_env()`, the `(gc-stats)` keys) and the key list in `primitives/gc.rs`'s module
+  doc.
+- **4c:** `docs/MACRO_SYSTEM.md` (the stale `ScopeSet` sketch, the `IdentifierData` one, which no type matches, and
+  provenance); `PRD/future/TREE_WALKER_HOOK_SYSTEM.md` §6 (provenance keyed by raw value bits).
 - **4d:** `docs/VM_DECISIONS.md` §4 (frames in a reserved stack rather than `derive(Clone)` structs in a `Vec`);
-  `docs/VM_RUNTIME.md` §2.1 and §4 (frame layout, call and return); README.md (`--stack-max`, `PATINA_STACK_MAX`,
-  `&stack-exhausted`).
-- **4e:** `docs/VM_DECISIONS.md` §4 (no continuation side tables or `VmContinuationRef`); `docs/VM_RUNTIME.md` §2.6
-  and §6 (continuation objects, roots).
+  `docs/VM_RUNTIME.md` §2.1 and §4 (frame layout, call and return), and §2.3, §2.5, §2.6, §3.3 and §3.4 (frame-count
+  depths, the flat register file); README.md (`--stack-max`, `PATINA_STACK_MAX`, `&stack-exhausted`); `docs/VM_ISA.md`
+  §2.1–2.2 (register windows; `derive(Clone)` "non-negotiable"); `docs/VM_COMPILER.md` §10.4 (per-PC bitsets);
+  `docs/VM_STEPPER.md` (absolute register indexes); the doc comment on `CallFrame` in `patina-vm`'s `types/mod.rs`, and
+  `smoke.rs`'s `call_frame_is_clone`, which the stage removes.
+- **4e:** `docs/VM_DECISIONS.md` §4 (no continuation side tables or `VmContinuationRef`) and §5 (the continuation side
+  tables as a root); `docs/VM_RUNTIME.md` §2.2 ("weak continuation stores"), §2.6 and §6 (continuation objects, roots);
+  `docs/VM_ISA.md` §2.3 and §4.3 (code objects, `MakeClosure`), §7.4 and §8 (the side tables); `docs/VM_COMPILER.md` §2
+  and §10.1 (the code store); AGENTS.md ("every nested entry into a loop opens one and has no driver", and the reason
+  "the call runs on a nested loop that defers"); `clippy.toml`'s header ("stages 2 and 4e … convert the sites").
+- **4f:** `docs/TEST_ORGANIZATION.md` ([#637]'s byte-trigger tests, the new frame and continuation tests); AGENTS.md
+  ("New heap object type": the host-payload recipe for a tree-walker kind); `PRD/future/TREE_WALKER_HOOK_SYSTEM.md` §4
+  and §5.1 (`Rc<CpsContinuation>`) and `PRD/future/VISUAL_DEBUGGER_DESIGN.md` §4 (`CpsContinuation`, and continuation
+  identity by `Rc`); `PRD/FFI_DESIGN.md` §1.1 (the `HostPayloadTable` "which stage 4f builds", described as built, and
+  its `FinalKind::Foreign` set beside the `FinalKind::HostPayload` that 4f adds).
+- **4g:** AGENTS.md's "New heap object type" step 1 (a payload the funnel writes is a plain field, not an `Interior`);
+  `docs/TEST_ORGANIZATION.md`'s census section (the per-kind lines).
 - **5:** AGENTS.md (the `TaggedValue` description; "New heap object type" becomes a `declare_layouts!` recipe);
   `docs/VM_DECISIONS.md` §2, §3, §5 and §9 (encoding, inline closures, the collector, inline strings);
   `docs/TEST_ORGANIZATION.md` (zeal-major, verifier and poisoning-sweep lanes); at 5e, README.md (`--heap-max`,
@@ -2095,10 +2177,45 @@ named stages), and decision 7c's threading additions 5–8, so about 99–138 in
 engineer. The figure is itemized, with no overrun factor; [K14](#k14) is its only calibration, and 5–8 of its weeks
 depend on decision 7c. Outside it: the two "now" rows (about 1–2 for the defects, 2–3 for detection), row C (about
 2–3), the SRFI 18 row (6–11 [I]) and the JIT track. Stage P is in the total because the pause estimate (§9.10) says
-its trigger will fire; if `large-live` measures under 100 ms, the total falls by 4–6 weeks. Parallel work is limited by
-shared files: only 4a and 4c can run beside 4d–4e, stage 6 beside stage 5, and stage P beside stages 7–9, so a second
-engineer shortens the calendar by about 14–21 weeks [I]. The collector proper is about 4–6 kLOC through stage 7, plus
-2–3 kLOC for stage 8 [I]; most of the effort is the common core every candidate design pays for.
+its trigger will fire; if `large-live` measures under 100 ms, the total falls by 4–6 weeks. Stage 4 counts in these
+figures at the 23–32 weeks its rows first gave, before row 4b's re-base to 6–9; the stage is planned against its
+itemized 37.5–53 (below), and the figures here are not re-summed, since 4d's range is chosen when 4d starts (decision 22
+on [#782]). Parallel work is limited by shared files: stage 4 runs in the tracks below, stage 6 beside stage 5, and
+stage P beside stages 7–9, so a second engineer shortens the calendar by about 14–21 weeks [I], a figure estimated
+before stage 4's tracks. The collector proper is about 4–6 kLOC through stage 7, plus 2–3 kLOC for stage 8 [I]; most of
+the effort is the common core every candidate design pays for.
+
+**Stage 4's plan** (decisions 13, 20 and 22 on [#782], 2026-11-01). The stage is planned against its itemized 37.5–53
+weeks [I]: 4a 5–6.5, 4b 6–9, 4c 5–7.5, 4d 6.5–8.5 (8–10 with work its items do not carry yet; its range is chosen when
+4d starts), 4e 7–10 (8–11 with work its items do not carry yet), 4f 3–4, 4g 3–5, and 2–2.5 for the stage-start PRs no
+sub-stage counts. About 4–6 weeks of the excess over the rows is limits work that the 5–7 above already count, and
+1.6–2.5 is scope added since the rows were written (4b's raw layer, [#613]'s index). It runs in five tracks:
+- **A, ports (4a):** landed.
+- **B, the VM core:** 4b → 4d → 4e, the critical path, about 19.5–27.5 weeks [I]. 4d's preparatory items (one `depth()`
+  accessor, `return_into`, [#714], dense per-pc maps, dead-slot clearing in the scan) run beside 4b, and opening them
+  does not start 4d under §2's rule: only 4d's stack-cap PR waits for decisions 8, 15 (values), SD5 and SD9. The
+  reserved register stack follows 4b's deletion of `frame_globals` by preference, not as a dependency. [#823] lands in
+  its own PR before 4b's link tables.
+- **C, syntax (4c):** beside 4b and 4d–4e, since its interning reaches heap identifiers only (decision 13 on [#782]).
+  4b's alias item lands before [#790] or after [#794], whichever opens first, and 4b's `Interpreter::heap()` step before
+  [#791].
+- **D, the tree-walker (4f):** after 4b's records item and [#785]'s registry, beside 4d; its fixpoint edge after 4e's
+  continuation objects.
+- **E, inline payloads (4g):** its core items at the stage's start; promise boxes and records any time; ephemerons after
+  4e's continuation objects; macro bodies after 4f's table; its gate last.
+
+The tracks meet in `heap/gc.rs`'s sweep (4c's [#788], [#791] and [#793], 4e's code release, 4f's host queue) and mark
+fixpoint (4e, 4f and 4g's ephemerons); in `heap/mod.rs`'s variants, which every sub-stage but 4d changes, with
+`account.rs`, core's `census.rs` (whose `VARIANT_NAMES` indices are fixed), `trace_sentinels.rs` and `debug_format.rs`,
+4b's deletion of `VmClosure.globals` editing `heap/mod.rs`, `gc.rs`, `account.rs` and `trace_sentinels.rs`; in
+`vm_state.rs` and `control.rs`, whose arms 4b, 4d and 4e edit apart except `MakeClosure` (4b's `frame_globals`, 4e's
+`note_closure_made`), with `push_frame_in` and 4g's inline `eq?`; where 4b meets 4d's preparatory items, in
+`code_object.rs`'s adjacent fields, `pass5_codegen.rs`, `gc_roots.rs`, `types/mod.rs` and the `CodeObject` stub
+literals, where whichever lands second rebases; and in `environment.rs` (4b, 4f and 4g; not 4c), `desugarer/mod.rs` (4b,
+4c and 4g), `SHARED_PAYLOADS` (edited by each PR that removes a payload) and the `(gc-stats)` keys. **The checkpoint:**
+after 4b's exit check and after 4d's, 4e–4g are re-planned if the two sub-stages' item estimates, plus the items their
+exit checks add, pass 1.5 times their re-based figure; each exit check also reports calendar days and PRs against stage
+3's and 4a's rates, as information.
 
 ## 20. Risks, mitigations and kill criteria
 
@@ -2114,15 +2231,15 @@ All measurements are interleaved A/B with confidence intervals (§16), on the pr
 | <a id="k6"></a>K6 | Self-tagged flonums do not pay | canonical boxes; constant folding; inline flonum operations first | immediate share < 70% on fibfp/mbrot/nucleic; or, **with inline flonum operations in both arms**, bytes allocated on those kernels not at least halved, or their cycles improved by less than half of the allocation-and-GC share their profile shows; or the spike's JIT float microkernel gains < 1.3×; or non-float cost > 1% in instructions → revert to 16 B boxes and keep `010`/`011` reserved. Decided before the stage 6 freeze |
 | <a id="k7"></a>K7 | The 2-load call or the limit-fold poll costs too much | spike measurement | spike: 2-load call > 3% slower in cycles than a 1-load entry on fib/tak/nboyer → entry blocks with a branch patched only inside `install_code` (with icache maintenance). Tick mode > 1% over the fold → Tick only in deterministic-scheduler builds |
 | <a id="k8"></a>K8 | The watermark return barrier breaks transfers or costs | one `return_into` choke point; strided lowering; matrix rows | any matrix row red under zeal-minor for > 1 week, or > 0.5% in instructions on deeprec or `deep-unwind`, where the barrier fires (fib/tak/nqueens at ≥ 1 s inputs are the control, where it should not) → raise the stride, or disable it (minors scan whole stacks; still correct), or enable it only above 10 K frames |
-| <a id="k9"></a>K9 | B1 is wrong: representation does not pay | stage 5 is kind by kind and can stop | **Stage 5's exit gates**, every one against the stage-4 exit baseline (§19), never against today's measurement table: GBS geomean ≥ 5% faster (cycles, with CI); on **every** GBS workload GC CPU ≤ stage 4 + 5% and peak RSS ≤ max(stage 4 + 10%, stage 4 + 5 MB); peak RSS ≥ 30% lower on libload, gcold and queue3; gcold (RSS − 11 MB floor)/pacing target ≤ 1.15; queue3 max pause < 15 ms (41 today); the post-load major (a `(gc)` right after libload's imports) at most half its stage-4 baseline, with decommit outside the pause; memory returned after a load visible in resident size and footprint; `Drop`-carrying allocations ≤ 1% (census); every class A, B and C steady-state row green ([K17](#k17)). Kill: < 5% geomean **and** < 30% peak-RSS gain, or any per-workload GC-CPU or RSS gate failed without a fix → stop and re-plan around a copying nursery over a mark-in-place old space |
+| <a id="k9"></a>K9 | B1 is wrong: representation does not pay | stage 5 is kind by kind and can stop | **Stage 5's exit gates**, every one against the stage-4 exit baseline (§19), never against today's measurement table: GBS geomean ≥ 5% faster (cycles, with CI); on **every** GBS workload GC CPU ≤ stage 4 + 5% and peak RSS ≤ max(stage 4 + 10%, stage 4 + 5 MB); peak RSS ≥ 30% lower on libload, gcold and queue3; gcold (RSS − 11 MB floor)/pacing target ≤ 1.15; queue3 max pause < 15 ms (41 today); the post-load major (a `(gc)` right after libload's imports) at most half its stage-4 baseline, with decommit outside the pause; memory returned after a load visible in resident size and footprint; `Drop`-carrying allocations ≤ 1% (the census's share with vector and string arena slots counted, from the key the stage-start census PR adds; the object-variant share is reported beside it); every class A, B and C steady-state row green ([K17](#k17)). Kill: < 5% geomean **and** < 30% peak-RSS gain, or any per-workload GC-CPU or RSS gate failed without a fix → stop and re-plan around a copying nursery over a mark-in-place old space |
 | <a id="k10"></a>K10 | The strangler mixes two heaps badly | one combined marker; per-kind sub-stages | a sub-stage cannot keep lanes byte-identical within two attempts, or mixed-trace pauses > +10% → convert the remaining kinds in one flag-day PR behind a temporary feature, deleted at 5e |
 | <a id="k11"></a>K11 | The fragment model's trampolined returns are too slow | none inside this contract | spike: fragments > 8% slower in cycles than a native call/ret estimate on fib/tak/nboyer → open a **separate native call/ret design**, priced and gated on its own: native call/ret only between non-`Leaf` events; every `Transfer` helper, poll or collection abandons the native stack back to the driver through an SP-reset stub written outside Cranelift, and frames resume through their `(code, pc)` resume entries; a native depth cap that falls back to fragments; the watermark check on the driver's resume path; gates: the matrix, 10 M-deep recursion, the two-mutator lane and zeal-minor. This contract does not cover that design |
 | <a id="k12"></a>K12 | Tier 2's rule (only tagged values at suspension points) costs too much | re-tagging is 1–6 instructions; out-of-band doubles boxed through a `Leaf` allocation | tier-2 measurements show > 15% loss on call-heavy float code → first more `Leaf` helpers and inlining; native stack maps only through a separately approved deopt-at-capture design that amends §14's exclusions |
 | <a id="k13"></a>K13 | VA reservations fail on CI (Linux overcommit, map count, `RLIMIT_AS`) | RW + `MAP_NORESERVE`; one VMA per heap; `MADV_DONTNEED` decommit (no VMA split); reservations fitted under `RLIMIT_AS`; the many-heaps probe | any reservation failure → 4 GiB default with chained reservations and a per-chunk `meta_bias` (+1 load in the barrier) |
 | <a id="k14"></a>K14 | Schedule overrun | each stage has standalone value | stage 5 at 2× its estimate (16–21 weeks [I], §19) → ship whole-heap `MarkRegion` (still the full representation win); defer 7 and 8. The measured overrun also replaces §18's borrowed factor after stage 9 |
 | <a id="k15"></a>K15 | C′, if pursued, regresses | design A first, same frame format | > 10% slower than A on deeprec or generator, or a matrix row unrestored after 4 weeks → stay at A |
-| <a id="k16"></a>K16 | B2 is wrong in practice: a window that cannot collect lets garbage grow (one huge form expanded under `NoGcScope` at point C or inside nested tree-walker trampolines; a Rust primitive building a large structure; polls deferred under `NoGcScope`; a C event loop calling Scheme through FFI callbacks) | `NoGcScope` confined to point C, the residual `apply_proc` fallbacks, nested tree-walker trampolines, a paused debugger's evaluation and, until they become driver entries (§11.3), FFI callbacks; overdraft with an emergency reserve; a pre-entry major when headroom is short (§17.3); `GcStats` keeps the high-water of bytes allocated since the last serviced poll and of bytes allocated under one `NoGcScope`, with the site (§15) | measured from stage 0 on the GBS, libload and both Larceny lanes, and, once FFI callbacks exist, on an FFI-callback event-loop probe in the FFI lane that the stage-2/3 `PRD/FFI_DESIGN.md` rewrite defines: any window above the larger of 64 MiB and 25% of the pacing target, or any lane reaching `HEAP_EXHAUSTED` → add a collection point at that site: bring decision 17's `ExpansionContext` root provider (a literal pool and epoch-checked memos) forward for point C, make the primitive resumable so it builds across `Step::Collect`, or root the nested tree-walker trampoline with evaluator-owned `StepRoots`, or make FFI callbacks driver entries (§11.3). Allocation itself never becomes a collection point |
-| <a id="k17"></a>K17 | Steady state regresses, or a stage makes a leak permanent | the steady-state lane, per PR and nightly, on both backends | a stage that turns a green row red is blocked until it is green. Stage 5's exit ([K9](#k9)) also needs every class A, B and C row green on the VM, and on the tree-walker except rows allowed to lag (decision 1). Under SD2's alternative, `sym-churn` and the symbol part of `unbound-ref` are class D |
+| <a id="k16"></a>K16 | B2 is wrong in practice: a window that cannot collect lets garbage grow (one huge form expanded under `NoGcScope` at point C or inside nested tree-walker trampolines; a Rust primitive building a large structure; polls deferred under `NoGcScope`; a C event loop calling Scheme through FFI callbacks) | `NoGcScope` confined to point C, the residual `apply_proc` fallbacks, nested tree-walker trampolines, a paused debugger's evaluation and, until they become driver entries (§11.3), FFI callbacks; overdraft with an emergency reserve; a pre-entry major when headroom is short (§17.3); `GcStats` keeps the high-water of bytes allocated since the last serviced poll and of bytes allocated under one `NoGcScope`, with the site (§15) | measured from stage 0 on the GBS, libload and both Larceny lanes, and, once FFI callbacks exist, on an FFI-callback event-loop probe in the FFI lane that the stage-2/3 `PRD/FFI_DESIGN.md` rewrite defines: any window above the larger of 64 MiB and 25% of the pacing target, or any lane reaching `HEAP_EXHAUSTED` → add a collection point at that site: bring decision 17's `ExpansionContext` root provider (a literal pool and epoch-checked memos) forward for point C, make the primitive resumable so it builds across `Step::Collect`, or root the nested tree-walker trampoline with evaluator-owned `StepRoots`, or make FFI callbacks driver entries (§11.3). Allocation itself never becomes a collection point. The planning probes deferred about 290 MiB in one window through `environment`, a top-level `(begin (import …))`, an `eval`'d or `load`'d `import` and the internal `call-with-port`, and about 101 MiB through the internal comparator `member`, where libload's own largest window is 27.2 MiB [P, `5b6d2956`]. These shapes are to be reported on [#647] with an owner each, and stay outside this criterion for now (decision 10 on [#782]): the `environment` family, 4e's `Step::LoadLibrary`; point C and the `eval`'d or `load`'d imports, a point-C follow-up issue (to be filed) or decision 17's `ExpansionContext`; the internal `member`, `assoc` and `call-with-port`, reachable only through `(patina internal …)`, deferred for good as stage 4's deferral controls, with 5g's pre-entry major an exhaustion guard only |
+| <a id="k17"></a>K17 | Steady state regresses, or a stage makes a leak permanent | the steady-state lane, per PR and nightly, on both backends | the lane is read by clause, each SS5 key a clause of its own (§17.1). No green clause turns red without the owner, and a stage that turns one red is blocked until it is green. A clause that turns red only because retention that already existed becomes counted is relabelled with its measured cost and recorded on the stage's issue as a re-baseline. A red SS1 clause that a sub-stage can move carries a per-cycle pin that only the owner raises, first `hidden-define`'s on both backends, from its re-baseline PR (4b's start decisions 9 and 10 on [#782]). Stage 5's exit ([K9](#k9)) also needs every class A, B and C row green on the VM, and on the tree-walker except rows allowed to lag (decision 1). Under SD2's alternative, `sym-churn` and the symbol part of `unbound-ref` are class D |
 | <a id="k18"></a>K18 | Mortal run-time objects (M1) cost too much | NMS swept only at majors, after the pause | M1 costing over 1% geomean in instructions, or 10% on any major pause → sweep the non-moving space every k-th major (reclamation delayed by up to k majors) |
 | <a id="k19"></a>K19 | The limits misfire | the reserve; the progress guard; the pre-entry major | handler room fails → unwind without running handlers. A GBS workload reaching the guard under default limits → a collection point ([K16](#k16)) or a corrected charge, never a larger default |
 
@@ -2142,11 +2259,11 @@ All measurements are interleaved A/B with confidence intervals (§16), on the pr
 | [K10](#k10) | lanes; mixed-trace pauses | byte identity; max pause |
 | [K11](#k11) | spike: fib, tak, nboyer | cycles |
 | [K12](#k12) | tier-2 float kernels (later) | cycles |
-| [K13](#k13) | `many-heaps` on Linux and macOS CI; budget detection under cgroup and `ulimit -v` | reservation failures |
+| [K13](#k13) | `many-heaps` on Linux and macOS CI; budget detection under cgroup and `ulimit -v` on Linux CI | reservation failures |
 | [K14](#k14) | — | elapsed engineer-weeks |
 | [K15](#k15) | deeprec, generator; the matrix | cycles; rows restored |
 | [K16](#k16) | the GBS, libload, both Larceny lanes (R7RS and the `--r6rs` emulation), the tree-walker subset; once FFI callbacks exist, an FFI-callback event-loop probe | `GcStats` high-water bytes since the last serviced poll and under one `NoGcScope`, per site; `HEAP_EXHAUSTED` events |
-| [K17](#k17) | the steady-state lane (§17.4), both backends | SS1–SS5 at the window ends; red and green rows per stage |
+| [K17](#k17) | the steady-state lane (§17.4), both backends | SS1–SS5 at the window ends, each SS5 key on its own; red and green clauses per stage, with their re-baselines and per-cycle pins |
 | [K18](#k18) | the GBS; the mark microbenchmark and `large-live` | instructions, geomean; max major pause |
 | [K19](#k19) | the limits lane; the GBS under default limits | handler room; progress-guard events |
 
@@ -2195,9 +2312,9 @@ stay with cost row R25.
 **Where DESIGN.md (including Appendices D, E and H) or ISSUES_DRAFT.md differ from this file, this file holds.** Both
 predate the steady-state, parallelism, contract and premature-collection follow-ups, so correct a stage issue drafted
 from them on these known points before filing it:
-- Symbols, global cells, binding records, record types and code descriptors are mortal and live in the NMS (M1,
-  decision 11, SD3), not in an immortal or descriptor space, as DESIGN §3, §4, Appendix D rows 4b and 5a, E.1 and E.6
-  and ISSUES_DRAFT's S0 holder inventory have it.
+- Symbols, global cells, binding records, record types and code descriptors are mortal and live in the NMS (M1, decision
+  11, SD3), not in an immortal or descriptor space, as DESIGN §3, §4, §8.6, Appendix D rows 4b and 5a, E.1 and E.6 and
+  ISSUES_DRAFT's S0 holder inventory have it.
 - Cells are not a root region, and the epilogue re-arms nothing at step 9 (§9.1, §9.9), unlike DESIGN §6.1, §6.10 and
   H.2.
 - Decommit also works per block, data pages only, inside partly occupied runs (§7), not only on whole 4 MiB runs
@@ -2226,10 +2343,49 @@ from them on these known points before filing it:
 - Stage 2 gives handles to the public paths that yield a value or environment, host-built environments included, and
   documents `backend()` and `evaluator()` as the raw layer ([#605], [#620], §11.5), where DESIGN E.3's stage 2 adds
   handles only for the `eval_*` results and leaves host environments to 4b's namespace handle.
+- DESIGN E.3's rows 3 and 4b move `Interpreter::heap()` and the loader's borrowed `&SharedHeap` with the `Backend`
+  trait, and replace the trait's words by handles at 4b. Under 4b's start decisions 6 and 7 on [#782], the promise line
+  comes before the records, `heap()` is deprecated there for typed replacements, and the loader keeps its borrowed
+  `&SharedHeap` as workspace-internal, which amends the 2026-10-21 decision on [#707]; after the link tables, S1 gives
+  `Backend` handle methods as provided defaults, its old methods deprecated for callers and required of implementors
+  until 5e (§11.5).
+- Under variant C, p8 follows chibi and Chez, while Gauche follows the import as R does (decision 3), where DESIGN's
+  decision 3 row has every case but p9 follow all the oracles, and ISSUES_DRAFT's #A5 records Gauche's p8 as an error
+  and plans a p8 row against Gauche, which `DIVERGENCES.tsv` does not need; E.2's p8 row is corrected in DESIGN.
 - Port identity needs no `DIVERGENCES.tsv` row, since chibi and Gauche answer [#608]'s programs as Patina does, where
   DESIGN Appendix D's row 4a updates one and ISSUES_DRAFT's #A3 adds two, `patina-defect` for chibi and Gauche;
   canonical record types are 4g's (decision 1 on [#782]), not 4a's; and three of row 4a's tests go by other names
   (row 4a here).
+- Appendix D's row 4b asks for `vm_global_cache.rs` green: its 7 tests assert what programs answer, so they survive the
+  cache's deletion, retargeted to link tables under a new name. For its "fib, tak and nboyer at ≥ 1 s", row 4b here
+  names the GBS, `fib` through `--set twins` and a `tak` workload of at least 1 s: `fib` is in `gbs.json`'s `twins` set,
+  not `gbs`, and `workloads.json`'s two `tak` inputs run in about 0.01 s at `86baed1b` [P].
+- Appendix D's row 4c gives "(765)", the study's libload `malloc` peak, from before stage 2's rooted loading.
+- Appendix D's row 4d names "the verifier's map check": it is the check-build panic at a frame whose pc has no map,
+  since the verifier arrives at 5a (§16).
+- Appendix D's row 4e gates on "`samedepth1000` RSS ≤ 200 MB", which has held since stage 1 (about 20 MB max RSS,
+  16.9 MB peak footprint and 377 collections at `86baed1b` [P]), so it is no gate of 4e's here; Appendix D's row 7
+  reuses the bound ("as at 4e"), so stage 7's issue states it.
+- H.5's "every program import runs inside `desugar_with_imports`' defer guard" no longer holds: a bare top-level import
+  loads outside the desugarer since stage 2 ([#677]), and the guard went at stage 3, when an import met inside a form
+  came to run beneath that form's context ([#704]).
+- Appendix D's row 4f has a "`HostPayloadTable` with young/old lists": no heap runs minors before stage 7, so 4f builds
+  `register`, `trace_payload`, `take` and the fixpoint edge over one list; the young and old lists, `store` and `dirty`
+  come with stage 7 (`store` possibly with 5a's contract types), and `PATINA_GC_VERIFY_ROOTS` exists from 5a. Its
+  "tree-walker libload garbage freed by the registry" cannot be measured as written. It becomes `tw-libload`'s peak RSS,
+  footprint and total pause no worse than `main` (base/branch/base); dead payloads dropped by their finalizers, not
+  inside the sweep (a check-build assertion); and finalizer time logged as non-mutator intervals (§9.9 step 11), so that
+  moving drops out of the pause cannot pass the gate on its own. Its "no drop-at-sweep left" waits for 5e (row 4f).
+- Appendix D's row 4g lists "macro literal vectors", which landed at stage 3 ([#718]); `Macro.body` is the remainder, in
+  4g after 4f's table.
+- Appendix D's row 5 gives 5c fewer fixed-size kinds (symbols, cells, record types, identifiers, descriptors,
+  parameters) than §6 has; stage 5's issue lists them all, and records, values and 4e's continuation objects go with 5d
+  (row 5 here).
+- Appendix D's and ISSUES_DRAFT's stage-4 efforts sum to 23–32 [I], where the stage is planned against its itemized
+  37.5–53 (§19, decision 22 on [#782]); their 4–5 for 4d is below its itemized 6.5–8.5. Appendix D's note on parallel
+  work serializes 4b, 4f and 4g with 4d–4e because they "edit the same dispatch arms in `vm_state.rs` and the same weak
+  seam in `gc.rs`"; the arms are edited apart except `MakeClosure` (4b and 4e), 4f edits none, and stage 4 runs in §19's
+  tracks (decision 20 on [#782]).
 
 [#38]: https://github.com/avalonalex/patina/pull/38
 [#47]: https://github.com/avalonalex/patina/pull/47
@@ -2239,6 +2395,7 @@ from them on these known points before filing it:
 [#352]: https://github.com/avalonalex/patina/issues/352
 [#406]: https://github.com/avalonalex/patina/issues/406
 [#423]: https://github.com/avalonalex/patina/issues/423
+[#438]: https://github.com/avalonalex/patina/issues/438
 [#442]: https://github.com/avalonalex/patina/issues/442
 [#471]: https://github.com/avalonalex/patina/issues/471
 [#476]: https://github.com/avalonalex/patina/issues/476
@@ -2267,7 +2424,10 @@ from them on these known points before filing it:
 [#624]: https://github.com/avalonalex/patina/issues/624
 [#625]: https://github.com/avalonalex/patina/issues/625
 [#626]: https://github.com/avalonalex/patina/issues/626
+[#634]: https://github.com/avalonalex/patina/issues/634
+[#636]: https://github.com/avalonalex/patina/pull/636
 [#637]: https://github.com/avalonalex/patina/issues/637
+[#638]: https://github.com/avalonalex/patina/pull/638
 [#643]: https://github.com/avalonalex/patina/issues/643
 [#647]: https://github.com/avalonalex/patina/issues/647
 [#648]: https://github.com/avalonalex/patina/issues/648
@@ -2277,18 +2437,34 @@ from them on these known points before filing it:
 [#652]: https://github.com/avalonalex/patina/issues/652
 [#655]: https://github.com/avalonalex/patina/issues/655
 [#656]: https://github.com/avalonalex/patina/issues/656
+[#677]: https://github.com/avalonalex/patina/issues/677
 [#686]: https://github.com/avalonalex/patina/issues/686
 [#687]: https://github.com/avalonalex/patina/issues/687
 [#697]: https://github.com/avalonalex/patina/issues/697
 [#704]: https://github.com/avalonalex/patina/issues/704
 [#706]: https://github.com/avalonalex/patina/issues/706
 [#707]: https://github.com/avalonalex/patina/issues/707
+[#708]: https://github.com/avalonalex/patina/issues/708
 [#710]: https://github.com/avalonalex/patina/issues/710
+[#714]: https://github.com/avalonalex/patina/issues/714
 [#718]: https://github.com/avalonalex/patina/issues/718
+[#774]: https://github.com/avalonalex/patina/issues/774
+[#780]: https://github.com/avalonalex/patina/issues/780
 [#784]: https://github.com/avalonalex/patina/issues/784
 [#782]: https://github.com/avalonalex/patina/issues/782
 [#785]: https://github.com/avalonalex/patina/issues/785
 [#786]: https://github.com/avalonalex/patina/issues/786
 [#783]: https://github.com/avalonalex/patina/issues/783
+[#787]: https://github.com/avalonalex/patina/issues/787
+[#788]: https://github.com/avalonalex/patina/issues/788
+[#789]: https://github.com/avalonalex/patina/issues/789
+[#790]: https://github.com/avalonalex/patina/issues/790
+[#791]: https://github.com/avalonalex/patina/issues/791
+[#792]: https://github.com/avalonalex/patina/issues/792
+[#793]: https://github.com/avalonalex/patina/issues/793
+[#794]: https://github.com/avalonalex/patina/issues/794
 [#817]: https://github.com/avalonalex/patina/issues/817
 [#818]: https://github.com/avalonalex/patina/issues/818
+[#822]: https://github.com/avalonalex/patina/pull/822
+[#823]: https://github.com/avalonalex/patina/issues/823
+[#824]: https://github.com/avalonalex/patina/pull/824

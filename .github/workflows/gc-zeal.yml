@@ -14,12 +14,14 @@ name: GC zeal
 # make and use the maps, and its types (Instruction, CallFrame, CodeObject's
 # register_roots); the heap and its collector, and TaggedValue, where
 # DEAD_SLOT lives; the library loader and registry (GcDeferGuard::holding
-# and the registry's roots); the tree-walker's trampoline and evaluator,
-# which poll the same way; the toolchain; and the lane's own inputs. A
-# weekly run catches what the filter misses (the primitives, lib/scheme,
-# Cargo.lock), at one lane's cost a week. The filter has the limits ci.yml's
-# has (docs/TEST_ORGANIZATION.md, "CI trigger scope"): a whole workflow
-# filtered out leaves a required check pending, and none is required today.
+# and the registry's roots); environments, libraries and import sets, and
+# both backends' backend.rs, which stage 4b rewrites (decision 23 on #782);
+# the tree-walker's trampoline and evaluator, which poll the same way; the
+# toolchain; and the lane's own inputs. A weekly run catches what the filter
+# misses (the primitives, lib/scheme, Cargo.lock), at one lane's cost a week.
+# The filter has the limits ci.yml's has (docs/TEST_ORGANIZATION.md, "CI
+# trigger scope"): a whole workflow filtered out leaves a required check
+# pending, and none is required today.
 on:
   push:
     branches: [ main ]
@@ -27,10 +29,15 @@ on:
       - 'crates/patina-vm/src/runtime/**'
       - 'crates/patina-vm/src/compiler/**'
       - 'crates/patina-vm/src/types/**'
+      - 'crates/patina-vm/src/backend.rs'
       - 'crates/patina-core/src/heap/**'
       - 'crates/patina-core/src/tagged_value.rs'
+      - 'crates/patina-core/src/environment.rs'
+      - 'crates/patina-core/src/library.rs'
       - 'crates/patina-runtime/src/library_loader.rs'
       - 'crates/patina-runtime/src/library_registry.rs'
+      - 'crates/patina-runtime/src/import_set.rs'
+      - 'crates/patina-tree-walker/src/backend.rs'
       - 'crates/patina-tree-walker/src/eval/mod.rs'
       - 'crates/patina-tree-walker/src/eval/cps_eval/**'
       - 'crates/patina-tests/tests/scheme/control/**'
@@ -44,10 +51,15 @@ on:
       - 'crates/patina-vm/src/runtime/**'
       - 'crates/patina-vm/src/compiler/**'
       - 'crates/patina-vm/src/types/**'
+      - 'crates/patina-vm/src/backend.rs'
       - 'crates/patina-core/src/heap/**'
       - 'crates/patina-core/src/tagged_value.rs'
+      - 'crates/patina-core/src/environment.rs'
+      - 'crates/patina-core/src/library.rs'
       - 'crates/patina-runtime/src/library_loader.rs'
       - 'crates/patina-runtime/src/library_registry.rs'
+      - 'crates/patina-runtime/src/import_set.rs'
+      - 'crates/patina-tree-walker/src/backend.rs'
       - 'crates/patina-tree-walker/src/eval/mod.rs'
       - 'crates/patina-tree-walker/src/eval/cps_eval/**'
       - 'crates/patina-tests/tests/scheme/control/**'

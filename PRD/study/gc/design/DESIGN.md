@@ -244,7 +244,7 @@ are declared raw in the layout specification, never scanned, and never a barrier
 | pair | `0100` | car, cdr | 16 |
 | procedure: VM closure | `0101` | descriptor ref, fv₀…fvₙ₋₁ | 8+8n |
 | procedure: primitive | `0101` | descriptor ref (its primitive descriptor), pad | 16; immortal, with its descriptor |
-| procedure: parameter | `0101` | descriptor ref (PARAM), converter, value vector (transitional shallow binding); from stage 9: descriptor ref, converter, global-value cell | 32 |
+| procedure: parameter | `0101` | descriptor ref (PARAM), converter, value (transitional shallow binding by swap); from stage 9: descriptor ref, converter, global-value cell | 32 |
 | procedure: continuation | `0101` | descriptor ref (CONT_INVOKE), `CONT` object | 16 |
 | procedure: tree-walker lambda | `0101` | descriptor ref (TW_LAMBDA), host id (fixnum) | 16 |
 | vector | `0110` | header(len), e₀… | 8+8n |
@@ -914,11 +914,15 @@ environment's fate is a design. Variant R (stage 4b) keeps today's "follow the n
 compiled before a later `define` over an import, or before a later import, must see the new binding, so R needs an
 indirection that variant C does not.
 - **Binding records.** Every name in a namespace (the global environment, a library's environment, an environment
-  specifier) maps to an immortal `BindingRecord { cell }`: own definitions, imports, aliases and placeholders alike.
+  specifier, a host namespace) maps to an immortal `BindingRecord { cell }`: own definitions, imports, aliases and
+  placeholders alike. A name a host namespace has not defined gets a child record that reads through to the global
+  namespace's; a GBS A/B chooses between a tag test on the global path and host opcodes, and if both miss the 1% gate,
+  host units instead link the parent's record and re-link through weak back-links (owner decision, 2026-11-01, #782).
   `Library.exports` maps names to cells, resolved one hop to the owning cell.
 - **Link tables.** Each code unit keeps a table of record references indexed by its global operands, filled at load; a
-  name with no binding yet gets a placeholder record whose cell holds `UNBOUND`. `LoadGlobal`, `StoreGlobal` and
-  `Define` take a link index; a read is `link[k] → record → cell → value`.
+  name with no binding yet gets a placeholder record whose cell holds `UNBOUND`. `LoadGlobal`, `StoreGlobal`,
+  `Define`, and the deoptimization of `CallPrimitive` and the inline primitive opcodes take a link index; a read is
+  `link[k] → record → cell → value`.
 - **Re-pointing.** A `define` over an import allocates a new cell and re-points `record.cell`; a `define` over the
   namespace's own binding stores into its cell (R7RS's "acts like `set!`"); an import re-points `record.cell` to the
   exporter's cell. Earlier code holds the record, so it sees the change, when the `define` runs.
@@ -1653,7 +1657,7 @@ is the source of truth, and §15 keeps one line linking to it. Effort is in focu
 | 4d | **Frames and stacks** (isolated) | non-relocating reserved register stack; interleaved 40 B frame headers; byte-offset depths; one `depth()` accessor at every `frames().len()` site; window initialization at push; dense per-pc map index with maps at every suspension point (calls, inline operations, raise sites, pc 0); dead-slot clearing in the scan; `Rc` code liveness kept through a per-thread side vector; the verifier's map check; the stack cap with `PATINA_STACK_MAX`/`--stack-max`, `&stack-exhausted`, and register-stack decommit (§8.1). `vm:runtime/{execution_state,control,vm_state}.rs`, `vm:types/code_object.rs` | matrix 64/64 and `escape_from_primitive.rs` on both backends; the raise-in-`guard` collection and capture tests (a collection and a `call/cc` inside a `guard` handler for errors raised by `(car 5)`, `(vector-ref v 99)`, an unbound global and a shadowed `+`, both backends); `finished_forms_release_code.rs` 9/9, including `a_captured_continuation_keeps_its_form_s_code`; 10 M-deep recursion still works and gives its stack pages back after two observations; `&stack-exhausted` is catchable, and uncaught it exits non-zero; call path ≥ neutral in instructions; map memory measured on libload | 4–5 | a JIT-ready stack, without changing the interpreter protocol or code lifetime |
 | 4e | **Continuations A and traced code liveness** | value-only `CONT` objects; code descriptors as heap objects with inline constants (arena slots until 5c); frame `code` words and procedure word 0 as descriptor references; units with an `escaped` bit that every holder sets (`CodeStore::escape`); the `Rc` side vector, VM weak tables and `live_closures` deleted; driver-level nested VM loops (`across_reentry`) audited and made collectable (loops beneath a `Cx` stay deferred); `environment` loads as `Step::LoadLibrary` | matrix on both backends; **`finished_forms_release_code.rs` 9/9, including the two 2,000-form tests with no collection**; capture targets per probe, set from the re-run toy; `samedepth1000` RSS ≤ 200 MB | 5–7 | capture becomes byte-visible; code release no longer depends on sweep; nested loops can collect |
 | 4f | **Tree-walker host payloads** | `HostPayloadTable` with young/old lists; tree-walker environments charged when GC-coupled, credited at finalization | `gc_tree_walker.rs` and tree-walker chibi green; tree-walker libload garbage freed by the registry; tree-walker `(fib 25)` triggers no environment-driven collection | 2–3 | no drop-at-sweep left |
-| 4g | **Inline payloads** | records, promises, cells and parameters (transitional values-vector layout) as plain fields; macro literal vectors | per kind: no `Rc` payload left in records, promises, cells, parameters, identifiers, ports and continuations (census) | 2–3 | the heap is ready to be moved into blocks |
+| 4g | **Inline payloads** | records, promises, cells and parameters (transitional single-value layout) as plain fields; macro literal vectors | per kind: no `Rc` payload left in records, promises, cells, parameters, identifiers, ports and continuations (census) | 2–3 | the heap is ready to be moved into blocks |
 | — | **Stage-4 exit baseline** | re-measure, at stage 4's exit, the GBS, the I/O workloads and the post-load major (a `(gc)` right after libload's imports): stages 1, 2 and 4c change the 178 ms of today, and K9 compares stage 5 with this baseline, not with today's measurement table | numbers posted on S5 before 5a starts | ≤ 1 | stage 5 is judged against what it actually replaces |
 | 5 | **The new heap: non-moving, whole-heap, kind by kind** | 5a `patina-gc` crate (reservation, metadata, SOS, LOS, descriptor and immortal spaces, `MarkRegion`, `NullGc`, verifier, `VERIFY_ROOTS`, the debug-poison sweep and quarantine, Miri on `patina-gc` and a core subset, the heterogeneous mark microbenchmark that fixes a, b and c, the weak and finalization contract of §11 with its conformance suite on `MarkRegion` and `NullGc`); 5b pairs (raw constructors become `unsafe`); 5c procedures and fixed-size headered kinds (symbols, cells, record types, identifiers, descriptors, parameters in their transitional layout); 5d vectors, strings, bytevectors, bignums and the LOS; 5e delete the arenas, the old collector and the `RefCell` (core, VM, tree-walker, compat), allocation on `&Cx`, pacing, the post-pause catch-up sweep and block classification, decommit, `PATINA_HEAP_MAX`/`--heap-max` with the reservation derived from `max_heap`, and collect-and-retry on `Oom` for user-sized requests and capture; 5f inline flonum fast paths (own PR, measured against boxed flonums), then **the final tag map and self-tagged flonums** (isolated, revertible) | per PR: all lanes in off, default, stress and debug-poison on both backends; reservation placement verified. 5e: `large_request_after_garbage` on both backends (with the heap filled close to `--heap-max` by garbage, a `(make-vector N)` that fits only after a collection succeeds, and so does a deep capture in the same state). **Exit:** K9's gates (§16), against the stage-4 exit baseline; `large-live` reported against decision 6's budgets. 5f: K6 | 16–21 | the representation win: about 2× fewer bytes, bump allocation, pauses proportional to live data, memory returned |
 | 6 | **JIT ABI spike and freeze** | a Cranelift prototype of about 20 opcodes **on an unmerged branch**, over `Mutator`/`GcAttrs`, driving `cranelift-codegen` into a `MAP_JIT` reservation; it can run beside stage 5. Then freeze the offsets, S1, the helper classes, the frame contract and the entry trampoline in `docs/GC_DESIGN.md` | answers: per-fragment prologue cost; 2-load call cost (K7); limit-fold poll and `Transfer`-return check cost; allocation grouping; inline barrier slow path against a `PreserveAll` stub; the return-barrier trampoline; the cost of results as the first `Tail` argument (`x2`); S1 against a native call/ret estimate (K11); a float microkernel with self-tagged and boxed flonums (K6, JIT side); BTI. Settled already from source: `x21` composes with `CallConv::Tail`; single-bit tests lower to `tbz`/`tbnz` | 3–5 | the JIT track can start without touching the GC |
@@ -1752,7 +1756,7 @@ fate that is a design (variant R's binding records).
 | VM continuation side tables, `VmContinuationRef` | deleted: continuations are heap objects | 4e |
 | `WindRecord.handlers: Rc<[H]>`, copied per `dynamic-wind` | a heap vector; persistent heap lists with C′ | 4e |
 | `symbol_table`, `core_syntax_table` (re-marked every GC) | an interner over immortal symbols, live as ephemeron keys (§6.6); core syntax in cells | 5c |
-| `Parameter{values: Rc<RefCell<Vec>>}` (shallow binding) | 4g: a transitional heap layout (descriptor, converter, values vector), which 5c keeps; stage 9: deep-bound parameterization as heap data | 4g / 9 |
+| `Parameter{values: Rc<RefCell<Vec>>}` (shallow binding) | 4g: a transitional heap layout (descriptor, converter, value), which 5c keeps; stage 9: deep-bound parameterization as heap data | 4g / 9 |
 | `%parameterize-swap!` calling parameter-like procedures from Rust, with a transactional undo (`crates/patina-primitives/src/primitives/parameters.rs:195-245` [S]) | stage 4a: the standard ports become parameter objects with validating converters, so the swap installs only into parameter objects and never calls back; any other parameter-like procedure is installed by a Scheme loop in `lib/scheme/base/parameters.scm` with a `guard`-based undo around a non-reentrant `%parameter-install!`. `parameters.scm:167-176`'s `(caught 0)` row gates it | 4a |
 | record `Rc<RTD>` + `Rc<RefCell<Vec>>`, promise `Rc`, `MutableCell` `RefCell` | inline heap fields through the funnel | 4g / 5c |
 | `Port(Rc<Port>)` and the `thread_local!` current ports | `PortTable` + port object, tables in a weak registry (R1), per thread at 4a and process-wide at 9; current ports in the dynamic environment | 4a / 9 |
@@ -1773,7 +1777,7 @@ referring to an identifier before it is imported errors in a program or library,
 | Case | Shape | Under R (stage 4b; today's answer) | Under C | Oracle followed | `DIVERGENCES.tsv` rows |
 |---|---|---|---|---|---|
 | p7 | a reference compiled before a later `define` of the same name | works: a placeholder record, whose own cell the `define` fills | works: a placeholder cell, which the `define` reuses as the program's own | all three agree | none |
-| p8 | a reference compiled before a mid-program `(import (counter))` that supplies the name | follows the import: `0` | stays unbound: an error | chibi, Gauche and Chez (all error) | R: chibi and Gauche; C: none |
+| p8 | a reference compiled before a mid-program `(import (counter))` that supplies the name | follows the import: `0`, as Gauche does (corrected for #782) | stays unbound: an error | chibi and Chez (both error) | R: chibi; C: Gauche |
 | p9 | the program defines `count` and compiles `show`, then imports `(counter)` and calls `(bump!)` | the import re-points the record, so `show` sees the library's `count`: `(1 1)` | `show` keeps the program's binding, later code sees the import: `(mine 1)`, with chibi's warning "importing already defined binding" | chibi, warning included | R: chibi and Gauche; C: Gauche, which answers `(mine mine)` (the definition wins everywhere) |
 | q1 | `call-with-values` and `dynamic-wind` sites run, then the program redefines both | the earlier sites use the new definitions: `mine mine` | the earlier sites keep the imports | chibi and Gauche | R: chibi and Gauche; C: none for the answers (Gauche's anomalous `dynamic-wind` result gets its own row if the suite row observes it) |
 | q2, q3 | `(import (rename (only (scheme base) cdr) (cdr car)))` after `f` was compiled, with and without a prior call of `f` | `f` follows the re-import: `((2) (2))` | `f` keeps `car`: `(1 (2))` | chibi and Gauche | R: chibi and Gauche; C: none |
@@ -1847,6 +1851,11 @@ keeps most of the ~200 test call sites compiling unchanged.
 - **Descriptors in the arena era (S4e, S5).** From 4e until 5c a descriptor is an `objects`-arena slot with the same
   fields; it moves into the descriptor space (primitive descriptors into the immortal space) with the other
   fixed-size kinds at 5c. Every code reference is a value from 4e onwards.
+- **Continuations before stage 5 (S4e, S5).** §10 describes the final form, and what it needs from the new heap
+  arrives with stage 5: the LOS at 5d, so captures over 8 KiB stay out of one until then; collect-and-retry
+  (`try_alloc`) at 5e; the `0101` procedure with `CONT_INVOKE` at 5c and 5f, and until then invocation stays the VM's
+  control intercept. What a continuation is from 4e until stage 5 is settled with PRD decision 18 when 4e starts
+  (corrected for #782).
 - **`Drop` census (S4g, S5).** 4g's gate is per kind: no `Rc` payload left in records, promises, cells, parameters,
   identifiers, ports and continuations. The ≤ 1% census target is met at stage 5's exit, when closures, vectors,
   strings, bytevectors and bignums have left the arenas.
@@ -1868,7 +1877,7 @@ keeps most of the ~200 test call sites compiling unchanged.
 | pair | `0100` | car, cdr | 16 | 16 (arena) |
 | procedure: VM closure | `0101` | descriptor ref, fv₀…fvₙ₋₁ | 8+8n | 72 + `Vec` + `Rc<Environment>` |
 | procedure: primitive | `0101` | descriptor ref (one immortal descriptor per primitive), pad | 16 | 72 + `Rc` |
-| procedure: parameter | `0101` | descriptor ref (PARAM), converter, value vector (shallow binding, transitional); from stage 9: descriptor ref, converter, global-value cell | 32 | 72 + `Rc<RefCell<Vec>>` |
+| procedure: parameter | `0101` | descriptor ref (PARAM), converter, value (shallow binding by swap, transitional); from stage 9: descriptor ref, converter, global-value cell | 32 | 72 + `Rc<RefCell<Vec>>` |
 | procedure: continuation | `0101` | descriptor ref (CONT_INVOKE), `CONT` object | 16 | id into weak side table |
 | procedure: tree-walker lambda | `0101` | descriptor ref (TW_LAMBDA), host id (fixnum) | 16 | 72 + `Rc<CpsLambda>` |
 | vector | `0110` | header(len), e₀… | 8+8n | 24 + `malloc` |
