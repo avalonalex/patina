@@ -1492,6 +1492,7 @@ fn runtime_stub(
         name: Some(Rc::from(name)),
         global_cache: GlobalCacheEntry::table(&instructions),
         global_links: GlobalCacheEntry::link_table(&instructions),
+        link_env: std::cell::Cell::new(0),
         live_closures: std::cell::Cell::new(0),
         instructions,
         constants: Vec::new(),

@@ -85,6 +85,31 @@ impl<T> HeapTable<T> {
         }
     }
 
+    /// SPIKE 4b.1 (#829): the table, unguarded, as a reference rather than
+    /// through a closure, in the default build: for the binding table's read
+    /// on every global read. [`Self::with_unguarded`] took a call frame there
+    /// (its instance for the VM's `LoadGlobal` was outlined, about 7
+    /// instructions a read; marking it `inline(always)` outlined the closure
+    /// instead), and this is inlined whole. An access open when it starts
+    /// panics, as [`Self::with_unguarded`]'s does. No threaded form: a lock
+    /// cannot hand out a bare reference; the caller takes
+    /// [`Self::with_unguarded`] there.
+    ///
+    /// # Safety
+    ///
+    /// The caller may only read and copy out of the reference, and must drop
+    /// it before anything that can access this table: no access may begin
+    /// while it is live, which is what marking the borrow would refuse.
+    #[cfg(not(feature = "threaded"))]
+    #[inline(always)]
+    pub(crate) unsafe fn unguarded_ref(&self) -> &T {
+        // SAFETY: the caller's contract, as `with_unguarded`'s.
+        match unsafe { self.state.try_borrow_unguarded() } {
+            Ok(state) => state,
+            Err(_) => nested_access(),
+        }
+    }
+
     /// Change the table for the length of `f`.
     #[inline]
     #[track_caller]

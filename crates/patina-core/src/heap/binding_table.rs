@@ -6,8 +6,11 @@
 //! reference encoded in its `TaggedValue` ([`RecordRef::word`]); the record
 //! names its cell; the cell holds the value. A read goes
 //! record → cell → value through [`BindingTable::read`], a safe accessor
-//! over [`HeapTable::with_unguarded`], as `PortTable::get` reads the port
-//! table: no heap borrow and no table borrow marked.
+//! over the table read unguarded, as `PortTable::get` reads the port table:
+//! no heap borrow and no table borrow marked. It reads through
+//! `HeapTable::unguarded_ref`, which hands out a reference rather than
+//! taking a closure, since `with_unguarded`'s closure cost the VM's
+//! `LoadGlobal` an outlined call (#829's review).
 //!
 //! What the prototype leaves out, by the spike's scope: no entry is ever
 //! freed (no marks, no sweep, no prune), so every entry is live; and the
@@ -186,11 +189,25 @@ impl BindingTable {
     /// The value of the cell `record` names: the read of every global, on
     /// both backends. Refuses a record reference that does not name a live
     /// record of this table, in every build.
+    ///
+    /// Closure-free in the default build ([`HeapTable::unguarded_ref`]), so
+    /// the VM's `LoadGlobal` takes the read inline: through
+    /// `with_unguarded`'s closure it took a call (#829's review).
     #[inline(always)]
     pub fn read(&self, record: RecordRef) -> TaggedValue {
-        // SAFETY: the closure indexes the table and copies a word out of it,
-        // or panics: none of it can reach the table.
-        unsafe { self.state.with_unguarded(|tables| tables.read(record)) }
+        #[cfg(not(feature = "threaded"))]
+        {
+            // SAFETY: the reference lives for this expression only, which
+            // indexes the table and copies a word out of it, or panics: none
+            // of it can reach the table.
+            unsafe { self.state.unguarded_ref() }.read(record)
+        }
+        #[cfg(feature = "threaded")]
+        {
+            // SAFETY: the closure indexes the table and copies a word out of
+            // it, or panics: none of it can reach the table.
+            unsafe { self.state.with_unguarded(|tables| tables.read(record)) }
+        }
     }
 
     /// The id of the cell `record` names.

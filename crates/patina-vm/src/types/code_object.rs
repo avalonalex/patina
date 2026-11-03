@@ -186,14 +186,28 @@ pub struct CodeObject {
     /// SPIKE 4b.1 (#829): per-site binding-record references for
     /// `LoadGlobal`, pc-indexed beside `global_cache` and the same length,
     /// standing in for 4b.9's link table. Filled on a site's first
-    /// execution from `frame_globals`' environment, when the name is that
-    /// namespace's own slot; a filled entry reads `link → record → cell →
-    /// value` with no `frame_globals` call and no cache probe.
+    /// execution from the frame's closure's environment, when the name is
+    /// that namespace's own slot and every closure of this code runs against
+    /// that one environment (`link_env`); a filled entry reads `link →
+    /// record → cell → value` with no `frame_globals` call and no cache
+    /// probe.
     #[trace(
         skip,
         reason = "record references, which are no heap values: the cells they reach are the binding table's, which the handle table traces"
     )]
     pub global_links: Vec<Cell<RecordRef>>,
+
+    /// SPIKE 4b.1 (#829): the environment the links are keyed on, since a
+    /// hit compares none (where `GlobalCacheEntry` compares `env_id` at every
+    /// probe). The `env_id` of the globals of every closure made of this
+    /// code and of every frame `push_frame_in` pushed for it, while they
+    /// agree; `0` before the first, and [`CodeObject::LINKS_MIXED`] once two
+    /// differ, which clears the links and refuses any more. A frame with no
+    /// closure (a program's top-level form, which reads `state.globals`, and
+    /// so whatever a `with_globals` has swapped in) never links. 4b.9's links
+    /// filled at load make the key hold by construction.
+    #[trace(skip, reason = "an environment id")]
+    pub link_env: Cell<u64>,
 
     /// How many live VM closures run this code (#338). A frame holds its code
     /// itself, so the `Rc` count says whether a frame needs it; a closure names
@@ -283,6 +297,37 @@ impl GlobalCacheEntry {
 }
 
 impl CodeObject {
+    /// SPIKE 4b.1 (#829): `link_env` once closures of this code have run
+    /// against two environments.
+    pub const LINKS_MIXED: u64 = u64::MAX;
+
+    /// SPIKE 4b.1 (#829): a closure of this code, or a frame of it, runs
+    /// against the globals `env_id`. The first sets `link_env`; one that
+    /// differs from it clears every link and refuses more, so a link is
+    /// never read against an environment it was not filled for.
+    pub fn note_link_env(&self, env_id: u64) {
+        let seen = self.link_env.get();
+        if seen == env_id || seen == Self::LINKS_MIXED {
+            return;
+        }
+        if seen == 0 {
+            self.link_env.set(env_id);
+            return;
+        }
+        self.link_env.set(Self::LINKS_MIXED);
+        for link in &self.global_links {
+            link.set(RecordRef::EMPTY);
+        }
+    }
+
+    /// SPIKE 4b.1 (#829): whether a site of this code may link against the
+    /// globals `env_id`: the one environment every closure of it runs
+    /// against.
+    #[inline]
+    pub fn links_for(&self, env_id: u64) -> bool {
+        self.link_env.get() == env_id
+    }
+
     /// Look up the source location for a given program counter.
     pub fn source_location(&self, pc: usize) -> Option<&SourceLocation> {
         let idx = self

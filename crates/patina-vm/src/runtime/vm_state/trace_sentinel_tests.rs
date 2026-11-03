@@ -46,6 +46,7 @@ fn code_holding(constants: Vec<TaggedValue>) -> Rc<CodeObject> {
         register_roots: None,
         global_cache: Vec::new(),
         global_links: Vec::new(),
+        link_env: std::cell::Cell::new(0),
         live_closures: Cell::new(0),
     })
 }

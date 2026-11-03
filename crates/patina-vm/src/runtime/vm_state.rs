@@ -420,6 +420,7 @@ impl VmState {
                 register_roots: None,
                 global_cache: Vec::new(),
                 global_links: Vec::new(),
+                link_env: std::cell::Cell::new(0),
                 live_closures: Cell::new(0),
             }),
             free_code_ids: Vec::new(),
@@ -688,8 +689,8 @@ impl VmState {
         loaded(&self.code_store, id)
     }
 
-    /// A closure was made of the code `id`.
-    pub(super) fn note_closure_made(&self, id: CodeObjectId) {
+    /// A closure was made of the code `id`, over the globals `env_id`.
+    pub(super) fn note_closure_made(&self, id: CodeObjectId, env_id: u64) {
         let code = self.loaded_code(id);
         // The code making the closure is running, and a unit is let go only
         // whole, so the closure's own code is loaded; a count missed here
@@ -700,6 +701,8 @@ impl VmState {
         );
         if let Some(code) = code {
             code.live_closures.set(code.live_closures.get() + 1);
+            // SPIKE 4b.1 (#829): the links' environment key.
+            code.note_link_env(env_id);
         }
     }
 
@@ -1302,7 +1305,7 @@ pub(super) fn eval_closure(
         .heap
         .borrow_mut()
         .alloc_vm_closure(top_id.0, Vec::new(), env.clone());
-    state.note_closure_made(top_id);
+    state.note_closure_made(top_id, env.env_id());
     Ok(closure)
 }
 
@@ -1412,6 +1415,8 @@ fn push_frame_in(
     env: &Rc<Environment>,
 ) -> Result<(), VmError> {
     let code = state.code_object(code_id)?;
+    // SPIKE 4b.1 (#829): the links' environment key.
+    code.note_link_env(env.env_id());
     // The closure is held only here until the frame takes it.
     let _no_gc = AssertNoGc::new(&state.heap);
     let closure = state.heap.borrow_mut().alloc_vm_closure(
@@ -1940,11 +1945,14 @@ pub(super) fn frame_globals(state: &VmState) -> Rc<Environment> {
     state.globals.clone()
 }
 
-/// SPIKE 4b.1 (#829): `LoadGlobal` at a site not yet linked. When the name
-/// is an own slot of `frame_globals`' namespace, the slot's record fills the
-/// site's link entry, and every later execution reads through it. A name
-/// that is not (a parent's, an alias's, an unbound one, or a frame's
-/// forward) takes today's path, through the per-site cache.
+/// SPIKE 4b.1 (#829): `LoadGlobal` at a site not yet linked. When the
+/// frame's closure's namespace is the one every closure of this code runs
+/// against (`CodeObject::link_env`) and the name is an own slot of it, the
+/// slot's record fills the site's link entry, and every later execution
+/// reads through it. Otherwise (a frame with no closure, which reads
+/// `state.globals`; code run against two environments; a parent's name, an
+/// alias's, an unbound one, or a frame's forward) the read takes today's
+/// path, through the per-site cache, which keys on the environment.
 #[inline(never)]
 fn load_global_unlinked(
     state: &VmState,
@@ -1952,8 +1960,19 @@ fn load_global_unlinked(
     pc: usize,
     name: &Rc<str>,
 ) -> Result<TaggedValue, VmError> {
-    let globals = frame_globals(state);
-    if let Some(slot) = globals.local_slot(name)
+    // `frame_globals`, keeping whether the environment is the closure's.
+    let closure_globals = state
+        .execution
+        .frames()
+        .last()
+        .and_then(CallFrame::closure)
+        .and_then(|closure| state.heap.borrow().get_vm_closure_globals(closure));
+    let linkable = closure_globals
+        .as_ref()
+        .is_some_and(|globals| code.links_for(globals.env_id()));
+    let globals = closure_globals.unwrap_or_else(|| state.globals.clone());
+    if linkable
+        && let Some(slot) = globals.local_slot(name)
         && let Some(record) = globals.slot_record(slot)
     {
         debug_assert!(
@@ -2133,11 +2152,12 @@ fn dispatch_one_instruction(
             let captured: Vec<TaggedValue> =
                 free_vars.iter().map(|&r| state.reg_at(base, r)).collect();
             let globals = frame_globals(state);
+            let env_id = globals.env_id();
             let closure_val = state
                 .heap
                 .borrow_mut()
                 .alloc_vm_closure(child_id.0, captured, globals);
-            state.note_closure_made(child_id);
+            state.note_closure_made(child_id, env_id);
             state.set_reg_at(base, dst, closure_val);
         }
 
@@ -3253,6 +3273,7 @@ mod tests {
             name: None,
             global_cache: GlobalCacheEntry::table(&instructions),
             global_links: GlobalCacheEntry::link_table(&instructions),
+            link_env: std::cell::Cell::new(0),
             instructions,
             constants: Vec::new(),
             num_regs: 1,
