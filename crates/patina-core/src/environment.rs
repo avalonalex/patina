@@ -1201,6 +1201,7 @@ impl Environment {
                 if heap.cdr(cell) == tag {
                     heap.set_car(cell, value);
                 } else {
+                    self.forget_alias(&name, cell);
                     let cell = heap.alloc_pair(value, tag);
                     heap.set_car(record, cell);
                 }
@@ -1233,10 +1234,37 @@ impl Environment {
             return;
         }
         match existing {
-            Some(record) => heap.set_car(record, cell),
+            Some(record) => {
+                let old = heap.car(record);
+                if old != cell {
+                    self.forget_alias(&name, old);
+                }
+                heap.set_car(record, cell);
+            }
             None => {
                 let record = heap.alloc_pair(cell, TaggedValue::fixnum(Self::RECORD_FLAGS));
                 self.define_slot(name, record);
+            }
+        }
+    }
+
+    /// `name`'s record is re-pointed away from `cell`, so it is no longer an
+    /// alias [`import_alias`](Self::import_alias) minted for `cell`: its
+    /// entry goes. An entry then lives only while its alias's record names
+    /// its cell, which keeps the cell, so no key outlives the cell it names
+    /// and meets the word of one made in its slot after a collection (spike
+    /// 4b.1's condition, #829). An entry for another spelling of `cell`
+    /// stays, its alias still naming the cell.
+    fn forget_alias(&self, name: &str, cell: TaggedValue) {
+        let Some(rare) = self.rare.get() else {
+            return;
+        };
+        let key = Self::cell_key(cell);
+        let mut table = rare.import_aliases.borrow_mut();
+        if let Some(aliases) = table.get_mut(&key) {
+            aliases.retain(|(_, alias)| &**alias != name);
+            if aliases.is_empty() {
+                table.remove(&key);
             }
         }
     }
