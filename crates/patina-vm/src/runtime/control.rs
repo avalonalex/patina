@@ -1491,6 +1491,7 @@ fn runtime_stub(
         id: CodeObjectId::label(),
         name: Some(Rc::from(name)),
         global_cache: GlobalCacheEntry::table(&instructions),
+        global_links: GlobalCacheEntry::link_table(&instructions),
         live_closures: std::cell::Cell::new(0),
         instructions,
         constants: Vec::new(),

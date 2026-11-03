@@ -36,6 +36,8 @@ use std::fmt;
 use std::rc::{Rc, Weak};
 
 use super::PortTable;
+use super::account::ExternalBytes;
+use super::binding_table::BindingTable;
 use super::finalize::FinalRegistry;
 use super::gc::RootSet;
 use super::table::HeapTable;
@@ -105,6 +107,10 @@ pub struct HandleTable {
         reason = "weak by design: each entry names its object by slot index, so that a collection can find it dead"
     )]
     finals: Rc<FinalRegistry>,
+    /// SPIKE 4b.1 (#829): the heap's binding records and global cells.
+    /// Traced here, as a root, on both backends: every cell's value at every
+    /// collection (the prototype marks nothing and sweeps nothing).
+    bindings: Rc<BindingTable>,
 }
 
 #[derive(Trace)]
@@ -132,21 +138,40 @@ enum Entry {
 
 impl HandleTable {
     /// An empty table for the heap numbered `heap_id`.
-    pub(crate) fn new(heap_id: u64) -> Rc<Self> {
-        Self::with_ports(heap_id, PortTable::new(), FinalRegistry::new())
+    pub(crate) fn new(heap_id: u64, account: ExternalBytes) -> Rc<Self> {
+        Self::with_ports(
+            heap_id,
+            PortTable::new(),
+            FinalRegistry::new(),
+            BindingTable::new(account),
+        )
     }
 
     /// The empty table teardown starts, which keeps this one's `PortTable`
     /// and `FinalRegistry`: the heap has one of each for its life (#785).
     pub(crate) fn after_teardown(&self) -> Rc<Self> {
+        // SPIKE 4b.1: a fresh binding table, so that the values the old one
+        // holds, which teardown freed, are traced no more.
         Self::with_ports(
             self.heap_id,
             Rc::clone(&self.ports),
             Rc::clone(&self.finals),
+            BindingTable::new(self.bindings.account()),
         )
     }
 
-    fn with_ports(heap_id: u64, ports: Rc<PortTable>, finals: Rc<FinalRegistry>) -> Rc<Self> {
+    /// SPIKE 4b.1 (#829): the heap's binding table.
+    #[inline]
+    pub(crate) fn bindings(&self) -> &Rc<BindingTable> {
+        &self.bindings
+    }
+
+    fn with_ports(
+        heap_id: u64,
+        ports: Rc<PortTable>,
+        finals: Rc<FinalRegistry>,
+        bindings: Rc<BindingTable>,
+    ) -> Rc<Self> {
         Rc::new(HandleTable {
             heap_id,
             entries: HeapTable::new(Entries {
@@ -159,6 +184,7 @@ impl HandleTable {
             parameterize_each: HeapTable::new(None),
             ports,
             finals,
+            bindings,
         })
     }
 
@@ -496,6 +522,7 @@ mod tests {
             parameterize_each: HeapTable::new(Some(each)),
             ports: PortTable::new(),
             finals: FinalRegistry::new(),
+            bindings: BindingTable::new(heap.external_bytes_handle()),
         });
         collect_only(&mut heap, |_| {});
         s.assert_survived(&heap);

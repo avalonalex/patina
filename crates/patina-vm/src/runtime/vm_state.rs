@@ -298,6 +298,14 @@ pub struct VmState {
     /// instance for its life; what changes is inside it.
     #[trace(skip, reason = "the interpreter's metadata: no value")]
     instance: Rc<patina_core::Instance>,
+    /// SPIKE 4b.1 (#829): the heap's binding table, cached at construction
+    /// so `LoadGlobal`'s linked read takes no heap borrow: a clone of the
+    /// `Rc` the heap and every namespace on it hold.
+    #[trace(
+        skip,
+        reason = "the heap's binding table, which the handle table traces as a root"
+    )]
+    pub(super) bindings: Rc<patina_core::BindingTable>,
     /// The carrier's driver, the capability to collect (#702), lent by the
     /// driver entry (`execute`, `execute_in`) to the loop it runs, for that
     /// loop's polls: `None` in a nested loop, which hides the driver for its
@@ -390,6 +398,7 @@ impl VmState {
         heap.borrow_mut().set_gc_threshold(gc.current_threshold());
         let mutator = Rc::clone(heap.borrow().mutator());
         let instance = Rc::clone(heap.borrow().instance());
+        let bindings = Rc::clone(heap.borrow().binding_table());
         heap.borrow_mut().enable_gc_freed_closure_tracking();
         let parameter_set = registry.resolve_index("scheme.base/%parameter-set!");
         Self {
@@ -410,6 +419,7 @@ impl VmState {
                 source_map: Vec::new(),
                 register_roots: None,
                 global_cache: Vec::new(),
+                global_links: Vec::new(),
                 live_closures: Cell::new(0),
             }),
             free_code_ids: Vec::new(),
@@ -439,6 +449,7 @@ impl VmState {
             gc: RefCell::new(gc),
             mutator,
             instance,
+            bindings,
             driver: None,
         }
     }
@@ -1929,6 +1940,46 @@ pub(super) fn frame_globals(state: &VmState) -> Rc<Environment> {
     state.globals.clone()
 }
 
+/// SPIKE 4b.1 (#829): `LoadGlobal` at a site not yet linked. When the name
+/// is an own slot of `frame_globals`' namespace, the slot's record fills the
+/// site's link entry, and every later execution reads through it. A name
+/// that is not (a parent's, an alias's, an unbound one, or a frame's
+/// forward) takes today's path, through the per-site cache.
+#[inline(never)]
+fn load_global_unlinked(
+    state: &VmState,
+    code: &CodeObject,
+    pc: usize,
+    name: &Rc<str>,
+) -> Result<TaggedValue, VmError> {
+    let globals = frame_globals(state);
+    if let Some(slot) = globals.local_slot(name)
+        && let Some(record) = globals.slot_record(slot)
+    {
+        debug_assert!(
+            globals
+                .binding_table()
+                .is_some_and(|table| Rc::ptr_eq(table, &state.bindings)),
+            "a namespace of this machine's heap"
+        );
+        code.global_links[pc].set(record);
+        return Ok(state.bindings.read(record));
+    }
+    // Per-site inline cache (Track P P4): see `GlobalCacheEntry`.
+    Ok(
+        match GlobalCacheEntry::probe(&code.global_cache[pc], &globals, name) {
+            Some(slot) => globals.slot_value(slot),
+            // Not a local slot. Fall back to the full lookup rather than
+            // straight to the parent: `get` also follows macro-expansion
+            // aliases recorded on this environment, which is how a template
+            // reaches a binding private to the library that defined it.
+            None => globals
+                .get(name)
+                .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?,
+        },
+    )
+}
+
 /// Shared skeleton of every inline primitive opcode arm (Track P P3): run
 /// `$fast` (which yields `Option<TaggedValue>`) only while the primitive is
 /// unshadowed; on `Some`, write `$dst`; otherwise funnel the exact same
@@ -2034,17 +2085,13 @@ fn dispatch_one_instruction(
         }
 
         Instruction::LoadGlobal { dst, ref name } => {
-            // Per-site inline cache (Track P P4): see `GlobalCacheEntry`.
-            let globals = frame_globals(state);
-            let val = match GlobalCacheEntry::probe(&code.global_cache[pc], &globals, name) {
-                Some(slot) => globals.slot_value(slot),
-                // Not a local slot. Fall back to the full lookup rather than
-                // straight to the parent: `get` also follows macro-expansion
-                // aliases recorded on this environment, which is how a template
-                // reaches a binding private to the library that defined it.
-                None => globals
-                    .get(name)
-                    .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?,
+            // SPIKE 4b.1 (#829): a linked site reads `link → record → cell →
+            // value`, with no `frame_globals` call and no cache probe.
+            let link = code.global_links[pc].get();
+            let val = if link.is_linked() {
+                state.bindings.read(link)
+            } else {
+                load_global_unlinked(state, code, pc, name)?
             };
             state.set_reg_at(base, dst, val);
         }
@@ -3205,6 +3252,7 @@ mod tests {
             id: CodeObjectId::label(),
             name: None,
             global_cache: GlobalCacheEntry::table(&instructions),
+            global_links: GlobalCacheEntry::link_table(&instructions),
             instructions,
             constants: Vec::new(),
             num_regs: 1,

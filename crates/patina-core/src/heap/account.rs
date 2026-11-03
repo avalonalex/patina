@@ -403,6 +403,11 @@ pub(super) struct ByteAccount {
 }
 
 impl ByteAccount {
+    /// SPIKE 4b.1 (#829): a handle to this account, before the heap exists.
+    pub(super) fn external_bytes(&self) -> ExternalBytes {
+        ExternalBytes(Rc::clone(&self.shared))
+    }
+
     /// An empty account that posts a collection to `mutator`, the heap's
     /// carrier, when an external charge crosses the byte threshold.
     pub(super) fn new(mutator: Rc<Carrier>) -> Self {

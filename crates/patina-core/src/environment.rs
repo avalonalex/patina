@@ -1,4 +1,5 @@
 use crate::Trace;
+use crate::heap::binding_table::{BindingTable, RecordRef, is_record_word, is_slot_marker};
 use crate::heap::{ExternalBytes, Heap, SharedHeap};
 use crate::scope::ScopeSet;
 use crate::scope_index::{FRAME_INDEX_ABOVE, INDEX_ABOVE, ScopeIndex};
@@ -448,6 +449,46 @@ impl Bindings {
         }
     }
 
+    /// SPIKE 4b.1: append a slot for `name`, which the caller has found is
+    /// not bound here: `insert`'s append, without its lookup.
+    fn append(&mut self, name: Rc<str>, word: TaggedValue) -> Inserted {
+        let slot = self.slots.len() as u32;
+        let mut grew = self.slots.len() == self.slots.capacity();
+        match &mut self.index {
+            Some(index) => {
+                grew |= index.len() == index.capacity();
+                index.insert(Rc::clone(&name), slot);
+            }
+            None if slot as usize + 1 > LINEAR_MAX => {
+                self.slots.push((name, word));
+                let mut index = FxHashMap::default();
+                index.reserve(self.slots.len());
+                for (i, (n, _)) in self.slots.iter().enumerate() {
+                    index.insert(Rc::clone(n), i as u32);
+                }
+                self.index = Some(Box::new(index));
+                return Inserted {
+                    slot,
+                    was_forwarded: false,
+                    grew: true,
+                };
+            }
+            None => {}
+        }
+        self.slots.push((name, word));
+        Inserted {
+            slot,
+            was_forwarded: false,
+            grew,
+        }
+    }
+
+    /// The slot of `name` and the word it holds.
+    fn lookup(&self, name: &str) -> Option<(u32, TaggedValue)> {
+        let slot = self.slot_of(name)?;
+        Some((slot, self.read_slot(slot)))
+    }
+
     /// Every bound name, in slot order.
     fn names(&self) -> impl Iterator<Item = &Rc<str>> {
         self.slots.iter().map(|(n, _)| n)
@@ -485,6 +526,36 @@ impl Bindings {
 /// including on a loop of nothing but primitive calls.
 type Owner = (Rc<Environment>, u32);
 
+/// SPIKE 4b.1 (#829): where an imported binding lives: a cell of the heap's
+/// binding table, which a namespace's record names, or an owner's slot,
+/// which a frame forwards to.
+enum Target {
+    Cell(u32),
+    Slot(Owner),
+}
+
+impl Target {
+    /// The location as `import_aliases` keys it: a cell as `(0, cell)` (0 is
+    /// no environment's id), a slot as its environment's id and the slot,
+    /// unless the slot holds a record, which is its cell.
+    fn key(&self) -> (u64, u32) {
+        match self {
+            Target::Cell(cell) => (0, *cell),
+            Target::Slot((env, slot)) => match env.own_location(*slot) {
+                BindingLocation::Cell(cell) => (0, cell),
+                _ => (env.env_id(), *slot),
+            },
+        }
+    }
+}
+
+/// SPIKE 4b.1: a record word in an environment that has no binding table.
+#[cold]
+#[inline(never)]
+fn no_table() -> ! {
+    unreachable!("a binding record in an environment with no binding table (#829)")
+}
+
 /// Which location a name reaches by its by-name view — [`Environment::get`]'s
 /// answer as a place rather than as what the place holds.
 ///
@@ -509,6 +580,9 @@ pub enum BindingLocation {
     /// holding it, its spelling there, and its place among that spelling's
     /// scoped bindings.
     Scoped(u64, Rc<str>, usize),
+    /// SPIKE 4b.1: a namespace's binding, by its cell in the heap's binding
+    /// table: one location however many records name it.
+    Cell(u32),
 }
 
 /// How a top-level definition a macro introduced is held, which is what an
@@ -626,6 +700,15 @@ struct RareTables {
     /// other environment that comes to hold one of these tables.
     #[trace(skip, reason = "a count of bytes and a handle to the heap's account")]
     namespace: Option<NamespaceCharge>,
+    /// SPIKE 4b.1 (#829): the heap's binding table, when this is a
+    /// namespace: its slots hold record references into it, and every read
+    /// of one goes record → cell → value through it, with no heap parameter
+    /// and no heap borrow. Held as `namespace` holds the heap's account.
+    #[trace(
+        skip,
+        reason = "the heap's binding table, which the handle table traces as a root"
+    )]
+    table: Option<Rc<BindingTable>>,
 }
 
 /// The external bytes (`heap/account.rs`, GC_PRD §15) a namespace has charged
@@ -951,12 +1034,18 @@ impl Environment {
     /// its account ([`Heap::external_bytes_handle`](crate::heap::Heap::external_bytes_handle))
     /// together, so a namespace cannot be charged to another heap's.
     pub(crate) fn namespace(heap: &crate::Heap) -> Self {
-        Self::parentless(heap.id(), Some(heap.external_bytes_handle()))
+        Self::parentless(
+            heap.id(),
+            Some((
+                heap.external_bytes_handle(),
+                Rc::clone(heap.binding_table()),
+            )),
+        )
     }
 
     /// A parentless environment of the heap numbered `heap_id`, charging
     /// `account` for its tables when there is one.
-    fn parentless(heap_id: u64, account: Option<ExternalBytes>) -> Self {
+    fn parentless(heap_id: u64, account: Option<(ExternalBytes, Rc<BindingTable>)>) -> Self {
         let env = Environment {
             heap_id,
             bindings: RefCell::new(Bindings::default()),
@@ -967,8 +1056,9 @@ impl Environment {
             has_visible_scoped: Cell::new(false),
             holds_temporaries: false,
             rare: match account {
-                Some(account) => OnceCell::from(Box::new(RareTables {
+                Some((account, table)) => OnceCell::from(Box::new(RareTables {
                     namespace: Some(NamespaceCharge::new(account)),
+                    table: Some(table),
                     ..RareTables::default()
                 })),
                 None => OnceCell::new(),
@@ -1044,10 +1134,50 @@ impl Environment {
     #[inline]
     pub fn slot_value(&self, slot: u32) -> TaggedValue {
         let tv = self.bindings.borrow().read_slot(slot);
-        if tv == TaggedValue::FORWARDED {
-            return self.shared_value(slot);
+        if is_slot_marker(tv) {
+            return self.resolve_marker(slot, tv);
         }
         tv
+    }
+
+    /// SPIKE 4b.1: what a slot holding a marker reads: a record's cell's
+    /// value, or the owner's slot for a forward.
+    #[inline(always)]
+    fn resolve_marker(&self, slot: u32, tv: TaggedValue) -> TaggedValue {
+        if is_record_word(tv) {
+            self.record_value(tv)
+        } else {
+            self.shared_value(slot)
+        }
+    }
+
+    /// SPIKE 4b.1: the value of the cell the record word `tv` names, in this
+    /// namespace's binding table.
+    #[inline(always)]
+    fn record_value(&self, tv: TaggedValue) -> TaggedValue {
+        match self.table() {
+            Some(table) => table.read(RecordRef::from_word_unchecked(tv)),
+            None => no_table(),
+        }
+    }
+
+    /// SPIKE 4b.1: this namespace's binding table; `None` for a frame and
+    /// for an environment made without a heap.
+    #[inline(always)]
+    fn table(&self) -> Option<&BindingTable> {
+        self.rare.get().and_then(|rare| rare.table.as_deref())
+    }
+
+    /// SPIKE 4b.1: the record `slot` holds, for the VM's link entry: `Some`
+    /// only for a namespace's slot that holds one.
+    #[inline]
+    pub fn slot_record(&self, slot: u32) -> Option<RecordRef> {
+        RecordRef::from_word(self.bindings.borrow().read_slot(slot))
+    }
+
+    /// SPIKE 4b.1: the heap's binding table, when this is a namespace.
+    pub fn binding_table(&self) -> Option<&Rc<BindingTable>> {
+        self.rare.get().and_then(|rare| rare.table.as_ref())
     }
 
     /// Overwrite the value in a slot previously obtained from `local_slot`.
@@ -1059,16 +1189,25 @@ impl Environment {
     #[inline]
     pub fn set_slot_value(&self, slot: u32, value: TaggedValue) {
         crate::census::store(crate::census::Site::EnvSetSlot, None, value);
-        let forwarded = {
+        let word = {
             let mut bindings = self.bindings.borrow_mut();
-            let forwarded = bindings.read_slot(slot) == TaggedValue::FORWARDED;
-            if !forwarded {
+            let word = bindings.read_slot(slot);
+            if !is_slot_marker(word) {
                 bindings.write_slot(slot, value);
             }
-            forwarded
+            word
         };
-        if forwarded {
-            self.write_shared(slot, value);
+        if is_slot_marker(word) {
+            if is_record_word(word) {
+                // SPIKE 4b.1: a store into the record's cell, under the
+                // table's `with_mut`.
+                match self.table() {
+                    Some(table) => table.store(RecordRef::from_word_unchecked(word), value),
+                    None => no_table(),
+                }
+            } else {
+                self.write_shared(slot, value);
+            }
         }
     }
 
@@ -1229,6 +1368,9 @@ impl Environment {
                 specifier: _,
                 // This account.
                 namespace: _,
+                // SPIKE 4b.1: the heap's binding table, which charges for
+                // itself.
+                table: _,
             } = &**rare;
             bytes += size_of::<RareTables>()
                 + hash_table_bytes::<Rc<str>, Introduced>(
@@ -1350,6 +1492,29 @@ impl Environment {
         let Some(slot) = source.local_slot(source_name) else {
             return false;
         };
+        // SPIKE 4b.1: a namespace's slot holds a record. A namespace imports
+        // it by a record of its own naming the same cell, resolved one hop
+        // (an imported record's cell is its owner's); a frame by a forward
+        // to the source's slot, which reads through the source's record.
+        let word = source.bindings.borrow().read_slot(slot);
+        if let Some(record) = RecordRef::from_word(word) {
+            let table = source.table().unwrap_or_else(|| no_table());
+            let owns = table.owns_cell(record);
+            // What the forward to itself and a non-owning source did before:
+            // a copy of the value.
+            if (!source_owns || std::ptr::eq(Rc::as_ptr(source), self)) && owns {
+                if !std::ptr::eq(Rc::as_ptr(source), self) || self.local_slot(&name) != Some(slot) {
+                    self.define(name, table.read(record));
+                }
+                return true;
+            }
+            if self.table().is_some() {
+                self.install(name, Target::Cell(table.cell_of(record)));
+            } else {
+                self.forward(name, (Rc::clone(source), slot));
+            }
+            return true;
+        }
         let owner = match source.owner_of(slot) {
             Some(owner) => owner,
             None if source_owns => (Rc::clone(source), slot),
@@ -1362,6 +1527,80 @@ impl Environment {
         true
     }
 
+    /// SPIKE 4b.1: install an import of `target` under `name`.
+    fn install(&self, name: Rc<str>, target: Target) {
+        match target {
+            Target::Cell(cell) => match self.table() {
+                Some(table) => self.install_record(table, name, cell),
+                None => no_table(),
+            },
+            Target::Slot(owner) => self.forward(name, owner),
+        }
+    }
+
+    /// SPIKE 4b.1: a namespace's import of `cell` under `name`: a new record
+    /// naming it, or the record already there re-pointed to it (an import
+    /// over a binding, §11.6's Re-pointing row). No `FORWARDED` slot and no
+    /// `Owner` link.
+    fn install_record(&self, table: &BindingTable, name: Rc<str>, cell: u32) {
+        crate::scope_trace::bind(&name, &ScopeSet::new(), true);
+        let found = self.bindings.borrow().lookup(&name);
+        match found {
+            Some((_, word)) if is_record_word(word) => {
+                table.repoint(RecordRef::from_word_unchecked(word), cell);
+            }
+            Some((slot, word)) => {
+                let record = table.new_import(cell);
+                self.bindings.borrow_mut().write_slot(slot, record.word());
+                if word == TaggedValue::FORWARDED {
+                    self.drop_owner(slot);
+                }
+            }
+            None => {
+                let record = table.new_import(cell);
+                let Inserted { grew, .. } = self.bindings.borrow_mut().append(name, record.word());
+                if grew {
+                    self.recharge();
+                }
+            }
+        }
+    }
+
+    /// SPIKE 4b.1: where the binding `slot` holds lives, when it is an
+    /// import: the cell of a record that does not own it, or a forward's
+    /// owner.
+    fn import_target(&self, slot: u32) -> Option<Target> {
+        let word = self.bindings.borrow().read_slot(slot);
+        if let Some(record) = RecordRef::from_word(word) {
+            let table = self.table()?;
+            return (!table.owns_cell(record)).then(|| Target::Cell(table.cell_of(record)));
+        }
+        self.owner_of(slot).map(Target::Slot)
+    }
+
+    /// SPIKE 4b.1: the location of the binding `slot` holds.
+    fn slot_location(&self, slot: u32) -> BindingLocation {
+        let word = self.bindings.borrow().read_slot(slot);
+        if let Some(record) = RecordRef::from_word(word) {
+            return BindingLocation::Cell(self.table().map_or(u32::MAX, |t| t.cell_of(record)));
+        }
+        match self.owner_of(slot) {
+            Some((owner, owner_slot)) => owner.own_location(owner_slot),
+            None => BindingLocation::Slot(self.env_id(), slot),
+        }
+    }
+
+    /// SPIKE 4b.1: the location of an owner's slot, which is never a forward.
+    fn own_location(&self, slot: u32) -> BindingLocation {
+        let word = self.bindings.borrow().read_slot(slot);
+        match RecordRef::from_word(word) {
+            Some(record) => {
+                BindingLocation::Cell(self.table().map_or(u32::MAX, |t| t.cell_of(record)))
+            }
+            None => BindingLocation::Slot(self.env_id(), slot),
+        }
+    }
+
     /// `define` without its bookkeeping: writes the slot, and reports it and
     /// whether an imported binding was there before.
     #[inline]
@@ -1369,6 +1608,53 @@ impl Environment {
         // A plain binding is reachable by name and by nothing else, so
         // `byname=true` here is a property of the table, not a decision.
         crate::scope_trace::bind(&name, &ScopeSet::new(), true);
+        // SPIKE 4b.1: a namespace defines through its records.
+        if self.is_namespace()
+            && let Some(table) = self.table()
+        {
+            return self.define_in_namespace(table, name, value);
+        }
+        self.define_plain_slot(name, value)
+    }
+
+    /// SPIKE 4b.1: a namespace's `define`: a store into the record's cell
+    /// when the record owns it, a new cell re-pointed to when it is an
+    /// import, and a new record and cell for a fresh name. Every write takes
+    /// the table's `with_mut`.
+    #[inline(never)]
+    fn define_in_namespace(
+        &self,
+        table: &BindingTable,
+        name: Rc<str>,
+        value: TaggedValue,
+    ) -> (u32, bool) {
+        let found = self.bindings.borrow().lookup(&name);
+        match found {
+            Some((slot, word)) if is_record_word(word) => {
+                table.define_over(RecordRef::from_word_unchecked(word), value);
+                (slot, false)
+            }
+            Some((slot, word)) => {
+                let record = table.new_binding(value);
+                self.bindings.borrow_mut().write_slot(slot, record.word());
+                (slot, word == TaggedValue::FORWARDED)
+            }
+            None => {
+                let record = table.new_binding(value);
+                let Inserted { slot, grew, .. } =
+                    self.bindings.borrow_mut().append(name, record.word());
+                if grew {
+                    self.recharge();
+                }
+                (slot, false)
+            }
+        }
+    }
+
+    /// `define_slot`'s write of the word itself: a frame's, and a
+    /// namespace's forward to an owner that is no namespace.
+    #[inline]
+    fn define_plain_slot(&self, name: Rc<str>, value: TaggedValue) -> (u32, bool) {
         let Inserted {
             slot,
             was_forwarded,
@@ -1390,7 +1676,28 @@ impl Environment {
             }
             return;
         }
-        let (slot, _) = self.define_slot(name, TaggedValue::FORWARDED);
+        // SPIKE 4b.1: a namespace imports by a record naming the owner's
+        // cell, and makes no `FORWARDED` slot and no `Owner` link.
+        if let Some(table) = self.table() {
+            let word = owner.0.bindings.borrow().read_slot(owner.1);
+            if let Some(record) = RecordRef::from_word(word) {
+                let owner_table = owner.0.table().unwrap_or_else(|| no_table());
+                debug_assert!(std::ptr::eq(owner_table, table), "one heap's binding table");
+                self.install_record(table, name, owner_table.cell_of(record));
+                return;
+            }
+            // An owner that is no namespace, made without a heap (tests
+            // only): today's forward into a new slot, or a copy over a
+            // record, which a link would go on reading.
+            let found = self.bindings.borrow().lookup(&name);
+            if let Some((_, word)) = found
+                && is_record_word(word)
+            {
+                self.define(name, owner.0.slot_value(owner.1));
+                return;
+            }
+        }
+        let (slot, _) = self.define_plain_slot(name, TaggedValue::FORWARDED);
         self.set_owner(slot, owner);
     }
 
@@ -1428,8 +1735,8 @@ impl Environment {
     /// (Only a *reference* is ever given this name — `Desugarer::early_bound`
     /// — so nothing Patina does defines over one.)
     pub fn import_alias(&self, name: &str, mut mint: impl FnMut() -> Rc<str>) -> Option<Rc<str>> {
-        let owner = self.owner_of(self.local_slot(name)?)?;
-        let key = (owner.0.env_id(), owner.1);
+        let target = self.import_target(self.local_slot(name)?)?;
+        let key = target.key();
         let rare = self.rare.get()?;
         // Out of the borrow first: `owner_of` borrows a table beside it.
         let known = rare.import_aliases.borrow().get(&key).and_then(|aliases| {
@@ -1441,8 +1748,8 @@ impl Environment {
         if let Some(alias) = known {
             let still_forwards = self
                 .local_slot(&alias)
-                .and_then(|slot| self.owner_of(slot))
-                .is_some_and(|(env, slot)| Rc::ptr_eq(&env, &owner.0) && slot == owner.1);
+                .and_then(|slot| self.import_target(slot))
+                .is_some_and(|target| target.key() == key);
             if still_forwards {
                 return Some(alias);
             }
@@ -1453,7 +1760,7 @@ impl Environment {
                 break candidate;
             }
         };
-        self.forward(Rc::clone(&alias), owner);
+        self.install(Rc::clone(&alias), target);
         let grew = {
             let mut table = rare.import_aliases.borrow_mut();
             let capacity = table.capacity();
@@ -1482,8 +1789,8 @@ impl Environment {
             let slot = bindings.slot_of(name)?;
             (slot, bindings.read_slot(slot))
         };
-        if tv == TaggedValue::FORWARDED {
-            return Some(self.shared_value(slot));
+        if is_slot_marker(tv) {
+            return Some(self.resolve_marker(slot, tv));
         }
         Some(tv)
     }
@@ -1598,10 +1905,7 @@ impl Environment {
         let mut env = self;
         loop {
             if let Some(slot) = env.local_slot(name) {
-                return Some(match env.owner_of(slot) {
-                    Some((owner, owner_slot)) => BindingLocation::Slot(owner.env_id(), owner_slot),
-                    None => BindingLocation::Slot(env.env_id(), slot),
-                });
+                return Some(env.slot_location(slot));
             }
             if env.has_aliases.get()
                 && let Some(target) = env.alias_target(name)
@@ -3045,8 +3349,8 @@ impl Environment {
                 // and `import_aliases` goes on listing it until the location
                 // is next asked for (`import_alias` replaces it then).
                 hidden.get(&***name).is_none_or(|location| {
-                    self.owner_of(*slot as u32)
-                        .is_none_or(|(env, owner_slot)| (env.env_id(), owner_slot) != *location)
+                    self.import_target(*slot as u32)
+                        .is_none_or(|target| target.key() != *location)
                 })
             })
             .map(|(slot, name)| (slot as u32, name.to_string()))

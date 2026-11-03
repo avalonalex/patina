@@ -24,6 +24,8 @@
 
 mod account;
 pub mod attrs;
+// SPIKE 4b.1 (#829): the per-heap binding table, home (c).
+pub mod binding_table;
 #[cfg(feature = "gc-census")]
 mod census;
 mod check;
@@ -56,6 +58,7 @@ pub use account::{
     PAIR_SLOT_BYTES, STRING_SLOT_BYTES, VECTOR_SLOT_BYTES, descriptor_limit,
     descriptor_pressure_threshold,
 };
+pub use binding_table::{BindingTable, RecordRef};
 use check::SlotChecks;
 pub use finalize::teardown;
 use handles::{HandleTable, Owned, OwnedEnvironment};
@@ -755,7 +758,8 @@ impl Heap {
     pub fn with_capacity(pairs: usize, vectors: usize, strings: usize) -> Self {
         let mutator = mutator::Carrier::new();
         let telemetry = telemetry::Telemetry::new();
-        let handles = HandleTable::new(telemetry.heap_id);
+        let account = ByteAccount::new(Rc::clone(&mutator));
+        let handles = HandleTable::new(telemetry.heap_id, account.external_bytes());
         port_table::register(handles.ports());
         Self {
             syntax_sources: std::collections::HashMap::new(),
@@ -775,7 +779,7 @@ impl Heap {
             string_checks: SlotChecks::new(),
             object_checks: SlotChecks::new(),
             allocs_since_gc: 0,
-            account: ByteAccount::new(Rc::clone(&mutator)),
+            account,
             gc_threshold: GcThreshold::NEVER,
             mutator,
             gc_freed_closure_code_ids: None,
@@ -792,6 +796,12 @@ impl Heap {
             census: crate::census::imp::HeapCensus::new(),
             next_vm_continuation_id: 0,
         }
+    }
+
+    /// SPIKE 4b.1 (#829): the heap's binding table, which a namespace and
+    /// the VM each hold a clone of.
+    pub fn binding_table(&self) -> &Rc<BindingTable> {
+        self.handles.bindings()
     }
 
     // =========================================================================

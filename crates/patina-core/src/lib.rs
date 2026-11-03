@@ -124,6 +124,7 @@ pub use heap::gc::{
 pub use heap::{
     GC_CHECK, Heap, SharedHeap, SpineEnd,
     attrs::{AllocAttrs, BarrierKind, GcAttrs, PollKind, Publication, WatermarkKind},
+    binding_table::{BindingTable, RecordRef},
     handles::{Owned, OwnedEnvironment},
     interrupt::InterruptHandle,
     mutator::{Carrier, Mutator, event},

@@ -140,12 +140,14 @@ impl Pass5Codegen {
         // Top-level: emit a Return of the expression's result.
         cg.emit(Instruction::Return { val: expr.dst });
         let global_cache = finalize_instructions(&mut cg.instructions);
+        let global_links = GlobalCacheEntry::links(global_cache.len());
         let register_roots = register_root_maps(&cg, allocated.num_regs.max(1), 0);
         let nested = cg.nested;
         let code = CodeObject {
             id,
             name: cg.name,
             global_cache,
+            global_links,
             live_closures: std::cell::Cell::new(0),
             instructions: cg.instructions,
             constants: cg.constants,
@@ -1183,11 +1185,13 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
     };
 
     let global_cache = finalize_instructions(&mut child_cg.instructions);
+    let global_links = GlobalCacheEntry::links(global_cache.len());
     let register_roots = register_root_maps(&child_cg, lam.num_regs, lam.num_params);
     let child_code = CodeObject {
         id: child_id,
         name: None,
         global_cache,
+        global_links,
         live_closures: std::cell::Cell::new(0),
         instructions: child_cg.instructions,
         constants: child_cg.constants,

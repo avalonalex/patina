@@ -3,6 +3,7 @@
 //! See VM_ISA.md §2.3.
 
 use super::instruction::Instruction;
+use patina_core::RecordRef;
 use patina_core::core_expr::Symbol;
 use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
@@ -182,6 +183,18 @@ pub struct CodeObject {
     #[trace(skip, reason = "environment ids and slot numbers")]
     pub global_cache: Vec<Cell<GlobalCacheEntry>>,
 
+    /// SPIKE 4b.1 (#829): per-site binding-record references for
+    /// `LoadGlobal`, pc-indexed beside `global_cache` and the same length,
+    /// standing in for 4b.9's link table. Filled on a site's first
+    /// execution from `frame_globals`' environment, when the name is that
+    /// namespace's own slot; a filled entry reads `link → record → cell →
+    /// value` with no `frame_globals` call and no cache probe.
+    #[trace(
+        skip,
+        reason = "record references, which are no heap values: the cells they reach are the binding table's, which the handle table traces"
+    )]
+    pub global_links: Vec<Cell<RecordRef>>,
+
     /// How many live VM closures run this code (#338). A frame holds its code
     /// itself, so the `Rc` count says whether a frame needs it; a closure names
     /// its code by id, so this is what says a closure does. Counted up where
@@ -240,6 +253,16 @@ impl GlobalCacheEntry {
         } else {
             Vec::new()
         }
+    }
+
+    /// SPIKE 4b.1: the link table for a cache table of `len` entries.
+    pub fn links(len: usize) -> Vec<Cell<RecordRef>> {
+        vec![Cell::new(RecordRef::EMPTY); len]
+    }
+
+    /// SPIKE 4b.1: the link table for a freshly compiled instruction stream.
+    pub fn link_table(instructions: &[Instruction]) -> Vec<Cell<RecordRef>> {
+        Self::links(Self::table(instructions).len())
     }
 
     /// Probe — and on a local resolution, fill — a per-site cache entry.
