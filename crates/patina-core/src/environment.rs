@@ -373,6 +373,10 @@ impl Bindings {
     /// `TaggedValue::FORWARDED` and not a value. Only `Environment`'s
     /// resolving reads call this; there is deliberately no by-name `get`
     /// here, so nothing can read around them.
+    // Spike 4b.1 (#829): `inline(always)`, since the record code's added
+    // callers left it out of line on the tree-walker's frame hit, which
+    // `main` inlines.
+    #[inline(always)]
     fn read_slot(&self, slot: u32) -> TaggedValue {
         self.slots[slot as usize].1
     }
@@ -1130,6 +1134,16 @@ impl Environment {
         heap.car(heap.car(record))
     }
 
+    /// A record whose cell holds `TaggedValue::UNBOUND`, in no namespace: what
+    /// the VM points an unlinked `LoadGlobal` site at, so that the linked
+    /// read's placeholder test is its only test. The caller roots it; the
+    /// cell is held only in this local until the record holds it, and
+    /// allocation never collects (`docs/GC_DESIGN.md` §6).
+    pub fn unlinked_record(heap: &mut Heap) -> TaggedValue {
+        let cell = heap.alloc_pair(TaggedValue::UNBOUND, TaggedValue::fixnum(0));
+        heap.alloc_pair(cell, TaggedValue::fixnum(Self::RECORD_FLAGS))
+    }
+
     /// Store `value` into the cell `record` names.
     #[inline]
     fn store_record(heap: &mut Heap, record: TaggedValue, value: TaggedValue) {
@@ -1523,11 +1537,11 @@ impl Environment {
     /// This is the primary API - accepts TaggedValue directly.
     pub fn define(&self, name: impl Into<Rc<str>>, value: TaggedValue) {
         crate::census::store(crate::census::Site::EnvDefine, None, value);
+        let name = name.into();
         if self.records {
-            self.define_record(&mut self.home().borrow_mut(), name.into(), value);
-            return;
+            return self.define_through_home(name, value);
         }
-        let (slot, was_forwarded) = self.define_slot(name.into(), value);
+        let (slot, was_forwarded) = self.define_slot(name, value);
         // A definition is a new binding of this environment's own, whatever
         // the name was before — so an importer that defines a name it
         // imported shadows it here and leaves the library's alone, which is
@@ -1535,6 +1549,15 @@ impl Environment {
         if was_forwarded {
             self.drop_owner(slot);
         }
+    }
+
+    /// `define` in a record namespace for a caller with no heap in hand, by
+    /// the `RareTables` handle: out of line, so a frame's definition (the
+    /// tree-walker binds every parameter and temporary by `define`) pays
+    /// only the `records` test for it.
+    #[inline(never)]
+    fn define_through_home(&self, name: Rc<str>, value: TaggedValue) {
+        self.define_record(&mut self.home().borrow_mut(), name, value);
     }
 
     /// [`define`](Self::define) with the heap in hand (spike 4b.1, #829): a
@@ -1924,50 +1947,103 @@ impl Environment {
     /// This is the primary API - returns TaggedValue directly.
     /// For the simple name-based lookup for identifiers.
     pub fn get(&self, name: &str) -> Option<TaggedValue> {
-        self.get_with(name, None)
+        // Walked iteratively rather than by recursing into the parent: the
+        // tree-walker builds a frame per `let`-bound temporary, so this chain
+        // is the hottest loop in the backend.
+        //
+        // Spike 4b.1 (#829): `main`'s walk unchanged; a record namespace's
+        // `local_value` reads through its record, reaching the heap by the
+        // `RareTables` handle. The tree-walker's variable reference calls
+        // `get_in` instead.
+        let mut env = self;
+        loop {
+            if let Some(tv) = env.local_value(name) {
+                return Some(tv);
+            }
+            // Follow a macro-expansion alias into the environment the macro was
+            // defined in. Checked after real bindings so a local definition always
+            // wins, and before the parent so the alias is not shadowed by an
+            // unrelated outer binding of the same (unique) name.
+            if env.has_aliases.get()
+                && let Some(target) = env.alias_target(name)
+            {
+                return target.get(env);
+            }
+            // A macro-introduced definition lives under its scopes; this is the
+            // name-only view of it. Checked after real bindings and aliases, so a
+            // binding written in source always wins.
+            if env.has_visible_scoped.get()
+                && let Some(i) = env.visible_scoped_index(name)
+            {
+                return env.scoped_bindings.borrow()[name]
+                    .get(i)
+                    .map(|b| b.tagged_value);
+            }
+            env = env.parent.as_deref()?;
+        }
     }
 
     /// [`get`](Self::get) with the heap in hand, for the namespace step's
     /// read through a record (spike 4b.1, #829): the tree-walker's variable
     /// reference, which borrows the heap only at that step.
-    #[inline]
+    ///
+    /// Out of line, as `main`'s `get` is, and its step at a frame is `get`'s
+    /// text: the walk tests for the namespace by the parent it loads to move
+    /// up anyway, and no frame tests `records`. Measured on the release
+    /// build, a frame missed is 20 instructions against `main`'s 19 (one
+    /// flag test compiles to a compare and a branch, not a bit test). The
+    /// shape that matched 19, both flags tested together and their calls
+    /// out of line, put the name-only view behind an extra call, and most
+    /// frames the tree-walker misses have one. The namespace step
+    /// differs: the `records` test (a spike artifact: every namespace of
+    /// the real home holds records), the record read under one heap borrow,
+    /// and the placeholder test (`UNBOUND`, a name linked before it is
+    /// bound, which reads as unbound) the VM's linked read makes, so the two
+    /// backends' figures carry the same tests.
+    #[inline(never)]
     pub fn get_in(&self, name: &str, heap: &RefCell<Heap>) -> Option<TaggedValue> {
-        self.get_with(name, Some(heap))
-    }
-
-    #[inline(always)]
-    fn get_with(&self, name: &str, heap: Option<&RefCell<Heap>>) -> Option<TaggedValue> {
-        // Walked iteratively rather than by recursing into the parent: the
-        // tree-walker builds a frame per `let`-bound temporary, so this chain
-        // is the hottest loop in the backend.
         let mut env = self;
         loop {
-            // The namespace step (spike 4b.1, #829): the parentless
-            // environment at the end of the chain, whose slot a record
-            // namespace reads through its record. Asked by the parent the walk
-            // loads anyway, so a frame pays nothing for it.
             let Some(parent) = env.parent.as_deref() else {
-                if env.records {
-                    if let Some(record) = env.local_record(name) {
-                        return Some(match heap {
-                            Some(heap) => Self::read_record(&heap.borrow(), record),
-                            None => env.record_value(record),
-                        });
-                    }
-                } else if let Some(tv) = env.plain_value(name) {
-                    return Some(tv);
-                }
-                return env.alias_or_view(name).flatten();
+                return env.namespace_get_in(name, heap);
             };
-            // A frame, read by name as before.
             if let Some(tv) = env.plain_value(name) {
                 return Some(tv);
             }
-            if let Some(found) = env.alias_or_view(name) {
-                return found;
+            // Follow a macro-expansion alias, then the name-only view of a
+            // macro-introduced definition, as `get` does.
+            if env.has_aliases.get()
+                && let Some(target) = env.alias_target(name)
+            {
+                return target.get(env);
+            }
+            if env.has_visible_scoped.get()
+                && let Some(i) = env.visible_scoped_index(name)
+            {
+                return env.scoped_bindings.borrow()[name]
+                    .get(i)
+                    .map(|b| b.tagged_value);
             }
             env = parent;
         }
+    }
+
+    /// `get_in`'s step at the parentless environment the walk ends at: a
+    /// record namespace's slot read through its record, or a plain one's
+    /// value, then the alias and the name-only view as at a frame.
+    #[inline(always)]
+    fn namespace_get_in(&self, name: &str, heap: &RefCell<Heap>) -> Option<TaggedValue> {
+        if self.records {
+            if let Some(record) = self.local_record(name) {
+                let tv = Self::read_record(&heap.borrow(), record);
+                if tv != TaggedValue::UNBOUND {
+                    return Some(tv);
+                }
+            }
+        } else if let Some(tv) = self.plain_value(name) {
+            return Some(tv);
+        }
+        self.alias_or_view(name).flatten()
     }
 
     /// The rest of `get`'s step at one environment, after its plain bindings:

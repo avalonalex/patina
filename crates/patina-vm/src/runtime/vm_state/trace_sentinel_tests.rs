@@ -122,6 +122,7 @@ fn every_vm_state_root_is_traced() {
     let constant = s.vector(h, "VmState.code_store: CodeObject.constants");
     let global = s.string(h, "VmState.globals");
     let saved_global = s.vector(h, "VmState.saved_globals");
+    let unlinked = s.pair(h, "VmState.unlinked");
     let scratch = s.object(h, "VmState.scratch_args");
     let pre_regs = s.pair(h, "VmState.tracer: StepTracer.pre_regs");
     let pre_all_regs = s.vector(h, "VmState.tracer: StepTracer.pre_all_regs");
@@ -161,6 +162,7 @@ fn every_vm_state_root_is_traced() {
         parameter_set: None,
         globals,
         saved_globals: vec![saved],
+        unlinked,
         heap: shared,
         primitive_registry: Rc::new(PrimitiveRegistry::new()),
         shadowed_primitives: Vec::new(),

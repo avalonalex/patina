@@ -183,10 +183,13 @@ pub struct CodeObject {
     pub global_cache: Vec<Cell<GlobalCacheEntry>>,
 
     /// Spike 4b.1 (#829), (a'): for each `LoadGlobal` site, the binding
-    /// record it reads, `link[pc] → record → cell → value`, or
-    /// [`GlobalCacheEntry::NO_LINK`] until the site's first execution finds
-    /// its name in the namespace's own table. It stands in for 4b.9's link
-    /// table, which fills at load. Same length as `global_cache`.
+    /// record it reads, `link[pc] → record → cell → value`: the machine's
+    /// unlinked record (`VmState::unlinked`, whose cell holds `UNBOUND`),
+    /// which `load` and `load_unit` put in every entry, until the site's
+    /// first execution finds its name in the namespace's own table. Before
+    /// load an entry is [`GlobalCacheEntry::NO_LINK`], which no code reads.
+    /// It stands in for 4b.9's link table, which fills at load. Same length
+    /// as `global_cache`.
     ///
     /// Not traced: a record never leaves the namespace slot that made it, and
     /// the code reads its records only while it runs in that namespace (a
@@ -240,7 +243,8 @@ pub struct GlobalCacheEntry {
 impl GlobalCacheEntry {
     pub const EMPTY: GlobalCacheEntry = GlobalCacheEntry { env_id: 0, slot: 0 };
 
-    /// A `global_links` entry not yet linked: never a record, which is a pair.
+    /// A `global_links` entry before its code is loaded: never a record,
+    /// which is a pair. Load replaces it with the machine's unlinked record.
     pub const NO_LINK: TaggedValue = TaggedValue::FALSE;
 
     /// The link vector beside a cache table (spike 4b.1, #829): one unlinked

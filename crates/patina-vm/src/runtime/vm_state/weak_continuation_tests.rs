@@ -278,6 +278,7 @@ fn store_stays_bounded_under_capture_churn() {
         );
     }
     // Every round's snapshot pins were reclaimed: the arena never grows past
-    // one round's worth of pairs.
-    assert!(state.heap.borrow().stats().pairs <= 100);
+    // one round's worth of pairs, and the machine's unlinked record and its
+    // cell (spike 4b.1, #829).
+    assert!(state.heap.borrow().stats().pairs <= 100 + 2);
 }

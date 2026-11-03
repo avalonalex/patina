@@ -206,6 +206,14 @@ pub struct VmState {
     /// last, each restored when its swap ends. Traced, so a library body run
     /// under a swap may collect (#677).
     saved_globals: Vec<Rc<Environment>>,
+    /// Spike 4b.1 (#829), (a'): the binding record every `LoadGlobal` site's
+    /// link names until the site is linked, whose cell holds `UNBOUND`
+    /// (`Environment::unlinked_record`): so the linked read's one
+    /// placeholder test also sends an unlinked site to be linked, as a link
+    /// table filled at load (4b.9) needs no test of its own. Set into every
+    /// code object's links at `load` and `load_unit`, and traced here, so
+    /// neither pair is ever freed.
+    unlinked: TaggedValue,
     /// The heap, shared with `patina-runtime` primitives.
     #[trace(
         skip,
@@ -392,6 +400,9 @@ impl VmState {
         let instance = Rc::clone(heap.borrow().instance());
         heap.borrow_mut().enable_gc_freed_closure_tracking();
         let parameter_set = registry.resolve_index("scheme.base/%parameter-set!");
+        // Held only in this local until the machine holds it: nothing
+        // collects before the machine exists.
+        let unlinked = Environment::unlinked_record(&mut heap.borrow_mut());
         Self {
             execution: super::execution_state::ExecutionState::default(),
             pending_escape: None,
@@ -426,6 +437,7 @@ impl VmState {
             parameter_set,
             globals,
             saved_globals: Vec::new(),
+            unlinked,
             heap,
             primitive_registry: Rc::new(registry),
             shadowed_primitives: Vec::new(),
@@ -593,8 +605,17 @@ impl VmState {
         );
         let id = self.next_code_id();
         code.id = id;
+        self.unlink(&code);
         self.code_store[id.index()] = Rc::new(code);
         id
+    }
+
+    /// Point every link of `code` at the machine's unlinked record (spike
+    /// 4b.1, #829), before it first runs.
+    fn unlink(&self, code: &CodeObject) {
+        for link in &code.global_links {
+            link.set(self.unlinked);
+        }
     }
 
     /// Load what one compilation produced — `top`, and the code nested in it —
@@ -633,6 +654,7 @@ impl VmState {
                 }
             }
             let slot = code.id.index();
+            self.unlink(&code);
             self.code_store[slot] = Rc::new(code);
         }
         self.code_units.insert(top_id, members);
@@ -1943,7 +1965,7 @@ fn load_global_unlinked(
     name: &patina_core::core_expr::Symbol,
 ) -> Result<TaggedValue, VmError> {
     // A linked site whose cell holds `UNBOUND`: a placeholder, unbound.
-    if code.global_links[pc].get() != GlobalCacheEntry::NO_LINK {
+    if code.global_links[pc].get() != state.unlinked {
         return Err(VmError::UnboundVariable { name: name.clone() });
     }
     let globals = frame_globals(state);
@@ -2073,13 +2095,12 @@ fn dispatch_one_instruction(
             // under one heap borrow, with no `frame_globals` call and no
             // cache probe once the site is linked.
             let link = code.global_links[pc].get();
-            let mut val = TaggedValue::UNBOUND;
-            if link != GlobalCacheEntry::NO_LINK {
-                val = Environment::read_record(&state.heap.borrow(), link);
-            }
+            let mut val = Environment::read_record(&state.heap.borrow(), link);
             // A placeholder's cell holds `UNBOUND` (§11.6: the real home
             // links unbound names too), so its read tests for one; the spike
-            // makes none. The test also sends an unlinked site to be linked.
+            // makes none. An unlinked site's link names the machine's
+            // unlinked record, whose cell holds one too, so the same test
+            // sends it to be linked: one compare, as a table filled at load.
             if val == TaggedValue::UNBOUND {
                 val = load_global_unlinked(state, code, pc, name)?;
             }
