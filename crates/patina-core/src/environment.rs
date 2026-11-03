@@ -4750,178 +4750,196 @@ mod introduced_definition_tests {
 /// `import_alias` gives a root a name of its own for an imported *location*,
 /// so that a reference bound to it survives the importer defining the
 /// spelling itself (#438).
-#[cfg(test)]
-mod import_alias_tests {
-    use super::*;
+/// Run on both kinds of namespace: plain value slots, and (spike 4b.1,
+/// #829) record namespaces, whose `import_alias` is `import_alias_record`
+/// and whose re-points go through `forget_alias`.
+macro_rules! import_alias_tests {
+    ($module:ident, $namespaces:expr) => {
+        #[cfg(test)]
+        mod $module {
+            use super::*;
 
-    fn n(i: i64) -> TaggedValue {
-        TaggedValue::fixnum(i)
-    }
+            fn n(i: i64) -> TaggedValue {
+                TaggedValue::fixnum(i)
+            }
 
-    fn library_and_program() -> (Rc<Environment>, Rc<Environment>) {
-        let library = Rc::new(Environment::new());
-        library.define("count", n(0));
-        let program = Rc::new(Environment::new());
-        program.share_binding("count", &library, "count");
-        (library, program)
-    }
+            fn library_and_program() -> (Rc<Environment>, Rc<Environment>) {
+                let (library, program) = $namespaces;
+                let (library, program) = (Rc::new(library), Rc::new(program));
+                library.define("count", n(0));
+                program.share_binding("count", &library, "count");
+                (library, program)
+            }
 
-    #[test]
-    fn the_alias_outlives_a_definition_over_the_import() {
-        let (library, program) = library_and_program();
-        let alias = program
-            .import_alias("count", || "count.alias".into())
-            .unwrap();
+            #[test]
+            fn the_alias_outlives_a_definition_over_the_import() {
+                let (library, program) = library_and_program();
+                let alias = program
+                    .import_alias("count", || "count.alias".into())
+                    .unwrap();
 
-        // The program defines the spelling itself: a binding of its own.
-        program.define("count", n(100));
-        library.set("count", n(1)).unwrap();
+                // The program defines the spelling itself: a binding of its own.
+                program.define("count", n(100));
+                library.set("count", n(1)).unwrap();
 
-        assert_eq!(program.get("count"), Some(n(100)));
-        assert_eq!(program.get(&alias), Some(n(1)));
-        // And it writes where it reads.
-        program.set(&alias, n(2)).unwrap();
-        assert_eq!(library.get("count"), Some(n(2)));
-        assert_eq!(program.get("count"), Some(n(100)));
-        assert_eq!(
-            program.binding_location(&alias),
-            library.binding_location("count")
-        );
-    }
+                assert_eq!(program.get("count"), Some(n(100)));
+                assert_eq!(program.get(&alias), Some(n(1)));
+                // And it writes where it reads.
+                program.set(&alias, n(2)).unwrap();
+                assert_eq!(library.get("count"), Some(n(2)));
+                assert_eq!(program.get("count"), Some(n(100)));
+                assert_eq!(
+                    program.binding_location(&alias),
+                    library.binding_location("count")
+                );
+            }
 
-    #[test]
-    fn one_name_has_one_alias_however_often_it_is_asked_for() {
-        let (_, program) = library_and_program();
-        let mut minted = 0;
-        let mut mint = || {
-            minted += 1;
-            Rc::<str>::from(format!("count.{minted}"))
-        };
-        let first = program.import_alias("count", &mut mint).unwrap();
-        let again = program.import_alias("count", &mut mint).unwrap();
-        assert_eq!(first, again);
+            #[test]
+            fn one_name_has_one_alias_however_often_it_is_asked_for() {
+                let (_, program) = library_and_program();
+                let mut minted = 0;
+                let mut mint = || {
+                    minted += 1;
+                    Rc::<str>::from(format!("count.{minted}"))
+                };
+                let first = program.import_alias("count", &mut mint).unwrap();
+                let again = program.import_alias("count", &mut mint).unwrap();
+                assert_eq!(first, again);
 
-        assert_eq!(minted, 1, "an alias per name, not per request");
-    }
+                assert_eq!(minted, 1, "an alias per name, not per request");
+            }
 
-    #[test]
-    fn a_second_name_for_the_location_has_an_alias_of_its_own() {
-        let (library, program) = library_and_program();
-        let mut minted = 0;
-        let mut mint = || {
-            minted += 1;
-            Rc::<str>::from(format!("alias.{minted}"))
-        };
-        let first = program.import_alias("count", &mut mint).unwrap();
+            #[test]
+            fn a_second_name_for_the_location_has_an_alias_of_its_own() {
+                let (library, program) = library_and_program();
+                let mut minted = 0;
+                let mut mint = || {
+                    minted += 1;
+                    Rc::<str>::from(format!("alias.{minted}"))
+                };
+                let first = program.import_alias("count", &mut mint).unwrap();
 
-        // A second name for the same location — a prefixed import. The
-        // desugarer reads the spelling a reference was written with back off
-        // its alias, so the two names cannot share one.
-        program.share_binding("c:count", &library, "count");
-        let prefixed = program.import_alias("c:count", &mut mint).unwrap();
-        assert_ne!(first, prefixed);
-        assert_eq!(
-            program.import_alias("c:count", &mut mint).unwrap(),
-            prefixed
-        );
-        assert_eq!(program.import_alias("count", &mut mint).unwrap(), first);
-        assert_eq!(minted, 2);
+                // A second name for the same location — a prefixed import. The
+                // desugarer reads the spelling a reference was written with back off
+                // its alias, so the two names cannot share one.
+                program.share_binding("c:count", &library, "count");
+                let prefixed = program.import_alias("c:count", &mut mint).unwrap();
+                assert_ne!(first, prefixed);
+                assert_eq!(
+                    program.import_alias("c:count", &mut mint).unwrap(),
+                    prefixed
+                );
+                assert_eq!(program.import_alias("count", &mut mint).unwrap(), first);
+                assert_eq!(minted, 2);
 
-        // Both are the library's location, and both are bookkeeping.
-        library.set("count", n(9)).unwrap();
-        assert_eq!(program.get(&first), Some(n(9)));
-        assert_eq!(program.get(&prefixed), Some(n(9)));
-        assert_eq!(program.local_names(), ["count", "c:count"]);
-    }
+                // Both are the library's location, and both are bookkeeping.
+                library.set("count", n(9)).unwrap();
+                assert_eq!(program.get(&first), Some(n(9)));
+                assert_eq!(program.get(&prefixed), Some(n(9)));
+                assert_eq!(program.local_names(), ["count", "c:count"]);
+            }
 
-    #[test]
-    fn an_alias_is_not_among_the_names_a_program_bound() {
-        let (_, program) = library_and_program();
-        program.define("before", n(1));
-        program
-            .import_alias("count", || "count.alias".into())
-            .unwrap();
-        program.define("after", n(2));
+            #[test]
+            fn an_alias_is_not_among_the_names_a_program_bound() {
+                let (_, program) = library_and_program();
+                program.define("before", n(1));
+                program
+                    .import_alias("count", || "count.alias".into())
+                    .unwrap();
+                program.define("after", n(2));
 
-        assert_eq!(program.local_names(), ["count", "before", "after"]);
-        // And leaving it out does not shift the values after it.
-        assert_eq!(
-            program.bindings(),
-            [
-                ("count".to_string(), n(0)),
-                ("before".to_string(), n(1)),
-                ("after".to_string(), n(2)),
-            ]
-        );
-    }
+                assert_eq!(program.local_names(), ["count", "before", "after"]);
+                // And leaving it out does not shift the values after it.
+                assert_eq!(
+                    program.bindings(),
+                    [
+                        ("count".to_string(), n(0)),
+                        ("before".to_string(), n(1)),
+                        ("after".to_string(), n(2)),
+                    ]
+                );
+            }
 
-    #[test]
-    fn an_alias_defined_over_is_replaced_not_handed_out_again() {
-        let (library, program) = library_and_program();
-        let first = program
-            .import_alias("count", || "count.alias".into())
-            .unwrap();
+            #[test]
+            fn an_alias_defined_over_is_replaced_not_handed_out_again() {
+                let (library, program) = library_and_program();
+                let first = program
+                    .import_alias("count", || "count.alias".into())
+                    .unwrap();
 
-        // Something defines the alias's own spelling: the slot is the
-        // definer's from now on, and no longer the library's location.
-        program.define(Rc::clone(&first), n(7));
-        // A name the program bound from that moment, not from whenever the
-        // location is next asked for.
-        assert_eq!(program.local_names(), ["count", "count.alias"]);
-        assert_eq!(
-            program.bindings(),
-            [
-                ("count".to_string(), n(0)),
-                ("count.alias".to_string(), n(7))
-            ]
-        );
-        let second = program
-            .import_alias("count", || "count.again".into())
-            .unwrap();
+                // Something defines the alias's own spelling: the slot is the
+                // definer's from now on, and no longer the library's location.
+                program.define(Rc::clone(&first), n(7));
+                // A name the program bound from that moment, not from whenever the
+                // location is next asked for.
+                assert_eq!(program.local_names(), ["count", "count.alias"]);
+                assert_eq!(
+                    program.bindings(),
+                    [
+                        ("count".to_string(), n(0)),
+                        ("count.alias".to_string(), n(7))
+                    ]
+                );
+                let second = program
+                    .import_alias("count", || "count.again".into())
+                    .unwrap();
 
-        assert_ne!(first, second);
-        library.set("count", n(1)).unwrap();
-        assert_eq!(program.get(&second), Some(n(1)));
-        assert_eq!(program.get(&first), Some(n(7)));
-        // The definition is a name the program bound; the new alias is not.
-        assert_eq!(program.local_names(), ["count", "count.alias"]);
-    }
+                assert_ne!(first, second);
+                library.set("count", n(1)).unwrap();
+                assert_eq!(program.get(&second), Some(n(1)));
+                assert_eq!(program.get(&first), Some(n(7)));
+                // The definition is a name the program bound; the new alias is not.
+                assert_eq!(program.local_names(), ["count", "count.alias"]);
+            }
 
-    #[test]
-    fn minting_never_forwards_over_a_name_already_bound() {
-        let (_, program) = library_and_program();
-        program.define("count.0", n(42));
-        let mut offered = ["count.0", "count.1"].into_iter();
-        let alias = program
-            .import_alias("count", || offered.next().unwrap().into())
-            .unwrap();
+            #[test]
+            fn minting_never_forwards_over_a_name_already_bound() {
+                let (_, program) = library_and_program();
+                program.define("count.0", n(42));
+                let mut offered = ["count.0", "count.1"].into_iter();
+                let alias = program
+                    .import_alias("count", || offered.next().unwrap().into())
+                    .unwrap();
 
-        assert_eq!(&*alias, "count.1");
-        assert_eq!(program.get("count.0"), Some(n(42)));
-    }
+                assert_eq!(&*alias, "count.1");
+                assert_eq!(program.get("count.0"), Some(n(42)));
+            }
 
-    #[test]
-    fn every_enumeration_of_names_leaves_an_alias_out() {
-        let (_, program) = library_and_program();
-        program
-            .import_alias("count", || "count.alias".into())
-            .unwrap();
-        assert_eq!(program.get_all_names(), ["count"]);
-    }
+            #[test]
+            fn every_enumeration_of_names_leaves_an_alias_out() {
+                let (_, program) = library_and_program();
+                program
+                    .import_alias("count", || "count.alias".into())
+                    .unwrap();
+                assert_eq!(program.get_all_names(), ["count"]);
+            }
 
-    #[test]
-    fn only_an_import_has_one() {
-        let (_, program) = library_and_program();
-        program.define("own", n(5));
-        let never = || -> Rc<str> { unreachable!("nothing to alias") };
-        assert_eq!(program.import_alias("own", never), None);
-        assert_eq!(program.import_alias("missing", never), None);
+            #[test]
+            fn only_an_import_has_one() {
+                let (_, program) = library_and_program();
+                program.define("own", n(5));
+                let never = || -> Rc<str> { unreachable!("nothing to alias") };
+                assert_eq!(program.import_alias("own", never), None);
+                assert_eq!(program.import_alias("missing", never), None);
 
-        // Defined over, the name is no longer an import.
-        program.define("count", n(100));
-        assert_eq!(program.import_alias("count", never), None);
-    }
+                // Defined over, the name is no longer an import.
+                program.define("count", n(100));
+                assert_eq!(program.import_alias("count", never), None);
+            }
+        }
+    };
 }
+
+import_alias_tests!(import_alias_tests, (Environment::new(), Environment::new()));
+
+// One heap for both, kept for the test thread's life: a record namespace
+// reaches its heap through a `Weak`.
+import_alias_tests!(import_alias_record_tests, {
+    let heap = crate::heap::new_shared_heap();
+    let namespaces = (Environment::with_heap(&heap), Environment::with_heap(&heap));
+    std::mem::forget(heap);
+    namespaces
+});
 
 /// A namespace's charge on the heap's external bytes (#615): made, grown,
 /// given back; and a frame's, which is nothing.
@@ -5462,7 +5480,7 @@ mod relink_alias_tests {
 /// after a collection: it would then hide a name the program bound under the
 /// alias's spelling (`visible_slots`), and be taken for that cell's alias
 /// (`import_alias`). The key is the word less a check build's generation
-/// stamp (#621), so the test fails without the fix in either build.
+/// stamp (#621), so the tests fail without the fix in either build.
 #[cfg(test)]
 mod import_alias_reuse_tests {
     use super::*;
@@ -5478,8 +5496,21 @@ mod import_alias_reuse_tests {
         env.home().borrow().car(record)
     }
 
-    #[test]
-    fn an_alias_key_never_meets_a_cell_made_in_its_cells_slot() {
+    fn keys(env: &Environment, cell: TaggedValue) -> bool {
+        env.rare.get().is_some_and(|rare| {
+            rare.import_aliases
+                .borrow()
+                .contains_key(&Environment::cell_key(cell))
+        })
+    }
+
+    /// An importer mints the alias `f.1` for a library's `f`, the library is
+    /// dropped, as a redefined one's will be once 4b releases it (#614), and
+    /// `repoint` moves both spellings off the library's cell, so that only
+    /// the alias's key can still name it. A collection runs, a second library
+    /// makes a cell in the swept cell's slot, and the program imports that
+    /// cell as `f.1` and as `f`.
+    fn reuse_case(repoint: impl FnOnce(&SharedHeap, &Environment)) {
         let heap = new_shared_heap();
         let importer = Rc::new(Environment::with_heap(&heap));
         let minted = Cell::new(0);
@@ -5488,26 +5519,24 @@ mod import_alias_reuse_tests {
             Rc::<str>::from(format!("f.{}", minted.get()))
         };
         let old_cell = {
-            // A library the importer outlives, as a redefined one's
-            // namespace is (#614).
             let library = Rc::new(Environment::with_heap(&heap));
             library.define("f", n(1));
             assert!(importer.share_binding("f", &library, "f"));
             assert_eq!(importer.import_alias("f", mint).as_deref(), Some("f.1"));
             cell_of(&importer, "f")
         };
-        // The program defines both spellings, each a cell of its own, so only
-        // the key names the library's cell.
-        importer.define("f", n(2));
-        importer.define("f.1", n(3));
+        repoint(&heap, &importer);
         collect_only(&mut heap.borrow_mut(), |visitor| visitor.env(&importer));
 
-        // A key that keeps its cell (the first fix) leaves nothing to reuse.
-        // Otherwise the next pair allocated takes the swept cell's slot.
+        // Nothing names the library's cell now but the alias's key, if it
+        // is still there: so the collection swept the cell, or the key kept
+        // it (tracing the keys, the other fix, which this branch does not
+        // commit). Swept, the next pair allocated takes the cell's slot.
         let swept = heap
             .borrow()
             .free_pair_slots()
             .contains(&old_cell.heap_index());
+        assert!(swept || keys(&importer, old_cell), "only a key keeps the cell");
         if swept {
             let mut held = heap.borrow_mut();
             while held.free_pair_slots().last() != Some(&old_cell.heap_index()) {
@@ -5516,12 +5545,10 @@ mod import_alias_reuse_tests {
         }
         let exporter = Rc::new(Environment::with_heap(&heap));
         exporter.define("h", n(4));
-        let new_cell = cell_of(&exporter, "h");
         if swept {
-            assert_eq!(new_cell.heap_index(), old_cell.heap_index());
+            assert_eq!(cell_of(&exporter, "h").heap_index(), old_cell.heap_index());
         }
 
-        // The program imports `h` under both spellings.
         assert!(importer.share_binding("f.1", &exporter, "h"));
         assert!(importer.share_binding("f", &exporter, "h"));
         assert!(
@@ -5536,5 +5563,27 @@ mod import_alias_reuse_tests {
         );
         assert_eq!(importer.get("f.1"), Some(n(4)));
         assert_eq!(importer.get(&alias.unwrap()), Some(n(4)));
+    }
+
+    /// Both spellings defined over: the alias leaves its cell through
+    /// `define_record`.
+    #[test]
+    fn an_alias_key_never_meets_a_cell_made_in_its_cells_slot() {
+        reuse_case(|_, importer| {
+            importer.define("f", n(2));
+            importer.define("f.1", n(3));
+        });
+    }
+
+    /// Both spellings imported over: the alias leaves its cell through
+    /// `bind_cell`.
+    #[test]
+    fn an_alias_imported_over_leaves_no_key_either() {
+        reuse_case(|heap, importer| {
+            let other = Rc::new(Environment::with_heap(heap));
+            other.define("g", n(5));
+            assert!(importer.share_binding("f", &other, "g"));
+            assert!(importer.share_binding("f.1", &other, "g"));
+        });
     }
 }
