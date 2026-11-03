@@ -5422,3 +5422,87 @@ mod relink_alias_tests {
         assert_eq!(frame.get(&own), Some(n(2)));
     }
 }
+
+/// Spike 4b.1's condition (#829; the owner's ruling of 2026-11-03 on #782):
+/// `import_aliases` keys an imported cell by its pair word, and the arena
+/// reuses a word once its cell is swept. A key must not outlive every record
+/// that names its cell, or it can meet the word of a cell made in that slot
+/// after a collection: it would then hide a name the program bound under the
+/// alias's spelling (`visible_slots`), and be taken for that cell's alias
+/// (`import_alias`). The words collide in a release build only: a check build
+/// stamps each with its slot's generation (#621), so there they differ.
+#[cfg(test)]
+mod import_alias_reuse_tests {
+    use super::*;
+    use crate::heap::new_shared_heap;
+    use crate::heap::trace_sentinels::collect_only;
+
+    fn n(i: i64) -> TaggedValue {
+        TaggedValue::fixnum(i)
+    }
+
+    fn cell_of(env: &Environment, name: &str) -> TaggedValue {
+        let record = env.local_record(name).expect("a record namespace's name");
+        env.home().borrow().car(record)
+    }
+
+    #[test]
+    fn an_alias_key_never_meets_a_cell_made_in_its_cells_slot() {
+        let heap = new_shared_heap();
+        let importer = Rc::new(Environment::with_heap(&heap));
+        let minted = Cell::new(0);
+        let mint = || {
+            minted.set(minted.get() + 1);
+            Rc::<str>::from(format!("f.{}", minted.get()))
+        };
+        let old_cell = {
+            // A library the importer outlives, as a redefined one's
+            // namespace is (#614).
+            let library = Rc::new(Environment::with_heap(&heap));
+            library.define("f", n(1));
+            assert!(importer.share_binding("f", &library, "f"));
+            assert_eq!(importer.import_alias("f", mint).as_deref(), Some("f.1"));
+            cell_of(&importer, "f")
+        };
+        // The program defines both spellings, each a cell of its own, so only
+        // the key names the library's cell.
+        importer.define("f", n(2));
+        importer.define("f.1", n(3));
+        collect_only(&mut heap.borrow_mut(), |visitor| visitor.env(&importer));
+
+        // A key that keeps its cell (the first fix) leaves nothing to reuse.
+        // Otherwise the next pair allocated takes the swept cell's slot.
+        let swept = heap
+            .borrow()
+            .free_pair_slots()
+            .contains(&old_cell.heap_index());
+        if swept {
+            let mut held = heap.borrow_mut();
+            while held.free_pair_slots().last() != Some(&old_cell.heap_index()) {
+                held.alloc_pair(TaggedValue::UNSPECIFIED, TaggedValue::UNSPECIFIED);
+            }
+        }
+        let exporter = Rc::new(Environment::with_heap(&heap));
+        exporter.define("h", n(4));
+        let new_cell = cell_of(&exporter, "h");
+        if swept {
+            assert_eq!(new_cell.heap_index(), old_cell.heap_index());
+        }
+
+        // The program imports `h` under both spellings.
+        assert!(importer.share_binding("f.1", &exporter, "h"));
+        assert!(importer.share_binding("f", &exporter, "h"));
+        assert!(
+            importer.local_names().iter().any(|name| name == "f.1"),
+            "`f.1` is the program's import, not an alias: {:?}",
+            importer.local_names()
+        );
+        let alias = importer.import_alias("f", mint);
+        assert!(
+            alias.as_deref().is_some_and(|alias| alias != "f.1"),
+            "a fresh alias, not the program's `f.1`: {alias:?}"
+        );
+        assert_eq!(importer.get("f.1"), Some(n(4)));
+        assert_eq!(importer.get(&alias.unwrap()), Some(n(4)));
+    }
+}

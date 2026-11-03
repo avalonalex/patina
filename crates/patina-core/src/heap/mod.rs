@@ -806,6 +806,13 @@ impl Heap {
         }
     }
 
+    /// The pair slots the next allocations take, the last first: a test's
+    /// view of the free list (spike 4b.1's reuse test, #829).
+    #[cfg(test)]
+    pub(crate) fn free_pair_slots(&self) -> &[HeapIndex] {
+        &self.free_pairs
+    }
+
     /// Spike 4b.1 (#829): the weak handle to this heap's `SharedHeap`, empty
     /// when it was not made by [`new_shared_heap`].
     pub(crate) fn this(&self) -> std::rc::Weak<RefCell<Heap>> {
