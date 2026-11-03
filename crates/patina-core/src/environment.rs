@@ -1271,9 +1271,13 @@ impl Environment {
 
     /// The key `import_aliases` files a record namespace's imported cell
     /// under, beside the `(env id, slot)` of a frame's owner: the cell's word,
-    /// with a slot no environment has.
+    /// with a slot no environment has. The word less a check build's
+    /// generation stamp (#621), so that a cell made in a swept cell's slot
+    /// has the swept cell's key in every build, and the reuse test of
+    /// [`forget_alias`](Self::forget_alias) fails without it in a debug
+    /// build as in a release one.
     fn cell_key(cell: TaggedValue) -> (u64, u32) {
-        (cell.raw(), u32::MAX)
+        (TaggedValue::pair(cell.heap_index()).raw(), u32::MAX)
     }
 
     /// Where `slot` lives, as `binding_location` names it: a record
@@ -5457,8 +5461,8 @@ mod relink_alias_tests {
 /// that names its cell, or it can meet the word of a cell made in that slot
 /// after a collection: it would then hide a name the program bound under the
 /// alias's spelling (`visible_slots`), and be taken for that cell's alias
-/// (`import_alias`). The words collide in a release build only: a check build
-/// stamps each with its slot's generation (#621), so there they differ.
+/// (`import_alias`). The key is the word less a check build's generation
+/// stamp (#621), so the test fails without the fix in either build.
 #[cfg(test)]
 mod import_alias_reuse_tests {
     use super::*;
