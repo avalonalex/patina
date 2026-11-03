@@ -2519,7 +2519,9 @@ mod tests {
         let mut heap = shared.borrow_mut();
         let stats = collect(&mut heap, &roots);
 
-        assert_eq!(stats.last_marked.pairs, 1);
+        // Spike 4b.1 (#829): the binding's record and cell, both pairs, and
+        // the value — kept by the environment's trace of its slot.
+        assert_eq!(stats.last_marked.pairs, 3);
         assert_eq!(heap.free_pairs, vec![dead.heap_index()]);
         assert_eq!(heap.car(live), TaggedValue::fixnum(1));
     }

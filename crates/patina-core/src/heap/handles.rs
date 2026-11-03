@@ -504,9 +504,11 @@ mod tests {
 
     /// An environment on `heap`, held borrowed, whose one binding holds
     /// `value`.
-    fn env_holding_on(heap: &super::super::Heap, value: TaggedValue) -> Rc<Environment> {
+    fn env_holding_on(heap: &mut super::super::Heap, value: TaggedValue) -> Rc<Environment> {
         let env = Rc::new(Environment::namespace(heap));
-        env.define("held", value);
+        // Spike 4b.1 (#829): the record and cell are allocated on the heap
+        // the test holds.
+        env.define_on("held", value, heap);
         env
     }
 
@@ -541,7 +543,7 @@ mod tests {
         let mut heap = shared.borrow_mut();
         collect_only(&mut heap, |_| {});
         let env = heap.held_environment(&copy);
-        assert_eq!(heap.car(env.get("held").unwrap()), TaggedValue::fixnum(2));
+        assert_eq!(heap.car(env.get_on("held", &heap).unwrap()), TaggedValue::fixnum(2));
         drop(env);
         drop(handle);
         drop(copy);
@@ -562,7 +564,7 @@ mod tests {
         assert_eq!(shared.borrow().handles.tracked(), 1, "tracked once");
         let mut heap = shared.borrow_mut();
         collect_only(&mut heap, |_| {});
-        assert_eq!(heap.car(env.get("held").unwrap()), TaggedValue::fixnum(3));
+        assert_eq!(heap.car(env.get_on("held", &heap).unwrap()), TaggedValue::fixnum(3));
         drop(env);
         collect_only(&mut heap, |_| {});
         assert_eq!(heap.handles.tracked(), 0, "forgotten once nothing holds it");

@@ -176,7 +176,11 @@ fn store_word(word: &mut TaggedValue, value: TaggedValue) {
 
 /// Create a new shared heap
 pub fn new_shared_heap() -> SharedHeap {
-    Rc::new(RefCell::new(Heap::new()))
+    let heap = Rc::new(RefCell::new(Heap::new()));
+    // Spike 4b.1 (#829), (a'): a namespace made from `&Heap` (`Cx::new_namespace`)
+    // reaches its records' pairs through this handle.
+    heap.borrow_mut().this = Rc::downgrade(&heap);
+    heap
 }
 
 // ============================================================================
@@ -651,6 +655,13 @@ pub struct Heap {
     /// (design §9.5) key on these ids and must never see one alias two
     /// entries. Monotonic, never reused.
     next_vm_continuation_id: u64,
+
+    /// Spike 4b.1 (#829), (a'): a weak handle to the `SharedHeap` this heap
+    /// lives in, set by [`new_shared_heap`], so a namespace made from `&Heap`
+    /// can hold one in its `RareTables` for the callers that read a record
+    /// without a heap in hand. Empty for a heap made any other way, whose
+    /// namespaces then keep plain value slots.
+    this: std::rc::Weak<RefCell<Heap>>,
 }
 
 /// `eqv?` on two inexact reals: identical bit patterns, not IEEE `==`.
@@ -791,7 +802,14 @@ impl Heap {
             #[cfg(feature = "gc-census")]
             census: crate::census::imp::HeapCensus::new(),
             next_vm_continuation_id: 0,
+            this: std::rc::Weak::new(),
         }
+    }
+
+    /// Spike 4b.1 (#829): the weak handle to this heap's `SharedHeap`, empty
+    /// when it was not made by [`new_shared_heap`].
+    pub(crate) fn this(&self) -> std::rc::Weak<RefCell<Heap>> {
+        self.this.clone()
     }
 
     // =========================================================================

@@ -145,6 +145,7 @@ impl Pass5Codegen {
         let code = CodeObject {
             id,
             name: cg.name,
+            global_links: GlobalCacheEntry::links(&global_cache),
             global_cache,
             live_closures: std::cell::Cell::new(0),
             instructions: cg.instructions,
@@ -1187,6 +1188,7 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
     let child_code = CodeObject {
         id: child_id,
         name: None,
+        global_links: GlobalCacheEntry::links(&global_cache),
         global_cache,
         live_closures: std::cell::Cell::new(0),
         instructions: child_cg.instructions,

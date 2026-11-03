@@ -17,6 +17,7 @@ fn code_object_constructs() {
         source_map: vec![],
         register_roots: None,
         global_cache: GlobalCacheEntry::table(&[]),
+        global_links: GlobalCacheEntry::links(&GlobalCacheEntry::table(&[])),
         live_closures: std::cell::Cell::new(0),
     };
     assert!(code.source_location(0).is_none());
@@ -46,6 +47,7 @@ fn call_frame_is_clone() {
         source_map: vec![],
         register_roots: None,
         global_cache: GlobalCacheEntry::table(&[]),
+        global_links: GlobalCacheEntry::links(&GlobalCacheEntry::table(&[])),
         live_closures: std::cell::Cell::new(0),
     });
     let frame = CallFrame {

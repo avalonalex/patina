@@ -182,6 +182,22 @@ pub struct CodeObject {
     #[trace(skip, reason = "environment ids and slot numbers")]
     pub global_cache: Vec<Cell<GlobalCacheEntry>>,
 
+    /// Spike 4b.1 (#829), (a'): for each `LoadGlobal` site, the binding
+    /// record it reads, `link[pc] → record → cell → value`, or
+    /// [`GlobalCacheEntry::NO_LINK`] until the site's first execution finds
+    /// its name in the namespace's own table. It stands in for 4b.9's link
+    /// table, which fills at load. Same length as `global_cache`.
+    ///
+    /// Not traced: a record never leaves the namespace slot that made it, and
+    /// the code reads its records only while it runs in that namespace (a
+    /// frame's closure, or the state's globals, keeps it live), whose trace
+    /// keeps the record. 4b.9's tables are traced instead.
+    #[trace(
+        skip,
+        reason = "spike: record words the namespace's slots keep live; 4b.9 traces link tables"
+    )]
+    pub global_links: Vec<Cell<TaggedValue>>,
+
     /// How many live VM closures run this code (#338). A frame holds its code
     /// itself, so the `Rc` count says whether a frame needs it; a closure names
     /// its code by id, so this is what says a closure does. Counted up where
@@ -223,6 +239,15 @@ pub struct GlobalCacheEntry {
 
 impl GlobalCacheEntry {
     pub const EMPTY: GlobalCacheEntry = GlobalCacheEntry { env_id: 0, slot: 0 };
+
+    /// A `global_links` entry not yet linked: never a record, which is a pair.
+    pub const NO_LINK: TaggedValue = TaggedValue::FALSE;
+
+    /// The link vector beside a cache table (spike 4b.1, #829): one unlinked
+    /// entry per cache entry.
+    pub fn links(cache: &[Cell<GlobalCacheEntry>]) -> Vec<Cell<TaggedValue>> {
+        vec![Cell::new(Self::NO_LINK); cache.len()]
+    }
 
     /// The cache table for a freshly compiled instruction stream: pc-indexed,
     /// or empty (never touched at runtime) when no instruction accesses a

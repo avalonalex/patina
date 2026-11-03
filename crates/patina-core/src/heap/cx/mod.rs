@@ -469,7 +469,7 @@ impl<'gc> Cx<'gc> {
             env.heap_id() == self.heap.borrow().id(),
             "Cx::lookup: an environment of another heap"
         );
-        env.get(name).map(|word| self.brand(word))
+        env.get_in(name, self.heap).map(|word| self.brand(word))
     }
 
     /// A literal pool on this context's heap ([`LiteralPool::new`]), for a

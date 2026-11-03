@@ -118,6 +118,11 @@ impl TaggedValue {
     /// the dead register is read instead of reading as a legal value. Readers
     /// that only display registers render it as `#<dead>`.
     pub const DEAD_SLOT: Self = Self(0xE8 | Self::TAG_SPECIAL);
+    /// Spike 4b.1 (#829): what a placeholder record's cell holds, a name
+    /// linked before it is bound (GC_PRD §11.6's link tables). The spike
+    /// makes no placeholders, so no cell holds it; the VM's linked read
+    /// tests for it all the same, as the real home's must.
+    pub const UNBOUND: Self = Self(0xE0 | Self::TAG_SPECIAL);
 
     // =========================================================================
     // Fixnum Constants and Operations

@@ -57,9 +57,11 @@ pub(crate) fn env_holding(heap: &SharedHeap, value: TaggedValue) -> Rc<Environme
 
 /// [`env_holding`] for a test that holds the heap, `held`, borrowed: the
 /// namespace takes its account from it rather than borrowing it again.
-fn env_holding_on(held: &Heap, value: TaggedValue) -> Rc<Environment> {
+fn env_holding_on(held: &mut Heap, value: TaggedValue) -> Rc<Environment> {
     let env = Rc::new(Environment::namespace(held));
-    env.define("held", value);
+    // Spike 4b.1 (#829): a record namespace's definition allocates its record
+    // and cell, so it takes the heap the test holds.
+    env.define_on("held", value, held);
     env
 }
 

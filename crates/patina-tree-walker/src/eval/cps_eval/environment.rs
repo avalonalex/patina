@@ -84,7 +84,10 @@ impl<'a> CpsEvaluator<'a> {
     ) -> Result<TaggedValue, EvalError> {
         // Use scoped lookup if scopes are present (for hygienic macros)
         if scopes.is_empty() {
-            env.get(name)
+            // Spike 4b.1 (#829): the heap goes down for the namespace step,
+            // which reads the namespace's slot through its binding record;
+            // the frames above it are read by name and never borrow it.
+            env.get_in(name, &self.evaluator.heap)
                 .ok_or_else(|| EvalError::UndefinedVariable(name.to_string()))
         } else {
             // Scope-based lookup for hygienic macros.

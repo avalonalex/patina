@@ -410,6 +410,7 @@ impl VmState {
                 source_map: Vec::new(),
                 register_roots: None,
                 global_cache: Vec::new(),
+                global_links: Vec::new(),
                 live_closures: Cell::new(0),
             }),
             free_code_ids: Vec::new(),
@@ -575,7 +576,7 @@ impl VmState {
             let proc =
                 Procedure::primitive(name, arity, Rc::from(qualified_name.as_str()), Some(index));
             let tv = self.heap.borrow_mut().alloc_procedure(proc);
-            self.globals.define(name, tv);
+            self.globals.define_in(name, tv, &self.heap);
         }
     }
 
@@ -1929,6 +1930,40 @@ pub(super) fn frame_globals(state: &VmState) -> Rc<Environment> {
     state.globals.clone()
 }
 
+/// A `LoadGlobal` site not linked yet (spike 4b.1, #829): link it when the
+/// name is the frame's namespace's own slot, an import's included, and read
+/// through the record; otherwise — a frame's name, a parent's, an alias's or
+/// an unbound one — read as before the spike, by the per-site cache and then
+/// by name.
+#[inline(never)]
+fn load_global_unlinked(
+    state: &VmState,
+    code: &CodeObject,
+    pc: usize,
+    name: &patina_core::core_expr::Symbol,
+) -> Result<TaggedValue, VmError> {
+    // A linked site whose cell holds `UNBOUND`: a placeholder, unbound.
+    if code.global_links[pc].get() != GlobalCacheEntry::NO_LINK {
+        return Err(VmError::UnboundVariable { name: name.clone() });
+    }
+    let globals = frame_globals(state);
+    if let Some(record) = globals.own_record(name) {
+        code.global_links[pc].set(record);
+        return Ok(Environment::read_record(&state.heap.borrow(), record));
+    }
+    // Per-site inline cache (Track P P4): see `GlobalCacheEntry`.
+    match GlobalCacheEntry::probe(&code.global_cache[pc], &globals, name) {
+        Some(slot) => Ok(globals.slot_value_in(slot, &state.heap.borrow())),
+        // Not a local slot. Fall back to the full lookup rather than
+        // straight to the parent: `get` also follows macro-expansion
+        // aliases recorded on this environment, which is how a template
+        // reaches a binding private to the library that defined it.
+        None => globals
+            .get_in(name, &state.heap)
+            .ok_or_else(|| VmError::UnboundVariable { name: name.clone() }),
+    }
+}
+
 /// Shared skeleton of every inline primitive opcode arm (Track P P3): run
 /// `$fast` (which yields `Option<TaggedValue>`) only while the primitive is
 /// unshadowed; on `Some`, write `$dst`; otherwise funnel the exact same
@@ -2034,18 +2069,20 @@ fn dispatch_one_instruction(
         }
 
         Instruction::LoadGlobal { dst, ref name } => {
-            // Per-site inline cache (Track P P4): see `GlobalCacheEntry`.
-            let globals = frame_globals(state);
-            let val = match GlobalCacheEntry::probe(&code.global_cache[pc], &globals, name) {
-                Some(slot) => globals.slot_value(slot),
-                // Not a local slot. Fall back to the full lookup rather than
-                // straight to the parent: `get` also follows macro-expansion
-                // aliases recorded on this environment, which is how a template
-                // reaches a binding private to the library that defined it.
-                None => globals
-                    .get(name)
-                    .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?,
-            };
+            // Spike 4b.1 (#829), (a'): `link[pc] → record → cell → value`
+            // under one heap borrow, with no `frame_globals` call and no
+            // cache probe once the site is linked.
+            let link = code.global_links[pc].get();
+            let mut val = TaggedValue::UNBOUND;
+            if link != GlobalCacheEntry::NO_LINK {
+                val = Environment::read_record(&state.heap.borrow(), link);
+            }
+            // A placeholder's cell holds `UNBOUND` (§11.6: the real home
+            // links unbound names too), so its read tests for one; the spike
+            // makes none. The test also sends an unlinked site to be linked.
+            if val == TaggedValue::UNBOUND {
+                val = load_global_unlinked(state, code, pc, name)?;
+            }
             state.set_reg_at(base, dst, val);
         }
 
@@ -2054,9 +2091,9 @@ fn dispatch_one_instruction(
             let globals = frame_globals(state);
             match GlobalCacheEntry::probe(&code.global_cache[pc], &globals, name) {
                 Some(slot) => {
-                    let old = globals.slot_value(slot);
+                    let old = globals.slot_value_in(slot, &state.heap.borrow());
                     mark_if_shadowing_primitive_value(state, old, val);
-                    globals.set_slot_value(slot, val);
+                    globals.set_slot_value_in(slot, val, &state.heap);
                 }
                 // Not a local slot. Use the full `set` rather than going
                 // straight to the parent: it also follows macro-expansion
@@ -3081,7 +3118,9 @@ fn mark_if_shadowing_primitive(
     name: &str,
     new_val: TaggedValue,
 ) {
-    let Some(old) = globals.get(name) else { return };
+    let Some(old) = globals.get_in(name, &state.heap) else {
+        return;
+    };
     mark_if_shadowing_primitive_value(state, old, new_val);
 }
 
@@ -3103,9 +3142,10 @@ pub(crate) fn define_global(
     value: TaggedValue,
 ) {
     if let Some(slot) = env.local_slot(&name) {
-        mark_if_shadowing_primitive_value(state, env.slot_value(slot), value);
+        let old = env.slot_value_in(slot, &state.heap.borrow());
+        mark_if_shadowing_primitive_value(state, old, value);
     }
-    env.define(name, value);
+    env.define_in(name, value, &state.heap);
 }
 
 /// Value-taking core of [`mark_if_shadowing_primitive`], for callers that
@@ -3156,7 +3196,7 @@ pub(crate) fn import_export(
     library: &Library,
     export: &str,
 ) {
-    let old = env.get(&name);
+    let old = env.get_in(&name, &state.heap);
     library.import_into(env, name.as_str(), export);
     mark_if_import_rebound(state, env, &name, old);
 }
@@ -3171,7 +3211,7 @@ fn mark_if_import_rebound(
     // library environment — so there is nothing to have shadowed, and no
     // reason to look the name up a second time.
     let Some(old) = old else { return };
-    if let Some(new) = env.get(name) {
+    if let Some(new) = env.get_in(name, &state.heap) {
         mark_if_shadowing_primitive_value(state, old, new);
     }
 }
@@ -3205,6 +3245,7 @@ mod tests {
             id: CodeObjectId::label(),
             name: None,
             global_cache: GlobalCacheEntry::table(&instructions),
+            global_links: GlobalCacheEntry::links(&GlobalCacheEntry::table(&instructions)),
             instructions,
             constants: Vec::new(),
             num_regs: 1,
