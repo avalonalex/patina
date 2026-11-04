@@ -27,6 +27,7 @@ pub(crate) use body_defines::for_each_define;
 
 use crate::error::CompileError;
 use crate::types::CodeObject;
+use patina_core::NamespaceView;
 use patina_core::core_expr::CoreExpr;
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
@@ -105,8 +106,9 @@ fn compile_pipeline(
             // root namespace, or a host environment, which is a child of the
             // global one (#620). Lexical definitions are resolved within the
             // form being compiled, and never reach here.
+            let view = NamespaceView::of(env);
             for (name, renamed) in introduced_globals {
-                env.define_introduced_global(name, renamed.scopes, renamed.name);
+                view.define_introduced_global(name, renamed.scopes, renamed.name);
             }
         }
         None => debug_assert!(

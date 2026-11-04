@@ -446,8 +446,8 @@ impl<'gc> Cx<'gc> {
         Environment::namespace(&self.heap.borrow())
     }
 
-    /// Bind `name` in `env` to the primitive `library`'s `name`
-    /// ([`Environment::define_primitive`]).
+    /// Bind `name` in `env` to the primitive `library`'s `name`, through the
+    /// namespace view ([`NamespaceView::define_primitive`](crate::NamespaceView::define_primitive)).
     #[inline]
     pub fn define_primitive(
         &mut self,
@@ -456,11 +456,11 @@ impl<'gc> Cx<'gc> {
         arity: crate::procedure::Arity,
         library: Vec<String>,
     ) {
-        env.define_primitive(self.heap, name, arity, library);
+        crate::NamespaceView::of(env).define_primitive(self.heap, name, arity, library);
     }
 
-    /// What `name` is bound to in `env` or its parents
-    /// ([`Environment::get`]), as a value: read as
+    /// What `name` is bound to in `env` or its parents, a lookup through the
+    /// namespace view ([`NamespaceView::get`](crate::NamespaceView::get)), as a value: read as
     /// [`Self::resolve_with_scopes`] reads a binding, which it is as live
     /// as.
     #[inline]
@@ -469,7 +469,9 @@ impl<'gc> Cx<'gc> {
             env.heap_id() == self.heap.borrow().id(),
             "Cx::lookup: an environment of another heap"
         );
-        env.get(name).map(|word| self.brand(word))
+        crate::NamespaceView::of(env)
+            .get(name)
+            .map(|word| self.brand(word))
     }
 
     /// A literal pool on this context's heap ([`LiteralPool::new`]), for a

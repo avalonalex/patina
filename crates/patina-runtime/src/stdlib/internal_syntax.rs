@@ -12,6 +12,7 @@
 //! See `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md`.
 
 use crate::environment::Environment;
+use patina_core::NamespaceView;
 use patina_core::core_syntax::{ALL_CORE_FORMS, CoreForm};
 use std::rc::Rc;
 
@@ -69,5 +70,5 @@ pub fn seed_top_level_syntax(env: &Rc<Environment>, heap: &patina_core::SharedHe
 /// the environment's own `RefCell`s.
 fn define_core_syntax(env: &Rc<Environment>, heap: &patina_core::SharedHeap, form: CoreForm) {
     let marker = heap.borrow_mut().core_syntax(form);
-    env.define(form.name(), marker);
+    NamespaceView::of(env).define(form.name(), marker);
 }

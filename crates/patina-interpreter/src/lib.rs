@@ -128,6 +128,7 @@ pub struct PrimSpec {
     pub arity: Arity,
     pub class: PrimClass,
 }
+use patina_core::NamespaceView;
 #[cfg(feature = "tree-walker")]
 pub use patina_tree_walker::{Evaluator, TreeWalker};
 #[cfg(feature = "vm")]
@@ -908,7 +909,7 @@ impl<B: Backend> Interpreter<B> {
     /// # }
     /// ```
     pub fn lookup(&self, name: &str) -> Option<Owned> {
-        let value = self.backend.global_env().get(name)?;
+        let value = NamespaceView::of(self.backend.global_env()).get(name)?;
         Some(self.hold(value))
     }
 
@@ -1113,7 +1114,7 @@ impl<B: Backend> Interpreter<B> {
     /// `None` when neither does. Panics on a handle another interpreter
     /// made.
     pub fn lookup_in(&self, env: &OwnedEnvironment, name: &str) -> Option<Owned> {
-        let value = self.raw_environment(env).get(name)?;
+        let value = NamespaceView::of(&self.raw_environment(env)).get(name)?;
         Some(self.hold(value))
     }
 

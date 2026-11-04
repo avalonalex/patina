@@ -122,7 +122,9 @@ fi
 # test counts re-pinned 2026-11-01 for #779's tests of a library body form
 # re-entered after its load and of the code a library's body forms and a
 # host environment's forms let go, and their counts re-measured that day,
-# the minimums left)
+# the minimums left; host_environments's test count re-pinned 2026-11-03 for
+# #830's test that a host environment is charged as a frame, and its counts
+# re-measured that day, the minimum left)
 TARGETS=(
     "callability 16 31 13"                    # 1543 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -132,7 +134,7 @@ TARGETS=(
     "finished_forms_release_code 16 1450 11"  # 3677 (13)
     "gc_tree_walker 16 11421 20"              # 24151 (658)
     "gc_vm 16 8001 25"                        # 17314 (667)
-    "host_environments 16 43788 11"           # 87576 (11)
+    "host_environments 16 43788 12"           # 88299 (11)
     "hygiene_matrix 16 400 14"                # 804 (2)
     "interpreter_api 16 138 27"               # 277 (4)
     "library_loading 16 46 9"                 # 93 (0): see the header

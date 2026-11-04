@@ -3,8 +3,8 @@
 //! See VM_ISA.md §2.3.
 
 use super::instruction::Instruction;
+use patina_core::NamespaceView;
 use patina_core::core_expr::Symbol;
-use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{Trace, TraceThroughRc};
@@ -247,7 +247,11 @@ impl GlobalCacheEntry {
     /// (a hit costs one id compare); `None` for parent-resolved or unbound
     /// names, which are never cached.
     #[inline(always)]
-    pub fn probe(cell: &Cell<GlobalCacheEntry>, globals: &Environment, name: &str) -> Option<u32> {
+    pub fn probe(
+        cell: &Cell<GlobalCacheEntry>,
+        globals: NamespaceView<'_>,
+        name: &str,
+    ) -> Option<u32> {
         let entry = cell.get();
         let env_id = globals.env_id();
         if entry.env_id == env_id {
