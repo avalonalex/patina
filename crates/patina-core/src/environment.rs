@@ -544,9 +544,12 @@ struct RareTables {
     /// direction it silently wrote a macro's private state onto a user's
     /// variable.
     ///
-    /// Only a parentless global environment ever holds entries: they are
-    /// installed beside the aliases in the VM's `compile_pipeline`, which
-    /// asserts that. Lookups therefore do not walk parents.
+    /// Installed beside the aliases by the VM's `compile_pipeline`, into the
+    /// environment a form is compiled in: a namespace, or a host's
+    /// environment, which is a frame until 4b.8 gives hosts a kind of their
+    /// own. Nothing asserts which. `introduced_global` and
+    /// `for_each_introduced_candidate` read this environment's table alone;
+    /// `has_introduced_definition` reads its root's.
     #[trace(
         skip,
         reason = "spellings, scope sets and the names of renamed globals"
@@ -631,8 +634,8 @@ struct RareTables {
 /// The external bytes (`heap/account.rs`, GC_PRD §15) a namespace has charged
 /// for its tables, given back when it drops (#615).
 ///
-/// **A namespace is an environment made without a parent**
-/// ([`Environment::with_heap`]): the global environment, a library's, and the
+/// **A namespace is an environment of the namespace kind** ([`Kind`]), made
+/// without a parent ([`Environment::with_heap`]): the global environment, a library's, and the
 /// ones `environment`, `scheme-report-environment` and `null-environment`
 /// build. Their tables are Rust allocations the trigger would otherwise not
 /// see: an `(environment '(scheme base))` holds about 40 KiB in them and
@@ -897,13 +900,11 @@ pub struct Environment {
         reason = "a summary of `scoped_bindings`, which is traced in full"
     )]
     has_visible_scoped: Cell<bool>,
-    /// Whether this is a frame the tree-walker made for its CPS code's
-    /// temporaries, a `let` temporary's or a continuation's parameter
-    /// ([`Environment::for_temporaries`]), where no definition belongs: a
-    /// `define` evaluated with it binds in the nearest environment above it
-    /// that is not one (#680). Set at construction and never changed.
-    #[trace(skip, reason = "a flag")]
-    holds_temporaries: bool,
+    /// What this environment is ([`Kind`]): a namespace, a frame, or a frame
+    /// of the tree-walker's temporaries. Set at construction and never
+    /// changed.
+    #[trace(skip, reason = "what the environment is, set at construction")]
+    kind: Kind,
     /// The tables only a global or a library environment ever fills
     /// ([`RareTables`]), absent until one of them is first written and one
     /// pointer wide either way.
@@ -922,6 +923,30 @@ pub struct Environment {
         reason = "the parent, which `SlotVisitor::env` walks with the chain it heads: the collector follows it by reference (`GcVisitor::visit_env`)"
     )]
     parent: Option<Rc<Environment>>,
+}
+
+/// What an environment is, set by its constructor and never changed (4b's
+/// start decision 4 on #782): one type serves namespaces and frames, and the
+/// kind says which.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// A namespace: the global environment, a library's, a specifier's, or a
+    /// standalone one ([`Environment::new`]), each made without a parent. One
+    /// made with a heap's account charges for its tables
+    /// ([`NamespaceCharge`]); every namespace indexes a spelling's scoped
+    /// bindings past [`INDEX_ABOVE`].
+    Namespace,
+    /// A frame ([`Environment::with_parent`]): a call's or a body's, the
+    /// desugarer's scopes, and a host's environment
+    /// (`Interpreter::new_environment`). It never charges, and indexes past
+    /// [`FRAME_INDEX_ABOVE`].
+    Frame,
+    /// A frame the tree-walker made for its CPS code's temporaries, a `let`
+    /// temporary's or a continuation's parameter
+    /// ([`Environment::for_temporaries`]), where no definition belongs: a
+    /// `define` evaluated with it binds in the nearest environment above it
+    /// that is not one (#680). Otherwise a frame.
+    Temporaries,
 }
 
 impl Environment {
@@ -965,7 +990,7 @@ impl Environment {
             alias_bindings: RefCell::new(FxHashMap::default()),
             has_aliases: Cell::new(false),
             has_visible_scoped: Cell::new(false),
-            holds_temporaries: false,
+            kind: Kind::Namespace,
             rare: match account {
                 Some(account) => OnceCell::from(Box::new(RareTables {
                     namespace: Some(NamespaceCharge::new(account)),
@@ -982,7 +1007,7 @@ impl Environment {
     /// Create a new environment with a parent: a frame, which never charges
     /// for its tables (`NamespaceCharge`).
     pub fn with_parent(parent: Rc<Environment>) -> Self {
-        Self::frame(parent, false)
+        Self::frame(parent, Kind::Frame)
     }
 
     /// [`Environment::with_parent`] for a frame of the tree-walker's CPS
@@ -990,10 +1015,10 @@ impl Environment {
     /// is never where a definition binds ([`Environment::holds_temporaries`],
     /// #680).
     pub fn for_temporaries(parent: Rc<Environment>) -> Self {
-        Self::frame(parent, true)
+        Self::frame(parent, Kind::Temporaries)
     }
 
-    fn frame(parent: Rc<Environment>, holds_temporaries: bool) -> Self {
+    fn frame(parent: Rc<Environment>, kind: Kind) -> Self {
         Environment {
             heap_id: parent.heap_id,
             bindings: RefCell::new(Bindings::default()),
@@ -1002,7 +1027,7 @@ impl Environment {
             alias_bindings: RefCell::new(FxHashMap::default()),
             has_aliases: Cell::new(false),
             has_visible_scoped: Cell::new(false),
-            holds_temporaries,
+            kind,
             rare: OnceCell::new(),
             parent: Some(parent),
         }
@@ -1019,7 +1044,7 @@ impl Environment {
     /// ([`Environment::for_temporaries`]), where no definition binds.
     #[inline]
     pub fn holds_temporaries(&self) -> bool {
-        self.holds_temporaries
+        self.kind == Kind::Temporaries
     }
 
     /// Process-unique, never-reused id for this environment's simple
@@ -1150,14 +1175,15 @@ impl Environment {
         }
     }
 
-    /// Whether this environment is a namespace, which charges for its tables
-    /// ([`NamespaceCharge`]): one made without a parent. Asked before a table
-    /// that frames fill too is measured, so that a frame skips the measuring
-    /// for the price of a field read: the parent is in the struct, where the
-    /// charge is behind the `rare` box.
+    /// Whether this environment is a namespace ([`Kind::Namespace`]), which
+    /// charges for its tables when it has an account ([`NamespaceCharge`])
+    /// and indexes at the namespace's threshold ([`Environment::indexes`]).
+    /// Asked before a table that frames fill too is measured, so that a frame
+    /// skips the measuring for the price of a field read: the kind is in the
+    /// struct, where the charge is behind the `rare` box.
     #[inline(always)]
     fn is_namespace(&self) -> bool {
-        self.parent.is_none()
+        self.kind == Kind::Namespace
     }
 
     /// After a table reallocated: a namespace charges the heap for what its
@@ -1193,7 +1219,7 @@ impl Environment {
             // Flags.
             has_aliases: _,
             has_visible_scoped: _,
-            holds_temporaries: _,
+            kind: _,
             rare,
             // An environment of its own, which charges for itself if it is a
             // namespace.
@@ -1623,7 +1649,8 @@ impl Environment {
 
     /// Whether this environment indexes a spelling's scoped bindings when it
     /// has `len` of them: past [`INDEX_ABOVE`] in a namespace, past
-    /// [`FRAME_INDEX_ABOVE`] in a frame, which is why a frame of parameters
+    /// [`FRAME_INDEX_ABOVE`] in a frame of either frame kind ([`Kind`]),
+    /// which is why a frame of parameters
     /// does not build one per call. The one place the scoped table's
     /// thresholds are applied, so that the writer that builds an index and
     /// the readers that consult it agree on which lists have one. (The VM's
@@ -4499,6 +4526,41 @@ mod namespace_charge_tests {
         }
     }
 
+    /// The kind is the constructor's (4b's start decision 4 on #782): the
+    /// namespace constructors make namespaces, which have no parent, and the
+    /// frame constructors make frames, which have one. What answers to the
+    /// kind answers as it did when it read the parent: a namespace with an
+    /// account charges, and `Environment::new`'s, which has none, does not.
+    #[test]
+    fn each_constructor_sets_its_kind() {
+        let heap = new_shared_heap();
+        let standalone = Rc::new(Environment::new());
+        let global = Rc::new(Environment::with_heap(&heap));
+        let in_hand = Rc::new(Environment::namespace(&heap.borrow()));
+        for namespace in [&standalone, &global, &in_hand] {
+            assert_eq!(namespace.kind, Kind::Namespace);
+            assert!(namespace.is_namespace() && !namespace.holds_temporaries());
+            assert!(namespace.parent().is_none());
+        }
+        assert_eq!(standalone.charged_bytes(), None);
+        assert!(global.charged_bytes().is_some() && in_hand.charged_bytes().is_some());
+
+        let frame = Environment::with_parent(Rc::clone(&global));
+        assert_eq!(frame.kind, Kind::Frame);
+        assert!(!frame.is_namespace() && !frame.holds_temporaries());
+        let temporaries = Environment::for_temporaries(Rc::clone(&global));
+        assert_eq!(temporaries.kind, Kind::Temporaries);
+        assert!(!temporaries.is_namespace() && temporaries.holds_temporaries());
+        for frame in [&frame, &temporaries] {
+            assert!(
+                frame
+                    .parent()
+                    .is_some_and(|parent| Rc::ptr_eq(parent, &global))
+            );
+            assert_eq!(frame.charged_bytes(), None);
+        }
+    }
+
     /// The estimate a tree-walker closure is charged for its frame (#637) is
     /// the frame it describes: one the tree-walker builds for a call of one
     /// parameter, bound under its scopes, measured as a namespace's tables
@@ -4637,7 +4699,7 @@ mod gc_edge_tests {
             alias_bindings: RefCell::new(aliases),
             has_aliases: Cell::new(true),
             has_visible_scoped: Cell::new(true),
-            holds_temporaries: false,
+            kind: Kind::Frame,
             rare: OnceCell::from(Box::new(RareTables {
                 introduced_global_names: RefCell::default(),
                 scoped_index: RefCell::default(),

@@ -841,7 +841,8 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   and post a collection the moment it crosses.
 
   **Namespaces are the holders that charge today (#615).** An environment
-  made without a parent (`Environment::with_heap`) — the global environment,
+  of the namespace kind, made without a parent (`Environment::with_heap`;
+  the kind is set at construction, #830) — the global environment,
   a library's, and the ones `environment`, `scheme-report-environment` and
   `null-environment` build — charges its tables once when it is made and
   again whenever one reallocates, and gives them back in `Drop`
@@ -853,8 +854,8 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   keeps its namespaces raises L with them. Frames (`Environment::with_parent`
   and `for_temporaries`, the tree-walker's per call and per `let`) never
   charge, and skip the measuring: a scoped binding or an alias, which is how
-  the tree-walker binds a call's parameters, checks for a parent before it
-  reads a table's capacity; a plain binding compares the slot vector's
+  the tree-walker binds a call's parameters, checks the environment's kind
+  before it reads a table's capacity; a plain binding compares the slot vector's
   length with its capacity (a fresh frame's first, nothing); and a frame
   whose vector spills or whose index grows finds in one load that it has no
   charge.
