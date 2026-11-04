@@ -13,12 +13,18 @@ the clauses it declares:
        (footprint: committed-bytes plus external-bytes)
   SS4  mutator CPU per cycle over [3N, 4N) <= 1.5 x that over [N, 2N),
        each segment the minimum of the runs (cpu-us less pause-total-us)
-  SS5  symbols(4N) within max(16, 5%) of symbols(N)
+  SS5  each per-owner count of (gc-stats), PER_OWNER_KEYS, at 4N within
+       max(16, 5%) of its value at N: one clause per key, SS5:<key>
 
 A clause a row fails today is marked red with the issue or stage that fixes
-it; it is reported, and a red clause that passes is called out for promotion,
-but neither fails the lane. Every other failure does: a clause, a run that
-exits non-zero, a missing reading, a timeout or the watchdog's cap.
+it, by its name (`SS5:<key>` for one per-owner key, never a bare SS5) or its
+name on one backend (`SS1/vm`); it is reported, and a red clause that passes
+is called out for promotion, but neither fails the lane. Every other failure
+does, whatever the row's marks: a clause, a run that exits non-zero, a
+missing reading (a reading the driver did not print, or `none` in a key a
+declared clause reads, a per-owner key among them) or a timeout. The
+watchdog's resident-size cap fails a row with no red mark and is reported
+red on one with a red mark.
 
 usage: run_steady_state.py [--quick] [--backend vm|tree-walker|both]
                            [--row NAME ...] [--runs 3] [--binary PATH]
@@ -41,14 +47,20 @@ MIB = 1 << 20
 KIB = 1 << 10
 BACKENDS = ('vm', 'tree-walker')
 CLAUSES = ('SS1', 'SS2', 'SS4', 'SS5')
+# The per-owner counts of (gc-stats) SS5 holds, one clause each
+# (PRD/GC_PRD.md §17.1; 4b's start decision 11 on #782). driver.scm prints
+# them, from its `steady-per-owner-keys`, which must be this list. A key
+# joins both in the PR that adds it to (gc-stats), with its table.
+PER_OWNER_KEYS = ('symbols', 'ports')
 
 
 @dataclasses.dataclass(frozen=True)
 class Row:
     """One row: `program` is a file under STEADY, or `stream:<form>` for a
     stream of top-level forms the runner writes, fed as a file, on standard
-    input or to the REPL (`mode`). `n` is N per backend; `red` maps a clause,
-    or `clause/backend`, to the issue or stage that fixes it."""
+    input or to the REPL (`mode`). `n` is N per backend; `red` maps a
+    check, or `check/backend`, to the issue or stage that fixes it: a clause
+    other than SS5, or SS5's clause of one per-owner key, `SS5:<key>`."""
     name: str
     group: str
     program: str
@@ -67,6 +79,13 @@ class Row:
 
     def red_reason(self, clause, backend):
         return self.red.get(f'{clause}/{backend}') or self.red.get(clause)
+
+    def checks(self):
+        """The results the row is held to, by the names marks use: each
+        declared clause, SS5 one per per-owner key, and `D` and `peak`."""
+        names = [f'SS5:{key}' for key in PER_OWNER_KEYS] if 'SS5' in self.clauses else []
+        names = [c for c in self.clauses if c != 'SS5'] + names
+        return names + ['D'] * bool(self.per_cycle) + ['peak'] * bool(self.live_max)
 
 
 STREAM_FORMS = {
@@ -120,7 +139,7 @@ ROWS = [
     Row('hidden-define', 'REPL', 'hidden-define.scm', {'vm': 2000, 'tree-walker': 2000}, clauses=REPL,
         red={'SS1/vm': 'stage 5c'}),
     Row('unbound-ref', 'REPL', 'unbound-ref.scm', {'vm': 4000, 'tree-walker': 4000}, clauses=REPL,
-        red={'SS1': 'stage 5c', 'SS5': 'stage 5c'}),
+        red={'SS1': 'stage 5c', 'SS5:symbols': 'stage 5c'}),
     Row('load-repeat', 'REPL', 'load-repeat.scm', {'vm': 1000, 'tree-walker': 1000}, clauses=REPL),
     Row('reimport', 'REPL', 'reimport.scm', {'vm': 1000, 'tree-walker': 1000}, clauses=REPL),
     Row('record-redefine', 'REPL', 'record-redefine.scm', {'vm': 2000, 'tree-walker': 2000}, clauses=REPL),
@@ -152,7 +171,7 @@ ROWS = [
         ('{scratch}/file-port-churn.txt',)),
     # Churn.
     Row('sym-churn', 'churn', 'sym-churn.scm', {'vm': 20000, 'tree-walker': 20000}, clauses=REPL,
-        red={'SS1': 'stage 5c', 'SS5': 'stage 5c'}),
+        red={'SS1': 'stage 5c', 'SS5:symbols': 'stage 5c'}),
     Row('eval-fresh-names', 'churn', 'eval-fresh-names.scm', {'vm': 4000, 'tree-walker': 4000},
         clauses=('SS4',), per_cycle={'vm': 180, 'tree-walker': 180}),
     Row('env-churn', 'churn', 'env-churn.scm', {'vm': 500, 'tree-walker': 500}),
@@ -234,9 +253,10 @@ def evaluate(row, backend, runs, n):
         ratio = late / early if early > 0 else 1.0
         results['SS4'] = (ratio, 1.5, ratio <= 1.5)
     if 'SS5' in row.clauses:
-        s1, s4 = median(lambda r: first(r)['symbols']), median(lambda r: last(r)['symbols'])
-        bound = max(16, 0.05 * s1)
-        results['SS5'] = (s4 - s1, bound, abs(s4 - s1) <= bound)
+        for key in PER_OWNER_KEYS:
+            c1, c4 = median(lambda r: first(r)[key]), median(lambda r: last(r)[key])
+            bound = max(16, 0.05 * c1)
+            results[f'SS5:{key}'] = (c4 - c1, bound, abs(c4 - c1) <= bound)
     if row.per_cycle:
         pinned = row.per_cycle[backend]
         cost = (live4 - live1) / (3 * n)
@@ -245,6 +265,78 @@ def evaluate(row, backend, runs, n):
         peak = max(live1, live4)
         results['peak'] = (peak, row.live_max, peak <= row.live_max)
     return results
+
+
+def mark_errors(row):
+    """What is wrong with the row's red marks: each names one of its checks
+    (`Row.checks`), optionally on one backend, so a mark silences nothing it
+    does not name; a bare SS5, which would silence every per-owner key, is
+    refused."""
+    errors = []
+    for mark in row.red:
+        check, _, backend = mark.partition('/')
+        if check == 'SS5':
+            errors.append(f'{row.name}: {mark!r} names no per-owner key (SS5:<key>)')
+        elif check not in row.checks():
+            errors.append(f'{row.name}: {mark!r} names no check of the row')
+        if backend not in ('', *BACKENDS):
+            errors.append(f'{row.name}: {mark!r} names no backend')
+    return errors
+
+
+def read_keys(row, n):
+    """What the row's clauses read, by reading: {(kind, at): keys}, kind
+    'after' (the after-collection readings at N and 4N) or 'pre' (the readings
+    at 2N, 3N and 4N). L and the footprint's two parts are read at N and 4N
+    for every row, since its verdict line prints them; SS5 reads each
+    per-owner key there; SS2 and SS4 read where `evaluate` and `segment`
+    read their counts and times."""
+    both = {'live-bytes', 'committed-bytes', 'external-bytes'}
+    if 'SS5' in row.clauses:
+        both |= set(PER_OWNER_KEYS)
+    after_n, pre = set(both), set()
+    if 'SS2' in row.clauses:
+        after_n.add('collections')
+        pre.add('collections')
+    if 'SS4' in row.clauses:
+        after_n |= {'cpu-us', 'pause-total-us'}
+        pre |= {'cpu-us', 'pause-total-us'}
+    keys = {('after', n): after_n, ('after', 4 * n): set(both)}
+    keys.update({('pre', at): set(pre) for at in (2 * n, 3 * n, 4 * n)})
+    return keys
+
+
+def reading_failure(row, readings, n):
+    """Why a run's readings cannot be held to the row's clauses, or None: a
+    reading the driver did not print, or `none` in a key a clause reads where
+    it reads it (`read_keys`). Either fails the row whatever its marks
+    (`problem_verdict`), as a run that stopped would."""
+    missing = [at for at in (n, 4 * n) if at not in readings['after']]
+    missing += [at for at in (2 * n, 3 * n, 4 * n) if at not in readings['pre']]
+    if missing:
+        return f'no reading at {missing}'
+    keys = read_keys(row, n)
+    for kind in ('after', 'pre'):
+        points = sorted(at for k, at in keys if k == kind)
+        for key in sorted(set().union(*(keys[(kind, at)] for at in points))):
+            ats = [at for at in points
+                   if key in keys[(kind, at)] and readings[kind][at].get(key) is None]
+            if ats:
+                return f'no reading of `{key}` at {ats}'
+    return None
+
+
+def problem_verdict(row, backend, problem):
+    """A row whose run stopped with `problem`: 'RED' with the marks' reasons
+    when the watchdog's resident-size cap stopped it and a clause of the row
+    is marked red on this backend (a cap hit is red, §17.4), else 'FAIL': a
+    timeout, a non-zero exit or a missing reading fails the row whatever its
+    marks."""
+    clauses = [c for c in row.checks() if c not in ('D', 'peak')]
+    reasons = sorted({row.red_reason(c, backend) for c in clauses} - {None})
+    if reasons and 'resident size' in problem:
+        return 'RED', reasons
+    return 'FAIL', []
 
 
 def describe(runs, n):
@@ -330,10 +422,7 @@ def run_once(binary, row, backend, n, timeout, cap_mib, scratch):
         failure = f'exited {child.returncode}: {stderr.strip()[-300:]}'
     readings = parse(stdout)
     if failure is None:
-        missing = [at for at in (n, 4 * n) if at not in readings['after']]
-        missing += [at for at in (2 * n, 3 * n, 4 * n) if at not in readings['pre']]
-        if missing:
-            failure = f'no reading at {missing}'
+        failure = reading_failure(row, readings, n)
     return readings, failure, seconds, maxrss
 
 
@@ -348,6 +437,9 @@ def main(argv=None):
     parser.add_argument('--cap', type=int, default=4096, help='resident-size cap per run, MiB')
     parser.add_argument('--scale', type=float, default=1.0, help='multiply every N')
     args = parser.parse_args(argv)
+    errors = [e for row in ROWS for e in mark_errors(row)]
+    if errors:
+        parser.error('; '.join(errors))
     backends = BACKENDS if args.backend == 'both' else (args.backend,)
     rows = [r for r in ROWS if (not args.quick or r.pr) and (not args.row or r.name in args.row)]
     if args.row and len(rows) != len(args.row):
@@ -370,9 +462,9 @@ def main(argv=None):
                     runs.append(readings)
                 label = f'{row.name} {backend} N={n}'
                 if problem:
-                    reasons = {row.red_reason(c, backend) for c in row.clauses} - {None}
-                    if reasons and 'resident size' in problem:
-                        print(f'RED  {label}: {problem} ({", ".join(sorted(reasons))})')
+                    verdict, reasons = problem_verdict(row, backend, problem)
+                    if verdict == 'RED':
+                        print(f'RED  {label}: {problem} ({", ".join(reasons)})')
                     else:
                         print(f'FAIL {label}: {problem}')
                         failed.append(label)
