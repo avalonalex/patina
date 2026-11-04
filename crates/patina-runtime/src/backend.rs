@@ -137,7 +137,7 @@ pub trait Backend {
     /// `Environment::define` and `Environment::set` are the raw layer, which
     /// write the binding and nothing else.
     fn define(&self, env: &Rc<Environment>, name: &str, value: TaggedValue) {
-        env.define(name, value);
+        patina_core::NamespaceView::of(env).define(name, value);
     }
 
     /// Apply the procedure `f` to `args` as a top-level form: a driver

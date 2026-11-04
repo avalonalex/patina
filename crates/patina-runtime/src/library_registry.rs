@@ -7,7 +7,7 @@
 //! - Library loading and caching
 
 use crate::library::Library;
-use patina_core::{Environment, FileSystem, TaggedValue, ThreadId, Trace};
+use patina_core::{Environment, FileSystem, NamespaceView, TaggedValue, ThreadId, Trace};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -623,7 +623,7 @@ impl LibraryRegistry {
             .libraries
             .get_mut(library)
             .expect("a host library stays registered");
-        lib.env.define(name, value);
+        NamespaceView::of(&lib.env).define(name, value);
         lib.export_tagged(name.to_string(), value);
     }
 

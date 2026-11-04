@@ -1514,10 +1514,9 @@ impl Environment {
         Some(tv)
     }
 
-    /// Define a primitive procedure in this environment.
-    ///
-    /// Consolidates the common pattern of creating a `Procedure::Primitive`
-    /// and converting it to TaggedValue for storage.
+    /// Define a primitive procedure in this environment, through the
+    /// namespace view ([`NamespaceView::define_primitive`](crate::NamespaceView::define_primitive)),
+    /// which says what it binds.
     ///
     /// The `library` parameter (e.g., `["scheme", "base"]`) is joined with "."
     /// and combined with `name` to produce a `qualified_name` (e.g., `"scheme.base/+"`).
@@ -1530,10 +1529,7 @@ impl Environment {
         arity: crate::procedure::Arity,
         library: Vec<String>,
     ) {
-        let qualified_name: Rc<str> = Rc::from(format!("{}/{}", library.join("."), name));
-        let proc = crate::procedure::Procedure::primitive(name, arity, qualified_name, None);
-        let tv = heap.borrow_mut().alloc_procedure(proc);
-        self.define(name, tv);
+        crate::NamespaceView::of(self).define_primitive(heap, name, arity, library);
     }
 
     /// Set an existing binding (searches parent environments)
@@ -3597,9 +3593,10 @@ mod introduced_global_tests {
         assert_eq!(order, (0..20).rev().map(identity).collect::<Vec<_>>());
     }
 
-    /// A child environment does not see them, which is what lets the lookup
-    /// skip walking parents: only the parentless global environment records
-    /// any, and the VM asserts that where it installs them.
+    /// A child environment does not see them: `introduced_global` and
+    /// `for_each_introduced_candidate` read the recording environment's own
+    /// table, which is the one a form was compiled in (a namespace, or a
+    /// host's environment, a frame until 4b.8). Nothing asserts which.
     #[test]
     fn entries_are_local_to_the_environment_that_recorded_them() {
         let parent = Rc::new(Environment::new());

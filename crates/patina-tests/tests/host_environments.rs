@@ -262,6 +262,28 @@ fn a_host_environment_is_a_child_of_the_global_environment() {
     a_child_of_the_global_environment(tree_walker_interpreter());
 }
 
+/// A host environment is a frame until 4b.8 gives hosts a kind of their own
+/// (#830): it charges nothing for its tables, however many names it binds.
+/// 4b.8 rewrites this test to the owner's charging ruling (4b's start
+/// decision 4 on #782).
+fn charged_as_a_frame<B: Backend>(interp: Interpreter<B>) {
+    let env = interp.new_environment();
+    assert_eq!(interp.raw_environment(&env).charged_bytes(), None);
+    let value = interp.eval_str_owned("'bound").unwrap();
+    for i in 0..100 {
+        interp.define_in(&env, &format!("name-{i}"), &value);
+    }
+    let raw = interp.raw_environment(&env);
+    assert_eq!(raw.local_names().len(), 100);
+    assert_eq!(raw.charged_bytes(), None);
+}
+
+#[test]
+fn a_host_environment_is_charged_as_a_frame() {
+    charged_as_a_frame(vm_interpreter());
+    charged_as_a_frame(tree_walker_interpreter());
+}
+
 /// Once the handle is dropped, a value bound only in its environment is
 /// freed by the next collection: a check build reports a read of it as a
 /// use after free.

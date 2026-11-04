@@ -22,6 +22,7 @@ use crate::types::continuation::{
 };
 use crate::types::instruction::{ControlForm, Instruction, TestOp};
 use crate::types::{CallFrame, CodeObjectId};
+use patina_core::NamespaceView;
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
@@ -575,7 +576,7 @@ impl VmState {
             let proc =
                 Procedure::primitive(name, arity, Rc::from(qualified_name.as_str()), Some(index));
             let tv = self.heap.borrow_mut().alloc_procedure(proc);
-            self.globals.define(name, tv);
+            NamespaceView::of(&self.globals).define(name, tv);
         }
     }
 
@@ -2036,13 +2037,14 @@ fn dispatch_one_instruction(
         Instruction::LoadGlobal { dst, ref name } => {
             // Per-site inline cache (Track P P4): see `GlobalCacheEntry`.
             let globals = frame_globals(state);
-            let val = match GlobalCacheEntry::probe(&code.global_cache[pc], &globals, name) {
-                Some(slot) => globals.slot_value(slot),
+            let view = NamespaceView::of(&globals);
+            let val = match GlobalCacheEntry::probe(&code.global_cache[pc], view, name) {
+                Some(slot) => view.slot_value(slot),
                 // Not a local slot. Fall back to the full lookup rather than
                 // straight to the parent: `get` also follows macro-expansion
                 // aliases recorded on this environment, which is how a template
                 // reaches a binding private to the library that defined it.
-                None => globals
+                None => view
                     .get(name)
                     .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?,
             };
@@ -2052,20 +2054,20 @@ fn dispatch_one_instruction(
         Instruction::StoreGlobal { ref name, src } => {
             let val = state.reg_at(base, src);
             let globals = frame_globals(state);
-            match GlobalCacheEntry::probe(&code.global_cache[pc], &globals, name) {
+            let view = NamespaceView::of(&globals);
+            match GlobalCacheEntry::probe(&code.global_cache[pc], view, name) {
                 Some(slot) => {
-                    let old = globals.slot_value(slot);
+                    let old = view.slot_value(slot);
                     mark_if_shadowing_primitive_value(state, old, val);
-                    globals.set_slot_value(slot, val);
+                    view.set_slot_value(slot, val);
                 }
                 // Not a local slot. Use the full `set` rather than going
                 // straight to the parent: it also follows macro-expansion
                 // aliases, so a template can assign to a binding private to the
                 // library that defined it, matching what `get` already does.
                 None => {
-                    mark_if_shadowing_primitive(state, &globals, name, val);
-                    globals
-                        .set(name, val)
+                    mark_if_shadowing_primitive(state, view, name, val);
+                    view.set(name, val)
                         .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
                 }
             }
@@ -3077,7 +3079,7 @@ fn dispatch_one_instruction(
 /// re-importing a library never pays for this.
 fn mark_if_shadowing_primitive(
     state: &mut VmState,
-    globals: &Rc<Environment>,
+    globals: NamespaceView<'_>,
     name: &str,
     new_val: TaggedValue,
 ) {
@@ -3102,10 +3104,11 @@ pub(crate) fn define_global(
     name: Rc<str>,
     value: TaggedValue,
 ) {
-    if let Some(slot) = env.local_slot(&name) {
-        mark_if_shadowing_primitive_value(state, env.slot_value(slot), value);
+    let view = NamespaceView::of(env);
+    if let Some(slot) = view.local_slot(&name) {
+        mark_if_shadowing_primitive_value(state, view.slot_value(slot), value);
     }
-    env.define(name, value);
+    view.define(name, value);
 }
 
 /// Value-taking core of [`mark_if_shadowing_primitive`], for callers that
@@ -3156,14 +3159,15 @@ pub(crate) fn import_export(
     library: &Library,
     export: &str,
 ) {
-    let old = env.get(&name);
+    let view = NamespaceView::of(env);
+    let old = view.get(&name);
     library.import_into(env, name.as_str(), export);
-    mark_if_import_rebound(state, env, &name, old);
+    mark_if_import_rebound(state, view, &name, old);
 }
 
 fn mark_if_import_rebound(
     state: &mut VmState,
-    env: &Rc<Environment>,
+    env: NamespaceView<'_>,
     name: &str,
     old: Option<TaggedValue>,
 ) {

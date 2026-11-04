@@ -20,6 +20,7 @@
 
 use std::rc::Rc;
 
+use patina_core::NamespaceView;
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
@@ -179,6 +180,7 @@ pub fn resolve_primitive_calls(
     collect_callees(&allocated.expr, &mut callees);
 
     let mut map = PrimitiveCallMap::default();
+    let view = NamespaceView::of(env);
     for name in callees.names {
         // Only a binding of the environment's own. A name it answers through
         // a macro-expansion alias, or as the name-only view of a definition a
@@ -191,10 +193,10 @@ pub fn resolve_primitive_calls(
         // binding for this reason (`define_global`). Imports, and the aliases
         // early binding makes, are slots of their own and keep their fast
         // paths.
-        if env.local_slot(&name).is_none() {
+        if view.local_slot(&name).is_none() {
             continue;
         }
-        let Some(val) = env.get(&name) else { continue };
+        let Some(val) = view.get(&name) else { continue };
         let Some(proc) = heap.borrow().get_procedure(val) else {
             continue;
         };

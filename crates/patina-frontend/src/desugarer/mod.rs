@@ -78,7 +78,7 @@ use crate::source_map::SourceMap;
 use patina_core::error::SourceLocation;
 use patina_core::source_document::ExpansionChain;
 use patina_core::walk::OpenNodes;
-use patina_core::{CoreForm, Cx, Lit, LiteralPool, TaggedValue, Value};
+use patina_core::{CoreForm, Cx, Lit, LiteralPool, NamespaceView, TaggedValue, Value};
 use patina_ir::{CoreExpr, CoreExprKind};
 use patina_macros::IdentifierKey;
 use patina_macros::macro_expander::utils::list_to_vec_with_tail;
@@ -1202,6 +1202,9 @@ impl<'a> Desugarer<'a> {
         // scan instead supplies its private environment: no speculative alias
         // or expansion identity may reach the real program.
         let target_env = scan_env.cloned().unwrap_or_else(|| self.env.root());
+        // Its alias installs go through the namespace view, a frame's as a
+        // namespace's: the view asserts no kind.
+        let target = NamespaceView::of(&target_env);
         let mut renames: HashMap<Rc<str>, Aliases> = HashMap::new();
         // Each name once: the written ones, then those only an enclosing
         // expansion put here. A name can be both.
@@ -1348,13 +1351,10 @@ impl<'a> Desugarer<'a> {
                     if self.env.scoped_binding_of(name, identity).ok().flatten()
                         != Some(scopes.clone())
                     {
-                        let alias = target_env.relink_alias(
-                            home,
-                            name.clone(),
-                            Some(scopes),
-                            identity,
-                            || Rc::from(alias_name(name)),
-                        );
+                        let alias =
+                            target.relink_alias(home, name.clone(), Some(scopes), identity, || {
+                                Rc::from(alias_name(name))
+                            });
                         let symbol = cx.intern_symbol(&alias);
                         made.push((identity.clone(), symbol));
                     }
@@ -1380,15 +1380,11 @@ impl<'a> Desugarer<'a> {
                 let mint = || Rc::from(alias_name(name));
                 let alias = match alias_to {
                     None => {
-                        target_env.relink_alias(def_env.clone(), name.clone(), None, identity, mint)
+                        target.relink_alias(def_env.clone(), name.clone(), None, identity, mint)
                     }
-                    Some((home, found)) => target_env.relink_alias_to_introduced(
-                        home,
-                        name.clone(),
-                        found,
-                        identity,
-                        mint,
-                    ),
+                    Some((home, found)) => {
+                        target.relink_alias_to_introduced(home, name.clone(), found, identity, mint)
+                    }
                 };
                 let symbol = cx.intern_symbol(&alias);
                 made.push((identity.clone(), symbol));
@@ -1535,7 +1531,8 @@ impl<'a> Desugarer<'a> {
         if target_env.binding_location(name).as_ref() != Some(&location) {
             return None;
         }
-        let alias = target_env.import_alias(name, || Rc::from(alias_name(name)))?;
+        let alias =
+            NamespaceView::of(&target_env).import_alias(name, || Rc::from(alias_name(name)))?;
         Some((location, alias))
     }
 
@@ -1958,8 +1955,9 @@ impl<'a> Desugarer<'a> {
                 return Err(DesugarError::Other("import failed".into()));
             }
             if let Some(staged) = staged {
+                let target = NamespaceView::of(env);
                 for name in staged.local_names() {
-                    env.copy_binding(name.as_str(), &staged, &name);
+                    target.copy_binding(name.as_str(), &staged, &name);
                     self.declarations
                         .borrow_mut()
                         .forget(env, &name, &ScopeSet::new());

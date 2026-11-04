@@ -106,10 +106,12 @@ impl Library {
     /// (R7RS §5.2; #406). `false` when the library has no such export.
     ///
     /// Every import in both backends comes through here, so that "what an
-    /// import installs" is decided in one place. Falls back to the value the
-    /// export held when the library was built, for an export that is not a
-    /// plain binding in `env` — see `Environment::share_binding` for which
-    /// those are.
+    /// import installs" is decided in one place, through the namespace view
+    /// ([`NamespaceView::share_binding`](crate::NamespaceView::share_binding),
+    /// an insert or a re-point). Falls back to the value the export held
+    /// when the library was built, for an export that is not a plain binding
+    /// in `env` — see `Environment::share_binding` for which those are — by
+    /// [`NamespaceView::define`](crate::NamespaceView::define).
     pub fn import_into(&self, env: &Environment, name: impl Into<Rc<str>>, export: &str) -> bool {
         let Some(&value) = self.exports.get(export) else {
             return false;
@@ -119,8 +121,9 @@ impl Library {
             .internal_names
             .get(export)
             .map_or(export, String::as_str);
-        if !env.share_binding(Rc::clone(&name), &self.env, internal) {
-            env.define(name, value);
+        let view = crate::NamespaceView::of(env);
+        if !view.share_binding(Rc::clone(&name), &self.env, internal) {
+            view.define(name, value);
         }
         true
     }

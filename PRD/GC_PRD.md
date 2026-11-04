@@ -225,7 +225,7 @@ decision 11.
 | 7 | Shared-memory parallelism | Proposed, pending owner review | **Not now**; start only when [§18.7](#187-decision-record)'s four conditions hold. Parallel stop-the-world marking (stage P) does not depend on this | Shared memory now or soon costs [§18.3](#183-cost)'s figures: 38–77 engineer-weeks itemized after stages 0–9 and P [I], about 2–9 engineer-years with overrun and recovery [A, I]. Isolates for share-nothing work: 3–5 weeks after 5e [I], starting no earlier than 5g, whose `MemoryBudget` they share | the retrofit histories of [§18.3](#183-cost) (OCaml, Racket places, CPython) | [§18.7](#187-decision-record)'s trigger |
 | 7a | One threaded build or two | Open until [§18.7](#187-decision-record)'s trigger | — (one build only if the threaded build's tax is within the plan's 1% rule and its footprint within SS2's tolerance) | A higher threshold needs its own row | Chez kept a non-threaded build until 10.0 | [§18.7](#187-decision-record)'s trigger |
 | 7b | `thread-terminate!` of a thread blocked in a system call | Open until [§18.7](#187-decision-record)'s trigger | — (may it wait for the call to return?) | — | — | [§18.7](#187-decision-record)'s trigger |
-| 7c | Cheap threading additions | Decided 2026-11-01 in part, as stages 0, 2 and 3 acted on it; C6 (4b; its shape is 4b's start decision 4 on [#782]) and C11 (4e) remain, and the additions of stages 5, 6, 9 and P stay undecided (owner, 2026-11-02) | **Adopt [§18.6](#186-cheap-additions-decision-7c-scheduled-in-19)'s additions** in stages 0, 2, 3, 4b, 4e, 5, 6, 9 and P: 5–8 engineer-weeks [I] during the redesign | Drop them: the redesign's total falls by 5–8 weeks, and parallelism, if ever started, costs 9–15.5 weeks more (a net loss of 1–10 weeks) | — | 0 |
+| 7c | Cheap threading additions | Decided 2026-11-01 in part, as stages 0, 2 and 3 acted on it; C6 is built (4b.2, [#830]: `NamespaceView`, a view type over `Environment`, the shape 4b's start decision 4 on [#782] set), C11 (4e) remains, and the additions of stages 5, 6, 9 and P stay undecided (owner, 2026-11-02) | **Adopt [§18.6](#186-cheap-additions-decision-7c-scheduled-in-19)'s additions** in stages 0, 2, 3, 4b, 4e, 5, 6, 9 and P: 5–8 engineer-weeks [I] during the redesign | Drop them: the redesign's total falls by 5–8 weeks, and parallelism, if ever started, costs 9–15.5 weeks more (a net loss of 1–10 weeks) | — | 0 |
 | 8 | JIT frame model and tiers | Proposed | **Fragments are the only baseline**; every tier publishes tagged values at every suspension point; native call/ret only as a separate design if [K11](#k11) fires ([§11.2](#112-jit-frames-by-tier-the-tier-contract)) | Native call/ret needs native-stack abandonment at every `Transfer`, a depth cap and its own gates; native maps need a walker and deoptimization at capture | V8 Sparkplug; SpiderMonkey Baseline | 4d (frame header); 6 |
 | 9 | Async interrupts in JIT code | Decided 2026-11-01, as stage 3 acted on it | **Yes:** free at calls, 2 instructions at back-edges, posted through a per-heap `InterruptHandle` that the REPL's SIGINT handler uses ([§12](#12-safepoints-and-polling)) | Back-edge polls go (0.3–1.9% saved in tight loops) and Ctrl-C fails in tight loops | V8 `StackGuard`; OCaml `young_limit` | 3 (`InterruptHandle`); 6 |
 | 10 | Identity hashing | Proposed | **Side-metadata `HASHED` plus the BFG extension on move; heap-base-relative; a symbol hashes by its name** ([§9.8](#98-identity-hash)) | Pin-on-hash blocks evacuation on eq-table heaps; GC-rehashed native tables mean rewriting SRFI 69/125 in Rust | JDK compact headers (JEPs 450, 519) | 5c |
@@ -1959,8 +1959,11 @@ The native-stack and stack-address-space rows of §17.3 come from this analysis.
 ### 18.6 Cheap additions (decision 7c; scheduled in §19)
 
 These serve the decided N-ready interfaces. Adopting them is decision 7c, decided 2026-11-01 in part, as stages 0, 2
-and 3 acted on it; C6 (4b; a view type over `Environment`, by 4b's start decision 4 on [#782]) and C11 (4e) remain,
-and the additions of stages 5, 6, 9 and P stay undecided (owner, 2026-11-02). §19's stages and totals assume it.
+and 3 acted on it. C6 is built at 4b ([#830]): `NamespaceView`, a view type over `Environment`, by 4b's start
+decision 4 on [#782], the one API through which the VM's global path, the import and definition funnels and the hosts
+read and write a top-level environment's own bindings, in four groups (lookups, inserts, re-points, stores). C11 (4e)
+remains, and the additions of stages 5, 6, 9 and P stay undecided (owner, 2026-11-02). §19's stages and totals assume
+it.
 
 | Addition | Stage | Cost [E] | Saves [E] |
 |---|---|---|---|
@@ -2469,3 +2472,4 @@ from them on these known points before filing it:
 [#823]: https://github.com/avalonalex/patina/issues/823
 [#824]: https://github.com/avalonalex/patina/pull/824
 [#826]: https://github.com/avalonalex/patina/issues/826
+[#830]: https://github.com/avalonalex/patina/issues/830
