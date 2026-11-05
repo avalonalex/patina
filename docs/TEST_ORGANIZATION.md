@@ -1355,8 +1355,12 @@ the row can see; **SS2**, footprint (`committed-bytes` plus `external-bytes`)
 ≤ F(L) at both readings, with at least two paced collections in each of
 [N, 2N) and [3N, 4N), or the clause is vacuous and fails; **SS4**, mutator CPU
 per cycle (`cpu-us` less `pause-total-us`) over [3N, 4N) ≤ 1.5× that over
-[N, 2N), each segment the minimum of the three runs; **SS5**, `symbols` at 4N
-within max(16, 5%) of N. A row that drops a peak also requires L below a
+[N, 2N), each segment the minimum of the three runs; **SS5**, each per-owner
+count of `(gc-stats)` at 4N within max(16, 5%) of N, one clause per key:
+`SS5:symbols` and `SS5:ports` since #832. The runner's `PER_OWNER_KEYS` and
+`driver.scm`'s `steady-per-owner-keys` are that list, a test keeps them equal,
+and a key joins both in the PR that adds it to `(gc-stats)`. A row that
+drops a peak also requires L below a
 ceiling (`peak`), and the class-D row `eval-fresh-names` holds its cost per
 fresh name to 1.2× the pinned bytes. The REPL rows declare SS1, SS4 and SS5,
 since their growth shows in L and the counts and their footprints are the
@@ -1364,14 +1368,21 @@ deferred library loads' high-water (#616); the server and churn rows declare
 SS2 as well. A clause a row fails today is marked red in the runner's table
 with the issue or stage that fixes it — #614, #616, #656, stage 5c —
 and is reported, not failed; a red clause that passes is called out for
-promotion. (#611's four rows, `macro-eval-guard` and the three
+promotion. A mark names one clause, or one clause on one backend
+(`SS1/vm`), and SS5's by its key (`SS5:symbols`), so that it silences no
+other key: the runner refuses a bare `SS5`, or a mark naming no clause the
+row declares. (#611's four rows, `macro-eval-guard` and the three
 `guard-stream` rows, were promoted when it was fixed; the tree-walker's
 `peak` clauses in `peak-then-drop` and `peak-then-sparse` when #681 fixed
 #655, and their SS2 clauses, red on both backends, are #616's; and
 `hidden-define`'s SS4 on both backends when #613's index made its time per
 expansion flat, and its SS1 on the VM is stage 5c's.) Every run is
-watched: a timeout, a resident-size cap, a non-zero exit or a missing reading
-fails the row. The rows marked `pr` run in
+watched: a timeout, a non-zero exit or a missing reading fails the row,
+whatever its marks, and the resident-size cap fails it too, except on a row
+with a clause marked red on that backend, where a cap hit is reported red. A
+reading is missing when the driver did not print it, or when a key one of the
+row's clauses reads, a per-owner key among them, reads `none`, which the
+driver prints for a key `(gc-stats)` lacks or one that answers `#f`. The rows marked `pr` run in
 CI's R7RS Compliance job (`--quick`, about 40 s here for both backends); the
 whole lane runs nightly (`nightly.yml`, about 5 minutes here). Peak RSS is
 printed beside each row as a signal, never a gate. The lane does not yet have

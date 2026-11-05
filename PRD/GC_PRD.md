@@ -1582,7 +1582,7 @@ deterministic.
 | SS2 | Footprint ≤ F(L) | at every paced major in the window, footprint ≤ F(L) = 1.1·(L + max(8 MiB, 2·L)) + free reserve | tree-walker continuation churn ([#656]); the arenas' high-water ([#616]) |
 | SS3 | Pause work stationary | in-pause work counters (frames scanned, bytes marked, root-region words, blocks touched): the second half's maximum ≤ 2× the first half's | pauses after a dropped peak ([#616]) |
 | SS4 | Operation cost flat | mutator CPU time per cycle over [3N, 4N) ≤ 1.5× that over [N, 2N), each segment the minimum of 3 runs | none since [#822] |
-| SS5 | Side structures bounded | each per-owner count in `(gc-stats)` at 4N within max(16, 5%) of N; byte-valued keys under SS1's bound. Each per-owner key is a clause, labelled red or green on its own: `SS5:symbols`, `SS5:ports`, `SS5:cells` and `SS5:binding-records`, plus a `code-units` key, which answers 0 on the tree-walker. The runner change lands on its own before 4b's mortality item, with `ports` checked from then on, and each key lands in the PR that creates its table (4b's start decision 11 on [#782]) | fresh symbols (`sym-churn`, `unbound-ref`; stage 5c) |
+| SS5 | Side structures bounded | each per-owner count in `(gc-stats)` at 4N within max(16, 5%) of N; byte-valued keys under SS1's bound. Each per-owner key is a clause, labelled red or green on its own: `SS5:symbols`, `SS5:ports`, `SS5:cells`, `SS5:binding-records` and `SS5:namespaces`, plus a `code-units` key, which answers 0 on the tree-walker. The runner change landed with [#841] (4b.4, [#832]), with `ports` checked from then on (4b's start decision 11 on [#782]). The later keys land with the tables they count, as the rulings of 2026-11-02 on [#782] place them: `cells`, `binding-records` and `namespaces` with 4b.6's ([#834]; R1, R11), and `code-units` with 4b.9's link tables ([#836]; R8) | fresh symbols (`sym-churn`, `unbound-ref`; stage 5c) |
 
 Lane rows are classed by the audit's failure shapes: **A** a true leak (a fixed amount per cycle, for ever), **B** a
 plateau set by a trigger blind to some bytes, **C** high-water retention (memory or pause cost of a peak never given
@@ -2473,3 +2473,7 @@ from them on these known points before filing it:
 [#824]: https://github.com/avalonalex/patina/pull/824
 [#826]: https://github.com/avalonalex/patina/issues/826
 [#830]: https://github.com/avalonalex/patina/issues/830
+[#832]: https://github.com/avalonalex/patina/issues/832
+[#834]: https://github.com/avalonalex/patina/issues/834
+[#836]: https://github.com/avalonalex/patina/issues/836
+[#841]: https://github.com/avalonalex/patina/pull/841
