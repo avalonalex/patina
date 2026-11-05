@@ -263,3 +263,56 @@ fn a_namespace_charges_its_growth_and_a_frame_nothing() {
         assert!(globals >= 2000 * 41, "{what}");
     }
 }
+
+/// A macro that introduces a top-level definition, expanded again and again
+/// in one namespace, as the steady-state lane's `hidden-define` does (#833).
+/// Each expansion's definition is kept until stage 5c, and with it what the
+/// namespace holds for it in Rust: on the tree-walker a binding in the
+/// spelling's list of scoped bindings and a position in its index, about
+/// 97 bytes an expansion at those buffers' capacities; on the VM a renamed
+/// global's slot, name and name-index entry, about 128 bytes, and its
+/// identity and index, about 97 more. All of it is in `external-bytes`,
+/// read between 2,000 and 8,000 expansions, the lane's N and 4N, after two
+/// collections. On `main` before #833 the tree-walker charged none of it
+/// and the VM only the global.
+#[test]
+fn macro_introduced_definitions_are_charged() {
+    let program = "(define env (interaction-environment))
+(define e2000 0)
+(define e8000 0)
+(eval '(define-syntax def-counter
+         (syntax-rules ()
+           ((_ name) (begin (define state 0)
+                            (define (name) (set! state (+ state 1)) state)))))
+      env)
+(define (expand n)
+  (let loop ((i 0))
+    (when (< i n)
+      (eval '(def-counter counter) env)
+      (eval '(counter) env)
+      (loop (+ i 1)))))
+(define (settled) (gc) (gc) (stat 'external-bytes))
+(expand 2000)
+(set! e2000 (settled))
+(expand 6000)
+(set! e8000 (settled))
+(write (list e2000 e8000))
+(newline)";
+    // Both backends are read before either is judged, so that a failure
+    // shows what each charged.
+    let mut short = Vec::new();
+    for (backend, least) in BOTH_BACKENDS.into_iter().zip([200, 80]) {
+        let counts = run(backend, program);
+        let [at_2000, at_8000] = counts[..] else {
+            panic!("{backend:?}: want two counts, got {counts:?}")
+        };
+        let per_expansion = (at_8000 - at_2000) / 6000;
+        if per_expansion < least {
+            short.push(format!(
+                "{backend:?}: {per_expansion} bytes an expansion from {at_2000} to {at_8000}, \
+                 want at least {least}"
+            ));
+        }
+    }
+    assert!(short.is_empty(), "{}", short.join("\n"));
+}

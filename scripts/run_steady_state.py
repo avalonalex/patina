@@ -15,16 +15,22 @@ the clauses it declares:
        each segment the minimum of the runs (cpu-us less pause-total-us)
   SS5  each per-owner count of (gc-stats), PER_OWNER_KEYS, at 4N within
        max(16, 5%) of its value at N: one clause per key, SS5:<key>
+  pin  on a row whose SS1 is red for retention a sub-stage can move, the
+       cost per cycle, (L(4N) - L(N))/3N, at most PIN_TOLERANCE (1.05) times
+       the bytes pinned for it (K17; R9 on #782); held at the row's own N
+       only, since a capacity charge steps with N
 
 A clause a row fails today is marked red with the issue or stage that fixes
 it, by its name (`SS5:<key>` for one per-owner key, never a bare SS5) or its
 name on one backend (`SS1/vm`); it is reported, and a red clause that passes
-is called out for promotion, but neither fails the lane. Every other failure
-does, whatever the row's marks: a clause, a run that exits non-zero, a
+is called out for promotion, but neither fails the lane. No mark may name a
+pin: a cost past it fails the lane until the owner re-pins it. Every other
+failure does, whatever the row's marks: a clause, a run that exits non-zero, a
 missing reading (a reading the driver did not print, or `none` in a key a
 declared clause reads, a per-owner key among them) or a timeout. The
 watchdog's resident-size cap fails a row with no red mark and is reported
-red on one with a red mark.
+red on one with a red mark, except on a pinned row run at its own N, which
+it fails: a cost past the cap is past the pin.
 
 usage: run_steady_state.py [--quick] [--backend vm|tree-walker|both]
                            [--row NAME ...] [--runs 3] [--binary PATH]
@@ -52,6 +58,8 @@ CLAUSES = ('SS1', 'SS2', 'SS4', 'SS5')
 # them, from its `steady-per-owner-keys`, which must be this list. A key
 # joins both in the PR that adds it to (gc-stats), with its table.
 PER_OWNER_KEYS = ('symbols', 'ports')
+# What a pin allows above the cost it pins: the owner's ruling R9 on #782.
+PIN_TOLERANCE = 1.05
 
 
 @dataclasses.dataclass(frozen=True)
@@ -73,6 +81,13 @@ class Row:
     # Class D: the program keeps a growing name set, outside the contract.
     # The lane holds its cost per cycle to 1.2x the pinned bytes.
     per_cycle: dict = None
+    # A row whose SS1 is red for retention a sub-stage can move (K17): the
+    # cost per cycle its re-baseline measured, per backend. The lane holds
+    # (L(4N) - L(N))/3N to PIN_TOLERANCE times it as the result `pin`, beside
+    # SS1 and whatever SS1's mark. No mark may name it, so a cost past it
+    # fails the lane until the owner raises it. Held at the row's own N only:
+    # a namespace charges its buffers at capacity, which steps with N.
+    pin: dict = None
     # A row that drops a peak before its window: L at N and at 4N must be
     # below this, or the peak is still live ('peak').
     live_max: int = None
@@ -81,10 +96,17 @@ class Row:
         return self.red.get(f'{clause}/{backend}') or self.red.get(clause)
 
     def checks(self):
-        """The results the row is held to, by the names marks use: each
-        declared clause, SS5 one per per-owner key, and `D` and `peak`."""
-        names = [f'SS5:{key}' for key in PER_OWNER_KEYS] if 'SS5' in self.clauses else []
-        names = [c for c in self.clauses if c != 'SS5'] + names
+        """The results the row is held to, in `evaluate`'s order and by the
+        names marks use: each declared clause, SS1's pin beside it, SS5 one
+        per per-owner key, and `D` and `peak`. No mark may name the pin."""
+        names = []
+        for clause in (c for c in CLAUSES if c in self.clauses):
+            if clause != 'SS5':
+                names.append(clause)
+            if clause == 'SS1' and self.pin:
+                names.append('pin')
+        if 'SS5' in self.clauses:
+            names += [f'SS5:{key}' for key in PER_OWNER_KEYS]
         return names + ['D'] * bool(self.per_cycle) + ['peak'] * bool(self.live_max)
 
 
@@ -131,13 +153,17 @@ ROWS = [
     Row('macro-eval-let', 'REPL', 'macro-eval.scm', {'vm': 4000, 'tree-walker': 4000}, ('let',), clauses=REPL),
     # N = 2,000 was chosen while #613's time per expansion grew with the
     # expansions before it, about 2x over the window here, clear of SS4's
-    # 1.5; since its index, 1.0. SS1/vm is the retention #613 left to stage
-    # 5c: each expansion's renamed global, whose slot, name and name-index
-    # entry L counts (about 128 B), and its recorded identity and index
-    # entry, which L does not; all kept strong until 5c reclaims introduced
-    # definitions.
+    # 1.5; since its index, 1.0. SS1 is the retention #613 left to stage 5c,
+    # each expansion's definition, kept strong until 5c reclaims introduced
+    # definitions. L counts what the namespace holds for it in Rust, on both
+    # backends since #833: on the VM a renamed global's slot, name and
+    # name-index entry (about 128 B) and its recorded identity and index; on
+    # the tree-walker a binding in the spelling's list of scoped bindings and
+    # its index; the last two about 97 B a cycle at the buffers' capacities.
+    # The pins are #833's readings at this N, which stays 2,000, since a
+    # capacity charge steps with N: the owner raises them (K17).
     Row('hidden-define', 'REPL', 'hidden-define.scm', {'vm': 2000, 'tree-walker': 2000}, clauses=REPL,
-        red={'SS1/vm': 'stage 5c'}),
+        red={'SS1': 'stage 5c'}, pin={'vm': 225, 'tree-walker': 97}),
     Row('unbound-ref', 'REPL', 'unbound-ref.scm', {'vm': 4000, 'tree-walker': 4000}, clauses=REPL,
         red={'SS1': 'stage 5c', 'SS5:symbols': 'stage 5c'}),
     Row('load-repeat', 'REPL', 'load-repeat.scm', {'vm': 1000, 'tree-walker': 1000}, clauses=REPL),
@@ -234,6 +260,11 @@ def evaluate(row, backend, runs, n):
     if 'SS1' in row.clauses:
         bound = 3 * n * 8 + 64 * KIB
         results['SS1'] = (live4 - live1, bound, live4 - live1 <= bound)
+        if row.pin:
+            bound = PIN_TOLERANCE * row.pin[backend]
+            cost = (live4 - live1) / (3 * n)
+            results['pin'] = ((cost, bound, cost <= bound) if n == row.n[backend]
+                              else (f'not held at N={n}', bound, True))
     if 'SS2' in row.clauses:
         # Paced collections in the window's two segments: at least two in
         # each, or the footprint was never read at a plateau (§17.1).
@@ -268,15 +299,21 @@ def evaluate(row, backend, runs, n):
 
 
 def mark_errors(row):
-    """What is wrong with the row's red marks: each names one of its checks
-    (`Row.checks`), optionally on one backend, so a mark silences nothing it
-    does not name; a bare SS5, which would silence every per-owner key, is
-    refused."""
+    """What is wrong with the row's red marks, and its pin: each mark names
+    one of its checks (`Row.checks`), optionally on one backend, so a mark
+    silences nothing it does not name; a bare SS5, which would silence every
+    per-owner key, is refused, and so is a mark on the pin, which only the
+    owner raises. A pin is held beside SS1, so a row with one declares SS1,
+    and pins both backends."""
     errors = []
+    if row.pin and ('SS1' not in row.clauses or set(row.pin) != set(BACKENDS)):
+        errors.append(f'{row.name}: a pin needs SS1 and a cost for each of {BACKENDS}')
     for mark in row.red:
         check, _, backend = mark.partition('/')
         if check == 'SS5':
             errors.append(f'{row.name}: {mark!r} names no per-owner key (SS5:<key>)')
+        elif check == 'pin':
+            errors.append(f'{row.name}: {mark!r} marks a pin, which only the owner raises')
         elif check not in row.checks():
             errors.append(f'{row.name}: {mark!r} names no check of the row')
         if backend not in ('', *BACKENDS):
@@ -326,12 +363,16 @@ def reading_failure(row, readings, n):
     return None
 
 
-def problem_verdict(row, backend, problem):
-    """A row whose run stopped with `problem`: 'RED' with the marks' reasons
-    when the watchdog's resident-size cap stopped it and a clause of the row
-    is marked red on this backend (a cap hit is red, §17.4), else 'FAIL': a
-    timeout, a non-zero exit or a missing reading fails the row whatever its
-    marks."""
+def problem_verdict(row, backend, problem, n):
+    """A row whose run at N = `n` stopped with `problem`: 'RED' with the
+    marks' reasons when the watchdog's resident-size cap stopped it and a
+    clause of the row is marked red on this backend (a cap hit is red,
+    §17.4), else 'FAIL': a timeout, a non-zero exit or a missing reading
+    fails the row whatever its marks, and so does a cap hit on a row whose
+    pin is held at this N, since a cost that reaches the cap is past the pin,
+    which no mark silences."""
+    if row.pin and n == row.n[backend]:
+        return 'FAIL', []
     clauses = [c for c in row.checks() if c not in ('D', 'peak')]
     reasons = sorted({row.red_reason(c, backend) for c in clauses} - {None})
     if reasons and 'resident size' in problem:
@@ -462,7 +503,7 @@ def main(argv=None):
                     runs.append(readings)
                 label = f'{row.name} {backend} N={n}'
                 if problem:
-                    verdict, reasons = problem_verdict(row, backend, problem)
+                    verdict, reasons = problem_verdict(row, backend, problem, n)
                     if verdict == 'RED':
                         print(f'RED  {label}: {problem} ({", ".join(reasons)})')
                     else:
