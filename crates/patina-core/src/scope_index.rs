@@ -13,6 +13,7 @@
 //! namespace, or [`FRAME_INDEX_ABOVE`] in a frame; below that, a scan of the
 //! list is the cheaper answer.
 
+use crate::environment::hash_table_bytes;
 use crate::scope::{ScopeId, ScopeSet};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -124,6 +125,15 @@ impl ScopeIndex {
     /// How many positions are filed: the length of the list indexed.
     pub(crate) fn len(&self) -> usize {
         self.previous.len()
+    }
+
+    /// The bytes of this index's two buffers at their capacities, the heads
+    /// map and the previous vector, as a namespace charges them
+    /// (`NamespaceCharge` in `environment.rs`). Both only grow, as the list
+    /// this indexes does.
+    pub(crate) fn buffer_bytes(&self) -> usize {
+        hash_table_bytes::<ScopeId, u32>(self.heads.capacity())
+            + self.previous.capacity() * size_of::<u32>()
     }
 
     /// The positions whose binding can be a candidate for `reference`, newest

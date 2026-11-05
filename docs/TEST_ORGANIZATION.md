@@ -1362,7 +1362,18 @@ count of `(gc-stats)` at 4N within max(16, 5%) of N, one clause per key:
 and a key joins both in the PR that adds it to `(gc-stats)`. A row that
 drops a peak also requires L below a
 ceiling (`peak`), and the class-D row `eval-fresh-names` holds its cost per
-fresh name to 1.2× the pinned bytes. The REPL rows declare SS1, SS4 and SS5,
+fresh name to 1.2× the pinned bytes (`D`). A row whose SS1 is red for
+retention a sub-stage can move gets a **pin**, its cost per cycle,
+(L(4N) − L(N))/3N, as the PR that pins it measured it on each backend, held
+to 1.05× (`pin`, beside SS1; K17, and the owner's ruling R9 on #782):
+`hidden-define`'s from its re-baseline, 225 bytes on the VM and 97 on the
+tree-walker since #833, and `library-stream`'s and `unbound-ref`'s from the
+4b PR that first moves each (R9), so neither has one yet. No mark may name a
+pin, so a cost past it fails the lane until the owner raises it, and a
+pinned row that reaches the resident-size cap fails too. A pin holds at the
+row's own N only, and is not held under `--scale`: a namespace charges its
+buffers at capacity, which steps with N.
+The REPL rows declare SS1, SS4 and SS5,
 since their growth shows in L and the counts and their footprints are the
 deferred library loads' high-water (#616); the server and churn rows declare
 SS2 as well. A clause a row fails today is marked red in the runner's table
@@ -1376,10 +1387,13 @@ row declares. (#611's four rows, `macro-eval-guard` and the three
 `peak` clauses in `peak-then-drop` and `peak-then-sparse` when #681 fixed
 #655, and their SS2 clauses, red on both backends, are #616's; and
 `hidden-define`'s SS4 on both backends when #613's index made its time per
-expansion flat, and its SS1 on the VM is stage 5c's.) Every run is
+expansion flat. Its SS1 is stage 5c's on both backends: red on the VM since
+the lane began, and on the tree-walker since #833 counted the retention it
+already had, a re-baseline under its pins.) Every run is
 watched: a timeout, a non-zero exit or a missing reading fails the row,
 whatever its marks, and the resident-size cap fails it too, except on a row
-with a clause marked red on that backend, where a cap hit is reported red. A
+with a clause marked red on that backend, where a cap hit is reported red,
+unless the row's pin is held at that N. A
 reading is missing when the driver did not print it, or when a key one of the
 row's clauses reads, a per-owner key among them, reads `none`, which the
 driver prints for a key `(gc-stats)` lacks or one that answers `#f`. The rows marked `pr` run in

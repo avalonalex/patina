@@ -847,7 +847,14 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   `null-environment` build — charges its tables once when it is made and
   again whenever one reallocates, and gives them back in `Drop`
   (`NamespaceCharge` in `environment.rs` says what is counted: the struct,
-  each table's buffer at capacity, and each slot's name). An
+  each table's buffer at capacity, each slot's name, and since #833 each
+  spelling's own buffers, kept as a running sum by their writers — the
+  list of a spelling's scoped bindings once spilled out of line and its
+  index on the tree-walker, the identities of its introduced globals and
+  their index on the VM — which a macro that introduces a definition grows
+  at every expansion: about 97 bytes a cycle in `hidden-define` on either
+  backend, 225 in all on the VM with the renamed global's slot, name and
+  name-index entry, measured 2026-11-04 on a release build, macOS arm64). An
   `(environment '(scheme base))` is charged about 40 KiB, so a loop of them
   collects every 8 MiB of namespaces and peaks near 21 MB on either backend
   at 80,000 or 320,000 calls, where it plateaued at 2.9 GB; a program that
@@ -861,8 +868,8 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   charge.
   Each namespace is charged once however many specifiers name it, and
   `interaction-environment` answers one specifier, cached on the
-  environment (§3.3), so a loop of it allocates nothing. Measured
-  2026-10-03, release, macOS arm64.
+  environment (§3.3), so a loop of it allocates nothing. The `environment`
+  loop's figures measured 2026-10-03, release, macOS arm64.
 
   **Open file ports charge too, and count toward descriptor pressure
   (#607).** A file port's descriptor and buffer were invisible to the

@@ -1,5 +1,6 @@
 """The steady-state lane's arithmetic (#652): parsing the driver's readings,
 F(L), and each clause, on synthetic readings; no interpreter needed."""
+import dataclasses
 import importlib.util
 from pathlib import Path
 import re
@@ -110,6 +111,36 @@ class Clauses(unittest.TestCase):
         results = steady.evaluate(row, 'vm', [run(1000, live=(2 * MIB, 2 * MIB))], 1000)
         self.assertFalse(results['peak'][2])
 
+    def test_a_pin_holds_a_class_a_row(self):
+        n = 1000
+        row = steady.Row('a', 'REPL', 'x.scm', {'vm': n, 'tree-walker': n}, clauses=steady.REPL,
+                         red={'SS1': 'stage 5c'}, pin={'vm': 100, 'tree-walker': 200})
+        self.assertEqual(steady.mark_errors(row), [])
+        self.assertEqual(row.checks()[:2], ['SS1', 'pin'])
+        at = lambda cost, backend='vm': steady.evaluate(row, backend, [run(n, live=(0, 3 * n * cost))], n)
+        # Within 1.05x of the pin, on each backend's own pin, beside a red SS1.
+        results = at(105)
+        self.assertEqual(results['pin'], (105.0, 105.0, True))
+        self.assertFalse(results['SS1'][2])
+        self.assertEqual(row.red_reason('SS1', 'vm'), 'stage 5c')
+        self.assertFalse(at(106)['pin'][2])
+        self.assertTrue(at(210, 'tree-walker')['pin'][2])
+        self.assertFalse(at(211, 'tree-walker')['pin'][2])
+        self.assertIsNone(row.red_reason('pin', 'vm'))
+        self.assertEqual(list(results), row.checks())
+        # In the clauses' own order, however a row lists them.
+        shuffled = dataclasses.replace(row, clauses=tuple(reversed(steady.REPL)))
+        self.assertEqual(shuffled.checks(), row.checks())
+        # At another N (`--scale`) the pin is not held: a capacity charge
+        # steps with N.
+        results = steady.evaluate(row, 'vm', [run(2 * n, live=(0, 6 * n * 500))], 2 * n)
+        self.assertEqual(results['pin'], ('not held at N=2000', 105.0, True))
+        # Only a row that declares SS1 has one, and it pins both backends.
+        for bad in (steady.Row('b', 'churn', 'x.scm', {}, clauses=('SS4',),
+                               pin={'vm': 1, 'tree-walker': 1}),
+                    steady.Row('c', 'REPL', 'x.scm', {}, clauses=steady.REPL, pin={'vm': 1})):
+            self.assertTrue(steady.mark_errors(bad), bad.name)
+
     def test_red_marks_name_a_clause_or_a_clause_on_one_backend(self):
         row = steady.Row('r', 'churn', 'x.scm', {}, red={'SS1': '#1', 'SS2/vm': '#2'})
         self.assertEqual(row.red_reason('SS1', 'tree-walker'), '#1')
@@ -132,8 +163,9 @@ class Clauses(unittest.TestCase):
         # A bare SS5 would silence every per-owner key; a key the list lacks
         # names no clause; and a mark must name a clause the row declares.
         for red in ({'SS5': '#1'}, {'SS5/vm': '#1'}, {'SS5:cells': '#1'}, {'SS2': '#1'},
-                    {'SS1/arm': '#1'}):
-            row = steady.Row('r', 'REPL', 'x.scm', {}, clauses=steady.REPL, red=red)
+                    {'SS1/arm': '#1'}, {'pin': '#1'}, {'pin/vm': '#1'}):
+            row = steady.Row('r', 'REPL', 'x.scm', {}, clauses=steady.REPL, red=red,
+                             pin={'vm': 1, 'tree-walker': 1})
             self.assertTrue(steady.mark_errors(row), red)
 
 
@@ -150,7 +182,7 @@ class Readings(unittest.TestCase):
             problem = steady.reading_failure(row, readings, n)
             self.assertEqual(problem, f'no reading of `ports` at [{n}]')
             # It fails the row on its own backend, the mark notwithstanding.
-            self.assertEqual(steady.problem_verdict(row, 'vm', problem), ('FAIL', []))
+            self.assertEqual(steady.problem_verdict(row, 'vm', problem, n), ('FAIL', []))
             # A key the driver did not print at all at 4N, as well.
             del readings['after'][4 * n]['ports']
             self.assertEqual(steady.reading_failure(row, readings, n),
@@ -177,15 +209,26 @@ class Readings(unittest.TestCase):
         marked = steady.Row('r', 'REPL', 'x.scm', {}, clauses=steady.REPL, red={'SS5:symbols/vm': '#1'})
         unmarked = steady.Row('r', 'REPL', 'x.scm', {}, clauses=steady.REPL)
         cap = 'resident size passed the 4096 MiB cap'
-        self.assertEqual(steady.problem_verdict(marked, 'vm', cap), ('RED', ['#1']))
-        self.assertEqual(steady.problem_verdict(marked, 'tree-walker', cap), ('FAIL', []))
-        self.assertEqual(steady.problem_verdict(unmarked, 'vm', cap), ('FAIL', []))
+        self.assertEqual(steady.problem_verdict(marked, 'vm', cap, 10), ('RED', ['#1']))
+        self.assertEqual(steady.problem_verdict(marked, 'tree-walker', cap, 10), ('FAIL', []))
+        self.assertEqual(steady.problem_verdict(unmarked, 'vm', cap, 10), ('FAIL', []))
         for problem in ('timed out after 600 s', 'exited 1: boom', 'no reading at [10]',
                         'no reading of `ports` at [10]'):
-            self.assertEqual(steady.problem_verdict(marked, 'vm', problem), ('FAIL', []), problem)
+            self.assertEqual(steady.problem_verdict(marked, 'vm', problem, 10), ('FAIL', []), problem)
         # A mark on `peak` or `D` alone does not make a cap hit red.
         peak = steady.Row('p', 'server', 'x.scm', {}, live_max=1, red={'peak': '#2'})
-        self.assertEqual(steady.problem_verdict(peak, 'vm', cap), ('FAIL', []))
+        self.assertEqual(steady.problem_verdict(peak, 'vm', cap, 10), ('FAIL', []))
+        # A pinned row's red SS1 does not make a cap hit red at the row's own
+        # N, where the pin is held, on either backend; under `--scale` it is
+        # red, as on any marked row.
+        pinned = steady.Row('a', 'REPL', 'x.scm', {'vm': 10, 'tree-walker': 10}, clauses=steady.REPL,
+                            red={'SS1': 'stage 5c'}, pin={'vm': 100, 'tree-walker': 100})
+        for backend in steady.BACKENDS:
+            self.assertEqual(steady.problem_verdict(pinned, backend, cap, 10), ('FAIL', []))
+            self.assertEqual(steady.problem_verdict(pinned, backend, cap, 20), ('RED', ['stage 5c']))
+        hidden = next(row for row in steady.ROWS if row.name == 'hidden-define')
+        self.assertEqual(steady.problem_verdict(hidden, 'tree-walker', cap, hidden.n['tree-walker']),
+                         ('FAIL', []))
 
 
 class Driver(unittest.TestCase):

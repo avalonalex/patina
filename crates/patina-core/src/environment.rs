@@ -32,6 +32,17 @@ pub struct ScopedBinding {
 /// macro-introduced parameter does not allocate a `Vec` per call.
 type ScopedBindingList = SmallVec<[ScopedBinding; 1]>;
 
+/// What a spelling's list of scoped bindings holds outside its entry in the
+/// table: its buffer at capacity, once it has spilled out of line, as a
+/// namespace charges it ([`NamespaceCharge`]). Nothing while it is inline.
+fn list_bytes(list: &ScopedBindingList) -> usize {
+    if list.spilled() {
+        list.capacity() * size_of::<ScopedBinding>()
+    } else {
+        0
+    }
+}
+
 /// The scoped bindings of one environment, plus the one fact a lookup needs
 /// before it is worth searching them.
 ///
@@ -225,6 +236,18 @@ impl Introduced {
     /// The global the definition at exactly `scopes` was renamed to.
     fn get(&self, scopes: &ScopeSet) -> Option<&Rc<str>> {
         self.position(scopes).map(|i| &self.identities[i].1)
+    }
+
+    /// The bytes of this spelling's buffers at their capacities, as a
+    /// namespace charges them ([`NamespaceCharge`]): the identities, and the
+    /// boxed index once there is one. Not the names the identities hold,
+    /// each the name of the global's slot, which the namespace counts there.
+    fn buffer_bytes(&self) -> usize {
+        self.identities.capacity() * size_of::<(ScopeSet, Rc<str>)>()
+            + self
+                .index
+                .as_ref()
+                .map_or(0, |index| size_of::<ScopeIndex>() + index.buffer_bytes())
     }
 
     /// Record a definition. One already recorded at the same scopes is
@@ -653,19 +676,28 @@ struct RareTables {
 /// not environments at all.
 ///
 /// **What is counted** ([`Environment::table_bytes`]): the environment and
-/// its out-of-line tables' box, every table's own buffer at its capacity —
+/// its out-of-line tables' box; every table's own buffer at its capacity —
 /// the slot vector once it is out of line, the name index, the scoped and
 /// alias tables, the import links, the owners, the import and relink aliases,
-/// the introduced globals and the scoped bindings' indexes — and the name of
-/// each slot, an `Rc<str>` of two counts and its bytes, counted whether or
-/// not something else shares it (an `environment` built by import has a
-/// fresh name for each of its several hundred bindings, which are most of
-/// what it holds). Not counted: what a table's entries own beyond their place
-/// in it — an alias's or a scoped binding's name, a scope set, a spelling's
-/// introduced globals, a list spilled out of line, and a spelling's index
-/// ([`ScopeIndex`]) — and the values, which live in the arenas and are
+/// the table of introduced globals and the table of the scoped bindings'
+/// indexes; the name of each slot, an `Rc<str>` of two counts and its bytes,
+/// counted whether or not something else shares it (an `environment` built
+/// by import has a fresh name for each of its several hundred bindings,
+/// which are most of what it holds); and each spelling's own buffers, which
+/// a macro that introduces a definition grows by an entry at every
+/// expansion (#833): its list of scoped bindings once spilled out of line,
+/// that list's index ([`ScopeIndex`]: its heads map and its previous
+/// vector), and its introduced globals' identities and their boxed index.
+/// The tree-walker fills the lists and their indexes, the VM the
+/// identities. Not counted: what an entry owns beyond its place in its
+/// buffer — a scope set's spilled part, an alias's or a scoped binding's
+/// name, and a name another table shares, as each identity's renamed global
+/// is its slot's name — and the values, which live in the arenas and are
 /// charged there. An estimate, then, of the tables a namespace fills by
 /// the hundred, and close for those: allocator overhead is not modelled.
+/// Outside any namespace, and so not counted here: the VM's code units and
+/// the objects arena's sweep vector, which a stream of expansions grows too,
+/// to a high-water.
 ///
 /// **When it is charged**: once when the namespace is made, and again
 /// whenever one of the counted tables reallocates, which is the only time
@@ -673,7 +705,12 @@ struct RareTables {
 /// it did, and only then is the namespace asked what it holds. The names are
 /// counted from where the last count stopped (slots are append-only), so a
 /// namespace's charge trails its names by at most the slots defined since a
-/// table last grew. Growth after a namespace is made is charged like the
+/// table last grew. A spelling's buffers are counted as a running sum,
+/// `entries`, which their writers — `insert_scoped`, `index_scoped` and
+/// `define_introduced_global` — add to when one of them reallocates, so no
+/// recharge walks the spellings. Nothing removes a scoped binding or an
+/// identity, so the buffers and the sum only grow, and `Drop` gives the sum
+/// back with the rest. Growth after a namespace is made is charged like the
 /// rest: the global environment growing under `eval`, a library's under its
 /// body.
 ///
@@ -692,6 +729,11 @@ struct NamespaceCharge {
     charged: Cell<usize>,
     /// How many slots' names are in `charged`, and their bytes.
     names: Cell<(usize, usize)>,
+    /// What the spellings' own buffers hold at their capacities: each
+    /// spelling's spilled list of scoped bindings, its index, and its
+    /// introduced globals' identities and index. A running sum, kept by the
+    /// buffers' writers ([`Environment::charge_entries`]).
+    entries: Cell<usize>,
 }
 
 impl NamespaceCharge {
@@ -700,7 +742,18 @@ impl NamespaceCharge {
             account,
             charged: Cell::new(0),
             names: Cell::new((0, 0)),
+            entries: Cell::new(0),
         }
+    }
+
+    /// One spelling's buffers went from `before` bytes to `after`: add the
+    /// growth to the running sum, and report whether there was any.
+    fn grow_entries(&self, before: usize, after: usize) -> bool {
+        debug_assert!(after >= before, "a spelling's buffers only grow");
+        // In this order, so that a shrink, which nothing makes, could not
+        // underflow either.
+        self.entries.set(self.entries.get() + after - before);
+        after != before
     }
 
     /// The bytes of the names of `slots`, counting only the ones not counted
@@ -758,7 +811,7 @@ pub(crate) const CAPTURED_FRAME_BYTES: usize =
 /// whose `capacity` reports `capacity`: its buckets, each an entry and a
 /// control byte, and a group of trailing control bytes. Zero for a table that
 /// never allocated.
-const fn hash_table_bytes<K, V>(capacity: usize) -> usize {
+pub(crate) const fn hash_table_bytes<K, V>(capacity: usize) -> usize {
     if capacity == 0 {
         return 0;
     }
@@ -1202,6 +1255,19 @@ impl Environment {
         charge.settle(self.table_bytes(charge));
     }
 
+    /// After one spelling's own buffers went from `before` bytes to `after`
+    /// (`list_bytes`, `ScopeIndex::buffer_bytes`, `Introduced::buffer_bytes`):
+    /// a namespace adds the growth to its running sum
+    /// ([`NamespaceCharge`]'s `entries`), and reports whether there was any,
+    /// for its caller to recharge. Anything else has no sum, and reports
+    /// none.
+    fn charge_entries(&self, before: usize, after: usize) -> bool {
+        match self.rare.get().and_then(|rare| rare.namespace.as_ref()) {
+            Some(charge) => charge.grow_entries(before, after),
+            None => false,
+        }
+    }
+
     /// What this namespace's tables hold outside the heap's arenas, as
     /// [`NamespaceCharge`] counts it.
     ///
@@ -1225,8 +1291,9 @@ impl Environment {
             // namespace.
             parent: _,
         } = self;
-        // The environment itself, in its `Rc`'s allocation.
-        let mut bytes = RC_COUNTS + size_of::<Environment>();
+        // The environment itself, in its `Rc`'s allocation; and each
+        // spelling's own buffers, which their writers sum as they grow.
+        let mut bytes = RC_COUNTS + size_of::<Environment>() + charge.entries.get();
         {
             let bindings = bindings.borrow();
             let Bindings { slots, index } = &*bindings;
@@ -1890,8 +1957,13 @@ impl Environment {
                 .introduced_global_names
                 .borrow_mut();
             let capacity = table.capacity();
-            table.entry(name).or_default().record(scopes, renamed_to);
-            table.capacity() != capacity
+            let introduced = table.entry(name).or_default();
+            let before = introduced.buffer_bytes();
+            introduced.record(scopes, renamed_to);
+            // The spelling's identities and index, which a namespace sums.
+            let after = introduced.buffer_bytes();
+            let table_grew = table.capacity() != capacity;
+            self.charge_entries(before, after) || table_grew
         };
         if grew {
             self.recharge();
@@ -2228,18 +2300,23 @@ impl Environment {
         }
         let grew = {
             let mut table = self.scoped_bindings.borrow_mut();
-            // Measured only for a namespace, which charges for the table: the
-            // tree-walker binds each call's parameters here, in a frame, and
-            // a frame's first scoped binding always allocates the table.
-            let capacity = self.is_namespace().then(|| table.capacity());
+            // Measured only for a namespace, which charges for the table and
+            // for each spelling's list: the tree-walker binds each call's
+            // parameters here, in a frame, and a frame's first scoped binding
+            // always allocates the table.
+            let measured = self.is_namespace();
+            let capacity = measured.then(|| table.capacity());
             let binding = ScopedBinding {
                 scopes,
                 tagged_value: value,
                 visible_by_name,
             };
             // By entry, so that the frame binding a call's parameters, which
-            // finds each spelling vacant, hashes each name once.
-            let index_grew = match table.entry(name) {
+            // finds each spelling vacant, hashes each name once. A vacant
+            // spelling's list is inline, in the table's own buffer, which a
+            // namespace counts at its capacity already, so it adds nothing
+            // to the spellings' sum until it spills.
+            let spelling_grew = match table.entry(name) {
                 Entry::Vacant(vacant) => {
                     vacant.insert(smallvec::smallvec![binding]);
                     false
@@ -2253,14 +2330,23 @@ impl Environment {
                             false
                         }
                         None => {
+                            let before = if measured {
+                                list_bytes(occupied.get())
+                            } else {
+                                0
+                            };
                             occupied.get_mut().push(binding);
                             let (spelling, bindings) = (occupied.key(), occupied.get());
-                            self.indexes(bindings.len()) && self.index_scoped(spelling, bindings)
+                            let list_grew =
+                                measured && self.charge_entries(before, list_bytes(bindings));
+                            let index_grew = self.indexes(bindings.len())
+                                && self.index_scoped(spelling, bindings);
+                            list_grew || index_grew
                         }
                     }
                 }
             };
-            capacity.is_some_and(|capacity| table.capacity() != capacity) || index_grew
+            capacity.is_some_and(|capacity| table.capacity() != capacity) || spelling_grew
         };
         if grew {
             self.recharge();
@@ -2270,23 +2356,32 @@ impl Environment {
     /// File the binding just pushed onto `bindings`, the scoped bindings of
     /// `name`, in the spelling's index — or build the index, for a list that
     /// has just grown past its threshold. Reports whether a namespace's table
-    /// of indexes reallocated, which it charges for.
+    /// of indexes reallocated, or the spelling's index grew, each of which
+    /// it charges for.
     fn index_scoped(&self, name: &Rc<str>, bindings: &[ScopedBinding]) -> bool {
         let rare = self.rare.get_or_init(Default::default);
         let mut indexes = rare.scoped_index.borrow_mut();
-        let capacity = self.is_namespace().then(|| indexes.capacity());
-        match indexes.get_mut(&**name) {
+        let measured = self.is_namespace();
+        let capacity = measured.then(|| indexes.capacity());
+        let (before, after) = match indexes.get_mut(&**name) {
             Some(index) => {
+                let before = index.buffer_bytes();
                 let newest = bindings.last().expect("a binding was just pushed");
                 index.push(&newest.scopes);
                 debug_assert_eq!(index.len(), bindings.len());
+                (before, index.buffer_bytes())
             }
             None => {
                 let sets = bindings.iter().map(|binding| &binding.scopes);
-                indexes.insert(Rc::clone(name), ScopeIndex::of(sets));
+                let index = ScopeIndex::of(sets);
+                let after = index.buffer_bytes();
+                indexes.insert(Rc::clone(name), index);
+                (0, after)
             }
-        }
-        capacity.is_some_and(|capacity| indexes.capacity() != capacity)
+        };
+        let table_grew = capacity.is_some_and(|capacity| indexes.capacity() != capacity);
+        let index_grew = measured && self.charge_entries(before, after);
+        table_grew || index_grew
     }
 
     /// Define a binding that a name-only lookup can also reach.
@@ -4471,6 +4566,157 @@ mod namespace_charge_tests {
         assert_eq!(external(&heap), 0);
     }
 
+    /// A set of one scope, `id`: the identity of one expansion's definition.
+    fn one_scope(id: usize) -> ScopeSet {
+        let mut scopes = ScopeSet::new();
+        scopes.add_scope(crate::scope::ScopeId(id));
+        scopes
+    }
+
+    /// What an index of `positions` bindings, each filed under a key of its
+    /// own, holds at the least, each buffer on its own: the heads map, a
+    /// table of at least that capacity, and the previous vector, a link per
+    /// position.
+    fn least_index(positions: usize) -> usize {
+        hash_table_bytes::<crate::scope::ScopeId, u32>(positions) + positions * size_of::<u32>()
+    }
+
+    /// The running sum of a namespace's spellings' buffers.
+    fn entries(env: &Environment) -> usize {
+        let charge = env.rare.get().and_then(|rare| rare.namespace.as_ref());
+        charge.expect("a namespace with an account").entries.get()
+    }
+
+    /// The same, by a walk of every spelling, which the sum spares the
+    /// recharges.
+    fn walked(env: &Environment) -> usize {
+        let lists: usize = env.scoped_bindings.borrow().values().map(list_bytes).sum();
+        let Some(rare) = env.rare.get() else {
+            return lists;
+        };
+        let indexes: usize = rare
+            .scoped_index
+            .borrow()
+            .values()
+            .map(ScopeIndex::buffer_bytes)
+            .sum();
+        let introduced: usize = rare
+            .introduced_global_names
+            .borrow()
+            .values()
+            .map(Introduced::buffer_bytes)
+            .sum();
+        lists + indexes + introduced
+    }
+
+    /// The tree-walker binds a macro's introduced definition under the
+    /// expansion's scopes, so each expansion of `hidden-define`'s macro adds
+    /// one binding to the spelling's list, and a position to its index
+    /// (#833). The namespace charges both as they grow, and gives them back.
+    #[test]
+    fn a_namespace_charges_a_spelling_s_scoped_list_and_its_index() {
+        let heap = new_shared_heap();
+        let env = Rc::new(Environment::with_heap(&heap));
+        let made = external(&heap);
+        for i in 0..1000 {
+            env.define_scoped_definition("state", one_scope(100 + i), n(i as i64));
+        }
+        let grown = external(&heap);
+        let list = env.scoped_bindings.borrow()["state"].capacity() * size_of::<ScopedBinding>();
+        assert!(list >= 1000 * size_of::<ScopedBinding>());
+        let least = list + least_index(1000);
+        assert!(
+            grown >= made + least,
+            "{made} then {grown}, at least {least} more"
+        );
+        assert_eq!(env.charged_bytes(), Some(grown));
+
+        // Bound again at the same scopes, a binding is written in place.
+        for i in 0..1000 {
+            env.define_scoped_definition("state", one_scope(100 + i), n(-(i as i64)));
+        }
+        assert_eq!(external(&heap), grown);
+
+        drop(env);
+        assert_eq!(external(&heap), 0);
+    }
+
+    /// The VM renames each expansion's definition to a fresh global and
+    /// records its identity under the spelling (`Introduced`), indexed past
+    /// `INDEX_ABOVE`. The namespace charges the identities and the index as
+    /// they grow, and gives them back.
+    #[test]
+    fn a_namespace_charges_its_introduced_globals() {
+        let heap = new_shared_heap();
+        let env = Rc::new(Environment::with_heap(&heap));
+        let made = external(&heap);
+        let record = |i: usize, renamed: &str| {
+            let renamed = Rc::from(format!("{renamed}.{i}"));
+            env.define_introduced_global(Rc::from("state"), one_scope(100 + i), renamed);
+        };
+        for i in 0..1000 {
+            record(i, "state");
+        }
+        let grown = external(&heap);
+        let least =
+            1000 * size_of::<(ScopeSet, Rc<str>)>() + size_of::<ScopeIndex>() + least_index(1000);
+        assert!(
+            grown >= made + least,
+            "{made} then {grown}, at least {least} more"
+        );
+        assert_eq!(env.charged_bytes(), Some(grown));
+
+        // Recorded again at the same scopes, an identity is overwritten.
+        for i in 0..1000 {
+            record(i, "again");
+        }
+        assert_eq!(external(&heap), grown);
+
+        drop(env);
+        assert_eq!(external(&heap), 0);
+    }
+
+    /// The running sum is what a walk of the spellings finds, and the
+    /// charge what the tables hold, after every write: spellings of one
+    /// binding, whose list is inline, of a few, of one past the namespace's
+    /// threshold, where the index is built, and of many, each bound by both
+    /// scoped writers and recorded as introduced globals, with redefinitions
+    /// between.
+    #[test]
+    fn the_running_sum_is_what_the_tables_hold() {
+        let heap = new_shared_heap();
+        let env = Rc::new(Environment::with_heap(&heap));
+        assert_eq!(entries(&env), 0);
+        let sizes = [1, 2, 5, INDEX_ABOVE, INDEX_ABOVE + 1, 40, 300];
+        for (k, size) in sizes.into_iter().enumerate() {
+            for i in 0..size {
+                let scopes = one_scope(1000 * (k + 1) + i);
+                let value = n(i as i64);
+                env.define_with_scopes(format!("p{k}"), scopes.clone(), value);
+                env.define_scoped_definition(format!("d{k}"), scopes.clone(), value);
+                let renamed = Rc::from(format!("g{k}.{i}"));
+                env.define_introduced_global(Rc::from(format!("g{k}")), scopes.clone(), renamed);
+                if i % 3 == 0 {
+                    env.define_with_scopes(format!("p{k}"), scopes.clone(), n(-1));
+                    env.define_introduced_global(Rc::from(format!("g{k}")), scopes, "again".into());
+                }
+                assert_eq!(entries(&env), walked(&env), "spelling {k}, binding {i}");
+                // And the charge settled it: what the tables hold now, a
+                // spelling's list that grew alone among them. No slot is
+                // defined here, so the names do not trail.
+                let charge = env.rare.get().and_then(|rare| rare.namespace.as_ref());
+                let now = env.table_bytes(charge.expect("an account"));
+                assert_eq!(env.charged_bytes(), Some(now), "spelling {k}, binding {i}");
+            }
+        }
+        assert!(entries(&env) > 0);
+        // A plain definition, and a scoped one at the empty set, which is
+        // stored by name, grow no spelling's buffers.
+        env.define("plain", n(1));
+        env.define_with_scopes("bare", ScopeSet::new(), n(2));
+        assert_eq!(entries(&env), walked(&env));
+    }
+
     /// An `environment` is built by import: what it holds is its slots,
     /// their names, the index, and the links to the owners of what it
     /// imported — each charged to the importer, none to the library.
@@ -4521,6 +4767,27 @@ mod namespace_charge_tests {
             assert!(!frame.is_namespace());
             assert_eq!(external(&heap), start, "a frame of {depth}");
         }
+
+        // A frame that grows a spelling's buffers: one spelling bound past a
+        // frame's threshold, so that it is indexed, and recorded as
+        // introduced globals, which the VM records in a host's environment.
+        // A frame sums none of them (#833).
+        let frame = Rc::new(Environment::with_parent(Rc::clone(&global)));
+        for k in 0..=FRAME_INDEX_ABOVE {
+            let mut scopes = ScopeSet::new();
+            scopes.add_scope(crate::scope::ScopeId(100 + k));
+            frame.define_with_scopes("deep", scopes.clone(), n(k as i64));
+            let renamed = Rc::from(format!("deep.{k}"));
+            frame.define_introduced_global(Rc::from("deep"), scopes, renamed);
+        }
+        let rare = frame
+            .rare
+            .get()
+            .expect("an indexed frame has the rare tables");
+        assert!(rare.scoped_index.borrow().contains_key("deep"));
+        assert!(frame.scoped_bindings.borrow()["deep"].spilled());
+        assert_eq!(frame.charged_bytes(), None);
+        assert_eq!(external(&heap), start, "a frame of one indexed spelling");
     }
 
     /// The kind is the constructor's (4b's start decision 4 on #782): the
