@@ -377,6 +377,13 @@ struct SplicingContext {
 
 type ImportHandler<'a> = dyn Fn(&crate::ImportSet, &Rc<Environment>) -> Result<()> + 'a;
 
+/// What turns parsed forms into `CoreExpr`: expanding macros, resolving
+/// identifiers against scope sets, and compiling `define-syntax`.
+///
+/// **The raw layer** (#831): outside the embedding API's promise
+/// (`docs/README.md`, "Changing the embedding API"), though
+/// `patina-interpreter` re-exports it. Its methods change without a
+/// deprecated twin.
 pub struct Desugarer<'a> {
     /// The environment head symbols resolve in.
     ///
@@ -631,7 +638,7 @@ impl<'a> Desugarer<'a> {
                           it only through a live macro's definition environment, which the \
                           collector traces"
             )]
-            let child = Rc::new(Environment::with_parent(self.env.clone()));
+            let child = Rc::new(Environment::child_frame(self.env.clone()));
             for (name, as_written) in &binders {
                 // Each binder at the scopes it was *written* with plus this
                 // form's — the rule `desugar_let_syntax_impl_tagged` states
@@ -758,7 +765,7 @@ impl<'a> Desugarer<'a> {
                       reaches no other safe point, so no Scheme runs while it lives"
         )]
         let mut probe = self.with_new_env(
-            Rc::new(Environment::with_parent(self.env.clone())),
+            Rc::new(Environment::child_frame(self.env.clone())),
             self.current_scopes.clone(),
         );
         probe.early = Rc::default();
@@ -1949,7 +1956,7 @@ impl<'a> Desugarer<'a> {
                           nothing collects"
             )]
             let staged = (!self.declarations.borrow().is_empty())
-                .then(|| Rc::new(Environment::with_parent(env.clone())));
+                .then(|| Rc::new(Environment::child_frame(env.clone())));
             if let Err(error) = import.borrow_mut()(set, staged.as_ref().unwrap_or(env)) {
                 *failure.borrow_mut() = Some(error);
                 return Err(DesugarError::Other("import failed".into()));
@@ -2481,7 +2488,7 @@ impl<'a> Desugarer<'a> {
                               macro lives only through a live macro's definition environment, \
                               which the collector traces"
                 )]
-                let new_env = Rc::new(Environment::with_parent(current_env.clone()));
+                let new_env = Rc::new(Environment::child_frame(current_env.clone()));
                 let tv = cx.alloc_macro(Rc::new(compiled_macro), literals);
                 current_desugarer.define_syntax_binding(
                     &new_env,
@@ -3192,7 +3199,7 @@ impl<'a> Desugarer<'a> {
         let body_env = if splicing {
             env.clone()
         } else {
-            Rc::new(Environment::with_parent(env.clone()))
+            Rc::new(Environment::child_frame(env.clone()))
         };
         for (name, binder_scopes, (compiled_macro, literals)) in macro_bindings {
             let tv = cx.alloc_macro(Rc::new(compiled_macro), literals);

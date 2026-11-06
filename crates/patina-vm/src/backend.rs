@@ -125,6 +125,14 @@ impl From<crate::error::CompileError> for VmBackendError {
 ///
 /// Holds a `VmState` and compiles + executes each expression on demand.
 /// The heap is shared with the parser so `TaggedValue` indices remain valid.
+///
+/// **In the embedding API's promise** (#831, `docs/README.md`, "Changing the
+/// embedding API"): the type's name and `new`, `with_fs`, `Default`,
+/// `add_library_search_path`, `prepend_library_search_path` and
+/// `bootstrap_error` are inside, changing only by #601's convention, and so
+/// is `LibraryError`, which `bootstrap_error` answers. Its other inherent
+/// methods are the raw layer, `#[doc(hidden)]` ones included: they change
+/// without a deprecated twin.
 pub struct VmBackend {
     state: RefCell<VmState>,
     /// The heap the machine's values live on, its global environment's

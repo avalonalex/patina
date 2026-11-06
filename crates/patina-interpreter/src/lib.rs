@@ -42,6 +42,26 @@
 //! nothing: the interpreter that could read it is gone, and dropping it does
 //! nothing.
 //!
+//! The embedding API's promise is [`Interpreter`], the handles [`Owned`] and
+//! [`OwnedEnvironment`], the [`Backend`] trait's methods, and the other items
+//! `docs/README.md`'s "Changing the embedding API" lists as inside: each
+//! changes only by #601's convention, a replacement beside it and the old
+//! form deprecated until stage 5e (#831). It promises a signature, not a
+//! root. Outside it is the raw layer, which promises only the rules its
+//! documentation gives: the `Backend` trait's words, bare `TaggedValue`s and
+//! environments that nothing roots between calls (#605), and what these
+//! methods, whose signatures are inside, reach:
+//! - [`Interpreter::backend`] and `evaluator` (tree-walker): `Heap`'s
+//!   methods, through `backend().heap()`; the backend's and the evaluator's
+//!   inherent methods, `#[doc(hidden)]` ones included, but for their setup
+//!   (`new`, `with_fs`, `TreeWalker::from_evaluator`, `Default`, the search
+//!   paths and `bootstrap_error`), which is inside; and the evaluator's pub
+//!   fields;
+//! - [`Interpreter::global_env`] and [`Interpreter::raw_environment`]: an
+//!   `Environment`, whose methods are raw;
+//! - [`Interpreter::raw_value`]: a bare `TaggedValue`, valid until the next
+//!   evaluation.
+//!
 //! Features: `vm`, `tree-walker`, and `legacy-pipeline` (which enables
 //! `tree-walker`). All are enabled by default to retain existing imports. Use
 //! `default-features = false, features = ["vm"]` for a VM-only dependency graph.
@@ -136,6 +156,45 @@ pub use patina_vm::{VmBackend, VmBackendError};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// The heap's counts, as [`Interpreter::gc_stats`] reads them at once (#831).
+/// Each field but `handles` is what `(patina debug)`'s `(gc-stats)` reports
+/// under the key of the same name. More fields may come, so a host builds
+/// none of these and matches none exhaustively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct GcCounts {
+    /// The collections run against the heap: `collections`.
+    pub collections: u64,
+    /// The handles alive on the heap: each [`Owned`] and [`OwnedEnvironment`]
+    /// not yet dropped. `(gc-stats)` has no key for it.
+    pub handles: usize,
+    /// The bytes held outside the heap on its objects' behalf, now:
+    /// `external-bytes`. It counts what the host's accounters charge
+    /// ([`Interpreter::external_bytes`]), the namespaces' tables and each
+    /// open file port's buffer.
+    pub external_bytes: usize,
+    /// The collections asked for where collection was deferred, and posted
+    /// instead: `deferred-collections`.
+    pub deferred_collections: u64,
+    /// The heap's port objects' entries in its port table, string ports and
+    /// the standard ports included: `ports`.
+    pub ports: usize,
+}
+
+/// Whether an interpreter's heap is gone, from a weak observer of it that
+/// outlives the interpreter: for the teardown tests (#831). Hidden: no host
+/// needs it.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct HeapProbe(std::rc::Weak<RefCell<patina_core::Heap>>);
+
+impl HeapProbe {
+    /// Whether the heap has been torn down: nothing holds it any longer.
+    pub fn is_gone(&self) -> bool {
+        self.0.strong_count() == 0
+    }
+}
+
 /// What running a whole program with `-k` has to report back.
 ///
 /// Carrying on past an error decides how much of the program runs, never
@@ -161,7 +220,8 @@ impl ProgramOutcome {
 /// `write` of a word on `heap`, for a host that holds one: the word crosses
 /// into a context as an embedder's value does (`NoGcScope::cross`), and the
 /// datum writer writes it there (#706). Prefer [`Interpreter::display_tagged`]
-/// with an [`Owned`] handle, which a later evaluation cannot free.
+/// with an [`Owned`] handle, which a later evaluation cannot free, and which
+/// names no `SharedHeap`; a host's comes from the raw `backend().heap()`.
 pub fn format_write_tagged(tv: TaggedValue, heap: &SharedHeap) -> String {
     patina_core::NoGcScope::cross(heap, [tv], |cx, [v]| {
         patina_primitives::primitives::io::datum_writer::format_write(cx, v)
@@ -169,7 +229,8 @@ pub fn format_write_tagged(tv: TaggedValue, heap: &SharedHeap) -> String {
 }
 
 /// `display` of a word on `heap`, for a host that holds one, as
-/// [`format_write_tagged`] writes one.
+/// [`format_write_tagged`] writes one. Prefer
+/// [`Interpreter::display_notation`] with an [`Owned`] handle.
 pub fn format_display_tagged(tv: TaggedValue, heap: &SharedHeap) -> String {
     patina_core::NoGcScope::cross(heap, [tv], |cx, [v]| {
         patina_primitives::primitives::io::datum_writer::format_display(cx, v)
@@ -1067,10 +1128,10 @@ impl<B: Backend> Interpreter<B> {
 
     /// A new environment for the host to bind values in, held by a handle
     /// that roots it, and everything bound in it, until the handle is dropped
-    /// (#620). It is a child of the global environment, as
-    /// `Environment::with_parent` makes one: what is defined in it stays in
-    /// it, and every other name resolves in the global environment, a global
-    /// defined later included.
+    /// (#620). It is a child of the global environment: what is defined in it
+    /// stays in it, and every other name resolves in the global environment,
+    /// a global defined later included. Until 4b.8's host-namespace kind it
+    /// is a frame.
     ///
     /// ```
     /// # #[cfg(feature = "vm")]
@@ -1087,6 +1148,74 @@ impl<B: Backend> Interpreter<B> {
     /// assert!(interp.lookup("held").is_none());
     /// # }
     /// ```
+    ///
+    /// It replaces the routes #831 deprecated, by which a host could build
+    /// an environment nothing roots, or hold any environment of the heap, a
+    /// frame included: `Environment::with_parent`, `Heap::hold_environment`,
+    /// and `Cx`'s `hold_environment` and `track_environment`. Each is pinned
+    /// below under `#![deny(deprecated)]`, beside a twin that compiles with
+    /// this method. A pin and its twin share their scaffolding, which calls
+    /// nothing deprecated, so each pin fails for its own call alone.
+    ///
+    /// ```
+    /// #![deny(deprecated)]
+    /// use std::rc::Rc;
+    /// use patina_interpreter::{Backend, Environment, Interpreter, OwnedEnvironment};
+    /// fn host_environment<B: Backend>(interp: &mut Interpreter<B>) -> OwnedEnvironment {
+    ///     let parent = Rc::new(Environment::with_heap(interp.backend().heap()));
+    ///     drop(parent);
+    ///     interp.new_environment()
+    /// }
+    /// ```
+    ///
+    /// `Environment::with_parent`:
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use std::rc::Rc;
+    /// use patina_interpreter::{Backend, Environment, Interpreter};
+    /// fn host_environment<B: Backend>(interp: &mut Interpreter<B>) -> Environment {
+    ///     let parent = Rc::new(Environment::with_heap(interp.backend().heap()));
+    ///     Environment::with_parent(parent)
+    /// }
+    /// ```
+    ///
+    /// `Heap::hold_environment`:
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use std::rc::Rc;
+    /// use patina_interpreter::{Backend, Environment, Interpreter, OwnedEnvironment};
+    /// fn host_environment<B: Backend>(interp: &mut Interpreter<B>) -> OwnedEnvironment {
+    ///     let parent = Rc::new(Environment::with_heap(interp.backend().heap()));
+    ///     interp.backend().heap().borrow().hold_environment(parent)
+    /// }
+    /// ```
+    ///
+    /// `Cx::hold_environment`:
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use std::rc::Rc;
+    /// use patina_interpreter::{Backend, Environment, Interpreter, OwnedEnvironment};
+    /// fn host_environment<B: Backend>(interp: &mut Interpreter<B>) -> OwnedEnvironment {
+    ///     let parent = Rc::new(Environment::with_heap(interp.backend().heap()));
+    ///     interp.with(|cx| cx.hold_environment(parent))
+    /// }
+    /// ```
+    ///
+    /// `Cx::track_environment`:
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use std::rc::Rc;
+    /// use patina_interpreter::{Backend, Environment, Interpreter, OwnedEnvironment};
+    /// fn host_environment<B: Backend>(interp: &mut Interpreter<B>) -> OwnedEnvironment {
+    ///     let parent = Rc::new(Environment::with_heap(interp.backend().heap()));
+    ///     interp.with(|cx| cx.track_environment(&parent));
+    ///     interp.new_environment()
+    /// }
+    /// ```
     pub fn new_environment(&self) -> OwnedEnvironment {
         let global = self.backend.global_env();
         #[expect(
@@ -1094,8 +1223,14 @@ impl<B: Backend> Interpreter<B> {
             reason = "the new environment goes into a handle, which roots it, before anything can \
                       collect"
         )]
-        let env = Rc::new(Environment::with_parent(Rc::clone(global)));
-        self.backend.heap().borrow().hold_environment(env)
+        let env = Rc::new(Environment::child_frame(Rc::clone(global)));
+        #[allow(
+            deprecated,
+            reason = "interim: the holder that takes only a namespace lands with 4b.8's \
+                      host-namespace kind, which this then makes (#831's ruling on question 1)"
+        )]
+        let held = self.backend.heap().borrow().hold_environment(env);
+        held
     }
 
     /// Bind `name` to `value` in the host environment `env`, as a program's
@@ -1189,9 +1324,9 @@ impl<B: Backend> Interpreter<B> {
     /// `TaggedValue`s. A value read from it is rooted only while the name
     /// stays bound to it, so once the program rebinds the name a later
     /// evaluation that collects can free it; [`Interpreter::lookup`] answers
-    /// a handle instead. An environment built from it with
-    /// `Environment::with_parent` is not rooted between calls (#620);
-    /// [`Interpreter::new_environment`] answers one that is.
+    /// a handle instead. An environment a host builds over it is not rooted
+    /// between calls (#620); [`Interpreter::new_environment`] answers one
+    /// that is.
     ///
     /// Its `define` and `set` are raw too: they write the binding and
     /// nothing else. The VM compiles a call to a primitive's binding into a
@@ -1207,8 +1342,76 @@ impl<B: Backend> Interpreter<B> {
     /// no handle to its heap (#704), so a host that read it through
     /// [`Interpreter::global_env`] reads it here. Keep values across an
     /// evaluation in handles ([`Owned`]), not in words read off it.
+    ///
+    /// Deprecated (#831). Its uses have typed replacements:
+    /// - [`Interpreter::gc_stats`] for the heap's counts;
+    /// - [`Interpreter::take_interrupt`] to clear a pending signal;
+    /// - [`Interpreter::interrupt_handle`], [`Interpreter::external_bytes`] and
+    ///   [`Interpreter::display_notation`];
+    /// - [`Interpreter::with`] for a context.
+    ///
+    /// What none of them covers is the raw layer, outside the embedding API's
+    /// promise: `backend().heap()` reaches it.
+    ///
+    /// ```
+    /// #![deny(deprecated)]
+    /// use patina_interpreter::{Backend, Interpreter};
+    /// fn collections<B: Backend>(interp: &Interpreter<B>) -> u64 {
+    ///     interp.gc_stats().collections
+    /// }
+    /// ```
+    ///
+    /// Its own call:
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use patina_interpreter::{Backend, Interpreter};
+    /// fn collections<B: Backend>(interp: &Interpreter<B>) -> u64 {
+    ///     interp.heap().borrow().gc_collections()
+    /// }
+    /// ```
+    #[deprecated(
+        note = "use `gc_stats()` for the heap's counts, `take_interrupt()` to clear a pending \
+                signal, and `interrupt_handle()`, `external_bytes()`, `display_notation()` or \
+                `with()`; `backend().heap()` is the raw layer, outside the promise (#831)"
+    )]
     pub fn heap(&self) -> &patina_core::SharedHeap {
         self.backend.heap()
+    }
+
+    /// The heap's counts, read at once: what `(patina debug)`'s `(gc-stats)`
+    /// reports under the keys of the same names, and the handles alive. A
+    /// host reads them here without evaluating, where a `(gc-stats)` call may
+    /// itself collect (#831).
+    pub fn gc_stats(&self) -> GcCounts {
+        let heap = self.backend.heap().borrow();
+        GcCounts {
+            collections: heap.gc_collections(),
+            handles: heap.handle_count(),
+            external_bytes: heap.external_bytes(),
+            deferred_collections: heap.gc_deferred_collections(),
+            ports: heap.port_entries(),
+        }
+    }
+
+    /// Clear a [`event::SIGNAL`] posted while nothing ran, and answer whether
+    /// there was one (#831). Without it the post stops the next evaluation at
+    /// its start ([`Interpreter::interrupt_handle`]). A host calls it between
+    /// evaluations, for a Ctrl-C that arrived after its evaluation's last
+    /// poll, as the REPL does once it stops forwarding SIGINT. A collection
+    /// posted stays posted, for the next evaluation to run, and an event
+    /// posted from elsewhere that nothing services yet is dropped with the
+    /// signal.
+    pub fn take_interrupt(&self) -> bool {
+        self.backend.heap().borrow().mutator().take_signal()
+    }
+
+    /// A weak observer of the interpreter's heap, which answers whether the
+    /// heap is gone once the interpreter is dropped: for the teardown tests,
+    /// which `heap()`'s deprecation took their `Rc::downgrade` from (#831).
+    #[doc(hidden)]
+    pub fn heap_probe(&self) -> HeapProbe {
+        HeapProbe(Rc::downgrade(self.backend.heap()))
     }
 
     /// A handle that interrupts this interpreter from anywhere: another
@@ -1237,12 +1440,12 @@ impl<B: Backend> Interpreter<B> {
     /// # use patina_interpreter::VmInterpreter;
     /// let interp = VmInterpreter::new_vm();
     /// // The heap's namespaces charge their tables too.
-    /// let before = interp.heap().borrow().external_bytes();
+    /// let before = interp.gc_stats().external_bytes;
     /// let mut buffers = interp.external_bytes();
     /// buffers.increase(1 << 20);
-    /// assert_eq!(interp.heap().borrow().external_bytes(), before + (1 << 20));
+    /// assert_eq!(interp.gc_stats().external_bytes, before + (1 << 20));
     /// drop(buffers);
-    /// assert_eq!(interp.heap().borrow().external_bytes(), before);
+    /// assert_eq!(interp.gc_stats().external_bytes, before);
     /// # }
     /// ```
     pub fn external_bytes(&self) -> patina_core::heap::ExternalAccounter {
@@ -1256,29 +1459,56 @@ impl<B: Backend> Interpreter<B> {
     /// Uses the datum writer which properly handles all TaggedValue types
     /// including heap pairs, vectors, strings, and circular structures.
     /// Multiple values (from `values`) are unpacked and displayed one per line.
+    /// [`Interpreter::display_notation`] is the same in `display`'s notation.
     pub fn display_tagged(&self, value: impl AsValue) -> String {
+        self.render(value, format_write_tagged)
+    }
+
+    /// [`Interpreter::display_tagged`] in `display`'s notation (#831): a
+    /// string without its quotes, a character as itself. Multiple values are
+    /// unpacked one per line, as there.
+    ///
+    /// ```
+    /// # #[cfg(feature = "vm")]
+    /// # {
+    /// use patina_interpreter::VmInterpreter;
+    /// let interp = VmInterpreter::new_vm();
+    /// let value = interp.eval_str_owned("\"held\"").unwrap();
+    /// assert_eq!(interp.display_notation(&value), "held");
+    /// assert_eq!(interp.display_tagged(&value), "\"held\"");
+    /// # }
+    /// ```
+    pub fn display_notation(&self, value: impl AsValue) -> String {
+        self.render(value, format_display_tagged)
+    }
+
+    /// `value` written by `write`, each of several values on its own line
+    /// (R7RS).
+    fn render(&self, value: impl AsValue, write: fn(TaggedValue, &SharedHeap) -> String) -> String {
         let heap = self.backend.heap();
         let tv = value.value_in(&heap.borrow());
-
-        // Unpack multiple values (R7RS: each value displayed on its own line)
         let vals = heap.borrow().get_values(tv).map(|v| v.to_vec());
-        if let Some(vals) = vals {
-            return vals
+        match vals {
+            Some(vals) => vals
                 .iter()
-                .map(|v| format_write_tagged(*v, heap))
+                .map(|v| write(*v, heap))
                 .collect::<Vec<_>>()
-                .join("\n");
+                .join("\n"),
+            None => write(tv, heap),
         }
-
-        format_write_tagged(tv, heap)
     }
 
     /// Get a reference to the underlying backend
     ///
     /// This allows access to backend-specific functionality that's not
-    /// part of the generic `Backend` trait. The raw layer (#605): the
-    /// backend's methods take and answer bare `TaggedValue`s and
-    /// environments, which nothing roots between calls.
+    /// part of the generic `Backend` trait. The `Backend` trait's methods are
+    /// inside the embedding API's promise, changing only by #601's
+    /// convention, but their words are the raw layer (#605): they take and
+    /// answer bare `TaggedValue`s and environments, which nothing roots
+    /// between calls. A backend's own inherent methods are raw, but for its
+    /// setup (`new`, `with_fs`, `Default`, the search paths and
+    /// `bootstrap_error`), and `backend().heap()` reaches
+    /// [`Heap`](patina_core::Heap)'s raw methods (#831).
     pub fn backend(&self) -> &B {
         &self.backend
     }
@@ -1430,8 +1660,11 @@ impl Interpreter<TreeWalker> {
     /// Get a reference to the underlying evaluator (TreeWalker-specific)
     ///
     /// This provides access to evaluator-specific functionality.
-    /// For generic backend access, use `backend()` instead. The raw layer, as
-    /// `backend()` is (#605).
+    /// For generic backend access, use `backend()` instead. The evaluator's
+    /// setup (`add_library_search_path`, `prepend_library_search_path`,
+    /// `bootstrap_error`) is inside the embedding API's promise; its other
+    /// methods and its pub fields are the raw layer (#605, #831; see
+    /// [`Evaluator`]).
     ///
     /// This method is only available when using the TreeWalker backend.
     pub fn evaluator(&self) -> &Evaluator {

@@ -9,6 +9,22 @@
 //! - Keep performance-critical primitives in Rust (arithmetic, list operations, etc.)
 //! - Use Scheme for derived functions and syntactic sugar
 //! - Support both for maximum flexibility
+//!
+//! # Outside the embedding API
+//!
+//! The loader traits, their registry, the `&SharedHeap` they borrow and the
+//! rest of this module are workspace-internal, outside #601's promise (#831,
+//! `docs/README.md`, "Changing the embedding API"): they change without a
+//! deprecated twin. `patina-interpreter` re-exports none of them, and no
+//! backend lets a host add a loader: a host gives the loaders only the file
+//! system the Scheme loader reads (`with_fs`) and the library search paths.
+//! A host that depends on this crate to build a `Backend` of its own is
+//! promised nothing about them.
+//!
+//! A load is lent the heap for the call (#707). A [`ParsedLibrary`] a loader
+//! answers keeps it past the call only through its guard, until
+//! [`ParsedLibrary::hand_to`] gives the body to the load's registry entry, or
+//! until it drops (#677; see [`ParsedLibrary::new`]).
 
 use crate::Environment;
 use crate::heap::SharedHeap;
@@ -21,10 +37,10 @@ use std::rc::{Rc, Weak};
 
 /// Trait for different library loading strategies
 ///
-/// This allows us to support multiple library types:
-/// - RustLibraryLoader: Loads libraries implemented as Rust code
-/// - SchemeLibraryLoader: Parses and evaluates .sld files
-/// - MixedLibraryLoader: Combines both approaches
+/// A loader of this trait loads a library on its own: `RustLibraryLoader`,
+/// for the libraries implemented as Rust code. A `.sld` file is parsed by
+/// `patina-frontend`'s `SchemeLibraryLoader`, an [`EvaluatingLibraryLoader`],
+/// since its body needs the evaluator.
 pub trait LibraryLoader {
     /// Load a library with the given name, its values on `heap`: the heap
     /// of the global environment, so that importing its exports needs no
@@ -177,7 +193,8 @@ pub struct ParsedLibrary {
     pub imports: Vec<ImportSet>,
 
     /// Library body expressions (need evaluation) as TaggedValues, on the
-    /// heap the loader was lent: it keeps no handle to it (#707).
+    /// heap the loader was lent for the call (#707). This value keeps that
+    /// heap only through the guard's clone of it ([`Self::new`]).
     pub body: Vec<TaggedValue>,
 
     /// Export specifications
@@ -197,8 +214,16 @@ impl ParsedLibrary {
     /// Build a parsed library, installing the GC defer guard described above.
     ///
     /// The heap is required, not optional: the body's forms live in it, and a
-    /// library built without one would carry no guard at all (#624). It is
-    /// borrowed for the guard, and not kept (#707).
+    /// library built without one would carry no guard at all (#624). The
+    /// loader lends it for the call (#707), but the guard keeps a clone of
+    /// it, inside core's `NoGcScope`, until [`Self::hand_to`] gives the body
+    /// to the registry entry, or until this value drops,
+    /// [`Self::into_declarations`] included.
+    ///
+    /// The guard's drop takes heap borrows: a mutable one when it closes the
+    /// last `NoGcScope`, and in a check build a shared one to read the
+    /// collection count. So a `ParsedLibrary` is not dropped, handed over or
+    /// turned into its declarations while a heap borrow is outstanding.
     pub fn new(
         name: Vec<String>,
         imports: Vec<ImportSet>,

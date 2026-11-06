@@ -20,6 +20,12 @@ use std::rc::Rc;
 ///
 /// Library exports are stored as `TaggedValue` for memory efficiency.
 ///
+/// **The raw layer** (#831): the type's name is inside the embedding API's
+/// promise, since a promised signature answers one
+/// (`ApplyContext::load_scheme_library`), but its fields, methods and impls
+/// are not (`docs/README.md`, "Changing the embedding API"). They change
+/// without a deprecated twin; 4b.6 makes the exports cells.
+///
 /// Its trace (derived, #686) reports its two root sets (`docs/GC_DESIGN.md`
 /// §5.3): each export's value, pinned until stage 4b makes the exports
 /// cells, and the library's environment. Pinned by the sentinel test

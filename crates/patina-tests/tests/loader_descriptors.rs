@@ -189,7 +189,7 @@ fn load<B: Backend + SearchPath>(
     interp
         .eval_program_owned("(import (scheme base))")
         .expect("(scheme base) loads");
-    let collections = || interp.heap().borrow().gc_collections();
+    let collections = || interp.gc_stats().collections;
     let before = collections();
     let answer = interp
         .eval_program_owned(program)

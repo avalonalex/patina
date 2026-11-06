@@ -55,6 +55,10 @@ use std::rc::Rc;
 /// A top-level environment's own bindings, as the one API the sites in the
 /// [module's](self) list read and write them through. See the module for the
 /// four groups its operations fall in.
+///
+/// **The raw layer** (#831), as [`Environment`]'s methods are: outside the
+/// embedding API's promise (`docs/README.md`, "Changing the embedding API").
+/// 4b.6 reimplements it over binding records.
 #[derive(Clone, Copy)]
 pub struct NamespaceView<'e> {
     env: &'e Environment,

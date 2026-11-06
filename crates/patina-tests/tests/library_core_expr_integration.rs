@@ -5,7 +5,7 @@
 // The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
 #![allow(deprecated)]
 
-use patina_interpreter::Interpreter;
+use patina_interpreter::{Backend, Interpreter};
 use patina_tree_walker::TreeWalker;
 
 #[test]
@@ -69,7 +69,7 @@ fn test_interpreter_api_with_macros() {
 
     println!("\n=== Testing complex macro code ===");
     let result = interp.eval_program(code).unwrap();
-    let heap = interp.heap();
+    let heap = interp.backend().heap();
     let heap_ref = heap.borrow();
     let name = heap_ref.get_symbol_name(result);
     assert_eq!(name, Some("one"));

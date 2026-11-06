@@ -32,7 +32,7 @@ const PRELUDE: &str = "(import (scheme base) (patina debug))
 const CHURN: &str = "(churn 200000) (gc) (define keep (list 'a 'b 'c 'd))";
 
 fn collections<B: Backend>(interp: &Interpreter<B>) -> u64 {
-    interp.heap().borrow().gc_collections()
+    interp.gc_stats().collections
 }
 
 /// One datum of `source`, read on `heap` as the word `Backend::eval` takes.
@@ -84,7 +84,10 @@ fn a_value_bound_in_a_host_environment_survives_a_program_that_collects() {
 fn defined_across_a_collection<B: Backend>(interp: Interpreter<B>) {
     interp.eval_program_owned(PRELUDE).unwrap();
     let env = interp.new_environment();
-    let datum = read("(define kept (list 'kept (vector 4 5 6)))", interp.heap());
+    let datum = read(
+        "(define kept (list 'kept (vector 4 5 6)))",
+        interp.backend().heap(),
+    );
     interp
         .backend()
         .eval(datum, &interp.raw_environment(&env))
@@ -119,7 +122,7 @@ fn evaluated_in_the_environment<B: Backend>(
     let raw = interp.raw_environment(&env);
     interp.define_in(&env, "x", TaggedValue::fixnum(99));
     interp.eval_program_owned("(define x 1)").unwrap();
-    let heap = interp.heap().clone();
+    let heap = interp.backend().heap().clone();
     let source_map = Rc::new(RefCell::new(SourceMap::new()));
     let eval = |source: &str| {
         let datum = read(source, &heap);
@@ -295,7 +298,7 @@ fn reclaimed_once_dropped<B: Backend>(interp: Interpreter<B>) {
     interp.define_in(&env, "only", value);
     interp.eval_program_owned("(gc)").unwrap();
     assert_eq!(interp.display_tagged(raw), "(only-here 1 2)");
-    let heap = interp.heap().clone();
+    let heap = interp.backend().heap().clone();
     drop(env);
     interp.eval_program_owned("(gc)").unwrap();
     let message = panic_message(|| {
@@ -337,12 +340,13 @@ fn kept_past_its_interpreter<B: Backend>(interp: Interpreter<B>) {
     let value = interp.eval_str_owned("(list 'held 1 2)").unwrap();
     interp.define_in(&env, "held", value);
     let copy = env.clone();
-    let heap = Rc::downgrade(interp.heap());
-    drop(interp);
+    let heap = interp.heap_probe();
     assert!(
-        heap.upgrade().is_none(),
-        "the environment kept the heap alive"
+        !heap.is_gone(),
+        "the heap is alive while its interpreter is"
     );
+    drop(interp);
+    assert!(heap.is_gone(), "the environment kept the heap alive");
     drop(env);
     let again = copy.clone();
     drop(copy);

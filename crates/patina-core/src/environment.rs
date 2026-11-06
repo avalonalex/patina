@@ -663,7 +663,7 @@ struct RareTables {
 /// build. Their tables are Rust allocations the trigger would otherwise not
 /// see: an `(environment '(scheme base))` holds about 40 KiB in them and
 /// costs the heap one specifier slot, so a loop of those piled up 2.9 GiB of
-/// dead namespaces between collections. A frame ([`Environment::with_parent`])
+/// dead namespaces between collections. A frame ([`Environment::child_frame`])
 /// is never one: the tree-walker builds one per call and per `let`-bound
 /// temporary, and what its bindings hold is short-lived and small, so its
 /// path does as little of the measuring as it can. A scoped binding or an
@@ -843,6 +843,11 @@ fn fresh_env_id() -> u64 {
 
 /// Environment for variable bindings
 ///
+/// **The raw layer** (#831): the type's name is inside the embedding API's
+/// promise, since promised signatures name it, but its methods are not
+/// (`docs/README.md`, "Changing the embedding API"). They change without a
+/// deprecated twin, and promise only the rules documented on them.
+///
 /// Uses Rc<RefCell<>> for shared mutable state (needed for set!)
 ///
 /// ## TaggedValue Storage
@@ -989,7 +994,7 @@ enum Kind {
     /// ([`NamespaceCharge`]); every namespace indexes a spelling's scoped
     /// bindings past [`INDEX_ABOVE`].
     Namespace,
-    /// A frame ([`Environment::with_parent`]): a call's or a body's, the
+    /// A frame ([`Environment::child_frame`]): a call's or a body's, the
     /// desugarer's scopes, and a host's environment
     /// (`Interpreter::new_environment`). It never charges, and indexes past
     /// [`FRAME_INDEX_ABOVE`].
@@ -1059,14 +1064,35 @@ impl Environment {
 
     /// Create a new environment with a parent: a frame, which never charges
     /// for its tables (`NamespaceCharge`).
+    ///
+    /// Deprecated for hosts (#831): nothing roots a frame built here between
+    /// calls (#620), and `Interpreter::new_environment` answers a host's
+    /// environment held. It goes at stage 5e. The workspace builds its frames
+    /// with [`Environment::child_frame`].
+    #[deprecated(
+        note = "use `Interpreter::new_environment`, which answers an environment held between \
+                calls; nothing roots a frame built here (#620), and this goes at stage 5e (#831)"
+    )]
     pub fn with_parent(parent: Rc<Environment>) -> Self {
         Self::frame(parent, Kind::Frame)
     }
 
-    /// [`Environment::with_parent`] for a frame of the tree-walker's CPS
+    /// A frame whose parent is `parent`, which never charges for its tables
+    /// (`NamespaceCharge`): the desugarer's scopes, and a frame of the
+    /// tree-walker's per call. What [`Environment::with_parent`] made, for
+    /// the workspace's own callers once it was deprecated (#831). Hidden,
+    /// since a host keeps an environment through `Interpreter::new_environment`,
+    /// and raw, as every `Environment` method is.
+    #[doc(hidden)]
+    pub fn child_frame(parent: Rc<Environment>) -> Self {
+        Self::frame(parent, Kind::Frame)
+    }
+
+    /// [`Environment::child_frame`] for a frame of the tree-walker's CPS
     /// temporaries, a `let` temporary's or a continuation's parameter, which
     /// is never where a definition binds ([`Environment::holds_temporaries`],
-    /// #680).
+    /// #680). Hidden with it (#831).
+    #[doc(hidden)]
     pub fn for_temporaries(parent: Rc<Environment>) -> Self {
         Self::frame(parent, Kind::Temporaries)
     }
@@ -3248,7 +3274,7 @@ mod tests {
     fn test_local_slot_ignores_parent() {
         let parent = Rc::new(Environment::new());
         parent.define("x".to_string(), TaggedValue::fixnum(42));
-        let child = Environment::with_parent(parent);
+        let child = Environment::child_frame(parent);
         // x resolves via the parent chain but has no local slot in the child.
         assert_eq!(child.get("x"), Some(TaggedValue::fixnum(42)));
         assert_eq!(child.local_slot("x"), None);
@@ -3301,7 +3327,7 @@ mod tests {
         let parent = Rc::new(Environment::new());
         parent.define("x".to_string(), TaggedValue::fixnum(42));
 
-        let child = Environment::with_parent(parent);
+        let child = Environment::child_frame(parent);
         assert_eq!(child.get("x"), Some(TaggedValue::fixnum(42)));
     }
 
@@ -3338,7 +3364,7 @@ mod tests {
         parent.define("x".to_string(), TaggedValue::fixnum(42));
         parent.define("y".to_string(), TaggedValue::fixnum(100));
 
-        let child = Environment::with_parent(parent);
+        let child = Environment::child_frame(parent);
         child.define("z".to_string(), TaggedValue::TRUE);
 
         // bindings() should only return local bindings
@@ -3696,7 +3722,7 @@ mod introduced_global_tests {
     fn entries_are_local_to_the_environment_that_recorded_them() {
         let parent = Rc::new(Environment::new());
         parent.define_introduced_global("x".into(), scopes(&[1]), "x #1".into());
-        let child = Environment::with_parent(Rc::clone(&parent));
+        let child = Environment::child_frame(Rc::clone(&parent));
         assert!(recorded(&child, "x").is_empty());
         assert_eq!(recorded(&parent, "x").len(), 1);
     }
@@ -3797,7 +3823,7 @@ mod scoped_index_tests {
         }
         assert_eq!(indexed_len(&root, "x"), Some(INDEX_ABOVE + 1));
 
-        let frame = Environment::with_parent(Rc::clone(&root));
+        let frame = Environment::child_frame(Rc::clone(&root));
         for k in 0..=INDEX_ABOVE {
             frame.define_with_scopes("x", scopes(&[1000 + k]), n(k as i64));
         }
@@ -3892,7 +3918,7 @@ mod name_view_tests {
         let parent = Rc::new(Environment::new());
         parent.define("x", zero());
         parent.define_scoped_definition("x", scopes(&[1]), zero());
-        let child = Environment::with_parent(parent);
+        let child = Environment::child_frame(parent);
         assert!(!reaches(&child, "x", &[1]));
         assert!(reaches(&child, "x", &[2]));
     }
@@ -4093,7 +4119,7 @@ mod shared_binding_tests {
         assert_eq!(importer.get("missing"), None);
 
         // A parent's binding is not the source's own location to share.
-        let child = Rc::new(Environment::with_parent(Rc::clone(&library)));
+        let child = Rc::new(Environment::child_frame(Rc::clone(&library)));
         assert!(!importer.share_binding("count", &child, "count"));
     }
 
@@ -4160,7 +4186,7 @@ mod binding_location_tests {
     fn the_walk_is_gets_walk() {
         let root = Rc::new(Environment::new());
         root.define("X", zero());
-        let child = Rc::new(Environment::with_parent(Rc::clone(&root)));
+        let child = Rc::new(Environment::child_frame(Rc::clone(&root)));
         // Through the parent.
         assert_eq!(child.binding_location("X"), root.binding_location("X"));
 
@@ -4335,7 +4361,7 @@ mod introduced_definition_tests {
         // binding in a *child* frame. It is not something an alias can name —
         // it lives in a run-time frame — so it is left to scoped resolution.
         let library = Rc::new(Environment::new());
-        let body = Rc::new(Environment::with_parent(Rc::clone(&library)));
+        let body = Rc::new(Environment::child_frame(Rc::clone(&library)));
         body.define_with_scopes("f", scopes(&[3]), n(1));
         assert!(body.introduced_definition("f", &scopes(&[3, 7])).is_none());
         assert!(!body.has_introduced_definition("f"));
@@ -4757,7 +4783,7 @@ mod namespace_charge_tests {
         let mut scopes = ScopeSet::new();
         scopes.add_scope(crate::scope::ScopeId(3));
         for depth in 0..100 {
-            let frame = Rc::new(Environment::with_parent(Rc::clone(&global)));
+            let frame = Rc::new(Environment::child_frame(Rc::clone(&global)));
             for i in 0..depth {
                 frame.define(format!("v{i}"), n(i));
                 frame.define_with_scopes(format!("s{i}"), scopes.clone(), n(i));
@@ -4772,7 +4798,7 @@ mod namespace_charge_tests {
         // frame's threshold, so that it is indexed, and recorded as
         // introduced globals, which the VM records in a host's environment.
         // A frame sums none of them (#833).
-        let frame = Rc::new(Environment::with_parent(Rc::clone(&global)));
+        let frame = Rc::new(Environment::child_frame(Rc::clone(&global)));
         for k in 0..=FRAME_INDEX_ABOVE {
             let mut scopes = ScopeSet::new();
             scopes.add_scope(crate::scope::ScopeId(100 + k));
@@ -4809,7 +4835,7 @@ mod namespace_charge_tests {
         assert_eq!(standalone.charged_bytes(), None);
         assert!(global.charged_bytes().is_some() && in_hand.charged_bytes().is_some());
 
-        let frame = Environment::with_parent(Rc::clone(&global));
+        let frame = Environment::child_frame(Rc::clone(&global));
         assert_eq!(frame.kind, Kind::Frame);
         assert!(!frame.is_namespace() && !frame.holds_temporaries());
         let temporaries = Environment::for_temporaries(Rc::clone(&global));
@@ -4834,7 +4860,7 @@ mod namespace_charge_tests {
     fn captured_frame_bytes_is_a_one_parameter_frame() {
         let heap = new_shared_heap();
         let global = Rc::new(Environment::with_heap(&heap));
-        let frame = Environment::with_parent(global);
+        let frame = Environment::child_frame(global);
         let mut scopes = ScopeSet::new();
         scopes.add_scope(crate::scope::ScopeId(3));
         frame.define_with_scopes("x", scopes, n(1));
@@ -5229,8 +5255,8 @@ mod relink_alias_tests {
             &ScopeSet::new(),
             &mut mint,
         );
-        let body = Rc::new(Environment::with_parent(Rc::clone(&program)));
-        let frame = Rc::new(Environment::with_parent(Rc::clone(&body)));
+        let body = Rc::new(Environment::child_frame(Rc::clone(&program)));
+        let frame = Rc::new(Environment::child_frame(Rc::clone(&body)));
         assert_eq!(
             frame.relink_alias(
                 Rc::clone(&library),

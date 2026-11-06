@@ -13,7 +13,7 @@ fn command_line<B: Backend>(interp: &Interpreter<B>) -> String {
     let value = interp
         .eval_program("(import (scheme process-context)) (command-line)")
         .unwrap();
-    patina_interpreter::format_write_tagged(value, interp.heap())
+    patina_interpreter::format_write_tagged(value, interp.backend().heap())
 }
 
 /// Same-backend instances must be independent too: a per-backend or
@@ -89,7 +89,7 @@ fn configured_command_line_reaches_library_bodies_eval_and_load() {
                 file.display()
             ))
             .unwrap();
-        let result = patina_interpreter::format_write_tagged(value, interp.heap());
+        let result = patina_interpreter::format_write_tagged(value, interp.backend().heap());
         assert_eq!(
             result,
             r#"(("outer.scm" "argument") ("outer.scm" "argument") ("outer.scm" "argument"))"#
@@ -258,6 +258,30 @@ fn an_error_leaves_the_interpreter_ready_for_the_next_form() {
                 .unwrap_or_else(|e| panic!("{name}: after `{failing}`, `(+ 1 2)` failed: {e}"));
             assert_eq!(result.as_fixnum(), Some(3), "{name}: after `{failing}`");
         }
+    }
+    check(TreeWalkInterpreter::new_tree_walker(), "tree-walker");
+    check(Interpreter::new(VmBackend::new()), "vm");
+}
+
+/// `display_notation` is `display_tagged` in `display`'s notation (#831): a
+/// string without its quotes and a character as itself, and several values
+/// one per line, as there.
+#[test]
+fn display_notation_writes_as_display_does() {
+    fn check<B: Backend>(interp: Interpreter<B>, name: &str) {
+        let value = interp
+            .eval_str_owned("(values \"text\" #\\c '(\"in\" #\\a list))")
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(
+            interp.display_notation(&value),
+            "text\nc\n(in a list)",
+            "{name}"
+        );
+        assert_eq!(
+            interp.display_tagged(&value),
+            "\"text\"\n#\\c\n(\"in\" #\\a list)",
+            "{name}"
+        );
     }
     check(TreeWalkInterpreter::new_tree_walker(), "tree-walker");
     check(Interpreter::new(VmBackend::new()), "vm");
@@ -773,7 +797,7 @@ fn chain_lengths(heap: &patina_core::SharedHeap, value: TaggedValue) -> Vec<Opti
 #[test]
 fn eval_of_one_datum_does_not_extend_its_earlier_chains() {
     fn check<B: Backend>(interp: &Interpreter<B>, backend: &str) {
-        let heap = interp.heap().clone();
+        let heap = interp.backend().heap().clone();
         let (result, _map) = interp.eval_program_with_source_name(
             "(import (scheme base) (scheme eval) (scheme repl))\n\
              (define form '(case 3 ((1 2) 'a) ((3) 'b) (else 'c)))\n\

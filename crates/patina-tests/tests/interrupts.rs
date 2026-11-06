@@ -213,3 +213,43 @@ fn a_post_between_evaluations_stops_the_next_only() {
     check("vm", vm_interpreter());
     check("tree-walker", tree_walker_interpreter());
 }
+
+/// A post while nothing runs, cleared before the next evaluation, stops
+/// nothing (#831): the evaluation answers its value. The first clear answers
+/// that a signal was posted, and a second that none is. A collection posted
+/// with the signal stays posted, and the next evaluation runs it.
+#[test]
+fn a_cleared_post_stops_nothing() {
+    fn check<B: Backend>(backend: &str, interp: Interpreter<B>)
+    where
+        B::Error: HasDiagnostic,
+    {
+        let run = |program: &str| {
+            outcome(
+                interp
+                    .eval_program_owned(program)
+                    .map(|value| interp.display_tagged(value)),
+            )
+        };
+        assert!(!interp.take_interrupt(), "{backend}: nothing was posted");
+        assert!(interp.interrupt_handle().post(event::SIGNAL));
+        assert!(interp.take_interrupt(), "{backend}: the post is cleared");
+        assert!(!interp.take_interrupt(), "{backend}: and cleared once");
+        assert_eq!(run("(define x 2) (+ x 1)"), Value("3".into()), "{backend}");
+
+        let before = interp.gc_stats().collections;
+        assert!(
+            interp
+                .interrupt_handle()
+                .post(event::SIGNAL | event::GC_MAJOR)
+        );
+        assert!(interp.take_interrupt(), "{backend}: the signal is cleared");
+        assert_eq!(run("(+ x 2)"), Value("4".into()), "{backend}");
+        assert!(
+            interp.gc_stats().collections > before,
+            "{backend}: the collection posted with it did not run"
+        );
+    }
+    check("vm", vm_interpreter());
+    check("tree-walker", tree_walker_interpreter());
+}

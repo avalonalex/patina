@@ -47,8 +47,6 @@
 #![allow(unused_macros)]
 
 use patina_core::GcMode;
-use patina_core::tagged_value::TaggedValue;
-use patina_interpreter::format_write_tagged;
 use patina_interpreter::{Interpreter, InterpreterError, TreeWalkInterpreter, TreeWalker};
 use patina_runtime::Backend;
 use patina_vm::VmBackend;
@@ -231,20 +229,6 @@ pub fn shipped_libraries(root: &std::path::Path) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// Format a TaggedValue for display (backend-agnostic).
-fn display_tagged(tv: TaggedValue, heap: &patina_core::SharedHeap) -> String {
-    // Unpack multiple values (R7RS: each value displayed on its own line)
-    let vals = heap.borrow().get_values(tv).map(|v| v.to_vec());
-    if let Some(vals) = vals {
-        return vals
-            .iter()
-            .map(|v| format_write_tagged(*v, heap))
-            .collect::<Vec<_>>()
-            .join("\n");
-    }
-    format_write_tagged(tv, heap)
-}
-
 // ─── Matrix reporting ────────────────────────────────────────────────────────
 
 /// Describe one row of a scoring matrix that stopped answering what it
@@ -386,7 +370,7 @@ where
         Mode::Program => interp.eval_program_owned(code),
     };
     match result {
-        Ok(value) => Ok(display_tagged(interp.raw_value(&value), interp.heap())),
+        Ok(value) => Ok(interp.display_tagged(&value)),
         Err(e) => {
             let class = match &e {
                 InterpreterError::Lex(_)
@@ -471,7 +455,11 @@ fn expect_error(which: Which, code: &str, mode: Mode) {
 /// could otherwise collect what it posts before anything after the call
 /// could look.
 fn without_safe_points<B: Backend>(interp: Interpreter<B>) -> Interpreter<B> {
-    interp.heap().borrow_mut().set_skip_safe_points(true);
+    interp
+        .backend()
+        .heap()
+        .borrow_mut()
+        .set_skip_safe_points(true);
     interp
 }
 

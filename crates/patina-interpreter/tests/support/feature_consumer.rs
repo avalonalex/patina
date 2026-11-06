@@ -3,9 +3,31 @@
 #![allow(deprecated)] // Exercise the compatibility APIs as an external caller.
 
 use patina_interpreter::{
-    Backend, Environment, EvalError, Interpreter, SharedHeap, TaggedValue, new_shared_heap,
+    Backend, Environment, EvalError, Interpreter, SharedHeap, TaggedValue, event,
+    new_shared_heap,
 };
 use std::rc::Rc;
+
+/// `heap()`'s typed replacements (#831), as a host outside the workspace
+/// calls them: the counts, a pending signal cleared, and display notation.
+fn replacements<B: Backend>(interpreter: &Interpreter<B>) {
+    let before = interpreter.gc_stats();
+    let held = interpreter.eval_str_owned("\"held\"").unwrap();
+    assert_eq!(interpreter.gc_stats().handles, before.handles + 1);
+    let mut charge = interpreter.external_bytes();
+    charge.increase(4096);
+    assert_eq!(
+        interpreter.gc_stats().external_bytes,
+        before.external_bytes + 4096
+    );
+    drop(charge);
+    assert!(interpreter.interrupt_handle().post(event::SIGNAL));
+    assert!(interpreter.take_interrupt());
+    assert!(!interpreter.take_interrupt());
+    assert_eq!(interpreter.display_notation(&held), "held");
+    let probe = interpreter.heap_probe();
+    assert!(!probe.is_gone());
+}
 
 // A host-supplied backend needs neither of Patina's concrete backends: a
 // global environment, and the heap its values live on.
@@ -104,6 +126,10 @@ where
     interpreter.define("car", &replacement);
     let head = interpreter.eval_str_owned("(head '(1 2))").unwrap();
     assert_eq!(interpreter.display_tagged(&head), "replaced");
+    replacements(&interpreter);
+    let probe = interpreter.heap_probe();
+    drop(interpreter);
+    assert!(probe.is_gone());
 }
 
 fn main() {
@@ -114,6 +140,7 @@ fn main() {
     host.define("answer", TaggedValue::fixnum(42));
     let answer = host.lookup("answer").expect("`answer` is bound");
     assert_eq!(host.raw_value(&answer).as_fixnum(), Some(42));
+    replacements(&host);
     #[cfg(any(feature = "vm", feature = "defaults"))]
     check(patina_interpreter::VmInterpreter::new_vm());
     #[cfg(any(

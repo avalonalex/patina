@@ -50,6 +50,14 @@ pub enum EvalResult {
 /// resumes it, which outlives any one step; the running machine lends it to
 /// each collection (#682). Pinned by the sentinel test
 /// `every_evaluator_root_is_traced`.
+///
+/// **In the embedding API's promise** (#831, `docs/README.md`, "Changing the
+/// embedding API"): the type's name and `new`, `with_fs`, `Default`,
+/// `add_library_search_path`, `prepend_library_search_path` and
+/// `bootstrap_error` are inside, changing only by #601's convention, and so
+/// is `LibraryError`, which `bootstrap_error` answers. Its other inherent
+/// methods and its pub fields are the raw layer, `#[doc(hidden)]` ones
+/// included: they change without a deprecated twin.
 #[derive(Trace)]
 pub struct Evaluator {
     pub global_env: Rc<Environment>,

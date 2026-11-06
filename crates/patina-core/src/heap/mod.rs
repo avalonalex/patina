@@ -72,18 +72,15 @@ use std::rc::Rc;
 // Shared Heap Type
 // ============================================================================
 
-/// Shared heap for TaggedValue allocations.
+/// The heap a backend allocates on, shared by the components that reach it:
+/// the backend, its machine, and the handles that root values on it.
 ///
-/// The heap is wrapped in `Rc<RefCell<...>>` so it can be shared across
-/// multiple components (evaluator, environment, closures) without threading
-/// a mutable reference through every function call.
-///
-/// # Example
-///
-/// ```ignore
-/// let heap = SharedHeap::new();
-/// let pair = heap.borrow_mut().alloc_pair(TaggedValue::fixnum(1), TaggedValue::fixnum(2));
-/// ```
+/// **In the embedding API's promise as a name** (#831, `docs/README.md`,
+/// "Changing the embedding API"): `SharedHeap` and [`new_shared_heap`] are
+/// inside, so a signature that names them changes only by #601's convention.
+/// What the alias stands for is not promised: that it is an
+/// `Rc<RefCell<Heap>>`, and what its `borrow()` reaches, [`Heap`]'s methods,
+/// are the raw layer. Stage 5e deletes the `RefCell` (`PRD/GC_PRD.md` §19).
 pub type SharedHeap = Rc<RefCell<Heap>>;
 
 /// Type alias for the complex parameter value type returned by `Heap::get_parameter`.
@@ -174,7 +171,8 @@ fn store_word(word: &mut TaggedValue, value: TaggedValue) {
     }
 }
 
-/// Create a new shared heap
+/// Create a new shared heap, inside the embedding API's promise as
+/// [`SharedHeap`] is (#831).
 pub fn new_shared_heap() -> SharedHeap {
     Rc::new(RefCell::new(Heap::new()))
 }
@@ -479,6 +477,12 @@ pub enum SpineEnd<V = TaggedValue> {
 }
 
 /// Heap arena for managing TaggedValue allocations
+///
+/// **The raw layer** (#831): `Heap`'s methods are outside the embedding API's
+/// promise (`docs/README.md`, "Changing the embedding API"). They change
+/// without a deprecated twin, and promise only the rules documented on them.
+/// A host reaches them through a `SharedHeap`'s `borrow()`, such as that of
+/// the heap the raw `Interpreter::backend().heap()` answers.
 ///
 /// Uses typed storage for common object types to avoid dynamic dispatch.
 /// Each object type has its own vector for cache-friendly access.
@@ -823,6 +827,15 @@ impl Heap {
 
     /// A handle on `env`, an environment of this heap, which roots it and
     /// what is bound in it until the handle is dropped (#620).
+    ///
+    /// Deprecated (#831): it holds any environment of the heap, a frame
+    /// included, where a host's comes from `Interpreter::new_environment`.
+    /// 4b.8 adds a holder that takes only a namespace, and this goes at
+    /// stage 5e.
+    #[deprecated(
+        note = "use `Interpreter::new_environment`, which answers an environment held; this \
+                holds any environment of the heap, a frame included, and goes at stage 5e (#831)"
+    )]
     pub fn hold_environment(&self, env: Rc<crate::environment::Environment>) -> OwnedEnvironment {
         self.assert_own(&env);
         self.handles.hold_environment(env)

@@ -13,7 +13,7 @@ use patina_core::Value;
 use patina_interpreter::{Backend, Interpreter};
 
 fn collections<B: Backend>(interp: &Interpreter<B>) -> u64 {
-    interp.heap().borrow().gc_collections()
+    interp.gc_stats().collections
 }
 
 /// Collects, by allocation and then by `(gc)`, before it reads its arguments.

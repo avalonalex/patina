@@ -35,7 +35,6 @@ mod common;
 
 use common::repo_root;
 use patina_interpreter::Interpreter;
-use patina_interpreter::format_display_tagged;
 use patina_runtime::Backend;
 use std::path::PathBuf;
 
@@ -85,7 +84,7 @@ fn counts_on<B: Backend>(interp: &Interpreter<B>, label: &str, program: &str) ->
     let value = interp
         .eval_program(program)
         .unwrap_or_else(|e| panic!("[{label}] failed to run: {e}"));
-    let text = format_display_tagged(value, interp.heap());
+    let text = interp.display_notation(value);
     let mut parts = text.split_whitespace();
     let mut next_int = || {
         parts

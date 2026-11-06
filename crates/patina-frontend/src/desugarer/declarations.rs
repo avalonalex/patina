@@ -29,7 +29,7 @@ impl Declarations {
             reason = "a lookup-only marker for one declaration: it binds only `UNSPECIFIED`, an \
                       immediate, so it holds no heap value, and it lives for one form's expansion"
         )]
-        let marker = Rc::new(Environment::with_parent(env.clone()));
+        let marker = Rc::new(Environment::child_frame(env.clone()));
         marker.define_with_scopes(name.clone(), scopes.clone(), TaggedValue::UNSPECIFIED);
         self.bindings.push(Declaration {
             env,
@@ -81,7 +81,7 @@ impl Declarations {
                 reason = "a lookup-only view over `env`: it binds only `UNSPECIFIED` and shared \
                           declaration markers, no heap value, and lives for one form's expansion"
             )]
-            let view = Rc::new(Environment::with_parent(env.clone()));
+            let view = Rc::new(Environment::child_frame(env.clone()));
             for declaration in declarations.into_iter().rev() {
                 if declaration.scopes.is_empty() {
                     // Every view must name the same declaration location, or

@@ -530,6 +530,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "the namespace-only holder replaces it in 4b.8 (#831)"
+    )]
     fn an_environment_handle_roots_what_is_bound_in_it_until_it_is_dropped() {
         let shared = new_shared_heap();
         let value = shared
@@ -595,6 +599,10 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "used with heap")]
+    #[allow(
+        deprecated,
+        reason = "the namespace-only holder replaces it in 4b.8 (#831)"
+    )]
     fn an_environment_handle_from_another_heap_is_refused() {
         let first = new_shared_heap();
         let second = new_shared_heap();
@@ -605,6 +613,10 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "an environment of another heap")]
+    #[allow(
+        deprecated,
+        reason = "the namespace-only holder replaces it in 4b.8 (#831)"
+    )]
     fn an_environment_of_another_heap_is_not_held() {
         let first = new_shared_heap();
         let second = new_shared_heap();
@@ -651,6 +663,10 @@ mod tests {
     /// handle still drops to nothing after. Before #704 the environment held
     /// the heap, and only teardown broke the cycle.
     #[test]
+    #[allow(
+        deprecated,
+        reason = "the namespace-only holder replaces it in 4b.8 (#831)"
+    )]
     fn a_held_environment_does_not_keep_its_heap_alive() {
         let shared = new_shared_heap();
         let env = Rc::new(Environment::with_heap(&shared));

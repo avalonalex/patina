@@ -7,6 +7,7 @@
 mod common;
 
 use common::{assert_program_eval_error, assert_program_eval_to};
+use patina_interpreter::Backend;
 
 // #546: keep the same import set as written, passed through a pattern variable,
 // and introduced by a template. Every call below gets a fresh interpreter.
@@ -373,7 +374,7 @@ fn backend_boundaries_refuse_unhandled_ir() {
         },
     ] {
         let expr = CoreExpr::new(CoreExprKind::Begin(vec![CoreExpr::new(kind)]));
-        let literals = || LiteralPool::new(&interp.heap().borrow());
+        let literals = || LiteralPool::new(&interp.backend().heap().borrow());
         assert!(patina_vm::compiler::compile(&expr, &literals()).is_err());
         assert!(
             patina_tree_walker::eval::eval_cps(

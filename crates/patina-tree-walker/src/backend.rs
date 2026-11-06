@@ -26,6 +26,14 @@ use std::rc::Rc;
 /// but with a standardized interface that allows it to be swapped with other
 /// backends (VM, JIT, etc.).
 ///
+/// **In the embedding API's promise** (#831, `docs/README.md`, "Changing the
+/// embedding API"): the type's name and `new`, `with_fs`, `from_evaluator`,
+/// `Default`, `add_library_search_path`, `prepend_library_search_path` and
+/// `bootstrap_error` are inside, changing only by #601's convention, and so
+/// is `LibraryError`, which `bootstrap_error` answers. Its other inherent
+/// methods are the raw layer, `#[doc(hidden)]` ones included: they change
+/// without a deprecated twin.
+///
 /// # CPS Evaluation
 ///
 /// All evaluation is done via CPS transformation. This ensures:
@@ -384,7 +392,7 @@ mod tests {
     #[test]
     fn test_tree_walker_eval_in_custom_env() {
         let backend = TreeWalker::new();
-        let custom_env = Rc::new(Environment::with_parent(backend.global_env().clone()));
+        let custom_env = Rc::new(Environment::child_frame(backend.global_env().clone()));
 
         // Define a variable in custom env
         custom_env.define("x".to_string(), TaggedValue::fixnum(99));

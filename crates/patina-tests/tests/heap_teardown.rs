@@ -56,9 +56,13 @@ fn freed_on_drop<B: Backend>(interp: Interpreter<B>) -> bool {
         .eval_program_owned(HOLDERS)
         .expect("the program runs");
     assert_eq!(interp.display_tagged(value), "(2 kept 2 1)");
-    let heap = Rc::downgrade(interp.heap());
+    let heap = interp.heap_probe();
+    assert!(
+        !heap.is_gone(),
+        "the heap is alive while its interpreter is"
+    );
     drop(interp);
-    heap.upgrade().is_none()
+    heap.is_gone()
 }
 
 #[test]
@@ -316,7 +320,7 @@ fn a_value_kept_past_its_interpreter_is_a_use_after_free() {
     let interp = vm_interpreter();
     let held = interp.eval_str_owned("(list 'held 1 2)").expect("a list");
     let value = interp.raw_value(&held);
-    let heap = interp.heap().clone();
+    let heap = interp.backend().heap().clone();
     drop(interp);
     let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         heap.borrow().get_pair(value);
@@ -347,7 +351,7 @@ fn interpreters_are_torn_down_safely_while_a_thread_posts_to_them() {
         let value = interp.eval_str_owned("(+ 1 2)").expect("the form runs");
         assert_eq!(interp.display_tagged(value), "3");
         let dropped = Arc::new(AtomicBool::new(false));
-        let handle = interp.heap().borrow().interrupt_handle();
+        let handle = interp.interrupt_handle();
         send.send((handle, Arc::clone(&dropped))).unwrap();
         drop(interp);
         dropped.store(true, Ordering::SeqCst);

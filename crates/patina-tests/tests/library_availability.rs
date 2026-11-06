@@ -20,7 +20,7 @@ fn run<B: Backend>(interpreter: &Interpreter<B>, program: &str) -> String {
     let value = interpreter
         .eval_program(program)
         .unwrap_or_else(|e| panic!("{program}: {e}"));
-    patina_interpreter::format_display_tagged(value, interpreter.heap())
+    interpreter.display_notation(value)
 }
 
 #[test]
