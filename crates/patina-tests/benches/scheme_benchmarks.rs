@@ -61,8 +61,8 @@ impl BenchInterp {
 
     fn heap(&self) -> &patina_core::SharedHeap {
         match self {
-            Self::Vm(i) => i.heap(),
-            Self::TreeWalker(i) => i.heap(),
+            Self::Vm(i) => i.backend().heap(),
+            Self::TreeWalker(i) => i.backend().heap(),
         }
     }
 

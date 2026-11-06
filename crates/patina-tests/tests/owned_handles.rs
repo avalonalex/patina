@@ -12,7 +12,6 @@ mod common;
 use common::{tree_walker_interpreter, vm_interpreter};
 use patina_interpreter::{Backend, Interpreter};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::rc::Rc;
 
 /// Defines `churn`, which allocates enough to collect on its own.
 const PRELUDE: &str = "(import (scheme base) (patina debug))
@@ -23,11 +22,11 @@ const PRELUDE: &str = "(import (scheme base) (patina debug))
 const CHURN: &str = "(churn 200000) (gc) (define keep (list 'a 'b 'c 'd))";
 
 fn collections<B: Backend>(interp: &Interpreter<B>) -> u64 {
-    interp.heap().borrow().gc_collections()
+    interp.gc_stats().collections
 }
 
 fn handles<B: Backend>(interp: &Interpreter<B>) -> usize {
-    interp.heap().borrow().handle_count()
+    interp.gc_stats().handles
 }
 
 /// The message of the panic `f` raises.
@@ -161,6 +160,73 @@ fn evaluation_leaves_no_handle_behind() {
     handles_left_behind(tree_walker_interpreter());
 }
 
+/// `(gc-stats)`'s `collections`, `external-bytes`, `deferred-collections`
+/// and `ports`, read in one form that defines nothing, so that what it
+/// reads is what the heap holds once it returns.
+const GC_STATS_KEYS: &str = "(let ((s (gc-stats)))
+    (map (lambda (k) (cdr (assq k s)))
+         '(collections external-bytes deferred-collections ports)))";
+
+/// What `gc_stats()` reads, against what `(gc-stats)` reported just before.
+/// Safe points are off, so the alist `(gc-stats)` allocates posts no
+/// collection that runs before the host reads; `(gc)` still collects at
+/// its call.
+fn read_as_gc_stats_does<B: Backend>(interp: Interpreter<B>) {
+    interp
+        .backend()
+        .heap()
+        .borrow_mut()
+        .set_skip_safe_points(true);
+    interp.eval_program_owned(PRELUDE).unwrap();
+    interp
+        .eval_program_owned("(define port (open-input-string \"held\")) (gc)")
+        .unwrap();
+    let mut charge = interp.external_bytes();
+    charge.increase(1 << 20);
+    let keys = interp.eval_str_owned(GC_STATS_KEYS).unwrap();
+    let stats = interp.gc_stats();
+    let read: Vec<u64> = interp
+        .display_tagged(&keys)
+        .trim_matches(|c| c == '(' || c == ')')
+        .split_whitespace()
+        .map(|n| n.parse().unwrap())
+        .collect();
+    assert_eq!(
+        read,
+        [
+            stats.collections,
+            stats.external_bytes as u64,
+            stats.deferred_collections,
+            stats.ports as u64
+        ],
+        "collections, external-bytes, deferred-collections, ports"
+    );
+    assert!(stats.collections > 0, "the program did not collect");
+    assert!(
+        stats.external_bytes >= 1 << 20,
+        "the host's charge is counted"
+    );
+    assert!(stats.ports > 0, "the string port has an entry");
+
+    let held = stats.handles;
+    let first = interp.eval_str_owned("1").unwrap();
+    let second = interp.eval_str_owned("2").unwrap();
+    assert_eq!(interp.gc_stats().handles, held + 2);
+    drop((first, second, keys));
+    assert_eq!(interp.gc_stats().handles, held - 1);
+    drop(charge);
+    assert_eq!(
+        interp.gc_stats().external_bytes,
+        stats.external_bytes - (1 << 20)
+    );
+}
+
+#[test]
+fn gc_stats_reads_as_gc_stats_does() {
+    read_as_gc_stats_does(vm_interpreter());
+    read_as_gc_stats_does(tree_walker_interpreter());
+}
+
 #[test]
 fn a_handle_used_with_another_interpreter_is_refused() {
     let vm = vm_interpreter();
@@ -184,9 +250,13 @@ fn a_handle_used_with_another_interpreter_is_refused() {
 fn kept_past_its_interpreter<B: Backend>(interp: Interpreter<B>) {
     let held = interp.eval_str_owned("(list 'held 1 2)").unwrap();
     let copy = held.clone();
-    let heap = Rc::downgrade(interp.heap());
+    let heap = interp.heap_probe();
+    assert!(
+        !heap.is_gone(),
+        "the heap is alive while its interpreter is"
+    );
     drop(interp);
-    assert!(heap.upgrade().is_none(), "a handle kept the heap alive");
+    assert!(heap.is_gone(), "a handle kept the heap alive");
     drop(held);
     let again = copy.clone();
     drop(copy);

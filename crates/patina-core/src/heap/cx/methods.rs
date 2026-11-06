@@ -395,7 +395,18 @@ impl<'gc> Cx<'gc> {
     }
 
     /// [`Heap::hold_environment`](crate::Heap::hold_environment) on this context's heap.
+    ///
+    /// Deprecated with it (#831): it holds any environment of the heap, a
+    /// frame included, on a type inside the embedding API's promise.
+    #[deprecated(
+        note = "use `Interpreter::new_environment`, which answers an environment held; this \
+                holds any environment of the heap, a frame included, and goes at stage 5e (#831)"
+    )]
     #[inline]
+    #[allow(
+        deprecated,
+        reason = "the deprecated twin of a deprecated method, until 5e (#831)"
+    )]
     pub fn hold_environment(&self, env: Rc<crate::environment::Environment>) -> OwnedEnvironment {
         self.heap.borrow().hold_environment(env)
     }
@@ -1169,6 +1180,15 @@ impl<'gc> Cx<'gc> {
     }
 
     /// [`Heap::track_environment`](crate::Heap::track_environment) on this context's heap.
+    ///
+    /// Deprecated (#831): it roots any environment of the heap, a frame
+    /// included, on a type inside the embedding API's promise, and nothing
+    /// calls it. `Heap::track_environment`, raw, stays for the deprecated
+    /// `StandardPipeline`, and goes with it.
+    #[deprecated(
+        note = "use `Interpreter::new_environment`, which answers an environment held; this \
+                roots any environment of the heap, a frame included, and goes at stage 5e (#831)"
+    )]
     #[inline]
     pub fn track_environment(&self, env: &Rc<crate::environment::Environment>) {
         self.heap.borrow().track_environment(env)

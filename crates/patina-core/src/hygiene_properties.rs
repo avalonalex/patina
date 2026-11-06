@@ -157,7 +157,7 @@ fn environments(frames: &[Frame]) -> Vec<Rc<Environment>> {
     for frame in frames {
         let env = Rc::new(match envs.last() {
             None => Environment::new(),
-            Some(parent) => Environment::with_parent(Rc::clone(parent)),
+            Some(parent) => Environment::child_frame(Rc::clone(parent)),
         });
         if let Some(value) = frame.plain {
             env.define("x", TaggedValue::fixnum(value));

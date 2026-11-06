@@ -32,6 +32,12 @@ impl Procedure {
     }
 }
 
+/// A procedure's heap payload, by kind.
+///
+/// **The raw layer** (#831): outside the embedding API's promise
+/// (`docs/README.md`, "Changing the embedding API"), though
+/// `patina-interpreter` re-exports it. No promised signature names it, and
+/// stage 4f takes the shared payload out of its `CpsLambda` arm.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum Procedure {

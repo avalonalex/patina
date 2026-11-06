@@ -827,16 +827,26 @@ cargo test --package patina-tests --test scheme_suite
 
 ### 3. Compile-time refusals (`compile_fail` doctests)
 
-**Location:** doc comments beside the API each refusal is about.
+**Location:** doc comments beside the API each refusal is about. The pins of
+the four routes to a host's environment that #831 deprecated are the
+exception: they sit on their replacement, `Interpreter::new_environment`,
+which core's doctests cannot reach, beside one twin that calls it.
+`Interpreter::heap`'s pin sits on `heap`, beside a twin that calls
+`gc_stats()`.
 
 **Purpose:** pin what the compiler must refuse. That covers the brand of
-`PRD/GC_PRD.md` §11.3 (#703, #709), the store funnel's seal (#708) and the
-`Trace` derive's checks (#686).
+`PRD/GC_PRD.md` §11.3 (#703, #709), the store funnel's seal (#708), the
+`Trace` derive's checks (#686) and the deprecations #831 made by #601's
+convention.
 - **Each case** is a `compile_fail` doctest with its error code pinned,
   beside a positive twin: the same code with the violation removed, which
   compiles.
 - **An error with no code,** such as a lifetime error, is a plain
   `compile_fail`. Its twin is what shows that it fails for its reason.
+- **A deprecation** is refused under `#![deny(deprecated)]`, on the
+  doctest's first line, so that rustdoc moves it to the crate root: a call
+  of the deprecated item is then a lint error, with no code. Its twin
+  carries the same attribute.
 - **Doctests rather than trybuild,** which would be a new dependency
   (decision 1 on #697, 2026-10-13).
 
@@ -860,6 +870,11 @@ cargo test --package patina-tests --test scheme_suite
 | interpreter | `Interpreter::with` | a value leaving `with` (#710) | a lifetime error, no code |
 | interpreter | `Interpreter::call` | a call made inside `with`, so a value from `with` passed to `call` there (#710) | E0499 |
 | interpreter | `PrimSpec` | a host primitive keeping its argument in a `static` (#710) | E0277 |
+| interpreter | `Interpreter::new_environment` | a call of `Environment::with_parent` under `#![deny(deprecated)]` (#831) | a lint error, no code |
+| interpreter | `Interpreter::new_environment` | a call of `Heap::hold_environment` under `#![deny(deprecated)]` (#831) | a lint error, no code |
+| interpreter | `Interpreter::new_environment` | a call of `Cx::hold_environment` under `#![deny(deprecated)]` (#831) | a lint error, no code |
+| interpreter | `Interpreter::new_environment` | a call of `Cx::track_environment` under `#![deny(deprecated)]` (#831) | a lint error, no code |
+| interpreter | `Interpreter::heap` | a call of `Interpreter::heap` under `#![deny(deprecated)]` (#831) | a lint error, no code |
 
 `patina-compat` has none of its own. It reads in words inside its own context
 (`sexp::parse_all`), and none of its API takes or answers a value.
@@ -958,8 +973,10 @@ The consumer covers malformed input (#329), library/macro imports, macro and
 runtime diagnostics with source positions, multiple/cyclic result formatting,
 host command lines, the handle forms (#605), a host's definition over a
 primitive's name and `Backend::define`'s default on the host-supplied backend
-(#673), and old pipeline module paths with a child environment, whose heap
-value is read back after a collection outside it (#620).
+(#673), old pipeline module paths with a child environment, whose heap value
+is read back after a collection outside it (#620), and `heap()`'s
+replacements (`gc_stats()`, `take_interrupt()`, `display_notation()` and the
+teardown probe) on each backend and on the host-supplied one (#831).
 `legacy_embedding.rs` pins the three corrected convenience-API discrepancies,
 legacy error categories and effects before a read error. These are fixed
 embedding cases for [#589](https://github.com/avalonalex/patina/issues/589),
@@ -1054,6 +1071,10 @@ through to rooting them, on both backends (#605):
 - a clone, after its original is dropped;
 - no handle left behind by any entry point, whether the program finished,
   failed or carried on;
+- `gc_stats()`, read against `(gc-stats)` just before it with safe points
+  off, after a program that collects and opens a string port and a host's
+  1 MiB charge: each field with a key equals that key, and `handles` follows
+  the handles the host holds (#831);
 - a handle refused by another interpreter;
 - a handle kept past its interpreter, which keeps nothing alive;
 - the converse, a value the host did not keep, freed by the next
@@ -1061,8 +1082,9 @@ through to rooting them, on both backends (#605):
   each top-level form's value bound in the global environment under the name
   its CPS transform made for it.
 
-Each test that collects checks that its program did, and the four of them
-fail with the handle table's trace removed. The table's own sentinel test is
+Each test that collects checks that its program did, and the four that keep
+a value across the collection fail with the handle table's trace removed.
+The table's own sentinel test is
 `heap::handles::tests::handle_table_fields` in `patina-core`. The file runs in
 the per-PR stress lane.
 

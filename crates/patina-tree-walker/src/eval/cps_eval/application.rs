@@ -84,7 +84,7 @@ impl<'a> CpsEvaluator<'a> {
                                   polls no safe point of its own, and binding the arguments calls \
                                   nothing"
                     )]
-                    let new_env = Rc::new(Environment::with_parent(lambda_env.clone()));
+                    let new_env = Rc::new(Environment::child_frame(lambda_env.clone()));
 
                     // Check arity - route through exception handlers
                     let min_args = params.len();

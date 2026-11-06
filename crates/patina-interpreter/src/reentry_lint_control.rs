@@ -173,8 +173,11 @@ fn every_nameable_entry_is_matched() {
     }
 
     // patina-core
+    #[allow(deprecated)]
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |parent: Rc<Environment>| Environment::with_parent(parent);
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |parent: Rc<Environment>| Environment::child_frame(parent);
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |parent: Rc<Environment>| Environment::for_temporaries(parent);
 }

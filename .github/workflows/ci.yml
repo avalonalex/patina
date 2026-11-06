@@ -52,13 +52,14 @@ jobs:
     # `#[derive(Trace)]`'s two (#686), on `patina_core::Trace`; the funnel's
     # seal (#708), on `patina_core::heap::Interior`; and the brand's (#703,
     # #704, #709), in core, primitives, the frontend and macros. The
-    # embedding API's (#710) run with the interpreter's doctests, below.
+    # embedding API's (#710), and the pins of #831's deprecations, run with
+    # the interpreter's doctests, below.
     # docs/TEST_ORGANIZATION.md, "Compile-time refusals", lists every case.
     - name: Compile-time checks
       run: cargo test -p patina-core -p patina-macros -p patina-primitives -p patina-frontend --doc
 
     # The per-PR GC stress lane (#626; docs/TEST_ORGANIZATION.md, "GC
-    # lanes"): thirteen targets that drive the collector, control flow and
+    # lanes"): sixteen targets that drive the collector, control flow and
     # library loading through the embedding API, which the chibi lanes never
     # reach, under PATINA_GC_STRESS=16, and scheme_suite.rs at 4096, in this
     # debug build, whose stale-reference checks turn a lost root into a

@@ -3,7 +3,7 @@
 //! Kept on public APIs so this exact harness can be ported before #137.
 #![allow(
     clippy::disallowed_methods,
-    reason = "a test crate: it builds environments with `Environment::with_parent` and evaluates \
+    reason = "a test crate: it builds environments with `Environment::child_frame` and evaluates \
               nothing, so it allows the re-entry rule (#622) once"
 )]
 use patina_core::tagged_value::TaggedValue;
@@ -38,7 +38,7 @@ fn family38_proper_subset_write_reaches_read_binding() {
             let mut envs = vec![Rc::new(Environment::new())];
             envs[0].define_with_scopes("x", binding.clone(), TaggedValue::fixnum(value));
             for _ in 1..depth {
-                let env = Rc::new(Environment::with_parent(envs.last().unwrap().clone()));
+                let env = Rc::new(Environment::child_frame(envs.last().unwrap().clone()));
                 env.define_with_scopes("x", scopes(32), TaggedValue::fixnum(value));
                 envs.push(env);
             }

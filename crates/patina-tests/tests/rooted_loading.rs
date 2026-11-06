@@ -24,7 +24,7 @@ use common::{tree_walker_interpreter, vm_interpreter};
 use patina_interpreter::{Backend, Interpreter};
 
 fn collections<B: Backend>(interp: &Interpreter<B>) -> u64 {
-    interp.heap().borrow().gc_collections()
+    interp.gc_stats().collections
 }
 
 /// Collections while `program` is evaluated.

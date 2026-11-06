@@ -17,7 +17,7 @@ use patina_interpreter::{
 };
 
 fn collections<B: Backend>(interp: &Interpreter<B>) -> u64 {
-    interp.heap().borrow().gc_collections()
+    interp.gc_stats().collections
 }
 
 fn fixnum(value: Value<'_>, who: &str) -> Result<i64, EvalError> {
@@ -285,9 +285,9 @@ fn a_host_charge<B: Backend>(interp: Interpreter<B>) -> (bool, usize) {
     let collected = collections(&interp) > before;
     // The heap's namespaces charge their tables too, so what the drop gives
     // back is measured, not the total.
-    let with_charge = interp.heap().borrow().external_bytes();
+    let with_charge = interp.gc_stats().external_bytes;
     drop(buffers);
-    let given_back = with_charge - interp.heap().borrow().external_bytes();
+    let given_back = with_charge - interp.gc_stats().external_bytes;
     (collected, given_back)
 }
 

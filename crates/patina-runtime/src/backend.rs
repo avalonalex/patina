@@ -33,20 +33,26 @@ use std::rc::Rc;
 ///
 /// # Words
 ///
-/// This is the raw layer: its methods take and answer `TaggedValue`s, bare
-/// words that root nothing. A host calls the `Interpreter`'s methods
-/// instead, which keep values in handles (#605). A caller of these keeps
-/// two rules, which both machines keep:
+/// The trait's methods are inside the embedding API's promise, changing only
+/// by #601's convention (#831, `docs/README.md`, "Changing the embedding
+/// API"). Their words are the raw layer: they take and answer `TaggedValue`s,
+/// bare words that root nothing, and environments as `&Rc<Environment>`,
+/// whose methods are raw. A host calls the `Interpreter`'s methods instead,
+/// which keep values in handles (#605). A caller of these keeps two rules,
+/// which both machines keep:
 /// - **A word passed in is live** in the backend's heap: an immediate, or an
 ///   object nothing has freed since it was made, as a datum just read in a
 ///   context is, or as a handle's word is while the handle lives.
 /// - **A word answered holds until the next evaluation,** which may collect.
 ///   Keep it in a handle (`Heap::hold`) to keep it past that.
 ///
-/// The trait keeps these words through stage 3 of the collector's redesign,
-/// and moves to handles at stage 4b, when `&Rc<Environment>` becomes a
-/// namespace handle, so an implementor migrates once (owner decision,
-/// 2026-10-21, #710; DESIGN E.3).
+/// These are the trait's only words until S1 (4b.12, #839; `PRD/GC_PRD.md`
+/// §11.5), which follows 4b's link tables. S1 adds handle methods beside
+/// them as provided defaults (`eval_in`, `define_in`, `call_owned` and
+/// `global_namespace`), and deprecates the old methods for callers (4b's
+/// start decision 6 on #782). An implementor still provides the old methods
+/// the trait requires, until stage 5e removes them, so it migrates once
+/// (owner decision, 2026-10-21, #710).
 pub trait Backend {
     /// Backend-specific error type
     ///

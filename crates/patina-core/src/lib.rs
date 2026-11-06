@@ -34,7 +34,7 @@
     test,
     allow(
         clippy::disallowed_methods,
-        reason = "the core's unit tests build environments with `Environment::with_parent` and \
+        reason = "the core's unit tests build environments with `Environment::child_frame` and \
                   evaluate nothing; the core's own code is linted like any crate's (#622)"
     )
 )]

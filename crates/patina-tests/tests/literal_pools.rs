@@ -32,7 +32,7 @@ const FORMS: &[&str] = &[
 ];
 
 fn check<B: Backend>(backend: &str, interp: Interpreter<B>) {
-    let registered = || interp.heap().borrow().root_set().registered();
+    let registered = || interp.backend().heap().borrow().root_set().registered();
     let before = registered();
     for form in FORMS {
         let _ = interp.eval_program_owned(form);

@@ -621,11 +621,14 @@ tree-walker), each a near-copy of the others, and when the guard lived at the
 call sites one of them was missed — bootstrap died on the first collection.
 The guard therefore lives on **`ParsedLibrary` itself**: it holds unevaluated
 `body` forms that no root provider can see, so it carries a `GcDeferGuard` for
-as long as it exists. It keeps the guard and not the heap, which the loaders
-borrow for the call (#707). A fourth loading path is now safe by
-construction, and the placement is also correct for a `ParsedLibrary` held
-beyond a single loading call, which a call-site guard would get wrong. See §11 on why the
-debug build is the lane that localizes failures like this one.
+as long as it exists. The loaders are lent the heap for the call (#707), but
+the guard keeps it: its `NoGcScope` holds a clone of the heap, and of its
+carrier, until `hand_to` gives the body to the load's registry entry, or until
+the value drops, as it does at the end of `into_declarations`. A fourth
+loading path is now safe by construction, and the placement is also correct
+for a `ParsedLibrary` held beyond a single loading call, which a call-site
+guard would get wrong. See §11 on why the debug build is the lane that
+localizes failures like this one.
 
 Since #677 a load is rooted instead, so that it may collect. The backends'
 loaders hand the body to the load's registry entry
@@ -858,7 +861,7 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   `(environment '(scheme base))` is charged about 40 KiB, so a loop of them
   collects every 8 MiB of namespaces and peaks near 21 MB on either backend
   at 80,000 or 320,000 calls, where it plateaued at 2.9 GB; a program that
-  keeps its namespaces raises L with them. Frames (`Environment::with_parent`
+  keeps its namespaces raises L with them. Frames (`Environment::child_frame`
   and `for_temporaries`, the tree-walker's per call and per `let`) never
   charge, and skip the measuring: a scoped binding or an alias, which is how
   the tree-walker binds a call's parameters, checks the environment's kind
@@ -1491,17 +1494,20 @@ and `eval`'s expansion (`expand_for_eval`, `eval_step`), which loads the
 libraries a datum imports while `resumable_step` holds a primitive's state and
 the step's stacks; `Backend::eval`, `eval_global`, `eval_with_source_map` and
 `call`; `Interpreter::eval_*` and `call` (#710), and the deprecated `Pipeline`
-and `SimpleInterpreter` adapters; and `Environment::with_parent`, since an environment
-built with it is reachable from no root unless its caller makes it so (#620):
-a host's is held by an `OwnedEnvironment` (`Interpreter::new_environment`).
-Only `with_parent` is listed, as #622 scoped it: an environment from
-`Environment::new` or `with_heap` that is held across a re-entry is named in
-that call's reason instead (the loaders' `lib_env`). A call made beneath a
-context is not listed: a higher-order primitive's `ApplyContext::apply_in`
-and `load_scheme_library` take its context, so it holds only values of it
-across them, which the brand covers, and no borrow of it (#709); and nothing
-beneath a context collects (#707). Every call outside the
-exempt crates carries
+and `SimpleInterpreter` adapters; and the frame constructors,
+`Environment::with_parent` (deprecated, #831), `child_frame` (its twin for
+the workspace's callers) and `for_temporaries` (#681), since an environment
+built with one is reachable from no root unless its caller makes it so
+(#620). A host's is held by an `OwnedEnvironment`
+(`Interpreter::new_environment`, the replacement `with_parent`'s deprecation
+names). Only the frame constructors are listed, as #622 scoped it: an
+environment from `Environment::new` or `with_heap` that is held across a
+re-entry is named in that call's reason instead (the loaders' `lib_env`). A
+call made beneath a context is not listed: a higher-order primitive's
+`ApplyContext::apply_in` and `load_scheme_library` take its context, so it
+holds only values of it across them, which the brand covers, and no borrow of
+it (#709); and nothing beneath a context collects (#707). Every call outside
+the exempt crates carries
 `#[expect(clippy::disallowed_methods, reason = "…")]` on the narrowest `let`,
 match arm or statement around it (a tail call bound in a `let`, which
 `let_and_return` then leaves alone; the function only for a wrapper whose one

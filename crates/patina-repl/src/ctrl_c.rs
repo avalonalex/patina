@@ -43,7 +43,7 @@ impl CtrlC {
         let forwarding = Self::for_program(interp);
         let result = evaluate();
         drop(forwarding);
-        interp.heap().borrow().mutator().take_signal();
+        interp.take_interrupt();
         result
     }
 }

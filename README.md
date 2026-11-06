@@ -254,8 +254,10 @@ assert_eq!(interpreter.display_tagged(&value), "(42)");
 For the tree-walker, use `TreeWalkInterpreter::new_tree_walker()` instead.
 
 `eval_program_owned` answers an `Owned` handle, which keeps the value alive
-until the handle is dropped. Read it with `display_tagged(&value)`, or take
-its raw `TaggedValue` with `raw_value(&value)`, which is valid until the next
+until the handle is dropped. Read it with `display_tagged(&value)`, in
+`write`'s notation, or `display_notation(&value)`, in `display`'s
+([#831](https://github.com/avalonalex/patina/issues/831)), or take its raw
+`TaggedValue` with `raw_value(&value)`, which is valid until the next
 evaluation; `lookup(name)` answers a handle on a global. `define(name, &value)`
 binds a global as a program's `define` does, so code compiled before it calls
 the new value on either backend. The global environment's own `define` and
@@ -275,18 +277,26 @@ bound in it until the handle is dropped
 ([#620](https://github.com/avalonalex/patina/issues/620)). Bind and read in it
 with `define_in(&env, name, &value)` and `lookup_in(&env, name)`, and evaluate
 in it with `eval_str_in(&env, …)` and `eval_program_in(&env, …)`, on either
-backend: what the code defines or imports stays in it. An environment built
-with `Environment::with_parent` is not rooted between calls.
+backend: what the code defines or imports stays in it. The routes by which a
+host could build an environment nothing roots between calls, or hold any
+environment of the heap, are deprecated for `new_environment()` and go at
+stage 5e ([#831](https://github.com/avalonalex/patina/issues/831)):
+`Environment::with_parent`, `Heap::hold_environment`, and `Cx`'s
+`hold_environment` and `track_environment`.
 
 `interrupt_handle()` answers an `InterruptHandle`, which a host uses to
 interrupt a running evaluation from another thread, a timer or a signal
 handler ([#701](https://github.com/avalonalex/patina/issues/701)). Its
 `post(event::SIGNAL)` makes the evaluation raise the interrupt at its next
 poll, as Ctrl-C does in the CLI. If nothing handles it, the evaluation answers
-an error whose diagnostic kind is `interrupt`. The handle is `Send + Sync +
-Clone`, and it can outlive the interpreter: once the interpreter is gone, a
-post does nothing and answers `false`. On Unix, `forward_sigint()` makes SIGINT
-post it for as long as its guard is held.
+an error whose diagnostic kind is `interrupt`. A post made while nothing runs
+stops the next evaluation at its start. `take_interrupt()` clears it between
+evaluations and answers whether there was one, as the REPL does for a Ctrl-C
+that came after its evaluation's last poll; a collection posted stays posted
+([#831](https://github.com/avalonalex/patina/issues/831)). The handle is
+`Send + Sync + Clone`, and it can outlive the interpreter: once the
+interpreter is gone, a post does nothing and answers `false`. On Unix,
+`forward_sigint()` makes SIGINT post it for as long as its guard is held.
 
 `with(|cx| …)` gives the host a context on the interpreter's heap, to read,
 allocate and store values as a primitive does; a value leaves it only as a
@@ -303,10 +313,23 @@ one does: `fn(&mut Cx<'gc>, &[Value<'gc>]) -> Result<Value<'gc>, EvalError>`.
 Its `class` says whether it may block (`Transfer`) or never does (`Leaf`).
 `external_bytes()` answers an accounter for the bytes the host holds outside
 the heap for its values, which count toward the next collection.
+`gc_stats()` reads the heap's counts at once: its collections, handles,
+external bytes, deferred collections and ports. It reads them without
+evaluating, where a call of `(gc-stats)` may itself collect, and each but
+`handles` equals the key of the same name in `(patina debug)`'s `(gc-stats)`
+([#831](https://github.com/avalonalex/patina/issues/831)).
 
-The `Backend` trait under the interpreter is the raw layer: its methods take
-and answer bare `TaggedValue`s, by the rules its documentation gives, and it
-moves to handles at stage 4b of the collector's redesign.
+The `Backend` trait under the interpreter is inside the embedding API's
+promise ([Changing the embedding API](docs/README.md#changing-the-embedding-api)):
+its methods change only by deprecation, with a replacement beside the old
+form. Its words are the raw layer: its methods take and answer bare
+`TaggedValue`s, by the rules its documentation gives. Later in stage 4b of the
+collector's redesign it gains handle methods as provided defaults, so an
+implementor gets no warning, and the bare-word methods are deprecated for
+callers and stay required of implementors until stage 5e (`PRD/GC_PRD.md`
+§11.5). `Interpreter::heap()` is deprecated for the typed methods above
+([#831](https://github.com/avalonalex/patina/issues/831)); what they do not
+cover is the raw layer, which `backend().heap()` reaches.
 
 A value belongs to the interpreter that made it, and another interpreter
 refuses its handles. Dropping an interpreter frees its heap and flushes the

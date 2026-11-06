@@ -2532,7 +2532,7 @@ mod tests {
             .borrow_mut()
             .alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
         parent.define("live".to_string(), live);
-        let child = Rc::new(Environment::with_parent(parent));
+        let child = Rc::new(Environment::child_frame(parent));
 
         let roots = TestRoots {
             envs: vec![child],

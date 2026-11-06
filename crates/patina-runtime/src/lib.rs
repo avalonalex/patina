@@ -16,6 +16,11 @@
 //! - `Backend`: Trait for pluggable interpreter implementations
 //! - `LibraryRegistry`, `LibraryLoader`: Library management
 //! - Standard library implementations
+//!
+//! The library loaders and registries, and the `&SharedHeap` they borrow, are
+//! workspace-internal, outside #601's promise (#831; see [`library_loader`]).
+//! `LibraryError` and `RegisterError`, which promised signatures answer, are
+//! inside.
 #![expect(
     clippy::disallowed_macros,
     reason = "the crate's one `thread_local!`, `diagnostic::OUTPUT`, the run's diagnostics stream: \

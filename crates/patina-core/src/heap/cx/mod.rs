@@ -179,6 +179,15 @@ pub use funnel::{
 };
 
 /// The mutation and allocation context. See the [module docs](self).
+///
+/// **In the embedding API's promise** (#831, `docs/README.md`, "Changing the
+/// embedding API"): a host primitive is written against it, through
+/// `Interpreter::with` and `Prim`. One rule sorts its methods. A method is
+/// inside, changing only by #601's convention, unless its signature names a
+/// raw type. Such a method is raw: `get_object`'s `HeapObjectData`,
+/// `register_root`'s `RootProvider`, `get_procedure`'s `Procedure`, and the
+/// rest. An `Environment` or a `Library` keeps a method inside, since their
+/// names are promised and only their members raw.
 pub struct Cx<'gc> {
     heap: &'gc RefCell<Heap>,
     mutator: &'gc Mutator,

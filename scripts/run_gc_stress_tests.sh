@@ -124,7 +124,11 @@ fi
 # host environment's forms let go, and their counts re-measured that day,
 # the minimums left; host_environments's test count re-pinned 2026-11-03 for
 # #830's test that a host environment is charged as a frame, and its counts
-# re-measured that day, the minimum left)
+# re-measured that day, the minimum left; owned_handles's and
+# interpreter_api's test counts re-pinned 2026-11-05 for #831's tests that
+# `gc_stats()` reads as `(gc-stats)` does and that `display_notation` writes
+# as `display` does, and their counts re-measured that day, the minimums
+# left)
 TARGETS=(
     "callability 16 31 13"                    # 1543 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -136,10 +140,10 @@ TARGETS=(
     "gc_vm 16 8001 25"                        # 17314 (667)
     "host_environments 16 43788 12"           # 88299 (11)
     "hygiene_matrix 16 400 14"                # 804 (2)
-    "interpreter_api 16 138 27"               # 277 (4)
+    "interpreter_api 16 138 28"               # 2277 (4)
     "library_loading 16 46 9"                 # 93 (0): see the header
     "macro_definition_env 16 16626 19"        # 33253 (67): see the header
-    "owned_handles 16 62714 8"                # 125429 (12)
+    "owned_handles 16 62714 9"                # 125485 (14)
     "rooted_loading 16 371 6"                 # 742 (12)
     "vm_callprimitive 16 33 17"               # 67 (0)
     "scheme_suite 4096 1534 11"               # 3068 (111): see the header

@@ -625,6 +625,10 @@ pub struct ExternalAccounter {
 
 impl ExternalAccounter {
     /// An accounter holding nothing, charging through `bytes`.
+    ///
+    /// Raw (#831): `ExternalBytes` is reached only through the raw
+    /// `Heap::external_bytes_handle`. A host gets an accounter from
+    /// `Interpreter::external_bytes`, which is inside the promise.
     pub fn new(bytes: ExternalBytes) -> Self {
         ExternalAccounter { bytes, held: 0 }
     }

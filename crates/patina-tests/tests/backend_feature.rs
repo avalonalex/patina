@@ -243,5 +243,5 @@ fn run<B: patina_runtime::Backend>(
     let value = interp
         .eval_program(program)
         .unwrap_or_else(|e| panic!("failed to run: {e}"));
-    patina_interpreter::format_display_tagged(value, interp.heap())
+    interp.display_notation(value)
 }

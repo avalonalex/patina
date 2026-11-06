@@ -3261,7 +3261,7 @@ mod tests {
             clippy::disallowed_methods,
             reason = "a test of the marking, which runs no Scheme and so collects nothing"
         )]
-        let child = Rc::new(Environment::with_parent(Rc::clone(&global)));
+        let child = Rc::new(Environment::child_frame(Rc::clone(&global)));
         define_global(&mut state, &child, Rc::from("car"), TaggedValue::fixnum(1));
         assert!(!state.is_primitive_shadowed(car));
         define_global(&mut state, &global, Rc::from("car"), TaggedValue::fixnum(1));

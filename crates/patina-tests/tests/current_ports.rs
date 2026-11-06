@@ -160,7 +160,7 @@ fn pair<A: Backend, B: Backend>(
              (display \"left current {pair}\")"
         ),
     );
-    let heap = Rc::clone(a.heap());
+    let heap = Rc::clone(a.backend().heap());
     drop(a);
     let written = std::fs::read_to_string(&path).unwrap_or_default();
     report("dropped", pair, &format!("{written:?}"));
