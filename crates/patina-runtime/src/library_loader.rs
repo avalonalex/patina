@@ -101,7 +101,21 @@ pub fn build_library(
         )
     };
 
+    // A name the library reaches only through a macro-expansion alias is the
+    // desugarer's, not a binding the library made: its importers would get a
+    // copy taken now, and chibi and Gauche leave it undefined (#846).
     for spec in &declarations.exports {
+        let internal = match spec {
+            ExportSpec::Identifier(name) => name,
+            ExportSpec::Rename { internal, .. } => internal,
+        };
+        if library.env.reaches_only_by_alias(internal) {
+            return Err(reject(
+                internal,
+                "is a name the desugarer made for a macro-expansion alias, not a binding the \
+                 library defines or imports, so it cannot be exported",
+            ));
+        }
         match spec {
             // Keywords need no exemption here. A library that imports one has
             // a binding to export like any other; one that does not cannot

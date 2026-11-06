@@ -1941,6 +1941,16 @@ impl Environment {
             .cloned()
     }
 
+    /// Whether `name` is reached here only through a macro-expansion alias:
+    /// no binding of this environment's own, and an alias the desugarer
+    /// installed under that name. `get` follows such an alias, but the alias
+    /// is not a binding, so a library cannot export it (#846).
+    pub fn reaches_only_by_alias(&self, name: &str) -> bool {
+        self.has_aliases.get()
+            && self.local_value(name).is_none()
+            && self.alias_target(name).is_some()
+    }
+
     /// Resolve a macro-expansion alias installed here, if any.
     ///
     /// The emptiness check matters: this sits on every global lookup that falls

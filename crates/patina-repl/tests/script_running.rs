@@ -295,3 +295,69 @@ fn a_rename_of_an_identifier_not_provided_is_an_error() {
         });
     }
 }
+
+/// A library cannot export a name the desugarer made for a macro-expansion
+/// alias (#846). Expanding `(probe a)`'s `peek` in `(probe b)`'s body mints
+/// an alias `secret.N` in B's namespace. Spelling it in B's exports gave
+/// B's importers a copy taken when B was built, and chibi and Gauche leave
+/// such a name undefined. Now the load is refused, with an error of its own,
+/// on both backends.
+///
+/// N comes from a counter, so the test does not assume it: it tries each N
+/// from 0, in a fresh process each, and wants one to be refused as an alias
+/// and every other refused as not defined, with none loading.
+#[test]
+fn a_library_cannot_export_a_desugarer_made_alias() {
+    let temp = TempDir::new().unwrap();
+    let lib = temp.path().join("lib/probe");
+    fs::create_dir_all(&lib).unwrap();
+    fs::write(
+        lib.join("a.sld"),
+        "(define-library (probe a)
+  (import (scheme base))
+  (export peek)
+  (begin
+    (define secret 0)
+    (define-syntax peek (syntax-rules () ((_) secret)))))",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("probe.scm"),
+        "(import (scheme base) (scheme write) (probe b)) (write s)",
+    )
+    .unwrap();
+    for backend in BOTH_BACKENDS {
+        let mut refused_as_alias = None;
+        for n in 0..16 {
+            fs::write(
+                lib.join("b.sld"),
+                format!(
+                    "(define-library (probe b)
+  (import (scheme base) (probe a))
+  (export (rename secret.{n} s))
+  (begin (define b-saw (peek))))"
+                ),
+            )
+            .unwrap();
+            let mut args = backend.to_vec();
+            args.extend(["-I", "lib", "probe.scm"]);
+            let (stdout, stderr, ok) = run_patina(temp.path(), &args);
+            assert!(
+                !ok,
+                "{backend:?}: (probe b) exporting secret.{n} loaded: {stdout}"
+            );
+            if stderr.contains("macro-expansion alias") {
+                refused_as_alias = Some(n);
+                break;
+            }
+            assert!(
+                stderr.contains("not defined"),
+                "{backend:?}: secret.{n} was refused for another reason: {stderr}"
+            );
+        }
+        assert!(
+            refused_as_alias.is_some(),
+            "{backend:?}: no secret.N in 0..16 was refused as an alias"
+        );
+    }
+}
