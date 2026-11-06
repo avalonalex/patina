@@ -126,6 +126,13 @@ impl<'e> NamespaceView<'e> {
         self.env.slot_value(heap, slot)
     }
 
+    /// [`slot_value`](Self::slot_value) with the heap already borrowed
+    /// ([`Environment::slot_value_in`]).
+    #[inline(always)]
+    pub fn slot_value_in(self, heap: &Heap, slot: u32) -> TaggedValue {
+        self.env.slot_value_in(heap, slot)
+    }
+
     /// The location [`get`](Self::get) reads for `name`, by the same walk, or
     /// `None` where it finds nothing ([`Environment::binding_location`]). A
     /// hit in a namespace borrows `heap` shared.

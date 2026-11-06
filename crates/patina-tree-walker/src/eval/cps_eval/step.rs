@@ -73,7 +73,7 @@ impl<'a> CpsEvaluator<'a> {
                 );
                 patina_core::census::skip_next_env_define();
                 if extends_in_place(&current_env) {
-                    current_env.define(&self.evaluator.heap, name, value);
+                    current_env.bind(name, value);
                 } else {
                     #[expect(
                         clippy::disallowed_methods,
@@ -83,7 +83,7 @@ impl<'a> CpsEvaluator<'a> {
                                   it roots a `LetVal` frame"
                     )]
                     let frame = Rc::new(Environment::for_temporaries(current_env));
-                    frame.define(&self.evaluator.heap, name, value);
+                    frame.bind(name, value);
                     current_env = frame;
                 }
             }
@@ -172,7 +172,7 @@ impl<'a> CpsEvaluator<'a> {
                     let val =
                         try_catchable!(self.eval_trivial_tagged(value, &current_env, &cont_env));
                     if extends_in_place(&current_env) {
-                        current_env.define(&self.evaluator.heap, Rc::clone(name), val);
+                        current_env.bind(Rc::clone(name), val);
                     } else {
                         #[expect(
                             clippy::disallowed_methods,
@@ -186,7 +186,7 @@ impl<'a> CpsEvaluator<'a> {
                                       §11.4 keeps it under `NoGcScope`)"
                         )]
                         let new_env = Rc::new(Environment::for_temporaries(current_env));
-                        new_env.define(&self.evaluator.heap, Rc::clone(name), val);
+                        new_env.bind(Rc::clone(name), val);
                         current_env = new_env;
                     }
                     current_expr = Rc::clone(body);

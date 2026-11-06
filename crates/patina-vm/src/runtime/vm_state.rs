@@ -2035,18 +2035,33 @@ fn dispatch_one_instruction(
         }
 
         Instruction::LoadGlobal { dst, ref name } => {
-            // Per-site inline cache (Track P P4): see `GlobalCacheEntry`.
-            let globals = frame_globals(state);
-            let view = NamespaceView::of(&globals);
-            let val = match GlobalCacheEntry::probe(&code.global_cache[pc], view, name) {
-                Some(slot) => view.slot_value(&state.heap, slot),
+            // Per-site inline cache (Track P P4): see `GlobalCacheEntry`. A hit
+            // finds the frame's globals and reads the slot under one shared
+            // borrow of the heap, with no `Rc` clone (#834).
+            let hit = {
+                let heap = state.heap.borrow();
+                let closure_globals = state
+                    .execution
+                    .frames()
+                    .last()
+                    .and_then(CallFrame::closure)
+                    .and_then(|closure| heap.vm_closure_globals_ref(closure));
+                let view = NamespaceView::of(closure_globals.unwrap_or(&state.globals));
+                GlobalCacheEntry::probe(&code.global_cache[pc], view, name)
+                    .map(|slot| view.slot_value_in(&heap, slot))
+            };
+            let val = match hit {
+                Some(val) => val,
                 // Not a local slot. Fall back to the full lookup rather than
                 // straight to the parent: `get` also follows macro-expansion
                 // aliases recorded on this environment, which is how a template
                 // reaches a binding private to the library that defined it.
-                None => view
-                    .get(&state.heap, name)
-                    .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?,
+                None => {
+                    let globals = frame_globals(state);
+                    NamespaceView::of(&globals)
+                        .get(&state.heap, name)
+                        .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?
+                }
             };
             state.set_reg_at(base, dst, val);
         }

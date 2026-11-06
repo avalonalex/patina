@@ -1190,9 +1190,12 @@ impl Environment {
     }
 
     /// [`slot_value`](Self::slot_value) with the heap already borrowed: the
-    /// namespace step's own body, and an import's read at its owner.
+    /// namespace step's own body, an import's read at its owner, and the
+    /// VM's `LoadGlobal`, which reads a cached slot under the borrow it took
+    /// to find the frame's globals (#834). Any environment's slot, a frame's
+    /// included. Raw, as every `Environment` method is.
     #[inline]
-    fn slot_value_in(&self, heap: &Heap, slot: u32) -> TaggedValue {
+    pub fn slot_value_in(&self, heap: &Heap, slot: u32) -> TaggedValue {
         self.check_heap(heap);
         let tv = self.bindings.borrow().read_slot(slot);
         if tv == TaggedValue::FORWARDED {
@@ -2544,6 +2547,54 @@ impl Environment {
         }
     }
 
+    /// A frame's own binding of `name` (#834): what [`define`](Self::define)
+    /// makes in a frame, with no heap, no kind test and no step, for the
+    /// tree-walker's per-call binds — a call's parameters and its CPS
+    /// temporaries — which are always a frame's. A namespace's binding goes
+    /// through `define`, which takes the heap.
+    #[inline]
+    pub fn bind(&self, name: impl Into<Rc<str>>, value: TaggedValue) {
+        debug_assert!(!self.is_namespace(), "`bind` is for a frame's own binding");
+        self.define_here(name.into(), value);
+    }
+
+    /// [`define_with_scopes`](Self::define_with_scopes) for a frame's own
+    /// binding, as [`bind`](Self::bind) is `define`'s.
+    #[inline]
+    pub fn bind_with_scopes(&self, name: impl Into<Rc<str>>, scopes: ScopeSet, value: TaggedValue) {
+        debug_assert!(
+            !self.is_namespace(),
+            "`bind_with_scopes` is for a frame's own binding"
+        );
+        let name = name.into();
+        if scopes.is_empty() {
+            self.define_here(name, value);
+        } else {
+            self.insert_scoped_here(name, scopes, value, false);
+        }
+    }
+
+    /// [`define_scoped_definition`](Self::define_scoped_definition) for a
+    /// frame's own binding, as [`bind`](Self::bind) is `define`'s.
+    #[inline]
+    pub fn bind_scoped_definition(
+        &self,
+        name: impl Into<Rc<str>>,
+        scopes: ScopeSet,
+        value: TaggedValue,
+    ) {
+        debug_assert!(
+            !self.is_namespace(),
+            "`bind_scoped_definition` is for a frame's own binding"
+        );
+        let name = name.into();
+        if scopes.is_empty() {
+            self.define_here(name, value);
+        } else {
+            self.insert_scoped_here(name, scopes, value, true);
+        }
+    }
+
     /// Define a binding with a scope set (for scope-based hygiene)
     ///
     /// Use this when creating bindings from binding forms (lambda, let, etc.)
@@ -2603,6 +2654,20 @@ impl Environment {
         // The step first, before the trace, the latch or the table: a
         // refused borrow then panics with nothing written.
         let _step = self.write_step(heap);
+        self.insert_scoped_here(name, scopes, value, visible_by_name);
+    }
+
+    /// [`insert_scoped`](Self::insert_scoped)'s body, for non-empty `scopes`,
+    /// under whatever step its caller took: the namespace's, or none for a
+    /// frame's own binding.
+    #[inline]
+    fn insert_scoped_here(
+        &self,
+        name: Rc<str>,
+        scopes: ScopeSet,
+        value: TaggedValue,
+        visible_by_name: bool,
+    ) {
         crate::scope_trace::bind(&name, &scopes, visible_by_name);
         if visible_by_name {
             self.has_visible_scoped.set(true);
@@ -5761,6 +5826,36 @@ mod heap_step_tests {
     /// What an access answered, which only its panic or its absence says
     /// anything about here.
     fn ignore<T>(_: T) {}
+
+    /// The tree-walker's per-call binds take no borrow of the heap: with it
+    /// borrowed mutably elsewhere, each still binds, and reads back as
+    /// `define`'s binding would (#834).
+    #[test]
+    fn a_frames_binds_take_no_borrow() {
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        let frame = Rc::new(Environment::child_frame(Rc::clone(&ns)));
+        {
+            let _held = heap.borrow_mut();
+            frame.bind("plain", n(1));
+            frame.bind_with_scopes("scoped", scopes(&[7]), n(2));
+            frame.bind_with_scopes("unscoped", ScopeSet::new(), n(3));
+            frame.bind_scoped_definition("both", scopes(&[8]), n(4));
+        }
+        assert_eq!(frame.get(&heap, "plain"), Some(n(1)));
+        assert_eq!(frame.get(&heap, "unscoped"), Some(n(3)));
+        assert_eq!(frame.get(&heap, "both"), Some(n(4)), "by name");
+        assert_eq!(
+            frame
+                .get_with_scopes(&heap, "scoped", &scopes(&[7]))
+                .unwrap(),
+            Some(n(2))
+        );
+        assert_eq!(
+            frame.get_with_scopes(&heap, "both", &scopes(&[8])).unwrap(),
+            Some(n(4))
+        );
+    }
 
     #[test]
     fn every_namespace_hit_borrows_the_heap_and_a_frames_own_does_not() {
