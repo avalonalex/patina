@@ -819,6 +819,160 @@ fn test_reentering_a_library_body_form_after_the_load() {
     }
 }
 
+/// `(interaction-environment)` in a library's body, while the library loads,
+/// is the program's environment, on every load path (#823). The VM answered
+/// the library's own environment: its load pointed the machine's globals at
+/// the library, and `interaction-environment` answered them. So a body that
+/// `eval`ed `hidden` there read the library's binding, never the program's,
+/// and the environment it kept was not the one the program later asked for.
+/// A library body's forms run in frames whose closures hold the library's
+/// environment (#824), so the load no longer swaps the globals.
+///
+/// The routes: a top-level `import`, with and without a program definition
+/// of `hidden` after it, which loads before that definition, so `unbound`;
+/// `environment` and an `eval`'d `import`, after the program defines
+/// `hidden`, so `program`; and the environment the body kept, `eq?` to the
+/// one the program asks for. Measured 2026-11-06 with chibi 0.12.0 and
+/// Gauche 0.9.15, each writing what it answers:
+/// - chibi answers as here on every route;
+/// - Gauche answers as here on the `import` routes and `eq?`;
+/// - through `environment` Gauche answers `unbound`, from its own
+///   interaction environment, which is not the script's;
+/// - after the `eval`'d `import` Gauche finds `seen` unbound in its
+///   interaction environment.
+///
+/// Neither oracle answers the library's binding.
+#[test]
+fn test_interaction_environment_in_a_library_body_is_the_program_s() {
+    let root = TempDir::new().expect("temp dir");
+    let dir = root.path().join("reenter823");
+    std::fs::create_dir_all(&dir).expect("library dir");
+    std::fs::write(
+        dir.join("ie.sld"),
+        "(define-library (reenter823 ie)
+           (import (scheme base) (scheme eval) (scheme repl))
+           (export seen ie-at-load)
+           (begin
+             (define hidden 'library)
+             (define ie-at-load (interaction-environment))
+             (define seen (guard (e (#t 'unbound)) (eval 'hidden (interaction-environment))))))",
+    )
+    .expect("library file");
+    for (program, expected) in [
+        (
+            "(import (scheme base) (reenter823 ie)) (list 'seen seen)",
+            "(seen unbound)",
+        ),
+        (
+            "(import (scheme base) (reenter823 ie)) (define hidden 'program) (list 'seen seen)",
+            "(seen unbound)",
+        ),
+        (
+            "(import (scheme base) (scheme eval))
+             (define hidden 'program)
+             (list 'seen (eval 'seen (environment '(reenter823 ie))))",
+            "(seen program)",
+        ),
+        (
+            "(import (scheme base) (scheme eval) (scheme repl))
+             (define hidden 'program)
+             (eval '(import (reenter823 ie)) (interaction-environment))
+             (list 'seen (eval 'seen (interaction-environment)))",
+            "(seen program)",
+        ),
+        (
+            "(import (scheme base) (scheme repl) (reenter823 ie))
+             (eq? ie-at-load (interaction-environment))",
+            "#t",
+        ),
+    ] {
+        assert_library_program(root.path(), program, expected);
+    }
+}
+
+/// A one-argument `load` in a library's body loads into the interaction
+/// environment, the program's (#823). `load` takes that environment from
+/// the machine, so on the VM it loaded into the library, which then saw the
+/// loaded definition and the program did not. Measured 2026-11-06: chibi
+/// 0.12.0 and Gauche 0.9.15 (with `-I .`, to find the file) answer as here.
+#[test]
+fn test_one_argument_load_in_a_library_body_loads_into_the_interaction_environment() {
+    let root = TempDir::new().expect("temp dir");
+    let dir = root.path().join("reenter823");
+    std::fs::create_dir_all(&dir).expect("library dir");
+    let loaded = root.path().join("loaded.scm");
+    std::fs::write(&loaded, "(define loaded-who 'loaded)").expect("loaded file");
+    std::fs::write(
+        dir.join("ld.sld"),
+        format!(
+            "(define-library (reenter823 ld)
+               (export lib-sees)
+               (import (scheme base) (scheme load))
+               (begin
+                 (load {:?})
+                 (define lib-sees (guard (e (#t 'unbound)) loaded-who))))",
+            loaded.to_string_lossy()
+        ),
+    )
+    .expect("library file");
+    assert_library_program(
+        root.path(),
+        "(import (scheme base) (scheme eval) (scheme repl) (reenter823 ld))
+         (list 'lib-sees lib-sees
+               'program-sees (guard (e (#t 'unbound)) (eval 'loaded-who (interaction-environment))))",
+        "(lib-sees unbound program-sees loaded)",
+    );
+}
+
+/// A program's top-level form, re-entered from a library's body while an
+/// `import` loads it, reads the program's bindings, on both backends: the
+/// tree-walker's answer, which the VM gives now that the load leaves the
+/// machine's globals the program's (#823). The VM resolved the form against
+/// the library being loaded, so it read the library's `x` and assigned the
+/// library's `seen`.
+///
+/// A regression pin, not scored against the oracles, which split here (the
+/// owner's ruling R3 on #782). Measured 2026-11-06 on this program:
+/// - chibi 0.12.0 reads the program's bindings too, writing `(seen (program))`:
+///   it evaluates `cons`'s operands right to left, so the `seen` it conses
+///   onto was read before the capture;
+/// - Gauche 0.9.15 resolves the form against the library and stops with
+///   `seen` unbound while it loads `caller`.
+#[test]
+fn test_a_program_form_resumed_during_an_import_reads_the_program_s_bindings() {
+    let root = TempDir::new().expect("temp dir");
+    let dir = root.path().join("reenter823");
+    std::fs::create_dir_all(&dir).expect("library dir");
+    std::fs::write(
+        dir.join("store.sld"),
+        "(define-library (reenter823 store)
+           (import (scheme base))
+           (export put! resume)
+           (begin (define k #f)
+                  (define (put! c) (set! k c))
+                  (define (resume) (k 1))))",
+    )
+    .expect("library file");
+    std::fs::write(
+        dir.join("caller.sld"),
+        "(define-library (reenter823 caller)
+           (import (scheme base) (reenter823 store))
+           (export)
+           (begin (define x 'library) (define seen 'library-seen) (resume)))",
+    )
+    .expect("library file");
+    assert_library_program(
+        root.path(),
+        "(import (scheme base) (reenter823 store))
+         (define x 'program)
+         (define seen '())
+         (set! seen (cons (if (= 1 (call/cc (lambda (c) (put! c) 0))) x 'first) seen))
+         (import (reenter823 caller))
+         (list 'seen seen)",
+        "(seen (program first))",
+    );
+}
+
 /// A raise in the body of a library that an `eval`'d `import` loads, caught
 /// by a `guard` around the `eval`: the handler escapes out of the load. The
 /// VM ran the rest of the library body after the escape, registered the

@@ -24,8 +24,7 @@
 //!   services it only at a safe point, or, for a primitive that asks for a
 //!   collection at its call (`Step::Collect`), at the `CollectAtCall` of the
 //!   stub frame they push, an instruction of its own (#639). Rust argument
-//!   vectors, capture copies,
-//!   and globals-swap temporaries are not roots. Only the loop a driver entry
+//!   vectors and capture copies are not roots. Only the loop a driver entry
 //!   runs holds the carrier's `GcDriver`; a nested loop has none and runs
 //!   under a `NoGcScope`, so it cannot collect while those temporaries live
 //!   (#702). A compiled driver must use the same driver/safe-point discipline
@@ -2490,10 +2489,9 @@ impl patina_primitives::ApplyContext for VmApplyContext {
 
     #[expect(
         clippy::disallowed_methods,
-        reason = "holds nothing: `expr` moves into the compile, and `vm_eval_expr` runs it with \
-                  the globals swapped by `with_globals`, which keeps the ones it set aside on the \
-                  machine's traced stack. Its one caller, `run_synchronously`, is one this \
-                  machine never reaches"
+        reason = "holds nothing: `expr` moves into the compile, and `vm_eval_expr` runs it in a \
+                  frame whose closure holds `env`, with the machine's `globals` left as they \
+                  are. Its one caller, `run_synchronously`, is one this machine never reaches"
     )]
     fn eval_expr(
         &self,
@@ -2538,6 +2536,9 @@ impl patina_primitives::ApplyContext for VmApplyContext {
         .map_err(Reentry::into_eval_error)
     }
 
+    /// The program's environment, during a library's load as after it, as
+    /// the tree-walker, chibi and Gauche answer (#823): the machine's
+    /// `globals` are no longer swapped to the library being loaded.
     fn interaction_environment(&self) -> Rc<patina_core::environment::Environment> {
         // SAFETY: pointer is valid for the lifetime of the primitive call.
         unsafe { (*self.state).global_env().clone() }

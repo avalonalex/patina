@@ -73,18 +73,18 @@ The remaining state belongs to `VmState`: code-unit ownership/recycling,
 weak continuation stores, global bindings and their invalidation bits, library
 services, GC policy, and transfer bookkeeping. Storage and invalidation fields
 are private; only the driver/control pair can see their shared transfer flags,
-stub ids, and scratch argument pool. `with_globals` scopes library/eval
-substitution on the same heap, keeps the environment it sets aside on the
-traced `saved_globals` (#677; it deferred GC while that environment lived only
-on the Rust stack), and restores it on both success and error/escape results.
-A library's body form does not rest on the swap for its own bindings: it runs
-as a closure whose globals are the library's environment (`execute_in` at a
-top-level `import`, `execute_nested` on the nested loads), so its frame
-resolves its globals against the library's wherever a continuation restores
-it (#779; §5.6). During a load the swapped globals are still read by a frame
-with no closure, a program form that a continuation resumes there, and by
-`interaction-environment` and a one-argument `load`, which takes its
-environment from it (#823).
+stub ids, and scratch argument pool. The machine's `globals` are the
+program's environment, during a library's load as after it. A library's body
+form runs as a closure whose globals are the library's environment
+(`execute_in` at a top-level `import`, `execute_nested` on the nested loads,
+and `eval`'s code the same way), so its frame resolves its globals against
+the library's wherever a continuation restores it (#779; §5.6). Nothing
+swaps `globals` any more (#823): `with_globals`, which pointed them at the
+library for the body's run and kept what it set aside on the traced
+`saved_globals` (#677), is gone. So a frame with no closure, a program form
+that a continuation resumes during a load, reads the program's bindings, and
+so do `interaction-environment` and a one-argument `load`, which takes its
+environment from it, as on the tree-walker, chibi and Gauche.
 `import_export` still installs shared bindings and invalidates primitive fast
 paths in the same operation. Library loading keeps one machine and its existing
 re-entry protocol.
@@ -99,8 +99,8 @@ collections private to `ExecutionState`. Its public inherent methods fell from
 
 | Consumer before | Mutation or inspection | Access after |
 |---|---|---|
-| `backend.rs` | filesystem, two library registries, tracer; swap globals for a library body; inspect code slots and compiler registry | paired library configuration, tracer attachment, `with_globals`, count/compiler accessors |
-| `runtime/vm_state.rs` | dispatch PC/register writes, returns, extent steps, top-level error reset, library/eval swaps | `ExecutionState` operations; scoped globals; private code, invalidation and continuation-store methods |
+| `backend.rs` | filesystem, two library registries, tracer; swap globals for a library body; inspect code slots and compiler registry | paired library configuration, tracer attachment, `with_globals` (removed by #823), count/compiler accessors |
+| `runtime/vm_state.rs` | dispatch PC/register writes, returns, extent steps, top-level error reset, library/eval swaps | `ExecutionState` operations; scoped globals (until #823 removed the swap); private code, invalidation and continuation-store methods |
 | `runtime/control.rs` | closure/stub frame allocation and tail reuse; prompt/handler/wind stacks; capture, full arrival, abort prefixes, composable relocation | same control policy over `ExecutionState` operations; fixed heap/registry handles |
 | `runtime/gc_roots.rs` | read live roots; prune weak stores through `RefCell` | moved beneath `vm_state`; read-only execution slices, private weak-store pruning |
 | `tests/callprimitive.rs` | configure compiler fixture environments; inspect primitive registry | `global_env()` / `primitive_registry()`; assertions unchanged |

@@ -2,11 +2,12 @@
 //!
 //! No library load collected while it ran: `ParsedLibrary` held its unrun
 //! body under a holder's guard, the environment being built was reachable
-//! from no root until the library was registered, and the VM's `with_globals`
+//! from no root until the library was registered, and the VM's globals swap
 //! held the environment it set aside the same way. Now the registry's
 //! loading stack roots each load's environment and the body forms it has not
-//! yet run, and the VM keeps what `with_globals` sets aside on a traced
-//! stack. A load the backend runs at its top level, outermost, collects
+//! yet run, and the VM's load leaves the machine's globals the program's
+//! environment, which the machine traces (#823). A load the backend runs at
+//! its top level, outermost, collects
 //! inside its body forms (point D) and where a library's load ends (point B),
 //! which also lets a run of `define-library` forms collect (#614's program
 //! 2). A load under a guard, such as one a running program asks for, still
@@ -62,9 +63,8 @@ const COLLECTING_LIBRARY: &str = "(define-library (rooted collecting)
     (define later '(later #(4 5 6) \"later\"))))";
 
 /// Collections during the library's load, then `early`, `later` and a global
-/// the program bound before it, read back. On the VM the global environment
-/// is set aside while the body runs, and only the machine's traced stack
-/// reaches it.
+/// the program bound before it, read back. The global environment is the
+/// machine's `globals` while the body runs, on the VM as after it (#823).
 fn collecting_body<B: Backend>(interp: Interpreter<B>) -> (u64, String) {
     interp
         .eval_program_owned("(define kept-global (list 'global (vector 7) \"global\"))")

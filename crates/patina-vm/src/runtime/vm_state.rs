@@ -200,13 +200,12 @@ pub struct VmState {
     /// parameter object runs (#478); looked up once, here, not per call.
     #[trace(skip, reason = "a registry index")]
     parameter_set: Option<usize>,
-    /// Global variable environment, shared with the library loader.
+    /// The program's global environment, which `interaction-environment`
+    /// answers and a frame with no closure reads, during a library's load as
+    /// after it (#823): a library body's forms run in frames whose closures
+    /// have the library's environment as their globals (#824).
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
     globals: Rc<Environment>,
-    /// The environments [`VmState::with_globals`] has set aside, innermost
-    /// last, each restored when its swap ends. Traced, so a library body run
-    /// under a swap may collect (#677).
-    saved_globals: Vec<Rc<Environment>>,
     /// The heap, shared with `patina-runtime` primitives.
     #[trace(
         skip,
@@ -425,7 +424,6 @@ impl VmState {
             resume_codes: [None; super::control::resume_step::VARIANTS],
             parameter_set,
             globals,
-            saved_globals: Vec::new(),
             heap,
             primitive_registry: Rc::new(registry),
             shadowed_primitives: Vec::new(),
@@ -503,27 +501,6 @@ impl VmState {
     }
     pub(crate) fn code_store_slots(&self) -> usize {
         self.code_store.len()
-    }
-
-    /// Temporarily compile/evaluate in another environment on the same heap.
-    /// Restore on every Result exit, including nonlocal-transfer errors. The
-    /// environment set aside waits on `saved_globals`, which the machine
-    /// traces, so `run` may collect (#677); it held a holder's guard while
-    /// that environment lived only on this Rust stack (#624).
-    pub(crate) fn with_globals<T>(
-        &mut self,
-        env: Rc<Environment>,
-        run: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        debug_assert_eq!(env.heap_id(), self.heap.borrow().id());
-        let saved = std::mem::replace(&mut self.globals, env);
-        self.saved_globals.push(saved);
-        let result = run(self);
-        self.globals = self
-            .saved_globals
-            .pop()
-            .expect("each swap restores the environment it set aside");
-        result
     }
 
     /// Record that the primitive at `index` had its global binding
@@ -1032,8 +1009,8 @@ pub(super) fn vm_load_library(
 ///
 /// Instead of creating a temporary VmState, we execute body expressions
 /// directly in the main state, each as a closure over the library's
-/// environment (`execute_nested`), with `state.globals` swapped to it for
-/// the run. This ensures continuations, code objects, and closures all live
+/// environment (`execute_nested`), `state.globals` left the program's
+/// (#823). This ensures continuations, code objects, and closures all live
 /// in the single real execution context.
 fn vm_evaluate_parsed_library(
     state: &mut VmState,
@@ -1056,8 +1033,9 @@ fn vm_evaluate_parsed_library(
     // as a closure whose globals are lib_env (`execute_nested`): its frames
     // read and define the library's bindings, even when a continuation
     // resumes them after the load (#779), and the closures they make capture
-    // lib_env too, so no seeding or merge is needed. `state.globals` is
-    // swapped to lib_env for the run as well, and swapped back after it.
+    // lib_env too, so no seeding or merge is needed. `state.globals` stays
+    // the program's environment, which `interaction-environment` answers
+    // during the load as after it (#823).
 
     // Collection is already deferred for this whole function: `parsed`
     // carries a `GcDeferGuard` while it holds unevaluated body forms (see
@@ -1071,7 +1049,7 @@ fn vm_evaluate_parsed_library(
         .with_include_base_of(parsed.source.as_deref());
     let shared_heap = state.heap.clone();
 
-    state.with_globals(lib_env.clone(), |state| -> Result<(), LibraryError> {
+    let run = |state: &mut VmState| -> Result<(), LibraryError> {
         for tv in &parsed.body {
             // The form's literals, rooted until its code holds them (#705).
             let literals = patina_core::LiteralPool::new(&shared_heap.borrow());
@@ -1125,7 +1103,7 @@ fn vm_evaluate_parsed_library(
                 clippy::disallowed_methods,
                 reason = "holds `parsed` (the body's later forms) and `lib_env` across the form's \
                           run: `parsed` holds `GcDeferGuard::holding`, so no collection runs. The \
-                          globals `with_globals` set aside are on the machine's traced stack"
+                          program's environment is the machine's `globals`, which it traces"
             )]
             let result = across_reentry(
                 state,
@@ -1146,7 +1124,8 @@ fn vm_evaluate_parsed_library(
             })?;
         }
         Ok(())
-    })?;
+    };
+    run(state)?;
 
     // Step 3: Assemble the library and resolve its exports
     build_library(parsed.into_declarations(), lib_env)
@@ -1176,10 +1155,10 @@ pub(crate) fn vm_process_import_set(
 /// `VmApplyContext::eval_expr`: for a caller with no frame to run the code
 /// in, which runs a resumable primitive's `Step::Eval` synchronously. The
 /// `eval` primitive itself has its datum run as a frame ([`eval_closure`],
-/// #477), since a continuation cannot carry this Rust frame. Swaps
-/// `state.globals` to the given environment, executes in the main VmState
-/// using `execute_nested` (which respects the current frame depth), then
-/// restores globals.
+/// #477), since a continuation cannot carry this Rust frame. Executes in the
+/// main VmState using `execute_nested` (which respects the current frame
+/// depth), in a frame whose closure has `env` as its globals; the machine's
+/// own `globals` stay the program's environment (#823).
 pub(super) fn vm_eval_expr(
     state: &mut VmState,
     expr: TaggedValue,
@@ -1187,22 +1166,18 @@ pub(super) fn vm_eval_expr(
 ) -> Result<TaggedValue, VmError> {
     let (top, nested) = compile_for_eval(state, expr, env)?;
 
-    // Swap globals to the eval environment, execute in the main state,
-    // then restore. This keeps continuations and code objects valid. The
-    // environment set aside waits on the machine's traced stack, so this
-    // holds nothing of its own across the run, wherever it is reached from.
-    state.with_globals(env.clone(), |state| {
-        let top_id = state.load_unit(top, nested);
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "holds nothing of its own: the globals `with_globals` set aside are on the \
-                      machine's traced stack, and the unit's constants are in the code store, \
-                      which the machine roots"
-        )]
-        let result = execute_nested(state, top_id, env);
-        state.release_unit_if_unused(top_id);
-        result
-    })
+    // Execute in the main state, which keeps continuations and code objects
+    // valid. This holds nothing of its own across the run, wherever it is
+    // reached from.
+    let top_id = state.load_unit(top, nested);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds nothing of its own: the unit's constants are in the code store, which the \
+                  machine roots, and its frame's closure holds `env`"
+    )]
+    let result = execute_nested(state, top_id, env);
+    state.release_unit_if_unused(top_id);
+    result
 }
 
 /// Expand and compile the datum `expr` in `env`, as `eval` does.
