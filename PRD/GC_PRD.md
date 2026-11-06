@@ -2134,7 +2134,7 @@ the detail):
   (globals through link tables); `docs/TEST_ORGANIZATION.md` (the import-policy section's mechanism); `docs/README.md`,
   "Changing the embedding API" (what [#601]'s promise counts as the API, and what stays raw); `docs/VM_ISA.md` §4.1 (the
   per-site cache), §4.5 (a set bit routes the call "through `globals[name]`") and §4.7 (`Define` as
-  `globals[name] ← reg[src]`); `docs/VM_RUNTIME.md` §2.2 (`with_globals`, `saved_globals`); `docs/VM_COMPILER.md` §5.1
+  `globals[name] ← reg[src]`); `docs/VM_RUNTIME.md` §2.2 (`with_globals` and `saved_globals`, gone with #823's fix); `docs/VM_COMPILER.md` §5.1
   (`introduced_globals`), §7 and §9.1 (globals "looked up dynamically"); `docs/MACRO_SYSTEM.md` ([#438]'s alias as "an
   ordinary forwarded slot", and the copy "an export `share_binding` cannot share"); README.md (the `Backend` raw-layer
   paragraph, the migration note's `global_env()`, the `(gc-stats)` keys) and the key list in `primitives/gc.rs`'s module

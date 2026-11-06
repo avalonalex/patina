@@ -746,7 +746,12 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   on both backends, and re-entering continuations captured around an open
   that ran out of descriptors, collected and retried (#607), or in a
   library's body form, after its load, through both of the VM's loaders
-  (#779).
+  (#779). It also holds what a library's body sees as the interaction
+  environment while it loads: the program's, through a top-level `import`,
+  `environment` and an `eval`'d `import`, and the one-argument `load`'s
+  environment with it; and a program form resumed during an `import`, which
+  reads the program's bindings, a regression pin where the oracles split
+  (#823).
   `backend_divergence.rs` is gone: its rows are in
   `control/cps-features.scm`, `control/callability.scm`, `control/prompts.scm`
   and `expansion/hygiene.scm`, the open ones as backend-scoped expectations
@@ -1172,8 +1177,8 @@ on both backends (#677):
   collect, collects during the run (#614's program 2);
 - a library body that collects partway through, at a `(gc)`, keeps the
   binding it made before, the body form it had not yet run, and a global the
-  program bound, which on the VM only the traced `saved_globals` reaches
-  while the body runs;
+  program bound, which the machine's globals hold while the body runs, on
+  the VM as after it (#823);
 - a library whose dependency collects while it loads keeps both libraries'
   bindings;
 - a library file a program's bare `import` loads collects at its `(gc)`,
@@ -1184,7 +1189,8 @@ on both backends (#677):
 Before #677 each of the first four reported no collection during the load,
 on both backends. With the loading entry's body untraced the second, third
 and fourth fail with a use-after-free; with `saved_globals` untraced the
-second fails on the VM; without either backend's point B the first fails on
+second failed on the VM, until #823 removed the swap that needed it; without
+either backend's point B the first fails on
 that backend; and without either backend's processing of a bare `import` the
 fourth fails on that backend. While
 the body runs, the entry's environment is also the running globals or the
@@ -1725,7 +1731,7 @@ failed with a use-after-free (`callability`, `control_flow_matrix`,
 `ephemerons`, `escape_from_primitive`, `gc_tree_walker`, `hygiene_matrix`,
 `interpreter_api`, `library_loading` and `macro_definition_env`), and so did
 `scheme_suite.rs`; the VM's Larceny suites did not, because a VM library
-body also runs inside `VmState::with_globals`' guard, and with that one gone
+body also ran inside `VmState::with_globals`' guard (which #823 removed), and with that one gone
 too every suite panicked at bootstrap. The tree-walker's bootstrap panics
 without the first alone. Three more were run when review found holes, each
 failing the lane where the lane before it passed: a tree-walker job whose
