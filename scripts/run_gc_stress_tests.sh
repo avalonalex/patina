@@ -128,7 +128,8 @@ fi
 # interpreter_api's test counts re-pinned 2026-11-05 for #831's tests that
 # `gc_stats()` reads as `(gc-stats)` does and that `display_notation` writes
 # as `display` does, and their counts re-measured that day, the minimums
-# left)
+# left: interpreter_api's 27 other tests made 2230, up from 277 since its
+# pin of 2026-10-06, which no re-pin had recorded, and the new test 47)
 TARGETS=(
     "callability 16 31 13"                    # 1543 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)

@@ -167,10 +167,20 @@ const GC_STATS_KEYS: &str = "(let ((s (gc-stats)))
     (map (lambda (k) (cdr (assq k s)))
          '(collections external-bytes deferred-collections ports)))";
 
+/// A `(gc)` where collection is deferred, which posts the collection and
+/// counts it in `deferred-collections`: in a comparator that `(patina
+/// internal lists)`'s `member` calls from Rust, on a nested loop. Then a
+/// string port, and a `(gc)` at the top level, which collects.
+const DEFERS_OPENS_AND_COLLECTS: &str = "(import (only (patina internal lists) member))
+    (member 1 (list 1) (lambda (x y) (gc) (= x y)))
+    (define port (open-input-string \"held\"))
+    (gc)";
+
 /// What `gc_stats()` reads, against what `(gc-stats)` reported just before.
 /// Safe points are off, so the alist `(gc-stats)` allocates posts no
-/// collection that runs before the host reads; `(gc)` still collects at
-/// its call.
+/// collection that runs before the host reads, and the deferred `(gc)`'s
+/// collection stays posted until the top-level `(gc)` runs one at its
+/// call.
 fn read_as_gc_stats_does<B: Backend>(interp: Interpreter<B>) {
     interp
         .backend()
@@ -178,8 +188,9 @@ fn read_as_gc_stats_does<B: Backend>(interp: Interpreter<B>) {
         .borrow_mut()
         .set_skip_safe_points(true);
     interp.eval_program_owned(PRELUDE).unwrap();
+    let before = interp.gc_stats();
     interp
-        .eval_program_owned("(define port (open-input-string \"held\")) (gc)")
+        .eval_program_owned(DEFERS_OPENS_AND_COLLECTS)
         .unwrap();
     let mut charge = interp.external_bytes();
     charge.increase(1 << 20);
@@ -201,12 +212,19 @@ fn read_as_gc_stats_does<B: Backend>(interp: Interpreter<B>) {
         ],
         "collections, external-bytes, deferred-collections, ports"
     );
-    assert!(stats.collections > 0, "the program did not collect");
+    assert!(
+        stats.collections > before.collections,
+        "the program did not collect"
+    );
+    assert!(
+        stats.deferred_collections > before.deferred_collections,
+        "the deferred `(gc)` was not counted"
+    );
     assert!(
         stats.external_bytes >= 1 << 20,
         "the host's charge is counted"
     );
-    assert!(stats.ports > 0, "the string port has an entry");
+    assert!(stats.ports > before.ports, "the string port has an entry");
 
     let held = stats.handles;
     let first = interp.eval_str_owned("1").unwrap();

@@ -481,7 +481,8 @@ pub enum SpineEnd<V = TaggedValue> {
 /// **The raw layer** (#831): `Heap`'s methods are outside the embedding API's
 /// promise (`docs/README.md`, "Changing the embedding API"). They change
 /// without a deprecated twin, and promise only the rules documented on them.
-/// A host reaches them only through the raw `Interpreter::backend().heap()`.
+/// A host reaches them through a `SharedHeap`'s `borrow()`, such as that of
+/// the heap the raw `Interpreter::backend().heap()` answers.
 ///
 /// Uses typed storage for common object types to avoid dynamic dispatch.
 /// Each object type has its own vector for cache-friendly access.

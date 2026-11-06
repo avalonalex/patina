@@ -1660,8 +1660,11 @@ impl Interpreter<TreeWalker> {
     /// Get a reference to the underlying evaluator (TreeWalker-specific)
     ///
     /// This provides access to evaluator-specific functionality.
-    /// For generic backend access, use `backend()` instead. The raw layer, as
-    /// `backend()` is (#605).
+    /// For generic backend access, use `backend()` instead. The evaluator's
+    /// setup (`add_library_search_path`, `prepend_library_search_path`,
+    /// `bootstrap_error`) is inside the embedding API's promise; its other
+    /// methods and its pub fields are the raw layer (#605, #831; see
+    /// [`Evaluator`]).
     ///
     /// This method is only available when using the TreeWalker backend.
     pub fn evaluator(&self) -> &Evaluator {

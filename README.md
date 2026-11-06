@@ -277,12 +277,14 @@ bound in it until the handle is dropped
 ([#620](https://github.com/avalonalex/patina/issues/620)). Bind and read in it
 with `define_in(&env, name, &value)` and `lookup_in(&env, name)`, and evaluate
 in it with `eval_str_in(&env, …)` and `eval_program_in(&env, …)`, on either
-backend: what the code defines or imports stays in it. The routes by which a
-host could build an environment nothing roots between calls, or hold any
-environment of the heap, are deprecated for `new_environment()` and go at
-stage 5e ([#831](https://github.com/avalonalex/patina/issues/831)):
-`Environment::with_parent`, `Heap::hold_environment`, and `Cx`'s
-`hold_environment` and `track_environment`.
+backend: what the code defines or imports stays in it.
+[#831](https://github.com/avalonalex/patina/issues/831) deprecated, for
+`new_environment()`, the routes by which a host could build an environment
+nothing roots between calls, or hold any environment of the heap, and they go
+at stage 5e: `Environment::with_parent`, `Heap::hold_environment`, and `Cx`'s
+`hold_environment` and `track_environment`. `Environment`'s other
+constructors and `Heap::track_environment` are raw, outside the promise
+([Changing the embedding API](docs/README.md#changing-the-embedding-api)).
 
 `interrupt_handle()` answers an `InterruptHandle`, which a host uses to
 interrupt a running evaluation from another thread, a timer or a signal
