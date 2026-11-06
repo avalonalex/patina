@@ -143,7 +143,7 @@ TARGETS=(
     "finished_forms_release_code 16 1450 11"  # 3677 (13)
     "gc_tree_walker 16 11421 20"              # 24151 (658)
     "gc_vm 16 8001 25"                        # 17314 (667)
-    "host_environments 16 56922 19"           # 113845 (117)
+    "host_environments 16 56923 19"           # 113847 (117)
     "hygiene_matrix 16 400 14"                # 804 (2)
     "interpreter_api 16 138 28"               # 2277 (4)
     "library_loading 16 46 9"                 # 93 (0): see the header

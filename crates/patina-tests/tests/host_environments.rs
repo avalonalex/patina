@@ -682,7 +682,15 @@ fn a_procedure_defined_in_a_dropped_host_namespace_is_freed_with_its_unit() {
 }
 
 /// `def-counter`, defined, expanded and used in the host environment: its
-/// expansion introduces `count`, which the `next!` it defines reaches.
+/// expansion introduces `count`, which the `next!` it defines reaches, from
+/// the environment itself and from a body's frame inside it. A use from such
+/// a frame is what the desugarer resolves through the definition
+/// environment's introduced definitions (`has_introduced_definition`,
+/// `introduced_definition`), which read only the chain's root, the global
+/// environment; a use in the host environment itself never reaches them.
+/// Nothing of the expansion is filed in the global environment: no `count` or
+/// `next!` by name, no introduced `count` (the VM's identity, the
+/// tree-walker's scoped binding), and no renamed `count` global.
 fn macro_introduced_in_the_environment<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
     interp.eval_program_owned("(import (scheme base))").unwrap();
     let env = interp.new_environment();
@@ -700,7 +708,7 @@ fn macro_introduced_in_the_environment<B: Backend>(interp: Interpreter<B>) -> Ve
              (def-counter next!)",
         )
         .unwrap();
-    let mut answers: Vec<String> = ["(next!)", "(next!)"]
+    let mut answers: Vec<String> = ["(next!)", "(next!)", "(let () (define unused 0) (next!))"]
         .iter()
         .map(|form| match interp.eval_str_in(&env, form) {
             Ok(value) => interp.display_tagged(value),
@@ -710,12 +718,32 @@ fn macro_introduced_in_the_environment<B: Backend>(interp: Interpreter<B>) -> Ve
     for name in ["count", "next!"] {
         answers.push(format!("global {name}: {}", interp.lookup(name).is_some()));
     }
+    let global = interp.global_env();
+    answers.push(format!(
+        "global introduced count: {}",
+        global.has_introduced_definition("count")
+    ));
+    answers.push(format!(
+        "global renamed count: {}",
+        global
+            .local_names()
+            .iter()
+            .any(|name| name.starts_with("count "))
+    ));
     answers
 }
 
 #[test]
 fn a_definition_a_macro_introduces_in_a_host_namespace() {
-    let expected = ["1", "2", "global count: false", "global next!: false"];
+    let expected = [
+        "1",
+        "2",
+        "3",
+        "global count: false",
+        "global next!: false",
+        "global introduced count: false",
+        "global renamed count: false",
+    ];
     assert_eq!(
         macro_introduced_in_the_environment(vm_interpreter()),
         expected

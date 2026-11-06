@@ -1135,8 +1135,12 @@ namespaces change how it is linked. Each holds on both backends at its base:
   frees (in a check build), and on the VM the code it ran let go with it: as
   many code objects are loaded after 100 dropped environments as after 10;
 - a macro defined, expanded and used in the environment, whose expansion
-  introduces a definition that the macro it defines reaches, binding nothing
-  in the global environment.
+  introduces a definition that the macro it defines reaches, from the
+  environment and from a body's frame inside it (the use the desugarer
+  resolves through the root-only `has_introduced_definition` and
+  `introduced_definition`), with nothing of the expansion filed in the global
+  environment: no binding by name, no introduced definition and no renamed
+  global.
 
 With either of the table's environment traces removed, the tests of that
 trace fail, and so does its sentinel test. Without the VM's alpha-renaming
