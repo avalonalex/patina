@@ -1701,3 +1701,35 @@ fn an_introduced_definition_only_templates_reach_survives() {
         assert_eq!(result.as_deref(), Ok("7"), "{backend}");
     }
 }
+
+/// The `def-getter` shape with a collection between its forms (4b's start
+/// decision 8 on #782, #834): `secret` is reached by nothing but the two
+/// templates while each `(gc)` runs, and it must survive both. It holds the
+/// stages that give an introduced definition a record (4b.6) and that reclaim
+/// introduced definitions (5c) to the shape's answer. Chibi 0.12 (`(chibi
+/// ast)`'s `gc`) and Gauche 0.9.15 (`(gauche base)`'s `gc`) print 7 with
+/// their own collection call in place of each `(gc)`, measured 2026-11-06.
+#[test]
+fn an_introduced_definition_only_templates_reach_survives_a_collection() {
+    let program = r#"
+        (import (scheme base) (patina debug))
+        (define-syntax def-getter
+          (syntax-rules ()
+            ((_ get set)
+             (begin
+               (define secret 42)
+               (define-syntax get (syntax-rules () ((_) secret)))
+               (define-syntax set (syntax-rules () ((_ v) (set! secret v))))))))
+        (def-getter get-secret set-secret!)
+        (gc)
+        (set-secret! 7)
+        (gc)
+        (get-secret)
+    "#;
+    for (backend, result) in [
+        ("vm", try_eval_program_vm(program)),
+        ("tree-walker", try_eval_program_tree_walker(program)),
+    ] {
+        assert_eq!(result.as_deref(), Ok("7"), "{backend}");
+    }
+}

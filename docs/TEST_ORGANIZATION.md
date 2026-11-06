@@ -1140,7 +1140,10 @@ namespaces change how it is linked. Each holds on both backends at its base:
   resolves through the root-only `has_introduced_definition` and
   `introduced_definition`), with nothing of the expansion filed in the global
   environment: no binding by name, no introduced definition and no renamed
-  global.
+  global;
+- an import into the environment, which shares the library's location: the
+  library's later assignment is seen there, and a definition there gives the
+  environment a binding of its own, leaving the library's alone (#834).
 
 With either of the table's environment traces removed, the tests of that
 trace fail, and so does its sentinel test. Without the VM's alpha-renaming
@@ -1284,7 +1287,10 @@ answers one specifier, and 1,000,000 calls of it collect no more often and
 allocate no more than 1,000,000 of `(cons 1 2)`, which collect; 2,000 kept
 environments collect three times, not nine; and the global environment's
 growth under `eval` is charged, while frames charge nothing, read while
-they are alive. A replaced library's namespace (#614's path) keeps its
+they are alive. 200 closures, each `eval`'d in a fresh specifier the program
+drops, keep their namespaces charged, about 40 KB each, while they live, and
+give every charge back once they are collected (decision 26 on #782, #834).
+A replaced library's namespace (#614's path) keeps its
 charge while an importer holds it and gives it back when the last holder
 drops (`library_registry.rs`).
 
@@ -1454,7 +1460,9 @@ which stage 2's teardown work adds, nor the thread rows of stage 9.
 `scripts/tests/test_steady_state.py` checks the runner's arithmetic, and
 `hygiene_matrix.rs`'s `an_introduced_definition_only_templates_reach_survives`
 is the `def-getter` shape the stages that reclaim macro-introduced
-definitions must keep: 7 on both backends, as on chibi and Gauche.
+definitions must keep: 7 on both backends, as on chibi and Gauche. Its
+`_a_collection` twin runs a `(gc)` between the forms, as chibi and Gauche
+answer 7 with their own collection calls (#834).
 
 **GC benchmarks (#649).** `scripts/run_gc_benchmarks.sh` (the `gc` mode of
 `scripts/benchmarks.py`, in `scripts/gc_bench.py`) runs the workloads of

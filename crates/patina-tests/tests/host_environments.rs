@@ -753,3 +753,45 @@ fn a_definition_a_macro_introduces_in_a_host_namespace() {
         expected
     );
 }
+
+/// `(host4b cell)` exports `value` and a procedure that assigns it.
+const CELL_LIBRARY: &str = "(import (scheme base) (scheme eval))
+    (define-library (host4b cell)
+      (export value set-value!)
+      (import (scheme base))
+      (begin (define value 'first)
+             (define (set-value! v) (set! value v))))";
+
+/// An import into a host environment shares the library's location (#834):
+/// the library's later assignment is seen there, and a definition there
+/// gives the environment a binding of its own, leaving the library's alone.
+fn import_shares_the_location<B: Backend>(interp: Interpreter<B>) -> [String; 5] {
+    interp.eval_program_owned(CELL_LIBRARY).unwrap();
+    let env = interp.new_environment();
+    let first = interp
+        .eval_program_in(&env, "(import (host4b cell)) value")
+        .unwrap();
+    let assigned = interp
+        .eval_program_in(&env, "(set-value! 'second) value")
+        .unwrap();
+    let own = interp
+        .eval_program_in(&env, "(define value 'host) (set-value! 'third) value")
+        .unwrap();
+    let library = interp
+        .eval_str_owned("(eval 'value (environment '(host4b cell)))")
+        .unwrap();
+    let global = format!("global value: {}", interp.lookup("value").is_some());
+    let [first, assigned, own, library] =
+        [first, assigned, own, library].map(|value| interp.display_tagged(value));
+    [first, assigned, own, library, global]
+}
+
+#[test]
+fn an_import_into_a_host_environment_shares_the_librarys_location() {
+    let expected = ["first", "second", "host", "third", "global value: false"];
+    assert_eq!(import_shares_the_location(vm_interpreter()), expected);
+    assert_eq!(
+        import_shares_the_location(tree_walker_interpreter()),
+        expected
+    );
+}
