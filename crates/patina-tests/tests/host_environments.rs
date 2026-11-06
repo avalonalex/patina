@@ -428,3 +428,300 @@ fn a_host_environment_reaches_what_a_global_expansion_introduced() {
         expected
     );
 }
+
+// ---------------------------------------------------------------------------
+// What host code reads and writes, what its closures keep, and what its
+// macros introduce, pinned before 4b.6's binding records and 4b.8's host
+// namespaces change how it is linked (#835's tests PR). Each holds at the
+// PR's base; the records and the host-namespace kind must keep it.
+// ---------------------------------------------------------------------------
+
+/// A `set!` in host code of a name only the global environment binds writes
+/// the global binding, and binds nothing in the host environment; a `set!` of
+/// a name neither binds is an error.
+fn set_writes_the_global_binding<B: Backend>(interp: Interpreter<B>) {
+    interp.eval_program_owned("(define g 1)").unwrap();
+    let env = interp.new_environment();
+    interp
+        .eval_program_in(&env, "(define (bump!) (set! g (+ g 1))) (bump!) (bump!)")
+        .unwrap();
+    assert_eq!(interp.display_tagged(interp.lookup("g").unwrap()), "3");
+    let own = interp.raw_environment(&env).local_names();
+    assert!(
+        !own.iter().any(|name| &**name == "g"),
+        "the host environment bound `g` of its own: {own:?}"
+    );
+    assert!(
+        interp.eval_program_in(&env, "(set! nowhere 1)").is_err(),
+        "a `set!` of a name neither environment binds answered"
+    );
+}
+
+#[test]
+fn a_set_in_a_host_namespace_writes_the_global_binding() {
+    set_writes_the_global_binding(vm_interpreter());
+    set_writes_the_global_binding(tree_walker_interpreter());
+}
+
+/// `(host4b lib)`, defined in the program, exporting `shared`.
+const SHARED_LIBRARY: &str = "(import (scheme base) (scheme eval))
+    (define-library (host4b lib)
+      (export shared)
+      (import (scheme base))
+      (begin (define shared 'library)))
+    (import (host4b lib))";
+
+/// Host code that reads a name the global environment imported reads the
+/// global definition that later replaces the import; the library's own
+/// binding keeps its value.
+fn global_definition_over_an_import<B: Backend>(interp: Interpreter<B>) -> [String; 3] {
+    interp.eval_program_owned(SHARED_LIBRARY).unwrap();
+    let env = interp.new_environment();
+    let before = interp
+        .eval_program_in(&env, "(define (f) shared) (f)")
+        .unwrap();
+    interp
+        .eval_program_owned("(define shared 'global)")
+        .unwrap();
+    let after = interp.eval_str_in(&env, "(f)").unwrap();
+    let library = interp
+        .eval_str_owned("(eval 'shared (environment '(host4b lib)))")
+        .unwrap();
+    [before, after, library].map(|value| interp.display_tagged(value))
+}
+
+#[test]
+fn host_code_sees_a_global_definition_over_an_import() {
+    let expected = ["library", "global", "library"];
+    assert_eq!(global_definition_over_an_import(vm_interpreter()), expected);
+    assert_eq!(
+        global_definition_over_an_import(tree_walker_interpreter()),
+        expected
+    );
+}
+
+/// `(host4b late)` exports `late`; `(host4b over)` exports `over`.
+const LATE_LIBRARIES: &str = "(import (scheme base))
+    (define-library (host4b late)
+      (export late)
+      (import (scheme base))
+      (begin (define late 'imported)))
+    (define-library (host4b over)
+      (export over)
+      (import (scheme base))
+      (begin (define over 'imported)))
+    (define over 'defined)";
+
+/// Host code that reads a name the global environment does not bind yet
+/// sees it once the global environment imports it; and host code that read a
+/// global definition sees the import that later replaces it.
+fn global_import<B: Backend>(interp: Interpreter<B>) -> [String; 4] {
+    interp.eval_program_owned(LATE_LIBRARIES).unwrap();
+    let env = interp.new_environment();
+    let unbound = interp
+        .eval_program_in(
+            &env,
+            "(define (read-late) (guard (e (#t 'unbound)) late))
+             (define (read-over) over)
+             (read-late)",
+        )
+        .unwrap();
+    let defined = interp.eval_str_in(&env, "(read-over)").unwrap();
+    interp
+        .eval_program_owned("(import (host4b late) (host4b over))")
+        .unwrap();
+    let late = interp.eval_str_in(&env, "(read-late)").unwrap();
+    let over = interp.eval_str_in(&env, "(read-over)").unwrap();
+    [unbound, late, defined, over].map(|value| interp.display_tagged(value))
+}
+
+#[test]
+fn host_code_sees_a_global_import() {
+    let expected = ["unbound", "imported", "defined", "imported"];
+    assert_eq!(global_import(vm_interpreter()), expected);
+    assert_eq!(global_import(tree_walker_interpreter()), expected);
+}
+
+/// How the host environment comes to define `later`.
+#[derive(Clone, Copy, Debug)]
+enum HostDefinition {
+    /// A program's `define`, by `eval_program_in`.
+    Program,
+    /// The host's own binding, by `define_in`.
+    Host,
+}
+
+/// Host code compiled while only the global environment binds `later` reads
+/// the host environment's definition once it is made, and the global binding
+/// is left as it was.
+fn host_definition_after_it_ran<B: Backend>(
+    interp: Interpreter<B>,
+    how: HostDefinition,
+) -> [String; 3] {
+    interp.eval_program_owned("(define later 'global)").unwrap();
+    let env = interp.new_environment();
+    let before = interp
+        .eval_program_in(&env, "(define (read-later) later) (read-later)")
+        .unwrap();
+    match how {
+        HostDefinition::Program => {
+            interp
+                .eval_program_in(&env, "(define later 'local)")
+                .unwrap();
+        }
+        HostDefinition::Host => {
+            let local = interp.eval_str_owned("'local").unwrap();
+            interp.define_in(&env, "later", &local);
+        }
+    }
+    let after = interp.eval_str_in(&env, "(read-later)").unwrap();
+    let global = interp.lookup("later").unwrap();
+    [
+        interp.display_tagged(before),
+        interp.display_tagged(after),
+        interp.display_tagged(global),
+    ]
+}
+
+#[test]
+fn host_code_sees_a_host_definition_made_after_it_ran() {
+    let expected = ["global", "local", "global"];
+    for how in [HostDefinition::Program, HostDefinition::Host] {
+        assert_eq!(
+            host_definition_after_it_ran(vm_interpreter(), how),
+            expected,
+            "vm, {how:?}"
+        );
+        assert_eq!(
+            host_definition_after_it_ran(tree_walker_interpreter(), how),
+            expected,
+            "tree-walker, {how:?}"
+        );
+    }
+}
+
+/// A closure host code made, held by the host, outlives the environment's
+/// handle and a collection, and still reads what the environment bound.
+fn closure_survives_its_handle<B: Backend>(mut interp: Interpreter<B>) -> String {
+    interp.eval_program_owned(PRELUDE).unwrap();
+    let env = interp.new_environment();
+    let closure = interp
+        .eval_program_in(&env, "(define x (list 'kept 1)) (lambda () x)")
+        .unwrap();
+    drop(env);
+    let before = collections(&interp);
+    interp.eval_program_owned(CHURN).unwrap();
+    assert!(collections(&interp) > before, "the program did not collect");
+    let value = interp.call(&closure, &[]).unwrap();
+    interp.display_tagged(&value)
+}
+
+#[test]
+fn a_closure_made_in_a_host_namespace_survives_its_handle_and_a_collection() {
+    assert_eq!(closure_survives_its_handle(vm_interpreter()), "(kept 1)");
+    assert_eq!(
+        closure_survives_its_handle(tree_walker_interpreter()),
+        "(kept 1)"
+    );
+}
+
+/// A procedure defined in a host environment, which nothing else holds, is
+/// freed by the collection after the handle is dropped: a check build reports
+/// a read of its word as a use after free.
+fn procedure_freed_with_its_environment<B: Backend>(interp: Interpreter<B>) {
+    interp.eval_program_owned(PRELUDE).unwrap();
+    let env = interp.new_environment();
+    interp.eval_program_in(&env, "(define (f) f)").unwrap();
+    let f = interp.lookup_in(&env, "f").unwrap();
+    let raw = interp.raw_value(&f);
+    drop(f);
+    interp.eval_program_owned("(gc)").unwrap();
+    assert!(
+        interp.backend().heap().borrow().is_procedure(raw),
+        "`f` is not a procedure while its environment is held"
+    );
+    drop(env);
+    interp.eval_program_owned("(gc)").unwrap();
+    let heap = interp.backend().heap().clone();
+    let message = panic_message(|| {
+        heap.borrow().get_object(raw);
+    });
+    assert!(message.contains("use-after-free"), "{message}");
+}
+
+/// On the VM, the code a dropped host environment's procedure ran is let go
+/// with it: as many code objects are loaded after 100 such environments, each
+/// dropped and followed by a collection, as after 10.
+fn code_let_go_with_its_environments(
+    interp: &Interpreter<patina_vm::VmBackend>,
+    n: usize,
+) -> usize {
+    for _ in 0..n {
+        let env = interp.new_environment();
+        interp.eval_program_in(&env, "(define (f) f) (f)").unwrap();
+        drop(env);
+        interp.eval_program_owned("(gc)").unwrap();
+    }
+    interp.backend().loaded_code_objects()
+}
+
+#[test]
+fn a_procedure_defined_in_a_dropped_host_namespace_is_freed_with_its_unit() {
+    if patina_core::heap::GC_CHECK {
+        procedure_freed_with_its_environment(vm_interpreter());
+        procedure_freed_with_its_environment(tree_walker_interpreter());
+    }
+    let interp = vm_interpreter();
+    interp.eval_program_owned(PRELUDE).unwrap();
+    let after_ten = code_let_go_with_its_environments(&interp, 10);
+    let after_hundred = code_let_go_with_its_environments(&interp, 90);
+    assert_eq!(
+        after_hundred, after_ten,
+        "code objects loaded after 10 dropped host environments, and after 100"
+    );
+}
+
+/// `def-counter`, defined, expanded and used in the host environment: its
+/// expansion introduces `count`, which the `next!` it defines reaches.
+fn macro_introduced_in_the_environment<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
+    interp.eval_program_owned("(import (scheme base))").unwrap();
+    let env = interp.new_environment();
+    interp
+        .eval_program_in(
+            &env,
+            "(define-syntax def-counter
+               (syntax-rules ()
+                 ((_ next)
+                  (begin
+                    (define count 0)
+                    (define-syntax next
+                      (syntax-rules ()
+                        ((_) (begin (set! count (+ count 1)) count))))))))
+             (def-counter next!)",
+        )
+        .unwrap();
+    let mut answers: Vec<String> = ["(next!)", "(next!)"]
+        .iter()
+        .map(|form| match interp.eval_str_in(&env, form) {
+            Ok(value) => interp.display_tagged(value),
+            Err(e) => format!("error: {e}"),
+        })
+        .collect();
+    for name in ["count", "next!"] {
+        answers.push(format!("global {name}: {}", interp.lookup(name).is_some()));
+    }
+    answers
+}
+
+#[test]
+fn a_definition_a_macro_introduces_in_a_host_namespace() {
+    let expected = ["1", "2", "global count: false", "global next!: false"];
+    assert_eq!(
+        macro_introduced_in_the_environment(vm_interpreter()),
+        expected
+    );
+    assert_eq!(
+        macro_introduced_in_the_environment(tree_walker_interpreter()),
+        expected
+    );
+}

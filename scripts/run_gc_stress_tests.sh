@@ -129,7 +129,11 @@ fi
 # `gc_stats()` reads as `(gc-stats)` does and that `display_notation` writes
 # as `display` does, and their counts re-measured that day, the minimums
 # left: interpreter_api's 27 other tests made 2230, up from 277 since its
-# pin of 2026-10-06, which no re-pin had recorded, and the new test 47)
+# pin of 2026-10-06, which no re-pin had recorded, and the new test 47;
+# host_environments's test count and minimum re-pinned 2026-11-06 for #835's
+# seven tests of what host code reads and writes, what its closures keep and
+# what its macros introduce, the minimum at half its count re-measured that
+# day, as #835 asks)
 TARGETS=(
     "callability 16 31 13"                    # 1543 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -139,7 +143,7 @@ TARGETS=(
     "finished_forms_release_code 16 1450 11"  # 3677 (13)
     "gc_tree_walker 16 11421 20"              # 24151 (658)
     "gc_vm 16 8001 25"                        # 17314 (667)
-    "host_environments 16 43788 12"           # 88299 (11)
+    "host_environments 16 56922 19"           # 113845 (117)
     "hygiene_matrix 16 400 14"                # 804 (2)
     "interpreter_api 16 138 28"               # 2277 (4)
     "library_loading 16 46 9"                 # 93 (0): see the header

@@ -1113,13 +1113,36 @@ what is bound in it, on both backends (#620):
 - a handle kept past its interpreter, which keeps nothing alive: teardown
   breaks the heap, table and environment cycle;
 - the legacy pipeline, whose caller's environment the heap traces while the
-  caller holds it.
+  caller holds it;
+- a host environment charged as a frame, however many names it binds (#830),
+  which 4b.8 rewrites to the owner's charging ruling.
+
+#835's tests pin what host code reads and writes, what its closures keep and
+what its macros introduce, before 4b.6's binding records and 4b.8's host
+namespaces change how it is linked. Each holds on both backends at its base:
+
+- a `set!` of a name only the global environment binds, which writes the
+  global binding and binds nothing in the host environment, and one of a
+  name neither binds, which is an error;
+- a global definition over an import, and a global import over a definition
+  or of a name not yet bound, each seen by code compiled in the environment
+  before it, the library keeping its own binding;
+- a definition the environment makes after its code ran, by a program or by
+  `define_in`, seen by that code, the global binding left as it was;
+- a closure made in the environment, called after the handle is dropped and a
+  collection;
+- a procedure defined in a dropped environment, which the next collection
+  frees (in a check build), and on the VM the code it ran let go with it: as
+  many code objects are loaded after 100 dropped environments as after 10;
+- a macro defined, expanded and used in the environment, whose expansion
+  introduces a definition that the macro it defines reaches, binding nothing
+  in the global environment.
 
 With either of the table's environment traces removed, the tests of that
 trace fail, and so does its sentinel test. Without the VM's alpha-renaming
-walking the environment's parents for introduced definitions, the last case
-fails on the VM, with the macro's `count` unbound. The file runs in the
-per-PR stress lane.
+walking the environment's parents for introduced definitions, the global
+macro's case fails on the VM, with the macro's `count` unbound. The file runs
+in the per-PR stress lane.
 
 `patina-tests/tests/vm_callprimitive.rs` holds a host's definitions to a
 program's, on both backends (#673). Through `Interpreter::define`, code the VM
