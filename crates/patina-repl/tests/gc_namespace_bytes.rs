@@ -316,3 +316,42 @@ fn macro_introduced_definitions_are_charged() {
     }
     assert!(short.is_empty(), "{}", short.join("\n"));
 }
+
+/// A specifier's namespace lives while code compiled in it does (decision 26
+/// on #782, #834): 200 closures, each `eval`'d in a fresh
+/// `(environment '(scheme base))` whose specifier the program does not keep.
+/// While the closures live, each one's namespace stays charged, about 40 KB;
+/// once they are dropped and collected, every charge is given back. On the
+/// VM a closure's globals hold its namespace, on the tree-walker its captured
+/// environment. 4b.6's binding records must keep both: the namespace's
+/// records die with it, and nothing else holds it.
+#[test]
+fn a_specifier_namespace_lives_while_code_compiled_in_it_does() {
+    let program = "(define closures '())
+(define before 0)
+(define held 0)
+(define after 0)
+(define (make n)
+  (let loop ((i 0))
+    (when (< i n)
+      (set! closures (cons (eval '(lambda () 'compiled) (environment '(scheme base)))
+                           closures))
+      (loop (+ i 1)))))
+(define (settled) (gc) (gc) (stat 'external-bytes))
+(set! before (settled))
+(make 200)
+(set! held (settled))
+(set! closures '())
+(set! after (settled))
+(write (list before held after))
+(newline)";
+    for backend in BOTH_BACKENDS {
+        let counts = run(backend, program);
+        let [before, held, after] = counts[..] else {
+            panic!("{backend:?}: want three counts, got {counts:?}")
+        };
+        let what = format!("{backend:?}: {counts:?}");
+        assert!(held - before >= 200 * 40_000, "{what}");
+        assert_eq!(after, before, "{what}");
+    }
+}
