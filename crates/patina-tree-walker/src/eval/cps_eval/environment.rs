@@ -84,7 +84,7 @@ impl<'a> CpsEvaluator<'a> {
     ) -> Result<TaggedValue, EvalError> {
         // Use scoped lookup if scopes are present (for hygienic macros)
         if scopes.is_empty() {
-            env.get(name)
+            env.get(&self.evaluator.heap, name)
                 .ok_or_else(|| EvalError::UndefinedVariable(name.to_string()))
         } else {
             // Scope-based lookup for hygienic macros.
@@ -96,7 +96,7 @@ impl<'a> CpsEvaluator<'a> {
             // The tree-walker is the backend that can — it carries scope sets
             // to runtime and re-resolves per read, where the VM resolves once
             // and is done.
-            env.get_with_scopes(name, scopes)
+            env.get_with_scopes(&self.evaluator.heap, name, scopes)
                 .map_err(|e| EvalError::InvalidSyntax(e.to_string()))?
                 .ok_or_else(|| EvalError::UndefinedVariable(name.to_string()))
         }
@@ -112,7 +112,7 @@ impl<'a> CpsEvaluator<'a> {
     ) -> Result<(), EvalError> {
         // Use scoped set if scopes are present (for hygienic macros)
         if scopes.is_empty() {
-            env.set(name, value)
+            env.set(&self.evaluator.heap, name, value)
                 .map_err(|_| EvalError::UndefinedVariable(name.to_string()))
         } else {
             // Scope-based set for hygienic macros. The two failures are
@@ -121,7 +121,7 @@ impl<'a> CpsEvaluator<'a> {
             // undefined variable. Collapsing them told a programmer their
             // variable did not exist when the problem was that it existed
             // twice.
-            env.set_with_scopes(name, scopes, value)
+            env.set_with_scopes(&self.evaluator.heap, name, scopes, value)
                 .map_err(|e| match e {
                     ScopedSetError::Undefined(name) => EvalError::UndefinedVariable(name),
                     ScopedSetError::Ambiguous(e) => EvalError::InvalidSyntax(e.to_string()),

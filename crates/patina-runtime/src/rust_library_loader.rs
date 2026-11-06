@@ -48,7 +48,7 @@ impl RustLibraryLoader {
 
         // Populate exports
         for export_name in exports {
-            if let Some(value) = lib.env.get(&export_name) {
+            if let Some(value) = lib.env.get(heap, &export_name) {
                 lib.export_tagged(export_name, value);
             }
         }
@@ -123,9 +123,9 @@ mod tests {
     fn build_test_lib(_name: Vec<String>, env: Rc<Environment>, heap: &SharedHeap) -> Vec<String> {
         let tv_internal = heap.borrow_mut().alloc_string("private".to_string());
 
-        env.define("foo".to_string(), TaggedValue::fixnum(42));
-        env.define("bar".to_string(), TaggedValue::TRUE);
-        env.define("internal".to_string(), tv_internal);
+        env.define(heap, "foo".to_string(), TaggedValue::fixnum(42));
+        env.define(heap, "bar".to_string(), TaggedValue::TRUE);
+        env.define(heap, "internal".to_string(), tv_internal);
 
         // Only export foo and bar
         vec!["foo".to_string(), "bar".to_string()]
@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(lib.get_export_tagged("bar"), Some(TaggedValue::TRUE));
 
         // Internal value should be in environment but not exported
-        assert!(lib.env.get("internal").is_some());
+        assert!(lib.env.get(&heap, "internal").is_some());
     }
 
     #[test]

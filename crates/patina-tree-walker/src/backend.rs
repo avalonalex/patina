@@ -366,7 +366,7 @@ mod tests {
     #[test]
     fn test_tree_walker_creation() {
         let backend = TreeWalker::new();
-        assert!(backend.global_env().get("car").is_some());
+        assert!(backend.global_env().get(backend.heap(), "car").is_some());
     }
 
     #[test]
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn test_tree_walker_default() {
         let backend = TreeWalker::default();
-        assert!(backend.global_env().get("+").is_some());
+        assert!(backend.global_env().get(backend.heap(), "+").is_some());
     }
 
     #[test]
@@ -395,7 +395,7 @@ mod tests {
         let custom_env = Rc::new(Environment::child_frame(backend.global_env().clone()));
 
         // Define a variable in custom env
-        custom_env.define("x".to_string(), TaggedValue::fixnum(99));
+        custom_env.define(backend.heap(), "x".to_string(), TaggedValue::fixnum(99));
 
         // Parse and evaluate x in custom env
         let heap = Backend::heap(&backend);

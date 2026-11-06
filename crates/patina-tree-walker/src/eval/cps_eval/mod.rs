@@ -810,7 +810,7 @@ mod tests {
         let evaluator = make_test_evaluator();
         evaluator
             .global_env
-            .define("x".to_string(), TaggedValue::fixnum(10));
+            .define(&evaluator.heap, "x".to_string(), TaggedValue::fixnum(10));
         let cps_eval = CpsEvaluator::new(&evaluator);
 
         // CPS: (halt x)

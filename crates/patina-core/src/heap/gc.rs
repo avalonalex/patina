@@ -2486,7 +2486,7 @@ mod tests {
             .borrow_mut()
             .alloc_environment_specifier(env.clone(), false);
         // …and env → heap edge (bare index in the binding map): a full cycle.
-        env.define("self".to_string(), spec);
+        env.define(&shared, "self".to_string(), spec);
         assert_eq!(Rc::strong_count(&env), 2);
 
         {
@@ -2507,7 +2507,7 @@ mod tests {
         let live = shared
             .borrow_mut()
             .alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
-        env.define("live".to_string(), live);
+        env.define(&shared, "live".to_string(), live);
         let dead = shared
             .borrow_mut()
             .alloc_pair(TaggedValue::fixnum(2), TaggedValue::NULL);
@@ -2531,7 +2531,7 @@ mod tests {
         let live = shared
             .borrow_mut()
             .alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
-        parent.define("live".to_string(), live);
+        parent.define(&shared, "live".to_string(), live);
         let child = Rc::new(Environment::child_frame(parent));
 
         let roots = TestRoots {
@@ -3214,7 +3214,7 @@ mod tests {
         let kept = Rc::new(Environment::with_heap(&shared));
         let dead = Rc::new(Environment::with_heap(&shared));
         for i in 0..100 {
-            dead.define(format!("binding-{i}"), TaggedValue::fixnum(i));
+            dead.define(&shared, format!("binding-{i}"), TaggedValue::fixnum(i));
         }
         let kept_charge = kept.charged_bytes().unwrap();
         // So that the account's falling to `kept_charge` below shows a

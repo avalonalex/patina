@@ -311,7 +311,8 @@ mod tests {
     }
 
     fn vm_closure(heap: &mut Heap) -> TaggedValue {
-        heap.alloc_vm_closure(0, vec![TaggedValue::fixnum(1)], Rc::new(Environment::new()))
+        let env = Rc::new(Environment::namespace(heap));
+        heap.alloc_vm_closure(0, vec![TaggedValue::fixnum(1)], env)
     }
 
     // ------------------------------------------------------------------------
@@ -819,10 +820,11 @@ mod tests {
         "store of a retired register into a closure's free variable",
         {
             let mut heap = Heap::new();
+            let env = Rc::new(Environment::namespace(&heap));
             heap.alloc_vm_closure(
                 0,
                 vec![TaggedValue::fixnum(1), TaggedValue::DEAD_SLOT],
-                Rc::new(Environment::new()),
+                env,
             );
         }
     );

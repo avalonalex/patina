@@ -21,6 +21,7 @@
 //! generated case to hold.
 
 use super::*;
+use crate::heap::new_shared_heap;
 use crate::scope::ScopeId;
 use crate::scope_resolve::resolve_index;
 use proptest::prelude::*;
@@ -152,25 +153,27 @@ fn frame_of(insertions: std::ops::Range<usize>) -> impl Strategy<Value = Frame> 
         })
 }
 
-fn environments(frames: &[Frame]) -> Vec<Rc<Environment>> {
+fn environments(heap: &SharedHeap, frames: &[Frame]) -> Vec<Rc<Environment>> {
     let mut envs = Vec::new();
     for frame in frames {
+        // The root is a namespace, on the property's one heap: the only
+        // coverage of a namespace's visible scoped writes.
         let env = Rc::new(match envs.last() {
-            None => Environment::new(),
+            None => Environment::with_heap(heap),
             Some(parent) => Environment::child_frame(Rc::clone(parent)),
         });
         if let Some(value) = frame.plain {
-            env.define("x", TaggedValue::fixnum(value));
+            env.define(heap, "x", TaggedValue::fixnum(value));
         }
         for &(mask, value, visible) in &frame.bindings {
             if visible {
-                env.define_scoped_definition("x", scopes(mask), TaggedValue::fixnum(value));
+                env.define_scoped_definition(heap, "x", scopes(mask), TaggedValue::fixnum(value));
             } else {
-                env.define_with_scopes("x", scopes(mask), TaggedValue::fixnum(value));
+                env.define_with_scopes(heap, "x", scopes(mask), TaggedValue::fixnum(value));
             }
         }
         // Unrelated names must never change either.
-        env.define("untouched", TaggedValue::fixnum(17));
+        env.define(heap, "untouched", TaggedValue::fixnum(17));
         envs.push(env);
     }
     envs
@@ -196,10 +199,10 @@ fn target(frames: &[Frame], reference: u8) -> Result<Option<(usize, u8)>, ()> {
         .map(|(i, _)| (i, 0)))
 }
 
-fn snapshot(envs: &[Rc<Environment>]) -> Vec<(usize, u8, i64)> {
+fn snapshot(heap: &SharedHeap, envs: &[Rc<Environment>]) -> Vec<(usize, u8, i64)> {
     let mut result = Vec::new();
     for (i, env) in envs.iter().enumerate() {
-        if let Some(value) = env.local_value("x") {
+        if let Some(value) = env.local_value(heap, "x") {
             result.push((i, 0, value.as_fixnum().unwrap()));
         }
         if let Some(bindings) = env.scoped_bindings.borrow().get("x") {
@@ -209,7 +212,7 @@ fn snapshot(envs: &[Rc<Environment>]) -> Vec<(usize, u8, i64)> {
             }
         }
         assert_eq!(
-            env.local_value("untouched")
+            env.local_value(heap, "untouched")
                 .and_then(|value| value.as_fixnum()),
             Some(17)
         );
@@ -218,11 +221,12 @@ fn snapshot(envs: &[Rc<Environment>]) -> Vec<(usize, u8, i64)> {
 }
 
 fn read_matches(
+    heap: &SharedHeap,
     frames: &[Frame],
     reference: u8,
     envs: &[Rc<Environment>],
 ) -> Result<(), TestCaseError> {
-    let before = snapshot(envs);
+    let before = snapshot(heap, envs);
     let expected = target(frames, reference).map(|id| {
         id.map(|(i, mask)| {
             before
@@ -235,17 +239,17 @@ fn read_matches(
     let read = envs
         .last()
         .unwrap()
-        .get_with_scopes("x", &scopes(reference))
+        .get_with_scopes(heap, "x", &scopes(reference))
         .map(|value| value.map(|v| v.as_fixnum().unwrap()))
         .map_err(|_| ());
     prop_assert_eq!(read, expected, "read disagrees with independent oracle");
     Ok(())
 }
 
-fn symmetry(frames: &[Frame], reference: u8) -> Result<(), TestCaseError> {
-    let envs = environments(frames);
-    read_matches(frames, reference, &envs)?;
-    let mut expected = snapshot(&envs);
+fn symmetry(heap: &SharedHeap, frames: &[Frame], reference: u8) -> Result<(), TestCaseError> {
+    let envs = environments(heap, frames);
+    read_matches(heap, frames, reference, &envs)?;
+    let mut expected = snapshot(heap, &envs);
     let target = target(frames, reference);
     if let Ok(Some((i, mask))) = target {
         expected
@@ -255,11 +259,12 @@ fn symmetry(frames: &[Frame], reference: u8) -> Result<(), TestCaseError> {
             .2 = SENTINEL;
     }
     let written = envs.last().unwrap().set_with_scopes(
+        heap,
         "x",
         &scopes(reference),
         TaggedValue::fixnum(SENTINEL),
     );
-    let after = snapshot(&envs);
+    let after = snapshot(heap, &envs);
     let should_write = matches!(target, Ok(Some(_)));
     if written.is_ok() != should_write || after != expected {
         let kind = match target {
@@ -278,7 +283,7 @@ fn symmetry(frames: &[Frame], reference: u8) -> Result<(), TestCaseError> {
         prop_assert_eq!(
             envs.last()
                 .unwrap()
-                .get_with_scopes("x", &scopes(reference))
+                .get_with_scopes(heap, "x", &scopes(reference))
                 .unwrap(),
             Some(TaggedValue::fixnum(SENTINEL))
         );
@@ -295,6 +300,7 @@ fn symmetry(frames: &[Frame], reference: u8) -> Result<(), TestCaseError> {
 /// nine distinct ones or more; a root that does not is skipped.
 #[test]
 fn indexed_spellings_read_and_write_as_the_oracle_does() {
+    let heap = new_shared_heap();
     check(
         (
             frame_of(13..48),
@@ -304,21 +310,25 @@ fn indexed_spellings_read_and_write_as_the_oracle_does() {
         |(root, below, reference)| {
             prop_assume!(root.bindings.len() > crate::scope_index::INDEX_ABOVE);
             let frames: Vec<Frame> = std::iter::once(root).chain(below).collect();
-            symmetry(&frames, reference)
+            symmetry(&heap, &frames, reference)
         },
     );
 }
 
 #[test]
 fn family36_39_arbitrary_environment_reads() {
+    let heap = new_shared_heap();
     check(
         (prop::collection::vec(frame(), 1..5), 1u8..64),
-        |(frames, reference)| read_matches(&frames, reference, &environments(&frames)),
+        |(frames, reference)| {
+            read_matches(&heap, &frames, reference, &environments(&heap, &frames))
+        },
     );
 }
 
 #[test]
 fn family38_nested_chain_binding_identity_with_equal_values() {
+    let heap = new_shared_heap();
     // Runtime lexical nesting: scopes accumulate towards the leaf. Includes
     // empty frames, repeated scopes across frames, and unbound references.
     check(
@@ -350,13 +360,14 @@ fn family38_nested_chain_binding_identity_with_equal_values() {
                     }
                 })
                 .collect();
-            symmetry(&frames, reference)
+            symmetry(&heap, &frames, reference)
         },
     );
 }
 
 #[test]
 fn family36_rejected_scoped_binding_is_not_plain_fallback() {
+    let heap = new_shared_heap();
     check(
         (1u8..32, 0i64..3, any::<bool>(), 1usize..5),
         |(reference, value, plain, depth)| {
@@ -369,7 +380,7 @@ fn family36_rejected_scoped_binding_is_not_plain_fallback() {
                 plain: None,
                 bindings: vec![(reference | 32, value, true)],
             }));
-            symmetry(&frames, reference)
+            symmetry(&heap, &frames, reference)
         },
     );
 }
@@ -382,6 +393,7 @@ fn family36_rejected_scoped_binding_is_not_plain_fallback() {
 /// resolution is chain-wide and must see them the same way.
 #[test]
 fn h2_a_an_ambiguous_write_is_refused_without_mutating() {
+    let heap = new_shared_heap();
     check((0i64..3, any::<bool>()), |(value, split)| {
         let frames = if split {
             vec![
@@ -400,7 +412,7 @@ fn h2_a_an_ambiguous_write_is_refused_without_mutating() {
                 bindings: vec![(1, value, false), (2, value, false)],
             }]
         };
-        symmetry(&frames, 3)
+        symmetry(&heap, &frames, 3)
     });
 }
 
@@ -410,8 +422,10 @@ fn h2_a_an_ambiguous_write_is_refused_without_mutating() {
 /// then read a cell it had not written.
 #[test]
 fn h2_b_a_more_specific_binding_in_a_parent_wins() {
+    let heap = new_shared_heap();
     check(0i64..3, |value| {
         symmetry(
+            &heap,
             &[
                 Frame {
                     plain: None,
@@ -433,8 +447,10 @@ fn h2_b_a_more_specific_binding_in_a_parent_wins() {
 /// global of the same spelling, sent the assignment out of the frame.
 #[test]
 fn h2_c_the_fallback_reaches_a_non_root_plain_binding() {
+    let heap = new_shared_heap();
     check((0i64..3, any::<bool>()), |(value, root_plain)| {
         symmetry(
+            &heap,
             &[
                 Frame {
                     plain: root_plain.then_some(value),
@@ -460,9 +476,10 @@ fn h2_c_the_fallback_reaches_a_non_root_plain_binding() {
 /// and an unbound one writes nothing.
 #[test]
 fn family38_unrestricted_environment_symmetry() {
+    let heap = new_shared_heap();
     check(
         (prop::collection::vec(frame(), 1..5), 1u8..64),
-        |(frames, reference)| symmetry(&frames, reference),
+        |(frames, reference)| symmetry(&heap, &frames, reference),
     );
 }
 

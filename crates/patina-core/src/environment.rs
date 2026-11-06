@@ -6,7 +6,7 @@ use crate::scope_resolve::AmbiguousReference;
 use crate::tagged_value::TaggedValue;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-use std::cell::{Cell, OnceCell, Ref, RefCell};
+use std::cell::{Cell, OnceCell, Ref, RefCell, RefMut};
 use std::collections::hash_map::Entry;
 use std::mem::size_of;
 use std::rc::Rc;
@@ -124,28 +124,33 @@ impl AliasTarget {
     // by name if it ever were not, reading and writing a plain binding of the
     // spelling where a dangling plain alias answers nothing.
 
-    fn get(&self, holder: &Environment) -> Option<TaggedValue> {
+    fn get(&self, holder: &Environment, heap: &RefCell<Heap>) -> Option<TaggedValue> {
         let env = self.env(holder);
         match &self.scopes {
-            None => env.get(&self.name),
-            Some(scopes) => env.scoped_definition_value(&self.name, scopes),
+            None => env.get(heap, &self.name),
+            Some(scopes) => env.scoped_definition_value(heap, &self.name, scopes),
         }
     }
 
     /// `Err` carries the name, as [`Environment::set`]'s does.
-    fn set(&self, holder: &Environment, value: TaggedValue) -> Result<(), String> {
+    fn set(
+        &self,
+        holder: &Environment,
+        heap: &RefCell<Heap>,
+        value: TaggedValue,
+    ) -> Result<(), String> {
         let env = self.env(holder);
         match &self.scopes {
-            None => env.set(&self.name, value),
-            Some(scopes) => env.set_scoped_definition(&self.name, scopes, value),
+            None => env.set(heap, &self.name, value),
+            Some(scopes) => env.set_scoped_definition(heap, &self.name, scopes, value),
         }
     }
 
-    fn location(&self, holder: &Environment) -> Option<BindingLocation> {
+    fn location(&self, holder: &Environment, heap: &RefCell<Heap>) -> Option<BindingLocation> {
         let env = self.env(holder);
         match &self.scopes {
-            None => env.binding_location(&self.name),
-            Some(scopes) => env.scoped_definition_location(&self.name, scopes),
+            None => env.binding_location(heap, &self.name),
+            Some(scopes) => env.scoped_definition_location(heap, &self.name, scopes),
         }
     }
 }
@@ -875,6 +880,30 @@ fn fresh_env_id() -> u64 {
 ///    not just reject it**. A binding the rule refused stays refused; the
 ///    fallback answering it anyway was triage family 36.
 ///
+/// ## The heap a namespace's binding takes (#834)
+///
+/// Each read or write of a namespace's binding takes `heap: &RefCell<Heap>`,
+/// the first parameter after the receiver, and borrows it at the
+/// **namespace step**: shared where a hit is read, mutable where a binding
+/// is written. From 4b.6's records on, that borrow covers the record the
+/// slot word names; until then it carries only a debug check that `heap` is
+/// this environment's. The borrows are taken in every build, so a caller
+/// that holds the heap across a namespace access panics in release as it
+/// will once the borrow is needed.
+///
+/// A frame's own binding takes no borrow. A frame's import borrows the heap,
+/// shared to read it and mutably to write it, whatever kind its owner is (a
+/// library's namespace, or the marker frame a declaration view imports from
+/// through `Cx::share_binding_in_frame`): from 4b.6's records on, it reads a
+/// cell on the heap. The step is found by the environment's kind where a
+/// binding is hit, never by whether it has a parent, and a miss takes no
+/// borrow.
+///
+/// The `_in` cores take the heap already borrowed: `slot_value_in`,
+/// `set_slot_value_in` and `define_in` are the step's own bodies, and
+/// `define_in` and the test-only `local_value_in` serve the tests in this
+/// crate that hold the heap borrowed.
+///
 /// ## Deliberately not `Clone`
 ///
 /// The binding tables are owned inline, so a derived `Clone` would *fork*
@@ -900,10 +929,10 @@ fn fresh_env_id() -> u64 {
 #[derive(Debug, Trace)]
 pub struct Environment {
     /// The number of the heap its values live on
-    /// ([`Heap::id`](crate::heap::Heap::id)), or 0 for one made with no
-    /// heap ([`Environment::new`]): how a heap refuses another's environment
-    /// (`Heap::assert_own`). An environment keeps no handle to its heap
-    /// (#704); a frame takes its parent's number.
+    /// ([`Heap::id`](crate::heap::Heap::id)): how a heap refuses another's
+    /// environment (`Heap::assert_own`), and what a namespace step checks
+    /// the heap it borrows against in a debug build. An environment keeps no
+    /// handle to its heap (#704); a frame takes its parent's number.
     #[trace(skip, reason = "a number")]
     heap_id: u64,
     /// Simple name-based bindings (for built-ins and top-level)
@@ -988,11 +1017,12 @@ pub struct Environment {
 /// kind says which.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
-    /// A namespace: the global environment, a library's, a specifier's, or a
-    /// standalone one ([`Environment::new`]), each made without a parent. One
-    /// made with a heap's account charges for its tables
-    /// ([`NamespaceCharge`]); every namespace indexes a spelling's scoped
-    /// bindings past [`INDEX_ABOVE`].
+    /// A namespace: the global environment, a library's or a specifier's,
+    /// each made without a parent and on a heap
+    /// ([`Environment::with_heap`]). It charges the heap's account for its
+    /// tables ([`NamespaceCharge`]), indexes a spelling's scoped bindings
+    /// past [`INDEX_ABOVE`], and borrows the heap at each read or write of a
+    /// binding (the namespace step, #834).
     Namespace,
     /// A frame ([`Environment::child_frame`]): a call's or a body's, the
     /// desugarer's scopes, and a host's environment
@@ -1008,12 +1038,6 @@ enum Kind {
 }
 
 impl Environment {
-    /// Create a new empty environment that charges no heap for its tables:
-    /// for a standalone use, whose values any heap may hold.
-    pub fn new() -> Self {
-        Self::parentless(0, None)
-    }
-
     /// Create a new empty namespace whose values live on `heap`: the global
     /// environment, a library's, or one `environment` or an R5RS constructor
     /// builds. It keeps no handle to the heap (#704): whoever reads or
@@ -1034,12 +1058,12 @@ impl Environment {
     /// its account ([`Heap::external_bytes_handle`](crate::heap::Heap::external_bytes_handle))
     /// together, so a namespace cannot be charged to another heap's.
     pub(crate) fn namespace(heap: &crate::Heap) -> Self {
-        Self::parentless(heap.id(), Some(heap.external_bytes_handle()))
+        Self::parentless(heap.id(), heap.external_bytes_handle())
     }
 
     /// A parentless environment of the heap numbered `heap_id`, charging
-    /// `account` for its tables when there is one.
-    fn parentless(heap_id: u64, account: Option<ExternalBytes>) -> Self {
+    /// `account` for its tables.
+    fn parentless(heap_id: u64, account: ExternalBytes) -> Self {
         let env = Environment {
             heap_id,
             bindings: RefCell::new(Bindings::default()),
@@ -1049,13 +1073,10 @@ impl Environment {
             has_aliases: Cell::new(false),
             has_visible_scoped: Cell::new(false),
             kind: Kind::Namespace,
-            rare: match account {
-                Some(account) => OnceCell::from(Box::new(RareTables {
-                    namespace: Some(NamespaceCharge::new(account)),
-                    ..RareTables::default()
-                })),
-                None => OnceCell::new(),
-            },
+            rare: OnceCell::from(Box::new(RareTables {
+                namespace: Some(NamespaceCharge::new(account)),
+                ..RareTables::default()
+            })),
             parent: None,
         };
         env.recharge();
@@ -1112,8 +1133,8 @@ impl Environment {
         }
     }
 
-    /// The number of the heap this environment's values live on, 0 for none
-    /// ([`Environment::new`]).
+    /// The number of the heap this environment's values live on
+    /// ([`Heap::id`](crate::heap::Heap::id)); a frame's is its parent's.
     #[inline]
     pub fn heap_id(&self) -> u64 {
         self.heap_id
@@ -1145,11 +1166,37 @@ impl Environment {
     ///
     /// An imported binding is read from the library that owns it, so this is
     /// the *binding's* current value, never a snapshot.
+    ///
+    /// The namespace step's read (#834): a namespace borrows `heap` shared;
+    /// a frame borrows it only for an import, whatever kind its owner is.
     #[inline]
-    pub fn slot_value(&self, slot: u32) -> TaggedValue {
+    pub fn slot_value(&self, heap: &RefCell<Heap>, slot: u32) -> TaggedValue {
+        if let Some(step) = self.read_step(heap) {
+            return self.slot_value_in(&step, slot);
+        }
+        self.frame_slot_value(heap, slot)
+    }
+
+    /// [`slot_value`](Self::slot_value) for a frame, out of line: the VM's
+    /// `LoadGlobal` inlines `slot_value`, and nearly every global it reads
+    /// is a namespace's.
+    #[inline(never)]
+    fn frame_slot_value(&self, heap: &RefCell<Heap>, slot: u32) -> TaggedValue {
         let tv = self.bindings.borrow().read_slot(slot);
         if tv == TaggedValue::FORWARDED {
-            return self.shared_value(slot);
+            return self.shared_value(heap, slot);
+        }
+        tv
+    }
+
+    /// [`slot_value`](Self::slot_value) with the heap already borrowed: the
+    /// namespace step's own body, and an import's read at its owner.
+    #[inline]
+    fn slot_value_in(&self, heap: &Heap, slot: u32) -> TaggedValue {
+        self.check_heap(heap);
+        let tv = self.bindings.borrow().read_slot(slot);
+        if tv == TaggedValue::FORWARDED {
+            return self.shared_value_in(heap, slot);
         }
         tv
     }
@@ -1160,8 +1207,44 @@ impl Environment {
     /// assignment, as it does under chibi and Gauche. R7RS §5.2 calls
     /// assigning an imported binding "an error", so any answer conforms; this
     /// is the one that keeps a location one location.
+    ///
+    /// The namespace step's write (#834): a namespace borrows `heap`
+    /// mutably; a frame borrows it only for an import, whatever kind its
+    /// owner is.
     #[inline]
-    pub fn set_slot_value(&self, slot: u32, value: TaggedValue) {
+    pub fn set_slot_value(&self, heap: &RefCell<Heap>, slot: u32, value: TaggedValue) {
+        if let Some(mut step) = self.write_step(heap) {
+            self.set_slot_value_in(&mut step, slot, value);
+            return;
+        }
+        self.frame_set_slot_value(heap, slot, value);
+    }
+
+    /// [`set_slot_value`](Self::set_slot_value) for a frame, out of line as
+    /// [`frame_slot_value`](Self::frame_slot_value) is. A plain slot is
+    /// written with no borrow; an import borrows `heap` mutably in
+    /// `write_shared`, whatever kind its owner is, before anything is
+    /// recorded.
+    #[inline(never)]
+    fn frame_set_slot_value(&self, heap: &RefCell<Heap>, slot: u32, value: TaggedValue) {
+        let forwarded = {
+            let mut bindings = self.bindings.borrow_mut();
+            let forwarded = bindings.read_slot(slot) == TaggedValue::FORWARDED;
+            if !forwarded {
+                crate::census::store(crate::census::Site::EnvSetSlot, None, value);
+                bindings.write_slot(slot, value);
+            }
+            forwarded
+        };
+        if forwarded {
+            self.write_shared(heap, slot, value);
+        }
+    }
+
+    /// [`set_slot_value`](Self::set_slot_value) with the heap already
+    /// borrowed mutably: the namespace step's body, and an import's owner's.
+    fn set_slot_value_in(&self, heap: &mut Heap, slot: u32, value: TaggedValue) {
+        self.check_heap(heap);
         crate::census::store(crate::census::Site::EnvSetSlot, None, value);
         let forwarded = {
             let mut bindings = self.bindings.borrow_mut();
@@ -1172,7 +1255,8 @@ impl Environment {
             forwarded
         };
         if forwarded {
-            self.write_shared(slot, value);
+            let (owner, owner_slot) = self.shared_target(slot);
+            owner.set_slot_value_in(heap, owner_slot, value);
         }
     }
 
@@ -1197,19 +1281,33 @@ impl Environment {
     /// borrows a link table mutably, so holding this one across the owner's
     /// read is safe.
     #[inline(never)]
-    fn shared_value(&self, slot: u32) -> TaggedValue {
+    fn shared_value_in(&self, heap: &Heap, slot: u32) -> TaggedValue {
         let links = self.rare.get().map(|rare| rare.links.borrow());
         match links.as_ref().and_then(|links| links.get(slot as usize)) {
-            Some(Some((owner, owner_slot))) => owner.slot_value(*owner_slot),
+            Some(Some((owner, owner_slot))) => owner.slot_value_in(heap, *owner_slot),
             // As `shared_target` says: not a state a program can reach.
             _ => unreachable!("slot {slot} is forwarded but has no owner"),
         }
     }
 
+    /// A frame's import, read: it borrows `heap` shared whatever kind its
+    /// owner is (a library's namespace, or a declaration's marker frame),
+    /// since from 4b.6's records on it reads a cell on the heap.
     #[inline(never)]
-    fn write_shared(&self, slot: u32, value: TaggedValue) {
+    fn shared_value(&self, heap: &RefCell<Heap>, slot: u32) -> TaggedValue {
+        self.shared_value_in(&self.borrow_read(heap), slot)
+    }
+
+    /// A frame's import, written: it borrows `heap` mutably first, whatever
+    /// kind its owner is, as [`shared_value`](Self::shared_value) borrows it
+    /// shared. Recorded once here and once at the owner, as a namespace's
+    /// import is.
+    #[inline(never)]
+    fn write_shared(&self, heap: &RefCell<Heap>, slot: u32, value: TaggedValue) {
+        let mut step = self.borrow_write(heap);
+        crate::census::store(crate::census::Site::EnvSetSlot, None, value);
         let (owner, owner_slot) = self.shared_target(slot);
-        owner.set_slot_value(owner_slot, value);
+        owner.set_slot_value_in(&mut step, owner_slot, value);
     }
 
     /// The owner of `slot`'s binding, when that is not this environment.
@@ -1261,8 +1359,60 @@ impl Environment {
     /// skips the measuring for the price of a field read: the kind is in the
     /// struct, where the charge is behind the `rare` box.
     #[inline(always)]
-    fn is_namespace(&self) -> bool {
+    pub(crate) fn is_namespace(&self) -> bool {
         self.kind == Kind::Namespace
+    }
+
+    /// The namespace step's shared borrow (#834): taken where a hit in a
+    /// namespace is read, which from 4b.6's records is the record the slot
+    /// word names. `None` for a frame, whose own bindings take no borrow.
+    #[inline(always)]
+    #[must_use = "the step's borrow must span the access"]
+    fn read_step<'h>(&self, heap: &'h RefCell<Heap>) -> Option<Ref<'h, Heap>> {
+        if !self.is_namespace() {
+            return None;
+        }
+        Some(self.borrow_read(heap))
+    }
+
+    /// The namespace step's mutable borrow (#834): taken where a namespace's
+    /// binding is written, before anything is. `None` for a frame.
+    #[inline(always)]
+    #[must_use = "the step's borrow must span the access"]
+    fn write_step<'h>(&self, heap: &'h RefCell<Heap>) -> Option<RefMut<'h, Heap>> {
+        if !self.is_namespace() {
+            return None;
+        }
+        Some(self.borrow_write(heap))
+    }
+
+    /// The step's shared borrow whatever the kind, with the debug identity
+    /// check: for a frame's import, which is the library's binding.
+    #[inline(always)]
+    fn borrow_read<'h>(&self, heap: &'h RefCell<Heap>) -> Ref<'h, Heap> {
+        let heap = heap.borrow();
+        self.check_heap(&heap);
+        heap
+    }
+
+    /// The step's mutable borrow whatever the kind, with the debug identity
+    /// check.
+    #[inline(always)]
+    fn borrow_write<'h>(&self, heap: &'h RefCell<Heap>) -> RefMut<'h, Heap> {
+        let heap = heap.borrow_mut();
+        self.check_heap(&heap);
+        heap
+    }
+
+    /// That `heap` is the one this environment's values live on, in a debug
+    /// build: until 4b.6's records, all the namespace step's borrow carries.
+    #[inline(always)]
+    fn check_heap(&self, heap: &Heap) {
+        debug_assert_eq!(
+            heap.id(),
+            self.heap_id,
+            "a namespace step with another heap's borrow"
+        );
     }
 
     /// After a table reallocated: a namespace charges the heap for what its
@@ -1406,9 +1556,30 @@ impl Environment {
     ///
     /// Use this for top-level defines, built-ins, and other simple bindings.
     /// This is the primary API - accepts TaggedValue directly.
-    pub fn define(&self, name: impl Into<Rc<str>>, value: TaggedValue) {
+    ///
+    /// A namespace borrows `heap` mutably on entry, for an insert, a store
+    /// or a re-point alike (#834); a frame takes no borrow.
+    pub fn define(&self, heap: &RefCell<Heap>, name: impl Into<Rc<str>>, value: TaggedValue) {
+        if let Some(mut step) = self.write_step(heap) {
+            self.define_in(&mut step, name, value);
+            return;
+        }
+        self.define_here(name.into(), value);
+    }
+
+    /// [`define`](Self::define) with the heap already borrowed mutably: the
+    /// namespace step's body, and a definition for this crate's tests that
+    /// hold the heap.
+    pub(crate) fn define_in(&self, heap: &mut Heap, name: impl Into<Rc<str>>, value: TaggedValue) {
+        self.check_heap(heap);
+        self.define_here(name.into(), value);
+    }
+
+    /// `define`'s body, under whatever step its caller took.
+    #[inline]
+    fn define_here(&self, name: Rc<str>, value: TaggedValue) {
         crate::census::store(crate::census::Site::EnvDefine, None, value);
-        let (slot, was_forwarded) = self.define_slot(name.into(), value);
+        let (slot, was_forwarded) = self.define_slot(name, value);
         // A definition is a new binding of this environment's own, whatever
         // the name was before — so an importer that defines a name it
         // imported shadows it here and leaves the library's alone, which is
@@ -1429,13 +1600,17 @@ impl Environment {
     /// were).
     ///
     /// See [`Owner`] for why every import shares, primitives included.
+    ///
+    /// Borrows `heap` shared at `source`'s step, to read who owns the
+    /// binding, and mutably at this environment's, to write it (#834).
     pub fn share_binding(
         &self,
+        heap: &RefCell<Heap>,
         name: impl Into<Rc<str>>,
         source: &Rc<Environment>,
         source_name: &str,
     ) -> bool {
-        self.take_binding(name.into(), source, source_name, true)
+        self.take_binding(heap, name.into(), source, source_name, true)
     }
 
     /// Copy a binding without making the source environment its owner.
@@ -1449,18 +1624,23 @@ impl Environment {
     /// `share_binding` — as that value, rather than as a forward into an
     /// environment about to be dropped.
     ///
+    /// Borrows `heap` as [`share_binding`] does, or as a read of `staging`
+    /// and a [`define`](Self::define) here for a staged value.
+    ///
     /// [`share_binding`]: Self::share_binding
     pub fn copy_binding(
         &self,
+        heap: &RefCell<Heap>,
         name: impl Into<Rc<str>>,
         staging: &Rc<Environment>,
         staged_name: &str,
     ) -> bool {
-        self.take_binding(name.into(), staging, staged_name, false)
+        self.take_binding(heap, name.into(), staging, staged_name, false)
     }
 
     fn take_binding(
         &self,
+        heap: &RefCell<Heap>,
         name: Rc<str>,
         source: &Rc<Environment>,
         source_name: &str,
@@ -1469,15 +1649,22 @@ impl Environment {
         let Some(slot) = source.local_slot(source_name) else {
             return false;
         };
-        let owner = match source.owner_of(slot) {
+        // The source's hit, read at its step: from 4b.6's records, whose
+        // binding it is lives in the record its slot names.
+        let owner = {
+            let _step = source.read_step(heap);
+            source.owner_of(slot)
+        };
+        let owner = match owner {
             Some(owner) => owner,
             None if source_owns => (Rc::clone(source), slot),
             None => {
-                self.define(name, source.slot_value(slot));
+                let value = source.slot_value(heap, slot);
+                self.define(heap, name, value);
                 return true;
             }
         };
-        self.forward(name, owner);
+        self.forward(heap, name, owner);
         true
     }
 
@@ -1499,16 +1686,20 @@ impl Environment {
         (slot, was_forwarded)
     }
 
-    fn forward(&self, name: Rc<str>, owner: Owner) {
+    /// Point `name` here at `owner`'s binding: a re-point or an insert,
+    /// under this environment's mutable step.
+    fn forward(&self, heap: &RefCell<Heap>, name: Rc<str>, owner: Owner) {
         // An environment cannot hold an `Rc` to itself without leaking, and
         // has no need to: a name that would forward to this environment is a
         // second name for a value already here.
         if std::ptr::eq(Rc::as_ptr(&owner.0), self) {
             if self.local_slot(&name) != Some(owner.1) {
-                self.define(name, self.slot_value(owner.1));
+                let value = self.slot_value(heap, owner.1);
+                self.define(heap, name, value);
             }
             return;
         }
+        let _step = self.write_step(heap);
         let (slot, _) = self.define_slot(name, TaggedValue::FORWARDED);
         self.set_owner(slot, owner);
     }
@@ -1546,33 +1737,48 @@ impl Environment {
     /// already bound here, since forwarding a name overwrites what it held.
     /// (Only a *reference* is ever given this name — `Desugarer::early_bound`
     /// — so nothing Patina does defines over one.)
-    pub fn import_alias(&self, name: &str, mut mint: impl FnMut() -> Rc<str>) -> Option<Rc<str>> {
-        let owner = self.owner_of(self.local_slot(name)?)?;
-        let key = (owner.0.env_id(), owner.1);
+    ///
+    /// Borrows `heap` shared over the lookup, and mutably to insert a fresh
+    /// alias (#834).
+    pub fn import_alias(
+        &self,
+        heap: &RefCell<Heap>,
+        name: &str,
+        mut mint: impl FnMut() -> Rc<str>,
+    ) -> Option<Rc<str>> {
+        let slot = self.local_slot(name)?;
         let rare = self.rare.get()?;
-        // Out of the borrow first: `owner_of` borrows a table beside it.
-        let known = rare.import_aliases.borrow().get(&key).and_then(|aliases| {
-            aliases
-                .iter()
-                .find(|(spelling, _)| &**spelling == name)
-                .map(|(_, alias)| Rc::clone(alias))
-        });
-        if let Some(alias) = known {
-            let still_forwards = self
-                .local_slot(&alias)
-                .and_then(|slot| self.owner_of(slot))
-                .is_some_and(|(env, slot)| Rc::ptr_eq(&env, &owner.0) && slot == owner.1);
-            if still_forwards {
-                return Some(alias);
+        let (owner, key) = {
+            // One step over the lookup: the import's owner, the alias
+            // remembered for it, and whether that still forwards there.
+            let _step = self.read_step(heap);
+            let owner = self.owner_of(slot)?;
+            let key = (owner.0.env_id(), owner.1);
+            // Out of the borrow first: `owner_of` borrows a table beside it.
+            let known = rare.import_aliases.borrow().get(&key).and_then(|aliases| {
+                aliases
+                    .iter()
+                    .find(|(spelling, _)| &**spelling == name)
+                    .map(|(_, alias)| Rc::clone(alias))
+            });
+            if let Some(alias) = known {
+                let still_forwards = self
+                    .local_slot(&alias)
+                    .and_then(|slot| self.owner_of(slot))
+                    .is_some_and(|(env, slot)| Rc::ptr_eq(&env, &owner.0) && slot == owner.1);
+                if still_forwards {
+                    return Some(alias);
+                }
             }
-        }
+            (owner, key)
+        };
         let alias = loop {
             let candidate = mint();
             if self.local_slot(&candidate).is_none() {
                 break candidate;
             }
         };
-        self.forward(Rc::clone(&alias), owner);
+        self.forward(heap, Rc::clone(&alias), owner);
         let grew = {
             let mut table = rare.import_aliases.borrow_mut();
             let capacity = table.capacity();
@@ -1594,15 +1800,43 @@ impl Environment {
     /// to its owner when it was imported. Every by-name read of the table
     /// goes through here; `Bindings` has no `get` of its own, so none can
     /// hand out the marker.
+    ///
+    /// A hit in a namespace is read at its step, under a shared borrow of
+    /// `heap`; a miss takes none, and nor does a frame's own binding (#834).
+    /// A frame's import borrows it shared, whatever kind its owner is. Both
+    /// branches stay inline: the tree-walker's frames are hot.
     #[inline(always)]
-    fn local_value(&self, name: &str) -> Option<TaggedValue> {
+    fn local_value(&self, heap: &RefCell<Heap>, name: &str) -> Option<TaggedValue> {
+        let (slot, tv) = {
+            let bindings = self.bindings.borrow();
+            let slot = bindings.slot_of(name)?;
+            (slot, bindings.read_slot(slot))
+        };
+        if let Some(step) = self.read_step(heap) {
+            return Some(if tv == TaggedValue::FORWARDED {
+                self.shared_value_in(&step, slot)
+            } else {
+                tv
+            });
+        }
+        if tv == TaggedValue::FORWARDED {
+            return Some(self.shared_value(heap, slot));
+        }
+        Some(tv)
+    }
+
+    /// [`local_value`](Self::local_value) with the heap already borrowed:
+    /// for this crate's tests that hold it.
+    #[cfg(test)]
+    pub(crate) fn local_value_in(&self, heap: &Heap, name: &str) -> Option<TaggedValue> {
+        self.check_heap(heap);
         let (slot, tv) = {
             let bindings = self.bindings.borrow();
             let slot = bindings.slot_of(name)?;
             (slot, bindings.read_slot(slot))
         };
         if tv == TaggedValue::FORWARDED {
-            return Some(self.shared_value(slot));
+            return Some(self.shared_value_in(heap, slot));
         }
         Some(tv)
     }
@@ -1627,14 +1861,17 @@ impl Environment {
 
     /// Set an existing binding (searches parent environments)
     /// This is the primary API - accepts TaggedValue directly.
-    pub fn set(&self, name: &str, value: TaggedValue) -> Result<(), String> {
+    ///
+    /// The binding it writes, in a namespace, is written at that
+    /// namespace's step, under a mutable borrow of `heap` (#834).
+    pub fn set(&self, heap: &RefCell<Heap>, name: &str, value: TaggedValue) -> Result<(), String> {
         // A loop up the chain, not a call per parent: a chain is as long as
         // the code is nested, and recursing on it overflowed the native stack
         // (#617).
         let mut env = self;
         loop {
             if let Some(slot) = env.local_slot(name) {
-                env.set_slot_value(slot, value);
+                env.set_slot_value(heap, slot, value);
                 return Ok(());
             }
             // Assign through a macro-expansion alias, so a template that
@@ -1642,7 +1879,7 @@ impl Environment {
             // follow aliases in `get`; writes have to as well or the two
             // disagree.
             if let Some(target) = env.alias_target(name) {
-                return target.set(env, value);
+                return target.set(env, heap, value);
             }
             // The write side of the same fallback `get` takes, and it has to
             // be here for the reason `alias_bindings` gives for its own pair:
@@ -1650,12 +1887,13 @@ impl Environment {
             // write through to it leaves the two disagreeing. Reached when a
             // macro-generated macro's template assigns to a definition its
             // expansion introduced, which arrives relinked to the bare name.
-            if let Some(i) = env.visible_scoped_index(name)
-                && let Some(bindings) = env.scoped_bindings.borrow_mut().get_mut(name)
-            {
-                crate::census::store(crate::census::Site::EnvSetScoped, None, value);
-                bindings[i].tagged_value = value;
-                return Ok(());
+            if let Some(i) = env.visible_scoped_index(name) {
+                let _step = env.write_step(heap);
+                if let Some(bindings) = env.scoped_bindings.borrow_mut().get_mut(name) {
+                    crate::census::store(crate::census::Site::EnvSetScoped, None, value);
+                    bindings[i].tagged_value = value;
+                    return Ok(());
+                }
             }
             match &env.parent {
                 Some(parent) => env = parent,
@@ -1668,13 +1906,16 @@ impl Environment {
     ///
     /// This is the primary API - returns TaggedValue directly.
     /// For the simple name-based lookup for identifiers.
-    pub fn get(&self, name: &str) -> Option<TaggedValue> {
+    ///
+    /// A hit in a namespace is read at that namespace's step, under a shared
+    /// borrow of `heap`; a miss, and a frame's own binding, take none (#834).
+    pub fn get(&self, heap: &RefCell<Heap>, name: &str) -> Option<TaggedValue> {
         // Walked iteratively rather than by recursing into the parent: the
         // tree-walker builds a frame per `let`-bound temporary, so this chain
         // is the hottest loop in the backend.
         let mut env = self;
         loop {
-            if let Some(tv) = env.local_value(name) {
+            if let Some(tv) = env.local_value(heap, name) {
                 return Some(tv);
             }
             // Follow a macro-expansion alias into the environment the macro was
@@ -1684,7 +1925,7 @@ impl Environment {
             if env.has_aliases.get()
                 && let Some(target) = env.alias_target(name)
             {
-                return target.get(env);
+                return target.get(env, heap);
             }
             // A macro-introduced definition lives under its scopes; this is the
             // name-only view of it. Checked after real bindings and aliases, so a
@@ -1692,6 +1933,7 @@ impl Environment {
             if env.has_visible_scoped.get()
                 && let Some(i) = env.visible_scoped_index(name)
             {
+                let _step = env.read_step(heap);
                 return env.scoped_bindings.borrow()[name]
                     .get(i)
                     .map(|b| b.tagged_value);
@@ -1708,11 +1950,17 @@ impl Environment {
     /// name reaches, or this would name one and `get` read another. One
     /// shared walk is Track Q's Q7.3; until then they mirror by hand.
     ///
+    /// A hit in a namespace is located at its step, under a shared borrow of
+    /// `heap`, which from 4b.6's records is where whose binding it is lives
+    /// (#834). A frame's hit takes none: a frame's import names its owner
+    /// and reads no value.
+    ///
     /// [`get`]: Self::get
-    pub fn binding_location(&self, name: &str) -> Option<BindingLocation> {
+    pub fn binding_location(&self, heap: &RefCell<Heap>, name: &str) -> Option<BindingLocation> {
         let mut env = self;
         loop {
             if let Some(slot) = env.local_slot(name) {
+                let _step = env.read_step(heap);
                 return Some(match env.owner_of(slot) {
                     Some((owner, owner_slot)) => BindingLocation::Slot(owner.env_id(), owner_slot),
                     None => BindingLocation::Slot(env.env_id(), slot),
@@ -1721,9 +1969,10 @@ impl Environment {
             if env.has_aliases.get()
                 && let Some(target) = env.alias_target(name)
             {
-                return target.location(env);
+                return target.location(env, heap);
             }
             if let Some(i) = env.visible_scoped_index(name) {
+                let _step = env.read_step(heap);
                 let table = env.scoped_bindings.borrow();
                 let (spelling, _) = table.get_key_value(name)?;
                 return Some(BindingLocation::Scoped(
@@ -1813,8 +2062,15 @@ impl Environment {
     }
 
     /// The location of the scoped definition of `name` whose identity is
-    /// exactly `scopes`, in this environment's own table.
-    fn scoped_definition_location(&self, name: &str, scopes: &ScopeSet) -> Option<BindingLocation> {
+    /// exactly `scopes`, in this environment's own table. A namespace reads
+    /// it at its step, under a shared borrow of `heap`.
+    fn scoped_definition_location(
+        &self,
+        heap: &RefCell<Heap>,
+        name: &str,
+        scopes: &ScopeSet,
+    ) -> Option<BindingLocation> {
+        let _step = self.read_step(heap);
         let table = self.scoped_bindings.borrow();
         let (spelling, bindings) = table.get_key_value(name)?;
         let index = self.scoped_position(name, bindings, scopes)?;
@@ -1828,7 +2084,13 @@ impl Environment {
     /// What that definition holds — [`scoped_definition_location`]'s read.
     ///
     /// [`scoped_definition_location`]: Self::scoped_definition_location
-    fn scoped_definition_value(&self, name: &str, scopes: &ScopeSet) -> Option<TaggedValue> {
+    fn scoped_definition_value(
+        &self,
+        heap: &RefCell<Heap>,
+        name: &str,
+        scopes: &ScopeSet,
+    ) -> Option<TaggedValue> {
+        let _step = self.read_step(heap);
         let table = self.scoped_bindings.borrow();
         let bindings = table.get(name)?;
         let position = self.scoped_position(name, bindings, scopes)?;
@@ -1836,16 +2098,19 @@ impl Environment {
     }
 
     /// Assign that definition — [`scoped_definition_location`]'s write. `Err`
-    /// carries the name, as [`set`]'s does.
+    /// carries the name, as [`set`]'s does. A namespace writes it at its
+    /// step, under a mutable borrow of `heap`.
     ///
     /// [`scoped_definition_location`]: Self::scoped_definition_location
     /// [`set`]: Self::set
     fn set_scoped_definition(
         &self,
+        heap: &RefCell<Heap>,
         name: &str,
         scopes: &ScopeSet,
         value: TaggedValue,
     ) -> Result<(), String> {
+        let _step = self.write_step(heap);
         let mut table = self.scoped_bindings.borrow_mut();
         let binding = table.get_mut(name).and_then(|bindings| {
             let position = self.scoped_position(name, bindings, scopes)?;
@@ -1909,20 +2174,30 @@ impl Environment {
     /// identity ([`define_introduced_global`]); the tree-walker files it under
     /// its scopes.
     ///
+    /// The definition's home is always this chain's root, which every caller
+    /// holds already ([`root`](Self::root)), so the answer does not repeat
+    /// it. Reads at each namespace's step, under a shared borrow of `heap`
+    /// (#834).
+    ///
     /// [`define_introduced_global`]: Self::define_introduced_global
     pub fn introduced_definition(
-        self: &Rc<Self>,
+        &self,
+        heap: &RefCell<Heap>,
         name: &str,
         scopes: &ScopeSet,
-    ) -> Option<(Rc<Environment>, IntroducedDefinition)> {
-        let chosen = self.scoped_binding_of(name, scopes).ok()??;
-        let root = self.root();
-        if let Some(renamed) = root.introduced_global(name, &chosen) {
-            return Some((root, IntroducedDefinition::Renamed(renamed)));
+    ) -> Option<IntroducedDefinition> {
+        let chosen = self.scoped_binding_of(heap, name, scopes).ok()??;
+        // Walked by reference: `root` clones an `Rc` per frame.
+        let mut root = self;
+        while let Some(parent) = root.parent.as_deref() {
+            root = parent;
         }
-        root.scoped_definition_location(name, &chosen)
+        if let Some(renamed) = root.introduced_global(name, &chosen) {
+            return Some(IntroducedDefinition::Renamed(renamed));
+        }
+        root.scoped_definition_location(heap, name, &chosen)
             .is_some()
-            .then(|| (root, IntroducedDefinition::Scoped(chosen)))
+            .then_some(IntroducedDefinition::Scoped(chosen))
     }
 
     /// The global the macro-introduced top-level definition of `name` at
@@ -2274,8 +2549,12 @@ impl Environment {
     /// Use this when creating bindings from binding forms (lambda, let, etc.)
     /// where you want to track the lexical scope for hygiene.
     /// This is the primary API - accepts TaggedValue directly.
+    ///
+    /// A namespace borrows `heap` mutably on entry (#834); a frame, where
+    /// nearly every scoped binding is made, takes no borrow.
     pub fn define_with_scopes(
         &self,
+        heap: &RefCell<Heap>,
         name: impl Into<Rc<str>>,
         scopes: ScopeSet,
         value: TaggedValue,
@@ -2290,7 +2569,7 @@ impl Environment {
             );
         }
 
-        self.insert_scoped(name, scopes, value, false);
+        self.insert_scoped(heap, name, scopes, value, false);
     }
 
     /// Store a binding under its scopes, or by name when it has none.
@@ -2311,15 +2590,19 @@ impl Environment {
     /// position filed in it as it is pushed.
     fn insert_scoped(
         &self,
+        heap: &RefCell<Heap>,
         name: Rc<str>,
         scopes: ScopeSet,
         value: TaggedValue,
         visible_by_name: bool,
     ) {
         if scopes.is_empty() {
-            self.define(name, value);
+            self.define(heap, name, value);
             return;
         }
+        // The step first, before the trace, the latch or the table: a
+        // refused borrow then panics with nothing written.
+        let _step = self.write_step(heap);
         crate::scope_trace::bind(&name, &scopes, visible_by_name);
         if visible_by_name {
             self.has_visible_scoped.set(true);
@@ -2430,13 +2713,17 @@ impl Environment {
     /// the bare name as well, and a `set!` through the scoped path then left
     /// the two disagreeing — the freeze `alias_bindings` names as the reason
     /// its own indirection exists.
+    ///
+    /// Borrows `heap` as [`define_with_scopes`](Self::define_with_scopes)
+    /// does.
     pub fn define_scoped_definition(
         &self,
+        heap: &RefCell<Heap>,
         name: impl Into<Rc<str>>,
         scopes: ScopeSet,
         value: TaggedValue,
     ) {
-        self.insert_scoped(name.into(), scopes, value, true);
+        self.insert_scoped(heap, name.into(), scopes, value, true);
     }
 
     /// Position of the most recent name-visible scoped definition of `name`
@@ -2484,16 +2771,23 @@ impl Environment {
     /// reference leaves every cell as it was, which is what makes the refusal
     /// worth anything.
     ///
+    /// The binding it writes, in a namespace, is written at that
+    /// namespace's step, under a mutable borrow of `heap` (#834); the
+    /// resolution reads scope sets only, and takes none.
+    ///
     /// [`get_with_scopes`]: Self::get_with_scopes
     pub fn set_with_scopes(
         &self,
+        heap: &RefCell<Heap>,
         name: &str,
         scopes: &ScopeSet,
         value: TaggedValue,
     ) -> Result<(), ScopedSetError> {
         if scopes.is_empty() {
             // Empty scopes - use simple lookup
-            return self.set(name, value).map_err(ScopedSetError::Undefined);
+            return self
+                .set(heap, name, value)
+                .map_err(ScopedSetError::Undefined);
         }
 
         /// Every candidate binding of `name` on this chain, paired with where
@@ -2563,6 +2857,7 @@ impl Environment {
             }
             Ok(Some(index)) => {
                 let (env, position) = candidates[index].1;
+                let _step = env.write_step(heap);
                 let mut scoped = env.scoped_bindings.borrow_mut();
                 match scoped.get_mut(name).and_then(|bs| bs.get_mut(position)) {
                     Some(binding) => {
@@ -2580,7 +2875,7 @@ impl Environment {
                 }
             }
             Ok(None) => {
-                let landed = self.set_scoped_fallback(name, scopes, value);
+                let landed = self.set_scoped_fallback(heap, name, scopes, value);
                 crate::scope_trace::wrote(
                     name,
                     scopes,
@@ -2617,6 +2912,7 @@ impl Environment {
     /// [`get`]: Self::get
     fn set_scoped_fallback(
         &self,
+        heap: &RefCell<Heap>,
         name: &str,
         scopes: &ScopeSet,
         value: TaggedValue,
@@ -2625,13 +2921,13 @@ impl Environment {
         let mut env = self;
         loop {
             if let Some(slot) = env.local_slot(name) {
-                env.set_slot_value(slot, value);
+                env.set_slot_value(heap, slot, value);
                 return Ok(());
             }
             if env.has_aliases.get()
                 && let Some(target) = env.alias_target(name)
             {
-                return target.set(env, value);
+                return target.set(env, heap, value);
             }
             if env.has_visible_scoped.get()
                 && let Some(i) = env.visible_scoped_index(name)
@@ -2650,6 +2946,7 @@ impl Environment {
                     );
                     if crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
                         drop(table);
+                        let _step = env.write_step(heap);
                         let mut table = env.scoped_bindings.borrow_mut();
                         if let Some(binding) = table.get_mut(name).and_then(|bs| bs.get_mut(i)) {
                             binding.tagged_value = value;
@@ -2690,12 +2987,16 @@ impl Environment {
     /// neither of which contains the other. The caller reports it — a
     /// `DesugarError` in the desugarer, an `EvalError` here at runtime — since
     /// no answer would be better than a guess. See [`AmbiguousReference`].
+    ///
+    /// Each namespace's hit is read at its step, under a shared borrow of
+    /// `heap` (#834).
     pub fn get_with_scopes(
         &self,
+        heap: &RefCell<Heap>,
         name: &str,
         scopes: &ScopeSet,
     ) -> Result<Option<TaggedValue>, Box<AmbiguousReference>> {
-        self.resolve_with_scopes(name, scopes)
+        self.resolve_with_scopes(heap, name, scopes)
             .map(|(value, _)| value)
     }
 
@@ -2709,9 +3010,12 @@ impl Environment {
     /// value, and early binding (#438) asks exactly this of the same
     /// reference.
     ///
+    /// Borrows `heap` as [`get_with_scopes`] does.
+    ///
     /// [`get_with_scopes`]: Self::get_with_scopes
     pub fn resolve_with_scopes(
         &self,
+        heap: &RefCell<Heap>,
         name: &str,
         scopes: &ScopeSet,
     ) -> Result<(Option<TaggedValue>, bool), Box<AmbiguousReference>> {
@@ -2728,7 +3032,7 @@ impl Environment {
             if debug {
                 println!("[ENV]   Empty scopes -> simple lookup");
             }
-            let result = self.get(name);
+            let result = self.get(heap, name);
             if debug {
                 match result {
                     Some(tv) => println!("[ENV]   Result: {tv:?}"),
@@ -2741,7 +3045,7 @@ impl Environment {
         // Every binding of this name in this environment and its parents,
         // in the order `resolve_scoped` wants them.
         let mut candidates: Vec<(ScopeSet, TaggedValue)> = Vec::new();
-        self.collect_scoped_candidates(name, scopes, &mut candidates, debug);
+        self.collect_scoped_candidates(heap, name, scopes, &mut candidates, debug);
 
         // One rule, shared with the VM's renamer: see
         // `crate::scope_resolve::resolve_scoped`. `None` means no candidate
@@ -2760,7 +3064,7 @@ impl Environment {
         // what happened on the path being debugged.
         let result = match &chosen {
             Ok(Some(i)) => Some(candidates[*i].1),
-            Ok(None) => self.get_scoped_fallback(name, scopes),
+            Ok(None) => self.get_scoped_fallback(heap, name, scopes),
             Err(_) => None,
         };
         if crate::scope_trace::enabled() {
@@ -2814,21 +3118,27 @@ impl Environment {
     /// through plain [`get`] on that side.
     ///
     /// [`get`]: Self::get
-    fn get_scoped_fallback(&self, name: &str, scopes: &ScopeSet) -> Option<TaggedValue> {
+    fn get_scoped_fallback(
+        &self,
+        heap: &RefCell<Heap>,
+        name: &str,
+        scopes: &ScopeSet,
+    ) -> Option<TaggedValue> {
         // A loop up the chain, as `get` walks it (#617).
         let mut env = self;
         loop {
-            if let Some(tv) = env.local_value(name) {
+            if let Some(tv) = env.local_value(heap, name) {
                 return Some(tv);
             }
             if env.has_aliases.get()
                 && let Some(target) = env.alias_target(name)
             {
-                return target.get(env);
+                return target.get(env, heap);
             }
             if env.has_visible_scoped.get()
                 && let Some(i) = env.visible_scoped_index(name)
             {
+                let _step = env.read_step(heap);
                 let table = env.scoped_bindings.borrow();
                 // `.get(i)`, as `get` reads the same table — the two copies of
                 // this walk must not disagree on out-of-bounds behavior. One
@@ -2881,9 +3191,13 @@ impl Environment {
     /// resolves a reference without reading it, and a record of a read that
     /// did not happen would make the trace disagree with the program.
     ///
+    /// Borrows `heap` as [`get_with_scopes`] does, since its walk is that
+    /// read's.
+    ///
     /// [`get_with_scopes`]: Self::get_with_scopes
     pub fn scoped_binding_of(
         &self,
+        heap: &RefCell<Heap>,
         name: &str,
         scopes: &ScopeSet,
     ) -> Result<Option<ScopeSet>, Box<AmbiguousReference>> {
@@ -2891,7 +3205,7 @@ impl Environment {
             return Ok(None);
         }
         let mut candidates: Vec<(ScopeSet, TaggedValue)> = Vec::new();
-        self.collect_scoped_candidates(name, scopes, &mut candidates, false);
+        self.collect_scoped_candidates(heap, name, scopes, &mut candidates, false);
         let chosen = crate::scope_resolve::resolve_index(name, scopes, &candidates)?;
         Ok(chosen.map(|index| candidates.swap_remove(index).0))
     }
@@ -2900,18 +3214,19 @@ impl Environment {
     /// local syntax region (#424). Unlike a runtime lexical variable, this
     /// binding lives in the expansion environment and can be shared by alias.
     ///
-    /// `heap` is the one its values live on, which says what is a macro.
+    /// `heap` is the one its values live on, which says what is a macro, and
+    /// which each namespace's step borrows shared (#834).
     pub fn scoped_macro_binding(
         self: &Rc<Self>,
+        heap: &RefCell<Heap>,
         name: &str,
         scopes: &ScopeSet,
-        heap: &crate::Heap,
     ) -> Option<(Rc<Self>, ScopeSet)> {
-        let identity = self.scoped_binding_of(name, scopes).ok()??;
+        let identity = self.scoped_binding_of(heap, name, scopes).ok()??;
         let mut home = self.clone();
         loop {
-            if let Some(value) = home.scoped_definition_value(name, &identity) {
-                let is_macro = heap.get_macro(value).is_some();
+            if let Some(value) = home.scoped_definition_value(heap, name, &identity) {
+                let is_macro = heap.borrow().get_macro(value).is_some();
                 return is_macro.then_some((home, identity));
             }
             home = home.parent.clone()?;
@@ -2947,12 +3262,16 @@ impl Environment {
     /// `Err` as [`scoped_binding_of`] gives it: an ambiguous reference
     /// denotes no binding.
     ///
+    /// Borrows `heap` as [`scoped_binding_of`] does; its own walk reads no
+    /// value.
+    ///
     /// [`get`]: Self::get
     /// [`get_scoped_fallback`]: Self::get_scoped_fallback
     /// [`define_introduced_global`]: Self::define_introduced_global
     /// [`scoped_binding_of`]: Self::scoped_binding_of
     pub fn name_reaches_binding_of(
         &self,
+        heap: &RefCell<Heap>,
         name: &str,
         scopes: &ScopeSet,
     ) -> Result<bool, Box<AmbiguousReference>> {
@@ -2960,7 +3279,7 @@ impl Environment {
             // The reference *is* the name-only view.
             return Ok(true);
         }
-        let chosen = self.scoped_binding_of(name, scopes)?;
+        let chosen = self.scoped_binding_of(heap, name, scopes)?;
         let mut env = self;
         loop {
             if env.bindings.borrow().slot_of(name).is_some() {
@@ -3018,6 +3337,7 @@ impl Environment {
     /// [`define_introduced_global`]: Self::define_introduced_global
     fn collect_scoped_candidates(
         &self,
+        heap: &RefCell<Heap>,
         name: &str,
         ref_scopes: &ScopeSet,
         candidates: &mut Vec<(ScopeSet, TaggedValue)>,
@@ -3027,6 +3347,8 @@ impl Environment {
         loop {
             let scoped = env.scoped_bindings.borrow();
             if let Some(bindings) = scoped.get(name) {
+                // Each candidate's value is read at the namespace's step.
+                let _step = env.read_step(heap);
                 // A spelling's index shows only the bindings filed under the
                 // reference's scopes, so with one the debug trace lists those.
                 env.visit_scoped_candidates(
@@ -3052,7 +3374,8 @@ impl Environment {
             match &env.parent {
                 Some(parent) => env = parent,
                 None => {
-                    return env.collect_introduced_globals(name, ref_scopes, candidates, debug);
+                    return env
+                        .collect_introduced_globals(heap, name, ref_scopes, candidates, debug);
                 }
             }
         }
@@ -3067,6 +3390,7 @@ impl Environment {
     /// [`collect_scoped_candidates`]: Self::collect_scoped_candidates
     fn collect_introduced_globals(
         &self,
+        heap: &RefCell<Heap>,
         name: &str,
         ref_scopes: &ScopeSet,
         candidates: &mut Vec<(ScopeSet, TaggedValue)>,
@@ -3088,7 +3412,7 @@ impl Environment {
             found.push((scopes.clone(), renamed_to.clone()));
         });
         for (scopes, renamed_to) in found {
-            let value = self.local_value(&renamed_to);
+            let value = self.local_value(heap, &renamed_to);
             if debug {
                 println!(
                     "[ENV]   Introduced global {} as {} ⊆ {} : {}",
@@ -3124,12 +3448,15 @@ impl Environment {
     }
 
     /// Get all variable names defined in this environment and parent environments
-    pub fn get_all_names(&self) -> Vec<String> {
+    ///
+    /// Borrows `heap` as [`local_names`](Self::local_names) does, at each
+    /// namespace on the chain.
+    pub fn get_all_names(&self, heap: &RefCell<Heap>) -> Vec<String> {
         let mut names = Vec::new();
         let mut env = Some(self);
         while let Some(current) = env {
             // Through `local_names`, so an `import_alias` is left out here too.
-            names.extend(current.local_names());
+            names.extend(current.local_names(heap));
             // Include names from scoped bindings
             names.extend(
                 current
@@ -3154,9 +3481,12 @@ impl Environment {
     /// enumerates names — an import set today, completion tomorrow — should
     /// offer it.
     ///
+    /// Borrows `heap` shared at a namespace's step, to tell an alias from a
+    /// name a program bound, when it holds any alias (#834).
+    ///
     /// [`import_alias`]: Self::import_alias
-    pub fn local_names(&self) -> Vec<String> {
-        self.visible_slots()
+    pub fn local_names(&self, heap: &RefCell<Heap>) -> Vec<String> {
+        self.visible_slots(heap)
             .into_iter()
             .map(|(_, name)| name)
             .collect()
@@ -3164,7 +3494,7 @@ impl Environment {
 
     /// Each name a program bound here with its slot, in slot order. With the
     /// slot, because leaving a name out makes position and slot two things.
-    fn visible_slots(&self) -> Vec<(u32, String)> {
+    fn visible_slots(&self, heap: &RefCell<Heap>) -> Vec<(u32, String)> {
         // A table, not a scan per name: an importer that expands library
         // macros holds an alias for each location their templates mention.
         let hidden: FxHashMap<Rc<str>, (u64, u32)> =
@@ -3179,6 +3509,13 @@ impl Environment {
                     })
                     .collect()
             });
+        // Whether an alias is still the forward it was minted as is read at
+        // the step, where from 4b.6's records the alias's binding is.
+        let _step = if hidden.is_empty() {
+            None
+        } else {
+            self.read_step(heap)
+        };
         self.bindings
             .borrow()
             .names()
@@ -3201,12 +3538,15 @@ impl Environment {
     ///
     /// Returns a vector of (name, TaggedValue) pairs for all bindings defined locally.
     /// This is useful for library imports where we need to iterate over all exports.
-    pub fn bindings(&self) -> Vec<(String, TaggedValue)> {
+    ///
+    /// Each value is read as [`slot_value`](Self::slot_value) reads it, at
+    /// a namespace's step (#834).
+    pub fn bindings(&self, heap: &RefCell<Heap>) -> Vec<(String, TaggedValue)> {
         // Names first and values after: an imported binding's value is read
         // from its owner, and that read must not happen under this borrow.
-        self.visible_slots()
+        self.visible_slots(heap)
             .into_iter()
-            .map(|(slot, name)| (name, self.slot_value(slot)))
+            .map(|(slot, name)| (name, self.slot_value(heap, slot)))
             .collect()
     }
 
@@ -3230,87 +3570,87 @@ impl Environment {
     }
 }
 
-impl Default for Environment {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::heap::new_shared_heap;
 
     #[test]
     fn test_define_and_get() {
-        let env = Environment::new();
-        env.define("x".to_string(), TaggedValue::fixnum(42));
-        assert_eq!(env.get("x"), Some(TaggedValue::fixnum(42)));
+        let heap = new_shared_heap();
+        let env = Environment::with_heap(&heap);
+        env.define(&heap, "x".to_string(), TaggedValue::fixnum(42));
+        assert_eq!(env.get(&heap, "x"), Some(TaggedValue::fixnum(42)));
     }
 
     #[test]
     fn test_slot_stability_across_redefine() {
-        let env = Environment::new();
-        env.define("x".to_string(), TaggedValue::fixnum(1));
+        let heap = new_shared_heap();
+        let env = Environment::with_heap(&heap);
+        env.define(&heap, "x".to_string(), TaggedValue::fixnum(1));
         let slot = env.local_slot("x").unwrap();
 
         // Redefinition overwrites the slot in place — same index, new value.
-        env.define("x".to_string(), TaggedValue::fixnum(2));
+        env.define(&heap, "x".to_string(), TaggedValue::fixnum(2));
         assert_eq!(env.local_slot("x"), Some(slot));
-        assert_eq!(env.slot_value(slot), TaggedValue::fixnum(2));
+        assert_eq!(env.slot_value(&heap, slot), TaggedValue::fixnum(2));
 
         // set! through the slot API is visible to name lookup and vice versa.
-        env.set_slot_value(slot, TaggedValue::fixnum(3));
-        assert_eq!(env.get("x"), Some(TaggedValue::fixnum(3)));
-        env.set("x", TaggedValue::fixnum(4)).unwrap();
-        assert_eq!(env.slot_value(slot), TaggedValue::fixnum(4));
+        env.set_slot_value(&heap, slot, TaggedValue::fixnum(3));
+        assert_eq!(env.get(&heap, "x"), Some(TaggedValue::fixnum(3)));
+        env.set(&heap, "x", TaggedValue::fixnum(4)).unwrap();
+        assert_eq!(env.slot_value(&heap, slot), TaggedValue::fixnum(4));
 
         // New defines append fresh slots without disturbing existing ones.
-        env.define("y".to_string(), TaggedValue::fixnum(10));
+        env.define(&heap, "y".to_string(), TaggedValue::fixnum(10));
         assert_ne!(env.local_slot("y"), Some(slot));
-        assert_eq!(env.slot_value(slot), TaggedValue::fixnum(4));
+        assert_eq!(env.slot_value(&heap, slot), TaggedValue::fixnum(4));
     }
 
     #[test]
     fn test_local_slot_ignores_parent() {
-        let parent = Rc::new(Environment::new());
-        parent.define("x".to_string(), TaggedValue::fixnum(42));
+        let heap = new_shared_heap();
+        let parent = Rc::new(Environment::with_heap(&heap));
+        parent.define(&heap, "x".to_string(), TaggedValue::fixnum(42));
         let child = Environment::child_frame(parent);
         // x resolves via the parent chain but has no local slot in the child.
-        assert_eq!(child.get("x"), Some(TaggedValue::fixnum(42)));
+        assert_eq!(child.get(&heap, "x"), Some(TaggedValue::fixnum(42)));
         assert_eq!(child.local_slot("x"), None);
     }
 
     #[test]
     fn linear_and_indexed_frames_agree_on_slots() {
+        let heap = new_shared_heap();
         // `Bindings` answers by linear scan until a frame passes
         // `LINEAR_MAX`, then by hash index. Only the global environment
         // crosses that line at runtime, and it crosses it during startup,
         // where a name the index misses looks like a missing primitive
         // rather than an indexing bug — so the crossover is pinned here.
-        let env = Environment::new();
+        let env = Environment::with_heap(&heap);
         let names: Vec<String> = (0..LINEAR_MAX + 2).map(|i| format!("v{i}")).collect();
         for (i, name) in names.iter().enumerate() {
-            env.define(name.as_str(), TaggedValue::fixnum(i as i64));
+            env.define(&heap, name.as_str(), TaggedValue::fixnum(i as i64));
         }
         // Every name keeps the slot its insertion order gave it, on both
         // sides of the crossover, and reads through the index agree with the
         // values.
         for (i, name) in names.iter().enumerate() {
             assert_eq!(env.local_slot(name), Some(i as u32), "slot of {name}");
-            assert_eq!(env.get(name), Some(TaggedValue::fixnum(i as i64)));
+            assert_eq!(env.get(&heap, name), Some(TaggedValue::fixnum(i as i64)));
         }
         // Redefining after the index exists must overwrite in place, not
         // append a second slot the index then shadows.
-        env.define("v0", TaggedValue::fixnum(99));
+        env.define(&heap, "v0", TaggedValue::fixnum(99));
         assert_eq!(env.local_slot("v0"), Some(0));
-        assert_eq!(env.get("v0"), Some(TaggedValue::fixnum(99)));
-        assert_eq!(env.bindings().len(), names.len());
+        assert_eq!(env.get(&heap, "v0"), Some(TaggedValue::fixnum(99)));
+        assert_eq!(env.bindings(&heap).len(), names.len());
     }
 
     #[test]
     fn test_env_ids_unique_and_nonzero() {
-        let a = Rc::new(Environment::new());
-        let b = Environment::new();
+        let heap = new_shared_heap();
+        let a = Rc::new(Environment::with_heap(&heap));
+        let b = Environment::with_heap(&heap);
         assert_ne!(a.env_id(), 0);
         assert_ne!(a.env_id(), b.env_id());
         // Sharing an environment is sharing its `Rc`, so an id is stable for
@@ -3324,21 +3664,23 @@ mod tests {
 
     #[test]
     fn test_parent_lookup() {
-        let parent = Rc::new(Environment::new());
-        parent.define("x".to_string(), TaggedValue::fixnum(42));
+        let heap = new_shared_heap();
+        let parent = Rc::new(Environment::with_heap(&heap));
+        parent.define(&heap, "x".to_string(), TaggedValue::fixnum(42));
 
         let child = Environment::child_frame(parent);
-        assert_eq!(child.get("x"), Some(TaggedValue::fixnum(42)));
+        assert_eq!(child.get(&heap, "x"), Some(TaggedValue::fixnum(42)));
     }
 
     #[test]
     fn test_bindings() {
-        let env = Environment::new();
-        env.define("x".to_string(), TaggedValue::fixnum(42));
-        env.define("y".to_string(), TaggedValue::TRUE);
-        env.define("z".to_string(), TaggedValue::fixnum(100));
+        let heap = new_shared_heap();
+        let env = Environment::with_heap(&heap);
+        env.define(&heap, "x".to_string(), TaggedValue::fixnum(42));
+        env.define(&heap, "y".to_string(), TaggedValue::TRUE);
+        env.define(&heap, "z".to_string(), TaggedValue::fixnum(100));
 
-        let bindings = env.bindings();
+        let bindings = env.bindings(&heap);
         assert_eq!(bindings.len(), 3);
 
         // Check that all bindings are present
@@ -3360,15 +3702,16 @@ mod tests {
 
     #[test]
     fn test_bindings_excludes_parent() {
-        let parent = Rc::new(Environment::new());
-        parent.define("x".to_string(), TaggedValue::fixnum(42));
-        parent.define("y".to_string(), TaggedValue::fixnum(100));
+        let heap = new_shared_heap();
+        let parent = Rc::new(Environment::with_heap(&heap));
+        parent.define(&heap, "x".to_string(), TaggedValue::fixnum(42));
+        parent.define(&heap, "y".to_string(), TaggedValue::fixnum(100));
 
         let child = Environment::child_frame(parent);
-        child.define("z".to_string(), TaggedValue::TRUE);
+        child.define(&heap, "z".to_string(), TaggedValue::TRUE);
 
         // bindings() should only return local bindings
-        let bindings = child.bindings();
+        let bindings = child.bindings(&heap);
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].0, "z");
         assert_eq!(bindings[0].1, TaggedValue::TRUE);
@@ -3376,22 +3719,28 @@ mod tests {
 
     #[test]
     fn test_scoped_bindings_basic() {
+        let heap = new_shared_heap();
         use crate::scope::ScopeId;
 
-        let env = Environment::new();
+        let env = Environment::with_heap(&heap);
         let s1 = ScopeId(1);
         let scopes = ScopeSet::singleton(s1);
 
-        env.define_with_scopes("x".to_string(), scopes.clone(), TaggedValue::fixnum(42));
+        env.define_with_scopes(
+            &heap,
+            "x".to_string(),
+            scopes.clone(),
+            TaggedValue::fixnum(42),
+        );
 
         // Lookup with matching scopes should find the binding
-        let result = env.get_with_scopes("x", &scopes).unwrap();
+        let result = env.get_with_scopes(&heap, "x", &scopes).unwrap();
         assert_eq!(result, Some(TaggedValue::fixnum(42)));
 
         // Lookup with superset scopes should also find it (binding.scopes ⊆ ref.scopes)
         let s2 = ScopeId(2);
         let larger_scopes = ScopeSet::from_iter([s1, s2]);
-        let result = env.get_with_scopes("x", &larger_scopes).unwrap();
+        let result = env.get_with_scopes(&heap, "x", &larger_scopes).unwrap();
         assert_eq!(result, Some(TaggedValue::fixnum(42)));
     }
 
@@ -3414,18 +3763,21 @@ mod tests {
         // Outer x binding: introduced at S1 (Symbol requires heap allocation)
         let outer_x_scopes = ScopeSet::singleton(s1);
         let outer_tv = heap.borrow_mut().intern_symbol("outer");
-        env.define_with_scopes("x".to_string(), outer_x_scopes.clone(), outer_tv);
+        env.define_with_scopes(&heap, "x".to_string(), outer_x_scopes.clone(), outer_tv);
 
         // Inner x binding: inside S1, S2, S3
         let inner_x_scopes = ScopeSet::from_iter([s1, s2, s3]);
         let inner_tv = heap.borrow_mut().intern_symbol("inner");
-        env.define_with_scopes("x".to_string(), inner_x_scopes.clone(), inner_tv);
+        env.define_with_scopes(&heap, "x".to_string(), inner_x_scopes.clone(), inner_tv);
 
         // Free var x in macro m: inside S1, S2 (captured when macro was defined)
         let macro_x_scopes = ScopeSet::from_iter([s1, s2]);
 
         // Lookup should find outer x, NOT inner x
-        let result_tv = env.get_with_scopes("x", &macro_x_scopes).unwrap().unwrap();
+        let result_tv = env
+            .get_with_scopes(&heap, "x", &macro_x_scopes)
+            .unwrap()
+            .unwrap();
         let name = heap
             .borrow()
             .get_symbol_name(result_tv)
@@ -3435,14 +3787,16 @@ mod tests {
 
     #[test]
     fn test_scoped_bindings_most_specific() {
+        let heap = new_shared_heap();
         use crate::scope::ScopeId;
 
-        let env = Environment::new();
+        let env = Environment::with_heap(&heap);
         let s1 = ScopeId(1);
         let s2 = ScopeId(2);
 
         // Less specific binding
         env.define_with_scopes(
+            &heap,
             "x".to_string(),
             ScopeSet::singleton(s1),
             TaggedValue::fixnum(1),
@@ -3450,6 +3804,7 @@ mod tests {
 
         // More specific binding
         env.define_with_scopes(
+            &heap,
             "x".to_string(),
             ScopeSet::from_iter([s1, s2]),
             TaggedValue::fixnum(2),
@@ -3458,14 +3813,14 @@ mod tests {
         // Lookup with {S1, S2} should find the more specific binding
         let lookup_scopes = ScopeSet::from_iter([s1, s2]);
         assert_eq!(
-            env.get_with_scopes("x", &lookup_scopes).unwrap(),
+            env.get_with_scopes(&heap, "x", &lookup_scopes).unwrap(),
             Some(TaggedValue::fixnum(2))
         );
 
         // Lookup with just {S1} should find the less specific binding
         let lookup_scopes_s1 = ScopeSet::singleton(s1);
         assert_eq!(
-            env.get_with_scopes("x", &lookup_scopes_s1).unwrap(),
+            env.get_with_scopes(&heap, "x", &lookup_scopes_s1).unwrap(),
             Some(TaggedValue::fixnum(1))
         );
     }
@@ -3479,12 +3834,15 @@ mod tests {
 
         // Define an unmarked binding (Symbol requires heap allocation)
         let tv = heap.borrow_mut().intern_symbol("primitive-cons");
-        env.define("cons".to_string(), tv);
+        env.define(&heap, "cons".to_string(), tv);
 
         // Lookup with scopes should fall back to unmarked binding
         let s1 = ScopeId(1);
         let scopes = ScopeSet::singleton(s1);
-        let result_tv = env.get_with_scopes("cons", &scopes).unwrap().unwrap();
+        let result_tv = env
+            .get_with_scopes(&heap, "cons", &scopes)
+            .unwrap()
+            .unwrap();
         let name = heap
             .borrow()
             .get_symbol_name(result_tv)
@@ -3502,17 +3860,20 @@ mod tests {
     /// answer that depended on insertion order rather than on the program.
     #[test]
     fn two_unordered_bindings_do_not_resolve() {
+        let heap = new_shared_heap();
         use crate::scope::ScopeId;
 
-        let env = Environment::new();
+        let env = Environment::with_heap(&heap);
         let (s1, s2) = (ScopeId(1), ScopeId(2));
 
         env.define_with_scopes(
+            &heap,
             "x".to_string(),
             ScopeSet::singleton(s1),
             TaggedValue::fixnum(1),
         );
         env.define_with_scopes(
+            &heap,
             "x".to_string(),
             ScopeSet::singleton(s2),
             TaggedValue::fixnum(2),
@@ -3520,18 +3881,20 @@ mod tests {
 
         let both = ScopeSet::from_iter([s1, s2]);
         let err = env
-            .get_with_scopes("x", &both)
+            .get_with_scopes(&heap, "x", &both)
             .expect_err("neither binding contains the other");
         assert_eq!(err.name, "x");
 
         // Each is still reachable on its own: ambiguity is a property of the
         // reference, not of the bindings.
         assert_eq!(
-            env.get_with_scopes("x", &ScopeSet::singleton(s1)).unwrap(),
+            env.get_with_scopes(&heap, "x", &ScopeSet::singleton(s1))
+                .unwrap(),
             Some(TaggedValue::fixnum(1))
         );
         assert_eq!(
-            env.get_with_scopes("x", &ScopeSet::singleton(s2)).unwrap(),
+            env.get_with_scopes(&heap, "x", &ScopeSet::singleton(s2))
+                .unwrap(),
             Some(TaggedValue::fixnum(2))
         );
     }
@@ -3540,6 +3903,7 @@ mod tests {
 #[cfg(test)]
 mod scoped_write_tests {
     use super::*;
+    use crate::heap::new_shared_heap;
 
     fn scopes(ids: &[usize]) -> ScopeSet {
         let mut set = ScopeSet::new();
@@ -3557,20 +3921,21 @@ mod scoped_write_tests {
     /// the two be swapped.
     #[test]
     fn an_ambiguous_write_reports_ambiguity() {
-        let env = Environment::new();
-        env.define_with_scopes("x", scopes(&[1]), TaggedValue::fixnum(1));
-        env.define_with_scopes("x", scopes(&[2]), TaggedValue::fixnum(2));
-        match env.set_with_scopes("x", &scopes(&[1, 2]), TaggedValue::fixnum(9)) {
+        let heap = new_shared_heap();
+        let env = Environment::with_heap(&heap);
+        env.define_with_scopes(&heap, "x", scopes(&[1]), TaggedValue::fixnum(1));
+        env.define_with_scopes(&heap, "x", scopes(&[2]), TaggedValue::fixnum(2));
+        match env.set_with_scopes(&heap, "x", &scopes(&[1, 2]), TaggedValue::fixnum(9)) {
             Err(ScopedSetError::Ambiguous(e)) => assert_eq!(e.name, "x"),
             other => panic!("expected an ambiguity, got {other:?}"),
         }
         // And nothing moved.
         assert_eq!(
-            env.get_with_scopes("x", &scopes(&[1])).unwrap(),
+            env.get_with_scopes(&heap, "x", &scopes(&[1])).unwrap(),
             Some(TaggedValue::fixnum(1))
         );
         assert_eq!(
-            env.get_with_scopes("x", &scopes(&[2])).unwrap(),
+            env.get_with_scopes(&heap, "x", &scopes(&[2])).unwrap(),
             Some(TaggedValue::fixnum(2))
         );
     }
@@ -3578,8 +3943,9 @@ mod scoped_write_tests {
     /// The other arm: a name nothing binds is undefined, not ambiguous.
     #[test]
     fn a_write_to_nothing_reports_undefined() {
-        let env = Environment::new();
-        match env.set_with_scopes("absent", &scopes(&[1]), TaggedValue::fixnum(9)) {
+        let heap = new_shared_heap();
+        let env = Environment::with_heap(&heap);
+        match env.set_with_scopes(&heap, "absent", &scopes(&[1]), TaggedValue::fixnum(9)) {
             Err(ScopedSetError::Undefined(name)) => assert_eq!(name, "absent"),
             other => panic!("expected undefined, got {other:?}"),
         }
@@ -3589,18 +3955,19 @@ mod scoped_write_tests {
     /// matching gets a diagnostic either way.
     #[test]
     fn both_arms_render_a_message() {
-        let env = Environment::new();
+        let heap = new_shared_heap();
+        let env = Environment::with_heap(&heap);
         let undefined = env
-            .set_with_scopes("absent", &scopes(&[1]), TaggedValue::fixnum(9))
+            .set_with_scopes(&heap, "absent", &scopes(&[1]), TaggedValue::fixnum(9))
             .unwrap_err()
             .to_string();
         assert!(undefined.contains("undefined variable"), "{undefined}");
         assert!(undefined.contains("absent"), "{undefined}");
 
-        env.define_with_scopes("x", scopes(&[1]), TaggedValue::fixnum(1));
-        env.define_with_scopes("x", scopes(&[2]), TaggedValue::fixnum(2));
+        env.define_with_scopes(&heap, "x", scopes(&[1]), TaggedValue::fixnum(1));
+        env.define_with_scopes(&heap, "x", scopes(&[2]), TaggedValue::fixnum(2));
         let ambiguous = env
-            .set_with_scopes("x", &scopes(&[1, 2]), TaggedValue::fixnum(9))
+            .set_with_scopes(&heap, "x", &scopes(&[1, 2]), TaggedValue::fixnum(9))
             .unwrap_err()
             .to_string();
         assert!(ambiguous.contains("ambiguous reference"), "{ambiguous}");
@@ -3610,6 +3977,7 @@ mod scoped_write_tests {
 #[cfg(test)]
 mod introduced_global_tests {
     use super::*;
+    use crate::heap::new_shared_heap;
 
     fn scopes(ids: &[usize]) -> ScopeSet {
         let mut set = ScopeSet::new();
@@ -3633,7 +4001,8 @@ mod introduced_global_tests {
 
     #[test]
     fn a_name_with_no_introduced_definition_yields_nothing() {
-        let env = Environment::new();
+        let heap = new_shared_heap();
+        let env = Environment::with_heap(&heap);
         env.define_introduced_global("x".into(), scopes(&[1]), "x #1".into());
         assert!(recorded(&env, "y").is_empty());
     }
@@ -3643,7 +4012,8 @@ mod introduced_global_tests {
     /// the removed bare-name alias did; scoped references need the identities.
     #[test]
     fn two_expansions_of_one_spelling_are_two_entries() {
-        let env = Environment::new();
+        let heap = new_shared_heap();
+        let env = Environment::with_heap(&heap);
         env.define_introduced_global("count".into(), scopes(&[1]), "count #1".into());
         env.define_introduced_global("count".into(), scopes(&[2]), "count #2".into());
         let entries = recorded(&env, "count");
@@ -3664,7 +4034,8 @@ mod introduced_global_tests {
     /// expansion does not leave two names for one binding.
     #[test]
     fn the_same_identity_recorded_twice_overwrites() {
-        let env = Environment::new();
+        let heap = new_shared_heap();
+        let env = Environment::with_heap(&heap);
         env.define_introduced_global("count".into(), scopes(&[1, 2]), "stale".into());
         env.define_introduced_global("count".into(), scopes(&[1, 2]), "fresh".into());
         assert_eq!(
@@ -3680,7 +4051,8 @@ mod introduced_global_tests {
     /// index is built and after.
     #[test]
     fn identities_past_the_threshold_are_found_through_the_index() {
-        let env = Environment::new();
+        let heap = new_shared_heap();
+        let env = Environment::with_heap(&heap);
         let identity = |i: usize| scopes(&[1, 100 + i]);
         for i in 0..20 {
             env.define_introduced_global("count".into(), identity(i), format!("count #{i}").into());
@@ -3720,7 +4092,8 @@ mod introduced_global_tests {
     /// host's environment, a frame until 4b.8). Nothing asserts which.
     #[test]
     fn entries_are_local_to_the_environment_that_recorded_them() {
-        let parent = Rc::new(Environment::new());
+        let heap = new_shared_heap();
+        let parent = Rc::new(Environment::with_heap(&heap));
         parent.define_introduced_global("x".into(), scopes(&[1]), "x #1".into());
         let child = Environment::child_frame(Rc::clone(&parent));
         assert!(recorded(&child, "x").is_empty());
@@ -3735,6 +4108,7 @@ mod introduced_global_tests {
 #[cfg(test)]
 mod scoped_index_tests {
     use super::*;
+    use crate::heap::new_shared_heap;
 
     fn scopes(ids: &[usize]) -> ScopeSet {
         let mut set = ScopeSet::new();
@@ -3759,40 +4133,41 @@ mod scoped_index_tests {
     /// own.
     #[test]
     fn an_indexed_spelling_is_found_by_its_exact_readers() {
-        let library = Rc::new(Environment::new());
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
         let identity = |k: usize| scopes(&[k, 100 + k]);
         for k in 0..12 {
-            library.define_with_scopes("count", identity(k), n(k as i64));
+            library.define_with_scopes(&heap, "count", identity(k), n(k as i64));
         }
-        library.define_with_scopes("count", identity(2), n(-2));
-        library.define_with_scopes("count", identity(11), n(-11));
+        library.define_with_scopes(&heap, "count", identity(2), n(-2));
+        library.define_with_scopes(&heap, "count", identity(11), n(-11));
         assert_eq!(library.scoped_bindings.borrow()["count"].len(), 12);
         assert_eq!(indexed_len(&library, "count"), Some(12));
         for (k, value) in [(0, 0), (2, -2), (7, 7), (11, -11)] {
             let reference = scopes(&[k, 100 + k, 500]);
             assert_eq!(
-                library.get_with_scopes("count", &reference).unwrap(),
+                library.get_with_scopes(&heap, "count", &reference).unwrap(),
                 Some(n(value))
             );
         }
 
-        let user = Environment::new();
+        let user = Environment::with_heap(&heap);
         for (alias, k) in [("oldest", 0), ("newest", 11)] {
             user.define_scoped_alias(alias, Rc::clone(&library), "count".into(), identity(k));
         }
-        assert_eq!(user.get("oldest"), Some(n(0)));
-        assert_eq!(user.get("newest"), Some(n(-11)));
-        user.set("oldest", n(40)).unwrap();
-        user.set("newest", n(41)).unwrap();
+        assert_eq!(user.get(&heap, "oldest"), Some(n(0)));
+        assert_eq!(user.get(&heap, "newest"), Some(n(-11)));
+        user.set(&heap, "oldest", n(40)).unwrap();
+        user.set(&heap, "newest", n(41)).unwrap();
         assert_eq!(
-            library.scoped_definition_value("count", &identity(0)),
+            library.scoped_definition_value(&heap, "count", &identity(0)),
             Some(n(40))
         );
         assert_eq!(
-            library.scoped_definition_value("count", &identity(11)),
+            library.scoped_definition_value(&heap, "count", &identity(11)),
             Some(n(41))
         );
-        let located = |alias| match user.binding_location(alias) {
+        let located = |alias| match user.binding_location(&heap, alias) {
             Some(BindingLocation::Scoped(id, spelling, index)) => {
                 assert_eq!((id, &*spelling), (library.env_id(), "count"));
                 index
@@ -3802,10 +4177,10 @@ mod scoped_index_tests {
         assert_eq!((located("oldest"), located("newest")), (0, 11));
 
         library
-            .set_with_scopes("count", &scopes(&[4, 104, 500]), n(44))
+            .set_with_scopes(&heap, "count", &scopes(&[4, 104, 500]), n(44))
             .unwrap();
         assert_eq!(
-            library.scoped_definition_value("count", &identity(4)),
+            library.scoped_definition_value(&heap, "count", &identity(4)),
             Some(n(44))
         );
         assert_eq!(library.scoped_bindings.borrow()["count"].len(), 12);
@@ -3817,31 +4192,34 @@ mod scoped_index_tests {
     /// out-of-line tables.
     #[test]
     fn a_frame_is_indexed_only_past_its_own_threshold() {
-        let root = Rc::new(Environment::new());
+        let heap = new_shared_heap();
+        let root = Rc::new(Environment::with_heap(&heap));
         for k in 0..=INDEX_ABOVE {
-            root.define_with_scopes("x", scopes(&[k + 1]), n(k as i64));
+            root.define_with_scopes(&heap, "x", scopes(&[k + 1]), n(k as i64));
         }
         assert_eq!(indexed_len(&root, "x"), Some(INDEX_ABOVE + 1));
 
         let frame = Environment::child_frame(Rc::clone(&root));
         for k in 0..=INDEX_ABOVE {
-            frame.define_with_scopes("x", scopes(&[1000 + k]), n(k as i64));
+            frame.define_with_scopes(&heap, "x", scopes(&[1000 + k]), n(k as i64));
         }
         assert_eq!(indexed_len(&frame, "x"), None);
         assert!(frame.rare.get().is_none());
         for k in INDEX_ABOVE + 1..FRAME_INDEX_ABOVE {
-            frame.define_with_scopes("x", scopes(&[1000 + k]), n(k as i64));
+            frame.define_with_scopes(&heap, "x", scopes(&[1000 + k]), n(k as i64));
         }
         assert_eq!(frame.scoped_bindings.borrow()["x"].len(), FRAME_INDEX_ABOVE);
         assert_eq!(indexed_len(&frame, "x"), None);
-        frame.define_with_scopes("x", scopes(&[5000]), n(-1));
+        frame.define_with_scopes(&heap, "x", scopes(&[5000]), n(-1));
         assert_eq!(indexed_len(&frame, "x"), Some(FRAME_INDEX_ABOVE + 1));
         assert_eq!(
-            frame.get_with_scopes("x", &scopes(&[1003, 9999])).unwrap(),
+            frame
+                .get_with_scopes(&heap, "x", &scopes(&[1003, 9999]))
+                .unwrap(),
             Some(n(3))
         );
         assert_eq!(
-            frame.get_with_scopes("x", &scopes(&[5000])).unwrap(),
+            frame.get_with_scopes(&heap, "x", &scopes(&[5000])).unwrap(),
             Some(n(-1))
         );
     }
@@ -3853,6 +4231,7 @@ mod scoped_index_tests {
 #[cfg(test)]
 mod name_view_tests {
     use super::*;
+    use crate::heap::new_shared_heap;
 
     fn scopes(ids: &[usize]) -> ScopeSet {
         let mut set = ScopeSet::new();
@@ -3867,8 +4246,8 @@ mod name_view_tests {
         TaggedValue::fixnum(0)
     }
 
-    fn reaches(env: &Environment, name: &str, ids: &[usize]) -> bool {
-        env.name_reaches_binding_of(name, &scopes(ids))
+    fn reaches(heap: &SharedHeap, env: &Environment, name: &str, ids: &[usize]) -> bool {
+        env.name_reaches_binding_of(heap, name, &scopes(ids))
             .expect("not ambiguous")
     }
 
@@ -3876,11 +4255,12 @@ mod name_view_tests {
     /// recent. Introduced definitions no longer use this view (#427).
     #[test]
     fn the_name_reaches_only_the_latest_of_two_introduced_definitions() {
-        let env = Environment::new();
-        env.define_scoped_definition("count", scopes(&[1]), zero());
-        env.define_scoped_definition("count", scopes(&[2]), zero());
-        assert!(!reaches(&env, "count", &[1]));
-        assert!(reaches(&env, "count", &[2]));
+        let heap = new_shared_heap();
+        let env = Environment::with_heap(&heap);
+        env.define_scoped_definition(&heap, "count", scopes(&[1]), zero());
+        env.define_scoped_definition(&heap, "count", scopes(&[2]), zero());
+        assert!(!reaches(&heap, &env, "count", &[1]));
+        assert!(reaches(&heap, &env, "count", &[2]));
     }
 
     /// A plain definition beside an introduced one takes the name, so the
@@ -3888,13 +4268,14 @@ mod name_view_tests {
     /// carrying the introducing expansion's scope means.
     #[test]
     fn a_plain_sibling_takes_the_name_from_an_introduced_definition() {
-        let env = Environment::new();
-        env.define("x", zero());
-        env.define_scoped_definition("x", scopes(&[1]), zero());
-        assert!(!reaches(&env, "x", &[1]));
-        assert!(reaches(&env, "x", &[]));
+        let heap = new_shared_heap();
+        let env = Environment::with_heap(&heap);
+        env.define(&heap, "x", zero());
+        env.define_scoped_definition(&heap, "x", scopes(&[1]), zero());
+        assert!(!reaches(&heap, &env, "x", &[1]));
+        assert!(reaches(&heap, &env, "x", &[]));
         // Scopes no binding claims fall back to the plain one, as a read does.
-        assert!(reaches(&env, "x", &[7]));
+        assert!(reaches(&heap, &env, "x", &[7]));
     }
 
     /// An explicitly installed alias can name an introduced global's
@@ -3902,25 +4283,27 @@ mod name_view_tests {
     /// environment API still needs to compare their bindings correctly.
     #[test]
     fn a_bare_alias_is_the_introduced_global_it_was_installed_for() {
-        let env = Rc::new(Environment::new());
+        let heap = new_shared_heap();
+        let env = Rc::new(Environment::with_heap(&heap));
         for (id, renamed) in [(1, "count #1"), (2, "count #2")] {
-            env.define(renamed, zero());
+            env.define(&heap, renamed, zero());
             env.define_introduced_global("count".into(), scopes(&[id]), renamed.into());
             env.define_alias("count", Rc::clone(&env), renamed.into());
         }
-        assert!(!reaches(&env, "count", &[1]));
-        assert!(reaches(&env, "count", &[2]));
+        assert!(!reaches(&heap, &env, "count", &[1]));
+        assert!(reaches(&heap, &env, "count", &[2]));
     }
 
     /// A child frame that binds nothing of the name defers to its parent.
     #[test]
     fn the_walk_continues_into_the_parent() {
-        let parent = Rc::new(Environment::new());
-        parent.define("x", zero());
-        parent.define_scoped_definition("x", scopes(&[1]), zero());
+        let heap = new_shared_heap();
+        let parent = Rc::new(Environment::with_heap(&heap));
+        parent.define(&heap, "x", zero());
+        parent.define_scoped_definition(&heap, "x", scopes(&[1]), zero());
         let child = Environment::child_frame(parent);
-        assert!(!reaches(&child, "x", &[1]));
-        assert!(reaches(&child, "x", &[2]));
+        assert!(!reaches(&heap, &child, "x", &[1]));
+        assert!(reaches(&heap, &child, "x", &[2]));
     }
 }
 
@@ -3935,16 +4318,17 @@ mod hygiene_properties;
 #[cfg(test)]
 mod shared_binding_tests {
     use super::*;
+    use crate::heap::new_shared_heap;
 
     fn n(i: i64) -> TaggedValue {
         TaggedValue::fixnum(i)
     }
 
     /// A library environment holding `count`, and an importer on its heap.
-    fn library_and_importer() -> (Rc<Environment>, Rc<Environment>) {
-        let library = Rc::new(Environment::new());
-        library.define("count", n(0));
-        let importer = Rc::new(Environment::new());
+    fn library_and_importer(heap: &SharedHeap) -> (Rc<Environment>, Rc<Environment>) {
+        let library = Rc::new(Environment::with_heap(heap));
+        library.define(heap, "count", n(0));
+        let importer = Rc::new(Environment::with_heap(heap));
         (library, importer)
     }
 
@@ -3972,139 +4356,149 @@ mod shared_binding_tests {
 
     #[test]
     fn a_shared_binding_reads_what_its_owner_holds_now() {
-        let (library, importer) = library_and_importer();
-        assert!(importer.share_binding("count", &library, "count"));
-        library.set("count", n(2)).unwrap();
+        let heap = new_shared_heap();
+        let (library, importer) = library_and_importer(&heap);
+        assert!(importer.share_binding(&heap, "count", &library, "count"));
+        library.set(&heap, "count", n(2)).unwrap();
 
-        assert_eq!(importer.get("count"), Some(n(2)));
+        assert_eq!(importer.get(&heap, "count"), Some(n(2)));
         // Every read, not only `get`: the VM reads by slot, a scoped reference
         // falls back by name, and an import set enumerates.
         let slot = importer.local_slot("count").unwrap();
-        assert_eq!(importer.slot_value(slot), n(2));
+        assert_eq!(importer.slot_value(&heap, slot), n(2));
         assert_eq!(
-            importer.get_with_scopes("count", &ScopeSet::new()).unwrap(),
+            importer
+                .get_with_scopes(&heap, "count", &ScopeSet::new())
+                .unwrap(),
             Some(n(2))
         );
-        assert_eq!(importer.bindings(), vec![("count".to_string(), n(2))]);
+        assert_eq!(importer.bindings(&heap), vec![("count".to_string(), n(2))]);
     }
 
     #[test]
     fn a_write_to_a_shared_binding_lands_in_its_owner() {
-        let (library, importer) = library_and_importer();
-        importer.share_binding("count", &library, "count");
+        let heap = new_shared_heap();
+        let (library, importer) = library_and_importer(&heap);
+        importer.share_binding(&heap, "count", &library, "count");
 
-        importer.set("count", n(10)).unwrap();
-        assert_eq!(library.get("count"), Some(n(10)));
+        importer.set(&heap, "count", n(10)).unwrap();
+        assert_eq!(library.get(&heap, "count"), Some(n(10)));
 
         let slot = importer.local_slot("count").unwrap();
-        importer.set_slot_value(slot, n(11));
-        assert_eq!(library.get("count"), Some(n(11)));
-        assert_eq!(importer.get("count"), Some(n(11)));
+        importer.set_slot_value(&heap, slot, n(11));
+        assert_eq!(library.get(&heap, "count"), Some(n(11)));
+        assert_eq!(importer.get(&heap, "count"), Some(n(11)));
     }
 
     #[test]
     fn a_definition_over_a_shared_binding_is_the_importers_own() {
-        let (library, importer) = library_and_importer();
-        importer.share_binding("count", &library, "count");
+        let heap = new_shared_heap();
+        let (library, importer) = library_and_importer(&heap);
+        importer.share_binding(&heap, "count", &library, "count");
         let slot = importer.local_slot("count").unwrap();
 
-        importer.define("count", n(99));
-        assert_eq!(importer.get("count"), Some(n(99)));
-        assert_eq!(library.get("count"), Some(n(0)));
+        importer.define(&heap, "count", n(99));
+        assert_eq!(importer.get(&heap, "count"), Some(n(99)));
+        assert_eq!(library.get(&heap, "count"), Some(n(0)));
         // In place, which is what the VM's per-site global caches rest on.
         assert_eq!(importer.local_slot("count"), Some(slot));
 
         // And it stays the importer's: a later write goes no further.
-        importer.set("count", n(100)).unwrap();
-        assert_eq!(library.get("count"), Some(n(0)));
+        importer.set(&heap, "count", n(100)).unwrap();
+        assert_eq!(library.get(&heap, "count"), Some(n(0)));
     }
 
     #[test]
     fn sharing_over_a_definition_replaces_it_in_place() {
-        let (library, importer) = library_and_importer();
-        importer.define("count", n(7));
+        let heap = new_shared_heap();
+        let (library, importer) = library_and_importer(&heap);
+        importer.define(&heap, "count", n(7));
         let slot = importer.local_slot("count").unwrap();
 
-        importer.share_binding("count", &library, "count");
+        importer.share_binding(&heap, "count", &library, "count");
         assert_eq!(importer.local_slot("count"), Some(slot));
-        assert_eq!(importer.slot_value(slot), n(0));
+        assert_eq!(importer.slot_value(&heap, slot), n(0));
     }
 
     #[test]
     fn a_re_export_forwards_to_the_owner_and_not_to_the_library_between() {
-        let (library, relay) = library_and_importer();
-        relay.share_binding("relayed", &library, "count");
-        let importer = Rc::new(Environment::new());
-        importer.share_binding("again", &relay, "relayed");
+        let heap = new_shared_heap();
+        let (library, relay) = library_and_importer(&heap);
+        relay.share_binding(&heap, "relayed", &library, "count");
+        let importer = Rc::new(Environment::with_heap(&heap));
+        importer.share_binding(&heap, "again", &relay, "relayed");
 
-        library.set("count", n(3)).unwrap();
-        assert_eq!(importer.get("again"), Some(n(3)));
+        library.set(&heap, "count", n(3)).unwrap();
+        assert_eq!(importer.get(&heap, "again"), Some(n(3)));
 
         // One hop: the relay can go back to being its own binding without the
         // importer noticing.
-        relay.define("relayed", n(-1));
-        library.set("count", n(4)).unwrap();
-        assert_eq!(importer.get("again"), Some(n(4)));
+        relay.define(&heap, "relayed", n(-1));
+        library.set(&heap, "count", n(4)).unwrap();
+        assert_eq!(importer.get(&heap, "again"), Some(n(4)));
 
         assert_eq!(edges_to_environments(&importer), vec![Rc::as_ptr(&library)]);
     }
 
     #[test]
     fn a_staging_environment_carries_a_binding_without_owning_it() {
-        let (library, staging) = library_and_importer();
-        staging.share_binding("count", &library, "count");
+        let heap = new_shared_heap();
+        let (library, staging) = library_and_importer(&heap);
+        staging.share_binding(&heap, "count", &library, "count");
         // The fallback an import takes for an export that is not a plain
         // binding: the staging environment is given the value outright.
-        staging.define("loose", n(5));
+        staging.define(&heap, "loose", n(5));
 
-        let importer = Rc::new(Environment::new());
-        assert!(importer.copy_binding("c:count", &staging, "count"));
-        assert!(importer.copy_binding("c:loose", &staging, "loose"));
-        assert!(!importer.copy_binding("c:absent", &staging, "absent"));
-        assert_eq!(importer.get("c:absent"), None);
+        let importer = Rc::new(Environment::with_heap(&heap));
+        assert!(importer.copy_binding(&heap, "c:count", &staging, "count"));
+        assert!(importer.copy_binding(&heap, "c:loose", &staging, "loose"));
+        assert!(!importer.copy_binding(&heap, "c:absent", &staging, "absent"));
+        assert_eq!(importer.get(&heap, "c:absent"), None);
 
-        library.set("count", n(2)).unwrap();
-        assert_eq!(importer.get("c:count"), Some(n(2)));
+        library.set(&heap, "count", n(2)).unwrap();
+        assert_eq!(importer.get(&heap, "c:count"), Some(n(2)));
 
         // A value, not a forward into an environment about to be dropped.
-        staging.set("loose", n(6)).unwrap();
-        assert_eq!(importer.get("c:loose"), Some(n(5)));
+        staging.set(&heap, "loose", n(6)).unwrap();
+        assert_eq!(importer.get(&heap, "c:loose"), Some(n(5)));
         assert_eq!(edges_to_environments(&importer), vec![Rc::as_ptr(&library)]);
     }
 
     #[test]
     fn a_re_exported_binding_is_one_location_whoever_assigns_and_whenever() {
+        let heap = new_shared_heap();
         // `primitives` stands for a library registered from Rust, `base` for
         // the Scheme library that re-exports it. A first version copied such
         // a binding down the chain, and an importer then saw a library's
         // assignment only if the import happened to come after it.
-        let (primitives, base) = library_and_importer();
-        base.share_binding("count", &primitives, "count");
-        let early = Rc::new(Environment::new());
-        early.share_binding("count", &base, "count");
+        let (primitives, base) = library_and_importer(&heap);
+        base.share_binding(&heap, "count", &primitives, "count");
+        let early = Rc::new(Environment::with_heap(&heap));
+        early.share_binding(&heap, "count", &base, "count");
 
-        base.set("count", n(50)).unwrap();
-        let late = Rc::new(Environment::new());
-        late.share_binding("count", &base, "count");
+        base.set(&heap, "count", n(50)).unwrap();
+        let late = Rc::new(Environment::with_heap(&heap));
+        late.share_binding(&heap, "count", &base, "count");
 
         for env in [&primitives, &base, &early, &late] {
-            assert_eq!(env.get("count"), Some(n(50)));
+            assert_eq!(env.get(&heap, "count"), Some(n(50)));
         }
-        early.set("count", n(51)).unwrap();
+        early.set(&heap, "count", n(51)).unwrap();
         for env in [&primitives, &base, &early, &late] {
-            assert_eq!(env.get("count"), Some(n(51)));
+            assert_eq!(env.get(&heap, "count"), Some(n(51)));
         }
     }
 
     #[test]
     fn the_collector_is_shown_each_owner_once() {
-        let (library, importer) = library_and_importer();
-        library.define("other", n(1));
-        let second = Rc::new(Environment::new());
-        second.define("third", n(2));
-        importer.share_binding("count", &library, "count");
-        importer.share_binding("third", &second, "third");
-        importer.share_binding("other", &library, "other");
+        let heap = new_shared_heap();
+        let (library, importer) = library_and_importer(&heap);
+        library.define(&heap, "other", n(1));
+        let second = Rc::new(Environment::with_heap(&heap));
+        second.define(&heap, "third", n(2));
+        importer.share_binding(&heap, "count", &library, "count");
+        importer.share_binding(&heap, "third", &second, "third");
+        importer.share_binding(&heap, "other", &library, "other");
 
         assert_eq!(
             edges_to_environments(&importer),
@@ -4114,22 +4508,24 @@ mod shared_binding_tests {
 
     #[test]
     fn a_name_the_source_does_not_bind_plainly_is_left_to_the_caller() {
-        let (library, importer) = library_and_importer();
-        assert!(!importer.share_binding("missing", &library, "missing"));
-        assert_eq!(importer.get("missing"), None);
+        let heap = new_shared_heap();
+        let (library, importer) = library_and_importer(&heap);
+        assert!(!importer.share_binding(&heap, "missing", &library, "missing"));
+        assert_eq!(importer.get(&heap, "missing"), None);
 
         // A parent's binding is not the source's own location to share.
         let child = Rc::new(Environment::child_frame(Rc::clone(&library)));
-        assert!(!importer.share_binding("count", &child, "count"));
+        assert!(!importer.share_binding(&heap, "count", &child, "count"));
     }
 
     #[test]
     fn an_environment_never_forwards_to_itself() {
-        let (library, _) = library_and_importer();
-        assert!(library.share_binding("count", &library, "count"));
-        assert!(library.share_binding("also", &library, "count"));
-        assert_eq!(library.get("count"), Some(n(0)));
-        assert_eq!(library.get("also"), Some(n(0)));
+        let heap = new_shared_heap();
+        let (library, _) = library_and_importer(&heap);
+        assert!(library.share_binding(&heap, "count", &library, "count"));
+        assert!(library.share_binding(&heap, "also", &library, "count"));
+        assert_eq!(library.get(&heap, "count"), Some(n(0)));
+        assert_eq!(library.get(&heap, "also"), Some(n(0)));
 
         assert_eq!(
             edges_to_environments(&library),
@@ -4144,6 +4540,7 @@ mod shared_binding_tests {
 #[cfg(test)]
 mod binding_location_tests {
     use super::*;
+    use crate::heap::new_shared_heap;
 
     fn zero() -> TaggedValue {
         TaggedValue::fixnum(0)
@@ -4151,93 +4548,106 @@ mod binding_location_tests {
 
     #[test]
     fn equal_values_in_two_environments_are_two_locations() {
-        let library = Rc::new(Environment::new());
-        library.define("X", zero());
-        let program = Rc::new(Environment::new());
-        program.define("X", zero());
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "X", zero());
+        let program = Rc::new(Environment::with_heap(&heap));
+        program.define(&heap, "X", zero());
 
-        assert_eq!(library.get("X"), program.get("X"));
-        assert_ne!(library.binding_location("X"), program.binding_location("X"));
-        assert_eq!(program.binding_location("missing"), None);
+        assert_eq!(library.get(&heap, "X"), program.get(&heap, "X"));
+        assert_ne!(
+            library.binding_location(&heap, "X"),
+            program.binding_location(&heap, "X")
+        );
+        assert_eq!(program.binding_location(&heap, "missing"), None);
     }
 
     #[test]
     fn an_import_is_its_librarys_location_by_any_route_and_any_name() {
-        let library = Rc::new(Environment::new());
-        library.define("X", zero());
-        let relay = Rc::new(Environment::new());
-        relay.share_binding("relayed", &library, "X");
-        let program = Rc::new(Environment::new());
-        program.share_binding("direct", &library, "X");
-        program.share_binding("through-relay", &relay, "relayed");
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "X", zero());
+        let relay = Rc::new(Environment::with_heap(&heap));
+        relay.share_binding(&heap, "relayed", &library, "X");
+        let program = Rc::new(Environment::with_heap(&heap));
+        program.share_binding(&heap, "direct", &library, "X");
+        program.share_binding(&heap, "through-relay", &relay, "relayed");
 
-        let home = library.binding_location("X");
+        let home = library.binding_location(&heap, "X");
         assert!(home.is_some());
-        assert_eq!(program.binding_location("direct"), home);
-        assert_eq!(program.binding_location("through-relay"), home);
-        assert_eq!(relay.binding_location("relayed"), home);
+        assert_eq!(program.binding_location(&heap, "direct"), home);
+        assert_eq!(program.binding_location(&heap, "through-relay"), home);
+        assert_eq!(relay.binding_location(&heap, "relayed"), home);
 
         // Defined over, it is the program's own again.
-        program.define("direct", zero());
-        assert_ne!(program.binding_location("direct"), home);
+        program.define(&heap, "direct", zero());
+        assert_ne!(program.binding_location(&heap, "direct"), home);
     }
 
     #[test]
     fn the_walk_is_gets_walk() {
-        let root = Rc::new(Environment::new());
-        root.define("X", zero());
+        let heap = new_shared_heap();
+        let root = Rc::new(Environment::with_heap(&heap));
+        root.define(&heap, "X", zero());
         let child = Rc::new(Environment::child_frame(Rc::clone(&root)));
         // Through the parent.
-        assert_eq!(child.binding_location("X"), root.binding_location("X"));
+        assert_eq!(
+            child.binding_location(&heap, "X"),
+            root.binding_location(&heap, "X")
+        );
 
         // Through a macro-expansion alias, into another environment.
-        let library = Rc::new(Environment::new());
-        library.define("helper", zero());
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "helper", zero());
         root.define_alias("helper.1", Rc::clone(&library), "helper".into());
         assert_eq!(
-            child.binding_location("helper.1"),
-            library.binding_location("helper")
+            child.binding_location(&heap, "helper.1"),
+            library.binding_location(&heap, "helper")
         );
 
         // Through an alias whose target is the environment holding it, which
         // is stored without one: the walk restarts there, as `get`'s does.
-        root.define("renamed.7", zero());
+        root.define(&heap, "renamed.7", zero());
         root.define_alias("bare", Rc::clone(&root), "renamed.7".into());
-        assert_eq!(child.get("bare"), Some(zero()));
+        assert_eq!(child.get(&heap, "bare"), Some(zero()));
         assert_eq!(
-            child.binding_location("bare"),
-            root.binding_location("renamed.7")
+            child.binding_location(&heap, "bare"),
+            root.binding_location(&heap, "renamed.7")
         );
         // A dangling alias is nothing, to both.
         root.define_alias("dangling", Rc::clone(&root), "nowhere".into());
-        assert_eq!(child.get("dangling"), None);
-        assert_eq!(child.binding_location("dangling"), None);
+        assert_eq!(child.get(&heap, "dangling"), None);
+        assert_eq!(child.binding_location(&heap, "dangling"), None);
 
         // A plain binding wins over a parent's, as it does for `get`.
-        child.define("X", zero());
-        assert_ne!(child.binding_location("X"), root.binding_location("X"));
+        child.define(&heap, "X", zero());
+        assert_ne!(
+            child.binding_location(&heap, "X"),
+            root.binding_location(&heap, "X")
+        );
     }
 
     #[test]
     fn a_macro_introduced_definition_has_a_location_of_its_own() {
-        let env = Rc::new(Environment::new());
+        let heap = new_shared_heap();
+        let env = Rc::new(Environment::with_heap(&heap));
         let scopes = ScopeSet::from_iter([crate::scope::ScopeId(1)]);
-        env.define_scoped_definition("X", scopes, zero());
-        let other = Rc::new(Environment::new());
-        other.define("X", zero());
+        env.define_scoped_definition(&heap, "X", scopes, zero());
+        let other = Rc::new(Environment::with_heap(&heap));
+        other.define(&heap, "X", zero());
 
         // `get` reaches it by name where nothing plain has the name, and then
         // it is that definition, not whatever else holds an equal value.
-        assert_eq!(env.get("X"), Some(zero()));
-        let here = env.binding_location("X");
+        assert_eq!(env.get(&heap, "X"), Some(zero()));
+        let here = env.binding_location(&heap, "X");
         assert!(matches!(here, Some(BindingLocation::Scoped(..))));
-        assert_ne!(here, other.binding_location("X"));
+        assert_ne!(here, other.binding_location(&heap, "X"));
 
         // A plain binding of the name takes the by-name view, as it does for
         // `get`.
-        env.define("X", zero());
+        env.define(&heap, "X", zero());
         assert!(matches!(
-            env.binding_location("X"),
+            env.binding_location(&heap, "X"),
             Some(BindingLocation::Slot(..))
         ));
     }
@@ -4249,6 +4659,7 @@ mod binding_location_tests {
 #[cfg(test)]
 mod introduced_definition_tests {
     use super::*;
+    use crate::heap::new_shared_heap;
 
     fn scopes(ids: &[usize]) -> ScopeSet {
         let mut set = ScopeSet::new();
@@ -4264,33 +4675,35 @@ mod introduced_definition_tests {
 
     /// A library as the tree-walker leaves it after a definer ran twice beside
     /// a plain definition of the same spelling.
-    fn tree_walker_library() -> Rc<Environment> {
-        let library = Rc::new(Environment::new());
-        library.define("count", n(100));
-        library.define_with_scopes("count", scopes(&[1]), n(10));
-        library.define_with_scopes("count", scopes(&[2]), n(20));
+    fn tree_walker_library(heap: &SharedHeap) -> Rc<Environment> {
+        let library = Rc::new(Environment::with_heap(heap));
+        library.define(heap, "count", n(100));
+        library.define_with_scopes(heap, "count", scopes(&[1]), n(10));
+        library.define_with_scopes(heap, "count", scopes(&[2]), n(20));
         library
     }
 
     #[test]
     fn a_mentions_scopes_select_its_own_generators_definition() {
-        let library = tree_walker_library();
+        let heap = new_shared_heap();
+        let library = tree_walker_library(&heap);
         // A use of the generated macro adds its own expansion scope.
         for (mention, run) in [(scopes(&[1, 7]), 1), (scopes(&[2, 8]), 2)] {
-            let (home, found) = library.introduced_definition("count", &mention).unwrap();
-            assert!(Rc::ptr_eq(&home, &library));
+            let found = library
+                .introduced_definition(&heap, "count", &mention)
+                .unwrap();
             assert_eq!(found, IntroducedDefinition::Scoped(scopes(&[run])));
         }
         // No scopes select the plain one, which is not an introduced
         // definition; nor is a spelling the library does not have.
         assert!(
             library
-                .introduced_definition("count", &scopes(&[9]))
+                .introduced_definition(&heap, "count", &scopes(&[9]))
                 .is_none()
         );
         assert!(
             library
-                .introduced_definition("other", &scopes(&[1]))
+                .introduced_definition(&heap, "other", &scopes(&[1]))
                 .is_none()
         );
         assert!(library.has_introduced_definition("count"));
@@ -4299,78 +4712,88 @@ mod introduced_definition_tests {
 
     #[test]
     fn a_scoped_alias_reads_writes_and_locates_that_definition() {
-        let library = tree_walker_library();
-        let program = Rc::new(Environment::new());
-        program.define("count", n(-1));
+        let heap = new_shared_heap();
+        let library = tree_walker_library(&heap);
+        let program = Rc::new(Environment::with_heap(&heap));
+        program.define(&heap, "count", n(-1));
         program.define_scoped_alias("count.1", Rc::clone(&library), "count".into(), scopes(&[1]));
         program.define_scoped_alias("count.2", Rc::clone(&library), "count".into(), scopes(&[2]));
 
-        assert_eq!(program.get("count.1"), Some(n(10)));
-        assert_eq!(program.get("count.2"), Some(n(20)));
+        assert_eq!(program.get(&heap, "count.1"), Some(n(10)));
+        assert_eq!(program.get(&heap, "count.2"), Some(n(20)));
 
-        program.set("count.1", n(11)).unwrap();
-        assert_eq!(program.get("count.1"), Some(n(11)));
+        program.set(&heap, "count.1", n(11)).unwrap();
+        assert_eq!(program.get(&heap, "count.1"), Some(n(11)));
         // Nothing else of the spelling moved: not the second run's, not the
         // library's plain one, not the program's.
-        assert_eq!(program.get("count.2"), Some(n(20)));
-        assert_eq!(library.get("count"), Some(n(100)));
-        assert_eq!(program.get("count"), Some(n(-1)));
+        assert_eq!(program.get(&heap, "count.2"), Some(n(20)));
+        assert_eq!(library.get(&heap, "count"), Some(n(100)));
+        assert_eq!(program.get(&heap, "count"), Some(n(-1)));
 
-        let first = program.binding_location("count.1");
+        let first = program.binding_location(&heap, "count.1");
         assert!(matches!(first, Some(BindingLocation::Scoped(..))));
-        assert_ne!(first, program.binding_location("count.2"));
-        assert_ne!(first, library.binding_location("count"));
+        assert_ne!(first, program.binding_location(&heap, "count.2"));
+        assert_ne!(first, library.binding_location(&heap, "count"));
     }
 
     #[test]
     fn a_scoped_alias_never_falls_back_to_the_spelling() {
+        let heap = new_shared_heap();
         // The scopes are an identity, matched exactly. Resolved as a
         // *reference* instead, an identity the library does not hold would
         // fall back by name and read — and assign — the plain `count`.
-        let library = tree_walker_library();
-        let program = Rc::new(Environment::new());
+        let library = tree_walker_library(&heap);
+        let program = Rc::new(Environment::with_heap(&heap));
         program.define_scoped_alias("count.9", Rc::clone(&library), "count".into(), scopes(&[9]));
 
-        assert_eq!(program.get("count.9"), None);
-        assert_eq!(program.binding_location("count.9"), None);
+        assert_eq!(program.get(&heap, "count.9"), None);
+        assert_eq!(program.binding_location(&heap, "count.9"), None);
         // Refused with the name, as `set` refuses a dangling plain alias.
-        assert_eq!(program.set("count.9", n(1)), Err("count".to_string()));
-        assert_eq!(library.get("count"), Some(n(100)));
+        assert_eq!(
+            program.set(&heap, "count.9", n(1)),
+            Err("count".to_string())
+        );
+        assert_eq!(library.get(&heap, "count"), Some(n(100)));
     }
 
     #[test]
     fn the_vms_renamed_global_is_found_by_the_same_question() {
+        let heap = new_shared_heap();
         // The VM renames an introduced definition to a global of its own and
         // records the identity, without exposing the bare name.
-        let library = Rc::new(Environment::new());
+        let library = Rc::new(Environment::with_heap(&heap));
         for (run, renamed, value) in [(1, "count.g1", 10), (2, "count.g2", 20)] {
-            library.define(renamed, n(value));
+            library.define(&heap, renamed, n(value));
             library.define_introduced_global("count".into(), scopes(&[run]), renamed.into());
         }
-        let (home, found) = library
-            .introduced_definition("count", &scopes(&[1, 7]))
+        let found = library
+            .introduced_definition(&heap, "count", &scopes(&[1, 7]))
             .unwrap();
-        assert!(Rc::ptr_eq(&home, &library));
         assert_eq!(found, IntroducedDefinition::Renamed("count.g1".into()));
         assert!(library.has_introduced_definition("count"));
     }
 
     #[test]
     fn a_lexical_binding_is_not_an_introduced_definition() {
+        let heap = new_shared_heap();
         // A `let`-bound variable around the macro's definition is a scoped
         // binding in a *child* frame. It is not something an alias can name —
         // it lives in a run-time frame — so it is left to scoped resolution.
-        let library = Rc::new(Environment::new());
+        let library = Rc::new(Environment::with_heap(&heap));
         let body = Rc::new(Environment::child_frame(Rc::clone(&library)));
-        body.define_with_scopes("f", scopes(&[3]), n(1));
-        assert!(body.introduced_definition("f", &scopes(&[3, 7])).is_none());
+        body.define_with_scopes(&heap, "f", scopes(&[3]), n(1));
+        assert!(
+            body.introduced_definition(&heap, "f", &scopes(&[3, 7]))
+                .is_none()
+        );
         assert!(!body.has_introduced_definition("f"));
 
-        // From inside a body, the root's definitions are still found, and the
-        // home is the root.
-        library.define_scoped_definition("g", scopes(&[4]), n(2));
-        let (home, _) = body.introduced_definition("g", &scopes(&[4, 7])).unwrap();
-        assert!(Rc::ptr_eq(&home, &library));
+        // From inside a body, the root's definitions are still found.
+        library.define_scoped_definition(&heap, "g", scopes(&[4]), n(2));
+        assert_eq!(
+            body.introduced_definition(&heap, "g", &scopes(&[4, 7])),
+            Some(IntroducedDefinition::Scoped(scopes(&[4])))
+        );
     }
 }
 
@@ -4380,52 +4803,55 @@ mod introduced_definition_tests {
 #[cfg(test)]
 mod import_alias_tests {
     use super::*;
+    use crate::heap::new_shared_heap;
 
     fn n(i: i64) -> TaggedValue {
         TaggedValue::fixnum(i)
     }
 
-    fn library_and_program() -> (Rc<Environment>, Rc<Environment>) {
-        let library = Rc::new(Environment::new());
-        library.define("count", n(0));
-        let program = Rc::new(Environment::new());
-        program.share_binding("count", &library, "count");
+    fn library_and_program(heap: &SharedHeap) -> (Rc<Environment>, Rc<Environment>) {
+        let library = Rc::new(Environment::with_heap(heap));
+        library.define(heap, "count", n(0));
+        let program = Rc::new(Environment::with_heap(heap));
+        program.share_binding(heap, "count", &library, "count");
         (library, program)
     }
 
     #[test]
     fn the_alias_outlives_a_definition_over_the_import() {
-        let (library, program) = library_and_program();
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
         let alias = program
-            .import_alias("count", || "count.alias".into())
+            .import_alias(&heap, "count", || "count.alias".into())
             .unwrap();
 
         // The program defines the spelling itself: a binding of its own.
-        program.define("count", n(100));
-        library.set("count", n(1)).unwrap();
+        program.define(&heap, "count", n(100));
+        library.set(&heap, "count", n(1)).unwrap();
 
-        assert_eq!(program.get("count"), Some(n(100)));
-        assert_eq!(program.get(&alias), Some(n(1)));
+        assert_eq!(program.get(&heap, "count"), Some(n(100)));
+        assert_eq!(program.get(&heap, &alias), Some(n(1)));
         // And it writes where it reads.
-        program.set(&alias, n(2)).unwrap();
-        assert_eq!(library.get("count"), Some(n(2)));
-        assert_eq!(program.get("count"), Some(n(100)));
+        program.set(&heap, &alias, n(2)).unwrap();
+        assert_eq!(library.get(&heap, "count"), Some(n(2)));
+        assert_eq!(program.get(&heap, "count"), Some(n(100)));
         assert_eq!(
-            program.binding_location(&alias),
-            library.binding_location("count")
+            program.binding_location(&heap, &alias),
+            library.binding_location(&heap, "count")
         );
     }
 
     #[test]
     fn one_name_has_one_alias_however_often_it_is_asked_for() {
-        let (_, program) = library_and_program();
+        let heap = new_shared_heap();
+        let (_, program) = library_and_program(&heap);
         let mut minted = 0;
         let mut mint = || {
             minted += 1;
             Rc::<str>::from(format!("count.{minted}"))
         };
-        let first = program.import_alias("count", &mut mint).unwrap();
-        let again = program.import_alias("count", &mut mint).unwrap();
+        let first = program.import_alias(&heap, "count", &mut mint).unwrap();
+        let again = program.import_alias(&heap, "count", &mut mint).unwrap();
         assert_eq!(first, again);
 
         assert_eq!(minted, 1, "an alias per name, not per request");
@@ -4433,47 +4859,52 @@ mod import_alias_tests {
 
     #[test]
     fn a_second_name_for_the_location_has_an_alias_of_its_own() {
-        let (library, program) = library_and_program();
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
         let mut minted = 0;
         let mut mint = || {
             minted += 1;
             Rc::<str>::from(format!("alias.{minted}"))
         };
-        let first = program.import_alias("count", &mut mint).unwrap();
+        let first = program.import_alias(&heap, "count", &mut mint).unwrap();
 
         // A second name for the same location — a prefixed import. The
         // desugarer reads the spelling a reference was written with back off
         // its alias, so the two names cannot share one.
-        program.share_binding("c:count", &library, "count");
-        let prefixed = program.import_alias("c:count", &mut mint).unwrap();
+        program.share_binding(&heap, "c:count", &library, "count");
+        let prefixed = program.import_alias(&heap, "c:count", &mut mint).unwrap();
         assert_ne!(first, prefixed);
         assert_eq!(
-            program.import_alias("c:count", &mut mint).unwrap(),
+            program.import_alias(&heap, "c:count", &mut mint).unwrap(),
             prefixed
         );
-        assert_eq!(program.import_alias("count", &mut mint).unwrap(), first);
+        assert_eq!(
+            program.import_alias(&heap, "count", &mut mint).unwrap(),
+            first
+        );
         assert_eq!(minted, 2);
 
         // Both are the library's location, and both are bookkeeping.
-        library.set("count", n(9)).unwrap();
-        assert_eq!(program.get(&first), Some(n(9)));
-        assert_eq!(program.get(&prefixed), Some(n(9)));
-        assert_eq!(program.local_names(), ["count", "c:count"]);
+        library.set(&heap, "count", n(9)).unwrap();
+        assert_eq!(program.get(&heap, &first), Some(n(9)));
+        assert_eq!(program.get(&heap, &prefixed), Some(n(9)));
+        assert_eq!(program.local_names(&heap), ["count", "c:count"]);
     }
 
     #[test]
     fn an_alias_is_not_among_the_names_a_program_bound() {
-        let (_, program) = library_and_program();
-        program.define("before", n(1));
+        let heap = new_shared_heap();
+        let (_, program) = library_and_program(&heap);
+        program.define(&heap, "before", n(1));
         program
-            .import_alias("count", || "count.alias".into())
+            .import_alias(&heap, "count", || "count.alias".into())
             .unwrap();
-        program.define("after", n(2));
+        program.define(&heap, "after", n(2));
 
-        assert_eq!(program.local_names(), ["count", "before", "after"]);
+        assert_eq!(program.local_names(&heap), ["count", "before", "after"]);
         // And leaving it out does not shift the values after it.
         assert_eq!(
-            program.bindings(),
+            program.bindings(&heap),
             [
                 ("count".to_string(), n(0)),
                 ("before".to_string(), n(1)),
@@ -4484,69 +4915,73 @@ mod import_alias_tests {
 
     #[test]
     fn an_alias_defined_over_is_replaced_not_handed_out_again() {
-        let (library, program) = library_and_program();
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
         let first = program
-            .import_alias("count", || "count.alias".into())
+            .import_alias(&heap, "count", || "count.alias".into())
             .unwrap();
 
         // Something defines the alias's own spelling: the slot is the
         // definer's from now on, and no longer the library's location.
-        program.define(Rc::clone(&first), n(7));
+        program.define(&heap, Rc::clone(&first), n(7));
         // A name the program bound from that moment, not from whenever the
         // location is next asked for.
-        assert_eq!(program.local_names(), ["count", "count.alias"]);
+        assert_eq!(program.local_names(&heap), ["count", "count.alias"]);
         assert_eq!(
-            program.bindings(),
+            program.bindings(&heap),
             [
                 ("count".to_string(), n(0)),
                 ("count.alias".to_string(), n(7))
             ]
         );
         let second = program
-            .import_alias("count", || "count.again".into())
+            .import_alias(&heap, "count", || "count.again".into())
             .unwrap();
 
         assert_ne!(first, second);
-        library.set("count", n(1)).unwrap();
-        assert_eq!(program.get(&second), Some(n(1)));
-        assert_eq!(program.get(&first), Some(n(7)));
+        library.set(&heap, "count", n(1)).unwrap();
+        assert_eq!(program.get(&heap, &second), Some(n(1)));
+        assert_eq!(program.get(&heap, &first), Some(n(7)));
         // The definition is a name the program bound; the new alias is not.
-        assert_eq!(program.local_names(), ["count", "count.alias"]);
+        assert_eq!(program.local_names(&heap), ["count", "count.alias"]);
     }
 
     #[test]
     fn minting_never_forwards_over_a_name_already_bound() {
-        let (_, program) = library_and_program();
-        program.define("count.0", n(42));
+        let heap = new_shared_heap();
+        let (_, program) = library_and_program(&heap);
+        program.define(&heap, "count.0", n(42));
         let mut offered = ["count.0", "count.1"].into_iter();
         let alias = program
-            .import_alias("count", || offered.next().unwrap().into())
+            .import_alias(&heap, "count", || offered.next().unwrap().into())
             .unwrap();
 
         assert_eq!(&*alias, "count.1");
-        assert_eq!(program.get("count.0"), Some(n(42)));
+        assert_eq!(program.get(&heap, "count.0"), Some(n(42)));
     }
 
     #[test]
     fn every_enumeration_of_names_leaves_an_alias_out() {
-        let (_, program) = library_and_program();
+        let heap = new_shared_heap();
+        let (_, program) = library_and_program(&heap);
         program
-            .import_alias("count", || "count.alias".into())
+            .import_alias(&heap, "count", || "count.alias".into())
             .unwrap();
-        assert_eq!(program.get_all_names(), ["count"]);
+        assert_eq!(program.get_all_names(&heap), ["count"]);
     }
 
     #[test]
     fn only_an_import_has_one() {
-        let (_, program) = library_and_program();
-        program.define("own", n(5));
+        let heap = new_shared_heap();
+        let (_, program) = library_and_program(&heap);
+        program.define(&heap, "own", n(5));
         let never = || -> Rc<str> { unreachable!("nothing to alias") };
-        assert_eq!(program.import_alias("own", never), None);
-        assert_eq!(program.import_alias("missing", never), None);
+        assert_eq!(program.import_alias(&heap, "own", never), None);
+        assert_eq!(program.import_alias(&heap, "missing", never), None);
 
         // Defined over, the name is no longer an import.
-        program.define("count", n(100));
-        assert_eq!(program.import_alias("count", never), None);
+        program.define(&heap, "count", n(100));
+        assert_eq!(program.import_alias(&heap, "count", never), None);
     }
 }
 
@@ -4574,7 +5009,7 @@ mod namespace_charge_tests {
         assert_eq!(env.charged_bytes(), Some(made));
 
         for i in 0..1000 {
-            env.define(format!("name-{i}"), n(i));
+            env.define(&heap, format!("name-{i}"), n(i));
         }
         let grown = external(&heap);
         // A slot and a name apiece at the least; the index is on top.
@@ -4584,7 +5019,7 @@ mod namespace_charge_tests {
 
         // Redefining a name writes its slot in place: no table grows.
         for i in 0..1000 {
-            env.define(format!("name-{i}"), n(-i));
+            env.define(&heap, format!("name-{i}"), n(-i));
         }
         assert_eq!(external(&heap), grown);
 
@@ -4645,7 +5080,7 @@ mod namespace_charge_tests {
         let env = Rc::new(Environment::with_heap(&heap));
         let made = external(&heap);
         for i in 0..1000 {
-            env.define_scoped_definition("state", one_scope(100 + i), n(i as i64));
+            env.define_scoped_definition(&heap, "state", one_scope(100 + i), n(i as i64));
         }
         let grown = external(&heap);
         let list = env.scoped_bindings.borrow()["state"].capacity() * size_of::<ScopedBinding>();
@@ -4659,7 +5094,7 @@ mod namespace_charge_tests {
 
         // Bound again at the same scopes, a binding is written in place.
         for i in 0..1000 {
-            env.define_scoped_definition("state", one_scope(100 + i), n(-(i as i64)));
+            env.define_scoped_definition(&heap, "state", one_scope(100 + i), n(-(i as i64)));
         }
         assert_eq!(external(&heap), grown);
 
@@ -4718,12 +5153,12 @@ mod namespace_charge_tests {
             for i in 0..size {
                 let scopes = one_scope(1000 * (k + 1) + i);
                 let value = n(i as i64);
-                env.define_with_scopes(format!("p{k}"), scopes.clone(), value);
-                env.define_scoped_definition(format!("d{k}"), scopes.clone(), value);
+                env.define_with_scopes(&heap, format!("p{k}"), scopes.clone(), value);
+                env.define_scoped_definition(&heap, format!("d{k}"), scopes.clone(), value);
                 let renamed = Rc::from(format!("g{k}.{i}"));
                 env.define_introduced_global(Rc::from(format!("g{k}")), scopes.clone(), renamed);
                 if i % 3 == 0 {
-                    env.define_with_scopes(format!("p{k}"), scopes.clone(), n(-1));
+                    env.define_with_scopes(&heap, format!("p{k}"), scopes.clone(), n(-1));
                     env.define_introduced_global(Rc::from(format!("g{k}")), scopes, "again".into());
                 }
                 assert_eq!(entries(&env), walked(&env), "spelling {k}, binding {i}");
@@ -4738,8 +5173,8 @@ mod namespace_charge_tests {
         assert!(entries(&env) > 0);
         // A plain definition, and a scoped one at the empty set, which is
         // stored by name, grow no spelling's buffers.
-        env.define("plain", n(1));
-        env.define_with_scopes("bare", ScopeSet::new(), n(2));
+        env.define(&heap, "plain", n(1));
+        env.define_with_scopes(&heap, "bare", ScopeSet::new(), n(2));
         assert_eq!(entries(&env), walked(&env));
     }
 
@@ -4751,14 +5186,14 @@ mod namespace_charge_tests {
         let heap = new_shared_heap();
         let library = Rc::new(Environment::with_heap(&heap));
         for i in 0..300 {
-            library.define(format!("export-{i}"), n(i));
+            library.define(&heap, format!("export-{i}"), n(i));
         }
         let library_charge = library.charged_bytes().unwrap();
         let importer = Rc::new(Environment::with_heap(&heap));
         let before = importer.charged_bytes().unwrap();
         for i in 0..300 {
             let name = format!("export-{i}");
-            assert!(importer.share_binding(name.as_str(), &library, &name));
+            assert!(importer.share_binding(&heap, name.as_str(), &library, &name));
         }
         let after = importer.charged_bytes().unwrap();
         let least = 300 * (size_of::<(Rc<str>, TaggedValue)>() + size_of::<Option<Owner>>());
@@ -4785,8 +5220,8 @@ mod namespace_charge_tests {
         for depth in 0..100 {
             let frame = Rc::new(Environment::child_frame(Rc::clone(&global)));
             for i in 0..depth {
-                frame.define(format!("v{i}"), n(i));
-                frame.define_with_scopes(format!("s{i}"), scopes.clone(), n(i));
+                frame.define(&heap, format!("v{i}"), n(i));
+                frame.define_with_scopes(&heap, format!("s{i}"), scopes.clone(), n(i));
             }
             frame.define_alias("alias", Rc::clone(&global), Rc::from("x"));
             assert_eq!(frame.charged_bytes(), None);
@@ -4802,7 +5237,7 @@ mod namespace_charge_tests {
         for k in 0..=FRAME_INDEX_ABOVE {
             let mut scopes = ScopeSet::new();
             scopes.add_scope(crate::scope::ScopeId(100 + k));
-            frame.define_with_scopes("deep", scopes.clone(), n(k as i64));
+            frame.define_with_scopes(&heap, "deep", scopes.clone(), n(k as i64));
             let renamed = Rc::from(format!("deep.{k}"));
             frame.define_introduced_global(Rc::from("deep"), scopes, renamed);
         }
@@ -4819,20 +5254,18 @@ mod namespace_charge_tests {
     /// The kind is the constructor's (4b's start decision 4 on #782): the
     /// namespace constructors make namespaces, which have no parent, and the
     /// frame constructors make frames, which have one. What answers to the
-    /// kind answers as it did when it read the parent: a namespace with an
-    /// account charges, and `Environment::new`'s, which has none, does not.
+    /// kind answers as it did when it read the parent: a namespace charges
+    /// its heap's account, which every namespace has since #834.
     #[test]
     fn each_constructor_sets_its_kind() {
         let heap = new_shared_heap();
-        let standalone = Rc::new(Environment::new());
         let global = Rc::new(Environment::with_heap(&heap));
         let in_hand = Rc::new(Environment::namespace(&heap.borrow()));
-        for namespace in [&standalone, &global, &in_hand] {
+        for namespace in [&global, &in_hand] {
             assert_eq!(namespace.kind, Kind::Namespace);
             assert!(namespace.is_namespace() && !namespace.holds_temporaries());
             assert!(namespace.parent().is_none());
         }
-        assert_eq!(standalone.charged_bytes(), None);
         assert!(global.charged_bytes().is_some() && in_hand.charged_bytes().is_some());
 
         let frame = Environment::child_frame(Rc::clone(&global));
@@ -4863,7 +5296,7 @@ mod namespace_charge_tests {
         let frame = Environment::child_frame(global);
         let mut scopes = ScopeSet::new();
         scopes.add_scope(crate::scope::ScopeId(3));
-        frame.define_with_scopes("x", scopes, n(1));
+        frame.define_with_scopes(&heap, "x", scopes, n(1));
 
         let bindings = frame.bindings.borrow();
         assert!(!bindings.slots.spilled());
@@ -4948,11 +5381,11 @@ mod gc_edge_tests {
         drop(h);
 
         let parent = Rc::new(Environment::with_heap(&heap));
-        parent.define("inherited", inherited);
+        parent.define(&heap, "inherited", inherited);
         let alias_target = Rc::new(Environment::with_heap(&heap));
-        alias_target.define("private", aliased);
+        alias_target.define(&heap, "private", aliased);
         let library = Rc::new(Environment::with_heap(&heap));
-        library.define("exported", imported);
+        library.define(&heap, "exported", imported);
         let owner_slot = library.local_slot("exported").unwrap();
 
         let mut scopes = ScopeSet::new();
@@ -5002,14 +5435,14 @@ mod gc_edge_tests {
             })),
             parent: Some(parent),
         };
-        assert_eq!(env.get("plain"), Some(plain));
+        assert_eq!(env.get(&heap, "plain"), Some(plain));
         assert_eq!(
-            env.get_with_scopes("hidden", &scopes).unwrap(),
+            env.get_with_scopes(&heap, "hidden", &scopes).unwrap(),
             Some(scoped)
         );
-        assert_eq!(env.get("alias"), Some(aliased));
-        assert_eq!(env.get("exported"), Some(imported));
-        assert_eq!(env.get("inherited"), Some(inherited));
+        assert_eq!(env.get(&heap, "alias"), Some(aliased));
+        assert_eq!(env.get(&heap, "exported"), Some(imported));
+        assert_eq!(env.get(&heap, "inherited"), Some(inherited));
         let env = Rc::new(env);
         assert_eq!(env.mutable_specifier(&heap), specifier);
 
@@ -5024,6 +5457,7 @@ mod relink_alias_tests {
     //! [`Environment::relink_alias`] (#611): one alias per target, however
     //! many expansions ask, and never one shared by two targets.
     use super::*;
+    use crate::heap::new_shared_heap;
     use crate::scope::{ScopeId, ScopeSet};
 
     fn n(i: i64) -> TaggedValue {
@@ -5032,17 +5466,18 @@ mod relink_alias_tests {
 
     /// A library with two private helpers, and a program that cannot name
     /// either.
-    fn library_and_program() -> (Rc<Environment>, Rc<Environment>) {
-        let library = Rc::new(Environment::new());
-        library.define("helper", n(1));
-        library.define("other", n(2));
-        let program = Rc::new(Environment::new());
+    fn library_and_program(heap: &SharedHeap) -> (Rc<Environment>, Rc<Environment>) {
+        let library = Rc::new(Environment::with_heap(heap));
+        library.define(heap, "helper", n(1));
+        library.define(heap, "other", n(2));
+        let program = Rc::new(Environment::with_heap(heap));
         (library, program)
     }
 
     #[test]
     fn one_target_asked_for_repeatedly_gets_one_alias() {
-        let (library, program) = library_and_program();
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
         let minted = Cell::new(0);
         let mut mint = || {
             minted.set(minted.get() + 1);
@@ -5067,15 +5502,16 @@ mod relink_alias_tests {
         }
         assert_eq!(minted.get(), 1, "an alias per target, not per expansion");
         // Still an alias, resolved afresh: it sees what the library assigns.
-        library.set("helper", n(10)).unwrap();
-        assert_eq!(program.get(&first), Some(n(10)));
+        library.set(&heap, "helper", n(10)).unwrap();
+        assert_eq!(program.get(&heap, &first), Some(n(10)));
     }
 
     #[test]
     fn two_targets_get_two_aliases() {
-        let (library, program) = library_and_program();
-        let elsewhere = Rc::new(Environment::new());
-        elsewhere.define("helper", n(3));
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
+        let elsewhere = Rc::new(Environment::with_heap(&heap));
+        elsewhere.define(&heap, "helper", n(3));
         let minted = Cell::new(0);
         let mut mint = || {
             minted.set(minted.get() + 1);
@@ -5104,14 +5540,15 @@ mod relink_alias_tests {
             &mut mint,
         );
         assert_eq!(minted.get(), 3);
-        assert_eq!(program.get(&helper), Some(n(1)));
-        assert_eq!(program.get(&other), Some(n(2)));
-        assert_eq!(program.get(&elsewhere_helper), Some(n(3)));
+        assert_eq!(program.get(&heap, &helper), Some(n(1)));
+        assert_eq!(program.get(&heap, &other), Some(n(2)));
+        assert_eq!(program.get(&heap, &elsewhere_helper), Some(n(3)));
     }
 
     #[test]
     fn two_identities_of_one_spelling_get_two_aliases() {
-        let (library, program) = library_and_program();
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
         let a = ScopeSet::singleton(ScopeId::fresh());
         let b = ScopeSet::singleton(ScopeId::fresh());
         let minted = Cell::new(0);
@@ -5159,7 +5596,8 @@ mod relink_alias_tests {
     /// since the spelling is what tells the renamed mentions apart.
     #[test]
     fn two_mentions_of_one_target_get_two_aliases() {
-        let (library, program) = library_and_program();
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
         let generated = ScopeSet::singleton(ScopeId::fresh());
         let minted = Cell::new(0);
         let mut mint = || {
@@ -5194,13 +5632,14 @@ mod relink_alias_tests {
             as_generated
         );
         assert_eq!(minted.get(), 2);
-        assert_eq!(program.get(&as_written), Some(n(1)));
-        assert_eq!(program.get(&as_generated), Some(n(1)));
+        assert_eq!(program.get(&heap, &as_written), Some(n(1)));
+        assert_eq!(program.get(&heap, &as_generated), Some(n(1)));
     }
 
     #[test]
     fn a_remembered_alias_that_was_defined_over_is_replaced() {
-        let (library, program) = library_and_program();
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
         let minted = Cell::new(0);
         let mut mint = || {
             minted.set(minted.get() + 1);
@@ -5214,7 +5653,7 @@ mod relink_alias_tests {
             &mut mint,
         );
         // `helper.1` is a legal identifier: the program binds it itself.
-        program.define(Rc::clone(&first), n(99));
+        program.define(&heap, Rc::clone(&first), n(99));
         let second = program.relink_alias(
             Rc::clone(&library),
             "helper".into(),
@@ -5224,8 +5663,8 @@ mod relink_alias_tests {
         );
         assert_ne!(second, first);
         assert_eq!(minted.get(), 2);
-        assert_eq!(program.get(&first), Some(n(99)));
-        assert_eq!(program.get(&second), Some(n(1)));
+        assert_eq!(program.get(&heap, &first), Some(n(99)));
+        assert_eq!(program.get(&heap, &second), Some(n(1)));
         // And the replacement is the one remembered from then on.
         assert_eq!(
             program.relink_alias(
@@ -5242,7 +5681,8 @@ mod relink_alias_tests {
 
     #[test]
     fn a_frame_reuses_its_roots_alias_and_keeps_its_own_to_itself() {
-        let (library, program) = library_and_program();
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
         let minted = Cell::new(0);
         let mut mint = || {
             minted.set(minted.get() + 1);
@@ -5272,7 +5712,7 @@ mod relink_alias_tests {
             frame.alias_target(&rooted).is_none(),
             "the frame installs nothing"
         );
-        assert_eq!(frame.get(&rooted), Some(n(1)));
+        assert_eq!(frame.get(&heap, &rooted), Some(n(1)));
         // A target the root has not aliased is minted into the frame alone.
         let own = frame.relink_alias(
             Rc::clone(&library),
@@ -5283,6 +5723,194 @@ mod relink_alias_tests {
         );
         assert_eq!(minted.get(), 2);
         assert!(program.alias_target(&own).is_none());
-        assert_eq!(frame.get(&own), Some(n(2)));
+        assert_eq!(frame.get(&heap, &own), Some(n(2)));
+    }
+}
+
+/// The namespace step (#834): every read or write of a namespace's binding
+/// borrows the heap, shared for a read and mutably for a write, in every
+/// build; a frame's own binding takes no borrow. Until 4b.6's records the
+/// borrow carries nothing but a debug identity check, so what this pins is
+/// that it is taken where step 4 will need it, and before anything is
+/// written. Run with `--release` too, where the borrows must still be taken.
+#[cfg(test)]
+mod heap_step_tests {
+    use super::*;
+    use crate::heap::new_shared_heap;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    fn n(i: i64) -> TaggedValue {
+        TaggedValue::fixnum(i)
+    }
+
+    fn scopes(ids: &[usize]) -> ScopeSet {
+        let mut set = ScopeSet::new();
+        for id in ids {
+            set.add_scope(crate::scope::ScopeId(*id));
+        }
+        set
+    }
+
+    /// A named access, run to see whether it panics.
+    type Case<'a> = (&'static str, Box<dyn FnOnce() + 'a>);
+
+    fn panics(f: impl FnOnce()) -> bool {
+        catch_unwind(AssertUnwindSafe(f)).is_err()
+    }
+
+    /// What an access answered, which only its panic or its absence says
+    /// anything about here.
+    fn ignore<T>(_: T) {}
+
+    #[test]
+    fn every_namespace_hit_borrows_the_heap_and_a_frames_own_does_not() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "lib", n(1));
+        let ns = Rc::new(Environment::with_heap(&heap));
+        ns.define(&heap, "own", n(2));
+        ns.define_with_scopes(&heap, "x", scopes(&[1]), n(3));
+        ns.define_scoped_definition(&heap, "vis", scopes(&[2]), n(4));
+        assert!(ns.share_binding(&heap, "imported", &library, "lib"));
+        let frame = Rc::new(Environment::child_frame(Rc::clone(&ns)));
+        frame.define(&heap, "local", n(5));
+        assert!(frame.share_binding(&heap, "frame-import", &library, "lib"));
+        let own = ns.local_slot("own").unwrap();
+        let local = frame.local_slot("local").unwrap();
+
+        // A read of a namespace's binding, under the heap borrowed mutably.
+        {
+            let held = heap.borrow_mut();
+            let reads: [Case<'_>; 11] = [
+                ("ns.get own", Box::new(|| ignore(ns.get(&heap, "own")))),
+                (
+                    "ns.get imported",
+                    Box::new(|| ignore(ns.get(&heap, "imported"))),
+                ),
+                (
+                    "frame.get, at the namespace",
+                    Box::new(|| ignore(frame.get(&heap, "own"))),
+                ),
+                (
+                    "frame.get of its import",
+                    Box::new(|| ignore(frame.get(&heap, "frame-import"))),
+                ),
+                (
+                    "ns.slot_value",
+                    Box::new(|| ignore(ns.slot_value(&heap, own))),
+                ),
+                (
+                    "ns.binding_location",
+                    Box::new(|| ignore(ns.binding_location(&heap, "own"))),
+                ),
+                (
+                    "ns.get_with_scopes",
+                    Box::new(|| ignore(ns.get_with_scopes(&heap, "x", &scopes(&[1, 9])))),
+                ),
+                (
+                    "ns.scoped_binding_of",
+                    Box::new(|| ignore(ns.scoped_binding_of(&heap, "x", &scopes(&[1, 9])))),
+                ),
+                ("ns.bindings", Box::new(|| ignore(ns.bindings(&heap)))),
+                (
+                    "NamespaceView::get",
+                    Box::new(|| ignore(crate::NamespaceView::of(&ns).get(&heap, "own"))),
+                ),
+                (
+                    "ns.get of the visible scoped binding",
+                    Box::new(|| ignore(ns.get(&heap, "vis"))),
+                ),
+            ];
+            for (what, read) in reads {
+                assert!(panics(read), "{what} took no shared borrow");
+            }
+            drop(held);
+        }
+
+        // A write of a namespace's binding, under the heap borrowed shared.
+        {
+            let held = heap.borrow();
+            let writes: [Case<'_>; 9] = [
+                (
+                    "ns.define over a name",
+                    Box::new(|| ns.define(&heap, "own", n(20))),
+                ),
+                (
+                    "ns.define of a fresh name",
+                    Box::new(|| ns.define(&heap, "fresh", n(21))),
+                ),
+                ("ns.set", Box::new(|| ns.set(&heap, "own", n(22)).unwrap())),
+                (
+                    "ns.set_slot_value",
+                    Box::new(|| ns.set_slot_value(&heap, own, n(23))),
+                ),
+                (
+                    "ns.define_with_scopes",
+                    Box::new(|| ns.define_with_scopes(&heap, "x", scopes(&[1]), n(24))),
+                ),
+                (
+                    "ns.set_with_scopes",
+                    Box::new(|| {
+                        ns.set_with_scopes(&heap, "x", &scopes(&[1, 9]), n(25))
+                            .unwrap()
+                    }),
+                ),
+                (
+                    "ns.share_binding re-pointing an import",
+                    Box::new(|| ignore(ns.share_binding(&heap, "imported", &library, "lib"))),
+                ),
+                (
+                    "frame.set of its import",
+                    Box::new(|| frame.set(&heap, "frame-import", n(26)).unwrap()),
+                ),
+                (
+                    "ns.set of the visible scoped binding",
+                    Box::new(|| ns.set(&heap, "vis", n(27)).unwrap()),
+                ),
+            ];
+            for (what, write) in writes {
+                assert!(panics(write), "{what} took no mutable borrow");
+            }
+            drop(held);
+        }
+
+        // Each step came before anything was written.
+        assert_eq!(ns.get(&heap, "own"), Some(n(2)));
+        assert_eq!(ns.get(&heap, "imported"), Some(n(1)));
+        assert_eq!(library.get(&heap, "lib"), Some(n(1)));
+        assert_eq!(
+            ns.get_with_scopes(&heap, "x", &scopes(&[1, 9])).unwrap(),
+            Some(n(3))
+        );
+        assert_eq!(ns.get(&heap, "vis"), Some(n(4)));
+        assert_eq!(ns.local_slot("fresh"), None);
+
+        // A frame's own binding, under the heap borrowed mutably: no borrow.
+        let held = heap.borrow_mut();
+        assert_eq!(frame.get(&heap, "local"), Some(n(5)));
+        frame.define(&heap, "frame-fresh", n(6));
+        frame.set(&heap, "local", n(7)).unwrap();
+        frame.define_with_scopes(&heap, "y", scopes(&[3]), n(8));
+        assert_eq!(frame.slot_value(&heap, local), n(7));
+        drop(held);
+        assert_eq!(frame.get(&heap, "frame-fresh"), Some(n(6)));
+        assert_eq!(
+            frame.get_with_scopes(&heap, "y", &scopes(&[3])).unwrap(),
+            Some(n(8))
+        );
+    }
+
+    /// The step's borrow is checked against the environment's heap: a
+    /// namespace read with another heap's `RefCell` is refused in a debug
+    /// build.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "another heap")]
+    fn a_namespace_step_refuses_another_heaps_borrow() {
+        let heap = new_shared_heap();
+        let other = new_shared_heap();
+        let ns = Environment::with_heap(&heap);
+        ns.define(&heap, "x", n(1));
+        let _ = ns.get(&other, "x");
     }
 }

@@ -66,7 +66,9 @@ fn read_after_its_slot_is_reused<B: Backend>(interp: Interpreter<B>) {
 fn bind_and_collect<B: Backend>(interp: Interpreter<B>) {
     let held = interp.eval_program(HELD_PAIR).expect("make the pair");
     interp.eval_program(COLLECT).expect("collect");
-    interp.global_env().define("stale", held);
+    interp
+        .global_env()
+        .define(interp.backend().heap(), "stale", held);
     let _ = interp.eval_program("(gc) 0");
 }
 

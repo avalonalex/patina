@@ -238,7 +238,7 @@ fn test_desugarer_installs_macro_in_environment() {
     .expect("Should desugar successfully");
 
     // Macro should now be in the environment
-    let macro_tv = env.get("foo");
+    let macro_tv = env.get(&heap, "foo");
     assert!(
         macro_tv.is_some(),
         "Macro 'foo' should be installed in environment"

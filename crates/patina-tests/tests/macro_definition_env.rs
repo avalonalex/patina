@@ -56,7 +56,7 @@ fn exported_fixnum(eval: &Evaluator, lib: &str, name: &str) -> i64 {
         .unwrap_or_else(|e| panic!("failed to load (t {lib}): {e}"));
     library
         .env
-        .get(name)
+        .get(&eval.heap, name)
         .unwrap_or_else(|| panic!("(t {lib}) does not define {name}"))
         .as_fixnum()
         .unwrap_or_else(|| panic!("{name} is not a fixnum"))
@@ -597,7 +597,7 @@ fn defining_over_the_alias<B: patina_runtime::Backend>(
     let env = interp.global_env();
     let spelling = (0..100_000)
         .map(|k| format!("private-helper.{k}"))
-        .find(|spelling| env.get(spelling).is_some())
+        .find(|spelling| env.get(interp.backend().heap(), spelling).is_some())
         .expect("relinking aliased the private helper");
     interp
         .eval_program(&format!("(define ({spelling} x) 'mine)"))

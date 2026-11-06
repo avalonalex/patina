@@ -115,9 +115,9 @@ disallowed-methods = [
     # patina-core: an environment no root reaches (#620). Only the frame
     # constructors, as #622 scoped it: `with_parent` (deprecated, #831),
     # `child_frame`, the workspace's twin of it, and `for_temporaries` (#681).
-    # An environment from `Environment::new` or `with_heap` held across a
-    # re-entry is named in that call's reason instead (the loaders'
-    # `lib_env`, the environment primitives' `env`).
+    # An environment from `Environment::with_heap` held across a re-entry is
+    # named in that call's reason instead (the loaders' `lib_env`, the
+    # environment primitives' `env`).
     { path = "patina_core::environment::Environment::with_parent", reason = "an environment built outside the core is reachable from no root unless its caller makes it so (#620); give what keeps its values alive in an `expect` (#622)" },
     { path = "patina_core::environment::Environment::child_frame", reason = "an environment built outside the core is reachable from no root unless its caller makes it so (#620); give what keeps its values alive in an `expect` (#622)" },
     { path = "patina_core::environment::Environment::for_temporaries", reason = "an environment built outside the core is reachable from no root unless its caller makes it so (#620); give what keeps its values alive in an `expect` (#622)" },

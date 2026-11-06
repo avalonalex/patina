@@ -623,7 +623,7 @@ impl LibraryRegistry {
             .libraries
             .get_mut(library)
             .expect("a host library stays registered");
-        NamespaceView::of(&lib.env).define(name, value);
+        NamespaceView::of(&lib.env).define(heap, name, value);
         lib.export_tagged(name.to_string(), value);
     }
 
@@ -824,6 +824,13 @@ impl crate::HasDiagnostic for LibraryError {
 mod tests {
     use super::*;
 
+    /// An empty library named `name`, its namespace on a heap of its own:
+    /// for the tests of the registry's bookkeeping, which read no binding.
+    fn empty_library(name: Vec<String>) -> Library {
+        let heap = patina_core::heap::new_shared_heap();
+        Library::with_env(name, Rc::new(patina_core::Environment::with_heap(&heap)))
+    }
+
     #[test]
     fn test_registry_creation() {
         let registry = LibraryRegistry::new();
@@ -869,11 +876,11 @@ mod tests {
     fn test_register_or_replace_overwrites() {
         let mut registry = LibraryRegistry::new();
         let name = vec!["test".to_string()];
-        registry.register(Library::new(name.clone())).unwrap();
+        registry.register(empty_library(name.clone())).unwrap();
 
         // A second registration under the same name replaces, not errors —
         // the replacement's exports are what `get` returns afterwards.
-        let mut replacement = Library::new(name.clone());
+        let mut replacement = empty_library(name.clone());
         replacement.export_tagged("v".to_string(), patina_core::TaggedValue::fixnum(2));
         registry.register_or_replace(replacement);
 
@@ -897,9 +904,13 @@ mod tests {
         let library = |value: i64| {
             let env = Rc::new(Environment::with_heap(&heap));
             for i in 0..50 {
-                env.define(format!("private-{i}"), patina_core::TaggedValue::fixnum(i));
+                env.define(
+                    &heap,
+                    format!("private-{i}"),
+                    patina_core::TaggedValue::fixnum(i),
+                );
             }
-            env.define("v", patina_core::TaggedValue::fixnum(value));
+            env.define(&heap, "v", patina_core::TaggedValue::fixnum(value));
             let mut library = Library::with_env(name.clone(), env);
             library.export_tagged("v".to_string(), patina_core::TaggedValue::fixnum(value));
             library
@@ -911,7 +922,7 @@ mod tests {
             registry
                 .get(&name)
                 .unwrap()
-                .import_into(&importer, "v", "v")
+                .import_into(&heap, &importer, "v", "v")
         );
         let old = registry.get(&name).unwrap().env.charged_bytes().unwrap();
 
@@ -938,7 +949,7 @@ mod tests {
     #[test]
     fn test_register_library() {
         let mut registry = LibraryRegistry::new();
-        let lib = Library::new(vec!["test".to_string()]);
+        let lib = empty_library(vec!["test".to_string()]);
         let name = vec!["test".to_string()];
 
         assert!(!registry.is_loaded(&name));
@@ -952,8 +963,8 @@ mod tests {
     #[test]
     fn test_duplicate_registration_error() {
         let mut registry = LibraryRegistry::new();
-        let lib1 = Library::new(vec!["test".to_string()]);
-        let lib2 = Library::new(vec!["test".to_string()]);
+        let lib1 = empty_library(vec!["test".to_string()]);
+        let lib2 = empty_library(vec!["test".to_string()]);
 
         registry.register(lib1).unwrap();
         let result = registry.register(lib2);
@@ -1060,8 +1071,8 @@ mod tests {
     fn test_get_loaded_libraries() {
         let mut registry = LibraryRegistry::new();
 
-        let lib1 = Library::new(vec!["lib1".to_string()]);
-        let lib2 = Library::new(vec!["scheme".to_string(), "base".to_string()]);
+        let lib1 = empty_library(vec!["lib1".to_string()]);
+        let lib2 = empty_library(vec!["scheme".to_string(), "base".to_string()]);
 
         registry.register(lib1).unwrap();
         registry.register(lib2).unwrap();
@@ -1075,7 +1086,7 @@ mod tests {
     #[test]
     fn test_clear_registry() {
         let mut registry = LibraryRegistry::new();
-        let lib = Library::new(vec!["test".to_string()]);
+        let lib = empty_library(vec!["test".to_string()]);
         let name = vec!["test".to_string()];
 
         registry.register(lib).unwrap();
@@ -1125,7 +1136,7 @@ mod gc_root_tests {
         let exported = s.pair(&mut heap, "LibraryRegistry.libraries: Library.exports");
         let private = s.vector(&mut heap, "LibraryRegistry.libraries: Library.env");
         drop(heap);
-        env.define("private", private);
+        env.define(&shared, "private", private);
 
         let name = vec!["sentinel".to_string()];
         let mut library = Library::with_env(name.clone(), env);
@@ -1157,7 +1168,7 @@ mod gc_root_tests {
             "LibraryRegistry.loading_stack: LoadingEntry.body",
         );
         drop(heap);
-        env.define("defined", defined);
+        env.define(&shared, "defined", defined);
 
         let registry = LibraryRegistry {
             libraries: HashMap::new(),

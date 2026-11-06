@@ -11,7 +11,9 @@
 use crate::apply_context::ApplyContext;
 use crate::registry::{PrimitiveFn, PrimitiveRegistry, Step, done_with_result};
 use patina_core::port::out_of_descriptors;
-use patina_core::{CollectKind, CoreExpr, CoreExprKind, Cx, Value, core_syntax::CoreForm};
+use patina_core::{
+    CollectKind, CoreExpr, CoreExprKind, Cx, NamespaceView, Value, core_syntax::CoreForm,
+};
 use patina_frontend::{Desugarer, LibraryDefinition};
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
@@ -75,7 +77,7 @@ fn primitive_environment<'gc>(
         let library = ctx.load_scheme_library(cx, set.library_name())?;
         for binding in set.resolve_bindings(library.export_names()) {
             let (name, export) = binding.map_err(patina_runtime::LibraryError::into_eval_error)?;
-            library.import_into(&env, name, &export);
+            cx.import_into(&library, NamespaceView::of(&env), name, &export);
         }
     }
     Ok(cx.alloc_environment_specifier(env, false))
@@ -219,10 +221,10 @@ const R5RS_SYNTAX_NOT_IN_BASE: &[&str] = &["delay"];
 /// evaluator and don't need to be in the environment" — true only because they
 /// were recognized in every scope, which is what made `(null-environment 5)`
 /// not null.
-fn install_r5rs_syntax(env: &Rc<Environment>, base_lib: &patina_core::Library) {
+fn install_r5rs_syntax(cx: &mut Cx<'_>, env: &Rc<Environment>, base_lib: &patina_core::Library) {
     for name in R5RS_SYNTAX {
         // The library's binding, as any import installs (#406).
-        if !base_lib.import_into(env, *name, name) {
+        if !cx.import_into(base_lib, NamespaceView::of(env), *name, name) {
             debug_assert!(
                 R5RS_SYNTAX_NOT_IN_BASE.contains(name),
                 "(scheme base) stopped exporting the R5RS keyword '{name}'; \
@@ -486,7 +488,7 @@ fn primitive_null_environment<'gc>(
         .load_scheme_library(cx, &["scheme".to_string(), "base".to_string()])
         .map_err(|e| EvalError::InternalError(format!("Cannot load scheme base: {}", e)))?;
 
-    install_r5rs_syntax(&env, &base_lib);
+    install_r5rs_syntax(cx, &env, &base_lib);
 
     Ok(cx.alloc_environment_specifier(env, false))
 }
@@ -532,11 +534,11 @@ fn primitive_scheme_report_environment<'gc>(
         .map_err(|e| EvalError::InternalError(format!("Cannot load scheme base: {}", e)))?;
 
     // Install syntactic keywords
-    install_r5rs_syntax(&env, &base_lib);
+    install_r5rs_syntax(cx, &env, &base_lib);
 
     // Install procedures
     for name in R5RS_PROCEDURES {
-        base_lib.import_into(&env, *name, name);
+        cx.import_into(&base_lib, NamespaceView::of(&env), *name, name);
     }
 
     // Two optional libraries: absent is fine, but a *failure* is not the same
@@ -561,7 +563,7 @@ fn primitive_scheme_report_environment<'gc>(
         for name in &[
             "sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "sqrt",
         ] {
-            inexact_lib.import_into(&env, *name, name);
+            cx.import_into(&inexact_lib, NamespaceView::of(&env), *name, name);
         }
     }
 
@@ -575,15 +577,25 @@ fn primitive_scheme_report_environment<'gc>(
             "magnitude",
             "angle",
         ] {
-            complex_lib.import_into(&env, *name, name);
+            cx.import_into(&complex_lib, NamespaceView::of(&env), *name, name);
         }
     }
 
     // Add the R5RS-specific aliases
     // exact->inexact is an alias for inexact
-    base_lib.import_into(&env, "exact->inexact", "inexact");
+    cx.import_into(
+        &base_lib,
+        NamespaceView::of(&env),
+        "exact->inexact",
+        "inexact",
+    );
     // inexact->exact is an alias for exact
-    base_lib.import_into(&env, "inexact->exact", "exact");
+    cx.import_into(
+        &base_lib,
+        NamespaceView::of(&env),
+        "inexact->exact",
+        "exact",
+    );
 
     // Add null-environment and scheme-report-environment themselves
     let r5rs_lib = vec!["scheme".to_string(), "r5rs".to_string()];

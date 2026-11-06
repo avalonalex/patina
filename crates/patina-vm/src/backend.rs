@@ -556,14 +556,14 @@ impl VmBackend {
         // Import (scheme base) into global environment
         if let Ok(lib) = self.get_loaded_library(&["scheme".into(), "base".into()]) {
             for name in lib.export_names() {
-                lib.import_into(&self.global_env, name, name);
+                lib.import_into(&self.heap, &self.global_env, name, name);
             }
         }
 
         // Import (patina debug) into global environment
         if let Ok(lib) = self.get_loaded_library(&["patina".into(), "debug".into()]) {
             for name in lib.export_names() {
-                lib.import_into(&self.global_env, name, name);
+                lib.import_into(&self.heap, &self.global_env, name, name);
             }
         }
 
@@ -889,7 +889,7 @@ impl VmBackend {
         }
 
         // Step 3: Assemble the library and resolve its exports
-        build_library(declarations, lib_env)
+        build_library(&self.heap, declarations, lib_env)
     }
 
     /// Resolve an import set into the given environment.

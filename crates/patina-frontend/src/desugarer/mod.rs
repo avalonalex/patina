@@ -78,7 +78,7 @@ use crate::source_map::SourceMap;
 use patina_core::error::SourceLocation;
 use patina_core::source_document::ExpansionChain;
 use patina_core::walk::OpenNodes;
-use patina_core::{CoreForm, Cx, Lit, LiteralPool, NamespaceView, TaggedValue, Value};
+use patina_core::{CoreForm, Cx, Lit, LiteralPool, NamespaceView, Value};
 use patina_ir::{CoreExpr, CoreExprKind};
 use patina_macros::IdentifierKey;
 use patina_macros::macro_expander::utils::list_to_vec_with_tail;
@@ -375,7 +375,12 @@ struct SplicingContext {
     keyword_scopes: Vec<ScopeId>,
 }
 
-type ImportHandler<'a> = dyn Fn(&crate::ImportSet, &Rc<Environment>) -> Result<()> + 'a;
+/// What the desugarer calls to load and install an import set into an
+/// environment. It takes the form's context, through which the staged
+/// import's bindings are copied into the target (`Cx::copy_binding`), each
+/// namespace step borrowing the context's heap (#834).
+type ImportHandler<'a> =
+    dyn for<'gc> Fn(&crate::ImportSet, &Rc<Environment>, &mut Cx<'gc>) -> Result<()> + 'a;
 
 /// What turns parsed forms into `CoreExpr`: expanding macros, resolving
 /// identifiers against scope sets, and compiling `define-syntax`.
@@ -598,6 +603,7 @@ impl<'a> Desugarer<'a> {
         &self,
         binders: impl IntoIterator<Item = (Rc<str>, ScopeSet)>,
         binding_scope: ScopeId,
+        cx: &Cx<'_>,
     ) -> Self {
         let binders: Vec<(Rc<str>, ScopeSet)> = binders.into_iter().collect();
         let new_scopes = self.current_scopes.with_scope(binding_scope);
@@ -649,7 +655,14 @@ impl<'a> Desugarer<'a> {
                 } else {
                     as_written.with_scope(binding_scope)
                 };
-                child.define_with_scopes(name.to_string(), scopes, TaggedValue::UNSPECIFIED);
+                // A frame's own binding, through a shared context: it takes
+                // no borrow of the heap and allocates nothing (#834).
+                cx.define_with_scopes_in_frame(
+                    NamespaceView::of(&child),
+                    name.to_string(),
+                    scopes,
+                    Value::UNSPECIFIED,
+                );
             }
             child
         };
@@ -717,7 +730,10 @@ impl<'a> Desugarer<'a> {
             return (self, body_tvs);
         }
         let body_tvs = Self::scope_body(&produced, &body_tvs, binding_scope, cx);
-        (self.enter_binding_form(produced, binding_scope), body_tvs)
+        (
+            self.enter_binding_form(produced, binding_scope, cx),
+            body_tvs,
+        )
     }
 
     /// The names a body's *macro uses* define — `define-values`,
@@ -1058,7 +1074,7 @@ impl<'a> Desugarer<'a> {
             scopes
         };
         let (value, selected) = cx
-            .resolve_with_scopes(&self.expansion_env(&self.env), name, scopes)
+            .resolve_with_scopes(&self.expansion_env(&self.env, cx), name, scopes)
             .map_err(|e| DesugarError::AmbiguousReference(e.to_string()))?;
         let by_name = !selected;
         let Some(tv) = value else {
@@ -1220,8 +1236,8 @@ impl<'a> Desugarer<'a> {
                 .keys()
                 .filter(|name| !template_symbols.contains(*name)),
         );
-        let definition_lookup = self.expansion_env(def_env);
-        let use_lookup = self.expansion_env(&self.env);
+        let definition_lookup = self.expansion_env(def_env, cx);
+        let use_lookup = self.expansion_env(&self.env, cx);
         for name in names {
             // The cheap test first: it settles nearly every name — `list`,
             // `if` and the rest are one binding on both sides — and the
@@ -1259,9 +1275,9 @@ impl<'a> Desugarer<'a> {
             // also mention a scoped keyword, including a splice's private
             // helper (#424), so nonempty definition scopes require that check
             // even for written template symbols.
-            let def_location = definition_lookup.binding_location(name);
-            let same_by_name =
-                def_location.is_some() && use_lookup.binding_location(name) == def_location;
+            let def_location = cx.binding_location(NamespaceView::of(&definition_lookup), name);
+            let same_by_name = def_location.is_some()
+                && cx.binding_location(NamespaceView::of(&use_lookup), name) == def_location;
             let may_mean_another = !definition_scopes.is_empty()
                 || (inherited_identifiers.contains_key(name)
                     && def_env.has_introduced_definition(name));
@@ -1355,7 +1371,10 @@ impl<'a> Desugarer<'a> {
                 // keyword. Its scopes identify a real expansion-time binding,
                 // even when the bare name has no binding at either site.
                 if let Some((home, scopes)) = cx.scoped_macro_binding(def_env, name, identity) {
-                    if self.env.scoped_binding_of(name, identity).ok().flatten()
+                    if cx
+                        .scoped_binding_of(NamespaceView::of(&self.env), name, identity)
+                        .ok()
+                        .flatten()
                         != Some(scopes.clone())
                     {
                         let alias =
@@ -1367,20 +1386,33 @@ impl<'a> Desugarer<'a> {
                     }
                     continue;
                 }
-                let alias_to = match def_env.name_reaches_binding_of(name, identity) {
-                    // The name is the binding. Nothing to do where the use
-                    // site's is the same one, or where it reaches nothing.
-                    Ok(true) if def_location.is_none() || same_by_name => continue,
-                    Ok(true) => None,
-                    Ok(false) => match def_env.introduced_definition(name, identity) {
-                        // Inside the library that holds it, scoped resolution
-                        // already sees it.
-                        Some((home, _)) if Rc::ptr_eq(&home, &target_env) => continue,
-                        Some(found) => Some(found),
-                        None => continue,
-                    },
-                    Err(_) => continue,
-                };
+                let alias_to =
+                    match cx.name_reaches_binding_of(NamespaceView::of(def_env), name, identity) {
+                        // The name is the binding. Nothing to do where the use
+                        // site's is the same one, or where it reaches nothing.
+                        Ok(true) if def_location.is_none() || same_by_name => continue,
+                        Ok(true) => None,
+                        Ok(false) => {
+                            match cx.introduced_definition(
+                                NamespaceView::of(def_env),
+                                name,
+                                identity,
+                            ) {
+                                // Held by the definition environment's root.
+                                Some(found) => {
+                                    let home = def_env.root();
+                                    // Inside the library that holds it, scoped
+                                    // resolution already sees it.
+                                    if Rc::ptr_eq(&home, &target_env) {
+                                        continue;
+                                    }
+                                    Some((home, found))
+                                }
+                                None => continue,
+                            }
+                        }
+                        Err(_) => continue,
+                    };
                 // One alias per target, however many expansions ask (#611):
                 // a remembered one is reused, and its symbol is already
                 // interned.
@@ -1478,7 +1510,13 @@ impl<'a> Desugarer<'a> {
     /// time. It was 6–8% before the one resolution was shared with the
     /// syntax-as-value check, the per-name part memoised under a fast hasher,
     /// and internal recursion taken off the entry point's bookkeeping.
-    fn early_bound(&self, name: &Rc<str>, scopes: &ScopeSet, by_name: bool) -> Option<Rc<str>> {
+    fn early_bound(
+        &self,
+        name: &Rc<str>,
+        scopes: &ScopeSet,
+        by_name: bool,
+        cx: &mut Cx<'_>,
+    ) -> Option<Rc<str>> {
         if !by_name || scopes.is_empty() {
             return None;
         }
@@ -1506,7 +1544,7 @@ impl<'a> Desugarer<'a> {
             .get(&macro_env)
             .and_then(|names| names.get(&**name).cloned());
         let import = known.unwrap_or_else(|| {
-            let import = self.import_of(name, &def_env);
+            let import = self.import_of(name, &def_env, cx);
             self.early
                 .imports
                 .borrow_mut()
@@ -1516,7 +1554,11 @@ impl<'a> Desugarer<'a> {
             import
         });
         let (location, alias) = import?;
-        if self.env.binding_location(name).as_ref() != Some(&location) {
+        if cx
+            .binding_location(NamespaceView::of(&self.env), name)
+            .as_ref()
+            != Some(&location)
+        {
             return None;
         }
         let mut bound = self.early.bound.borrow_mut();
@@ -1532,14 +1574,20 @@ impl<'a> Desugarer<'a> {
         &self,
         name: &Rc<str>,
         def_env: &Rc<Environment>,
+        cx: &mut Cx<'_>,
     ) -> Option<(patina_core::BindingLocation, Rc<str>)> {
         let target_env = self.env.root();
-        let location = def_env.binding_location(name)?;
-        if target_env.binding_location(name).as_ref() != Some(&location) {
+        let location = cx.binding_location(NamespaceView::of(def_env), name)?;
+        if cx
+            .binding_location(NamespaceView::of(&target_env), name)
+            .as_ref()
+            != Some(&location)
+        {
             return None;
         }
-        let alias =
-            NamespaceView::of(&target_env).import_alias(name, || Rc::from(alias_name(name)))?;
+        let alias = cx.import_alias(NamespaceView::of(&target_env), name, || {
+            Rc::from(alias_name(name))
+        })?;
         Some((location, alias))
     }
 
@@ -1943,7 +1991,7 @@ impl<'a> Desugarer<'a> {
         // nothing collects while a context lives (#624, #704).
         let import = RefCell::new(import);
         let failure = RefCell::new(None);
-        let handler = |set: &crate::ImportSet, env: &Rc<Environment>| {
+        let handler = |set: &crate::ImportSet, env: &Rc<Environment>, cx: &mut Cx<'_>| {
             // When a variable has been declared earlier in this form, an
             // import can supersede its expansion binding. Stage the import
             // to learn exactly which names it installs, preserving shared
@@ -1963,8 +2011,8 @@ impl<'a> Desugarer<'a> {
             }
             if let Some(staged) = staged {
                 let target = NamespaceView::of(env);
-                for name in staged.local_names() {
-                    target.copy_binding(name.as_str(), &staged, &name);
+                for name in cx.local_names(NamespaceView::of(&staged)) {
+                    cx.copy_binding(target, name.as_str(), &staged, &name);
                     self.declarations
                         .borrow_mut()
                         .forget(env, &name, &ScopeSet::new());
@@ -2083,7 +2131,9 @@ impl<'a> Desugarer<'a> {
         // Identifier - variable reference with scopes (for hygiene)
         if let Some((name, scopes)) = cx.get_identifier_data_any(tagged) {
             let by_name = self.checked_reference(&name, &scopes, cx)?;
-            let name = self.early_bound(&name, &scopes, by_name).unwrap_or(name);
+            let name = self
+                .early_bound(&name, &scopes, by_name, cx)
+                .unwrap_or(name);
             return Ok(CoreExpr::new(CoreExprKind::Var { name, scopes }));
         }
 
@@ -2418,11 +2468,11 @@ impl<'a> Desugarer<'a> {
         // 3. The body's own internal definitions, which bind over all of it
         let binders = utils::formals_to_binders(&params);
         let body_tvs = Self::scope_body(&binders, &body_tvs, binding_scope, cx);
-        let body_desugarer = self.enter_binding_form(binders, binding_scope);
+        let body_desugarer = self.enter_binding_form(binders, binding_scope, cx);
 
         let defined = body_desugarer.body_definition_names(&body_tvs, cx);
         let body_tvs = Self::scope_body(&defined, &body_tvs, binding_scope, cx);
-        let body_desugarer = body_desugarer.enter_binding_form(defined, binding_scope);
+        let body_desugarer = body_desugarer.enter_binding_form(defined, binding_scope, cx);
         let (body_desugarer, body_tvs) =
             body_desugarer.enter_produced_definitions(body_tvs, binding_scope, cx);
 
@@ -2494,7 +2544,8 @@ impl<'a> Desugarer<'a> {
                     &new_env,
                     macro_name,
                     binder_scopes,
-                    tv.tagged(),
+                    tv,
+                    cx,
                 );
 
                 current_env = new_env.clone();
@@ -2643,7 +2694,9 @@ impl<'a> Desugarer<'a> {
         // breaks inside its own startup code. Without this, reading syntax was
         // an error while overwriting it silently succeeded.
         let by_name = self.checked_reference(&name, &scopes, cx)?;
-        let name = self.early_bound(&name, &scopes, by_name).unwrap_or(name);
+        let name = self
+            .early_bound(&name, &scopes, by_name, cx)
+            .unwrap_or(name);
 
         let value = self.desugar_expression(args_vec[1], cx)?;
 
@@ -2683,7 +2736,7 @@ impl<'a> Desugarer<'a> {
             }
 
             let params = utils::convert_formals_tagged(formals_tv, cx)?;
-            self.declare_top_level_variable(&name, &name_scopes);
+            self.declare_top_level_variable(&name, &name_scopes, cx);
 
             // Create a fresh binding scope for this lambda, and give the body
             // the scopes that include it.
@@ -2703,11 +2756,11 @@ impl<'a> Desugarer<'a> {
             // own internal definitions (see `body_definition_names`).
             let binders = utils::formals_to_binders(&params);
             let body_tvs = Self::scope_body(&binders, &body_tvs, binding_scope, cx);
-            let body_desugarer = self.enter_binding_form(binders, binding_scope);
+            let body_desugarer = self.enter_binding_form(binders, binding_scope, cx);
 
             let defined = body_desugarer.body_definition_names(&body_tvs, cx);
             let body_tvs = Self::scope_body(&defined, &body_tvs, binding_scope, cx);
-            let body_desugarer = body_desugarer.enter_binding_form(defined, binding_scope);
+            let body_desugarer = body_desugarer.enter_binding_form(defined, binding_scope, cx);
             let (body_desugarer, body_tvs) =
                 body_desugarer.enter_produced_definitions(body_tvs, binding_scope, cx);
 
@@ -2748,7 +2801,7 @@ impl<'a> Desugarer<'a> {
             });
         }
 
-        self.declare_top_level_variable(&name, &name_scopes);
+        self.declare_top_level_variable(&name, &name_scopes, cx);
         let value_tv = args_vec[1];
         let value = self.desugar_expression(value_tv, cx)?;
 
@@ -2794,7 +2847,7 @@ impl<'a> Desugarer<'a> {
             scopes
         };
         let Ok((Some(value), _)) =
-            cx.resolve_with_scopes(&self.expansion_env(&self.env), name, scopes)
+            cx.resolve_with_scopes(&self.expansion_env(&self.env, cx), name, scopes)
         else {
             return false;
         };
@@ -2934,7 +2987,7 @@ impl<'a> Desugarer<'a> {
 
         // Install in environment
         let tv = cx.alloc_macro(Rc::new(compiled_macro), literals);
-        self.define_syntax_binding(env, name, binder_scopes, tv.tagged());
+        self.define_syntax_binding(env, name, binder_scopes, tv, cx);
 
         Ok(CoreExpr::new(CoreExprKind::Literal(Lit::UNSPECIFIED)))
     }
@@ -2944,12 +2997,15 @@ impl<'a> Desugarer<'a> {
     /// scopes stands in the body's context, just like a source reference.
     /// Top-level keywords keep their existing name visibility; #427 changes
     /// introduced variables only.
-    fn define_syntax_binding(
+    ///
+    /// Written through `cx`, whose heap a namespace's step borrows (#834).
+    fn define_syntax_binding<'gc>(
         &self,
         env: &Environment,
         name: Rc<str>,
         binder_scopes: ScopeSet,
-        value: TaggedValue,
+        value: Value<'gc>,
+        cx: &mut Cx<'gc>,
     ) {
         let (env, current_scopes) = match &self.splicing {
             Some(context) => (context.env.as_ref(), &context.scopes),
@@ -2960,7 +3016,7 @@ impl<'a> Desugarer<'a> {
             self.declarations
                 .borrow_mut()
                 .forget(env, &name, &ScopeSet::new());
-            env.define(name, value);
+            cx.define(NamespaceView::of(env), name, value);
         } else {
             let scopes = if binder_scopes.is_empty() {
                 current_scopes.clone()
@@ -2968,7 +3024,7 @@ impl<'a> Desugarer<'a> {
                 binder_scopes
             };
             self.declarations.borrow_mut().forget(env, &name, &scopes);
-            env.define_with_scopes(name, scopes, value);
+            cx.define_with_scopes(NamespaceView::of(env), name, scopes, value);
         }
     }
 
@@ -3009,7 +3065,7 @@ impl<'a> Desugarer<'a> {
                         DesugarError::InvalidSyntax(format!("Invalid import set: {e}"))
                             .with_diagnostic(e.diagnostic())
                     })?;
-                import(&set, &self.env)?;
+                import(&set, &self.env, cx)?;
             }
             // A later macro reference may now reach a different imported
             // location. Keep already-emitted aliases, but refresh lookups.
@@ -3233,10 +3289,13 @@ impl<'a> Desugarer<'a> {
             } else {
                 &binder_scopes
             };
-            body_env.define_with_scopes(
+            // Through `cx`: `body_env` is the enclosing namespace when a
+            // splice is at top level, whose step borrows the heap (#834).
+            cx.define_with_scopes(
+                NamespaceView::of(&body_env),
                 name.to_string(),
                 as_written.with_scope(let_syntax_scope),
-                tv.tagged(),
+                tv,
             );
         }
 
@@ -3708,7 +3767,7 @@ impl<'a> Desugarer<'a> {
         let rules = self.parse_macro_rules_tagged(&list[rules_start..], &name, cx)?;
 
         let macro_name = name.clone();
-        let expansion_env = self.expansion_env(env);
+        let expansion_env = self.expansion_env(env, cx);
         let mut compiler =
             Compiler::with_env_and_scopes(literals, custom_ellipsis, expansion_env, scopes.clone());
         let compiled = compiler.compile_macro(cx, name, rules);
@@ -3817,6 +3876,7 @@ impl<'a> Desugarer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use patina_core::TaggedValue;
     use patina_ir::Formals;
 
     /// A desugarer for one test, with the literal pool its trees' literals

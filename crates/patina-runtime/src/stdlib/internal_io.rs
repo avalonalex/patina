@@ -121,7 +121,7 @@ pub fn build_internal_io(
     ];
     let namespace = NamespaceView::of(&env);
     for (name, parameter) in names.into_iter().zip(parameters) {
-        namespace.define(name, parameter);
+        namespace.define(heap, name, parameter);
         exports.push(name.to_string());
     }
     // Their converters, as the parameters hold them: a registered primitive
@@ -132,7 +132,7 @@ pub fn build_internal_io(
             .parameter_parts(parameter)
             .and_then(|(_, converter)| converter)
             .expect("a standard port parameter has its converter");
-        namespace.define(name, converter);
+        namespace.define(heap, name, converter);
         exports.push(name.to_string());
     }
 

@@ -31,7 +31,7 @@ fn literal(value: TaggedValue) -> Rc<CpsExpr> {
 
 fn env_holding(heap: &SharedHeap, value: TaggedValue) -> Rc<Environment> {
     let env = Rc::new(Environment::with_heap(heap));
-    env.define("held", value);
+    env.define(heap, "held", value);
     env
 }
 
@@ -200,7 +200,7 @@ fn every_evaluator_root_is_traced() {
     let mutator = Rc::clone(heap.mutator());
     let instance = Rc::clone(heap.instance());
     drop(heap);
-    global_env.define("global", global);
+    global_env.define(&shared, "global", global);
 
     let library_registry = Rc::new(RefCell::new(LibraryRegistry::new()));
     let library_roots = LibraryRegistry::register_roots(&library_registry, &shared.borrow());

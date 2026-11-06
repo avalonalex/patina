@@ -9,7 +9,7 @@
 //! enters (`enter_binding_form`).
 
 use crate::macro_expander::Site;
-use patina_core::{Cx, Value};
+use patina_core::{Cx, NamespaceView, Value};
 use patina_runtime::{ScopeId, ScopeSet};
 
 /// Does `input` match the pattern literal `lit`?
@@ -51,21 +51,26 @@ pub fn matches_literal<'gc>(
     // identifier carrying nothing else was written at the use site. The scope
     // can stay in the set it is resolved with: it was minted after every
     // binding that exists, so no candidate carries it.
-    let lit_binding = || local_binding(lit_name, scopes_of(lit, cx), None, definition);
-    let input_binding = || local_binding(input_name, scopes_of(input, cx), macro_scope, use_site);
+    //
+    // Each question below reads bindings through `cx`, whose namespace steps
+    // borrow the heap shared, beside the two names' borrows above: a read
+    // here may not become a write.
+    let lit_binding = || local_binding(lit_name, scopes_of(lit, cx), None, definition, cx);
+    let input_binding =
+        || local_binding(input_name, scopes_of(input, cx), macro_scope, use_site, cx);
 
     if lit_name == input_name {
         let (lit_local, input_local) = (lit_binding()?, input_binding()?);
         if lit_local.is_some() || input_local.is_some() {
             return Ok(lit_local == input_local);
         }
-        return Ok(!distinct_globals(lit_name, definition, use_site));
+        return Ok(!distinct_globals(lit_name, definition, use_site, cx));
     }
     // Spelled differently, the two can still be one binding — a global
     // imported under a rename. A local binding is never renamed, so either
     // side reaching one rules it out.
     Ok(
-        denotes_same_binding(lit_name, input_name, definition, use_site)
+        denotes_same_binding(lit_name, input_name, definition, use_site, cx)
             && lit_binding()?.is_none()
             && input_binding()?.is_none(),
     )
@@ -81,6 +86,7 @@ fn local_binding(
     own: ScopeSet,
     ignoring: Option<ScopeId>,
     site: Option<Site<'_>>,
+    cx: &Cx<'_>,
 ) -> Result<Option<ScopeSet>, String> {
     let Some(site) = site else {
         return Ok(None);
@@ -90,8 +96,7 @@ fn local_binding(
     } else {
         &own
     };
-    site.env
-        .scoped_binding_of(name, scopes)
+    cx.scoped_binding_of(NamespaceView::of(site.env), name, scopes)
         .map_err(|ambiguous| ambiguous.to_string())
 }
 
@@ -120,16 +125,22 @@ fn local_binding(
 /// import holds a value of its own, so this does not undo #450.
 ///
 /// [`Environment::binding_location`]: patina_runtime::Environment::binding_location
-fn distinct_globals(name: &str, definition: Option<Site<'_>>, use_site: Option<Site<'_>>) -> bool {
+fn distinct_globals(
+    name: &str,
+    definition: Option<Site<'_>>,
+    use_site: Option<Site<'_>>,
+    cx: &Cx<'_>,
+) -> bool {
     let (Some(definition), Some(use_site)) = (definition, use_site) else {
         return false;
     };
     match (
-        definition.env.binding_location(name),
-        use_site.env.binding_location(name),
+        cx.binding_location(NamespaceView::of(definition.env), name),
+        cx.binding_location(NamespaceView::of(use_site.env), name),
     ) {
         (Some(lit), Some(input)) if lit != input => {
-            definition.env.get(name) != use_site.env.get(name)
+            cx.lookup(definition.env, name).map(Value::tagged)
+                != cx.lookup(use_site.env, name).map(Value::tagged)
         }
         _ => false,
     }
@@ -167,11 +178,14 @@ fn denotes_same_binding(
     input_name: &str,
     definition: Option<Site<'_>>,
     use_site: Option<Site<'_>>,
+    cx: &Cx<'_>,
 ) -> bool {
     let (Some(definition), Some(use_site)) = (definition, use_site) else {
         return false;
     };
-    match (definition.env.get(lit_name), use_site.env.get(input_name)) {
+    let lit_value = cx.lookup(definition.env, lit_name).map(Value::tagged);
+    let input_value = cx.lookup(use_site.env, input_name).map(Value::tagged);
+    match (lit_value, input_value) {
         (Some(lit_value), Some(input_value)) => lit_value.is_object() && lit_value == input_value,
         _ => false,
     }

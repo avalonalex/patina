@@ -80,15 +80,26 @@ fn compatibility_adapters_keep_their_error_categories_and_execution_order() {
     assert_eq!(
         simple
             .global_env()
-            .get("ran-before-error")
+            .get(&simple.evaluator().heap, "ran-before-error")
             .unwrap()
             .as_fixnum(),
         Some(42)
     );
-    assert_eq!(env.get("ran-before-error").unwrap().as_fixnum(), Some(42));
+    let pipeline_heap = &pipeline.evaluator().heap;
+    assert_eq!(
+        env.get(pipeline_heap, "ran-before-error")
+            .unwrap()
+            .as_fixnum(),
+        Some(42)
+    );
     let source = "(define should-not-run 42) (";
     assert!(simple.eval_str(source).is_err());
     assert!(pipeline.eval(source, &env).is_err());
-    assert!(simple.global_env().get("should-not-run").is_none());
-    assert!(env.get("should-not-run").is_none());
+    assert!(
+        simple
+            .global_env()
+            .get(&simple.evaluator().heap, "should-not-run")
+            .is_none()
+    );
+    assert!(env.get(pipeline_heap, "should-not-run").is_none());
 }

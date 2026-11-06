@@ -182,7 +182,7 @@ fn test_library_with_imports() {
     // Verify the computed value is correct (100 + 10 = 110)
     let tv = lib
         .env
-        .get("computed-value")
+        .get(&eval.heap, "computed-value")
         .expect("computed-value should be defined");
     assert_eq!(
         tv.as_fixnum(),
@@ -282,7 +282,10 @@ fn test_import_modifiers() {
         .load_library(&["test".to_string(), "only-test".to_string()])
         .expect("Failed to load library with 'only' modifier");
 
-    let tv = lib.env.get("result").expect("result should be defined");
+    let tv = lib
+        .env
+        .get(&eval.heap, "result")
+        .expect("result should be defined");
     assert_eq!(
         tv.as_fixnum(),
         Some(3),
@@ -305,7 +308,10 @@ fn test_import_modifiers() {
         .load_library(&["test".to_string(), "except-test".to_string()])
         .expect("Failed to load library with 'except' modifier");
 
-    let tv = lib.env.get("result").expect("result should be defined");
+    let tv = lib
+        .env
+        .get(&eval.heap, "result")
+        .expect("result should be defined");
     assert_eq!(
         tv.as_fixnum(),
         Some(3),
@@ -328,7 +334,10 @@ fn test_import_modifiers() {
         .load_library(&["test".to_string(), "prefix-test".to_string()])
         .expect("Failed to load library with 'prefix' modifier");
 
-    let tv = lib.env.get("result").expect("result should be defined");
+    let tv = lib
+        .env
+        .get(&eval.heap, "result")
+        .expect("result should be defined");
     assert_eq!(
         tv.as_fixnum(),
         Some(3),
@@ -351,7 +360,10 @@ fn test_import_modifiers() {
         .load_library(&["test".to_string(), "rename-test".to_string()])
         .expect("Failed to load library with 'rename' modifier");
 
-    let tv = lib.env.get("result").expect("result should be defined");
+    let tv = lib
+        .env
+        .get(&eval.heap, "result")
+        .expect("result should be defined");
     assert_eq!(
         tv.as_fixnum(),
         Some(3),
@@ -597,7 +609,7 @@ fn test_sld_with_unknown_clause_loads() {
         .expect("a library with an unknown declaration must still load");
 
     assert!(lib.exports_identifier("stable-export"));
-    let tv = lib.env.get("stable-export").unwrap();
+    let tv = lib.env.get(&eval.heap, "stable-export").unwrap();
     assert_eq!(tv.as_fixnum(), Some(42));
 }
 
@@ -636,7 +648,7 @@ fn test_sld_with_non_list_declaration_loads() {
         .expect("a library with a non-list declaration must still load");
 
     assert!(lib.exports_identifier("stable-export"));
-    let tv = lib.env.get("stable-export").unwrap();
+    let tv = lib.env.get(&eval.heap, "stable-export").unwrap();
     assert_eq!(tv.as_fixnum(), Some(42));
 }
 
@@ -695,7 +707,7 @@ fn test_include_order_matters() {
     // result should be 42 (set by included file)
     let tv = lib
         .env
-        .get("result")
+        .get(&eval.heap, "result")
         .expect("result should be defined in library");
     assert_eq!(
         tv.as_fixnum(),
@@ -792,7 +804,10 @@ fn test_include_ci_folds_identifiers() {
     assert_eq!(lib.export_names().len(), 2);
 
     // Verify my-const has correct value
-    let tv = lib.env.get("my-const").expect("my-const should be defined");
+    let tv = lib
+        .env
+        .get(&eval.heap, "my-const")
+        .expect("my-const should be defined");
     assert_eq!(tv.as_fixnum(), Some(42), "my-const should be 42");
 }
 
@@ -983,7 +998,7 @@ fn test_include_library_declarations_begin() {
     assert!(lib.exports_identifier("get-x"), "Should export get-x");
 
     // Verify x has correct value
-    let tv = lib.env.get("x").expect("x should be defined");
+    let tv = lib.env.get(&eval.heap, "x").expect("x should be defined");
     assert_eq!(tv.as_fixnum(), Some(100), "x should be 100");
 }
 
@@ -1041,9 +1056,15 @@ fn test_include_library_declarations_multiple_files() {
     assert_eq!(lib.export_names().len(), 2);
 
     // Verify values
-    let tv = lib.env.get("foo").expect("foo should be defined");
+    let tv = lib
+        .env
+        .get(&eval.heap, "foo")
+        .expect("foo should be defined");
     assert_eq!(tv.as_fixnum(), Some(42));
-    let tv = lib.env.get("bar").expect("bar should be defined");
+    let tv = lib
+        .env
+        .get(&eval.heap, "bar")
+        .expect("bar should be defined");
     assert_eq!(tv.as_fixnum(), Some(99));
 }
 
@@ -1100,7 +1121,7 @@ fn test_include_library_declarations_nested() {
 
     let tv = lib
         .env
-        .get("deep-value")
+        .get(&eval.heap, "deep-value")
         .expect("deep-value should be defined");
     assert_eq!(tv.as_fixnum(), Some(999));
 }
@@ -1145,7 +1166,10 @@ fn test_cond_expand_library_check_available() {
     assert!(lib.exports_identifier("result"), "Should export result");
 
     // Verify the correct branch was taken
-    let tv = lib.env.get("result").expect("result should be defined");
+    let tv = lib
+        .env
+        .get(&eval.heap, "result")
+        .expect("result should be defined");
     let heap = &eval.heap;
     let name = heap
         .borrow()
@@ -1193,7 +1217,10 @@ fn test_cond_expand_library_check_unavailable() {
     assert!(lib.exports_identifier("result"), "Should export result");
 
     // Verify the else branch was taken
-    let tv = lib.env.get("result").expect("result should be defined");
+    let tv = lib
+        .env
+        .get(&eval.heap, "result")
+        .expect("result should be defined");
     let heap = &eval.heap;
     let name = heap
         .borrow()
@@ -1253,7 +1280,10 @@ fn test_cond_expand_library_check_sld_library() {
     assert!(lib.exports_identifier("result"), "Should export result");
 
     // Verify (test helper) was found
-    let tv = lib.env.get("result").expect("result should be defined");
+    let tv = lib
+        .env
+        .get(&eval.heap, "result")
+        .expect("result should be defined");
     let heap = &eval.heap;
     let name = heap
         .borrow()
@@ -1356,7 +1386,10 @@ fn test_include_shared_in_an_untaken_branch_is_not_reached() {
     let lib = eval
         .load_library(&["test".to_string(), "guarded".to_string()])
         .expect("the portable branch must still load");
-    assert_eq!(lib.env.get("answer").unwrap().as_fixnum(), Some(42));
+    assert_eq!(
+        lib.env.get(&eval.heap, "answer").unwrap().as_fixnum(),
+        Some(42)
+    );
 }
 
 /// The inline path shares the parser, so it shares the refusal — on both

@@ -127,9 +127,9 @@ fn every_vm_state_root_is_traced() {
     let mutator = Rc::clone(h.mutator());
     let instance = Rc::clone(h.instance());
     drop(heap);
-    globals.define("global", global);
+    globals.define(&shared, "global", global);
     let saved = Rc::new(Environment::with_heap(&shared));
-    saved.define("saved", saved_global);
+    saved.define(&shared, "saved", saved_global);
 
     let code = code_holding(vec![constant]);
     let state = VmState {
