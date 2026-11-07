@@ -215,6 +215,12 @@ impl<'gc> Cx<'gc> {
         r.map(|w| self.brand(w))
     }
 
+    /// [`Heap::binding_records`](crate::Heap::binding_records) on this context's heap.
+    #[inline]
+    pub fn binding_records(&self) -> usize {
+        self.heap.borrow().binding_records()
+    }
+
     /// [`Heap::bytes_since_gc`](crate::Heap::bytes_since_gc) on this context's heap.
     #[inline]
     pub fn bytes_since_gc(&self) -> usize {
@@ -254,6 +260,12 @@ impl<'gc> Cx<'gc> {
     pub fn car(&self, ptr: Value<'gc>) -> Value<'gc> {
         let r = self.heap.borrow().car(ptr.tagged());
         self.brand(r)
+    }
+
+    /// [`Heap::cells`](crate::Heap::cells) on this context's heap.
+    #[inline]
+    pub fn cells(&self) -> usize {
+        self.heap.borrow().cells()
     }
 
     /// [`Heap::cdr`](crate::Heap::cdr) on this context's heap.
@@ -703,6 +715,12 @@ impl<'gc> Cx<'gc> {
     #[inline]
     pub fn mmu(&self, ms: u64) -> Option<f64> {
         self.heap.borrow().mmu(ms)
+    }
+
+    /// [`Heap::namespaces`](crate::Heap::namespaces) on this context's heap.
+    #[inline]
+    pub fn namespaces(&self) -> usize {
+        self.heap.borrow().namespaces()
     }
 
     /// [`Heap::numerator`](crate::Heap::numerator) on this context's heap.

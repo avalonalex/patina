@@ -3189,7 +3189,11 @@ mod tests {
         );
         assert_eq!(stats.gc_collections, 0);
         // The specifier's namespace dropped with its slot (#834).
-        assert_eq!(stats.namespaces, 0, "a namespace outlived teardown");
+        assert_eq!(
+            shared.borrow().namespaces(),
+            0,
+            "a namespace outlived teardown"
+        );
         if GC_CHECK {
             let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 shared.borrow().get_pair(kept);

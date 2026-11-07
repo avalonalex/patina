@@ -3834,9 +3834,6 @@ impl Heap {
             bytes_reclaimed: self.bytes_reclaimed(),
             committed_bytes: self.committed_bytes(),
             external_bytes: self.external_bytes(),
-            namespaces: self.namespaces(),
-            binding_records: self.binding_records(),
-            cells: self.cells(),
         }
     }
 }
@@ -3882,15 +3879,6 @@ pub struct HeapStats {
     /// [`Heap::external_bytes`]: what is held outside the arenas on heap
     /// objects' behalf, now.
     pub external_bytes: usize,
-    /// [`Heap::namespaces`]: the live namespaces, each of which charges its
-    /// tables.
-    pub namespaces: usize,
-    /// [`Heap::binding_records`]: the binding records the live namespaces
-    /// hold (#834).
-    pub binding_records: usize,
-    /// [`Heap::cells`]: the cells of their own the live namespaces' records
-    /// name now (#834).
-    pub cells: usize,
 }
 
 // ============================================================================

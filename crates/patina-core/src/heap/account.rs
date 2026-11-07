@@ -939,11 +939,6 @@ mod tests {
         assert_eq!(counts(), (2, 3, 1));
         handle.namespace_dropped(2, 1);
         assert_eq!(counts(), (1, 1, 0));
-        let stats = heap.stats();
-        assert_eq!(
-            (stats.namespaces, stats.binding_records, stats.cells),
-            (1, 1, 0)
-        );
         handle.namespace_dropped(1, 0);
         assert_eq!(counts(), (0, 0, 0));
     }

@@ -224,9 +224,9 @@ fn gc_stats<'gc>(cx: &mut Cx<'gc>, _args: &[Value<'gc>]) -> Result<Value<'gc>, E
             "descriptor-limit",
             patina_core::heap::descriptor_limit().map_or(Value::FALSE, n),
         ),
-        ("namespaces", n(stats.namespaces)),
-        ("cells", n(stats.cells)),
-        ("binding-records", n(stats.binding_records)),
+        ("namespaces", n(cx.namespaces())),
+        ("cells", n(cx.cells())),
+        ("binding-records", n(cx.binding_records())),
     ];
 
     let mut alist: Vec<Value<'gc>> = entries
