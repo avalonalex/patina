@@ -314,8 +314,10 @@ impl<'e> NamespaceView<'e> {
     /// ([`Environment::import_alias`]): the one remembered for that
     /// location and spelling while it still is that import, which writes
     /// nothing, or a fresh one `mint` offers, inserted as an import of the
-    /// same location. `None` when `name` is not an import here. A namespace
-    /// borrows `heap` shared over the lookup and mutably to insert.
+    /// same location. `None` when `name` is not an import here, and always
+    /// for a frame, whose imports hold no record: a namespace's only, as
+    /// `Desugarer::import_of` asks the root (#834). Borrows `heap` shared
+    /// over the lookup and mutably to insert.
     #[inline]
     pub fn import_alias(
         self,

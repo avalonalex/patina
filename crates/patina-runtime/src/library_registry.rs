@@ -755,8 +755,8 @@ impl Default for LibraryRegistry {
 /// Its trace is derived (#686); pinned by the sentinel tests
 /// `a_registered_library_is_a_root` and `a_library_being_loaded_is_a_root`.
 impl patina_core::RootProvider for LibraryRegistry {
-    /// Every value here is pinned until stage 4b makes a library's exports
-    /// cells (#682): the forms a load has not yet run as well.
+    /// Every value here is reported pinned, by copy (#682): a library's
+    /// export cells (#834), and the forms a load has not yet run as well.
     fn trace_roots(&self, visitor: &mut dyn patina_core::SlotVisitor) {
         self.trace(visitor);
     }
