@@ -1761,6 +1761,11 @@ struct RecordShape {
     /// Spellings that must have no record: a pass-through name, a splicing
     /// keyword.
     unlisted: &'static [&'static str],
+    /// Whether the desugarer traces the definition's `BIND`, which is the
+    /// evidence each record's identity is held to: it does for a definition
+    /// in a body it scans, and not for one a top-level use expands to, as
+    /// the generated shape's `(make-it)` does ([`bound_at`]).
+    desugar_bound: bool,
 }
 
 /// `nest-inner`'s template defines the name it is passed, so the one
@@ -1795,6 +1800,7 @@ const RECORD_SHAPES: &[RecordShape] = &[
         values: &["7"],
         identity_scopes: 1,
         unlisted: &["get-secret", "set-secret!"],
+        desugar_bound: true,
     },
     // The steady-state lane's `hidden-define`, three cycles.
     RecordShape {
@@ -1818,6 +1824,7 @@ const RECORD_SHAPES: &[RecordShape] = &[
         values: &["1", "1", "1"],
         identity_scopes: 1,
         unlisted: &["counter"],
+        desugar_bound: true,
     },
     RecordShape {
         name: "nested",
@@ -1828,6 +1835,7 @@ const RECORD_SHAPES: &[RecordShape] = &[
         values: &["3"],
         identity_scopes: 1,
         unlisted: &[],
+        desugar_bound: true,
     },
     RecordShape {
         name: "two-expansions",
@@ -1839,6 +1847,7 @@ const RECORD_SHAPES: &[RecordShape] = &[
         values: &["1", "2"],
         identity_scopes: 1,
         unlisted: &[],
+        desugar_bound: true,
     },
     // The one shape whose identity has two scopes, so that its largest and
     // its smallest differ (critique E2): `secret` is written in the
@@ -1862,6 +1871,7 @@ const RECORD_SHAPES: &[RecordShape] = &[
         values: &["5"],
         identity_scopes: 2,
         unlisted: &["make-it", "get-it"],
+        desugar_bound: false,
     },
     // `splicing-let-syntax`'s scope is stripped from the definition it
     // splices, and its keyword, a scoped entry holding a macro, is no
@@ -1884,6 +1894,7 @@ const RECORD_SHAPES: &[RecordShape] = &[
         values: &["9"],
         identity_scopes: 1,
         unlisted: &["sp-k", "get-secret"],
+        desugar_bound: true,
     },
 ];
 
@@ -1986,12 +1997,24 @@ fn traced(trace: &str, kind: &str, name: &str, field: &str) -> Vec<Vec<usize>> {
         .collect()
 }
 
-/// The identities the trace shows `name` defined at: a `BIND` of it, the
-/// desugarer's or the tree-walker's at run time, or the VM renamer's
-/// resolution of the definition's binder (`op=bind`). The desugarer writes
-/// its `BIND` only for a definition it finds in a body it scans, so not for
-/// one a top-level use expands to, as `(make-it)` does.
-fn bound_at(trace: &str, name: &str) -> Vec<Vec<usize>> {
+/// The identities the trace shows `name` defined at, for a shape whose
+/// definition the desugarer binds (`desugar_bound`): its `BIND phase=desugar`
+/// lines alone, which neither backend's record is made from, so a record
+/// filed at the wrong identity disagrees with them. The desugarer writes its
+/// `BIND` only for a definition it finds in a body it scans, so not for one
+/// a top-level use expands to, as the generated shape's `(make-it)` does;
+/// that shape falls back to the backends' own lines, the tree-walker's
+/// `BIND phase=run` and the VM renamer's resolution of the binder
+/// (`op=bind`), and its identity is held to its `RESOLVE` lines as well.
+fn bound_at(trace: &str, name: &str, desugar_bound: bool) -> Vec<Vec<usize>> {
+    if desugar_bound {
+        let desugared = trace
+            .lines()
+            .filter(|line| line.contains(" phase=desugar "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return traced(&desugared, "BIND", name, "scopes");
+    }
     let binders = trace
         .lines()
         .filter(|line| line.ends_with(" op=bind"))
@@ -2084,11 +2107,13 @@ fn an_introduced_definitions_record_carries_its_identity_and_scope() {
                 .collect();
             let what = format!("{what}: {records:?}");
             // Every record: its scope is its identity's largest, and the
-            // desugarer bound the definition at that identity.
+            // desugarer bound the definition at that identity (the backends'
+            // own lines for the generated shape, which it does not bind).
             for record in &records {
                 assert_eq!(record.scope, record.identity.last().copied(), "{what}");
                 assert!(
-                    bound_at(&trace, shape.spelling).contains(&record.identity),
+                    bound_at(&trace, shape.spelling, shape.desugar_bound)
+                        .contains(&record.identity),
                     "{what}: `{}` is not traced defined at {:?}",
                     shape.spelling,
                     record.identity
