@@ -175,8 +175,9 @@ exists only once the `Define` has run, and nothing is filled at compile time.
 The scope that introduced the definition is derived from the identity, its
 largest scope (`ScopeSet::introducing_scope`), and stored nowhere;
 `Environment::introduced_records` answers each record with it, for stage 5c's
-reclamation and the tests. In a host's environment, a frame until stage 4b.8,
-the renamed global is a plain slot of the frame, with no record.
+reclamation and the tests. In a host namespace (#835) the renamed global is
+a record over a cell, as in any namespace; it was a plain slot of a frame,
+with no record, until host environments became namespaces at stage 4b.8.
 
 Since #427, the compiler installs no alias under the bare spelling. Such an
 alias let an unrelated expansion — even a reference compiled before the

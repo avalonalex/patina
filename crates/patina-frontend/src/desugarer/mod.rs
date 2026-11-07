@@ -332,8 +332,9 @@ impl SyntaxRef<'_> {
     }
 }
 
-/// What a name means to a macro's environment, where the root here imports
-/// that very location: the location, and the root's alias for it.
+/// What a name means to a macro's environment, where a namespace here
+/// imports that very location: the location, and that namespace's alias for
+/// it (`Desugarer::import_of`).
 type ImportOf = Option<(patina_core::BindingLocation, Rc<str>)>;
 
 /// What early binding (#438, `Desugarer::early_bound`) has to remember across
@@ -348,11 +349,14 @@ struct EarlyBinding {
     /// early in this form.
     bound: RefCell<FxHashMap<Rc<str>, Rc<str>>>,
     /// Per macro environment, then name: the location the name means there
-    /// and the root's alias for it, or `None` where it is not an import to
-    /// bind. Two levels so that a hit is looked up by `&str`, without minting
-    /// a key — this is asked once per reference a library macro makes, and
-    /// with the default hasher and a cloned key it was most of what early
-    /// binding cost.
+    /// and the alias for it of the namespace here that imports it, or `None`
+    /// where it is not an import to bind. Two levels so that a hit is looked
+    /// up by `&str`, without minting a key — this is asked once per reference
+    /// a library macro makes, and with the default hasher and a cloned key it
+    /// was most of what early binding cost. Not keyed by the namespace here
+    /// as well: every desugarer that shares this one desugars one form in one
+    /// environment, or a frame made under it, so all hang from the same
+    /// nearest namespace (#835).
     imports: RefCell<FxHashMap<u64, FxHashMap<Rc<str>, ImportOf>>>,
     /// The definitions this form's expansions introduced: name, and scopes.
     introduced: RefCell<Vec<(Rc<str>, ScopeSet)>>,
@@ -1500,9 +1504,10 @@ impl<'a> Desugarer<'a> {
     ///   definition a macro introduced — so it is headed for the by-name view.
     ///   (`by_name`: the resolution that refused syntax as a value already
     ///   knows, and a second one per reference was a measurable cost.)
-    /// - By name it reaches, from here and from the root alike, the very
-    ///   location the macro's own environment reaches: an import of the use
-    ///   site's that is the binding the template meant.
+    /// - By name it reaches, from here and from the namespace whose alias it
+    ///   takes (`import_of`), the very location the macro's own environment
+    ///   reaches: an import of the use site's that is the binding the
+    ///   template meant.
     ///
     /// No name is left out for its spelling. Five were until 2026-09-23,
     /// because some part of Patina decided what a call meant from the name on
@@ -1548,10 +1553,11 @@ impl<'a> Desugarer<'a> {
                 .max_by_key(|scope| scope.0)?;
             Rc::clone(&foreign[latest])
         };
-        // What the *name* means to the macro's environment and to the root
-        // here is the same for every reference in a form, so it is asked once
-        // per name. What is asked per reference is only whether a frame in
-        // between has the spelling — in which case it is somebody's variable.
+        // What the *name* means to the macro's environment and to the
+        // namespaces here is the same for every reference in a form, so it is
+        // asked once per name. What is asked per reference is only whether a
+        // frame in between has the spelling — in which case it is somebody's
+        // variable.
         let macro_env = def_env.env_id();
         let known = self
             .early
@@ -1584,27 +1590,38 @@ impl<'a> Desugarer<'a> {
         Some(alias)
     }
 
-    /// The location `name` means to `def_env`, with the root's alias for it,
-    /// when the root here imports that very location.
+    /// The location `name` means to `def_env`, with an alias for it, when a
+    /// namespace here imports that very location: the nearest namespace
+    /// (`Environment::namespace_root`), else each namespace above it in turn,
+    /// and the alias is that namespace's. For a host form that is its host
+    /// namespace, then the global namespace (the owner's ruling (c) of
+    /// 2026-11-07 on #835's question 3): a library macro used in a host
+    /// namespace that imported the location keeps it past a later host
+    /// definition of the name (#851), and one the host does not import is
+    /// bound early by the global namespace's import, as before. Anywhere
+    /// else the nearest namespace is the root, which has no parent.
     fn import_of(
         &self,
         name: &Rc<str>,
         def_env: &Rc<Environment>,
         cx: &mut Cx<'_>,
     ) -> Option<(patina_core::BindingLocation, Rc<str>)> {
-        let target_env = self.env.root();
         let location = cx.binding_location(NamespaceView::of(def_env), name)?;
-        if cx
-            .binding_location(NamespaceView::of(&target_env), name)
-            .as_ref()
-            != Some(&location)
-        {
-            return None;
+        let mut target_env = self.env.namespace_root();
+        loop {
+            if cx
+                .binding_location(NamespaceView::of(&target_env), name)
+                .as_ref()
+                == Some(&location)
+                && let Some(alias) = cx.import_alias(NamespaceView::of(&target_env), name, || {
+                    Rc::from(alias_name(name))
+                })
+            {
+                return Some((location, alias));
+            }
+            let next = target_env.parent()?.namespace_root();
+            target_env = next;
         }
-        let alias = cx.import_alias(NamespaceView::of(&target_env), name, || {
-            Rc::from(alias_name(name))
-        })?;
-        Some((location, alias))
     }
 
     /// A definition whose name carries scopes, for `settle_early_bindings`.

@@ -96,16 +96,19 @@
 //! - `ports`: the port objects' entries in the `PortTable`, above.
 //! - `namespaces`: the live namespaces, each of which charges its tables to
 //!   `external-bytes`: the global environment, each loaded library's, each
-//!   live environment specifier's, and `%parameterize-swap!`'s compile
-//!   namespace. A host's environment is a frame, and is not counted.
+//!   live environment specifier's, `%parameterize-swap!`'s compile
+//!   namespace, and each live host namespace, the environment a host's
+//!   `Interpreter::new_environment` answers (#835). A frame is not counted.
 //! - `binding-records` (#834): the binding records the live namespaces hold,
 //!   one for each slot, each scoped entry (the splicing `let-syntax`
-//!   keywords filed at top level among them) and each import alias.
+//!   keywords filed at top level among them), each import alias, and each
+//!   of a host namespace's read-through records (#835).
 //! - `cells` (#834): the cells of their own the live namespaces' records name
 //!   now. Not counted: a frame's imports, a free cell (an export with no
-//!   binding behind it, a declaration's location), and a cell only an
-//!   importer's record or an export keeps once its namespace dropped or
-//!   re-pointed away from it.
+//!   binding behind it, a declaration's location, the one a host
+//!   namespace's read-through records name), and a cell only an importer's
+//!   record or an export keeps once its namespace dropped or re-pointed away
+//!   from it.
 //!
 //! The last two are running sums: raised as a namespace makes a record or a
 //! cell, `cells` lowered as a record is re-pointed away from its namespace's

@@ -103,8 +103,8 @@ fn compile_pipeline(
     match resolver {
         Some((_, env, _)) => {
             // The environment compiled against holds these identities: a
-            // root namespace, or a host environment, which is a child of the
-            // global one (#620). Lexical definitions are resolved within the
+            // root namespace, or a host namespace, whose parent is the global
+            // one (#620, #835). Lexical definitions are resolved within the
             // form being compiled, and never reach here.
             let view = NamespaceView::of(env);
             for (name, renamed) in introduced_globals {

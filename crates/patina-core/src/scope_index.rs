@@ -10,8 +10,9 @@
 //! [`ScopeIndex`] files each binding's position under one scope of its set,
 //! and answers a reference with the positions filed under the scopes it
 //! carries. It is built only for a list longer than [`INDEX_ABOVE`] in a
-//! namespace, or [`FRAME_INDEX_ABOVE`] in a frame; below that, a scan of the
-//! list is the cheaper answer.
+//! namespace of either kind, a host namespace's included (#835), or
+//! [`FRAME_INDEX_ABOVE`] in a frame; below that, a scan of the list is the
+//! cheaper answer.
 
 use crate::environment::hash_table_bytes;
 use crate::scope::{ScopeId, ScopeSet};
@@ -19,7 +20,7 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 /// A namespace's list of more than this many scoped bindings of one spelling
-/// is indexed.
+/// is indexed: a parentless namespace's and a host namespace's alike (#835).
 ///
 /// Below it a scan visits fewer bindings than the index would probe scopes:
 /// a reference carries a few scopes, each a hash probe, where a short list is
@@ -36,9 +37,10 @@ pub(crate) const INDEX_ABOVE: usize = 8;
 /// spelling. A `let-values` clause of nine formals binds nine parameters
 /// spelled `x`, each at its own expansion's scope, so at [`INDEX_ABOVE`]
 /// every call of it would build an index, and its environment's out-of-line
-/// tables, on the path that binds parameters. A frame that lives long and
-/// grows, as a host's environment does under a stream of expansions (#620),
-/// is still indexed once it passes this.
+/// tables, on the path that binds parameters. A host's environment, which
+/// lives long and grows under a stream of expansions (#620), is a host
+/// namespace and indexed at [`INDEX_ABOVE`] (#835); a frame that grows is
+/// still indexed once it passes this.
 pub(crate) const FRAME_INDEX_ABOVE: usize = 64;
 
 /// No position: the end of a chain.

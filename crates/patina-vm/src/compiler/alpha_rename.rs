@@ -162,7 +162,7 @@ impl RenameEnv {
         // spelling, and is answered at run time by whatever that spelling
         // means: a user's global, or an unbound name. Triage family 40.
         // The environment compiled against and its parents: a host
-        // environment is a child of the global one (#620), and an earlier
+        // namespace's parent is the global one (#620, #835), and an earlier
         // global form's expansion defined its names there.
         let mut chain = self.global_env.as_deref();
         while let Some(env) = chain {

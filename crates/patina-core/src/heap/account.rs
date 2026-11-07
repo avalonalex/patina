@@ -36,11 +36,12 @@
 //! same memory once per object that names it, and what they hold belongs to
 //! code and environments, which GC_PRD §15 charges as **external bytes**,
 //! once per holder rather than once per object that names it. A namespace —
-//! an environment made without a parent: the global environment, a
-//! library's, and those `environment` and the R5RS constructors build —
-//! charges its own tables, once when it is made and again as they grow, and
-//! gives them back when it drops (#615; `Environment`'s `NamespaceCharge`
-//! says what it counts). [`Heap::charge_external_bytes`] is the entry point
+//! an environment made without a parent (the global environment, a
+//! library's, and those `environment` and the R5RS constructors build) or a
+//! host namespace, whose parent is the global one (#835) — charges its own
+//! tables, once when it is made and again as they grow, and gives them back
+//! when it drops (#615; `Environment`'s `NamespaceCharge` says what it
+//! counts). [`Heap::charge_external_bytes`] is the entry point
 //! for a holder with the heap in hand, and an [`ExternalBytes`] handle for
 //! one without: the handle needs no heap borrow, because such a holder
 //! usually dies when the last `Rc` naming it drops, and that is often inside
@@ -780,26 +781,29 @@ impl Heap {
 
     /// The live namespaces, each of which charges its tables
     /// (`Environment`'s `NamespaceCharge`): the global environment, each
-    /// loaded library's, each live environment specifier's, and
-    /// `%parameterize-swap!`'s compile namespace. A host's environment is a
-    /// frame, and is not counted. `(gc-stats)`'s `namespaces`.
+    /// loaded library's, each live environment specifier's,
+    /// `%parameterize-swap!`'s compile namespace, and each live host
+    /// namespace, the environment `Interpreter::new_environment` answers
+    /// (#835). A frame is not counted. `(gc-stats)`'s `namespaces`.
     pub fn namespaces(&self) -> usize {
         self.account.shared.namespaces.get()
     }
 
     /// The binding records the live namespaces hold (#834): each slot's,
-    /// each scoped entry's and each import alias's. A frame's imports are
-    /// not counted. A running sum, exact once the dead namespaces have
-    /// dropped. `(gc-stats)`'s `binding-records`.
+    /// each scoped entry's and each import alias's, and each of a host
+    /// namespace's read-through records (#835). A frame's imports are not
+    /// counted. A running sum, exact once the dead namespaces have dropped.
+    /// `(gc-stats)`'s `binding-records`.
     pub fn binding_records(&self) -> usize {
         self.account.shared.binding_records.get()
     }
 
-    /// The cells of their own the live namespaces' records name now (#834).
-    /// Not counted: a free cell, and a cell only an importer's record or an
-    /// export keeps once its namespace dropped or re-pointed away from it. A
-    /// running sum, exact once the dead namespaces have dropped.
-    /// `(gc-stats)`'s `cells`.
+    /// The cells of their own the live namespaces' records name now (#834),
+    /// a host namespace's among them (#835). Not counted: a free cell, the
+    /// one a host namespace's read-through records name among them, and a
+    /// cell only an importer's record or an export keeps once its namespace
+    /// dropped or re-pointed away from it. A running sum, exact once the
+    /// dead namespaces have dropped. `(gc-stats)`'s `cells`.
     pub fn cells(&self) -> usize {
         self.account.shared.cells.get()
     }

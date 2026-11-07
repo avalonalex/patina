@@ -200,6 +200,42 @@ fn a_host_definition_in_a_host_environment_deoptimizes() {
     }
 }
 
+/// A `set!` in a host namespace of a name only the global namespace binds
+/// assigns the global's binding (#835): the host namespace does not bind it,
+/// and the store marks the primitive the binding held, so code the global
+/// namespace compiled while the name held it calls the new value. 4b.9's
+/// linked store, through a read-through record, must keep this.
+fn host_namespace_set<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
+    let warm = interp
+        .eval_program_owned("(define first car) (define (g x) (first x)) (g '(1 2))")
+        .unwrap();
+    let env = interp.new_environment();
+    interp
+        .eval_program_in(&env, "(set! first (lambda (x) 'replaced))")
+        .unwrap();
+    let binds = interp
+        .raw_environment(&env)
+        .local_names(interp.backend().heap())
+        .iter()
+        .any(|name| name == "first");
+    vec![
+        interp.display_tagged(warm),
+        interp.display_tagged(interp.eval_str_owned("(g '(1 2))").unwrap()),
+        interp.display_tagged(interp.eval_str_in(&env, "(first '(1 2))").unwrap()),
+        format!("host binds first: {binds}"),
+    ]
+}
+
+#[test]
+fn a_set_through_a_host_namespace_marks_the_primitive_it_replaces() {
+    let expected = ["1", "replaced", "replaced", "host binds first: false"];
+    assert_eq!(host_namespace_set(common::vm_interpreter()), expected);
+    assert_eq!(
+        host_namespace_set(common::tree_walker_interpreter()),
+        expected
+    );
+}
+
 /// Re-pointing an alias does not write the binding it previously reached,
 /// so no shadow mark is set and a fast path must never trust that alias.
 /// Found in review of #442 for `call-with-values` and ordinary primitives.

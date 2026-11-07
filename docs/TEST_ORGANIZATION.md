@@ -728,6 +728,10 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
 - `hygiene_matrix.rs` — macro hygiene as a *scoreboard*: 28 use-site-binder
   shapes against chibi and Racket, and 111 generated / library-imported macro
   shapes against chibi and Gauche, read as a table when a fix moves a row.
+  `every_shape_answers_the_same_in_a_host_namespace` runs every row again in
+  a host namespace, on both backends, and holds it to the answer the row
+  records, but for a row `HOST_EXEMPT` lists with its issue (none since
+  #835's fix of #851 took out its eight `redefined` rows).
   Its ignored `dump_programs` writes every program out for re-measuring.
   Stays Rust.
   `hygiene.rs` is gone, migrated into `tests/scheme/expansion/`
@@ -1096,8 +1100,9 @@ The table's own sentinel test is
 `heap::handles::tests::handle_table_fields` in `patina-core`. The file runs in
 the per-PR stress lane.
 
-`patina-tests/tests/host_environments.rs` holds a host environment to rooting
-what is bound in it, on both backends (#620):
+`patina-tests/tests/host_environments.rs` holds a host environment, a host
+namespace since #835, to rooting what is bound in it, on both backends
+(#620):
 
 - a value the host binds, across a program that collects outside the
   environment;
@@ -1113,22 +1118,35 @@ what is bound in it, on both backends (#620):
 - a definition a global macro's expansion introduced, which code in the
   environment reaches through that macro, and which a host binding of the
   same spelling does not capture;
-- `with_parent`'s meaning: a global defined later is seen, and a definition
-  stays in the child;
+- a host namespace's meaning, which is what `with_parent`'s frame meant: a
+  global defined later is seen, and a definition stays in the host
+  namespace;
 - a value bound only in a dropped environment, which the next collection
   frees (in a check build);
 - a handle refused by another interpreter;
-- a handle kept past its interpreter, which keeps nothing alive: teardown
-  breaks the heap, table and environment cycle;
+- a handle kept past its interpreter, which keeps neither the heap nor its
+  interpreter alive (#704);
 - the legacy pipeline, whose caller's environment the heap traces while the
   caller holds it;
-- a host environment charged as a frame, however many names it binds (#830),
-  which 4b.8 rewrites to the owner's charging ruling.
+- a host namespace charged as a namespace (the owner's ruling (a) of
+  2026-11-07 on #835's question 2): counted among the heap's namespaces
+  while it lives, its charge growing with its tables, and both given back
+  when its handle drops;
+- a library macro used in a host namespace that imports the binding its
+  template names, which keeps that binding past a later host definition of
+  the name, as at top level, while the global environment imports nothing
+  of it (#851; question 3's option (c) on #835, pending the owner's
+  ruling, has the desugarer ask the host namespace for the import alias
+  before the global environment);
+- the same macro used in a host namespace that imports nothing, after the
+  global environment imports it and the binding its template names, which
+  keeps the global environment's import: the desugarer asks the global
+  environment once the host namespace holds no import of the binding.
 
 #835's tests pin what host code reads and writes, what its closures keep and
 what its macros introduce, from before 4b.6's binding records (#834) changed
 how it is linked. Each held on both backends at its base and holds under the
-records, and 4b.8's host namespaces must keep it:
+records, and 4b.8's host namespaces keep it:
 
 - a `set!` of a name only the global environment binds, which writes the
   global binding and binds nothing in the host environment, and one of a
@@ -1155,14 +1173,15 @@ records, and 4b.8's host namespaces must keep it:
   environment a binding of its own, leaving the library's alone (#834).
 
 The binding records add two more (#834), on both backends: `lookup` and
-`lookup_in` of an own name, an imported name and a host frame's import each
-answer the value, never a record (`no_namespace_read_answers_a_record`,
+`lookup_in` of an own name, an imported name and a host namespace's import
+each answer the value, never a record (`no_namespace_read_answers_a_record`,
 whose core half reads nine kinds of binding through every read path); and a
 read makes no record: an unbound name evaluated bare, from compiled code and
-through `lookup_in` leaves `binding-records`, and the names the host
-environment and the global environment list, as they were
-(`a_read_makes_no_record`), which fails on either backend when its miss
-path makes one.
+through `lookup_in`, and a host's `lookup_in` of a name only the global
+environment binds, which makes no read-through record (#835), leave
+`binding-records`, and the names the host namespace and the global
+environment list, as they were (`a_read_makes_no_record`), which fails on
+either backend when its miss path makes one.
 
 With either of the table's environment traces removed, the tests of that
 trace fail, and so does its sentinel test. Without the VM's alpha-renaming
@@ -1182,7 +1201,13 @@ the environment itself still does. A definition marks the primitive by the
 environment's own binding only, so a host environment's `car` leaves the
 global `car`'s fast path alone:
 `runtime::vm_state::tests::a_definition_marks_only_the_environments_own_binding`
-in `patina-vm`, which fails if the mark follows the parent.
+in `patina-vm`, which fails if the mark follows the parent, and whose host
+namespace's arm defines a name only the global namespace binds (#835). A
+`set!` in a host namespace of a name only the global namespace binds stores
+into the global binding and marks the primitive it replaces, so code the VM
+compiled while it was the primitive calls the new value, and the host binds
+nothing (`a_set_through_a_host_namespace_marks_the_primitive_it_replaces`,
+#835).
 
 `patina-tests/tests/rooted_loading.rs` holds a library's load to collecting,
 on both backends (#677):

@@ -409,9 +409,9 @@ enum FormsEnd<E> {
 /// top-level form, and answers a handle (#710).
 ///
 /// An environment the host builds is held the same way:
-/// [`Interpreter::new_environment`] answers an [`OwnedEnvironment`], a child
-/// of the global environment that is rooted, with everything bound in it,
-/// until the handle is dropped (#620). [`Interpreter::define_in`] and
+/// [`Interpreter::new_environment`] answers an [`OwnedEnvironment`] holding a
+/// host namespace, whose parent is the global namespace, rooted with
+/// everything bound in it until the handle is dropped (#620, #835). [`Interpreter::define_in`] and
 /// [`Interpreter::lookup_in`] bind and read in it, and
 /// [`Interpreter::eval_str_in`] and [`Interpreter::eval_program_in`]
 /// evaluate in it, on either backend.
@@ -1126,12 +1126,13 @@ impl<B: Backend> Interpreter<B> {
         self.backend.heap().borrow().hold(value)
     }
 
-    /// A new environment for the host to bind values in, held by a handle
+    /// A new host namespace for the host to bind values in, held by a handle
     /// that roots it, and everything bound in it, until the handle is dropped
-    /// (#620). It is a child of the global environment: what is defined in it
-    /// stays in it, and every other name resolves in the global environment,
-    /// a global defined later included. Until 4b.8's host-namespace kind it
-    /// is a frame.
+    /// (#620). A host namespace's parent is the global namespace (#835): what
+    /// is defined or imported in it is a binding of its own, and every other
+    /// name resolves in the global namespace by name, a global defined later
+    /// included. It charges the heap for its tables as every namespace does,
+    /// and counts among the heap's namespaces until it drops.
     ///
     /// ```
     /// # #[cfg(feature = "vm")]
@@ -1217,20 +1218,10 @@ impl<B: Backend> Interpreter<B> {
     /// }
     /// ```
     pub fn new_environment(&self) -> OwnedEnvironment {
-        let global = self.backend.global_env();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the new environment goes into a handle, which roots it, before anything can \
-                      collect"
-        )]
-        let env = Rc::new(Environment::child_frame(Rc::clone(global)));
-        #[allow(
-            deprecated,
-            reason = "interim: the holder that takes only a namespace lands with 4b.8's \
-                      host-namespace kind, which this then makes (#831's ruling on question 1)"
-        )]
-        let held = self.backend.heap().borrow().hold_environment(env);
-        held
+        self.backend
+            .heap()
+            .borrow()
+            .new_host_namespace(self.backend.global_env())
     }
 
     /// Bind `name` to `value` in the host environment `env`, as a program's
@@ -1253,11 +1244,13 @@ impl<B: Backend> Interpreter<B> {
         Some(self.hold(value))
     }
 
-    /// The environment `env` holds, raw, for a call the handle forms do not
-    /// cover, such as `Backend::eval`. The handle roots it, not this `Rc`:
-    /// keep the handle while the environment is in use, and read a value
-    /// from it, or write one, as raw, as with [`Interpreter::global_env`].
-    /// Panics on a handle another interpreter made.
+    /// The environment `env` holds, raw (a host namespace when it came from
+    /// [`new_environment`](Self::new_environment)), for a call the handle
+    /// forms do not cover, such as `Backend::eval`. The handle roots it, not
+    /// this `Rc`: keep the handle while the environment is in use, and read
+    /// a value from it, or write one, as raw, as with
+    /// [`Interpreter::global_env`]. Panics on a handle another interpreter
+    /// made.
     pub fn raw_environment(&self, env: &OwnedEnvironment) -> Rc<Environment> {
         self.backend.heap().borrow().held_environment(env)
     }
@@ -1324,9 +1317,9 @@ impl<B: Backend> Interpreter<B> {
     /// `TaggedValue`s. A value read from it is rooted only while the name
     /// stays bound to it, so once the program rebinds the name a later
     /// evaluation that collects can free it; [`Interpreter::lookup`] answers
-    /// a handle instead. An environment a host builds over it is not rooted
-    /// between calls (#620); [`Interpreter::new_environment`] answers one
-    /// that is.
+    /// a handle instead. A frame a host builds over it is not rooted between
+    /// calls (#620); [`Interpreter::new_environment`] answers a host
+    /// namespace over it that is (#835).
     ///
     /// Its `define` and `set` are raw too: they write the binding and
     /// nothing else. The VM compiles a call to a primitive's binding into a

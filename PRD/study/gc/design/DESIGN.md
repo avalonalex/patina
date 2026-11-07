@@ -914,10 +914,15 @@ environment's fate is a design. Variant R (stage 4b) keeps today's "follow the n
 compiled before a later `define` over an import, or before a later import, must see the new binding, so R needs an
 indirection that variant C does not.
 - **Binding records.** Every name in a namespace (the global environment, a library's environment, an environment
-  specifier, a host namespace) maps to an immortal `BindingRecord { cell }`: own definitions, imports, aliases and
-  placeholders alike. A name a host namespace has not defined gets a child record that reads through to the global
-  namespace's; a GBS A/B chooses between a tag test on the global path and host opcodes, and if both miss the 1% gate,
-  host units instead link the parent's record and re-link through weak back-links (owner decision, 2026-11-01, #782).
+  specifier, a host namespace) maps to a binding record over a cell: own definitions, imports and placeholders alike.
+  As built (4b.6, #834), a record is the pair `(cell . flags)` over a cell `(value . owner)`, mortal: it dies with its
+  namespace (SD3), not in an immortal space. An import alias is a second record over the import's cell until a
+  variable alias stops being a name (4b.10). A name a host namespace has not defined gets a child record that reads
+  through to the global namespace's; a GBS A/B chooses between a tag test on the global path and host opcodes, and if
+  both miss the 1% gate, host units instead link the parent's record and re-link through weak back-links (owner
+  decision, 2026-11-01, #782). As built (4b.8, #835), `lookup_in`, `get` and `get_with_scopes` create no records; no
+  `CallPrimitive` is compiled through a read-through record, and a child `define` over one marks nothing, an exception
+  to the latch rule below; and a host namespace is charged by `NamespaceCharge` as every namespace is.
   `Library.exports` maps names to cells, resolved one hop to the owning cell.
 - **Link tables.** Each code unit keeps a table of record references indexed by its global operands, filled at load; a
   name with no binding yet gets a placeholder record whose cell holds `UNBOUND`. `LoadGlobal`, `StoreGlobal`,
@@ -926,10 +931,11 @@ indirection that variant C does not.
 - **Re-pointing.** A `define` over an import allocates a new cell and re-points `record.cell`; a `define` over the
   namespace's own binding stores into its cell (R7RS's "acts like `set!`"); an import re-points `record.cell` to the
   exporter's cell. Earlier code holds the record, so it sees the change, when the `define` runs.
-- **What goes:** `GlobalCacheEntry`, the `env_id` cache, `frame_globals`, `FORWARDED`, `Owner` links and
-  `VmClosure.globals` (one link of today's teardown cycle). **What stays:** the shadow bitsets and `mark_if_*`, which
-  latch when a record is re-pointed or a cell store replaces a primitive, and the per-site deoptimization they drive
-  (#442). Stage 4b measures the path against `frame_globals` rather than assuming a gain.
+- **What goes:** `GlobalCacheEntry`, the `env_id` cache, `frame_globals`, `FORWARDED` (renamed `IMPORTED` at 4b.6 and
+  kept as a frame's marker, #834), `Owner` links and `VmClosure.globals` (one link of today's teardown cycle). **What
+  stays:** the shadow bitsets and `mark_if_*`, which latch when a record is re-pointed or a cell store replaces a
+  primitive, and the per-site deoptimization they drive (#442). Stage 4b measures the path against `frame_globals`
+  rather than assuming a gain.
 - **The JIT under R** emits the two dependent loads, or embeds the cell with `WATCHED` on both record and cell. Under C
   the records disappear and a JIT global is one load. The tree-walker reads root bindings through the same records.
 

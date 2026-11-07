@@ -212,6 +212,8 @@ impl TraceThroughRc for CodeObject {}
 /// - Only names that resolve in the queried environment's **own** table are
 ///   cached; parent-resolved names always take the full lookup, so a later
 ///   local (re)definition that would change resolution can never be masked.
+///   A host namespace's read-through records are in no slot of its table, so
+///   they are never cached either (#835).
 /// - An *imported* name is in that table too: in a namespace its record
 ///   names the exporter's cell (#406), and in a frame its slot holds the
 ///   import marker beside the cell. The cache needs to know nothing about

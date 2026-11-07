@@ -1,13 +1,15 @@
 //! A host environment is rooted by its handle, on both backends (#620).
 //!
-//! An environment a host built with `Environment::with_parent` was reachable
-//! from no root: what was bound in it was freed by the next collection that
-//! ran outside it, a use after free in a debug build and another object in a
-//! release one. `Interpreter::new_environment` answers an `OwnedEnvironment`,
-//! a child of the global environment that the heap's handle table roots,
-//! with everything bound in it, until the handle is dropped. The legacy
-//! pipeline has the heap trace the environments its callers give it for as
-//! long as they hold them.
+//! An environment a host built with `Environment::with_parent`, a frame of
+//! the global environment, was reachable from no root: what was bound in it
+//! was freed by the next collection that ran outside it, a use after free in
+//! a debug build and another object in a release one.
+//! `Interpreter::new_environment` answers an `OwnedEnvironment` holding a
+//! host namespace, whose parent is the global namespace (#835), which the
+//! heap's handle table roots, with everything bound in it, until the handle
+//! is dropped. The legacy pipeline has the heap trace the environments its
+//! callers give it, frames built with `with_parent`, for as long as they
+//! hold them.
 //!
 //! The VM evaluated in the global environment whatever environment
 //! `Backend::eval` was given; it now evaluates where the tree-walker does,
@@ -242,9 +244,10 @@ fn a_primitive_redefined_in_a_host_environment_stays_in_it() {
     );
 }
 
-/// What `Environment::with_parent` makes: definitions stay in the child,
-/// and every other name resolves in the global environment, a global defined
-/// after the child included.
+/// What a host namespace means, which is what `Environment::with_parent`'s
+/// frame meant: definitions stay in the host namespace, and every other name
+/// resolves in the global namespace, a global defined after the host
+/// namespace included.
 fn a_child_of_the_global_environment<B: Backend>(interp: Interpreter<B>) {
     let env = interp.new_environment();
     interp.eval_program_owned("(define later 'global)").unwrap();
@@ -267,26 +270,48 @@ fn a_host_environment_is_a_child_of_the_global_environment() {
     a_child_of_the_global_environment(tree_walker_interpreter());
 }
 
-/// A host environment is a frame until 4b.8 gives hosts a kind of their own
-/// (#830): it charges nothing for its tables, however many names it binds.
-/// 4b.8 rewrites this test to the owner's charging ruling (4b's start
-/// decision 4 on #782).
-fn charged_as_a_frame<B: Backend>(interp: Interpreter<B>) {
+/// A host namespace is charged as a parentless namespace is (the owner's
+/// ruling (a) of 2026-11-07 on #835's question 2): counted among the
+/// heap's namespaces while it lives, charging the heap's external bytes for
+/// its tables as they grow, and giving both back when its handle drops. No
+/// closure was made in it, so nothing but the handle holds it.
+fn charged_as_a_namespace<B: Backend>(interp: Interpreter<B>) {
+    interp
+        .eval_program_owned("(import (scheme base) (patina debug)) (gc)")
+        .unwrap();
+    let heap = interp.backend().heap().clone();
+    let namespaces = heap.borrow().namespaces();
     let env = interp.new_environment();
-    assert_eq!(interp.raw_environment(&env).charged_bytes(), None);
+    assert_eq!(heap.borrow().namespaces(), namespaces + 1);
+    let raw = interp.raw_environment(&env);
+    let made = raw.charged_bytes().expect("a host namespace charges");
     let value = interp.eval_str_owned("'bound").unwrap();
     for i in 0..100 {
         interp.define_in(&env, &format!("name-{i}"), &value);
     }
-    let raw = interp.raw_environment(&env);
-    assert_eq!(raw.local_names(interp.backend().heap()).len(), 100);
-    assert_eq!(raw.charged_bytes(), None);
+    assert_eq!(raw.local_names(&heap).len(), 100);
+    let charged = raw.charged_bytes().unwrap();
+    assert!(
+        charged > made,
+        "{charged} charged after 100 names, {made} made"
+    );
+    let before = interp.gc_stats().external_bytes;
+    drop(raw);
+    drop(env);
+    assert_eq!(
+        interp.gc_stats().external_bytes,
+        before - charged,
+        "its charge given back when its handle dropped"
+    );
+    assert_eq!(heap.borrow().namespaces(), namespaces);
+    interp.eval_program_owned("(gc)").unwrap();
+    assert_eq!(heap.borrow().namespaces(), namespaces);
 }
 
 #[test]
-fn a_host_environment_is_charged_as_a_frame() {
-    charged_as_a_frame(vm_interpreter());
-    charged_as_a_frame(tree_walker_interpreter());
+fn a_host_namespace_is_charged_as_a_namespace() {
+    charged_as_a_namespace(vm_interpreter());
+    charged_as_a_namespace(tree_walker_interpreter());
 }
 
 /// Once the handle is dropped, a value bound only in its environment is
@@ -334,9 +359,10 @@ fn an_environment_handle_used_with_another_interpreter_is_refused() {
     assert!(vm.lookup_in(&env, "car").is_some());
 }
 
-/// The table holds the environment, which holds the heap, which holds the
-/// table: teardown breaks that cycle, so a handle kept past its interpreter
-/// keeps nothing alive.
+/// A handle kept past its interpreter holds nothing: teardown drops the
+/// table that held the host namespace, and the namespace holds no handle to
+/// its heap, so the handle keeps neither the heap nor its interpreter alive
+/// (#704).
 fn kept_past_its_interpreter<B: Backend>(interp: Interpreter<B>) {
     let env = interp.new_environment();
     let value = interp.eval_str_owned("(list 'held 1 2)").unwrap();
@@ -435,7 +461,7 @@ fn a_host_environment_reaches_what_a_global_expansion_introduced() {
 // What host code reads and writes, what its closures keep, and what its
 // macros introduce, pinned before 4b.6's binding records (#834) changed how
 // it is linked (#835's tests PR). Each held at the PR's base and holds under
-// the records; 4b.8's host-namespace kind must keep it.
+// the records and under 4b.8's host namespaces (#835).
 // ---------------------------------------------------------------------------
 
 /// A `set!` in host code of a name only the global environment binds writes
@@ -758,6 +784,90 @@ fn a_definition_a_macro_introduces_in_a_host_namespace() {
     );
 }
 
+/// `(host4b sum)` exports `sum-list`, a macro whose template calls the
+/// `fold` the library imports from `(srfi 1)`. The global environment
+/// imports `(scheme base)` and nothing of `(srfi 1)`.
+const SUM_LIBRARY: &str = "(import (scheme base))
+    (define-library (host4b sum)
+      (export sum-list)
+      (import (scheme base) (srfi 1))
+      (begin (define-syntax sum-list (syntax-rules () ((_ l) (fold + 0 l))))))";
+
+/// The program each environment runs after its imports: `sum-list`'s
+/// `fold` is the library's, whatever the use site defines afterwards.
+const SUM_PROGRAM: &str = "(define (f) (sum-list '(1 2 3))) (define fold 'captured) (f)";
+
+/// A library macro used in a host namespace that imports the binding its
+/// template names keeps that binding past a later host definition of the
+/// name, as the same program does at top level (#851). The desugarer binds
+/// the template's `fold` early to an import alias of the nearest namespace
+/// that imports it, the host namespace, before asking the global namespace,
+/// which here imports nothing of `(srfi 1)` (the owner's ruling (c) of
+/// 2026-11-07 on #835's question 3). The host's own `fold` is its
+/// definition all the same.
+fn library_macro_keeps_its_import<B: Backend>(interp: Interpreter<B>) -> [String; 3] {
+    interp.eval_program_owned(SUM_LIBRARY).unwrap();
+    let shown = |result: Result<_, _>| match result {
+        Ok(value) => interp.display_tagged(&value),
+        Err(e) => format!("error: {e}"),
+    };
+    let env = interp.new_environment();
+    let host = shown(interp.eval_program_in(
+        &env,
+        &format!("(import (scheme base) (srfi 1) (host4b sum)) {SUM_PROGRAM}"),
+    ));
+    let host_fold = shown(interp.eval_str_in(&env, "fold"));
+    let global =
+        shown(interp.eval_program_owned(&format!("(import (srfi 1) (host4b sum)) {SUM_PROGRAM}")));
+    [host, host_fold, global]
+}
+
+#[test]
+fn a_library_macro_in_a_host_namespace_keeps_its_import() {
+    let expected = ["6", "captured", "6"];
+    assert_eq!(library_macro_keeps_its_import(vm_interpreter()), expected);
+    assert_eq!(
+        library_macro_keeps_its_import(tree_walker_interpreter()),
+        expected
+    );
+}
+
+/// The same program in a host namespace that imports nothing, after the
+/// global namespace imports `(srfi 1)` and `(host4b sum)`: the host
+/// namespace holds no import of `fold`'s location, so the desugarer asks the
+/// global namespace next, whose import alias keeps the template's `fold`
+/// the library's, as before the host-namespace kind (the owner's ruling
+/// (c) of 2026-11-07 on #835's question 3). The host's `fold` is its own
+/// definition, and the global's is still `(srfi 1)`'s.
+fn library_macro_keeps_the_global_import<B: Backend>(interp: Interpreter<B>) -> [String; 3] {
+    interp.eval_program_owned(SUM_LIBRARY).unwrap();
+    interp
+        .eval_program_owned("(import (srfi 1) (host4b sum))")
+        .unwrap();
+    let shown = |result: Result<_, _>| match result {
+        Ok(value) => interp.display_tagged(&value),
+        Err(e) => format!("error: {e}"),
+    };
+    let env = interp.new_environment();
+    let host = shown(interp.eval_program_in(&env, SUM_PROGRAM));
+    let host_fold = shown(interp.eval_str_in(&env, "fold"));
+    let global_fold = shown(interp.eval_str_owned("(procedure? fold)"));
+    [host, host_fold, global_fold]
+}
+
+#[test]
+fn a_library_macro_in_a_host_namespace_falls_back_to_the_global_import() {
+    let expected = ["6", "captured", "#t"];
+    assert_eq!(
+        library_macro_keeps_the_global_import(vm_interpreter()),
+        expected
+    );
+    assert_eq!(
+        library_macro_keeps_the_global_import(tree_walker_interpreter()),
+        expected
+    );
+}
+
 /// `(host4b cell)` exports `value` and a procedure that assigns it.
 const CELL_LIBRARY: &str = "(import (scheme base) (scheme eval))
     (define-library (host4b cell)
@@ -810,9 +920,9 @@ const READS_LIBRARY: &str = "(import (scheme base))
     (import (host4b reads))
     (define own 13)";
 
-/// What the host reads of an own binding, an import, and a host frame's
-/// import (#834, critique D2): the value each binding's record, or the
-/// frame's import, leads to, never the record or the cell itself.
+/// What the host reads of an own binding, an import, and an import into the
+/// host namespace (#834, critique D2): the value each binding's record leads
+/// to, never the record or the cell itself.
 fn host_reads<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
     interp.eval_program_owned(READS_LIBRARY).unwrap();
     let env = interp.new_environment();
@@ -851,11 +961,14 @@ const RECORDS: &str = "(cdr (assq 'binding-records (gc-stats)))";
 
 /// A read of a name nothing binds makes no binding record (#834, critique
 /// E3): a bare reference the backend misses, a reference from compiled code
-/// that misses when it runs, and a host's lookup. No macro is expanded and
-/// nothing is defined between the readings, and every name is fresh, so a
-/// miss that made a record, however late, would show in the count. Frames
-/// are not counted, so the names each environment lists are checked as
-/// well.
+/// that misses when it runs, and a host's lookup. Nor does a host's lookup
+/// of a name only the global namespace binds, which reads through the host
+/// namespace by name and makes no read-through record (#835). No macro is
+/// expanded and nothing is defined between the readings, and every unbound
+/// name is fresh, so a read that made a record, however late, would show
+/// in the count. The host namespace's records are counted with the rest
+/// (the owner's ruling (a) of 2026-11-07 on #835's question 2); the names
+/// each environment lists are checked as well.
 fn read_makes_no_record<B: Backend>(interp: Interpreter<B>, backend: &str) {
     interp
         .eval_program_owned("(import (scheme base) (patina debug))")
@@ -892,9 +1005,13 @@ fn read_makes_no_record<B: Backend>(interp: Interpreter<B>, backend: &str) {
         interp.lookup_in(&env, "never-bound-name-834c").is_none(),
         "{backend}: a host's lookup of an unbound name answered"
     );
+    assert!(
+        interp.lookup_in(&env, "car").is_some(),
+        "{backend}: a host's lookup of a name only the global binds missed"
+    );
 
     interp.eval_str_owned("(gc)").unwrap();
-    assert_eq!(records(), before, "{backend}: a miss made a binding record");
+    assert_eq!(records(), before, "{backend}: a read made a binding record");
     assert_eq!(names(), listed, "{backend}: a miss bound a name");
 }
 
