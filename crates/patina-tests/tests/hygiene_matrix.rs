@@ -121,6 +121,10 @@
 //! - **break a working shape** → its row goes red too. That is the direction
 //!   #138 went, undetected.
 //!
+//! [`every_shape_answers_the_same_in_a_host_namespace`] runs every row again
+//! in a host environment, and holds it to the same recorded answers, except
+//! the rows [`HOST_EXEMPT`] lists with their issue.
+//!
 //! # Adding axes
 //!
 //! The axes here are deliberately the cheap ones. Two that this list used to
@@ -163,7 +167,8 @@
 mod common;
 
 use common::{
-    eval_program_tree_walker, eval_program_vm, try_eval_program_tree_walker, try_eval_program_vm,
+    eval_program_tree_walker, eval_program_vm, try_eval_program_in_host_tree_walker,
+    try_eval_program_in_host_vm, try_eval_program_tree_walker, try_eval_program_vm,
 };
 
 const TRIAGE: &str = "scheme_tests/reports/larceny_triage.md";
@@ -1178,11 +1183,26 @@ fn all_rows() -> Vec<Row> {
 
 /// Run one shape on one backend, rendering a rejection as [`ERROR`].
 fn answer(code: &str, vm: bool) -> String {
-    let ok = if vm {
+    rendered(if vm {
         try_eval_program_vm(code)
     } else {
         try_eval_program_tree_walker(code)
-    };
+    })
+}
+
+/// [`answer`] in a host environment: the shape's program runs through
+/// `Interpreter::eval_program_in` on a fresh `new_environment()`.
+fn host_answer(code: &str, vm: bool) -> String {
+    rendered(if vm {
+        try_eval_program_in_host_vm(code)
+    } else {
+        try_eval_program_in_host_tree_walker(code)
+    })
+}
+
+/// One run's answer, or its rejection as [`ERROR`] with the first line of
+/// the message.
+fn rendered(ok: Result<String, String>) -> String {
     // The message is kept rather than collapsed to a token: no row expects an
     // error, so one appearing is a surprise, and a bare `<error>` in the
     // failure output would say nothing about which.
@@ -1220,6 +1240,93 @@ fn shapes_score_as_recorded() {
          moved in {TRIAGE}.",
         moved.len(),
         moved.join("\n\n")
+    );
+}
+
+/// The rows that answer in a host environment something other than what
+/// they record, each with why: an issue, or the reason the host's answer is
+/// right. [`every_shape_answers_the_same_in_a_host_namespace`] fails on a row
+/// listed here that answers the same, so an entry leaves with its defect.
+const HOST_EXEMPT: &[(&str, &str)] = &[
+    // The eight `redefined` rows, on both backends: the host imports `X`
+    // from the library and defines its own afterwards, and the template's
+    // `X`, the library's, follows the host's definition — a read answers
+    // `(use use)`, a write lands on the host's `X`. #438 binds such a
+    // reference to the import's alias, and the desugarer asks the global
+    // environment for one, which here imports nothing of `(hm gen)`. With
+    // the global environment importing `(hm gen)` first, all eight answer
+    // what they record, as #851's shape does with `(srfi 1)`.
+    ("written/read/library/redefined", "#851"),
+    ("written/write/library/redefined", "#851"),
+    ("generated/read/library/redefined", "#851"),
+    ("generated/write/library/redefined", "#851"),
+    ("generated-arg/read/library/redefined", "#851"),
+    ("generated-arg/write/library/redefined", "#851"),
+    ("generated/read/library-generator/redefined", "#851"),
+    ("generated/write/library-generator/redefined", "#851"),
+];
+
+/// Every shape answers in a host namespace what it records (#835): its
+/// program runs through `Interpreter::eval_program_in` on a fresh
+/// `new_environment()`, on a fresh interpreter, on both backends. A row that
+/// already answered differently in a host before the host-namespace kind is
+/// listed in [`HOST_EXEMPT`] with its issue.
+///
+/// The other tests make no host environment, so without this one the matrix
+/// says nothing about one. A host's form imports into the host and defines
+/// there, and reaches the global environment's bindings past its own; what
+/// `new_environment()` answers changes from a frame to a host namespace with
+/// #835, and this holds the change to the answers the program gives at top
+/// level.
+#[test]
+fn every_shape_answers_the_same_in_a_host_namespace() {
+    let rows = all_rows();
+    for (name, _) in HOST_EXEMPT {
+        assert!(
+            rows.iter().any(|row| row.name == *name),
+            "HOST_EXEMPT names {name}, which is no row of MATRIX or MADE"
+        );
+    }
+    let mut moved = Vec::new();
+    let mut retired = Vec::new();
+    for row in &rows {
+        let exempt = HOST_EXEMPT.iter().find(|(name, _)| *name == row.name);
+        let mut diverged = false;
+        for (backend, recorded) in [("vm", row.vm), ("tree-walker", row.tw)] {
+            let got = host_answer(&row.code, backend == "vm");
+            if got != recorded {
+                diverged = true;
+                if exempt.is_none() {
+                    moved.push(common::describe_move(
+                        &row.name,
+                        &format!("{backend}, in a host"),
+                        recorded,
+                        &got,
+                        row.correct,
+                        &row.code,
+                    ));
+                }
+            }
+        }
+        if let (Some((name, why)), false) = (exempt, diverged) {
+            retired.push(format!("  {name} ({why})"));
+        }
+    }
+    assert!(
+        moved.is_empty(),
+        "{} hygiene shape(s) answer in a host environment something other than \
+         what the matrix records.\n\n{}\n\n\
+         A host environment's form should answer what the same program answers \
+         at top level. File the divergence, and list the row in HOST_EXEMPT \
+         with its issue.",
+        moved.len(),
+        moved.join("\n\n")
+    );
+    assert!(
+        retired.is_empty(),
+        "HOST_EXEMPT lists row(s) that now answer in a host what they record; \
+         remove them:\n{}",
+        retired.join("\n")
     );
 }
 

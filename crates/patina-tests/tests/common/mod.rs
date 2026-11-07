@@ -350,10 +350,13 @@ type Outcome = Result<String, TestError>;
 /// Whether the code is a whole program (`eval_program`) or a single
 /// expression (`eval_str`). The two entry points differ in how they treat
 /// multiple top-level forms, so tests must keep using the one they chose.
+/// `HostProgram` is a whole program run in a host environment: the
+/// interpreter's fresh `new_environment()`, through `eval_program_in`.
 #[derive(Clone, Copy)]
 enum Mode {
     Expr,
     Program,
+    HostProgram,
 }
 
 /// Run `code` on one backend, capturing either its value or its error.
@@ -368,6 +371,10 @@ where
     let result = match mode {
         Mode::Expr => interp.eval_str_owned(code),
         Mode::Program => interp.eval_program_owned(code),
+        Mode::HostProgram => {
+            let env = interp.new_environment();
+            interp.eval_program_in(&env, code)
+        }
     };
     match result {
         Ok(value) => Ok(interp.display_tagged(&value)),
@@ -624,6 +631,20 @@ pub fn try_eval_program_vm(code: &str) -> Result<String, String> {
 /// The tree-walker half of [`try_eval_program_vm`].
 pub fn try_eval_program_tree_walker(code: &str) -> Result<String, String> {
     run_on(tree_walker_interpreter(), code, Mode::Program).map_err(|e| e.message)
+}
+
+/// [`try_eval_program_vm`] in a host environment: the program runs through
+/// `Interpreter::eval_program_in` on the interpreter's fresh
+/// `new_environment()`, whose parent is the global environment, rather than
+/// at top level. What it defines stays in that environment, and what it
+/// imports is bound there. For the hygiene matrix's host slice (#835).
+pub fn try_eval_program_in_host_vm(code: &str) -> Result<String, String> {
+    run_on(vm_interpreter(), code, Mode::HostProgram).map_err(|e| e.message)
+}
+
+/// The tree-walker half of [`try_eval_program_in_host_vm`].
+pub fn try_eval_program_in_host_tree_walker(code: &str) -> Result<String, String> {
+    run_on(tree_walker_interpreter(), code, Mode::HostProgram).map_err(|e| e.message)
 }
 
 /// Evaluate a program on the tree-walker only and `write` the result. For
