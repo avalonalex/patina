@@ -638,7 +638,7 @@ struct RareTables {
     /// table of those entries, sized into the `CAPTURED_FRAME_BYTES` charged
     /// to every closure it makes, so a word more per entry would be paid by
     /// every call. Which lists are indexed is [`Environment::indexes`]'s:
-    /// a namespace's past [`INDEX_ABOVE`], a frame's past
+    /// a namespace's, of either kind, past [`INDEX_ABOVE`], a frame's past
     /// [`FRAME_INDEX_ABOVE`]. `insert_scoped`, the one writer of the lists,
     /// is the one writer of these, and `scoped_index` checks that an index
     /// covers its list.
@@ -717,10 +717,13 @@ struct ReadThrough {
 /// The external bytes (`heap/account.rs`, GC_PRD §15) a namespace has charged
 /// for its tables, given back when it drops (#615).
 ///
-/// **A namespace is an environment of the namespace kind** ([`Kind`]), made
-/// without a parent ([`Environment::with_heap`]): the global environment, a library's, and the
-/// ones `environment`, `scheme-report-environment` and `null-environment`
-/// build. Their tables are Rust allocations the trigger would otherwise not
+/// **A namespace is an environment of either namespace kind** ([`Kind`]): a
+/// parentless one ([`Environment::with_heap`]) — the global environment, a
+/// library's, and the ones `environment`, `scheme-report-environment` and
+/// `null-environment` build — or a host namespace
+/// (`Heap::new_host_namespace`, #835), whose parent is the global one and
+/// which charges the same account. Their tables are Rust allocations the
+/// trigger would otherwise not
 /// see: an `(environment '(scheme base))` holds about 32 KB in them (about
 /// 40 KB until #834 took out its import links and owners) and costs the heap
 /// one specifier slot, so a loop of those piled up 2.9 GiB of dead
@@ -740,9 +743,11 @@ struct ReadThrough {
 /// its out-of-line tables' box; every table's own buffer at its capacity —
 /// the slot vector once it is out of line, the name index, the scoped and
 /// alias tables, the import and relink aliases, the table of introduced
-/// globals and the table of the scoped bindings' indexes, and a frame's
-/// import cells, which a namespace never has; the name of each slot, an
-/// `Rc<str>` of two counts and its bytes,
+/// globals and the table of the scoped bindings' indexes, a host
+/// namespace's table of read-through records (#835), whose keys are its
+/// parent's slot names and are counted there, and a frame's import cells,
+/// which a namespace never has; the name of each slot, an `Rc<str>` of two
+/// counts and its bytes,
 /// counted whether or not something else shares it (an `environment` built
 /// by import has a fresh name for each of its several hundred bindings,
 /// which are most of what it holds); and each spelling's own buffers, which
@@ -793,12 +798,15 @@ struct ReadThrough {
 /// **What it counts** (#834): `records`, every binding record the namespace
 /// holds — one per slot, per scoped entry (the splicing `let-syntax`
 /// keywords filed at top level among them) and per import alias, each of
-/// which is a slot; and `cells`, the cells of its own its records name now.
+/// which is a slot, and per read-through record of a host namespace's,
+/// which is in no slot until a define or an import adopts it (#835); and
+/// `cells`, the cells of its own its records name now.
 /// Each is a running sum, raised as a record or a cell is made
 /// (`Environment::count`), `cells` lowered as a record is re-pointed away
 /// from an own cell (`Environment::count_cell_let_go`), and both given back
 /// to the heap's sums when the namespace drops. Not counted: a frame's
-/// imports, a free cell, and a cell only an importer's record or an export
+/// imports, a free cell (the one a host namespace's read-through records
+/// name among them), and a cell only an importer's record or an export
 /// keeps once this namespace re-pointed away from it. `Environment::recount`
 /// checks the sums against the tables in the tests.
 #[derive(Debug)]
@@ -2432,14 +2440,14 @@ impl Environment {
     }
 
     /// Whether this environment indexes a spelling's scoped bindings when it
-    /// has `len` of them: past [`INDEX_ABOVE`] in a namespace, past
-    /// [`FRAME_INDEX_ABOVE`] in a frame of either frame kind ([`Kind`]),
-    /// which is why a frame of parameters
-    /// does not build one per call. The one place the scoped table's
-    /// thresholds are applied, so that the writer that builds an index and
-    /// the readers that consult it agree on which lists have one. (The VM's
-    /// identities, `Introduced`, are recorded only in a namespace or a host's
-    /// environment, and carry their own index past [`INDEX_ABOVE`].) The
+    /// has `len` of them: past [`INDEX_ABOVE`] in a namespace of either
+    /// kind, a host namespace's included (#835), past [`FRAME_INDEX_ABOVE`]
+    /// in a frame of either frame kind ([`Kind`]), which is why a frame of
+    /// parameters does not build one per call. The one place the scoped
+    /// table's thresholds are applied, so that the writer that builds an
+    /// index and the readers that consult it agree on which lists have one.
+    /// (The VM's identities, `Introduced`, are recorded only in a namespace,
+    /// and carry their own index past [`INDEX_ABOVE`].) The
     /// first test is the one nearly every list fails, so a short list costs a
     /// compare.
     #[inline]
@@ -4960,6 +4968,38 @@ mod scoped_index_tests {
             Some(n(-1))
         );
     }
+
+    /// A host namespace indexes a spelling past `INDEX_ABOVE`, as every
+    /// namespace does, and not at a frame's threshold (#835, the owner's
+    /// ruling on question 2); the index is charged with the rest of its
+    /// tables.
+    #[test]
+    fn a_host_namespace_is_indexed_at_the_namespace_threshold() {
+        let heap = new_shared_heap();
+        let root = Rc::new(Environment::with_heap(&heap));
+        let host = Environment::host_namespace(Rc::clone(&root));
+        assert!(!host.indexes(INDEX_ABOVE) && host.indexes(INDEX_ABOVE + 1));
+        for k in 0..INDEX_ABOVE {
+            host.define_with_scopes(&heap, "x", scopes(&[k + 1]), n(k as i64));
+        }
+        assert_eq!(indexed_len(&host, "x"), None);
+        let unindexed = host.charged_bytes().unwrap();
+        host.define_with_scopes(&heap, "x", scopes(&[100]), n(-1));
+        assert_eq!(indexed_len(&host, "x"), Some(INDEX_ABOVE + 1));
+        assert!(
+            host.charged_bytes().unwrap() > unindexed,
+            "the index is charged"
+        );
+        assert_eq!(
+            host.get_with_scopes(&heap, "x", &scopes(&[3, 9999]))
+                .unwrap(),
+            Some(n(2))
+        );
+        assert_eq!(
+            host.get_with_scopes(&heap, "x", &scopes(&[100])).unwrap(),
+            Some(n(-1))
+        );
+    }
 }
 
 /// `name_reaches_binding_of` answers by *binding*. Every case here holds the
@@ -6263,6 +6303,49 @@ mod namespace_charge_tests {
         assert_eq!(counts(), (0, 0, 0));
     }
 
+    /// A host namespace is counted while it lives, as a parentless one is
+    /// (#835, the owner's ruling on question 2): made, +1; a define, a record
+    /// and a cell; a read-through record, a record, its table charged; its
+    /// adoption by a define, a cell; dropped, every count and its charge
+    /// back where they started.
+    #[test]
+    fn a_host_namespace_is_counted_while_it_lives() {
+        let heap = new_shared_heap();
+        let counts = || {
+            let h = heap.borrow();
+            (h.namespaces(), h.binding_records(), h.cells())
+        };
+        let global = Rc::new(Environment::with_heap(&heap));
+        global.define(&heap, "x", n(1));
+        let (namespaces, records, cells) = counts();
+        let start = external(&heap);
+
+        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
+        assert_eq!(counts(), (namespaces + 1, records, cells));
+        assert!(external(&heap) > start, "charged for its tables");
+        host.define(&heap, "own", n(2));
+        assert_eq!(counts(), (namespaces + 1, records + 1, cells + 1));
+
+        let unlinked = host.charged_bytes().unwrap();
+        let child = host.link_record(&heap, "x").unwrap();
+        assert_eq!(counts(), (namespaces + 1, records + 2, cells + 1));
+        assert!(
+            host.charged_bytes().unwrap() >= unlinked + size_of::<RefCell<ReadThrough>>(),
+            "the read-through table is charged"
+        );
+        assert_eq!(host.link_record(&heap, "x"), Some(child));
+        assert_eq!(counts(), (namespaces + 1, records + 2, cells + 1));
+
+        host.define(&heap, "x", n(3));
+        assert_eq!(host.local_record("x"), Some(child), "adopted");
+        assert_eq!(counts(), (namespaces + 1, records + 2, cells + 2));
+        assert_eq!(host.recount(&heap.borrow()), host.counted());
+
+        drop(host);
+        assert_eq!(counts(), (namespaces, records, cells));
+        assert_eq!(external(&heap), start);
+    }
+
     /// A set of one scope, `id`: the identity of one expansion's definition.
     fn one_scope(id: usize) -> ScopeSet {
         let mut scopes = ScopeSet::new();
@@ -7559,15 +7642,20 @@ mod heap_step_tests {
         let frame = Rc::new(Environment::child_frame(Rc::clone(&ns)));
         frame.define(&heap, "local", n(5));
         share(&heap, &frame, "frame-import", &library, "lib");
+        // A host namespace is a namespace (#835): its own binding is read
+        // and written at the step too.
+        let host = Rc::new(Environment::host_namespace(Rc::clone(&ns)));
+        host.define(&heap, "host-own", n(9));
         // Taken before any borrow: it reads the library at its step.
         let lib_cell = library.cell_of(&heap, "lib").unwrap();
         let own = ns.local_slot("own").unwrap();
         let local = frame.local_slot("local").unwrap();
+        let host_own = host.local_slot("host-own").unwrap();
 
         // A read of a namespace's binding, under the heap borrowed mutably.
         {
             let held = heap.borrow_mut();
-            let reads: [Case<'_>; 11] = [
+            let reads: [Case<'_>; 13] = [
                 ("ns.get own", Box::new(|| ignore(ns.get(&heap, "own")))),
                 (
                     "ns.get imported",
@@ -7606,6 +7694,14 @@ mod heap_step_tests {
                     "ns.get of the visible scoped binding",
                     Box::new(|| ignore(ns.get(&heap, "vis"))),
                 ),
+                (
+                    "host.get of its own",
+                    Box::new(|| ignore(host.get(&heap, "host-own"))),
+                ),
+                (
+                    "host.slot_value",
+                    Box::new(|| ignore(host.slot_value(&heap, host_own))),
+                ),
             ];
             for (what, read) in reads {
                 assert!(panics(read), "{what} took no shared borrow");
@@ -7616,7 +7712,7 @@ mod heap_step_tests {
         // A write of a namespace's binding, under the heap borrowed shared.
         {
             let held = heap.borrow();
-            let writes: [Case<'_>; 9] = [
+            let writes: [Case<'_>; 10] = [
                 (
                     "ns.define over a name",
                     Box::new(|| ns.define(&heap, "own", n(20))),
@@ -7653,6 +7749,10 @@ mod heap_step_tests {
                     "ns.set of the visible scoped binding",
                     Box::new(|| ns.set(&heap, "vis", n(27)).unwrap()),
                 ),
+                (
+                    "host.define of a fresh name",
+                    Box::new(|| host.define(&heap, "host-fresh", n(28))),
+                ),
             ];
             for (what, write) in writes {
                 assert!(panics(write), "{what} took no mutable borrow");
@@ -7670,6 +7770,8 @@ mod heap_step_tests {
         );
         assert_eq!(ns.get(&heap, "vis"), Some(n(4)));
         assert_eq!(ns.local_slot("fresh"), None);
+        assert_eq!(host.get(&heap, "host-own"), Some(n(9)));
+        assert_eq!(host.local_slot("host-fresh"), None);
 
         // A frame's own binding, under the heap borrowed mutably: no borrow.
         // Nor does installing a frame's import, which allocates nothing

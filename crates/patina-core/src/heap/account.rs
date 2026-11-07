@@ -780,26 +780,29 @@ impl Heap {
 
     /// The live namespaces, each of which charges its tables
     /// (`Environment`'s `NamespaceCharge`): the global environment, each
-    /// loaded library's, each live environment specifier's, and
-    /// `%parameterize-swap!`'s compile namespace. A host's environment is a
-    /// frame, and is not counted. `(gc-stats)`'s `namespaces`.
+    /// loaded library's, each live environment specifier's,
+    /// `%parameterize-swap!`'s compile namespace, and each live host
+    /// namespace, the environment `Interpreter::new_environment` answers
+    /// (#835). A frame is not counted. `(gc-stats)`'s `namespaces`.
     pub fn namespaces(&self) -> usize {
         self.account.shared.namespaces.get()
     }
 
     /// The binding records the live namespaces hold (#834): each slot's,
-    /// each scoped entry's and each import alias's. A frame's imports are
-    /// not counted. A running sum, exact once the dead namespaces have
-    /// dropped. `(gc-stats)`'s `binding-records`.
+    /// each scoped entry's and each import alias's, and each of a host
+    /// namespace's read-through records (#835). A frame's imports are not
+    /// counted. A running sum, exact once the dead namespaces have dropped.
+    /// `(gc-stats)`'s `binding-records`.
     pub fn binding_records(&self) -> usize {
         self.account.shared.binding_records.get()
     }
 
-    /// The cells of their own the live namespaces' records name now (#834).
-    /// Not counted: a free cell, and a cell only an importer's record or an
-    /// export keeps once its namespace dropped or re-pointed away from it. A
-    /// running sum, exact once the dead namespaces have dropped.
-    /// `(gc-stats)`'s `cells`.
+    /// The cells of their own the live namespaces' records name now (#834),
+    /// a host namespace's among them (#835). Not counted: a free cell, the
+    /// one a host namespace's read-through records name among them, and a
+    /// cell only an importer's record or an export keeps once its namespace
+    /// dropped or re-pointed away from it. A running sum, exact once the
+    /// dead namespaces have dropped. `(gc-stats)`'s `cells`.
     pub fn cells(&self) -> usize {
         self.account.shared.cells.get()
     }

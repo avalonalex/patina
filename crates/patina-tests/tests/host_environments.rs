@@ -873,11 +873,14 @@ const RECORDS: &str = "(cdr (assq 'binding-records (gc-stats)))";
 
 /// A read of a name nothing binds makes no binding record (#834, critique
 /// E3): a bare reference the backend misses, a reference from compiled code
-/// that misses when it runs, and a host's lookup. No macro is expanded and
-/// nothing is defined between the readings, and every name is fresh, so a
-/// miss that made a record, however late, would show in the count. Frames
-/// are not counted, so the names each environment lists are checked as
-/// well.
+/// that misses when it runs, and a host's lookup. Nor does a host's lookup
+/// of a name only the global namespace binds, which reads through the host
+/// namespace by name and makes no read-through record (#835). No macro is
+/// expanded and nothing is defined between the readings, and every unbound
+/// name is fresh, so a read that made a record, however late, would show
+/// in the count. The host namespace's records are counted with the rest
+/// (the owner's ruling on question 2); the names each environment lists are
+/// checked as well.
 fn read_makes_no_record<B: Backend>(interp: Interpreter<B>, backend: &str) {
     interp
         .eval_program_owned("(import (scheme base) (patina debug))")
@@ -914,9 +917,13 @@ fn read_makes_no_record<B: Backend>(interp: Interpreter<B>, backend: &str) {
         interp.lookup_in(&env, "never-bound-name-834c").is_none(),
         "{backend}: a host's lookup of an unbound name answered"
     );
+    assert!(
+        interp.lookup_in(&env, "car").is_some(),
+        "{backend}: a host's lookup of a name only the global binds missed"
+    );
 
     interp.eval_str_owned("(gc)").unwrap();
-    assert_eq!(records(), before, "{backend}: a miss made a binding record");
+    assert_eq!(records(), before, "{backend}: a read made a binding record");
     assert_eq!(names(), listed, "{backend}: a miss bound a name");
 }
 

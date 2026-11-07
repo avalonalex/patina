@@ -115,7 +115,8 @@ The architecture is designed to support future exploration:
   `bytes-allocated`, `bytes-reclaimed`, `committed-bytes`,
   `external-bytes`, descriptor pressure and `ports`, its port objects'
   entries in the port table, and `namespaces`, `binding-records` and
-  `cells`, what the live namespaces hold, beside its arena counts
+  `cells`, what the live namespaces hold, host namespaces among them
+  (#835), beside its arena counts
   (`docs/GC_DESIGN.md` §6), and the pauses, the MMU at 10 ms, how much was
   allocated where collection was deferred, and the process's resident size
   and CPU time (§6.2). `PATINA_GC_LOG=<path>` writes a CSV line per

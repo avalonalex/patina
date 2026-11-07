@@ -1168,12 +1168,13 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   drain (§4.6), so the count is the live ports' only right after a
   collection. `namespaces`, `binding-records` and `cells` (#834) count what
   the namespaces hold: the live namespaces that charge (the global
-  environment, each loaded library's, each live specifier's and
-  `%parameterize-swap!`'s compile namespace; a host's environment is a
-  frame, and is not counted); the binding records they hold, one per slot,
-  per scoped entry and per import alias; and the cells of their own their
-  records name now, leaving out a frame's imports, a free cell, and a cell
-  only an importer's record or an export keeps. Each is a running sum,
+  environment, each loaded library's, each live specifier's,
+  `%parameterize-swap!`'s compile namespace and each live host namespace,
+  #835; a frame is not counted); the binding records they hold, one per
+  slot, per scoped entry, per import alias and per read-through record of
+  a host namespace's; and the cells of their own their records name now,
+  leaving out a frame's imports, a free cell, and a cell only an
+  importer's record or an export keeps. Each is a running sum,
   raised as a namespace makes one, `cells` lowered as a record is
   re-pointed away from an own cell, and both given back when a namespace
   drops, so they are exact once the dead namespaces have dropped, which a

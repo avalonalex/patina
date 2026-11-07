@@ -396,12 +396,13 @@ every binding of it (#613, `scope_index.rs`). A binding is filed under the
 largest scope of its set, and a reference is shown the bindings filed under
 the scopes it carries: every candidate is among them, since a candidate's
 scopes are all the reference's, and the rule then sees the same candidates
-in the same order as a scan would give it. A namespace's list of a spelling
-is indexed once it holds more than eight bindings, and a frame's once it
-holds more than 64: a frame the tree-walker builds per call holds what one
-form binds, which does not grow with the program's history, and a
-`let-values` clause of nine formals already binds nine parameters spelled
-`x`, so a lower bound would build an index on every call of it.
+in the same order as a scan would give it. A namespace's list of a spelling,
+a host namespace's included (#835), is indexed once it holds more than eight
+bindings, and a frame's once it holds more than 64: a frame the tree-walker
+builds per call holds what one form binds, which does not grow with the
+program's history, and a `let-values` clause of nine formals already binds
+nine parameters spelled `x`, so a lower bound would build an index on every
+call of it.
 
 Since #427, neither backend exposes an introduced variable through its bare
 spelling. The VM's former bare-name alias let unrelated expansions reach a
