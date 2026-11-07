@@ -1452,10 +1452,12 @@ retention a sub-stage can move gets a **pin**, its cost per cycle,
 (L(4N) − L(N))/3N, as the PR that pins it measured it on each backend, held
 to 1.05× (`pin`, beside SS1; K17, and the owner's ruling R9 on #782):
 `hidden-define`'s from its re-baseline, 225 bytes on the VM and 97 on the
-tree-walker since #833, which the binding records' 32 bytes a cycle (#834)
-pass until the owner re-pins them, and `library-stream`'s and
-`unbound-ref`'s from the 4b PR that first moves each (R9), so neither has
-one yet. No mark may name a
+tree-walker since #833, re-pinned by the owner at 257 and 129 for the
+binding records' 32 bytes a cycle (#834, its question 2);
+`library-stream`'s, whose SS1 passes since #834, at about 90.84 bytes, so
+that its 1.05× is SS1's bound per cycle at its N until 4b.11 promotes the
+clause (question 4); and `unbound-ref`'s from the 4b PR that first moves it
+(R9), so it has none yet. No mark may name a
 pin, so a cost past it fails the lane until the owner raises it, and a
 pinned row that reaches the resident-size cap fails too. A pin holds at the
 row's own N only, and is not held under `--scale`: a namespace charges its

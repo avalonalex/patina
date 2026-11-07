@@ -183,6 +183,17 @@ class Clauses(unittest.TestCase):
             # A reference to an unbound name makes no record (R22).
             for key in ('namespaces', 'cells', 'binding-records'):
                 self.assertIsNone(rows['unbound-ref'].red_reason(f'SS5:{key}', backend), (key, backend))
+        # The owner's re-pin for the records (question 2 on #834).
+        self.assertEqual(hidden.pin, {'vm': 257, 'tree-walker': 129})
+
+    def test_library_stream_s_pin_is_ss1_s_bound(self):
+        # Its SS1 passes since #834; until 4b.11 promotes it, the pin's 1.05x
+        # is SS1's bound per cycle at the row's N (question 4 on #834).
+        row = next(row for row in steady.ROWS if row.name == 'library-stream')
+        self.assertEqual(row.red_reason('SS1', 'vm'), '#614')
+        for backend in steady.BACKENDS:
+            self.assertAlmostEqual(steady.PIN_TOLERANCE * row.pin[backend], steady.leak_floor(row.n[backend]))
+        self.assertIn('pin', row.checks())
 
     def test_ss5_marks_name_one_key(self):
         row = steady.Row('r', 'churn', 'x.scm', {}, red={'SS5:ports/vm': '#1'})
