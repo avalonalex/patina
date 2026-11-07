@@ -623,8 +623,12 @@ impl LibraryRegistry {
             .libraries
             .get_mut(library)
             .expect("a host library stays registered");
-        NamespaceView::of(&lib.env).define(heap, name, value);
-        lib.export_tagged(name.to_string(), value);
+        // Always an insert: `check_host_export` refuses a name exported
+        // before, so the cell is the fresh binding's (#834).
+        let view = NamespaceView::of(&lib.env);
+        view.define(heap, name, value);
+        let cell = view.cell_of(heap, name).expect("just defined");
+        lib.export_cell(name.to_string(), cell);
     }
 
     /// Find the file path for a library, over this registry's search paths.
@@ -880,8 +884,10 @@ mod tests {
 
         // A second registration under the same name replaces, not errors —
         // the replacement's exports are what `get` returns afterwards.
-        let mut replacement = empty_library(name.clone());
-        replacement.export_tagged("v".to_string(), patina_core::TaggedValue::fixnum(2));
+        let heap = patina_core::heap::new_shared_heap();
+        let mut replacement =
+            Library::with_env(name.clone(), Rc::new(Environment::with_heap(&heap)));
+        replacement.export_value(&heap, "v".to_string(), patina_core::TaggedValue::fixnum(2));
         registry.register_or_replace(replacement);
 
         assert!(registry.get(&name).unwrap().exports.contains_key("v"));
@@ -889,17 +895,31 @@ mod tests {
 
     /// A library defined again is replaced in the registry (#614's path),
     /// and its environment, a namespace, keeps its charge on the heap's
-    /// external bytes (#615) for as long as anything holds it — here an
-    /// importer's link — and gives it back when the last holder drops. That
-    /// drop is the one a namespace can see outside a sweep.
+    /// external bytes (#615) for as long as anything holds it, and gives it
+    /// back when the last holder drops. An importer holds the library's
+    /// cell, not its namespace (#834), so the replaced namespace drops with
+    /// the replacement, outside a sweep, while the importer still reads the
+    /// old binding through the cell, a collection after included.
     #[test]
     fn a_replaced_library_gives_its_namespace_charge_back_when_it_drops() {
+        use patina_core::RootProvider;
+        use patina_core::SlotVisitor;
         use patina_core::environment::Environment;
+        use patina_core::heap::gc::collect_for_tests;
         use patina_core::heap::new_shared_heap;
         use std::rc::Rc;
 
+        /// Roots the importer alone.
+        struct Importer<'a>(&'a Rc<Environment>);
+        impl RootProvider for Importer<'_> {
+            fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
+                visitor.env(self.0);
+            }
+        }
+
         let heap = new_shared_heap();
         let external = || heap.borrow().external_bytes();
+        let namespaces = || heap.borrow().namespaces();
         let name = vec!["test".to_string()];
         let library = |value: i64| {
             let env = Rc::new(Environment::with_heap(&heap));
@@ -911,31 +931,41 @@ mod tests {
                 );
             }
             env.define(&heap, "v", patina_core::TaggedValue::fixnum(value));
-            let mut library = Library::with_env(name.clone(), env);
-            library.export_tagged("v".to_string(), patina_core::TaggedValue::fixnum(value));
+            let mut library = Library::with_env(name.clone(), Rc::clone(&env));
+            let cell = env.cell_of(&heap, "v").expect("`v` is defined");
+            library.export_cell("v".to_string(), cell);
             library
         };
         let mut registry = LibraryRegistry::new();
         registry.register(library(1)).unwrap();
-        let importer = Environment::with_heap(&heap);
+        let importer = Rc::new(Environment::with_heap(&heap));
         assert!(
             registry
                 .get(&name)
                 .unwrap()
                 .import_into(&heap, &importer, "v", "v")
         );
-        let old = registry.get(&name).unwrap().env.charged_bytes().unwrap();
+        let one = Some(patina_core::TaggedValue::fixnum(1));
+        assert_eq!(importer.get(&heap, "v"), one);
 
-        registry.register_or_replace(library(2));
+        let replacement = library(2);
+        assert_eq!(namespaces(), 3);
+        registry.register_or_replace(replacement);
+        assert_eq!(namespaces(), 2, "the replaced namespace dropped");
         let new = registry.get(&name).unwrap().env.charged_bytes().unwrap();
-        // The importer links the old library's binding, so the old namespace
-        // lives on, and stays charged, out of the registry.
-        assert_eq!(external(), importer.charged_bytes().unwrap() + old + new);
+        assert_eq!(external(), importer.charged_bytes().unwrap() + new);
+
+        // The importer reads the old binding through its cell, which its
+        // record alone keeps.
+        assert_eq!(importer.get(&heap, "v"), one);
+        collect_for_tests(&mut heap.borrow_mut(), &[&Importer(&importer)]);
+        assert_eq!(importer.get(&heap, "v"), one);
 
         drop(importer);
         assert_eq!(external(), new);
         drop(registry);
         assert_eq!(external(), 0);
+        assert_eq!(namespaces(), 0);
     }
 
     #[test]
@@ -1140,7 +1170,7 @@ mod gc_root_tests {
 
         let name = vec!["sentinel".to_string()];
         let mut library = Library::with_env(name.clone(), env);
-        library.export_tagged("exported".to_string(), exported);
+        library.export_value(&shared, "exported".to_string(), exported);
         let registry = LibraryRegistry {
             libraries: HashMap::from([(name, library)]),
             search_paths: Vec::new(),

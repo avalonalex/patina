@@ -76,11 +76,19 @@ fn test_library_predicate() {
 
 #[test]
 fn test_library_with_exports() {
-    let mut lib = empty_library(vec!["mylib".to_string()]);
+    let heap = patina_core::new_shared_heap();
+    let mut lib = Library::with_env(
+        vec!["mylib".to_string()],
+        Rc::new(Environment::with_heap(&heap)),
+    );
 
     // Add some exports
-    lib.export_tagged("foo".to_string(), patina_core::TaggedValue::fixnum(42));
-    lib.export_tagged("bar".to_string(), patina_core::TaggedValue::TRUE);
+    lib.export_value(
+        &heap,
+        "foo".to_string(),
+        patina_core::TaggedValue::fixnum(42),
+    );
+    lib.export_value(&heap, "bar".to_string(), patina_core::TaggedValue::TRUE);
 
     // Verify exports
     assert!(lib.exports_identifier("foo"));
@@ -89,11 +97,11 @@ fn test_library_with_exports() {
 
     // Get export values
     assert_eq!(
-        lib.get_export_tagged("foo"),
+        lib.get_export_tagged(&heap, "foo"),
         Some(patina_core::TaggedValue::fixnum(42))
     );
     assert_eq!(
-        lib.get_export_tagged("bar"),
+        lib.get_export_tagged(&heap, "bar"),
         Some(patina_core::TaggedValue::TRUE)
     );
 

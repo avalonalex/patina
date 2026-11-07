@@ -1381,7 +1381,8 @@ impl<'h> GcVisitor<'h> {
     }
 
     /// Trace an environment and every environment it keeps live: its parent
-    /// chain, its alias targets and the owners of its imports, and theirs.
+    /// chain and its alias targets, and theirs. An import is a cell, which
+    /// the environment's trace marks like any value (#834).
     /// Deduped by environment identity, so the global environment is walked
     /// once no matter how many closures point at it. Iterative: what one
     /// environment reaches is queued, not recursed into.
@@ -2519,7 +2520,8 @@ mod tests {
         let mut heap = shared.borrow_mut();
         let stats = collect(&mut heap, &roots);
 
-        assert_eq!(stats.last_marked.pairs, 1);
+        // The binding's record and cell, each a pair (#834), and the value.
+        assert_eq!(stats.last_marked.pairs, 3);
         assert_eq!(heap.free_pairs, vec![dead.heap_index()]);
         assert_eq!(heap.car(live), TaggedValue::fixnum(1));
     }

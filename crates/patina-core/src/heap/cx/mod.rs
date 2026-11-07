@@ -535,8 +535,8 @@ impl<'gc> Cx<'gc> {
     // `docs/README.md`'s method rule. Each hands the view this context's
     // heap, which the environment borrows at the namespace step and
     // releases: no method returns the heap or a guard. Reads take `&self`;
-    // writes take `&mut self`, since from 4b.6's records a namespace's write
-    // allocates.
+    // writes take `&mut self`, since a namespace's write can allocate a
+    // binding record and a cell (#834).
     // ------------------------------------------------------------------------
 
     /// The location `name` reaches in `ns` ([`NamespaceView::binding_location`]).
@@ -653,7 +653,7 @@ impl<'gc> Cx<'gc> {
 
     /// [`define_with_scopes`](Self::define_with_scopes) for a frame, through
     /// a shared context: a frame's own binding takes no borrow and allocates
-    /// nothing, now or under 4b.6's records, so it needs no `&mut`. For the
+    /// nothing, so it needs no `&mut`. For the
     /// desugarer's binding forms and declarations, which run where only
     /// `&Cx` is in hand. Raw: names `NamespaceView`.
     ///
@@ -676,30 +676,40 @@ impl<'gc> Cx<'gc> {
         frame.define_with_scopes(self.heap, name, scopes, value.tagged());
     }
 
-    /// [`NamespaceView::share_binding`] from a frame into a frame, through a
-    /// shared context: neither frame's step borrows the heap, and a frame's
-    /// import allocates nothing, so it needs no `&mut`. A read through the
-    /// import it makes borrows the heap shared, as a read of any frame's
-    /// import does, whatever kind its owner is. For the desugarer's
-    /// declaration views. Raw: names `NamespaceView`.
+    /// Import `cell` into the frame `frame` as `name`
+    /// ([`NamespaceView::import_cell`]), through a shared context: a frame's
+    /// import allocates nothing and takes no borrow, so it needs no `&mut`.
+    /// A read through it borrows the heap shared, as a read of any frame's
+    /// import does. For the desugarer's declaration views. Raw: names
+    /// `NamespaceView` and `BindingCell`.
     ///
     /// # Panics
     ///
-    /// When `frame` or `source` is a namespace.
+    /// When `frame` views a namespace.
     #[inline]
-    pub fn share_binding_in_frame(
+    pub fn import_cell_in_frame(
         &self,
         frame: NamespaceView<'_>,
         name: impl Into<Rc<str>>,
-        source: &Rc<Environment>,
-        source_name: &str,
-    ) -> bool {
+        cell: crate::BindingCell,
+    ) {
         assert!(
-            !frame.env().is_namespace() && !source.is_namespace(),
-            "Cx::share_binding_in_frame: a frame's own binding, which takes no borrow and \
-             allocates nothing"
+            !frame.env().is_namespace(),
+            "Cx::import_cell_in_frame: a frame's import, which takes no borrow and allocates \
+             nothing"
         );
-        frame.share_binding(self.heap, name, source, source_name)
+        frame.import_cell(self.heap, name, cell);
+    }
+
+    /// A free cell holding `UNSPECIFIED`, for a declaration's location
+    /// (#463), which every view of the declaration imports. Raw (names
+    /// `BindingCell`) and hidden: the cell carries no `'gc` brand, so it
+    /// must not outlive this context — the next collection may sweep it and
+    /// reuse its slot. The desugarer drops it with the form.
+    #[doc(hidden)]
+    #[inline]
+    pub fn new_declaration_cell(&mut self) -> crate::BindingCell {
+        crate::BindingCell::free(&mut self.heap.borrow_mut(), TaggedValue::UNSPECIFIED)
     }
 
     /// [`Heap::source`], cloned.

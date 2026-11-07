@@ -95,7 +95,7 @@ fn every_registered_primitive_is_reachable_by_some_import() {
     let mut exported_anywhere: BTreeSet<String> = BTreeSet::new();
     for library in &candidates {
         if let Ok(lib) = evaluator.load_library(library) {
-            exported_anywhere.extend(lib.exports_iter_tagged().map(|(n, _)| n.clone()));
+            exported_anywhere.extend(lib.exports.keys().cloned());
         }
     }
 
@@ -221,7 +221,7 @@ fn every_exported_primitive_can_be_dispatched() {
             }
         };
         libraries += 1;
-        for (name, tv) in lib.exports_iter_tagged() {
+        for (name, tv) in lib.exports_iter_tagged(&heap) {
             let qualified = {
                 let heap = heap.borrow();
                 match heap.get_procedure(tv).as_deref() {

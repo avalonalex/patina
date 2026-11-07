@@ -1104,10 +1104,6 @@ impl Heap {
     /// with the cell as holder, when the caller logs one. A cell is a pair,
     /// but this is not `set-car!`, so it never counts as `SetCar`.
     #[inline(always)]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by #834's records, the next commit")
-    )]
     pub(crate) fn store_cell(
         &mut self,
         cell: TaggedValue,
@@ -1128,10 +1124,6 @@ impl Heap {
     /// may be old and the cell young, an old-to-young edge stage 7's barrier
     /// must see.
     #[inline]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by #834's records, the next commit")
-    )]
     pub(crate) fn set_record_cell(&mut self, record: TaggedValue, cell: TaggedValue) {
         debug_assert!(record.is_pair() && cell.is_pair());
         self.pair_checks.check("pair", record);

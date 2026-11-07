@@ -18,7 +18,8 @@
 //! tree-walker's reads and writes by name, which run from whatever frame the
 //! step holds; the backends' reading of a top-level form's head
 //! (`patina_frontend`'s `top_level_head`, by `get_with_scopes`); and the
-//! loaders' export snapshots, which 4b.6 rewrites with cells. The view, not
+//! loaders' export snapshots, which take each export's cell
+//! (`Environment::cell_of`, #834). The view, not
 //! the type system, holds the discipline: namespaces and frames are one type
 //! (4b's start decision 4 on #782).
 //!
@@ -26,11 +27,13 @@
 //! `heap: &RefCell<Heap>`, which the environment borrows at the namespace
 //! step (#834): shared for a lookup's hit, mutable for an insert, a
 //! re-point or a store. A frame's own binding takes no borrow; a frame's
-//! import borrows it as a namespace's binding does, whatever kind its owner
-//! is.
+//! import borrows it to read or write its cell, and installing one takes
+//! none.
 //!
-//! Its operations come in four groups, which 4b.6 implements over binding
-//! records. The first three are what a threaded build keeps apart, C6's
+//! Its operations come in four groups, implemented over binding records
+//! (#834): a namespace's binding is a record in its slot naming a cell, an
+//! import is a record naming the exporter's cell. The first three are what a
+//! threaded build keeps apart, C6's
 //! "lookup, insert, re-point" (`PRD/study/gc/followup/parallelism/itemize.md`,
 //! its R3: lookups over a snapshot, inserts under a lock, a re-point as a
 //! release store); a store writes a cell, which a threaded build treats as
@@ -58,6 +61,7 @@
 //! a speculative scan's private frame. Its lookups by name walk to the parent
 //! as [`Environment::get`] does.
 
+use crate::binding_record::BindingCell;
 use crate::environment::{BindingLocation, Environment, IntroducedDefinition};
 use crate::heap::Heap;
 use crate::procedure::{Arity, Procedure};
@@ -73,7 +77,7 @@ use std::rc::Rc;
 ///
 /// **The raw layer** (#831), as [`Environment`]'s methods are: outside the
 /// embedding API's promise (`docs/README.md`, "Changing the embedding API").
-/// 4b.6 reimplements it over binding records.
+/// Implemented over binding records (#834).
 #[derive(Clone, Copy)]
 pub struct NamespaceView<'e> {
     env: &'e Environment,
@@ -182,6 +186,16 @@ impl<'e> NamespaceView<'e> {
         self.env.introduced_definition(heap, name, scopes)
     }
 
+    /// The cell this environment's own binding of `name` names
+    /// ([`Environment::cell_of`]): a namespace's record's, or a frame's
+    /// import's. `None` for a frame's own binding, a name reached through an
+    /// alias or the parent, or one not bound. A namespace borrows `heap`
+    /// shared.
+    #[inline]
+    pub fn cell_of(self, heap: &RefCell<Heap>, name: &str) -> Option<BindingCell> {
+        self.env.cell_of(heap, name)
+    }
+
     /// The names a program bound in this environment only, in slot order
     /// ([`Environment::local_names`]). A namespace holding an import alias
     /// borrows `heap` shared.
@@ -231,36 +245,25 @@ impl<'e> NamespaceView<'e> {
         self.env.define_with_scopes(heap, name, scopes, value);
     }
 
-    /// Import `source_name` from `source` as `name` here, as the same
-    /// location ([`Environment::share_binding`]):
-    /// - an **insert** when the name has no plain slot here;
+    /// Make `name` here the binding `cell` is, an import
+    /// ([`Environment::import_cell`]):
+    /// - an **insert** when the name has no plain slot here: a record naming
+    ///   the cell;
     /// - a **re-point** when it has one, a definition or another import:
-    ///   the slot stays and now means `source`'s binding, resolved to the
-    ///   environment that owns it.
+    ///   the slot keeps its record, which names the cell from now on.
     ///
-    /// `false`, having done nothing, when `source` has no plain binding of
-    /// that name; the caller then installs the value it has, by
-    /// [`define`](Self::define), as `Library::import_into` does. A name of
-    /// this environment's own imported under a second name is copied, by
-    /// `define`'s rules.
-    ///
-    /// Borrows `heap` shared at `source`'s step, and mutably at this
-    /// namespace's.
+    /// An own cell under another name is copied, by `define`'s rules. A
+    /// namespace borrows `heap` mutably; a frame's import takes no borrow
+    /// and allocates nothing.
     #[inline]
-    pub fn share_binding(
-        self,
-        heap: &RefCell<Heap>,
-        name: impl Into<Rc<str>>,
-        source: &Rc<Environment>,
-        source_name: &str,
-    ) -> bool {
-        self.env.share_binding(heap, name, source, source_name)
+    pub fn import_cell(self, heap: &RefCell<Heap>, name: impl Into<Rc<str>>, cell: BindingCell) {
+        self.env.import_cell(heap, name, cell);
     }
 
-    /// [`share_binding`](Self::share_binding) from a staging environment,
-    /// which owns nothing ([`Environment::copy_binding`]): a staged import
-    /// arrives as the same import (an insert or a re-point, as
-    /// `share_binding`'s), and a staged value as a definition of it (an
+    /// [`import_cell`](Self::import_cell) from a staging environment, which
+    /// owns nothing ([`Environment::copy_binding`]): a staged import arrives
+    /// as an import of the same cell (an insert or a re-point, as
+    /// `import_cell`'s), and a staged value as a definition of it (an
     /// insert, a store or a re-point, as [`define`](Self::define)'s).
     /// Borrows `heap` as they do.
     #[inline]
@@ -408,8 +411,20 @@ mod tests {
         let namespace = Rc::new(Environment::with_heap(heap));
         let view = NamespaceView::of(&namespace);
         view.define(heap, "own", n(2));
-        assert!(view.share_binding(heap, "imported", &library, "count"));
+        let count = NamespaceView::of(&library).cell_of(heap, "count").unwrap();
+        view.import_cell(heap, "imported", count);
         (library, namespace)
+    }
+
+    /// The heap's running sums of records and cells (#834).
+    fn sums(heap: &crate::heap::SharedHeap) -> (usize, usize) {
+        let heap = heap.borrow();
+        (heap.binding_records(), heap.cells())
+    }
+
+    /// That `env`'s running sums are what its tables hold.
+    fn assert_recounted(heap: &crate::heap::SharedHeap, env: &Environment) {
+        assert_eq!(env.recount(&heap.borrow()), env.counted());
     }
 
     #[test]
@@ -420,6 +435,7 @@ mod tests {
         let names = namespace.local_names(&heap);
         let charged = namespace.charged_bytes();
         let library_charged = library.charged_bytes();
+        let counted = sums(&heap);
 
         for _ in 0..3 {
             assert_eq!(view.get(&heap, "own"), Some(n(2)));
@@ -436,11 +452,16 @@ mod tests {
             assert_eq!(view.slot_value(&heap, own), n(2));
             assert_eq!(view.slot_value(&heap, imported), n(1));
             assert_eq!(view.local_slot("unbound"), None);
+            assert_eq!(view.cell_of(&heap, "unbound"), None);
+            assert_eq!(sums(&heap), counted, "a lookup makes no record or cell");
         }
 
         assert_eq!(namespace.local_names(&heap), names);
         assert_eq!(namespace.charged_bytes(), charged);
         assert_eq!(library.charged_bytes(), library_charged);
+        assert_eq!(sums(&heap), counted);
+        assert_recounted(&heap, &namespace);
+        assert_recounted(&heap, &library);
     }
 
     #[test]
@@ -449,59 +470,97 @@ mod tests {
         let (library, namespace) = library_and_namespace(&heap);
         let view = NamespaceView::of(&namespace);
         let names = |env: &Environment| env.local_names(&heap).len();
+        let count = NamespaceView::of(&library).cell_of(&heap, "count").unwrap();
+        let record_word = |name: &str| namespace.local_record(name).unwrap().word();
+        assert_recounted(&heap, &namespace);
 
-        // Inserts: a fresh `define` and a fresh import add a name.
+        // Inserts: a fresh `define` and a fresh import add a name and a
+        // record; the `define` makes a cell, the import none.
         let before = names(&namespace);
+        let (records, cells) = sums(&heap);
         view.define(&heap, "fresh", n(3));
         assert_eq!(names(&namespace), before + 1);
-        assert!(view.share_binding(&heap, "fresh-import", &library, "count"));
+        assert_eq!(sums(&heap), (records + 1, cells + 1));
+        view.import_cell(&heap, "fresh-import", count);
         assert_eq!(names(&namespace), before + 2);
+        assert_eq!(sums(&heap), (records + 2, cells + 1));
         assert_eq!(
             view.binding_location(&heap, "fresh-import"),
             library.binding_location(&heap, "count")
         );
+        assert_recounted(&heap, &namespace);
 
         // A store: a `define` over the namespace's own binding keeps its
-        // location and changes its value; so does `set!`.
+        // location, its record and its cell, and changes its value; so does
+        // `set!`.
         let location = view.binding_location(&heap, "own");
-        let count = names(&namespace);
+        let word = record_word("own");
+        let cell = view.cell_of(&heap, "own");
+        let counted = sums(&heap);
+        let count_names = names(&namespace);
         view.define(&heap, "own", n(4));
         assert_eq!(view.binding_location(&heap, "own"), location);
         assert_eq!(view.get(&heap, "own"), Some(n(4)));
         view.set(&heap, "own", n(5)).unwrap();
         assert_eq!(view.binding_location(&heap, "own"), location);
         assert_eq!(view.get(&heap, "own"), Some(n(5)));
-        assert_eq!(names(&namespace), count);
+        assert_eq!(
+            (record_word("own"), view.cell_of(&heap, "own")),
+            (word, cell)
+        );
+        assert_eq!(names(&namespace), count_names);
+        assert_eq!(sums(&heap), counted);
         // A store through an import writes the library's location.
         let slot = view.local_slot("imported").unwrap();
         view.set_slot_value(&heap, slot, n(6));
         assert_eq!(library.get(&heap, "count"), Some(n(6)));
+        assert_eq!(sums(&heap), counted);
+        assert_recounted(&heap, &namespace);
 
         // Re-points: a `define` over an import, and an import over a
-        // definition, change the name's location and add no name.
+        // definition, change the name's location and cell and add no name
+        // and no record. The first makes a cell of the namespace's own, the
+        // second lets one go.
         let imported = view.binding_location(&heap, "imported");
+        let word = record_word("imported");
+        let (records, cells) = sums(&heap);
         view.define(&heap, "imported", n(7));
         assert_ne!(view.binding_location(&heap, "imported"), imported);
+        assert_ne!(view.cell_of(&heap, "imported"), Some(count));
+        assert_eq!(
+            record_word("imported"),
+            word,
+            "the record stays in its slot"
+        );
         assert_eq!(view.get(&heap, "imported"), Some(n(7)));
         assert_eq!(
             library.get(&heap, "count"),
             Some(n(6)),
             "the library's binding is left alone"
         );
-        assert_eq!(names(&namespace), count);
+        assert_eq!(names(&namespace), count_names);
+        assert_eq!(sums(&heap), (records, cells + 1));
+        assert_recounted(&heap, &namespace);
 
         let own = view.binding_location(&heap, "own");
-        assert!(view.share_binding(&heap, "own", &library, "count"));
+        let word = record_word("own");
+        view.import_cell(&heap, "own", count);
         assert_ne!(view.binding_location(&heap, "own"), own);
+        assert_eq!(view.cell_of(&heap, "own"), Some(count));
+        assert_eq!(record_word("own"), word, "the record stays in its slot");
         assert_eq!(
             view.binding_location(&heap, "own"),
             library.binding_location(&heap, "count")
         );
         assert_eq!(view.get(&heap, "own"), Some(n(6)));
-        assert_eq!(names(&namespace), count);
+        assert_eq!(names(&namespace), count_names);
+        assert_eq!(sums(&heap), (records, cells));
+        assert_recounted(&heap, &namespace);
 
         // An unbound `set!` writes nothing.
         assert_eq!(view.set(&heap, "unbound", n(8)), Err("unbound".to_string()));
-        assert_eq!(names(&namespace), count);
+        assert_eq!(names(&namespace), count_names);
+        assert_eq!(sums(&heap), (records, cells));
+        assert_recounted(&heap, &library);
     }
 }

@@ -91,7 +91,8 @@ pub use core_expr::{
 pub use core_syntax::{ALL_CORE_FORMS, CoreForm};
 pub use cps_expr::{CpsExpr, CpsExprKind, CpsParam, CpsPrimitive, PromptTag};
 pub use environment::{
-    BindingLocation, Environment, IntroducedDefinition, ScopedBinding, ScopedSetError,
+    BindingLocation, Environment, IntroducedDefinition, IntroducedRecord, ScopedBinding,
+    ScopedSetError,
 };
 pub use error::{ErrorDetail, ErrorKind, ExceptionKind, ExceptionObject, SourceLocation};
 pub use heap::PromiseState;

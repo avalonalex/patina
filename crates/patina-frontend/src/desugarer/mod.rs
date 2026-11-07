@@ -118,6 +118,22 @@ impl<'gc> DerefMut for FormCx<'_, 'gc> {
     }
 }
 
+/// Clears a form's declarations, views and all, when it drops: at the end of
+/// `Desugarer::desugar_tagged`, whether the form desugared, failed or
+/// unwound. Their declaration cells are values of the form's context, which
+/// a collection after it may sweep (#834).
+struct ResetDeclarations<'a>(&'a RefCell<declarations::Declarations>);
+
+impl Drop for ResetDeclarations<'_> {
+    fn drop(&mut self) {
+        // `try_borrow_mut`: an unwind out of a borrow of the table must not
+        // panic again here; the borrow's own drop runs first in that case.
+        if let Ok(mut declarations) = self.0.try_borrow_mut() {
+            *declarations = declarations::Declarations::default();
+        }
+    }
+}
+
 /// Whether a desugared body contributes any definition, looking through
 /// `Begin`.
 ///
@@ -1961,6 +1977,15 @@ impl<'a> Desugarer<'a> {
             self.early.is_idle() && self.open_forms.borrow().is_empty(),
             "`desugar_tagged` is the per-form entry point; recurse through `desugar_form`"
         );
+        // A form's declarations hold cells of its context (#834), so none
+        // may outlive the form: cleared at entry, and on the way out by a
+        // guard, so that a form that unwinds clears them too.
+        debug_assert!(
+            self.declarations.borrow().is_empty(),
+            "a form's declarations outlived it"
+        );
+        let _reset = ResetDeclarations(&self.declarations);
+        *self.declarations.borrow_mut() = declarations::Declarations::default();
         self.form.set(NEXT_FORM.fetch_add(1, Ordering::Relaxed));
         let mut cx = FormCx {
             cx,
@@ -1969,7 +1994,6 @@ impl<'a> Desugarer<'a> {
         };
         let result = self.desugar_form(tagged, &mut cx);
         let finished = self.early.finish_form();
-        *self.declarations.borrow_mut() = declarations::Declarations::default();
         result.map(|expr| Self::settle_early_bindings(expr, finished))
     }
 

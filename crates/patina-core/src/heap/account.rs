@@ -652,20 +652,12 @@ impl ExternalBytes {
     }
 
     /// A namespace made `n` binding records (#834).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by #834's records, the next commit")
-    )]
     pub(crate) fn records_made(&self, n: usize) {
         let records = &self.0.binding_records;
         records.set(records.get() + n);
     }
 
     /// A namespace made `n` cells of its own (#834).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by #834's records, the next commit")
-    )]
     pub(crate) fn cells_made(&self, n: usize) {
         let cells = &self.0.cells;
         cells.set(cells.get() + n);
@@ -674,10 +666,6 @@ impl ExternalBytes {
     /// A namespace's records stopped naming `n` cells of its own: each was
     /// re-pointed away from its cell, which an importer's record or an
     /// export may still keep (#834).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by #834's records, the next commit")
-    )]
     pub(crate) fn cells_let_go(&self, n: usize) {
         lower(&self.0.cells, n, "cells");
     }

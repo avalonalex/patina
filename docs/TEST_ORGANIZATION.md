@@ -1290,15 +1290,19 @@ size and four times it, each collect about every 8 MiB of namespaces, hold
 under 16 MiB of external bytes between collections at either size, and leave
 `external-bytes` where it started after a `(gc)`; `interaction-environment`
 answers one specifier, and 1,000,000 calls of it collect no more often and
-allocate no more than 1,000,000 of `(cons 1 2)`, which collect; 2,000 kept
-environments collect three times, not nine; and the global environment's
-growth under `eval` is charged, while frames charge nothing, read while
-they are alive. 200 closures, each `eval`'d in a fresh specifier the program
-drops, keep their namespaces charged, about 40 KB each, while they live, and
-give every charge back once they are collected (decision 26 on #782, #834).
-A replaced library's namespace (#614's path) keeps its
-charge while an importer holds it and gives it back when the last holder
-drops (`library_registry.rs`).
+allocate no more than 1,000,000 of `(cons 1 2)`, which collect; 2,200 kept
+environments, about 80 MB, collect three times, not nine; and the global
+environment's growth under `eval` is charged, while frames charge nothing,
+read while they are alive. 200 closures, each `eval`'d in a fresh specifier
+the program drops, keep their namespaces charged and counted (`namespaces`),
+each at least 95% of one specifier's charge, about 32 KB, calibrated in the
+test from one environment made and dropped first, while they live, and give
+every charge and count back once they are collected (decision 26 on #782,
+#834). A replaced library's namespace (#614's path) drops with the
+replacement, since an importer holds the library's cell and not its
+namespace (#834): the importer reads the old binding through the cell, a
+collection rooted at it alone included, and the external bytes and the
+`namespaces` count fall at the replacement (`library_registry.rs`).
 
 `crates/patina-repl/tests/file_descriptors.rs`, in the Test Suite, runs
 #607's programs through the CLI in a shell that lowers `RLIMIT_NOFILE`

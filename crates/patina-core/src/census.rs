@@ -66,8 +66,11 @@ pub enum Site {
     /// A machine's own `force`: the VM's `force_stub`, and since #708 the
     /// tree-walker's CPS `force`, in the study's spelling.
     PromiseForceVm,
-    /// The environment sites hold their values off the heap, so their
-    /// holder is never young or old.
+    /// The environment sites. A frame's own binding is off the heap (holder
+    /// `None`). A namespace's binding and any import is a cell, which is the
+    /// holder of a store into it (#834). A definition's first value
+    /// initialises a fresh cell and is logged with no holder. A record's
+    /// re-point is `EnvRecordRepoint`, with the record as holder.
     EnvDefine,
     EnvSetSlot,
     EnvSetScoped,

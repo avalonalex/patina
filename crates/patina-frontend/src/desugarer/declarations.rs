@@ -6,13 +6,20 @@
 //! expose unfinished declarations to library initializers run during expansion.
 
 use super::*;
+use patina_core::BindingCell;
 
 #[derive(Clone)]
 struct Declaration {
     env: Rc<Environment>,
     name: Rc<str>,
     scopes: ScopeSet,
-    marker: Rc<Environment>,
+    /// The declaration's location, which every view of it imports: a free
+    /// cell holding `UNSPECIFIED`, `Some` exactly when `scopes` is empty.
+    /// A value of the context that desugars this form, made by `declare`
+    /// beneath it. The form's `Declarations` drop with the form
+    /// (`Desugarer::desugar_tagged`), and nothing collects beneath a
+    /// context, so it is never held across a collection (#834).
+    cell: Option<BindingCell>,
 }
 
 #[derive(Default, Clone)]
@@ -22,28 +29,24 @@ pub(super) struct Declarations {
 }
 
 impl Declarations {
-    /// Declare `name` at `scopes` in `env`, in a marker frame of its own.
-    /// Through a shared context: a frame's own binding takes no borrow of
-    /// the heap and allocates nothing (#834).
-    pub fn declare(&mut self, env: Rc<Environment>, name: Rc<str>, scopes: ScopeSet, cx: &Cx<'_>) {
+    /// Declare `name` at `scopes` in `env`. An unscoped declaration gets a
+    /// location of its own, a free cell the context allocates, which every
+    /// view imports (#834); a scoped one is bound in each view under its
+    /// scopes.
+    pub fn declare(
+        &mut self,
+        env: Rc<Environment>,
+        name: Rc<str>,
+        scopes: ScopeSet,
+        cx: &mut Cx<'_>,
+    ) {
         self.forget(&env, &name, &scopes);
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "a lookup-only marker for one declaration: it binds only `UNSPECIFIED`, an \
-                      immediate, so it holds no heap value, and it lives for one form's expansion"
-        )]
-        let marker = Rc::new(Environment::child_frame(env.clone()));
-        cx.define_with_scopes_in_frame(
-            NamespaceView::of(&marker),
-            name.clone(),
-            scopes.clone(),
-            Value::UNSPECIFIED,
-        );
+        let cell = scopes.is_empty().then(|| cx.new_declaration_cell());
         self.bindings.push(Declaration {
             env,
             name,
             scopes,
-            marker,
+            cell,
         });
         self.views.clear();
     }
@@ -65,8 +68,8 @@ impl Declarations {
     /// ambiguity checks. The views are never captured by compiled macros or
     /// runtime aliases; those retain the real, live environments.
     ///
-    /// Through a shared context, as [`declare`](Self::declare) is: the view
-    /// and the markers are frames, whose binds take no borrow (#834).
+    /// Through a shared context: the view is a frame, whose binds and
+    /// imports take no borrow and allocate nothing (#834).
     pub fn view(&mut self, env: &Rc<Environment>, cx: &Cx<'_>) -> Rc<Environment> {
         if self.bindings.is_empty() {
             return env.clone();
@@ -89,20 +92,21 @@ impl Declarations {
         } else {
             #[expect(
                 clippy::disallowed_methods,
-                reason = "a lookup-only view over `env`: it binds only `UNSPECIFIED` and shared \
-                          declaration markers, no heap value, and lives for one form's expansion"
+                reason = "a lookup-only view over `env`: it binds `UNSPECIFIED` and the form's \
+                          declaration cells, values of the form's context, beneath which nothing \
+                          collects; it lives for one form's expansion"
             )]
             let view = Rc::new(Environment::child_frame(env.clone()));
             for declaration in declarations.into_iter().rev() {
-                if declaration.scopes.is_empty() {
+                if let Some(cell) = declaration.cell {
                     // Every view must name the same declaration location, or
                     // a local macro would mistake its own global for a foreign
                     // binding and relink it to the value preceding the define.
-                    cx.share_binding_in_frame(
+                    // Each imports the one cell, so each answers its `Cell`.
+                    cx.import_cell_in_frame(
                         NamespaceView::of(&view),
                         declaration.name.clone(),
-                        &declaration.marker,
-                        &declaration.name,
+                        cell,
                     );
                 } else {
                     cx.define_with_scopes_in_frame(
@@ -129,7 +133,7 @@ impl Desugarer<'_> {
         &self,
         name: &Rc<str>,
         scopes: &ScopeSet,
-        cx: &Cx<'_>,
+        cx: &mut Cx<'_>,
     ) {
         if self.top_level.get() {
             let env = self

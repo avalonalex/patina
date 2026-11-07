@@ -52,10 +52,6 @@ fn stamp_free(word: TaggedValue) -> u64 {
 /// these. Never leaves this crate, and a program never sees one as a value:
 /// every read path of `Environment` dereferences it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Trace)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by #834's records, the next commit")
-)]
 pub(crate) struct Record(TaggedValue);
 
 /// A location: the pair `(value . owner)`, where owner is the fixnum
@@ -67,13 +63,35 @@ pub(crate) struct Record(TaggedValue);
 /// holder outside the heap's roots keeps it only while the registry entry, a
 /// record or the context that made it does. A program never sees one as a
 /// value; every read path of `Environment` dereferences it.
+///
+/// **Why an import is the exporter's cell.** R7RS §5.2 has an import name a
+/// *binding*, so an importer and the library share one location: what the
+/// library assigns later, the importer sees. Installing the value the
+/// variable held at import time instead was #406 — every importer read a
+/// stale copy, silently, and no suite caught it because none assigns a
+/// variable another library imported.
+///
+/// **Every import shares, a primitive registered from Rust included.** A
+/// first version copied those, reasoning that nothing can assign them and
+/// that one program's `(set! car …)` should stay out of every other library.
+/// Both halves were wrong. A Scheme library can re-export a primitive and
+/// assign it later, and its importers then held exactly the stale copy this
+/// sharing exists to remove — before or after the import deciding which. And
+/// for a procedure they do not inline, chibi 0.12 and Gauche 0.9.15 agree
+/// that the location is one: a program's `(set! list-copy …)` is seen by a
+/// library that imported `list-copy`, and a library's by the program
+/// (measured 2026-09-19; both rows are in `stdlib/library-bindings.scm`).
+/// They differ from each other only where each inlines at compile time —
+/// `car` is an opcode in chibi, `length` is inlined by Gauche — and Patina's
+/// VM deoptimizes a `CallPrimitive` site when its primitive is rebound
+/// precisely so that inlining is never observable. R7RS calls assigning an
+/// imported binding "an error", so all of this is latitude; one location is
+/// the answer that does not depend on what happened first. It was free when
+/// measured the same day, interleaved with `main`: copying primitives
+/// against sharing them made no difference on either backend.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Trace)]
 pub struct BindingCell(TaggedValue);
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by #834's records, the next commit")
-)]
 impl BindingCell {
     /// A cell of the namespace numbered `env_id`, holding `value`.
     pub(crate) fn new_own(heap: &mut Heap, value: TaggedValue, env_id: u64) -> Self {
@@ -112,12 +130,15 @@ impl BindingCell {
     pub(crate) fn key(self) -> u64 {
         stamp_free(self.0)
     }
+
+    /// The location this cell is, as `Environment::binding_location`
+    /// answers it: its word, stamp and all, as an integer identity.
+    #[inline]
+    pub(crate) fn location(self) -> crate::environment::BindingLocation {
+        crate::environment::BindingLocation::Cell(self.0.raw())
+    }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by #834's records, the next commit")
-)]
 impl Record {
     /// A record over `cell`, with no flags set.
     pub(crate) fn new(heap: &mut Heap, cell: BindingCell) -> Self {
