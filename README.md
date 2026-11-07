@@ -273,10 +273,15 @@ is temporary: from stage 5e of the collector's redesign (`PRD/GC_PRD.md`) the
 plain names answer handles, and the `_owned` names stay as deprecated aliases
 until stage 5g.
 
-`new_environment()` answers an `OwnedEnvironment`: an environment for the host
-to bind values in, a child of the global environment, rooted with everything
-bound in it until the handle is dropped
-([#620](https://github.com/avalonalex/patina/issues/620)). Bind and read in it
+`new_environment()` answers an `OwnedEnvironment` holding a host namespace:
+an environment for the host to bind values in, rooted with everything bound
+in it until the handle is dropped
+([#620](https://github.com/avalonalex/patina/issues/620)). A host namespace's
+parent is the global namespace: what is defined or imported in it is a
+binding of its own, and every other name resolves in the global namespace by
+name, a global defined later included. It is charged for its tables and
+counted among the heap's namespaces as every namespace is
+([#835](https://github.com/avalonalex/patina/issues/835)). Bind and read in it
 with `define_in(&env, name, &value)` and `lookup_in(&env, name)`, and evaluate
 in it with `eval_str_in(&env, …)` and `eval_program_in(&env, …)`, on either
 backend: what the code defines or imports stays in it.
@@ -284,7 +289,9 @@ backend: what the code defines or imports stays in it.
 `new_environment()`, the routes by which a host could build an environment
 nothing roots between calls, or hold any environment of the heap, and they go
 at stage 5e: `Environment::with_parent`, `Heap::hold_environment`, and `Cx`'s
-`hold_environment` and `track_environment`. `Environment`'s other
+`hold_environment` and `track_environment`. `Heap::hold_namespace`, the raw
+holder, takes only a namespace, and `Heap::new_host_namespace` makes the host
+namespace `new_environment()` answers, held. `Environment`'s other
 constructors and `Heap::track_environment` are raw, outside the promise
 ([Changing the embedding API](docs/README.md#changing-the-embedding-api)).
 

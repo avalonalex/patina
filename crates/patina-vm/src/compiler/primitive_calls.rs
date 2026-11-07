@@ -187,10 +187,12 @@ pub fn resolve_primitive_calls(
         // macro introduced, can be pointed at another binding without any
         // write to the one it reaches now, which is what the shadow marks
         // watch — a second expansion defining it again re-points the alias.
-        // So can a name a host environment reaches through its parent (#620):
+        // So can a name a host namespace reaches through its parent (#620):
         // a definition there gives it a binding of its own and writes nothing
-        // of the parent's. A definition marks by the environment's own
-        // binding for this reason (`define_global`). Imports, and the aliases
+        // of the parent's. A host namespace's read-through records (#835) are
+        // in no slot, so they are skipped as a parent's binding is. A
+        // definition marks by the environment's own binding for this reason
+        // (`define_global`). Imports, and the aliases
         // early binding makes, are slots of their own and keep their fast
         // paths.
         if view.local_slot(&name).is_none() {

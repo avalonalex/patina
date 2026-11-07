@@ -1,13 +1,15 @@
 //! A host environment is rooted by its handle, on both backends (#620).
 //!
-//! An environment a host built with `Environment::with_parent` was reachable
-//! from no root: what was bound in it was freed by the next collection that
-//! ran outside it, a use after free in a debug build and another object in a
-//! release one. `Interpreter::new_environment` answers an `OwnedEnvironment`,
-//! a child of the global environment that the heap's handle table roots,
-//! with everything bound in it, until the handle is dropped. The legacy
-//! pipeline has the heap trace the environments its callers give it for as
-//! long as they hold them.
+//! An environment a host built with `Environment::with_parent`, a frame of
+//! the global environment, was reachable from no root: what was bound in it
+//! was freed by the next collection that ran outside it, a use after free in
+//! a debug build and another object in a release one.
+//! `Interpreter::new_environment` answers an `OwnedEnvironment` holding a
+//! host namespace, whose parent is the global namespace (#835), which the
+//! heap's handle table roots, with everything bound in it, until the handle
+//! is dropped. The legacy pipeline has the heap trace the environments its
+//! callers give it, frames built with `with_parent`, for as long as they
+//! hold them.
 //!
 //! The VM evaluated in the global environment whatever environment
 //! `Backend::eval` was given; it now evaluates where the tree-walker does,
@@ -242,9 +244,10 @@ fn a_primitive_redefined_in_a_host_environment_stays_in_it() {
     );
 }
 
-/// What `Environment::with_parent` makes: definitions stay in the child,
-/// and every other name resolves in the global environment, a global defined
-/// after the child included.
+/// What a host namespace means, which is what `Environment::with_parent`'s
+/// frame meant: definitions stay in the host namespace, and every other name
+/// resolves in the global namespace, a global defined after the host
+/// namespace included.
 fn a_child_of_the_global_environment<B: Backend>(interp: Interpreter<B>) {
     let env = interp.new_environment();
     interp.eval_program_owned("(define later 'global)").unwrap();
@@ -356,9 +359,10 @@ fn an_environment_handle_used_with_another_interpreter_is_refused() {
     assert!(vm.lookup_in(&env, "car").is_some());
 }
 
-/// The table holds the environment, which holds the heap, which holds the
-/// table: teardown breaks that cycle, so a handle kept past its interpreter
-/// keeps nothing alive.
+/// A handle kept past its interpreter holds nothing: teardown drops the
+/// table that held the host namespace, and the namespace holds no handle to
+/// its heap, so the handle keeps neither the heap nor its interpreter alive
+/// (#704).
 fn kept_past_its_interpreter<B: Backend>(interp: Interpreter<B>) {
     let env = interp.new_environment();
     let value = interp.eval_str_owned("(list 'held 1 2)").unwrap();
@@ -879,9 +883,9 @@ const READS_LIBRARY: &str = "(import (scheme base))
     (import (host4b reads))
     (define own 13)";
 
-/// What the host reads of an own binding, an import, and a host frame's
-/// import (#834, critique D2): the value each binding's record, or the
-/// frame's import, leads to, never the record or the cell itself.
+/// What the host reads of an own binding, an import, and an import into the
+/// host namespace (#834, critique D2): the value each binding's record leads
+/// to, never the record or the cell itself.
 fn host_reads<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
     interp.eval_program_owned(READS_LIBRARY).unwrap();
     let env = interp.new_environment();

@@ -409,9 +409,9 @@ enum FormsEnd<E> {
 /// top-level form, and answers a handle (#710).
 ///
 /// An environment the host builds is held the same way:
-/// [`Interpreter::new_environment`] answers an [`OwnedEnvironment`], a child
-/// of the global environment that is rooted, with everything bound in it,
-/// until the handle is dropped (#620). [`Interpreter::define_in`] and
+/// [`Interpreter::new_environment`] answers an [`OwnedEnvironment`] holding a
+/// host namespace, whose parent is the global namespace, rooted with
+/// everything bound in it until the handle is dropped (#620, #835). [`Interpreter::define_in`] and
 /// [`Interpreter::lookup_in`] bind and read in it, and
 /// [`Interpreter::eval_str_in`] and [`Interpreter::eval_program_in`]
 /// evaluate in it, on either backend.
@@ -1244,8 +1244,8 @@ impl<B: Backend> Interpreter<B> {
         Some(self.hold(value))
     }
 
-    /// The environment `env` holds, raw, for a call the handle forms do not
-    /// cover, such as `Backend::eval`. The handle roots it, not this `Rc`:
+    /// The host namespace `env` holds, raw, for a call the handle forms do
+    /// not cover, such as `Backend::eval`. The handle roots it, not this `Rc`:
     /// keep the handle while the environment is in use, and read a value
     /// from it, or write one, as raw, as with [`Interpreter::global_env`].
     /// Panics on a handle another interpreter made.
@@ -1315,9 +1315,9 @@ impl<B: Backend> Interpreter<B> {
     /// `TaggedValue`s. A value read from it is rooted only while the name
     /// stays bound to it, so once the program rebinds the name a later
     /// evaluation that collects can free it; [`Interpreter::lookup`] answers
-    /// a handle instead. An environment a host builds over it is not rooted
-    /// between calls (#620); [`Interpreter::new_environment`] answers one
-    /// that is.
+    /// a handle instead. A frame a host builds over it is not rooted between
+    /// calls (#620); [`Interpreter::new_environment`] answers a host
+    /// namespace over it that is (#835).
     ///
     /// Its `define` and `set` are raw too: they write the binding and
     /// nothing else. The VM compiles a call to a primitive's binding into a

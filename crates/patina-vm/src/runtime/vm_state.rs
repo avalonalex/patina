@@ -1335,8 +1335,8 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
 }
 
 /// [`execute`] for code compiled in `env`, an environment other than the
-/// machine's globals, such as one a host built (#620) or a library's, for a
-/// body form the backend's loader runs, a top-level `import`'s or a
+/// machine's globals, such as a host namespace (#620, #835) or a library's,
+/// for a body form the backend's loader runs, a top-level `import`'s or a
 /// `define-library`'s in the program (#779): the unit runs in
 /// [`push_frame_in`]'s frame, so its frames read and define `env`'s bindings.
 /// The frame holds its closure, which roots it and `env` while the code
@@ -1893,7 +1893,7 @@ fn attach_source_location(state: &VmState, e: VmError) -> VmError {
 /// If the current frame is executing a closure, returns that closure's
 /// captured globals (the environment it was compiled against): a lambda's,
 /// or the one `push_frame_in` made for top-level code compiled in another
-/// environment, such as a library's body form or a host environment's form.
+/// environment, such as a library's body form or a host namespace's form.
 /// Otherwise returns `state.globals`: a program's top-level form, or a stub,
 /// which reads no global.
 pub(super) fn frame_globals(state: &VmState) -> Rc<Environment> {
@@ -3088,8 +3088,10 @@ fn mark_if_shadowing_primitive(
 /// name `env` reaches through a parent, a macro-expansion alias or the
 /// name-only view of a macro's definition to an ordinary call. So this marks
 /// the primitive that binding held, if any, and a definition that gives
-/// `env` a binding of its own marks nothing: a host environment that defines
-/// `car` leaves the global `car`'s fast path alone.
+/// `env` a binding of its own marks nothing: a host namespace that defines
+/// `car` leaves the global `car`'s fast path alone. A read-through record is
+/// in no slot, so a definition over it marks nothing either (#835,
+/// condition 3).
 pub(crate) fn define_global(
     state: &mut VmState,
     env: &Rc<Environment>,

@@ -141,7 +141,7 @@ What `patina-interpreter` exports, at its root unless a module is named:
 | `InterpreterError<E>`, `ProgramOutcome`, `WithSourceMap<T>`, `PrimSpec` | inside | |
 | `AsValue` | inside, sealed | its `#[doc(hidden)]` `value_in` names `Heap`, so is raw |
 | `format_write_tagged`, `format_display_tagged`, `format_interpreter_error`, `format_parse_error_with_source`, `format_error_with_source`, `format_backend_error_with_source`, `HasSourceLocation` | inside | the first two take `&SharedHeap`; `Interpreter`'s `display_tagged()` and `display_notation()` take a handle instead |
-| `Owned`, `OwnedEnvironment` | inside, opaque | `new_environment()`'s holds an environment the interpreter made; the deprecated holders hold any of the heap's until 5e |
+| `Owned`, `OwnedEnvironment` | inside, opaque | `new_environment()`'s holds a host namespace, a namespace whose parent is the global one (#835); the deprecated holders hold any of the heap's until 5e |
 | `SharedHeap`, `new_shared_heap` | inside as names | the alias's definition, `Rc<RefCell<Heap>>`, and what its `borrow()` reaches are raw; 5e deletes the `RefCell` |
 | `TaggedValue`, `SourceLocation`, `SourceMap`, `CoreExpr`, `Arity`, `EvalError`, `RegisterError` | inside | |
 | `InterruptHandle`, `event` | inside | |
@@ -150,7 +150,7 @@ What `patina-interpreter` exports, at its root unless a module is named:
 | `Desugarer` | raw | |
 | `prune_freed_locations` | inside, deprecated | a no-op, until 5e (#643) |
 | `Backend` | inside | its methods change by the convention, and its words keep the "# Words" rules |
-| `Environment` | type inside, members raw | `with_parent` is deprecated (#831) and goes at 5e; the workspace builds its frames with the `#[doc(hidden)]` `child_frame`, on #622's list; `for_temporaries` is hidden too |
+| `Environment` | type inside, members raw | `with_parent` is deprecated (#831) and goes at 5e; the workspace builds its frames with the `#[doc(hidden)]` `child_frame`, on #622's list; `for_temporaries` is hidden too; `namespace_root`, the nearest namespace, is raw as `root` is (#835) |
 | `Procedure` | raw | a heap payload no promised signature names; 4f changes its `CpsLambda` arm |
 | `Prim`, `ApplyContext`, `CallArgs`, `HostPrimitives`, `PrimClass`, `ResumableStart`, `ResumableResume`, `Step` | inside | `Prim` is `CxHandler`, and `CallArgs` a `smallvec::SmallVec` |
 | `VmBackend` (vm); `TreeWalker`, `Evaluator` (tree-walker) | type and setup inside, other members raw | setup: `new`, `with_fs`, `TreeWalker::from_evaluator`, `Default`, `add_library_search_path`, `prepend_library_search_path`, `bootstrap_error`; raw: the other inherent methods, `#[doc(hidden)]` ones included, and `Evaluator`'s pub fields |
@@ -172,7 +172,7 @@ types promised signatures name, and the raw types a host reaches from them:
 | `patina_core::CoreExprKind` | inside | `CoreExpr`'s `kind` |
 | `patina_frontend::error::FrontendError`, `patina_macros::MacroError` | inside | through `PipelineError` (legacy-pipeline) |
 | `patina_core::Library` | type inside, members raw | `ApplyContext::load_scheme_library` answers one; its exports are cells (#834) |
-| `patina_core::Heap` | raw | `SharedHeap` stands for it, and `backend().heap()` reaches it; `hold_environment` is deprecated (#831), until 5e |
+| `patina_core::Heap` | raw | `SharedHeap` stands for it, and `backend().heap()` reaches it; `hold_environment` is deprecated (#831), until 5e, for `hold_namespace`, which takes only a namespace; `new_host_namespace` makes the host namespace `new_environment()` answers, held (#835) |
 | `patina_core::NamespaceView` | raw | no promised signature names it; implemented over binding records (#834) |
 | `patina_core::BindingCell` | raw | a location's token: `Library.exports`' values, and what `Cx::new_declaration_cell` (`#[doc(hidden)]`) answers and `Cx::import_cell_in_frame` takes; unbranded, so held only while the registry entry, a record or the context that made it keeps it (#834) |
 | `patina_core::IntroducedRecord` | raw | what `Environment::introduced_records` answers, for 5c and the tests (#834) |
@@ -194,7 +194,8 @@ A change to an inside item takes four steps:
    callers of `heap()` moved to its replacements or to `backend().heap()`,
    and those of `with_parent` to `child_frame`. A caller with none takes
    `#[allow(deprecated)]`, so `clippy -D warnings` stays green, as
-   `new_environment` does for `Heap::hold_environment` until 4b.8's holder.
+   `new_environment` did for `Heap::hold_environment` until 4b.8's holder
+   (#835).
    A test file that still calls the old API carries `#![allow(deprecated)]`.
 4. **Keep `scripts/check_embedding_features.sh` green at each step.** A host
    built against each feature set, and an external `Backend`, still compile.

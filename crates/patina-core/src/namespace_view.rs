@@ -56,10 +56,11 @@
 //!
 //! A `define` and an import each keep one signature, and can insert, re-point
 //! or store depending on what the name held; each method says which outcome
-//! is which. The view asserts no kind: the VM reads a host environment
-//! through it, which is a frame until 4b.8, and the desugarer's relinks write
-//! a speculative scan's private frame. Its lookups by name walk to the parent
-//! as [`Environment::get`] does.
+//! is which. The view asserts no kind: the VM reads a namespace of either
+//! kind through it, a host namespace among them since #835, and a raw frame
+//! a host hands it, and the desugarer's relinks write a speculative scan's
+//! private frame. Its lookups by name walk to the parent as
+//! [`Environment::get`] does.
 
 use crate::binding_record::BindingCell;
 use crate::environment::{BindingLocation, Environment, IntroducedDefinition};
@@ -84,8 +85,9 @@ pub struct NamespaceView<'e> {
 }
 
 impl<'e> NamespaceView<'e> {
-    /// The view of `env`: a namespace, or a frame the VM or the desugarer
-    /// reads and writes as one (a host's environment, a scan's private frame).
+    /// The view of `env`: a namespace of either kind, or a frame the VM or
+    /// the desugarer reads and writes as one (a raw frame a host hands the
+    /// VM, a scan's private frame).
     #[inline(always)]
     pub fn of(env: &'e Environment) -> Self {
         NamespaceView { env }

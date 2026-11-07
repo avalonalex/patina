@@ -10,7 +10,11 @@
 //!
 //! An environment a host builds is reachable from no root either, so its
 //! bindings went the same way (#620). An [`OwnedEnvironment`] handle roots
-//! one: the table holds the environment, and a collection traces it with
+//! one, a namespace: the host namespace an interpreter's `new_environment`
+//! answers, made held (`Heap::new_host_namespace`, #835), or one
+//! `Heap::hold_namespace` held; until stage 5e the deprecated
+//! `hold_environment` holds any environment of the heap (#831). The table
+//! holds the environment, and a collection traces it with
 //! `GcVisitor::visit_env`, its bindings, its parent chain and its alias
 //! targets. A host that holds an environment by its own `Rc` instead, as the
 //! legacy pipeline's callers do, can have the table trace it for as long as

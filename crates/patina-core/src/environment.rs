@@ -619,11 +619,12 @@ struct RareTables {
     /// variable.
     ///
     /// Installed beside the aliases by the VM's `compile_pipeline`, into the
-    /// environment a form is compiled in: a namespace, or a host's
-    /// environment, which is a frame until 4b.8 gives hosts a kind of their
-    /// own. Nothing asserts which. `introduced_global` and
-    /// `for_each_introduced_candidate` read this environment's table alone;
-    /// `has_introduced_definition` reads its root's.
+    /// environment a form is compiled in: a namespace of either kind, a host
+    /// namespace included (#835). Nothing asserts which. `introduced_global`
+    /// and `for_each_introduced_candidate` read this environment's table
+    /// alone; `has_introduced_definition` reads its root's, which for a host
+    /// form is the global namespace's (the owner's ruling on question 3 on
+    /// #835 moved only the import lookup to the nearest namespace).
     #[trace(
         skip,
         reason = "spellings, scope sets and the names of renamed globals"
@@ -723,8 +724,8 @@ struct ReadThrough {
 /// `null-environment` build — or a host namespace
 /// (`Heap::new_host_namespace`, #835), whose parent is the global one and
 /// which charges the same account. Their tables are Rust allocations the
-/// trigger would otherwise not
-/// see: an `(environment '(scheme base))` holds about 32 KB in them (about
+/// trigger would otherwise not see: an `(environment '(scheme base))` holds
+/// about 32 KB in them (about
 /// 40 KB until #834 took out its import links and owners) and costs the heap
 /// one specifier slot, so a loop of those piled up 2.9 GiB of dead
 /// namespaces between collections. A frame ([`Environment::child_frame`])
@@ -1146,9 +1147,11 @@ enum Kind {
     /// ([`Environment::host_namespace`]). Every namespace path is its own:
     /// its definitions and imports are records over cells in its slots
     /// (#834, D1), and it borrows the heap at each read or write of a
-    /// binding. It charges its heap's account for its tables as a
-    /// parentless namespace does ([`NamespaceCharge`]), and indexes past
-    /// [`INDEX_ABOVE`] as one does. Next to [`Kind::Namespace`], so that
+    /// binding. It also holds read-through records over its parent's
+    /// (`RareTables::read_through`), which are in no slot. It charges its
+    /// heap's account for its tables as a parentless namespace does
+    /// ([`NamespaceCharge`]), and indexes past [`INDEX_ABOVE`] as one does.
+    /// Next to [`Kind::Namespace`], so that
     /// [`Environment::is_namespace`] asks one range of discriminants.
     HostNamespace,
     /// A frame ([`Environment::child_frame`]): a call's or a body's, and the
@@ -1258,9 +1261,9 @@ impl Environment {
     /// for its tables (`NamespaceCharge`).
     ///
     /// Deprecated for hosts (#831): nothing roots a frame built here between
-    /// calls (#620), and `Interpreter::new_environment` answers a host's
-    /// environment held. It goes at stage 5e. The workspace builds its frames
-    /// with [`Environment::child_frame`].
+    /// calls (#620), and `Interpreter::new_environment` answers a host
+    /// namespace held (#835). It goes at stage 5e. The workspace builds its
+    /// frames with [`Environment::child_frame`].
     #[deprecated(
         note = "use `Interpreter::new_environment`, which answers an environment held between \
                 calls; nothing roots a frame built here (#620), and this goes at stage 5e (#831)"
@@ -1460,7 +1463,8 @@ impl Environment {
 
     /// A frame's import, read with the heap borrowed. Kept out of line:
     /// `slot_value_in` is inlined into the VM's `LoadGlobal`, and a frame's
-    /// import is rare there (a host's environment, until 4b.8).
+    /// import is rare there, where the environment is a namespace, a host's
+    /// included since #835.
     #[inline(never)]
     fn frame_import_value_in(&self, heap: &Heap, slot: u32) -> TaggedValue {
         self.frame_import_cell(slot).value(heap)
@@ -2772,8 +2776,8 @@ impl Environment {
     /// identities map's unspecified order.
     ///
     /// Parents are not walked: a caller that resolves through a chain, as
-    /// the VM's alpha-renaming does for a host environment and the global
-    /// one above it (#620), asks each environment of it.
+    /// the VM's alpha-renaming does for a host namespace and the global one
+    /// above it (#620, #835), asks each environment of it.
     ///
     /// [`define_introduced_global`]: Self::define_introduced_global
     pub fn for_each_introduced_candidate(
@@ -4851,8 +4855,8 @@ mod introduced_global_tests {
 
     /// A child environment does not see them: `introduced_global` and
     /// `for_each_introduced_candidate` read the recording environment's own
-    /// table, which is the one a form was compiled in (a namespace, or a
-    /// host's environment, a frame until 4b.8). Nothing asserts which.
+    /// table, which is the one a form was compiled in (a namespace of either
+    /// kind, a host namespace since #835). Nothing asserts which.
     #[test]
     fn entries_are_local_to_the_environment_that_recorded_them() {
         let heap = new_shared_heap();
@@ -6568,8 +6572,9 @@ mod namespace_charge_tests {
 
         // A frame that grows a spelling's buffers: one spelling bound past a
         // frame's threshold, so that it is indexed, and recorded as
-        // introduced globals, which the VM records in a host's environment.
-        // A frame sums none of them (#833).
+        // introduced globals, as the VM recorded them in a host's
+        // environment while that was a frame (until #835). A frame sums
+        // none of them (#833).
         let frame = Rc::new(Environment::child_frame(Rc::clone(&global)));
         for k in 0..=FRAME_INDEX_ABOVE {
             let mut scopes = ScopeSet::new();

@@ -136,13 +136,19 @@ like any value, so an importer keeps the cell and not the library's
 environment (§4.7, #834). One more value sits beside the slots: the
 environment's mutable specifier, which `interaction-environment` and `load`
 hand out again rather than allocate per call (#615), and which is live
-exactly as long as the bindings are. The trace leaves out the parent. `GcVisitor::visit_env`
-follows the parent chain by reference and walks the other environments from
-a worklist, all deduplicated by `gc_identity`, without recursing: an
-environment's trace reports to `EnvEdges`, which marks each value and queues
-each environment the walk has not seen. Anything that gives an environment
-another way to reach a value held elsewhere is a new field, which does not
-compile until its type has a trace or it is skipped with its reason.
+exactly as long as the bindings are. A host namespace (#835), the
+namespace `Interpreter::new_environment` answers, whose parent is the global
+namespace, is traced as any namespace is, and has one table more: its
+read-through records (`RareTables::read_through`, §4.7), whose derived trace
+reports the table's `unbound` cell and each record, a pair the collector
+follows to the global namespace's record it reads through. The trace leaves
+out the parent. `GcVisitor::visit_env` follows the parent chain by reference
+and walks the other environments from a worklist, all deduplicated by
+`gc_identity`, without recursing: an environment's trace reports to
+`EnvEdges`, which marks each value and queues each environment the walk has
+not seen. Anything that gives an environment another way to reach a value
+held elsewhere is a new field, which does not compile until its type has a
+trace or it is skipped with its reason.
 
 ### 3.4 Why moving/compacting GC is off the table
 
@@ -543,11 +549,13 @@ is a binding's location, the pair `(value . owner)`, where owner is the
 fixnum `env_id << 4` of the namespace whose cell it is, or 0 for a free
 cell. A record is a namespace's hold on a location, the pair
 `(cell . flags)`, whose flags stay the fixnum 0 until 4b.9's link tables use
-them.
+them. A pair where the flags would be marks a host namespace's read-through
+record (below).
 
-- **Where they live.** In a namespace, the word in each slot of `Bindings`,
-  and in each of its scoped entries, is a record (the owner's ruling D1 of
-  2026-11-06 on #834). Slots stay append-only and a record never leaves its
+- **Where they live.** In a namespace of either kind, a parentless one or
+  a host namespace (#835), the word in each slot of `Bindings`, and in each
+  of its scoped entries, is a record (the owner's ruling D1 of 2026-11-06
+  on #834). Slots stay append-only and a record never leaves its
   slot: a `define` over the namespace's own binding stores into its cell, a
   `define` over an import makes a cell and re-points the record at it, and
   an import inserts a record over the exporter's cell or re-points the
@@ -562,6 +570,24 @@ them.
   `TaggedValue::IMPORTED` in its slot, with the cell beside it in
   `RareTables::frame_imports` (D5/D6), so installing one allocates nothing
   and takes no borrow of the heap.
+- **Read-through records (#835).** A host namespace's parent is the global
+  namespace, and every name it does not bind resolves there. For code a
+  linker compiles in it (4b.9), `Environment::link_record` gives such a
+  name a record of the host's, `(unbound . parent)`: the global namespace's
+  record for the name in the cdr, and in the car the host namespace's one
+  cell holding `TaggedValue::UNBOUND`, so a read that forgot to read
+  through answers that marker, never a stale value. A read resolves through
+  the parent's record (`Record::resolved_cell`), so the global namespace's
+  later define or import is seen, and a check build refuses one read as a
+  record of its own (`Record::cell`). The records are kept in
+  `RareTables::read_through`, at most one per name the global namespace
+  binds in a slot, and never in a slot, so `local_slot` and its callers see
+  none (`a_read_through_record_is_no_own_binding`). A define or an import
+  of the name in the host namespace adopts its record: the record moves
+  into a fresh slot, keeping its word, re-pointed at the new cell or the
+  exporter's, flags 0, and the global namespace's record is left alone.
+  Only `link_record` makes one, and until 4b.9's linker calls it only the
+  tests do.
 - **Exports are cells.** `Library.exports` maps each name to the cell its
   binding named when the library was built, resolved one hop to the owning
   cell, so a re-export is the defining library's cell; `import_into` makes
@@ -585,24 +611,30 @@ them.
   a record, so a program never sees one as a value
   (`record_read_tests::no_namespace_read_answers_a_record`, with an
   `Interpreter` half in `host_environments.rs`), and a read makes no record
-  on either backend (`a_read_makes_no_record`). A namespace's read takes
-  the heap's shared borrow at its step and follows record → cell → value;
-  a frame's own read is one compare with the marker. A record or cell is
-  made under one `&mut Heap`, which a collection needs, and allocation
-  never collects (§6), so the cell held in a local between the two
-  allocations needs no root.
+  on either backend (`a_read_makes_no_record`): in a host namespace a read
+  of a name only the global namespace binds walks to it by name and makes
+  no read-through record (`a_read_makes_no_read_through_record`). A
+  namespace's read takes the heap's shared borrow at its step and follows
+  record → cell → value; a frame's own read is one compare with the marker.
+  A record or cell is made under one `&mut Heap`, which a collection needs,
+  and allocation never collects (§6), so the cell held in a local between
+  the two allocations needs no root.
 - **Trace.** Records and cells are pairs, so the collector marks record →
   cell → value with no trace code of its own. `Environment`'s derived trace
   reports each slot's word and each scoped entry's, pinned, and each cell in
   `frame_imports`; `Library`'s reports each export's cell. The sentinels are
   `gc_edge_tests::environment_edges` (a frame's import),
+  `gc_edge_tests::read_through_edges` (a host namespace's read-through
+  table),
   `a_namespace_record_keeps_its_cell_and_value` (a slot's and a scoped
   entry's), `a_cell_only_an_importer_holds_outlives_its_exporter` and
   `library.rs`'s `library_exports_and_environment`.
 - **Liveness.** Until the link tables, a record's holder is its namespace,
-  so a namespace's records die with it. A cell lives while a record, an
-  export or a frame's import names it: an importer keeps the exporter's
-  cell, and nothing keeps the exporter's namespace for it
+  so a namespace's records die with it, a host namespace's read-through
+  records and their `unbound` cell included (SD3,
+  `a_read_through_record_dies_with_its_host_namespace`). A cell lives
+  while a record, an export or a frame's import names it: an importer keeps
+  the exporter's cell, and nothing keeps the exporter's namespace for it
   (`an_importer_holds_the_cell_and_not_the_library`), which is what releases
   a replaced library's namespace where nothing else holds it
   (`gc_namespace_bytes.rs`'s `a_replaced_library_with_a_procedure_is_released`).
@@ -635,7 +667,9 @@ them.
   the records. A record's re-point is logged at `EnvRecordRepoint` with the
   record as holder: the record may be old and the cell young, an
   old-to-young edge stage 7's barrier must see (`gc_census.rs`'s
-  `a_record_repoint_is_logged_with_a_heap_holder`).
+  `a_record_repoint_is_logged_with_a_heap_holder`). A host namespace's
+  adoption of a read-through record logs both of the record's words there:
+  the cell, then the flags fixnum that replaces the parent's record (#835).
 - **The identity condition.** `RareTables::import_aliases` keys each
   imported cell by `BindingCell::key`, its word less a check build's
   generation stamp, so a cell made in a swept cell's slot has the swept
@@ -778,7 +812,7 @@ expansion runs in (§7; point C of `PRD/GC_PRD.md` §11.3).
 | `LibraryRegistry.loading_stack[*]` | `crates/patina-runtime/src/library_registry.rs` | A library being loaded: the environment it is built in and the body forms it has not yet run, handed over by `ParsedLibrary::hand_to` and traced, pinned, by the same `impl RootProvider for LibraryRegistry` (#677). Each entry names the thread that started the load (#688), so a cycle is found per thread, and another thread's import of the same library will wait for the load once stage 9 has threads |
 | `ParsedLibrary.body` | `crates/patina-runtime/src/library_loader.rs` | Unevaluated forms between parsing and the hand-over to the load's entry, or for the whole load where nothing hands them over; covered by deferral |
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
-| `Heap.handles` | `heap/handles.rs` | What hosts keep across evaluations, each rooted until its handle is dropped: an `Owned` handle's value (#605) — what the `eval_*_owned` methods and `Interpreter::lookup` answer, and the last value of a program the interpreter is running — and an `OwnedEnvironment`'s environment (#620), traced by `visit_env` with everything bound in it. Also the environments hosts hold by their own `Rc` and lend to the legacy pipeline, kept weakly and traced while anything holds them. Visited in `GcVisitor::new` beside the intern tables, so every collection on either backend traces them; visited, not only marked, since a handle's value can be anything. A handle holds its table weakly and keeps nothing alive |
+| `Heap.handles` | `heap/handles.rs` | What hosts keep across evaluations, each rooted until its handle is dropped: an `Owned` handle's value (#605) — what the `eval_*_owned` methods and `Interpreter::lookup` answer, and the last value of a program the interpreter is running — and an `OwnedEnvironment`'s namespace (#620) — a host namespace from `Interpreter::new_environment` (#835), or one `Heap::hold_namespace` held — traced by `visit_env` with everything bound in it. Also the environments hosts hold by their own `Rc` and lend to the legacy pipeline, kept weakly and traced while anything holds them. Visited in `GcVisitor::new` beside the intern tables, so every collection on either backend traces them; visited, not only marked, since a handle's value can be anything. A handle holds its table weakly and keeps nothing alive |
 | `HandleTable.parameterize_each` | `heap/handles.rs` | The procedure `%parameterize-swap!` has the machine call for a `parameterize` whose bindings are not all parameter objects (#817): the loop, `%parameterize-each`, which the swap has the machine evaluate on its first use on the heap (`Step::Eval`) and keeps for the heap's life. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason, traced by its derive; pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown |
 | `HandleTable.standard_ports` | `heap/handles.rs` | The parameter objects `current-input-port`, `current-output-port` and `current-error-port` are bound to (#608): made once per heap on `(patina internal io)`'s first build (`Heap::standard_port_parameters`), each holding one port object and its converter, and kept for the heap's life, so a second build binds the same three. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason, so its derived trace reaches it when `GcVisitor::new` visits the table; visited, not only marked, since a parameter holds its port and its converter. Pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown. The port each one holds is also cached, by `Rc`, in the interpreter's `Instance` slots, which the store funnel refreshes at every assignment of one (`write_parameter`) |
 | `HandleTable.ports` | `heap/port_table.rs` | Not a root: the heap's `PortTable` (#785), the `Rc<Port>` each port object's slot names by number, which hold Rust state and no value, so the derived trace skips the field. The table also records each entry's owner word, by which the sweep's pass finds a dead entry by its object's mark bit (#818) and which a check build's read compares by its bits; it must stay untraced, or every port object would live for ever. On the `HandleTable`, by its own `Rc`, for `root_set`'s reason and so that exit's registry of tables can hold it weakly (§4.6, #786); the table teardown starts takes it over, so a heap keeps one for its life. The sweep's pass takes a dead plain port's entry out as the sweep starts, and the drain after the collection a file port's (§4.5, §4.6). A read, on every port operation, does not mark the table borrowed (`HeapTable::with_unguarded`, #818): it clones an `Rc` and reaches nothing. An entry need not hold its port's last `Rc`: the `Instance` holds the standard ports and caches the current ones, and a host may keep one |
@@ -965,10 +999,12 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   and post a collection the moment it crosses.
 
   **Namespaces are the holders that charge today (#615).** An environment
-  of the namespace kind, made without a parent (`Environment::with_heap`;
-  the kind is set at construction, #830) — the global environment,
+  of either namespace kind (the kind is set at construction, #830) — one
+  made without a parent (`Environment::with_heap`): the global environment,
   a library's, and the ones `environment`, `scheme-report-environment` and
-  `null-environment` build — charges its tables once when it is made and
+  `null-environment` build; or a host namespace, whose parent is the global
+  one (`Heap::new_host_namespace`, #835, the owner's ruling on question 2)
+  — charges its tables once when it is made and
   again whenever one reallocates, and gives them back in `Drop`
   (`NamespaceCharge` in `environment.rs` says what is counted: the struct,
   each table's buffer at capacity, each slot's name, and since #833 each
@@ -1644,12 +1680,13 @@ and `SimpleInterpreter` adapters; and the frame constructors,
 `Environment::with_parent` (deprecated, #831), `child_frame` (its twin for
 the workspace's callers) and `for_temporaries` (#681), since an environment
 built with one is reachable from no root unless its caller makes it so
-(#620). A host's is held by an `OwnedEnvironment`
+(#620). A host's is a host namespace held by an `OwnedEnvironment`
 (`Interpreter::new_environment`, the replacement `with_parent`'s deprecation
-names). Only the frame constructors are listed, as #622 scoped it: a
-namespace from `with_heap`, the one public namespace constructor since #834's
-heap threading, that is held across a re-entry is named in that call's
-reason instead (the loaders' `lib_env`). A
+names), and a host namespace is made only held (`Heap::new_host_namespace`,
+#835), so no constructor of one is public. Only the frame constructors are
+listed, as #622 scoped it: a namespace from `with_heap`, the one public
+namespace constructor since #834's heap threading, that is held across a
+re-entry is named in that call's reason instead (the loaders' `lib_env`). A
 call made beneath a context is not listed: a higher-order primitive's
 `ApplyContext::apply_in` and `load_scheme_library` take its context, so it
 holds only values of it across them, which the brand covers, and no borrow of

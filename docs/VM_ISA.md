@@ -149,11 +149,12 @@ of `PRD/GC_PRD.md` §11.6 replace the cache (#834): redefinition stores into
 the cell, and a definition over an import or an import over a definition
 re-points the record, never the slot, so hits always see the current value.
 An imported name's record names the exporting library's cell, so its read
-costs the same hop. In a frame (a host's environment) the slot holds the
-value, overwritten in place by a redefinition, or the import marker beside
-the imported cell. Names that resolve through a parent environment are
-never cached. The cache is invisible to the ISA: operands, semantics, and
-error behavior are unchanged.
+costs the same hop. A host's environment is a namespace too, a host
+namespace (#835). In a frame the slot holds the value, overwritten in place
+by a redefinition, or the import marker beside the imported cell. Names that
+resolve through a parent environment are never cached, a host namespace's
+read-through records among them (#835). The cache is invisible to the ISA:
+operands, semantics, and error behavior are unchanged.
 
 ### 4.2 MutableCell Operations
 

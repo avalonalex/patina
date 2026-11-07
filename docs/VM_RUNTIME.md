@@ -862,7 +862,7 @@ Notes on the cells that are not a plain yes:
   defines the bindings of the environment its code was compiled in through
   the closure it holds: a lambda's frame through its closure, and top-level
   code compiled in another environment — a library's body form, a host
-  environment's form — through a closure of no arguments over that
+  namespace's form — through a closure of no arguments over that
   environment, made retired so that it names no code (`push_frame_in`). Only
   a program's own top-level forms and the stubs, which resolve no name, run
   with no closure, and read the machine's globals as they are when the frame

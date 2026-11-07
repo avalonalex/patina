@@ -152,7 +152,16 @@ fi
 # host_environments for its tests of what a host reads through a record and
 # that a read of an unbound name makes none, the minimums at half their
 # counts measured that day: hygiene_matrix's 12334, up from 8683, and
-# host_environments's 114484, up from 113904)
+# host_environments's 114484, up from 113904; host_environments's,
+# hygiene_matrix's and vm_callprimitive's test counts and minimums re-pinned
+# 2026-11-07 for #835's host-namespace kind: host_environments for its test
+# that a library macro used in a host namespace keeps its import, its 22
+# other tests making 114596, up from 114484, and the new test 250;
+# hygiene_matrix for its test that every shape answers in a host namespace
+# what it records, 9939 of its 22273; and vm_callprimitive for its test of
+# a `set!` through a host namespace, its 17 other tests making 1020, up from
+# 67 since its pin of 2026-10-10, which no re-pin had recorded, and the new
+# test 71; the minimums at half their counts measured that day)
 TARGETS=(
     "callability 16 31 13"                    # 1543 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -162,14 +171,14 @@ TARGETS=(
     "finished_forms_release_code 16 1450 11"  # 3677 (13)
     "gc_tree_walker 16 11421 20"              # 24151 (658)
     "gc_vm 16 8001 25"                        # 17314 (667)
-    "host_environments 16 57242 22"           # 114484 (121)
-    "hygiene_matrix 16 6167 16"               # 12334 (6)
+    "host_environments 16 57423 23"           # 114846 (125)
+    "hygiene_matrix 16 11136 17"              # 22273 (6)
     "interpreter_api 16 138 28"               # 2277 (4)
     "library_loading 16 46 9"                 # 93 (0): see the header
     "macro_definition_env 16 16626 19"        # 33253 (67): see the header
     "owned_handles 16 62714 9"                # 125485 (14)
     "rooted_loading 16 371 6"                 # 742 (12)
-    "vm_callprimitive 16 33 17"               # 67 (0)
+    "vm_callprimitive 16 545 18"              # 1091 (0)
     "scheme_suite 4096 1534 11"               # 3068 (111): see the header
 )
 
