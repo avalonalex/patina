@@ -138,13 +138,19 @@ fi
 # that collects between its forms and of an import into a host environment,
 # the minimums at half their counts re-measured that day, as #834 asks:
 # hygiene_matrix's 14 other tests made 8628, up from 804 since its pin of
-# 2026-10-07, which no re-pin had recorded, and the new test 55)
+# 2026-10-07, which no re-pin had recorded, and the new test 55;
+# escape_from_primitive's test count and minimum re-pinned 2026-11-06 for
+# #823's tests of what a library body's interaction environment and
+# one-argument `load` are and of a program form resumed during an import,
+# the minimum at half its count re-measured that day, as #823 asks: the 15
+# other tests' 6951 unchanged by the removal of the VM's globals swap, and
+# the new tests 387)
 TARGETS=(
     "callability 16 31 13"                    # 1543 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
     "cps_features 16 530 3"                   # 1060 (2)
     "ephemerons 16 289 30"                    # 578 (204)
-    "escape_from_primitive 16 480 15"         # 6951 (90)
+    "escape_from_primitive 16 3669 18"        # 7338 (90)
     "finished_forms_release_code 16 1450 11"  # 3677 (13)
     "gc_tree_walker 16 11421 20"              # 24151 (658)
     "gc_vm 16 8001 25"                        # 17314 (667)

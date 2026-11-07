@@ -1533,16 +1533,10 @@ impl Environment {
     ///
     /// Held in this environment and traced with its bindings, so it is as
     /// safe as they are: whatever environment it is asked of, a root reaches
-    /// it while the program can use it. That is not always the program's
-    /// global environment. The VM answers `interaction-environment` with the
-    /// environment its globals are swapped to, which while a library's body
-    /// runs is the library's (`VmState::with_globals`): a call there gets a
-    /// mutable specifier over the library's environment, cached on it and
-    /// rooted with it by the registry, where the tree-walker answers its
-    /// global environment wherever it is asked. That divergence is older
-    /// than this cache — before it, the VM answered a fresh specifier over
-    /// the library's environment — and the cache changes only how long the
-    /// answer lives.
+    /// it while the program can use it. Both backends ask it of the
+    /// program's global environment, during a library's load as after it:
+    /// the VM answered the library's environment there until its load
+    /// stopped swapping the machine's globals (#823).
     pub fn mutable_specifier(self: &Rc<Self>, heap: &RefCell<Heap>) -> TaggedValue {
         let rare = self.rare.get_or_init(Default::default);
         if let Some(specifier) = rare.specifier.get() {
@@ -2217,6 +2211,16 @@ impl Environment {
             .get(name)?
             .get(scopes)
             .cloned()
+    }
+
+    /// Whether `name` is reached here only through a macro-expansion alias:
+    /// no binding of this environment's own, and an alias the desugarer
+    /// installed under that name. `get` follows such an alias, but the alias
+    /// is not a binding, so a library cannot export it (#846).
+    pub fn reaches_only_by_alias(&self, name: &str) -> bool {
+        self.has_aliases.get()
+            && self.local_slot(name).is_none()
+            && self.alias_target(name).is_some()
     }
 
     /// Resolve a macro-expansion alias installed here, if any.

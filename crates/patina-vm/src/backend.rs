@@ -767,9 +767,9 @@ impl VmBackend {
     ///
     /// Instead of creating a temporary VmState, we execute body expressions
     /// directly in the main state, each as a closure over `lib_env`
-    /// (`execute_in`), with the main state's globals swapped to `lib_env`
-    /// for the run. This ensures continuations, code objects, and closures
-    /// all live in the single real execution context.
+    /// (`execute_in`), the main state's globals left the program's (#823).
+    /// This ensures continuations, code objects, and closures all live in the
+    /// single real execution context.
     ///
     /// The body and `lib_env` go into `loading`'s registry entry first,
     /// which roots them until the load ends, so the load collects where it
@@ -801,8 +801,9 @@ impl VmBackend {
         // frames read and define the library's bindings, even when a
         // continuation resumes them after the load (#779), and the closures
         // they make capture lib_env too, so no seeding or merge is needed.
-        // The main state's globals are swapped to lib_env for the run as
-        // well, and swapped back after it.
+        // The main state's globals stay the program's environment, which
+        // `interaction-environment` answers during the load as after it
+        // (#823).
 
         // A relative `include` in the body resolves beside the `.sld`.
         let source = declarations.source.as_deref();
@@ -813,7 +814,7 @@ impl VmBackend {
 
         {
             let mut state = self.state.borrow_mut();
-            state.with_globals(lib_env.clone(), |state| -> Result<(), LibraryError> {
+            let run = |state: &mut VmState| -> Result<(), LibraryError> {
                 while let Some(form) = loading.next_form() {
                     // The form's literals, rooted until its code holds them
                     // (#705).
@@ -867,10 +868,10 @@ impl VmBackend {
                         clippy::disallowed_methods,
                         reason = "outermost when the load is, so the run may collect (point D, \
                                   #677). Holds `lib_env` and the body's later forms, which this \
-                                  load's registry entry roots; and, through `with_globals`, the \
-                                  globals it set aside, on the machine's traced stack. The form's \
-                                  constants are in the loaded unit, which the code store roots, \
-                                  and its frame holds the closure that holds `lib_env`"
+                                  load's registry entry roots, and the program's environment, which \
+                                  the machine's `globals` hold. The form's constants are in the \
+                                  loaded unit, which the code store roots, and its frame holds the \
+                                  closure that holds `lib_env`"
                     )]
                     let result = execute_in(state, top_id, &lib_env);
                     state.release_unit_if_unused(top_id);
@@ -885,7 +886,8 @@ impl VmBackend {
                     })?;
                 }
                 Ok(())
-            })?;
+            };
+            run(&mut state)?;
         }
 
         // Step 3: Assemble the library and resolve its exports

@@ -575,8 +575,7 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 | `scratch_args` | yes | Pinned. Empty at every safe point: `mem::take`n while a primitive call holds it, and emptied when the call is done (since #639: the last call's arguments had stayed in it, and a dead key passed to `make-ephemeron` survived a `(gc)`). Rooting it is free and future-proof |
 | `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | Pinned until stage 4e makes them heap data. `tag`/`handler`/`before`/`after` values, and a wind record's `handlers` — the stack of its own `dynamic-wind` call, which its thunks run under and which nothing else holds once the live stack has moved on (`types/continuation.rs`). An `ExceptionHandler` is one procedure now — it used to also carry the wind depth `raise` unwound to, which no raise path needs since Track L families 22/28 |
 | `code_store[*].constants` | **yes** | Pinned until stage 4e makes them a descriptor's. Kept while a frame, a captured continuation or a live closure can run the code; a finished form's code is released with its constants (#338) |
-| `globals` | **yes** | `env` |
-| `saved_globals` | **yes** | `env` for each environment `with_globals` has set aside, so that a library body run under the swap may collect (#677) |
+| `globals` | **yes** | `env`: the program's environment, during a library's load as after it (#823). `saved_globals`, which held the environments a load's swap set aside so that a library body under it could collect (#677), went with the swap |
 | `continuation_store` / `delimited_continuation_store` | **weak** (since #19) | `VmContinuation` snapshots hold full `registers` copies and frames, each with its closure, all slots as the live ones are, and wind/prompt/handler stacks, pinned as theirs are (`types/continuation.rs:59,:101`). Heap-side `VmContinuationRef { id, bytes }` is opaque (its `bytes` charges the snapshot to the trigger, §6); only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_ids` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
 | `tracer` | yes | Pinned: `StepTracer.pre_regs`/`pre_all_regs`, copies of registers for display (`crates/patina-vm/src/tracer.rs`) |
 | `library_registry` | yes | §5.3 |
@@ -597,16 +596,17 @@ argument through the call, and a focused test pins that contract.
 
 Rust-stack temporaries (continuation-capture register clones, primitive args
 in `VmApplyContext` callbacks): **not rooted — handled by safe-point
-placement + deferral (§7).** The environments `with_globals` sets aside were
-one, until #677 moved them onto the traced `saved_globals`.
+placement + deferral (§7).** The environments `with_globals` set aside were
+one, until #677 moved them onto the traced `saved_globals`, which went with
+the swap itself (#823).
 
 **Implementation note (stage 3):** every nested dispatch loop runs with no
 driver, under a `NoGcScope` (§7, #702), so any nested `run_loop_until` —
 reached via `execute_nested`, a re-entrant primitive, or `eval` — is deferred
-by construction. `with_globals`
-restores the original environment on every returned result, including
-transfer errors; it deferred across each substitution until #677 traced the
-environments it sets aside.
+by construction. `with_globals`, which pointed the machine's globals at a
+library while its body ran, deferred across each substitution until #677
+traced the environments it set aside; #823 removed it, since a body form
+runs in a frame whose closure holds the library's environment (#824).
 
 Library loading is the case that needed more. The predicate is **"does this
 Rust frame hold heap values that must survive across an evaluation call?"** —
@@ -1134,8 +1134,9 @@ writes each record as a CSV line (`docs/TEST_ORGANIZATION.md`, "GC lanes").
 root, and no heap `RefCell` borrow is outstanding.**
 
 Both backends stash live values in Rust-stack locals mid-operation (VM
-continuation-capture temporaries, `mem::take`n buffers, `saved_globals` swap
-windows, primitive argument vectors; tree-walker nested trampolines). Rather
+continuation-capture temporaries, `mem::take`n buffers, primitive argument
+vectors; tree-walker nested trampolines; the VM's globals-swap windows until
+#823 removed the swap). Rather
 than shadow-stack rooting every such site (invasive, error-prone), v1 uses
 placement + deferral:
 
@@ -1232,7 +1233,8 @@ placement + deferral:
      provider can see until then.
    - each method of the tree-walker's detached `ApplyContext for Evaluator`.
      The VM's globals-swap window (`VmState::with_globals`) was one until
-     #677 traced what it sets aside, and a form being expanded while its
+     #677 traced what it set aside, before #823 removed the swap, and a form
+     being expanded while its
      imports load (`desugar_with_imports`) until #704: its forms are now
      values of the context the backend opens for the expansion
      (`NoGcScope::cross`), beneath which nothing collects. Since #677 only
@@ -1518,8 +1520,8 @@ that is safe:
 - it holds nothing it reads after the call: a wrapper, or a call whose
   arguments move into the run, which roots them;
 - a root reaches what it holds: a library being loaded is rooted by its
-  registry entry, and the environments `with_globals` sets aside by the VM's
-  `saved_globals` (#677);
+  registry entry (#677), and the program's environment by the machine's
+  `globals`, which a load no longer swaps (#823);
 - a guard on the data defers collection: `ParsedLibrary` holds
   `GcDeferGuard::holding`, and an expansion's data are values of the context
   it runs in (`NoGcScope::cross`);

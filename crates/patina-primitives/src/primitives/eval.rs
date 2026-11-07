@@ -669,8 +669,9 @@ fn primitive_load<'gc>(
         }
         args[1]
     } else {
-        // The machine's, which on the VM, inside a library's body, is the
-        // library's: why `load` takes the `ApplyContext` beside the context.
+        // The machine's interaction environment, the program's on both
+        // backends, inside a library's body too (#823): why `load` takes the
+        // `ApplyContext` beside the context.
         cx.mutable_specifier(&ctx.interaction_environment())
     };
 
@@ -786,9 +787,8 @@ fn load_next<'gc>(cx: &mut Cx<'gc>, state: Value<'gc>) -> Result<Step<'gc>, Eval
 /// Returns a mutable environment specifier for the interaction (global)
 /// environment: the same object every call, as chibi, Gauche and Chez answer
 /// (`Environment::mutable_specifier`), so a loop of these allocates nothing.
-/// The environment is the backend's `interaction_environment`, which on the
-/// VM, inside a library's body, is the library's (`mutable_specifier`'s doc
-/// says what that means for the cache).
+/// The environment is the backend's `interaction_environment`, the
+/// program's on both backends, inside a library's body too (#823).
 fn primitive_interaction_environment<'gc>(
     cx: &mut Cx<'gc>,
     ctx: &dyn ApplyContext,
