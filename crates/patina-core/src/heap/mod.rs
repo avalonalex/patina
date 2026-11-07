@@ -1164,6 +1164,18 @@ impl Heap {
         store_word(&mut self.pairs[record.heap_index() as usize].0, cell);
     }
 
+    /// A read-through record becomes a record of its own over `cell` (#835,
+    /// `Record::adopt`): the cell in its car, logged at `EnvRecordRepoint` as
+    /// any re-point is, then the flags fixnum 0 in its cdr where its parent's
+    /// record was, logged at the same site as an immediate store.
+    #[inline]
+    pub(crate) fn adopt_record(&mut self, record: TaggedValue, cell: TaggedValue) {
+        self.set_record_cell(record, cell);
+        let flags = TaggedValue::fixnum(0);
+        crate::census::store(crate::census::Site::EnvRecordRepoint, Some(record), flags);
+        store_word(&mut self.pairs[record.heap_index() as usize].1, flags);
+    }
+
     // =========================================================================
     // Vector Operations
     // =========================================================================

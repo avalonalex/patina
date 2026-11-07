@@ -75,6 +75,10 @@ pub enum Site {
     /// definition's first value initialises a fresh cell and is logged with
     /// no holder; a scoped one's fresh cell is initialised unlogged. A
     /// record's re-point is `EnvRecordRepoint`, with the record as holder.
+    /// A host namespace's bindings are a namespace's (#835); when a define
+    /// or an import there adopts a read-through record, both of the
+    /// record's words are stored at `EnvRecordRepoint`, the cell and then
+    /// the flags fixnum.
     EnvDefine,
     EnvSetSlot,
     EnvSetScoped,

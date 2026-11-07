@@ -691,6 +691,27 @@ struct RareTables {
     /// other environment that comes to hold one of these tables.
     #[trace(skip, reason = "a count of bytes and a handle to the heap's account")]
     namespace: Option<NamespaceCharge>,
+    /// A host namespace's read-through records ([`ReadThrough`], #835), made
+    /// the first time a linker asks for one: never in another kind. One
+    /// pointer wide either way.
+    read_through: OnceCell<Box<RefCell<ReadThrough>>>,
+}
+
+/// A host namespace's read-through records (#835): for each name its parent
+/// binds in a slot that a linker asked for ([`Environment::link_record`]),
+/// its child record over the parent's, and the one cell they all name, which
+/// holds `TaggedValue::UNBOUND`. At most one per name the parent binds, so
+/// they are bounded by the parent's bindings. A define or an import of the
+/// name here adopts its record and takes it out of this table. Dies with the
+/// host namespace: nothing else holds the table, and the parent's records do
+/// not name their children.
+#[derive(Debug, Trace)]
+struct ReadThrough {
+    /// The free cell every record here names in its car: `(UNBOUND . 0)`.
+    unbound: BindingCell,
+    /// Each name's read-through record, keyed by the parent's slot name,
+    /// shared.
+    records: FxHashMap<Rc<str>, Record>,
 }
 
 /// The external bytes (`heap/account.rs`, GC_PRD §15) a namespace has charged
@@ -1652,6 +1673,7 @@ impl Environment {
                 specifier: _,
                 // This account.
                 namespace: _,
+                read_through,
             } = &**rare;
             bytes += size_of::<RareTables>()
                 + hash_table_bytes::<Rc<str>, Introduced>(
@@ -1661,7 +1683,15 @@ impl Environment {
                 // Always empty in a namespace, whose imports are records.
                 + frame_imports.borrow().capacity() * size_of::<Option<BindingCell>>()
                 + hash_table_bytes::<u64, ImportAliases>(import_aliases.borrow().capacity())
-                + hash_table_bytes::<RelinkKey, Rc<str>>(relink_aliases.borrow().capacity());
+                + hash_table_bytes::<RelinkKey, Rc<str>>(relink_aliases.borrow().capacity())
+                // A host namespace's read-through records (#835): the box and
+                // the table's buffer. Its keys are its parent's slot names,
+                // shared, and counted there; its records and their cell are
+                // pairs, charged in the live bytes.
+                + read_through.get().map_or(0, |table| {
+                    size_of::<RefCell<ReadThrough>>()
+                        + hash_table_bytes::<Rc<str>, Record>(table.borrow().records.capacity())
+                });
         }
         bytes
     }
@@ -1782,9 +1812,24 @@ impl Environment {
                 // (`docs/GC_DESIGN.md` §6): the cell, held only in this
                 // local until the record holds it, cannot be swept between.
                 let cell = BindingCell::new_own(heap, value, self.env_id);
-                let record = Record::new(heap, cell);
-                self.append_slot(name, record.word());
-                self.count(1, 1);
+                match self.take_read_through(&name) {
+                    // A definition in a host namespace of a name a linker
+                    // asked for (#835): the read-through record becomes this
+                    // namespace's own, in a slot, over the fresh cell. The
+                    // parent's record and cell are left alone, and code that
+                    // linked the record reads the cell from now on. The
+                    // record was counted when it was made.
+                    Some(child) => {
+                        child.adopt(heap, cell);
+                        self.append_slot(name, child.word());
+                        self.count(0, 1);
+                    }
+                    None => {
+                        let record = Record::new(heap, cell);
+                        self.append_slot(name, record.word());
+                        self.count(1, 1);
+                    }
+                }
             }
         }
     }
@@ -1808,6 +1853,93 @@ impl Environment {
         let bindings = self.bindings.borrow();
         let slot = bindings.slot_of(name)?;
         Some(Record::from_word(bindings.read_slot(slot)))
+    }
+
+    /// The record code compiled in this namespace links for `name` (#835):
+    /// its own ([`local_record`](Self::local_record)); or, in a host
+    /// namespace that does not bind `name`, its read-through record over its
+    /// parent's, made the first time and the same one after. `None` for a
+    /// frame, for a name no slot of this namespace or its parent holds (a
+    /// name only an alias or a scoped definition reaches is read by name, as
+    /// today), and for a parentless namespace that does not bind it (4b.9's
+    /// placeholders). Takes the write step. The reads by name (`get`,
+    /// `get_with_scopes`, `Interpreter::lookup_in`, the tree-walker's) never
+    /// call it, so a read makes no record.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "4b.9's linker links host units through it (#836); until then only the \
+                      tests do (#835)"
+        )
+    )]
+    pub(crate) fn link_record(&self, heap: &RefCell<Heap>, name: &str) -> Option<Record> {
+        let mut step = self.write_step(heap)?;
+        if let Some(own) = self.local_record(name) {
+            return Some(own);
+        }
+        if self.kind != Kind::HostNamespace {
+            return None;
+        }
+        let parent = self
+            .parent
+            .as_deref()
+            .expect("a host namespace has its parent");
+        // The parent's slot name, shared: this table counts no name of its
+        // own.
+        let (key, parent_record) = {
+            let bindings = parent.bindings.borrow();
+            let slot = bindings.slot_of(name)?;
+            let (key, word) = &bindings.slots[slot as usize];
+            (Rc::clone(key), Record::from_word(*word))
+        };
+        let rare = self
+            .rare
+            .get()
+            .expect("a host namespace has its tables from construction");
+        let made = rare.read_through.get().is_none();
+        let table = rare.read_through.get_or_init(|| {
+            let unbound = BindingCell::free(&mut step, TaggedValue::UNBOUND);
+            Box::new(RefCell::new(ReadThrough {
+                unbound,
+                records: FxHashMap::default(),
+            }))
+        });
+        let mut table = table.borrow_mut();
+        if let Some(&child) = table.records.get(name) {
+            return Some(child);
+        }
+        // Allocation never collects (`docs/GC_DESIGN.md` §6), and both
+        // allocations are under the one step: the cell is held by the table
+        // before the record is made.
+        let child = Record::read_through(&mut step, table.unbound, parent_record);
+        let capacity = table.records.capacity();
+        table.records.insert(key, child);
+        let grew = made || table.records.capacity() != capacity;
+        drop(table);
+        drop(step);
+        self.count(1, 0);
+        if grew {
+            self.recharge();
+        }
+        Some(child)
+    }
+
+    /// The read-through record this host namespace made for `name`, taken
+    /// out of its table, for a define or an import of `name` here to adopt
+    /// (#835). Any other kind answers `None` for the price of a compare.
+    #[inline]
+    fn take_read_through(&self, name: &str) -> Option<Record> {
+        if self.kind != Kind::HostNamespace {
+            return None;
+        }
+        self.rare
+            .get()?
+            .read_through
+            .get()?
+            .borrow_mut()
+            .records
+            .remove(name)
     }
 
     /// Make `name` here the binding `cell` is: an import (R7RS §5.2, #406).
@@ -1861,11 +1993,20 @@ impl Environment {
                 }
                 record.repoint(heap, cell);
             }
-            None => {
-                let record = Record::new(heap, cell);
-                self.append_slot(name, record.word());
-                self.count(1, 0);
-            }
+            None => match self.take_read_through(&name) {
+                // An import in a host namespace of a name a linker asked for
+                // (#835): the read-through record names the exporter's cell
+                // from now on, in a slot. It was counted when it was made.
+                Some(child) => {
+                    child.adopt(heap, cell);
+                    self.append_slot(name, child.word());
+                }
+                None => {
+                    let record = Record::new(heap, cell);
+                    self.append_slot(name, record.word());
+                    self.count(1, 0);
+                }
+            },
         }
     }
 
@@ -3001,6 +3142,17 @@ impl Environment {
     ) {
         crate::scope_trace::bind(&name, &scopes, visible_by_name);
         if visible_by_name {
+            // Only the tree-walker makes a visible scoped definition, and it
+            // links nothing, so no read-through record is under one (#835).
+            debug_assert!(
+                self.kind != Kind::HostNamespace
+                    || self
+                        .rare
+                        .get()
+                        .and_then(|rare| rare.read_through.get())
+                        .is_none_or(|table| !table.borrow().records.contains_key(&*name)),
+                "a visible scoped definition over a read-through record (#835)"
+            );
             self.has_visible_scoped.set(true);
         }
         let env_id = self.env_id;
@@ -4105,6 +4257,11 @@ impl Environment {
             for binding in list {
                 tally(binding.tagged_value);
             }
+        }
+        // A host namespace's read-through records (#835): records, each
+        // over the one free cell, which no namespace owns.
+        if let Some(table) = self.rare.get().and_then(|rare| rare.read_through.get()) {
+            records += table.borrow().records.len();
         }
         (records, cells)
     }
@@ -6460,6 +6617,299 @@ mod namespace_charge_tests {
     }
 }
 
+/// A host namespace's read-through records (#835): made only by
+/// [`Environment::link_record`], never in a slot, reading through the
+/// parent's record to whatever it names now, and adopted by a define or an
+/// import in the host namespace. Until 4b.9's linker calls `link_record`,
+/// these tests are its only callers.
+#[cfg(test)]
+mod read_through_tests {
+    use super::*;
+    use crate::NamespaceView;
+    use crate::heap::new_shared_heap;
+    use crate::heap::trace_sentinels::collect_only;
+
+    fn n(i: i64) -> TaggedValue {
+        TaggedValue::fixnum(i)
+    }
+
+    /// The global namespace binding `x` to 1, and a host namespace over it.
+    fn global_and_host(heap: &SharedHeap) -> (Rc<Environment>, Rc<Environment>) {
+        let global = Rc::new(Environment::with_heap(heap));
+        global.define(heap, "x", n(1));
+        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
+        (global, host)
+    }
+
+    /// What `record` resolves to now.
+    fn resolved(heap: &SharedHeap, record: Record) -> TaggedValue {
+        let h = heap.borrow();
+        record.resolved_cell(&h).value(&h)
+    }
+
+    /// The host namespace's read-through table, if a linker made it.
+    fn table(host: &Environment) -> Option<&RefCell<ReadThrough>> {
+        host.rare
+            .get()
+            .and_then(|rare| rare.read_through.get())
+            .map(|table| &**table)
+    }
+
+    fn holds(host: &Environment, name: &str) -> bool {
+        table(host).is_some_and(|table| table.borrow().records.contains_key(name))
+    }
+
+    /// A parent's later store, import and define are each seen through the
+    /// child record, which reads through the parent's one record the whole
+    /// time: a store into its cell, and a re-point of it.
+    #[test]
+    fn a_read_through_record_reads_the_parents_later_define_and_import() {
+        let heap = new_shared_heap();
+        let (global, host) = global_and_host(&heap);
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "x", n(100));
+        let child = host.link_record(&heap, "x").expect("the global binds x");
+        let parent = global.local_record("x").unwrap();
+        let reads_through_parent = || {
+            let h = heap.borrow();
+            child.parent_record(&h).map(Record::key) == Some(parent.key())
+        };
+        assert_eq!(resolved(&heap, child), n(1));
+        assert!(reads_through_parent());
+
+        // A store into the global's own cell.
+        global.define(&heap, "x", n(2));
+        assert_eq!(resolved(&heap, child), n(2));
+        assert!(reads_through_parent());
+
+        // An import over the definition: the global's record names the
+        // library's cell.
+        share(&heap, &global, "x", &library, "x");
+        assert_eq!(resolved(&heap, child), n(100));
+        assert!(reads_through_parent());
+
+        // A definition over the import: a fresh cell of the global's own.
+        global.define(&heap, "x", n(3));
+        assert_eq!(resolved(&heap, child), n(3));
+        assert_eq!(library.get(&heap, "x"), Some(n(100)));
+        assert!(reads_through_parent());
+        assert_eq!(global.local_record("x"), Some(parent), "one record");
+    }
+
+    /// A define in the host namespace adopts the read-through record: the
+    /// same word, now a record of its own in a slot over a fresh cell. The
+    /// global's record and cell are left alone, and the table lets go.
+    #[test]
+    fn a_child_define_repoints_the_read_through_record_and_leaves_the_parents() {
+        let heap = new_shared_heap();
+        let (global, host) = global_and_host(&heap);
+        let global_cell = global.cell_of(&heap, "x").unwrap();
+        let child = host.link_record(&heap, "x").unwrap();
+        assert_eq!(host.counted(), (1, 0), "a record, over no cell of its own");
+
+        host.define(&heap, "x", n(9));
+        assert_eq!(
+            host.local_record("x"),
+            Some(child),
+            "the record keeps its word"
+        );
+        {
+            let h = heap.borrow();
+            assert_eq!(child.parent_record(&h), None);
+            assert!(child.cell(&h).owned_by(&h, host.env_id()));
+            let parents = global.local_record("x").unwrap();
+            assert_eq!(parents.cell(&h), global_cell);
+            assert_eq!(global_cell.value(&h), n(1));
+        }
+        assert_eq!(resolved(&heap, child), n(9));
+        assert_eq!(host.get(&heap, "x"), Some(n(9)));
+        assert_eq!(global.get(&heap, "x"), Some(n(1)));
+        assert!(!holds(&host, "x"), "the table let go of it");
+        assert_eq!(host.counted(), (1, 1));
+        assert_eq!(host.recount(&heap.borrow()), host.counted());
+    }
+
+    /// An import in the host namespace adopts the read-through record over
+    /// the exporter's cell: what the library stores later the host reads,
+    /// and the global's binding of the name is left alone.
+    #[test]
+    fn a_child_import_repoints_the_read_through_record_to_the_exporters_cell() {
+        let heap = new_shared_heap();
+        let (global, host) = global_and_host(&heap);
+        global.define(&heap, "y", n(2));
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "y", n(20));
+        let exported = library.cell_of(&heap, "y").unwrap();
+        let child = host.link_record(&heap, "y").unwrap();
+
+        host.import_cell(&heap, "y", exported);
+        assert_eq!(host.local_record("y"), Some(child));
+        assert_eq!(child.cell(&heap.borrow()), exported);
+        assert!(!holds(&host, "y"));
+        assert_eq!(host.get(&heap, "y"), Some(n(20)));
+
+        library.define(&heap, "y", n(21));
+        assert_eq!(
+            host.get(&heap, "y"),
+            Some(n(21)),
+            "the library's later store"
+        );
+        assert_eq!(resolved(&heap, child), n(21));
+        assert_eq!(global.get(&heap, "y"), Some(n(2)));
+        assert_eq!(host.counted(), (1, 0), "an import makes no cell");
+        assert_eq!(host.recount(&heap.borrow()), host.counted());
+    }
+
+    /// An assignment through a read-through record lands in its parent's
+    /// cell, the location `resolved_cell` names; and an assignment by name
+    /// in the host namespace, which does not bind the name, lands there too.
+    #[test]
+    fn a_set_through_a_read_through_record_stores_into_the_parents_cell() {
+        let heap = new_shared_heap();
+        let (global, host) = global_and_host(&heap);
+        let child = host.link_record(&heap, "x").unwrap();
+        {
+            let mut h = heap.borrow_mut();
+            let cell = child.resolved_cell(&h);
+            cell.store(&mut h, n(5), Site::EnvSetSlot);
+        }
+        assert_eq!(global.get(&heap, "x"), Some(n(5)));
+
+        host.set(&heap, "x", n(6)).unwrap();
+        assert_eq!(resolved(&heap, child), n(6));
+        assert_eq!(global.get(&heap, "x"), Some(n(6)));
+        assert_eq!(host.local_slot("x"), None, "a set binds nothing here");
+        assert!(holds(&host, "x"));
+    }
+
+    /// A read makes no record: none of the reads by name of a name only the
+    /// parent binds makes the table, or counts a record.
+    #[test]
+    fn a_read_makes_no_read_through_record() {
+        let heap = new_shared_heap();
+        let (_global, host) = global_and_host(&heap);
+        let records = heap.borrow().binding_records();
+        let mut scopes = ScopeSet::new();
+        scopes.add_scope(crate::scope::ScopeId(7));
+
+        assert_eq!(host.get(&heap, "x"), Some(n(1)));
+        assert_eq!(
+            host.get_with_scopes(&heap, "x", &scopes).unwrap(),
+            Some(n(1))
+        );
+        assert!(host.binding_location(&heap, "x").is_some());
+        assert_eq!(host.cell_of(&heap, "x"), None, "through the parent");
+        assert!(host.has("x"));
+        assert!(host.local_names(&heap).is_empty());
+        assert!(NamespaceView::of(&host).get(&heap, "x").is_some());
+
+        assert!(table(&host).is_none(), "no read made the table");
+        assert_eq!(heap.borrow().binding_records(), records);
+        assert_eq!(host.counted(), (0, 0));
+    }
+
+    /// One read-through record per name, however often it is asked for. An
+    /// own name answers its own record; a name neither namespace binds, a
+    /// frame, and a parentless namespace asked for a name it does not bind
+    /// answer `None`; none of those makes a record.
+    #[test]
+    fn link_record_answers_one_record_per_name() {
+        let heap = new_shared_heap();
+        let (global, host) = global_and_host(&heap);
+
+        assert_eq!(host.link_record(&heap, "nowhere"), None);
+        assert!(table(&host).is_none(), "a miss makes no table");
+
+        host.define(&heap, "own", n(2));
+        let own = host.local_record("own").unwrap();
+        assert_eq!(host.link_record(&heap, "own"), Some(own));
+        assert!(table(&host).is_none(), "an own name makes no child");
+
+        let first = host.link_record(&heap, "x").unwrap();
+        let second = host.link_record(&heap, "x").unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.key(), second.key());
+        assert_eq!(table(&host).unwrap().borrow().records.len(), 1);
+        assert_eq!(
+            host.counted(),
+            (2, 1),
+            "own's record and cell, and x's record"
+        );
+        assert_eq!(host.recount(&heap.borrow()), host.counted());
+
+        let frame = Environment::child_frame(Rc::clone(&global));
+        assert_eq!(frame.link_record(&heap, "x"), None, "a frame links nothing");
+        assert_eq!(global.link_record(&heap, "missing"), None);
+        assert_eq!(global.link_record(&heap, "x"), global.local_record("x"));
+    }
+
+    /// The table is the host namespace's alone: once it drops, a collection
+    /// rooted at the global namespace frees the read-through record and the
+    /// cell it named, and keeps the global's record.
+    #[test]
+    fn a_read_through_record_dies_with_its_host_namespace() {
+        let heap = new_shared_heap();
+        let (global, host) = global_and_host(&heap);
+        let child = host.link_record(&heap, "x").unwrap();
+        let unbound = table(&host).unwrap().borrow().unbound;
+        let parent = global.local_record("x").unwrap();
+        assert_eq!(heap.borrow().binding_records(), 2);
+        drop(host);
+        assert_eq!(
+            heap.borrow().binding_records(),
+            1,
+            "given back with the host"
+        );
+
+        collect_only(&mut heap.borrow_mut(), |visitor| visitor.env(&global));
+        let h = heap.borrow();
+        let free = h.free_pair_slots();
+        assert!(
+            free.contains(&child.word().heap_index()),
+            "the child record"
+        );
+        assert!(free.contains(&unbound.word().heap_index()), "its cell");
+        assert!(!free.contains(&parent.word().heap_index()));
+        assert_eq!(parent.value(&h), n(1));
+    }
+
+    /// A read-through record's car names no binding, and a check build
+    /// refuses to read it as a record of its own.
+    #[test]
+    #[cfg(any(debug_assertions, feature = "gc-check"))]
+    #[should_panic(expected = "read-through")]
+    fn a_read_through_record_read_as_its_own_panics() {
+        let heap = new_shared_heap();
+        let (_global, host) = global_and_host(&heap);
+        let child = host.link_record(&heap, "x").unwrap();
+        let h = heap.borrow();
+        let _ = child.cell(&h);
+    }
+
+    /// A read-through record is in no slot, so nothing that asks for this
+    /// namespace's own bindings sees it: `local_slot`, which the VM's
+    /// `define_global` and `resolve_primitive_calls` gate on, the name
+    /// lists, and `cell_of`. A define puts it in a slot, with its word.
+    #[test]
+    fn a_read_through_record_is_no_own_binding() {
+        let heap = new_shared_heap();
+        let (_global, host) = global_and_host(&heap);
+        let child = host.link_record(&heap, "x").unwrap();
+
+        assert_eq!(host.local_slot("x"), None);
+        assert_eq!(NamespaceView::of(&host).local_slot("x"), None);
+        assert!(!host.local_names(&heap).iter().any(|name| name == "x"));
+        assert!(!host.bindings(&heap).iter().any(|(name, _)| name == "x"));
+        assert!(!host.cells(&heap).iter().any(|(name, _)| name == "x"));
+        assert_eq!(host.cell_of(&heap, "x"), None);
+
+        host.define(&heap, "x", n(1));
+        let slot = host.local_slot("x").expect("a define binds it here");
+        assert_eq!(host.bindings.borrow().read_slot(slot), child.word());
+        assert_eq!(host.local_names(&heap), vec!["x".to_string()]);
+    }
+}
+
 #[cfg(test)]
 mod layout_tests {
     /// Not a style rule: this struct's size is a measured cost. The
@@ -6560,6 +7010,8 @@ mod gc_edge_tests {
                 relink_aliases: RefCell::default(),
                 specifier: Cell::new(Some(specifier)),
                 namespace: None,
+                // A host namespace's: `read_through_edges`.
+                read_through: OnceCell::new(),
             })),
             parent: Some(parent),
         };
@@ -6577,6 +7029,71 @@ mod gc_edge_tests {
         let mut h = heap.borrow_mut();
         collect_only(&mut h, |visitor| visitor.env(&env));
         s.assert_survived(&h);
+    }
+
+    /// A host namespace's read-through table (#835), every edge: the cell
+    /// its records name in their car, and each record, whose cdr is its
+    /// parent's record, which holds the parent's cell and its value. The
+    /// parent namespace whose record it reads through is dropped and the
+    /// host's own parent is empty, so the table alone reaches either
+    /// sentinel. Built by a struct literal; the reads before the collection
+    /// show the table is what `link_record` would have made.
+    #[test]
+    fn read_through_edges() {
+        let heap = new_shared_heap();
+        let mut h = heap.borrow_mut();
+        let mut s = Sentinels::new(&mut h);
+        let unbound = s.pair(
+            &mut h,
+            "Environment.rare: RareTables.read_through: ReadThrough.unbound",
+        );
+        let inherited = s.vector(
+            &mut h,
+            "Environment.rare: RareTables.read_through: ReadThrough.records, through the parent's record",
+        );
+        let unbound = BindingCell::free(&mut h, unbound);
+        drop(h);
+
+        let child = {
+            let elsewhere = Rc::new(Environment::with_heap(&heap));
+            elsewhere.define(&heap, "x", inherited);
+            let parent = elsewhere.local_record("x").unwrap();
+            let mut h = heap.borrow_mut();
+            let marker = BindingCell::free(&mut h, TaggedValue::UNBOUND);
+            Record::read_through(&mut h, marker, parent)
+        };
+        let mut records = FxHashMap::default();
+        records.insert(Rc::from("x"), child);
+        let empty = Rc::new(Environment::with_heap(&heap));
+        let env = Rc::new(Environment {
+            heap_id: heap.borrow().id(),
+            bindings: RefCell::new(Bindings::default()),
+            env_id: fresh_env_id(),
+            scoped_bindings: RefCell::new(ScopedTable::default()),
+            alias_bindings: RefCell::new(AliasBindings::default()),
+            has_aliases: Cell::new(false),
+            has_visible_scoped: Cell::new(false),
+            kind: Kind::HostNamespace,
+            rare: OnceCell::from(Box::new(RareTables {
+                read_through: OnceCell::from(Box::new(RefCell::new(ReadThrough {
+                    unbound,
+                    records,
+                }))),
+                ..RareTables::default()
+            })),
+            parent: Some(empty),
+        });
+        assert_eq!(env.recount(&heap.borrow()), (1, 0), "one record, no cell");
+        assert_eq!(env.local_slot("x"), None, "in no slot");
+        assert_eq!(
+            child.resolved_cell(&heap.borrow()).value(&heap.borrow()),
+            inherited
+        );
+
+        let mut h = heap.borrow_mut();
+        collect_only(&mut h, |visitor| visitor.env(&env));
+        s.assert_survived(&h);
+        assert_eq!(child.resolved_cell(&h).value(&h), inherited);
     }
 
     /// A namespace's slot and scoped entry each hold a record, which holds

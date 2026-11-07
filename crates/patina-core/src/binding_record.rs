@@ -177,13 +177,6 @@ impl Record {
     /// `(unbound . parent)`. `unbound` is the host namespace's cell holding
     /// `TaggedValue::UNBOUND`, so a read that does not ask whether it reads
     /// through answers that marker rather than a stale value.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "made only by `link_record`, which 4b.9's linker calls (#836)"
-        )
-    )]
     pub(crate) fn read_through(heap: &mut Heap, unbound: BindingCell, parent: Record) -> Self {
         debug_assert_eq!(unbound.value(heap), TaggedValue::UNBOUND);
         debug_assert!(
@@ -239,6 +232,18 @@ impl Record {
     #[inline]
     pub(crate) fn repoint(self, heap: &mut Heap, cell: BindingCell) {
         heap.set_record_cell(self.0, cell.0);
+    }
+
+    /// A define or an import in the host namespace (#835): this read-through
+    /// record becomes a record of its own over `cell`, flags 0
+    /// ([`Heap::adopt_record`]). Its word does not change, so code that
+    /// linked it reads `cell` from now on.
+    pub(crate) fn adopt(self, heap: &mut Heap, cell: BindingCell) {
+        debug_assert!(
+            self.parent_record(heap).is_some(),
+            "only a read-through record is adopted"
+        );
+        heap.adopt_record(self.0, cell.0);
     }
 
     /// The record's identity: its word less a check build's generation
@@ -436,6 +441,36 @@ mod tests {
             TaggedValue::UNBOUND,
             "the cell that names no binding is left alone"
         );
+    }
+
+    /// A read-through record (#835) reads through its parent's record until
+    /// it is adopted: then it is a record of its own over the cell it was
+    /// given, flags 0, with the same word, and the parent's record and cell
+    /// are left alone.
+    #[test]
+    fn a_read_through_record_reads_through_until_it_is_adopted() {
+        let mut heap = Heap::new();
+        let parents = BindingCell::new_own(&mut heap, n(1), 3);
+        let parent = Record::new(&mut heap, parents);
+        let unbound = BindingCell::free(&mut heap, TaggedValue::UNBOUND);
+        let child = Record::read_through(&mut heap, unbound, parent);
+        let word = child.word();
+        assert_eq!(child.parent_record(&heap), Some(parent));
+        assert_eq!(child.resolved_cell(&heap), parents);
+        parents.store(&mut heap, n(2), Site::EnvDefine);
+        assert_eq!(child.resolved_cell(&heap).value(&heap), n(2));
+
+        let own = BindingCell::new_own(&mut heap, n(9), 4);
+        child.adopt(&mut heap, own);
+        assert_eq!(child.word(), word, "an adoption moves no record");
+        assert_eq!(heap.cdr(child.word()), n(0), "its flags are cleared");
+        assert_eq!(child.parent_record(&heap), None);
+        assert_eq!(child.cell(&heap), own, "read as a record of its own");
+        assert_eq!(child.resolved_cell(&heap), own);
+        assert_eq!(child.value(&heap), n(9));
+        assert_eq!(parent.cell(&heap), parents, "the parent's record stays");
+        assert_eq!(parents.value(&heap), n(2), "and so does its cell");
+        assert_eq!(unbound.value(&heap), TaggedValue::UNBOUND);
     }
 
     /// A read-through record's own cell names no binding: a check build
