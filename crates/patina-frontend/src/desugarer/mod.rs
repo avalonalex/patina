@@ -1594,8 +1594,8 @@ impl<'a> Desugarer<'a> {
     /// namespace here imports that very location: the nearest namespace
     /// (`Environment::namespace_root`), else each namespace above it in turn,
     /// and the alias is that namespace's. For a host form that is its host
-    /// namespace, then the global namespace (question 3's option (c) on
-    /// #835, pending the owner's ruling): a library macro used in a host
+    /// namespace, then the global namespace (the owner's ruling (c) of
+    /// 2026-11-07 on #835's question 3): a library macro used in a host
     /// namespace that imported the location keeps it past a later host
     /// definition of the name (#851), and one the host does not import is
     /// bound early by the global namespace's import, as before. Anywhere

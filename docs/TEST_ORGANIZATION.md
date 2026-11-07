@@ -1128,8 +1128,8 @@ namespace since #835, to rooting what is bound in it, on both backends
   interpreter alive (#704);
 - the legacy pipeline, whose caller's environment the heap traces while the
   caller holds it;
-- a host namespace charged as a namespace (question 2's option (a) on
-  #835, pending the owner's ruling): counted among the heap's namespaces
+- a host namespace charged as a namespace (the owner's ruling (a) of
+  2026-11-07 on #835's question 2): counted among the heap's namespaces
   while it lives, its charge growing with its tables, and both given back
   when its handle drops;
 - a library macro used in a host namespace that imports the binding its
