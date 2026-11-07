@@ -831,6 +831,42 @@ fn a_library_macro_in_a_host_namespace_keeps_its_import() {
     );
 }
 
+/// The same program in a host namespace that imports nothing, after the
+/// global namespace imports `(srfi 1)` and `(host4b sum)`: the host
+/// namespace holds no import of `fold`'s location, so the desugarer asks the
+/// global namespace next, whose import alias keeps the template's `fold`
+/// the library's, as it did before #835 (question 3's option (c), pending
+/// the owner's ruling). The host's `fold` is its own definition, and the
+/// global's is still `(srfi 1)`'s.
+fn library_macro_keeps_the_global_import<B: Backend>(interp: Interpreter<B>) -> [String; 3] {
+    interp.eval_program_owned(SUM_LIBRARY).unwrap();
+    interp
+        .eval_program_owned("(import (srfi 1) (host4b sum))")
+        .unwrap();
+    let shown = |result: Result<_, _>| match result {
+        Ok(value) => interp.display_tagged(&value),
+        Err(e) => format!("error: {e}"),
+    };
+    let env = interp.new_environment();
+    let host = shown(interp.eval_program_in(&env, SUM_PROGRAM));
+    let host_fold = shown(interp.eval_str_in(&env, "fold"));
+    let global_fold = shown(interp.eval_str_owned("(procedure? fold)"));
+    [host, host_fold, global_fold]
+}
+
+#[test]
+fn a_library_macro_in_a_host_namespace_falls_back_to_the_global_import() {
+    let expected = ["6", "captured", "#t"];
+    assert_eq!(
+        library_macro_keeps_the_global_import(vm_interpreter()),
+        expected
+    );
+    assert_eq!(
+        library_macro_keeps_the_global_import(tree_walker_interpreter()),
+        expected
+    );
+}
+
 /// `(host4b cell)` exports `value` and a procedure that assigns it.
 const CELL_LIBRARY: &str = "(import (scheme base) (scheme eval))
     (define-library (host4b cell)

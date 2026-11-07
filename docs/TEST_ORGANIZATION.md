@@ -1135,7 +1135,11 @@ namespace since #835, to rooting what is bound in it, on both backends
   template names, which keeps that binding past a later host definition of
   the name, as at top level, while the global environment imports nothing
   of it (#851; #835's ruling on question 3 has the desugarer ask the host
-  namespace for the import alias before the global environment).
+  namespace for the import alias before the global environment);
+- the same macro used in a host namespace that imports nothing, after the
+  global environment imports it and the binding its template names, which
+  keeps the global environment's import: the desugarer asks the global
+  environment once the host namespace holds no import of the binding.
 
 #835's tests pin what host code reads and writes, what its closures keep and
 what its macros introduce, from before 4b.6's binding records (#834) changed

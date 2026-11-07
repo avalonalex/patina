@@ -160,8 +160,13 @@ fi
 # hygiene_matrix for its test that every shape answers in a host namespace
 # what it records, 9939 of its 22273; and vm_callprimitive for its test of
 # a `set!` through a host namespace, its 17 other tests making 1020, up from
-# 67 since its pin of 2026-10-10, which no re-pin had recorded, and the new
-# test 71; the minimums at half their counts measured that day)
+# 67 since its pin of 2026-10-10, which no re-pin had recorded (already 1020
+# at the kind's base, a69bf155), and the new test 71; the minimums at half
+# their counts measured that day; host_environments's test count and minimum
+# re-pinned again that day for #835's test that a library macro used in a
+# host namespace that imports nothing keeps the global environment's import,
+# its 23 other tests making 114846 and the new test 242, the minimum at half
+# its count measured that day)
 TARGETS=(
     "callability 16 31 13"                    # 1543 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -171,7 +176,7 @@ TARGETS=(
     "finished_forms_release_code 16 1450 11"  # 3677 (13)
     "gc_tree_walker 16 11421 20"              # 24151 (658)
     "gc_vm 16 8001 25"                        # 17314 (667)
-    "host_environments 16 57423 23"           # 114846 (125)
+    "host_environments 16 57544 24"           # 115088 (125)
     "hygiene_matrix 16 11136 17"              # 22273 (6)
     "interpreter_api 16 138 28"               # 2277 (4)
     "library_loading 16 46 9"                 # 93 (0): see the header
