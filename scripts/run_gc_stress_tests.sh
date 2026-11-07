@@ -144,7 +144,15 @@ fi
 # one-argument `load` are and of a program form resumed during an import,
 # the minimum at half its count re-measured that day, as #823 asks: the 15
 # other tests' 6951 unchanged by the removal of the VM's globals swap, and
-# the new tests 387)
+# the new tests 387; hygiene_matrix's and host_environments's test counts
+# and minimums re-pinned 2026-11-06 again for #834's binding records:
+# hygiene_matrix for its test of an introduced definition's record, its
+# identity and its scope, which runs the test binary again in twelve child
+# processes, a shape and a backend each, that collect under stress too, and
+# host_environments for its tests of what a host reads through a record and
+# that a read of an unbound name makes none, the minimums at half their
+# counts measured that day: hygiene_matrix's 12334, up from 8683, and
+# host_environments's 114484, up from 113904)
 TARGETS=(
     "callability 16 31 13"                    # 1543 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -154,8 +162,8 @@ TARGETS=(
     "finished_forms_release_code 16 1450 11"  # 3677 (13)
     "gc_tree_walker 16 11421 20"              # 24151 (658)
     "gc_vm 16 8001 25"                        # 17314 (667)
-    "host_environments 16 56952 20"           # 113904 (117)
-    "hygiene_matrix 16 4341 15"               # 8683 (6)
+    "host_environments 16 57242 22"           # 114484 (121)
+    "hygiene_matrix 16 6167 16"               # 12334 (6)
     "interpreter_api 16 138 28"               # 2277 (4)
     "library_loading 16 46 9"                 # 93 (0): see the header
     "macro_definition_env 16 16626 19"        # 33253 (67): see the header

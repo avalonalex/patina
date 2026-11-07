@@ -346,6 +346,42 @@ fn the_census_counts_each_kind_of_source_key() {
     }
 }
 
+/// A record's re-point is a store into the record, logged at its own site
+/// with the record as its holder (#834, choice C9): it can be an old record
+/// given a young cell, an old-to-young edge a generational barrier must
+/// see. The program defines a name it imported, which re-points its record
+/// at a fresh cell of its own, and defines it again, which stores into that
+/// cell, with the cell as the holder of `env_define`'s store.
+#[test]
+fn a_record_repoint_is_logged_with_a_heap_holder() {
+    if !GC_CENSUS {
+        return;
+    }
+    let program = "(import (scheme base) (scheme write))
+(define list-copy 0)
+(define list-copy 1)
+(display \"done\")
+";
+    for backend in BOTH_BACKENDS {
+        let c = census(backend, program, &[]);
+        assert!(
+            c.site("env_record_repoint", "total") >= 1,
+            "{backend:?}: {:?}",
+            c.sites.get("env_record_repoint")
+        );
+        assert_eq!(
+            c.site("env_record_repoint", "target_unknown"),
+            0,
+            "{backend:?}: every re-point names its record"
+        );
+        assert!(
+            c.site("env_define", "target_unknown") < c.site("env_define", "total"),
+            "{backend:?}: a definition's store into its own cell names the cell: {:?}",
+            c.sites.get("env_define")
+        );
+    }
+}
+
 #[test]
 fn heaps_are_counted_per_process() {
     if !GC_CENSUS {

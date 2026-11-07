@@ -394,3 +394,43 @@ fn a_specifier_namespace_lives_while_code_compiled_in_it_does() {
         assert_eq!(ns_after, ns_base, "{what}");
     }
 }
+
+/// A library redefined and imported again gives its old namespace back
+/// (#834): the program's import names the new export's cell, and nothing
+/// holds the old namespace once the registry replaces it, where an import
+/// owner held every replaced one before. The library's procedure refers to
+/// itself, so its code holds the library's namespace too, and that goes with
+/// it. The steady-state lane's `library-stream` shape, in file mode: after
+/// the redefinition and two collections the namespaces are counted and
+/// charged as they were before it.
+#[test]
+fn a_replaced_library_with_a_procedure_is_released() {
+    let program = "(define ns0 0)
+(define ext0 0)
+(define ns1 0)
+(define ext1 0)
+(define-library (stream lib) (import (scheme base)) (export f) (begin (define (f) f)))
+(import (stream lib))
+(gc)
+(gc)
+(set! ns0 (stat 'namespaces))
+(set! ext0 (stat 'external-bytes))
+(define-library (stream lib) (import (scheme base)) (export f) (begin (define (f) f)))
+(import (stream lib))
+(gc)
+(gc)
+(set! ns1 (stat 'namespaces))
+(set! ext1 (stat 'external-bytes))
+(write (list ns0 ns1 ext0 ext1 (if (eq? (f) f) 1 0)))
+(newline)";
+    for backend in BOTH_BACKENDS {
+        let counts = run(backend, program);
+        let [ns0, ns1, ext0, ext1, same] = counts[..] else {
+            panic!("{backend:?}: want five counts, got {counts:?}")
+        };
+        let what = format!("{backend:?}: {counts:?}");
+        assert_eq!(same, 1, "the new library's `f`: {what}");
+        assert_eq!(ns1, ns0, "the replaced namespace was released: {what}");
+        assert_eq!(ext1, ext0, "and gave its charge back: {what}");
+    }
+}

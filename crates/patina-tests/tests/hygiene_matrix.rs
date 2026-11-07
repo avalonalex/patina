@@ -1733,3 +1733,444 @@ fn an_introduced_definition_only_templates_reach_survives_a_collection() {
         assert_eq!(result.as_deref(), Ok("7"), "{backend}");
     }
 }
+
+/// Set when this test binary runs itself as the child of
+/// [`an_introduced_definitions_record_carries_its_identity_and_scope`]:
+/// `<shape>/<backend>`, the [`RecordShape`] it runs and the backend.
+const RECORD_CASE: &str = "PATINA_HYGIENE_RECORD_CASE";
+
+/// Where that child writes the records it read.
+const RECORD_OUT: &str = "PATINA_HYGIENE_RECORD_OUT";
+
+/// A program whose top level a macro introduces definitions into, and the
+/// spelling whose records are read afterwards
+/// (`Environment::introduced_records`).
+struct RecordShape {
+    name: &'static str,
+    /// Evaluated before `program`, as part of it.
+    prelude: &'static str,
+    program: &'static str,
+    spelling: &'static str,
+    /// What the program answers, where it says something.
+    answer: Option<&'static str>,
+    /// What the records' cells hold, in order: one a record.
+    values: &'static [&'static str],
+    /// How many scopes each record's identity has.
+    identity_scopes: usize,
+    /// Spellings that must have no record: a pass-through name, a splicing
+    /// keyword.
+    unlisted: &'static [&'static str],
+}
+
+/// `nest-inner`'s template defines the name it is passed, so the one
+/// `nest-outer` passes, `secret`, carries the outer expansion's scope and
+/// not the inner's, which only `nest-mark` carries.
+const NESTED: &str = "(define nest-mark 0)
+    (define-syntax nest-inner (syntax-rules () ((_ name) (define name nest-mark))))
+    (define-syntax nest-outer
+      (syntax-rules ()
+        ((_ get set)
+         (begin
+           (nest-inner secret)
+           (define-syntax get (syntax-rules () ((_) secret)))
+           (define-syntax set (syntax-rules () ((_ v) (set! secret v))))))))";
+
+const RECORD_SHAPES: &[RecordShape] = &[
+    RecordShape {
+        name: "def-getter",
+        prelude: "",
+        program: "(define-syntax def-getter
+              (syntax-rules ()
+                ((_ get set)
+                 (begin
+                   (define secret 42)
+                   (define-syntax get (syntax-rules () ((_) secret)))
+                   (define-syntax set (syntax-rules () ((_ v) (set! secret v))))))))
+            (def-getter get-secret set-secret!)
+            (set-secret! 7)
+            (get-secret)",
+        spelling: "secret",
+        answer: Some("7"),
+        values: &["7"],
+        identity_scopes: 1,
+        unlisted: &["get-secret", "set-secret!"],
+    },
+    // The steady-state lane's `hidden-define`, three cycles.
+    RecordShape {
+        name: "hidden-define",
+        prelude: "",
+        program: "(import (scheme base) (scheme eval) (scheme repl))
+            (define env (interaction-environment))
+            (eval '(define-syntax def-counter
+                     (syntax-rules ()
+                       ((_ name) (begin (define state 0)
+                                        (define (name) (set! state (+ state 1)) state)))))
+                  env)
+            (eval '(def-counter counter) env)
+            (eval '(counter) env)
+            (eval '(def-counter counter) env)
+            (eval '(counter) env)
+            (eval '(def-counter counter) env)
+            (eval '(counter) env)",
+        spelling: "state",
+        answer: Some("1"),
+        values: &["1", "1", "1"],
+        identity_scopes: 1,
+        unlisted: &["counter"],
+    },
+    RecordShape {
+        name: "nested",
+        prelude: NESTED,
+        program: "(nest-outer get-secret set-secret!) (set-secret! 3) (get-secret)",
+        spelling: "secret",
+        answer: Some("3"),
+        values: &["3"],
+        identity_scopes: 1,
+        unlisted: &[],
+    },
+    RecordShape {
+        name: "two-expansions",
+        prelude: NESTED,
+        program: "(nest-outer get-a set-a!) (nest-outer get-b set-b!) (set-a! 1) (set-b! 2)
+            (list (get-a) (get-b))",
+        spelling: "secret",
+        answer: Some("(1 2)"),
+        values: &["1", "2"],
+        identity_scopes: 1,
+        unlisted: &[],
+    },
+    // The one shape whose identity has two scopes, so that its largest and
+    // its smallest differ (critique E2): `secret` is written in the
+    // template of `maker`, which the outer expansion generated, so it
+    // carries the outer's scope and `maker`'s. The program traced for
+    // #834's design, less its `(display (get-it))`, whose reference is
+    // unbound by hygiene.
+    RecordShape {
+        name: "generated",
+        prelude: "",
+        program: "(define-syntax gen-outer
+              (syntax-rules ()
+                ((_ maker get)
+                 (begin
+                   (define-syntax maker (syntax-rules () ((_) (define secret 5))))
+                   (define-syntax get (syntax-rules () ((_) secret)))))))
+            (gen-outer make-it get-it)
+            (make-it)",
+        spelling: "secret",
+        answer: None,
+        values: &["5"],
+        identity_scopes: 2,
+        unlisted: &["make-it", "get-it"],
+    },
+    // `splicing-let-syntax`'s scope is stripped from the definition it
+    // splices, and its keyword, a scoped entry holding a macro, is no
+    // introduced definition.
+    RecordShape {
+        name: "splice",
+        prelude: "",
+        program: "(import (scheme base) (srfi 188))
+            (define-syntax def-spliced
+              (syntax-rules ()
+                ((_ get)
+                 (begin
+                   (splicing-let-syntax ((sp-k (syntax-rules () ((_ x) x))))
+                     (define secret (sp-k 9)))
+                   (define-syntax get (syntax-rules () ((_) secret)))))))
+            (def-spliced get-secret)
+            (get-secret)",
+        spelling: "secret",
+        answer: Some("9"),
+        values: &["9"],
+        identity_scopes: 1,
+        unlisted: &["sp-k", "get-secret"],
+    },
+];
+
+/// The child's half: run `shape` and write what it answered and each record
+/// the global environment holds for its spellings, one per line:
+/// `RECORD <spelling> scope=<n> identity=<n>,<n> record=<key> value=<value>`.
+fn read_introduced_records<B: patina_interpreter::Backend>(
+    interp: patina_interpreter::Interpreter<B>,
+    shape: &RecordShape,
+) -> String {
+    let answer = interp
+        .eval_program_owned(&format!("{}\n{}", shape.prelude, shape.program))
+        .unwrap_or_else(|e| panic!("{}: {e:?}", shape.name));
+    let mut out = format!("ANSWER {}\n", interp.display_tagged(&answer));
+    let global = interp.global_env();
+    let heap = interp.backend().heap();
+    for spelling in std::iter::once(&shape.spelling).chain(shape.unlisted) {
+        for record in global.introduced_records(heap, spelling) {
+            let identity: Vec<String> = record.identity.iter().map(|s| s.0.to_string()).collect();
+            out.push_str(&format!(
+                "RECORD {spelling} scope={} identity={} record={} value={}\n",
+                record.scope.map_or("-".to_string(), |s| s.0.to_string()),
+                identity.join(","),
+                record.record,
+                interp.display_tagged(record.value),
+            ));
+        }
+    }
+    out
+}
+
+/// One record a child read.
+#[derive(Debug)]
+struct ReadRecord {
+    spelling: String,
+    scope: Option<usize>,
+    identity: Vec<usize>,
+    record: u64,
+    value: String,
+}
+
+fn parse_read_records(text: &str) -> (String, Vec<ReadRecord>) {
+    let mut answer = String::new();
+    let mut records = Vec::new();
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("ANSWER ") {
+            answer = rest.to_string();
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("RECORD ") else {
+            continue;
+        };
+        let mut words = rest.split(' ');
+        let spelling = words.next().unwrap().to_string();
+        let field = |words: &mut std::str::Split<'_, char>, key: &str| {
+            let word = words.next().unwrap();
+            word.strip_prefix(key)
+                .and_then(|w| w.strip_prefix('='))
+                .unwrap_or_else(|| panic!("{key} in {line}"))
+                .to_string()
+        };
+        let scope = field(&mut words, "scope");
+        let identity = field(&mut words, "identity");
+        let record = field(&mut words, "record");
+        let value = field(&mut words, "value");
+        records.push(ReadRecord {
+            spelling,
+            scope: scope.parse().ok(),
+            identity: identity
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.parse().unwrap())
+                .collect(),
+            record: record.parse().unwrap(),
+            value,
+        });
+    }
+    (answer, records)
+}
+
+/// The scope trace's lines of `kind` (`BIND`, `RESOLVE`) for `name`, each
+/// with the scopes of its `field` (`scopes`, `ref`, `picked`).
+fn traced(trace: &str, kind: &str, name: &str, field: &str) -> Vec<Vec<usize>> {
+    let quoted = format!("name={name:?} ");
+    let field = format!(" {field}={{");
+    trace
+        .lines()
+        .filter(|line| line.split(' ').next() == Some(kind) && line.contains(&quoted))
+        .filter_map(|line| {
+            let start = line.find(&field)? + field.len();
+            let end = start + line[start..].find('}')?;
+            Some(
+                line[start..end]
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.trim_start_matches('S').parse().unwrap())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+/// The identities the trace shows `name` defined at: a `BIND` of it, the
+/// desugarer's or the tree-walker's at run time, or the VM renamer's
+/// resolution of the definition's binder (`op=bind`). The desugarer writes
+/// its `BIND` only for a definition it finds in a body it scans, so not for
+/// one a top-level use expands to, as `(make-it)` does.
+fn bound_at(trace: &str, name: &str) -> Vec<Vec<usize>> {
+    let binders = trace
+        .lines()
+        .filter(|line| line.ends_with(" op=bind"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut out = traced(trace, "BIND", name, "scopes");
+    out.extend(traced(&binders, "RESOLVE", name, "picked"));
+    out
+}
+
+/// An introduced definition's record carries its identity, and its
+/// introducing scope is the identity's largest (#834, rulings D8 and D9):
+/// for each shape, on each backend, the records `introduced_records` reads
+/// in the global environment, held against the scope trace
+/// (`PATINA_SCOPE_TRACE`, `docs/MACRO_SYSTEM.md`). The trace's sink is read
+/// once per process, so each shape and backend runs in a child process: this
+/// test binary run again, as `heap_teardown.rs`'s embedder is.
+///
+/// - `def-getter`, `hidden-define`: each record's scope is its identity's
+///   one scope, the one the desugarer bound the definition at.
+/// - nested: the outer expansion's scope, which `nest-inner`'s reference
+///   carries, and not the inner's, which `nest-mark`'s does; two
+///   expansions of it, two records.
+/// - generated: an identity of two scopes, the outer expansion's and the
+///   generated macro's, and the scope is the generated macro's: the one
+///   shape where an identity's largest scope and its smallest differ.
+/// - splice: `splicing-let-syntax`'s scope stripped, and its keyword no
+///   record.
+#[test]
+fn an_introduced_definitions_record_carries_its_identity_and_scope() {
+    if let Ok(case) = std::env::var(RECORD_CASE) {
+        let out =
+            std::path::PathBuf::from(std::env::var_os(RECORD_OUT).expect("an output directory"));
+        let (name, backend) = case.split_once('/').expect("<shape>/<backend>");
+        let shape = RECORD_SHAPES
+            .iter()
+            .find(|s| s.name == name)
+            .expect("a shape");
+        let text = match backend {
+            "vm" => read_introduced_records(common::vm_interpreter(), shape),
+            _ => read_introduced_records(common::tree_walker_interpreter(), shape),
+        };
+        std::fs::write(out.join("records.txt"), text).expect("write the records");
+        return;
+    }
+    for shape in RECORD_SHAPES {
+        for backend in ["vm", "tree-walker"] {
+            let what = format!("{} on the {backend}", shape.name);
+            let dir = tempfile::tempdir().expect("a scratch directory");
+            let trace_path = dir.path().join("trace.txt");
+            let child =
+                std::process::Command::new(std::env::current_exe().expect("this test binary"))
+                    .env(RECORD_CASE, format!("{}/{backend}", shape.name))
+                    .env(RECORD_OUT, dir.path())
+                    .env("PATINA_SCOPE_TRACE", &trace_path)
+                    .args([
+                        "--exact",
+                        "an_introduced_definitions_record_carries_its_identity_and_scope",
+                        "--test-threads=1",
+                    ])
+                    .output()
+                    .expect("run the child");
+            assert!(
+                child.status.success(),
+                "{what}: the child failed: {}\n{}{}",
+                child.status,
+                String::from_utf8_lossy(&child.stdout),
+                String::from_utf8_lossy(&child.stderr)
+            );
+            let text =
+                std::fs::read_to_string(dir.path().join("records.txt")).expect("the records");
+            let trace = std::fs::read_to_string(&trace_path).expect("the scope trace");
+            assert!(
+                trace.starts_with("RUN pid="),
+                "{what}: the trace did not run"
+            );
+            let (answer, records) = parse_read_records(&text);
+            if let Some(expected) = shape.answer {
+                assert_eq!(answer, expected, "{what}");
+            }
+            for unlisted in shape.unlisted {
+                assert!(
+                    records.iter().all(|r| r.spelling != *unlisted),
+                    "{what}: `{unlisted}` has a record: {records:?}"
+                );
+            }
+            let records: Vec<&ReadRecord> = records
+                .iter()
+                .filter(|r| r.spelling == shape.spelling)
+                .collect();
+            let what = format!("{what}: {records:?}");
+            // Every record: its scope is its identity's largest, and the
+            // desugarer bound the definition at that identity.
+            for record in &records {
+                assert_eq!(record.scope, record.identity.last().copied(), "{what}");
+                assert!(
+                    bound_at(&trace, shape.spelling).contains(&record.identity),
+                    "{what}: `{}` is not traced defined at {:?}",
+                    shape.spelling,
+                    record.identity
+                );
+            }
+            let mut keys: Vec<u64> = records.iter().map(|r| r.record).collect();
+            keys.sort_unstable();
+            keys.dedup();
+            assert_eq!(keys.len(), records.len(), "{what}: a record shared");
+            let mut scopes: Vec<Option<usize>> = records.iter().map(|r| r.scope).collect();
+            scopes.sort_unstable();
+            scopes.dedup();
+            assert_eq!(scopes.len(), records.len(), "{what}: a scope shared");
+            let mut values: Vec<&str> = records.iter().map(|r| r.value.as_str()).collect();
+            values.sort_unstable();
+            assert_eq!(values, shape.values, "{what}");
+            assert!(
+                records
+                    .iter()
+                    .all(|r| r.identity.len() == shape.identity_scopes),
+                "{what}: want identities of {} scope(s)",
+                shape.identity_scopes
+            );
+            match shape.name {
+                "nested" | "two-expansions" => {
+                    // Each record's scope is an outer expansion's, which its
+                    // template's `nest-inner` carries alone; the inner
+                    // expansions' scopes are the ones `nest-mark` carries.
+                    let outers = traced(&trace, "RESOLVE", "nest-inner", "ref");
+                    let inners: Vec<usize> = traced(&trace, "RESOLVE", "nest-mark", "ref")
+                        .into_iter()
+                        .filter(|scopes| scopes.len() == 1)
+                        .map(|scopes| scopes[0])
+                        .collect();
+                    assert!(!inners.is_empty(), "{what}: no inner expansion traced");
+                    for record in &records {
+                        let scope = record.scope.unwrap();
+                        assert!(
+                            outers.contains(&vec![scope]),
+                            "{what}: {scope} is no outer expansion's"
+                        );
+                        assert!(
+                            !inners.contains(&scope),
+                            "{what}: {scope} is an inner expansion's"
+                        );
+                    }
+                }
+                "generated" => {
+                    // `{S_o, S_m}`: the outer expansion's scope, which the
+                    // outer template's `define-syntax` carries alone, and the
+                    // generated macro's, which its template's `define`
+                    // carries beside it. The record's scope is `S_m`.
+                    let record = records[0];
+                    let [outer, maker] = record.identity[..] else {
+                        panic!("{what}: want an identity of two scopes")
+                    };
+                    assert!(outer < maker, "{what}");
+                    assert!(
+                        traced(&trace, "RESOLVE", "define-syntax", "ref").contains(&vec![outer]),
+                        "{what}: S{outer} is no outer expansion's"
+                    );
+                    assert!(
+                        traced(&trace, "RESOLVE", "define", "ref").contains(&vec![outer, maker]),
+                        "{what}: S{maker} is not the generated macro's"
+                    );
+                    assert_eq!(record.scope, Some(maker), "{what}");
+                    assert_ne!(record.scope, Some(outer), "{what}");
+                }
+                "splice" => {
+                    // The template's `define` carries `splicing-let-syntax`'s
+                    // scope, larger than the expansion's; the definition is
+                    // bound without it.
+                    let scope = records[0].scope.unwrap();
+                    let defines = traced(&trace, "RESOLVE", "define", "ref");
+                    assert!(
+                        defines.iter().any(|scopes| scopes.len() == 2
+                            && scopes[0] == scope
+                            && scopes[1] > scope),
+                        "{what}: no `define` at S{scope} and a splicing scope"
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+}

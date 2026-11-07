@@ -3178,6 +3178,7 @@ mod tests {
             heap.alloc_pair(symbol, vector)
         };
         let heap = Rc::downgrade(&shared);
+        assert_eq!(shared.borrow().namespaces(), 1);
 
         crate::heap::teardown(&shared);
         let stats = shared.borrow().stats();
@@ -3187,6 +3188,8 @@ mod tests {
             "a slot outlived teardown: {stats:?}"
         );
         assert_eq!(stats.gc_collections, 0);
+        // The specifier's namespace dropped with its slot (#834).
+        assert_eq!(stats.namespaces, 0, "a namespace outlived teardown");
         if GC_CHECK {
             let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 shared.borrow().get_pair(kept);
@@ -3209,7 +3212,8 @@ mod tests {
     /// A namespace a dead specifier held drops inside the sweep that frees
     /// the specifier, with the heap borrowed mutably, and gives back its
     /// tables through its handle; the collection's L leaves them out, and the
-    /// live namespace's tables stay in it.
+    /// live namespace's tables stay in it. Its count, records and own cells
+    /// leave the heap's running sums with it (#834).
     #[test]
     fn a_namespace_dropped_by_a_sweep_gives_its_tables_back() {
         let shared: SharedHeap = Rc::new(RefCell::new(Heap::new()));
@@ -3236,6 +3240,8 @@ mod tests {
             heap.alloc_environment_specifier(dead, false);
         }
         drop(kept);
+        let counts = |heap: &Heap| (heap.namespaces(), heap.binding_records(), heap.cells());
+        assert_eq!(counts(&shared.borrow()), (2, 100, 100));
 
         let mut controller = GcController::new(GcMode::On);
         controller.collect(&mut shared.borrow_mut(), &[&roots], false);
@@ -3243,6 +3249,11 @@ mod tests {
         assert_eq!(heap.external_bytes(), kept_charge);
         assert!(heap.live_bytes() >= kept_charge + OBJECT_SLOT_BYTES);
         assert!(heap.live_bytes() < kept_charge + 4 * OBJECT_SLOT_BYTES);
+        assert_eq!(
+            counts(&heap),
+            (1, 0, 0),
+            "the dead namespace and its hundred records and cells left the sums"
+        );
     }
 
     /// An open file port is charged its buffer and its place in descriptor

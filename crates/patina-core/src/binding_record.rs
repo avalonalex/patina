@@ -137,6 +137,13 @@ impl BindingCell {
     pub(crate) fn location(self) -> crate::environment::BindingLocation {
         crate::environment::BindingLocation::Cell(self.0.raw())
     }
+
+    /// The cell's word, stamp and all: for the tests that watch its slot
+    /// in the pair arena.
+    #[cfg(test)]
+    pub(crate) fn word(self) -> TaggedValue {
+        self.0
+    }
 }
 
 impl Record {
