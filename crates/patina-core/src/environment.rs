@@ -1136,8 +1136,12 @@ pub struct Environment {
 
 /// What an environment is, set by its constructor and never changed (4b's
 /// start decision 4 on #782): one type serves namespaces and frames, and the
-/// kind says which.
+/// kind says which. The low bit of a kind's discriminant is set for the two
+/// frame kinds and clear for the two namespace kinds, so that
+/// [`Environment::is_namespace`], asked at every binding's read and write,
+/// is one bit test (#835).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
 enum Kind {
     /// A parentless namespace: the global environment, a library's or a
     /// specifier's, each made without a parent and on a heap
@@ -1145,7 +1149,7 @@ enum Kind {
     /// tables ([`NamespaceCharge`]), indexes a spelling's scoped bindings
     /// past [`INDEX_ABOVE`], and borrows the heap at each read or write of a
     /// binding (the namespace step, #834).
-    Namespace,
+    Namespace = 0,
     /// A host namespace (#835): the namespace `Interpreter::new_environment`
     /// answers, whose parent is the global namespace, a parentless one
     /// ([`Environment::host_namespace`]). Every namespace path is its own:
@@ -1155,20 +1159,21 @@ enum Kind {
     /// (`RareTables::read_through`), which are in no slot. It charges its
     /// heap's account for its tables as a parentless namespace does
     /// ([`NamespaceCharge`]), and indexes past [`INDEX_ABOVE`] as one does.
-    /// Next to [`Kind::Namespace`], so that
-    /// [`Environment::is_namespace`] asks one range of discriminants.
-    HostNamespace,
+    HostNamespace = 2,
     /// A frame ([`Environment::child_frame`]): a call's or a body's, and the
     /// desugarer's scopes. It never charges, and indexes past
     /// [`FRAME_INDEX_ABOVE`].
-    Frame,
+    Frame = 1,
     /// A frame the tree-walker made for its CPS code's temporaries, a `let`
     /// temporary's or a continuation's parameter
     /// ([`Environment::for_temporaries`]), where no definition belongs: a
     /// `define` evaluated with it binds in the nearest environment above it
     /// that is not one (#680). Otherwise a frame.
-    Temporaries,
+    Temporaries = 3,
 }
+
+/// The bit of a [`Kind`]'s discriminant set for a frame of either kind.
+const FRAME_KIND_BIT: u8 = 1;
 
 impl Environment {
     /// Create a new empty namespace whose values live on `heap`: the global
@@ -1549,11 +1554,13 @@ impl Environment {
     /// and indexes at the namespace's threshold ([`Environment::indexes`]).
     /// Asked before a table that frames fill too is measured, so that a frame
     /// skips the measuring for the price of a field read: the kind is in the
-    /// struct, where the charge is behind the `rare` box. The two kinds'
-    /// discriminants are adjacent, so this is one compare.
+    /// struct, where the charge is behind the `rare` box. A test of one bit
+    /// of the kind ([`FRAME_KIND_BIT`]): one instruction, where a test of two
+    /// adjacent discriminants was a compare and a branch at each of some
+    /// fifty inlined sites (#835).
     #[inline(always)]
     pub(crate) fn is_namespace(&self) -> bool {
-        matches!(self.kind, Kind::Namespace | Kind::HostNamespace)
+        self.kind as u8 & FRAME_KIND_BIT == 0
     }
 
     /// The namespace step's shared borrow (#834): taken where a hit in a
