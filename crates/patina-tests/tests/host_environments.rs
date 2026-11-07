@@ -267,26 +267,48 @@ fn a_host_environment_is_a_child_of_the_global_environment() {
     a_child_of_the_global_environment(tree_walker_interpreter());
 }
 
-/// A host environment is a frame until 4b.8 gives hosts a kind of their own
-/// (#830): it charges nothing for its tables, however many names it binds.
-/// 4b.8 rewrites this test to the owner's charging ruling (4b's start
-/// decision 4 on #782).
-fn charged_as_a_frame<B: Backend>(interp: Interpreter<B>) {
+/// A host namespace is charged as a parentless namespace is (#835, the
+/// owner's ruling on question 2): counted among the heap's namespaces while
+/// it lives, charging the heap's external bytes for its tables as they
+/// grow, and giving both back when its handle drops. No closure was made in
+/// it, so nothing but the handle holds it.
+fn charged_as_a_namespace<B: Backend>(interp: Interpreter<B>) {
+    interp
+        .eval_program_owned("(import (scheme base) (patina debug)) (gc)")
+        .unwrap();
+    let heap = interp.backend().heap().clone();
+    let namespaces = heap.borrow().namespaces();
     let env = interp.new_environment();
-    assert_eq!(interp.raw_environment(&env).charged_bytes(), None);
+    assert_eq!(heap.borrow().namespaces(), namespaces + 1);
+    let raw = interp.raw_environment(&env);
+    let made = raw.charged_bytes().expect("a host namespace charges");
     let value = interp.eval_str_owned("'bound").unwrap();
     for i in 0..100 {
         interp.define_in(&env, &format!("name-{i}"), &value);
     }
-    let raw = interp.raw_environment(&env);
-    assert_eq!(raw.local_names(interp.backend().heap()).len(), 100);
-    assert_eq!(raw.charged_bytes(), None);
+    assert_eq!(raw.local_names(&heap).len(), 100);
+    let charged = raw.charged_bytes().unwrap();
+    assert!(
+        charged > made,
+        "{charged} charged after 100 names, {made} made"
+    );
+    let before = interp.gc_stats().external_bytes;
+    drop(raw);
+    drop(env);
+    assert_eq!(
+        interp.gc_stats().external_bytes,
+        before - charged,
+        "its charge given back when its handle dropped"
+    );
+    assert_eq!(heap.borrow().namespaces(), namespaces);
+    interp.eval_program_owned("(gc)").unwrap();
+    assert_eq!(heap.borrow().namespaces(), namespaces);
 }
 
 #[test]
-fn a_host_environment_is_charged_as_a_frame() {
-    charged_as_a_frame(vm_interpreter());
-    charged_as_a_frame(tree_walker_interpreter());
+fn a_host_namespace_is_charged_as_a_namespace() {
+    charged_as_a_namespace(vm_interpreter());
+    charged_as_a_namespace(tree_walker_interpreter());
 }
 
 /// Once the handle is dropped, a value bound only in its environment is

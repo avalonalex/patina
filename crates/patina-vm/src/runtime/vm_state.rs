@@ -3241,7 +3241,9 @@ mod tests {
     /// A definition marks the primitive it rebinds only where the
     /// environment binds the name itself, the one binding a fast path
     /// compiled there stands on: a child's definition of a name its parent
-    /// binds leaves the parent's fast path alone (#673).
+    /// binds leaves the parent's fast path alone (#673). A host namespace's
+    /// definition of a name only the global namespace binds is a namespace's
+    /// fresh record, and marks nothing either (#835).
     #[test]
     fn a_definition_marks_only_the_environments_own_binding() {
         let mut state = VmState::on_a_fresh_heap();
@@ -3257,6 +3259,10 @@ mod tests {
         )]
         let child = Rc::new(Environment::child_frame(Rc::clone(&global)));
         define_global(&mut state, &child, Rc::from("car"), TaggedValue::fixnum(1));
+        assert!(!state.is_primitive_shadowed(car));
+        let host = state.heap.borrow().new_host_namespace(&global);
+        let host = state.heap.borrow().held_environment(&host);
+        define_global(&mut state, &host, Rc::from("car"), TaggedValue::fixnum(1));
         assert!(!state.is_primitive_shadowed(car));
         define_global(&mut state, &global, Rc::from("car"), TaggedValue::fixnum(1));
         assert!(state.is_primitive_shadowed(car));

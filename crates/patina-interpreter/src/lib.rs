@@ -1126,12 +1126,13 @@ impl<B: Backend> Interpreter<B> {
         self.backend.heap().borrow().hold(value)
     }
 
-    /// A new environment for the host to bind values in, held by a handle
+    /// A new host namespace for the host to bind values in, held by a handle
     /// that roots it, and everything bound in it, until the handle is dropped
-    /// (#620). It is a child of the global environment: what is defined in it
-    /// stays in it, and every other name resolves in the global environment,
-    /// a global defined later included. Until 4b.8's host-namespace kind it
-    /// is a frame.
+    /// (#620). A host namespace's parent is the global namespace (#835): what
+    /// is defined or imported in it is a binding of its own, and every other
+    /// name resolves in the global namespace by name, a global defined later
+    /// included. It charges the heap for its tables as every namespace does,
+    /// and counts among the heap's namespaces until it drops.
     ///
     /// ```
     /// # #[cfg(feature = "vm")]
@@ -1217,20 +1218,10 @@ impl<B: Backend> Interpreter<B> {
     /// }
     /// ```
     pub fn new_environment(&self) -> OwnedEnvironment {
-        let global = self.backend.global_env();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the new environment goes into a handle, which roots it, before anything can \
-                      collect"
-        )]
-        let env = Rc::new(Environment::child_frame(Rc::clone(global)));
-        #[allow(
-            deprecated,
-            reason = "interim: the holder that takes only a namespace lands with 4b.8's \
-                      host-namespace kind, which this then makes (#831's ruling on question 1)"
-        )]
-        let held = self.backend.heap().borrow().hold_environment(env);
-        held
+        self.backend
+            .heap()
+            .borrow()
+            .new_host_namespace(self.backend.global_env())
     }
 
     /// Bind `name` to `value` in the host environment `env`, as a program's

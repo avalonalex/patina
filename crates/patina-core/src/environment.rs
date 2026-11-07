@@ -1105,16 +1105,25 @@ pub struct Environment {
 /// kind says which.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
-    /// A namespace: the global environment, a library's or a specifier's,
-    /// each made without a parent and on a heap
+    /// A parentless namespace: the global environment, a library's or a
+    /// specifier's, each made without a parent and on a heap
     /// ([`Environment::with_heap`]). It charges the heap's account for its
     /// tables ([`NamespaceCharge`]), indexes a spelling's scoped bindings
     /// past [`INDEX_ABOVE`], and borrows the heap at each read or write of a
     /// binding (the namespace step, #834).
     Namespace,
-    /// A frame ([`Environment::child_frame`]): a call's or a body's, the
-    /// desugarer's scopes, and a host's environment
-    /// (`Interpreter::new_environment`). It never charges, and indexes past
+    /// A host namespace (#835): the namespace `Interpreter::new_environment`
+    /// answers, whose parent is the global namespace, a parentless one
+    /// ([`Environment::host_namespace`]). Every namespace path is its own:
+    /// its definitions and imports are records over cells in its slots
+    /// (#834, D1), and it borrows the heap at each read or write of a
+    /// binding. It charges its heap's account for its tables as a
+    /// parentless namespace does ([`NamespaceCharge`]), and indexes past
+    /// [`INDEX_ABOVE`] as one does. Next to [`Kind::Namespace`], so that
+    /// [`Environment::is_namespace`] asks one range of discriminants.
+    HostNamespace,
+    /// A frame ([`Environment::child_frame`]): a call's or a body's, and the
+    /// desugarer's scopes. It never charges, and indexes past
     /// [`FRAME_INDEX_ABOVE`].
     Frame,
     /// A frame the tree-walker made for its CPS code's temporaries, a `let`
@@ -1152,6 +1161,51 @@ impl Environment {
     /// A parentless environment of the heap numbered `heap_id`, charging
     /// `account` for its tables.
     fn parentless(heap_id: u64, account: ExternalBytes) -> Self {
+        Self::namespace_with(
+            heap_id,
+            Kind::Namespace,
+            Some(NamespaceCharge::new(account)),
+            None,
+        )
+    }
+
+    /// A host namespace over `parent` (#835): what `Heap::new_host_namespace`
+    /// makes and holds for `Interpreter::new_environment`. Panics unless
+    /// `parent` is a parentless namespace, so no host namespace sits under a
+    /// frame or under another host namespace. Its heap is its parent's. Its
+    /// `RareTables` is built here under every charging rule, as a parentless
+    /// namespace's is: `import_alias` and `link_record` need it.
+    pub(crate) fn host_namespace(parent: Rc<Environment>) -> Self {
+        assert!(
+            parent.kind == Kind::Namespace,
+            "a host namespace's parent is a parentless namespace, not a {:?} (#835)",
+            parent.kind
+        );
+        // Charged to its parent's account, its heap's, which every
+        // parentless namespace has (#834), as a parentless namespace is
+        // charged (the owner's ruling on question 2).
+        let charge = Some(NamespaceCharge::new(
+            parent
+                .rare
+                .get()
+                .and_then(|rare| rare.namespace.as_ref())
+                .expect("a parentless namespace has its charge (#834)")
+                .account
+                .clone(),
+        ));
+        Self::namespace_with(parent.heap_id, Kind::HostNamespace, charge, Some(parent))
+    }
+
+    /// A namespace of either kind, with its `RareTables` built: the one
+    /// struct literal [`Environment::parentless`] and
+    /// [`Environment::host_namespace`] share, so the two cannot drift.
+    /// Charges what its tables hold from the start when it has a charge.
+    fn namespace_with(
+        heap_id: u64,
+        kind: Kind,
+        charge: Option<NamespaceCharge>,
+        parent: Option<Rc<Environment>>,
+    ) -> Self {
         let env = Environment {
             heap_id,
             bindings: RefCell::new(Bindings::default()),
@@ -1160,12 +1214,12 @@ impl Environment {
             alias_bindings: RefCell::new(FxHashMap::default()),
             has_aliases: Cell::new(false),
             has_visible_scoped: Cell::new(false),
-            kind: Kind::Namespace,
+            kind,
             rare: OnceCell::from(Box::new(RareTables {
-                namespace: Some(NamespaceCharge::new(account)),
+                namespace: charge,
                 ..RareTables::default()
             })),
-            parent: None,
+            parent,
         };
         env.recharge();
         env
@@ -1449,15 +1503,19 @@ impl Environment {
         }
     }
 
-    /// Whether this environment is a namespace ([`Kind::Namespace`]), which
+    /// Whether this environment is a namespace of either kind
+    /// ([`Kind::Namespace`], [`Kind::HostNamespace`]): records in its slots,
+    /// the namespace step, and the namespace-only holder's test
+    /// (`Heap::hold_namespace`, #831's ruling on question 1). Either kind
     /// charges for its tables when it has an account ([`NamespaceCharge`])
     /// and indexes at the namespace's threshold ([`Environment::indexes`]).
     /// Asked before a table that frames fill too is measured, so that a frame
     /// skips the measuring for the price of a field read: the kind is in the
-    /// struct, where the charge is behind the `rare` box.
+    /// struct, where the charge is behind the `rare` box. The two kinds'
+    /// discriminants are adjacent, so this is one compare.
     #[inline(always)]
     pub(crate) fn is_namespace(&self) -> bool {
-        self.kind == Kind::Namespace
+        matches!(self.kind, Kind::Namespace | Kind::HostNamespace)
     }
 
     /// The namespace step's shared borrow (#834): taken where a hit in a
@@ -6274,10 +6332,12 @@ mod namespace_charge_tests {
     }
 
     /// The kind is the constructor's (4b's start decision 4 on #782): the
-    /// namespace constructors make namespaces, which have no parent, and the
-    /// frame constructors make frames, which have one. What answers to the
-    /// kind answers as it did when it read the parent: a namespace charges
-    /// its heap's account, which every namespace has since #834.
+    /// namespace constructors make parentless namespaces, the host
+    /// namespace's makes a namespace whose parent is a parentless one
+    /// (#835), and the frame constructors make frames, which have a parent.
+    /// What answers to the kind answers as it did when it read the parent: a
+    /// namespace of either kind charges its heap's account, which every
+    /// parentless namespace has since #834.
     #[test]
     fn each_constructor_sets_its_kind() {
         let heap = new_shared_heap();
@@ -6304,6 +6364,51 @@ mod namespace_charge_tests {
             );
             assert_eq!(frame.charged_bytes(), None);
         }
+
+        let host = Environment::host_namespace(Rc::clone(&global));
+        assert_eq!(host.kind, Kind::HostNamespace);
+        assert!(host.is_namespace() && !host.holds_temporaries());
+        assert!(
+            host.parent()
+                .is_some_and(|parent| Rc::ptr_eq(parent, &global))
+        );
+        assert_eq!(host.heap_id(), global.heap_id(), "its parent's heap");
+        assert!(
+            host.rare.get().is_some(),
+            "its rare tables are built eagerly"
+        );
+        // Charged, as a parentless namespace is (the owner's ruling on
+        // question 2).
+        assert!(host.charged_bytes().is_some());
+    }
+
+    /// A host namespace's parent is a parentless namespace (#835): a frame,
+    /// a frame of temporaries and another host namespace are refused.
+    #[test]
+    #[should_panic(expected = "a host namespace's parent is a parentless namespace")]
+    fn a_host_namespace_over_a_frame_is_refused() {
+        let heap = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(&heap));
+        let frame = Rc::new(Environment::child_frame(global));
+        Environment::host_namespace(frame);
+    }
+
+    #[test]
+    #[should_panic(expected = "a host namespace's parent is a parentless namespace")]
+    fn a_host_namespace_over_a_frame_of_temporaries_is_refused() {
+        let heap = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(&heap));
+        let temporaries = Rc::new(Environment::for_temporaries(global));
+        Environment::host_namespace(temporaries);
+    }
+
+    #[test]
+    #[should_panic(expected = "a host namespace's parent is a parentless namespace")]
+    fn a_host_namespace_over_a_host_namespace_is_refused() {
+        let heap = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(&heap));
+        let host = Rc::new(Environment::host_namespace(global));
+        Environment::host_namespace(host);
     }
 
     /// The estimate a tree-walker closure is charged for its frame (#637) is

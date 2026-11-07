@@ -26,11 +26,11 @@
 //! (`heap::teardown`, #604) drops the table, so a handle that outlives its
 //! interpreter holds a dead reference: dropping it does nothing, and the heap
 //! refuses to read it, whatever becomes of the heap afterwards. Dropping the
-//! table also lets go of the environments it holds, each of which holds the
-//! heap: heap, table, environment and heap again are a cycle, and teardown
-//! is what breaks it. The heap's `PortTable` and `FinalRegistry`, which the
-//! table also holds, are not dropped: the table teardown starts takes them
-//! over (#785).
+//! table also lets go of the environments it holds. An environment does not
+//! hold its heap (#704), so no cycle runs through the table
+//! (`a_held_environment_does_not_keep_its_heap_alive`). The heap's
+//! `PortTable` and `FinalRegistry`, which the table also holds, are not
+//! dropped: the table teardown starts takes them over (#785).
 
 use std::fmt;
 use std::rc::{Rc, Weak};
@@ -435,10 +435,13 @@ impl fmt::Debug for Owned {
 /// An environment a host keeps: rooted, with everything bound in it, until
 /// the handle is dropped (#620).
 ///
-/// An interpreter's `new_environment` answers one, and the interpreter that
-/// made it uses it; it panics on a handle from another interpreter. Like
-/// [`Owned`], the handle keeps neither the heap nor its interpreter alive,
-/// and dropping it after the interpreter does nothing.
+/// It holds a namespace: a host namespace from an interpreter's
+/// `new_environment`, or one `Heap::hold_namespace` held. The deprecated
+/// holders hold any environment of the heap until stage 5e, so the
+/// guarantee holds from then (#831). The interpreter that made it uses it;
+/// it panics on a handle from another interpreter. Like [`Owned`], the
+/// handle keeps neither the heap nor its interpreter alive, and dropping it
+/// after the interpreter does nothing.
 #[derive(Clone)]
 pub struct OwnedEnvironment(Claim);
 
@@ -531,17 +534,13 @@ mod tests {
     }
 
     #[test]
-    #[allow(
-        deprecated,
-        reason = "the namespace-only holder replaces it in 4b.8 (#831)"
-    )]
     fn an_environment_handle_roots_what_is_bound_in_it_until_it_is_dropped() {
         let shared = new_shared_heap();
         let value = shared
             .borrow_mut()
             .alloc_pair(TaggedValue::fixnum(2), TaggedValue::NULL);
         let env = env_holding(&shared, value);
-        let handle = shared.borrow().hold_environment(env);
+        let handle = shared.borrow().hold_namespace(env);
         let copy = handle.clone();
         let mut heap = shared.borrow_mut();
         collect_only(&mut heap, |_| {});
@@ -551,6 +550,57 @@ mod tests {
         drop(env);
         drop(handle);
         drop(copy);
+        assert!(heap.handles.is_empty());
+        collect_only(&mut heap, |_| {});
+        assert!(heap.free_pairs.contains(&value.heap_index()));
+    }
+
+    /// A handle holds only a namespace (#831's ruling on question 1, #835):
+    /// a frame is refused.
+    #[test]
+    #[should_panic(expected = "a handle holds only a namespace")]
+    fn a_frame_is_not_held() {
+        let shared = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(&shared));
+        let frame = Rc::new(Environment::child_frame(global));
+        let _handle = shared.borrow().hold_namespace(frame);
+    }
+
+    /// And so is a frame of the tree-walker's temporaries.
+    #[test]
+    #[should_panic(expected = "a handle holds only a namespace")]
+    fn a_frame_of_temporaries_is_not_held() {
+        let shared = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(&shared));
+        let temporaries = Rc::new(Environment::for_temporaries(global));
+        let _handle = shared.borrow().hold_namespace(temporaries);
+    }
+
+    /// A host namespace is made held (#835): its handle roots what is
+    /// defined in it until the handle is dropped, with no other root.
+    #[test]
+    fn a_host_namespace_is_held_with_what_is_bound_in_it() {
+        let shared = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(&shared));
+        let handle = shared.borrow().new_host_namespace(&global);
+        let host = shared.borrow().held_environment(&handle);
+        assert!(host.is_namespace());
+        assert!(
+            host.parent()
+                .is_some_and(|parent| Rc::ptr_eq(parent, &global))
+        );
+        let value = shared
+            .borrow_mut()
+            .alloc_pair(TaggedValue::fixnum(4), TaggedValue::NULL);
+        host.define(&shared, "held", value);
+        drop(host);
+        let mut heap = shared.borrow_mut();
+        collect_only(&mut heap, |_| {});
+        let host = heap.held_environment(&handle);
+        let held = host.local_value_in(&heap, "held").unwrap();
+        assert_eq!(heap.car(held), TaggedValue::fixnum(4));
+        drop(host);
+        drop(handle);
         assert!(heap.handles.is_empty());
         collect_only(&mut heap, |_| {});
         assert!(heap.free_pairs.contains(&value.heap_index()));
@@ -602,29 +652,21 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "used with heap")]
-    #[allow(
-        deprecated,
-        reason = "the namespace-only holder replaces it in 4b.8 (#831)"
-    )]
     fn an_environment_handle_from_another_heap_is_refused() {
         let first = new_shared_heap();
         let second = new_shared_heap();
         let env = Rc::new(Environment::with_heap(&first));
-        let handle = first.borrow().hold_environment(env);
+        let handle = first.borrow().hold_namespace(env);
         second.borrow().held_environment(&handle);
     }
 
     #[test]
     #[should_panic(expected = "an environment of another heap")]
-    #[allow(
-        deprecated,
-        reason = "the namespace-only holder replaces it in 4b.8 (#831)"
-    )]
     fn an_environment_of_another_heap_is_not_held() {
         let first = new_shared_heap();
         let second = new_shared_heap();
         let env = Rc::new(Environment::with_heap(&first));
-        let _handle = second.borrow().hold_environment(env);
+        let _handle = second.borrow().hold_namespace(env);
     }
 
     #[test]
@@ -666,14 +708,10 @@ mod tests {
     /// handle still drops to nothing after. Before #704 the environment held
     /// the heap, and only teardown broke the cycle.
     #[test]
-    #[allow(
-        deprecated,
-        reason = "the namespace-only holder replaces it in 4b.8 (#831)"
-    )]
     fn a_held_environment_does_not_keep_its_heap_alive() {
         let shared = new_shared_heap();
         let env = Rc::new(Environment::with_heap(&shared));
-        let handle = shared.borrow().hold_environment(env);
+        let handle = shared.borrow().hold_namespace(env);
         let weak = Rc::downgrade(&shared);
         drop(shared);
         assert!(

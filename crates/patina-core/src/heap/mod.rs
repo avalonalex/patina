@@ -838,7 +838,7 @@ impl Heap {
     ///
     /// Deprecated (#831): it holds any environment of the heap, a frame
     /// included, where a host's comes from `Interpreter::new_environment`.
-    /// 4b.8 adds a holder that takes only a namespace, and this goes at
+    /// [`Heap::hold_namespace`] holds only a namespace (#835); this goes at
     /// stage 5e.
     #[deprecated(
         note = "use `Interpreter::new_environment`, which answers an environment held; this \
@@ -847,6 +847,38 @@ impl Heap {
     pub fn hold_environment(&self, env: Rc<crate::environment::Environment>) -> OwnedEnvironment {
         self.assert_own(&env);
         self.handles.hold_environment(env)
+    }
+
+    /// A handle on `env`, a namespace of this heap — the global namespace, a
+    /// library's, a specifier's, or a host namespace — which roots it and
+    /// what is bound in it until the handle is dropped (#620). Panics on a
+    /// frame or a frame of temporaries, as on another heap's environment: a
+    /// handle holds a namespace (#831's ruling on question 1, #835). Raw, as
+    /// `Heap` is.
+    pub fn hold_namespace(&self, env: Rc<crate::environment::Environment>) -> OwnedEnvironment {
+        self.assert_own(&env);
+        assert!(
+            env.is_namespace(),
+            "a frame or a frame of temporaries: a handle holds only a namespace (#831)"
+        );
+        self.handles.hold_environment(env)
+    }
+
+    /// A new host namespace over `parent`, this heap's parentless namespace,
+    /// held (#835): what `Interpreter::new_environment` answers. A host
+    /// namespace is made only here, so none that is not held leaves core.
+    /// Panics as `Environment::host_namespace` does on any other parent.
+    ///
+    /// Borrow-free beyond `&self`: the namespace's charge goes through the
+    /// heap's account handle, and nothing is allocated in the arenas.
+    pub fn new_host_namespace(
+        &self,
+        parent: &Rc<crate::environment::Environment>,
+    ) -> OwnedEnvironment {
+        self.assert_own(parent);
+        self.hold_namespace(Rc::new(crate::environment::Environment::host_namespace(
+            Rc::clone(parent),
+        )))
     }
 
     /// The environment `handle` holds. Panics as [`Heap::held`] does.
