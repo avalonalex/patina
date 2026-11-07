@@ -1126,9 +1126,9 @@ what is bound in it, on both backends (#620):
   which 4b.8 rewrites to the owner's charging ruling.
 
 #835's tests pin what host code reads and writes, what its closures keep and
-what its macros introduce, from before 4b.6's binding records (#834) and
-4b.8's host namespaces changed how it is linked. Each held on both backends
-at its base and holds under the records:
+what its macros introduce, from before 4b.6's binding records (#834) changed
+how it is linked. Each held on both backends at its base and holds under the
+records, and 4b.8's host namespaces must keep it:
 
 - a `set!` of a name only the global environment binds, which writes the
   global binding and binds nothing in the host environment, and one of a

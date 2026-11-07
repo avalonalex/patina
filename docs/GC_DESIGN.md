@@ -552,10 +552,12 @@ them.
   `define` over an import makes a cell and re-points the record at it, and
   an import inserts a record over the exporter's cell or re-points the
   name's record at it. A cell of the namespace's own imported under another
-  name is copied by `define`'s rules, so two names of one namespace never
-  share a cell. So the VM's cached `(env_id, slot)` names one record for
-  the namespace's life. An import alias (`Environment::import_alias`, #438)
-  is a second record over the same cell. A frame holds no record: its own
+  name is copied by `define`'s rules, so no two names of one namespace
+  share a cell the namespace owns, and each own cell has exactly one record.
+  So the VM's cached `(env_id, slot)` names one record for the namespace's
+  life. Two names may share an imported cell: an import alias
+  (`Environment::import_alias`, #438), or one export imported under two
+  names, is a second record over the same cell. A frame holds no record: its own
   bindings are values, and an import is the frame-only marker
   `TaggedValue::IMPORTED` in its slot, with the cell beside it in
   `RareTables::frame_imports` (D5/D6), so installing one allocates nothing
@@ -604,12 +606,15 @@ them.
   (`an_importer_holds_the_cell_and_not_the_library`), which is what releases
   a replaced library's namespace where nothing else holds it
   (`gc_namespace_bytes.rs`'s `a_replaced_library_with_a_procedure_is_released`).
-  Three holders keep a cell's word outside the roots, unbranded, and each
-  only while something rooted keeps the cell: a `Library` clone's copies of
-  the registry's words; `BindingLocation::Cell`, the cell's word as an
-  identity within one form's desugaring, beneath a context; and the
-  desugarer's declaration cells, values of the context that desugars the
-  form, dropped with it.
+  Three holders keep a cell's word outside the roots, unbranded. A
+  `Library` clone's copies of the registry's words are sound only while the
+  registry entry or a record keeps the cell. The desugarer's declaration
+  cells are free cells nothing roots: they are sound because nothing
+  collects beneath the context that desugars the form, which made them and
+  drops them with it. `BindingLocation::Cell`, the cell's word as an
+  identity within one form's desugaring, is sound on the same ground, since
+  it may name a declaration cell. So a change that lets desugaring collect
+  mid-form must first root these.
 - **The stale check (#621).** Every read and write goes through
   `Heap::car`, `cdr`, `store_cell` or `set_record_cell`, each of which
   checks the pair's generation, so a freed record or cell panics with
@@ -623,8 +628,9 @@ them.
   an assignment, a scoped entry's included (`gc_census.rs`'s
   `a_store_into_an_introduced_definition_names_its_cell`). A by-name
   definition's first value initialises a fresh cell and is logged at
-  `EnvDefine` with no holder, one `EnvDefine` per by-name `define`, on
-  which the tree-walker's `TwContinuationDefine` relies; a scoped
+  `EnvDefine` with no holder, one `EnvDefine` per by-name `define` (the
+  tree-walker's `TwContinuationDefine` relies on the same rule for a
+  frame's `bind`, which logs one `EnvDefine` with no holder); a scoped
   definition's fresh cell is initialised unlogged, as its entry was before
   the records. A record's re-point is logged at `EnvRecordRepoint` with the
   record as holder: the record may be old and the cell young, an

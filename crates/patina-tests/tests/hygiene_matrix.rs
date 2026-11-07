@@ -1424,11 +1424,13 @@ fn a_definition_over_an_import_is_not_a_library_macros_literal() {
     }
 }
 
-/// A copied import still matches the exporting library's literal (#450).
-/// The original fixture exported a macro-introduced global by its bare name,
-/// which #427 deliberately makes private. Force the import's copied-value
-/// representation here instead, preserving the matcher regression without
-/// making global privacy depend on the old fixture.
+/// A binding with an import's value but its own location still matches the
+/// exporting library's literal (#450). The original fixture exported a
+/// macro-introduced global by its bare name, which #427 deliberately makes
+/// private, and an import was then installed as a copy. No import is a copy
+/// since #834, so a host `define` of the imported value makes that shape
+/// here, preserving the matcher regression without making global privacy
+/// depend on the old fixture.
 #[test]
 fn an_import_installed_as_a_copy_still_matches_the_librarys_literal() {
     fn check<B: patina_runtime::Backend>(interp: patina_interpreter::Interpreter<B>) {
@@ -1449,7 +1451,7 @@ fn an_import_installed_as_a_copy_still_matches_the_librarys_literal() {
         let env = interp.backend().global_env();
         let shared = env.binding_location(interp.backend().heap(), "kw");
         let value = env.get(interp.backend().heap(), "kw").unwrap();
-        // The fallback import representation: same value, its own location.
+        // The shape a copied import had: same value, its own location.
         env.define(interp.backend().heap(), "kw", value);
         assert_ne!(env.binding_location(interp.backend().heap(), "kw"), shared);
         assert_eq!(
