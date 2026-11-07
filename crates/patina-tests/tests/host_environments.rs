@@ -461,7 +461,7 @@ fn a_host_environment_reaches_what_a_global_expansion_introduced() {
 // What host code reads and writes, what its closures keep, and what its
 // macros introduce, pinned before 4b.6's binding records (#834) changed how
 // it is linked (#835's tests PR). Each held at the PR's base and holds under
-// the records; 4b.8's host-namespace kind must keep it.
+// the records and under 4b.8's host namespaces (#835).
 // ---------------------------------------------------------------------------
 
 /// A `set!` in host code of a name only the global environment binds writes

@@ -36,11 +36,12 @@
 //! same memory once per object that names it, and what they hold belongs to
 //! code and environments, which GC_PRD §15 charges as **external bytes**,
 //! once per holder rather than once per object that names it. A namespace —
-//! an environment made without a parent: the global environment, a
-//! library's, and those `environment` and the R5RS constructors build —
-//! charges its own tables, once when it is made and again as they grow, and
-//! gives them back when it drops (#615; `Environment`'s `NamespaceCharge`
-//! says what it counts). [`Heap::charge_external_bytes`] is the entry point
+//! an environment made without a parent (the global environment, a
+//! library's, and those `environment` and the R5RS constructors build) or a
+//! host namespace, whose parent is the global one (#835) — charges its own
+//! tables, once when it is made and again as they grow, and gives them back
+//! when it drops (#615; `Environment`'s `NamespaceCharge` says what it
+//! counts). [`Heap::charge_external_bytes`] is the entry point
 //! for a holder with the heap in hand, and an [`ExternalBytes`] handle for
 //! one without: the handle needs no heap borrow, because such a holder
 //! usually dies when the last `Rc` naming it drops, and that is often inside

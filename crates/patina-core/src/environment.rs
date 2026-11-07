@@ -1037,13 +1037,16 @@ fn fresh_env_id() -> u64 {
 ///
 /// Derived (#686): the value in each of its slots, which in a namespace is
 /// the binding's record, and so its cell and value; each cell a frame
-/// imports (`frame_imports`); the target of each macro-expansion alias; not
-/// its parent. `SlotVisitor::env` walks an
+/// imports (`frame_imports`); the target of each macro-expansion alias; a
+/// host namespace's read-through table (`RareTables::read_through`), its
+/// `unbound` cell and each read-through record, and through the record the
+/// parent's (#835); not its parent. `SlotVisitor::env` walks an
 /// environment with the chain it heads, and the collector follows the
 /// parent by reference, since nearly every environment has one: queueing it
 /// as well cost a hash lookup and a reference count per environment, about
-/// 1% of the tree-walker's chibi suite under stress 1. The sentinel test
-/// `gc_edge_tests::environment_edges` puts a value behind each edge that
+/// 1% of the tree-walker's chibi suite under stress 1. The sentinel tests
+/// `gc_edge_tests::environment_edges` and, for the read-through table,
+/// `gc_edge_tests::read_through_edges` put a value behind each edge that
 /// nothing else reaches.
 #[derive(Debug, Trace)]
 pub struct Environment {

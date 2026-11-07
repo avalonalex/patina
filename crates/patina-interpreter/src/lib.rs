@@ -1244,11 +1244,13 @@ impl<B: Backend> Interpreter<B> {
         Some(self.hold(value))
     }
 
-    /// The host namespace `env` holds, raw, for a call the handle forms do
-    /// not cover, such as `Backend::eval`. The handle roots it, not this `Rc`:
-    /// keep the handle while the environment is in use, and read a value
-    /// from it, or write one, as raw, as with [`Interpreter::global_env`].
-    /// Panics on a handle another interpreter made.
+    /// The environment `env` holds, raw (a host namespace when it came from
+    /// [`new_environment`](Self::new_environment)), for a call the handle
+    /// forms do not cover, such as `Backend::eval`. The handle roots it, not
+    /// this `Rc`: keep the handle while the environment is in use, and read
+    /// a value from it, or write one, as raw, as with
+    /// [`Interpreter::global_env`]. Panics on a handle another interpreter
+    /// made.
     pub fn raw_environment(&self, env: &OwnedEnvironment) -> Rc<Environment> {
         self.backend.heap().borrow().held_environment(env)
     }

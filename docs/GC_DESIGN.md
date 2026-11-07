@@ -621,8 +621,11 @@ record (below).
   the two allocations needs no root.
 - **Trace.** Records and cells are pairs, so the collector marks record →
   cell → value with no trace code of its own. `Environment`'s derived trace
-  reports each slot's word and each scoped entry's, pinned, and each cell in
-  `frame_imports`; `Library`'s reports each export's cell. The sentinels are
+  reports each slot's word and each scoped entry's, pinned, each cell in
+  `frame_imports`, and a host namespace's read-through table
+  (`RareTables::read_through`): its `unbound` cell and each read-through
+  record, and through the record the parent's; `Library`'s reports each
+  export's cell. The sentinels are
   `gc_edge_tests::environment_edges` (a frame's import),
   `gc_edge_tests::read_through_edges` (a host namespace's read-through
   table),
