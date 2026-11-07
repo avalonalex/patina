@@ -125,15 +125,18 @@ There is no traversal API today; the tracer needs a new
 `bindings` + `scoped_bindings` + the parent chain.
 
 *As built:* an environment's derived trace (#686) reports its edges: the
-value in each slot, plain and scoped, and two kinds of edge that leave the
-parent chain, both an `Rc<Environment>` in a side table rather than a value
-in a slot: a macro-expansion alias into the environment the macro was
-defined in, and the owner of an imported binding, whose slot here holds only
-a marker — the value is in the slot of the library that owns the location
-(#406). One more value sits beside the slots: the environment's mutable
-specifier, which `interaction-environment` and `load` hand out again rather
-than allocate per call (#615), and which is live exactly as long as the
-bindings are. The trace leaves out the parent. `GcVisitor::visit_env`
+word in each slot, plain and scoped, which in a namespace is the binding's
+record, so that its cell and value are marked as the pairs they are; each
+cell a frame imports; and one kind of edge that leaves the parent chain, an
+`Rc<Environment>` in a side table rather than a value in a slot: a
+macro-expansion alias into the environment the macro was defined in. An
+import is no such edge: it is the exporter's cell, which the importer's
+record names, or a frame's import table holds, and which the trace marks
+like any value, so an importer keeps the cell and not the library's
+environment (§4.7, #834). One more value sits beside the slots: the
+environment's mutable specifier, which `interaction-environment` and `load`
+hand out again rather than allocate per call (#615), and which is live
+exactly as long as the bindings are. The trace leaves out the parent. `GcVisitor::visit_env`
 follows the parent chain by reference and walks the other environments from
 a worklist, all deduplicated by `gc_identity`, without recursing: an
 environment's trace reports to `EnvEdges`, which marks each value and queues
@@ -337,7 +340,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs`):
 | `MutableCell` | inner value |
 | `VmClosure` | each of `free_vars` + **`visit_env(globals)`** |
 | `Procedure` | captured env (`visit_env`) + **body-expression literals** (§4.4) |
-| `Macro` | each of its `literals`, which its patterns and templates name by index (#718, §9.6); and its body, `CompiledMacro`: `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623, though today the registry or an importer's `owners` also roots each (`CompiledMacro`'s derived trace, #686) |
+| `Macro` | each of its `literals`, which its patterns and templates name by index (#718, §9.6); and its body, `CompiledMacro`: `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623; the registry also roots each while its library is registered, and since #834 nothing else need once a redefinition replaces it, since an importer holds the library's cells and not its environment (`CompiledMacro`'s derived trace, #686) |
 | `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` — each record's before/after thunks and the handler stack it captured at its `dynamic-wind` call (`WindRecord`'s derived trace, the one tracing point for a record wherever it sits: a stack, a continuation, a prompt frame, or a `DynamicWindSetup`/`Jump` cont value), `exception_handlers`, `prompt_stack` — each frame's handler and the continuation below it (derived; the tag is a plain `Rc` struct), `captured_cont_env` (deduplicated worklist), `resume` (`ContValue`'s derived trace), body literals (§4.4) |
 | `EnvironmentSpecifier` | `visit_env(env)` |
 | `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id; the payload in `VmState`'s side tables is traced only for recorded ids, via the `RootProvider::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5) |
@@ -531,6 +534,124 @@ terminated thread (stage 9), and `FinalKind::HostPayload` with 4f.
 GC-time flushing is observable, and matches chibi and Gauche, so the tests
 that pin it stay out of the byte-identical differential lane.
 
+### 4.7 Binding records and cells (#834)
+
+A namespace's binding is a **record** over a **cell**, as `PRD/GC_PRD.md`
+§11.6's variant R has it, in the home stage 4b's spike chose, (a′): two-word
+pairs in the pair arena (`crates/patina-core/src/binding_record.rs`). A cell
+is a binding's location, the pair `(value . owner)`, where owner is the
+fixnum `env_id << 4` of the namespace whose cell it is, or 0 for a free
+cell. A record is a namespace's hold on a location, the pair
+`(cell . flags)`, whose flags stay the fixnum 0 until 4b.9's link tables use
+them.
+
+- **Where they live.** In a namespace, the word in each slot of `Bindings`,
+  and in each of its scoped entries, is a record (the owner's ruling D1 of
+  2026-11-06 on #834). Slots stay append-only and a record never leaves its
+  slot: a `define` over the namespace's own binding stores into its cell, a
+  `define` over an import makes a cell and re-points the record at it, and
+  an import inserts a record over the exporter's cell or re-points the
+  name's record at it. A cell of the namespace's own imported under another
+  name is copied by `define`'s rules, so no two names of one namespace
+  share a cell the namespace owns, and each own cell has exactly one record.
+  So the VM's cached `(env_id, slot)` names one record for the namespace's
+  life. Two names may share an imported cell: an import alias
+  (`Environment::import_alias`, #438), or one export imported under two
+  names, is a second record over the same cell. A frame holds no record: its own
+  bindings are values, and an import is the frame-only marker
+  `TaggedValue::IMPORTED` in its slot, with the cell beside it in
+  `RareTables::frame_imports` (D5/D6), so installing one allocates nothing
+  and takes no borrow of the heap.
+- **Exports are cells.** `Library.exports` maps each name to the cell its
+  binding named when the library was built, resolved one hop to the owning
+  cell, so a re-export is the defining library's cell; `import_into` makes
+  the importing name a record over it. The loaders take each cell with
+  `Environment::cell_of` (`cells` for the tree-walker's export of a
+  Rust-built library). An export with no binding behind it,
+  `Library::export_value`, is a free cell, and so is the location the
+  desugarer gives a declaration (#463, `Cx::new_declaration_cell`), which
+  every view of the declaration imports.
+- **Macro-introduced definitions.** On the VM the record is the one in the
+  renamed global's slot, born at the global's `Define` and reached from the
+  identity through `Introduced`, which holds no record word (D8); on the
+  tree-walker it is the scoped entry's word. The scope that introduced it is
+  the identity's largest, derived and stored nowhere
+  (`ScopeSet::introducing_scope`, D9), and `Environment::introduced_records`
+  answers both backends' records, raw, for 5c and the tests.
+- **Reads and writes.** Only core makes or reads either: `Record` never
+  leaves the crate, and `BindingCell` is a token outside it, which a crate
+  can only hand back (`Library::export_cell`, `NamespaceView::import_cell`,
+  `Cx::import_cell_in_frame`). Every read path of `Environment` dereferences
+  a record, so a program never sees one as a value
+  (`record_read_tests::no_namespace_read_answers_a_record`, with an
+  `Interpreter` half in `host_environments.rs`), and a read makes no record
+  on either backend (`a_read_makes_no_record`). A namespace's read takes
+  the heap's shared borrow at its step and follows record → cell → value;
+  a frame's own read is one compare with the marker. A record or cell is
+  made under one `&mut Heap`, which a collection needs, and allocation
+  never collects (§6), so the cell held in a local between the two
+  allocations needs no root.
+- **Trace.** Records and cells are pairs, so the collector marks record →
+  cell → value with no trace code of its own. `Environment`'s derived trace
+  reports each slot's word and each scoped entry's, pinned, and each cell in
+  `frame_imports`; `Library`'s reports each export's cell. The sentinels are
+  `gc_edge_tests::environment_edges` (a frame's import),
+  `a_namespace_record_keeps_its_cell_and_value` (a slot's and a scoped
+  entry's), `a_cell_only_an_importer_holds_outlives_its_exporter` and
+  `library.rs`'s `library_exports_and_environment`.
+- **Liveness.** Until the link tables, a record's holder is its namespace,
+  so a namespace's records die with it. A cell lives while a record, an
+  export or a frame's import names it: an importer keeps the exporter's
+  cell, and nothing keeps the exporter's namespace for it
+  (`an_importer_holds_the_cell_and_not_the_library`), which is what releases
+  a replaced library's namespace where nothing else holds it
+  (`gc_namespace_bytes.rs`'s `a_replaced_library_with_a_procedure_is_released`).
+  Three holders keep a cell's word outside the roots, unbranded. A
+  `Library` clone's copies of the registry's words are sound only while the
+  registry entry or a record keeps the cell. The desugarer's declaration
+  cells are free cells nothing roots: they are sound because nothing
+  collects beneath the context that desugars the form, which made them and
+  drops them with it. `BindingLocation::Cell`, the cell's word as an
+  identity within one form's desugaring, is sound on the same ground, since
+  it may name a declaration cell. So a change that lets desugaring collect
+  mid-form must first root these.
+- **The stale check (#621).** Every read and write goes through
+  `Heap::car`, `cdr`, `store_cell` or `set_record_cell`, each of which
+  checks the pair's generation, so a freed record or cell panics with
+  "use-after-free" in a debug or `gc-check` build
+  (`gc_edge_tests::a_freed_record_is_refused_in_a_check_build`).
+- **Census sites (#651).** Every store into a cell is logged at its
+  caller's site with the cell as holder, since the cell may be old and the
+  value young (`Heap::store_cell` takes the site, not an `Option` of one):
+  `EnvDefine` for a `define` over the namespace's own binding, by name or
+  at a scope set it already holds, and `EnvSetSlot` and `EnvSetScoped` for
+  an assignment, a scoped entry's included (`gc_census.rs`'s
+  `a_store_into_an_introduced_definition_names_its_cell`). A by-name
+  definition's first value initialises a fresh cell and is logged at
+  `EnvDefine` with no holder, one `EnvDefine` per by-name `define` (the
+  tree-walker's `TwContinuationDefine` relies on the same rule for a
+  frame's `bind`, which logs one `EnvDefine` with no holder); a scoped
+  definition's fresh cell is initialised unlogged, as its entry was before
+  the records. A record's re-point is logged at `EnvRecordRepoint` with the
+  record as holder: the record may be old and the cell young, an
+  old-to-young edge stage 7's barrier must see (`gc_census.rs`'s
+  `a_record_repoint_is_logged_with_a_heap_holder`).
+- **The identity condition.** `RareTables::import_aliases` keys each
+  imported cell by `BindingCell::key`, its word less a check build's
+  generation stamp, so a cell made in a swept cell's slot has the swept
+  cell's key in every build. The keys are compared, never traced or
+  dereferenced, and an entry goes when its alias's record is re-pointed
+  (`forget_alias`, in `define`'s and an import's re-point), so no key
+  outlives its cell (the owner's rulings of 2026-11-03 on #782).
+  `import_alias_reuse_tests` makes a cell in the swept cell's slot after
+  each of the two re-points, and each test fails without its re-point's
+  `forget_alias` in a debug build, whose words carry the stamp, as in
+  release.
+
+What a namespace holds is counted by the `namespaces`, `binding-records` and
+`cells` keys (§6). Records and cells are charged in L as the pair arena's,
+never by `NamespaceCharge`.
+
 ---
 
 ## 5. Root Inventory
@@ -653,7 +774,7 @@ expansion runs in (§7; point C of `PRD/GC_PRD.md` §11.3).
 
 | Root | Location | Notes |
 |------|----------|-------|
-| `LibraryRegistry.libraries[*]` | `crates/patina-runtime/src/library_registry.rs` | Each `Library` has `exports: HashMap<String, TaggedValue>` **and** `env: Rc<Environment>` — two root sets per library. **`impl RootProvider for LibraryRegistry`** lives in `patina-runtime`, so both backends share the rule, and each registers the registry it makes with its heap (`LibraryRegistry::register_roots`, #682), as a provider that holds it weakly and is not ready while a load holds it; each `Library`'s derived trace (#686) reports the exports pinned until stage 4b makes them cells |
+| `LibraryRegistry.libraries[*]` | `crates/patina-runtime/src/library_registry.rs` | Each `Library` has `exports: HashMap<String, BindingCell>` **and** `env: Rc<Environment>` — two root sets per library. **`impl RootProvider for LibraryRegistry`** lives in `patina-runtime`, so both backends share the rule, and each registers the registry it makes with its heap (`LibraryRegistry::register_roots`, #682), as a provider that holds it weakly and is not ready while a load holds it; each `Library`'s derived trace (#686) reports each export's cell, pinned: the cell its binding named when the library was built, resolved one hop to the owning cell, or a free cell for an export with no binding behind it (#834, §4.7) |
 | `LibraryRegistry.loading_stack[*]` | `crates/patina-runtime/src/library_registry.rs` | A library being loaded: the environment it is built in and the body forms it has not yet run, handed over by `ParsedLibrary::hand_to` and traced, pinned, by the same `impl RootProvider for LibraryRegistry` (#677). Each entry names the thread that started the load (#688), so a cycle is found per thread, and another thread's import of the same library will wait for the load once stage 9 has threads |
 | `ParsedLibrary.body` | `crates/patina-runtime/src/library_loader.rs` | Unevaluated forms between parsing and the hand-over to the load's entry, or for the whole load where nothing hands them over; covered by deferral |
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
@@ -857,11 +978,16 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   their index on the VM — which a macro that introduces a definition grows
   at every expansion: about 97 bytes a cycle in `hidden-define` on either
   backend, 225 in all on the VM with the renamed global's slot, name and
-  name-index entry, measured 2026-11-04 on a release build, macOS arm64). An
-  `(environment '(scheme base))` is charged about 40 KiB, so a loop of them
-  collects every 8 MiB of namespaces and peaks near 21 MB on either backend
-  at 80,000 or 320,000 calls, where it plateaued at 2.9 GB; a program that
-  keeps its namespaces raises L with them. Frames (`Environment::child_frame`
+  name-index entry, measured 2026-11-04 on a release build, macOS arm64).
+  Binding records and cells (§4.7) are pairs, in L as the pair arena's and
+  never in a namespace's charge: since #834 each such expansion's record and
+  cell add two pairs, 32 bytes a cycle, on both backends. An
+  `(environment '(scheme base))` is charged about 32 KB since #834 took out
+  its import links and owners (about 40 KiB when the loop's figures below
+  were measured), so a loop of them collects every 8 MiB of namespaces and
+  peaks near 21 MB on either backend at 80,000 or 320,000 calls, where it
+  plateaued at 2.9 GB; a program that keeps its namespaces raises L with
+  them. Frames (`Environment::child_frame`
   and `for_temporaries`, the tree-walker's per call and per `let`) never
   charge, and skip the measuring: a scoped binding or an alias, which is how
   the tree-walker binds a call's parameters, checks the environment's kind
@@ -871,7 +997,10 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   charge.
   Each namespace is charged once however many specifiers name it, and
   `interaction-environment` answers one specifier, cached on the
-  environment (§3.3), so a loop of it allocates nothing. The `environment`
+  environment (§3.3), so a loop of it allocates nothing. The charge also
+  counts the namespace, its binding records and its own cells, through the
+  same borrow-free handle (#834): the `namespaces`, `binding-records` and
+  `cells` keys below. The `environment`
   loop's figures measured 2026-10-03, release, macOS arm64.
 
   **Open file ports charge too, and count toward descriptor pressure
@@ -1037,7 +1166,21 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   objects while they are reachable: a dead port object keeps its entry until
   the collection that finds it, and a file port's until that collection's
   drain (§4.6), so the count is the live ports' only right after a
-  collection. A trigger the GC mode does not use reads `#f`. `minors` and `majors`
+  collection. `namespaces`, `binding-records` and `cells` (#834) count what
+  the namespaces hold: the live namespaces that charge (the global
+  environment, each loaded library's, each live specifier's and
+  `%parameterize-swap!`'s compile namespace; a host's environment is a
+  frame, and is not counted); the binding records they hold, one per slot,
+  per scoped entry and per import alias; and the cells of their own their
+  records name now, leaving out a frame's imports, a free cell, and a cell
+  only an importer's record or an export keeps. Each is a running sum,
+  raised as a namespace makes one, `cells` lowered as a record is
+  re-pointed away from an own cell, and both given back when a namespace
+  drops, so they are exact once the dead namespaces have dropped, which a
+  collection's sweep does for the specifiers it frees; a test-only
+  `Environment::recount` checks them against the tables. Records and cells
+  are pairs, so `pairs` counts them too. A trigger the GC mode does not use
+  reads `#f`. `minors` and `majors`
   count collections by kind: every one is a major until a nursery.
   For a tree-walker closure, the first four count the estimate of the frame
   it captures (#637, above) as part of its payload: an estimate, not a

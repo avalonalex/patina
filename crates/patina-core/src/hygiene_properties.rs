@@ -208,7 +208,8 @@ fn snapshot(heap: &SharedHeap, envs: &[Rc<Environment>]) -> Vec<(usize, u8, i64)
         if let Some(bindings) = env.scoped_bindings.borrow().get("x") {
             for binding in bindings {
                 let mask = binding.scopes.iter().fold(0, |m, s| m | (1 << s.0));
-                result.push((i, mask, binding.tagged_value.as_fixnum().unwrap()));
+                let value = env.scoped_entry_value(heap, binding);
+                result.push((i, mask, value.as_fixnum().unwrap()));
             }
         }
         assert_eq!(

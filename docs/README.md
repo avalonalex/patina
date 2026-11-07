@@ -171,9 +171,11 @@ types promised signatures name, and the raw types a host reaches from them:
 | `patina_primitives::{PrimitiveFn, TaggedStep, StepFn}`, `patina_core::{CollectKind, SigintForwarding}` | inside | through `HostPrimitives`, `ApplyContext`, `Step::Collect` and `InterruptHandle::forward_sigint` |
 | `patina_core::CoreExprKind` | inside | `CoreExpr`'s `kind` |
 | `patina_frontend::error::FrontendError`, `patina_macros::MacroError` | inside | through `PipelineError` (legacy-pipeline) |
-| `patina_core::Library` | type inside, members raw | `ApplyContext::load_scheme_library` answers one; 4b.6 makes its exports cells |
+| `patina_core::Library` | type inside, members raw | `ApplyContext::load_scheme_library` answers one; its exports are cells (#834) |
 | `patina_core::Heap` | raw | `SharedHeap` stands for it, and `backend().heap()` reaches it; `hold_environment` is deprecated (#831), until 5e |
-| `patina_core::NamespaceView` | raw | no promised signature names it; 4b.6 reimplements it over binding records |
+| `patina_core::NamespaceView` | raw | no promised signature names it; implemented over binding records (#834) |
+| `patina_core::BindingCell` | raw | a location's token: `Library.exports`' values, and what `Cx::new_declaration_cell` (`#[doc(hidden)]`) answers and `Cx::import_cell_in_frame` takes; unbranded, so held only while the registry entry, a record or the context that made it keeps it (#834) |
+| `patina_core::IntroducedRecord` | raw | what `Environment::introduced_records` answers, for 5c and the tests (#834) |
 | `patina_core::heap::ExternalBytes` | raw | only the raw `ExternalAccounter::new` and `Heap::external_bytes_handle` name it |
 
 `patina-runtime`'s library loader, which `patina-interpreter` does not

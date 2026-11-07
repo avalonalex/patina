@@ -435,7 +435,8 @@ program may by then have defined the spelling itself: `define` over an import
 gives the importer a binding of its own, and the template's `count`, or `car`,
 followed the name to it. So such a reference is given
 `Environment::import_alias` — a name of the use site's own for the import's
-*location*, an ordinary forwarded slot, minted once per imported name.
+*location*, a second record over the same cell (#834), minted once per
+imported name.
 
 **Where** matters more than it looks. Relinking only records that the
 expansion came from another program or library; the name is changed where the
@@ -526,10 +527,12 @@ Two cases compare by something other than which local binding is reached:
   (`Environment::binding_location`), holding different values. A program's
   `(define else #f)` over the import is therefore not `cond`'s `else`, and a
   library macro's `quote` literal does not match a use site whose `quote` is
-  SRFI 101's — chibi and Gauche agree on both. The value check keeps an
-  import installed as a copy (an export `share_binding` cannot share)
-  matching the library's literal. A name bound on one side and unbound on
-  the other still matches.
+  SRFI 101's — chibi and Gauche agree on both. No import is a copy: each
+  is the exporter's cell (#834). The value check keeps a binding of the use
+  site's own that holds what the library's holds, as a host's `define` of an
+  import's value makes, matching the library's literal, as such a copy did
+  when it was an import's representation. A name bound on one side and
+  unbound on the other still matches.
 - **Globals spelled differently match by value** (`denotes_same_binding`),
   which is what lets `(rename (scheme base) (else alt))` match `else`.
 

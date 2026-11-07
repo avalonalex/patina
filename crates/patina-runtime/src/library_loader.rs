@@ -118,23 +118,24 @@ pub fn build_library(
                  library defines or imports, so it cannot be exported",
             ));
         }
-        match spec {
-            // Keywords need no exemption here. A library that imports one has
-            // a binding to export like any other; one that does not cannot
-            // export it, and saying so is right rather than lenient — the
-            // importer would have got nothing either way, and before stage 2
-            // only the desugarer's spelling fallback hid that.
-            ExportSpec::Identifier(name) => match library.env.get(heap, name) {
-                Some(value) => library.export_tagged(name.clone(), value),
-                None => return Err(reject(name, "not defined")),
-            },
-            ExportSpec::Rename { internal, external } => match library.env.get(heap, internal) {
-                // Renaming a keyword works like renaming anything else: the
-                // marker goes out under the new name, and the importer's
-                // desugarer dispatches on the form rather than the spelling.
-                Some(value) => library.export_renamed(internal.clone(), external.clone(), value),
-                None => return Err(reject(internal, "not defined")),
-            },
+        // Keywords need no exemption here. A library that imports one has a
+        // binding to export like any other; one that does not cannot export
+        // it, and saying so is right rather than lenient — the importer
+        // would have got nothing either way, and before stage 2 only the
+        // desugarer's spelling fallback hid that. Renaming a keyword works
+        // like renaming anything else: the marker goes out under the new
+        // name, and the importer's desugarer dispatches on the form rather
+        // than the spelling.
+        let (internal, external) = match spec {
+            ExportSpec::Identifier(name) => (name, name),
+            ExportSpec::Rename { internal, external } => (internal, external),
+        };
+        // The cell the binding names, own or imported: a re-export is the
+        // defining library's cell, one hop (#834). The environment is
+        // parentless, so this is `get`'s answer less an alias, refused above.
+        match library.env.cell_of(heap, internal) {
+            Some(cell) => library.export_cell(external.clone(), cell),
+            None => return Err(reject(internal, "not defined")),
         }
     }
     Ok(library)

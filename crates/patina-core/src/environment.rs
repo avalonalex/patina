@@ -1,6 +1,8 @@
 use crate::Trace;
+use crate::binding_record::{BindingCell, Record};
+use crate::census::Site;
 use crate::heap::{ExternalBytes, Heap, SharedHeap};
-use crate::scope::ScopeSet;
+use crate::scope::{ScopeId, ScopeSet};
 use crate::scope_index::{FRAME_INDEX_ABOVE, INDEX_ABOVE, ScopeIndex};
 use crate::scope_resolve::AmbiguousReference;
 use crate::tagged_value::TaggedValue;
@@ -40,6 +42,43 @@ fn list_bytes(list: &ScopedBindingList) -> usize {
         list.capacity() * size_of::<ScopedBinding>()
     } else {
         0
+    }
+}
+
+/// The value a slot's or a scoped entry's `word` stands for: in a namespace
+/// (`step` is its borrow, `Some` exactly for a namespace, from `read_step`)
+/// what the word's record's cell holds (#834); in a frame, the word itself.
+#[inline(always)]
+fn resolve(step: Option<&Heap>, word: TaggedValue) -> TaggedValue {
+    step.map_or(word, |heap| Record::from_word(word).value(heap))
+}
+
+/// Write `value` into the binding a scoped entry is: in a namespace (`step`
+/// is its mutable borrow, from `write_step`) a store into the cell the
+/// entry's record names, logged at `site` with the cell as holder, as every
+/// store into a cell is (#834); in a frame, the entry's word itself, off the
+/// heap, logged at `site` with no holder where `log_frame` says so. Only
+/// [`Environment::set`]'s by-name step logs a frame's entry; the scoped
+/// assignments write it unlogged, as they did before #834.
+#[inline]
+fn write_entry(
+    step: Option<&mut Heap>,
+    entry: &mut ScopedBinding,
+    value: TaggedValue,
+    site: Site,
+    log_frame: bool,
+) {
+    match step {
+        Some(heap) => {
+            let cell = Record::from_word(entry.tagged_value).cell(heap);
+            cell.store(heap, value, site);
+        }
+        None => {
+            if log_frame {
+                crate::census::store(site, None, value);
+            }
+            entry.tagged_value = value;
+        }
     }
 }
 
@@ -334,7 +373,7 @@ fn visit_candidates<T>(
 /// holding its own name, with a hash index built only for large environments.
 ///
 /// Slots are append-only: a binding's slot never moves or disappears once
-/// created, and redefining a name overwrites its slot in place. The VM's
+/// created, and redefining a name keeps its slot (below). The VM's
 /// per-site global caches rest on this invariant (see `GlobalCacheEntry`
 /// in patina-vm), so every mutation must go through these methods.
 ///
@@ -346,12 +385,20 @@ fn visit_candidates<T>(
 /// linearly, and the index is built only when one grows past `LINEAR_MAX`:
 /// in practice the global environment and the per-library environments, the
 /// ones where a linear scan would actually be the wrong shape.
+///
+/// In a namespace a slot's word is the binding's record (`binding_record.rs`,
+/// #834), and a definition or an import changes what the record names,
+/// never the slot's word: `define_record` and `bind_cell` re-point, so the
+/// VM's cached `(env_id, slot)` names one record for the namespace's life.
+/// In a frame a slot's word is the value, or `TaggedValue::IMPORTED`.
 #[derive(Debug, Default, Trace)]
 struct Bindings {
     /// The bindings in slot order: a name's slot *is* its index here. One
     /// vector rather than parallel name and value vectors, so there is no
     /// length invariant for `read_slot` to index past and no second
-    /// allocation when a frame outgrows its inline capacity.
+    /// allocation when a frame outgrows its inline capacity. In a namespace
+    /// each word is the binding's record; in a frame, the value, or
+    /// `TaggedValue::IMPORTED`.
     slots: SmallVec<[(Rc<str>, TaggedValue); 3]>,
     /// name → slot, present only above `LINEAR_MAX` entries.
     #[trace(skip, reason = "name → slot number; the values are in `slots`")]
@@ -365,8 +412,8 @@ const LINEAR_MAX: usize = 8;
 struct Inserted {
     /// The slot written.
     slot: u32,
-    /// Whether it held an imported binding's marker before.
-    was_forwarded: bool,
+    /// Whether it held a frame's import marker before.
+    was_imported: bool,
     /// Whether the slot vector or the index reallocated to take it.
     grew: bool,
 }
@@ -397,10 +444,11 @@ impl Bindings {
         }
     }
 
-    /// What the slot holds, which for an imported binding is
-    /// `TaggedValue::FORWARDED` and not a value. Only `Environment`'s
-    /// resolving reads call this; there is deliberately no by-name `get`
-    /// here, so nothing can read around them.
+    /// What the slot holds: in a namespace, the binding's record; in a
+    /// frame, the value, or `TaggedValue::IMPORTED` for an import. Neither a
+    /// record nor the marker is a value. Only `Environment`'s resolving
+    /// reads call this; there is deliberately no by-name `get` here, so
+    /// nothing can read around them.
     fn read_slot(&self, slot: u32) -> TaggedValue {
         self.slots[slot as usize].1
     }
@@ -409,14 +457,15 @@ impl Bindings {
         self.slots[slot as usize].1 = value;
     }
 
-    /// Define semantics: overwrite the existing slot or append a new one.
+    /// Define semantics: overwrite the existing slot or append a new one. A
+    /// frame's; a namespace never overwrites a slot's word (`append`).
     ///
-    /// Reports the slot, whether what it overwrote was an imported binding's
-    /// marker — in which case the caller has an [`Owner`] to drop — and
-    /// whether a table reallocated to make room, which a namespace charges
-    /// (`NamespaceCharge`). Both asked here rather than of a side table or
-    /// of the environment, so the frames the tree-walker builds by the
-    /// million pay a compare for each and nothing else.
+    /// Reports the slot, whether what it overwrote was a frame's import
+    /// marker — in which case the caller has an entry of `frame_imports` to
+    /// drop — and whether a table reallocated to make room, which a
+    /// namespace charges (`NamespaceCharge`). Both asked here rather than of
+    /// a side table or of the environment, so the frames the tree-walker
+    /// builds by the million pay a compare for each and nothing else.
     fn insert(&mut self, name: Rc<str>, value: TaggedValue) -> Inserted {
         // A fresh frame is the common case on the tree-walker's hot path —
         // one is built per `let`-bound temporary and per call — and it has
@@ -426,7 +475,7 @@ impl Bindings {
             self.slots.push((name, value));
             return Inserted {
                 slot: 0,
-                was_forwarded: false,
+                was_imported: false,
                 grew: false,
             };
         }
@@ -434,10 +483,23 @@ impl Bindings {
             let old = std::mem::replace(&mut self.slots[slot as usize].1, value);
             return Inserted {
                 slot,
-                was_forwarded: old == TaggedValue::FORWARDED,
+                was_imported: old == TaggedValue::IMPORTED,
                 grew: false,
             };
         }
+        self.append(name, value)
+    }
+
+    /// Append a slot for `name`, which has none: [`insert`](Self::insert)'s
+    /// append half, and a namespace's fresh name, which is hashed once
+    /// (#834). A namespace never overwrites a slot's word, so its records
+    /// stay in their slots for its life, which the VM's per-site global
+    /// caches rest on.
+    fn append(&mut self, name: Rc<str>, value: TaggedValue) -> Inserted {
+        debug_assert!(
+            self.slot_of(&name).is_none(),
+            "`append` of `{name}`, which has a slot"
+        );
         let slot = self.slots.len() as u32;
         // A full vector reallocates to take one more.
         let mut grew = self.slots.len() == self.slots.capacity();
@@ -462,7 +524,7 @@ impl Bindings {
                 self.index = Some(Box::new(index));
                 return Inserted {
                     slot,
-                    was_forwarded: false,
+                    was_imported: false,
                     grew: true,
                 };
             }
@@ -471,7 +533,7 @@ impl Bindings {
         self.slots.push((name, value));
         Inserted {
             slot,
-            was_forwarded: false,
+            was_imported: false,
             grew,
         }
     }
@@ -482,61 +544,45 @@ impl Bindings {
     }
 }
 
-/// Where an imported binding lives: the environment that owns the location,
-/// and its slot there.
-///
-/// R7RS §5.2 has an import name a *binding*, so an importer and the library
-/// share one location: what the library assigns later, the importer sees.
-/// Installing the value the variable held at import time instead was #406 —
-/// every importer read a stale copy, silently, and no suite caught it because
-/// none assigns a variable another library imported.
-///
-/// **Every import shares, a primitive registered from Rust included.** A
-/// first version copied those, reasoning that nothing can assign them and
-/// that one program's `(set! car …)` should stay out of every other library.
-/// Both halves were wrong. A Scheme library can re-export a primitive and
-/// assign it later, and its importers then held exactly the stale copy this
-/// type exists to remove — before or after the import deciding which. And
-/// for a procedure they do not inline, chibi 0.12 and Gauche 0.9.15 agree
-/// that the location is one: a program's `(set! list-copy …)` is seen by a
-/// library that imported `list-copy`, and a library's by the program
-/// (measured 2026-09-19; both rows are in `stdlib/library-bindings.scm`).
-/// They differ from each other only where each inlines at compile time —
-/// `car` is an opcode in chibi, `length` is inlined by Gauche — and Patina's
-/// VM deoptimizes a `CallPrimitive` site when its primitive is rebound
-/// precisely so that inlining is never observable. R7RS calls assigning an
-/// imported binding "an error", so all of this is latitude; one location is
-/// the answer that does not depend on what happened first.
-///
-/// It is also free. Measured the same day, interleaved with `main`: copying
-/// primitives against sharing them made no difference on either backend,
-/// including on a loop of nothing but primitive calls.
-type Owner = (Rc<Environment>, u32);
-
 /// Which location a name reaches by its by-name view — [`Environment::get`]'s
 /// answer as a place rather than as what the place holds.
 ///
 /// Two environments mean one binding by a name exactly when these are equal,
 /// which a comparison of values cannot say: two variables that are both `0`
 /// are two bindings. Comparable across environments because an import is the
-/// exporting library's location ([`Owner`]): a name imported twice, by any
-/// routes and under any import sets, is one `Slot`.
-///
-/// The exception is the one [`Environment::share_binding`] names: an export
-/// that is not a plain definition — one a macro introduced under its scopes,
-/// or one reached through an alias — is still installed as a copy, so each
-/// importer has a `Slot` of its own for it and the library's is a third. The
-/// relinker then aliases such a mention to the library's, which is the
-/// binding the template meant.
+/// exporting library's location, a cell its record and the importer's name
+/// (`binding_record.rs`, #834): a name imported twice, by any routes and
+/// under any import sets, is one `Cell`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindingLocation {
-    /// A plain binding: the id of the environment that owns the location, and
-    /// its slot there.
+    /// A frame's own plain binding: the frame's id, and its slot there.
     Slot(u64, u32),
-    /// The name-only view of a definition a macro introduced: the environment
-    /// holding it, its spelling there, and its place among that spelling's
+    /// The name-only view of a definition a macro introduced in a frame:
+    /// the frame, its spelling there, and its place among that spelling's
     /// scoped bindings.
     Scoped(u64, Rc<str>, usize),
+    /// A cell, by its word: a namespace's binding (a slot or a scoped entry,
+    /// own or imported) and any frame's import. An identity within one
+    /// form's desugaring, beneath a context, and never held across a
+    /// collection: the word of a cell made in a swept cell's slot may be the
+    /// same (the rulings of 2026-11-03).
+    Cell(u64),
+}
+
+/// One macro-introduced top-level definition's record, as
+/// [`Environment::introduced_records`] answers it: raw, for 5c and the
+/// tests (#834).
+#[derive(Debug, Clone)]
+pub struct IntroducedRecord {
+    /// The scope set it was introduced at, its identity.
+    pub identity: ScopeSet,
+    /// `identity.introducing_scope()`: the scope of the expansion that
+    /// introduced it (ruling D9).
+    pub scope: Option<ScopeId>,
+    /// What its cell holds now.
+    pub value: TaggedValue,
+    /// The record's identity: its word less a check build's stamp.
+    pub record: u64,
 }
 
 /// How a top-level definition a macro introduced is held, which is what an
@@ -601,34 +647,29 @@ struct RareTables {
         reason = "positions in `scoped_bindings`, which is traced in full"
     )]
     scoped_index: RefCell<FxHashMap<Rc<str>, ScopeIndex>>,
-    /// Per slot, the [`Owner`] of the binding when that is not this
-    /// environment; the slot itself then holds `TaggedValue::FORWARDED`.
-    /// Indexed by slot and grown on demand, so `None` — or a slot past the
-    /// end — is an ordinary binding, which nearly every slot of nearly every
-    /// environment is.
+    /// For a frame, per slot, the cell an import names; the slot holds
+    /// `TaggedValue::IMPORTED`. Indexed by slot, grown on demand: `None`, or
+    /// a slot past the end, is the frame's own binding, which nearly every
+    /// slot of nearly every frame is. Never filled in a namespace, whose
+    /// slot words are records (#834, ruling D5/D6).
     ///
-    /// Always the environment that *owns* the location, never another
-    /// importer: `share_binding` resolves through a source that is itself
-    /// forwarded, so a read is one hop however many libraries re-exported
-    /// the name.
-    ///
-    /// Reads never ask whether this table exists: a forwarded slot announces
+    /// Reads never ask whether this table exists: an imported slot announces
     /// itself by its marker, so the read path pays one compare, and so does
     /// the one writer that must drop an entry — `define` over an import.
-    #[trace(
-        skip,
-        reason = "each forwarded slot's owner, also in `owners`, where `set_owner`, the one writer of a link, records it first"
-    )]
-    links: RefCell<Vec<Option<Owner>>>,
+    frame_imports: RefCell<Vec<Option<BindingCell>>>,
     /// For each imported location something here has been *early-bound* to,
     /// the hidden names that hold it — see [`Environment::import_alias`].
-    /// Keyed by the owner's environment id and slot, then by the spelling that
-    /// was asked about: one name for one location has one alias however many
-    /// expansions ask. Nearly always one entry; a location imported under two
-    /// names has two, because the desugarer reads a spelling back off an
-    /// alias (`Desugarer::settle_early_bindings`).
-    #[trace(skip, reason = "environment ids, slot numbers and names")]
-    import_aliases: RefCell<FxHashMap<(u64, u32), ImportAliases>>,
+    /// Keyed by the imported cell's key ([`BindingCell::key`], its word less
+    /// a check build's stamp), then by the spelling that was asked about:
+    /// one name for one location has one alias however many expansions ask.
+    /// Nearly always one entry; a location imported under two names has
+    /// two, because the desugarer reads a spelling back off an alias
+    /// (`Desugarer::settle_early_bindings`).
+    #[trace(
+        skip,
+        reason = "cell keys less the stamp, and names: never dereferenced; an entry lives only while its alias's record names the cell (`forget_alias`)"
+    )]
+    import_aliases: RefCell<FxHashMap<u64, ImportAliases>>,
     /// For each binding the desugarer's relinking aliased here, the alias it
     /// minted — see [`Environment::relink_alias`]. One target has one alias
     /// however many expansions ask (#611), where each expansion used to mint
@@ -639,13 +680,6 @@ struct RareTables {
         reason = "environment ids, names, scope ids and alias spellings; the binding each alias reaches is an edge of `alias_bindings`"
     )]
     relink_aliases: RefCell<FxHashMap<RelinkKey, Rc<str>>>,
-    /// The distinct environments `links` points into, for the collector. An
-    /// importer of `(scheme base)` holds several hundred links into a dozen
-    /// environments, and a collection should look at the dozen. Only ever
-    /// added to: an owner whose last link was defined over stays listed,
-    /// which keeps a library's environment reachable for as long as one of
-    /// its importers is — and the registry does that anyway.
-    owners: RefCell<Vec<Rc<Environment>>>,
     /// This environment's mutable specifier, made the first time one was
     /// asked for ([`Environment::mutable_specifier`]) and handed out after
     /// that: `(interaction-environment)` answers one object, as chibi,
@@ -666,9 +700,10 @@ struct RareTables {
 /// without a parent ([`Environment::with_heap`]): the global environment, a library's, and the
 /// ones `environment`, `scheme-report-environment` and `null-environment`
 /// build. Their tables are Rust allocations the trigger would otherwise not
-/// see: an `(environment '(scheme base))` holds about 40 KiB in them and
-/// costs the heap one specifier slot, so a loop of those piled up 2.9 GiB of
-/// dead namespaces between collections. A frame ([`Environment::child_frame`])
+/// see: an `(environment '(scheme base))` holds about 32 KB in them (about
+/// 40 KB until #834 took out its import links and owners) and costs the heap
+/// one specifier slot, so a loop of those piled up 2.9 GiB of dead
+/// namespaces between collections. A frame ([`Environment::child_frame`])
 /// is never one: the tree-walker builds one per call and per `let`-bound
 /// temporary, and what its bindings hold is short-lived and small, so its
 /// path does as little of the measuring as it can. A scoped binding or an
@@ -683,9 +718,10 @@ struct RareTables {
 /// **What is counted** ([`Environment::table_bytes`]): the environment and
 /// its out-of-line tables' box; every table's own buffer at its capacity —
 /// the slot vector once it is out of line, the name index, the scoped and
-/// alias tables, the import links, the owners, the import and relink aliases,
-/// the table of introduced globals and the table of the scoped bindings'
-/// indexes; the name of each slot, an `Rc<str>` of two counts and its bytes,
+/// alias tables, the import and relink aliases, the table of introduced
+/// globals and the table of the scoped bindings' indexes, and a frame's
+/// import cells, which a namespace never has; the name of each slot, an
+/// `Rc<str>` of two counts and its bytes,
 /// counted whether or not something else shares it (an `environment` built
 /// by import has a fresh name for each of its several hundred bindings,
 /// which are most of what it holds); and each spelling's own buffers, which
@@ -698,7 +734,9 @@ struct RareTables {
 /// buffer — a scope set's spilled part, an alias's or a scoped binding's
 /// name, and a name another table shares, as each identity's renamed global
 /// is its slot's name — and the values, which live in the arenas and are
-/// charged there. An estimate, then, of the tables a namespace fills by
+/// charged there, as are the binding records and cells (#834): each a pair,
+/// charged in the live bytes as the pair arena's and never here. An
+/// estimate, then, of the tables a namespace fills by
 /// the hundred, and close for those: allocator overhead is not modelled.
 /// Outside any namespace, and so not counted here: the VM's code units and
 /// the objects arena's sweep vector, which a stream of expansions grows too,
@@ -726,6 +764,22 @@ struct RareTables {
 /// sweep, which holds the heap mutably while it drops a dead specifier's
 /// `Rc`. Each namespace is charged once however many specifiers name it:
 /// `interaction-environment` and `load` wrap the one global environment.
+///
+/// **Counted** (#834): `new` counts the namespace in `Heap::namespaces`, and
+/// `Drop` takes it off again with its `records` and `cells`, through the same
+/// handle and for the same reason.
+///
+/// **What it counts** (#834): `records`, every binding record the namespace
+/// holds — one per slot, per scoped entry (the splicing `let-syntax`
+/// keywords filed at top level among them) and per import alias, each of
+/// which is a slot; and `cells`, the cells of its own its records name now.
+/// Each is a running sum, raised as a record or a cell is made
+/// (`Environment::count`), `cells` lowered as a record is re-pointed away
+/// from an own cell (`Environment::count_cell_let_go`), and both given back
+/// to the heap's sums when the namespace drops. Not counted: a frame's
+/// imports, a free cell, and a cell only an importer's record or an export
+/// keeps once this namespace re-pointed away from it. `Environment::recount`
+/// checks the sums against the tables in the tests.
 #[derive(Debug)]
 struct NamespaceCharge {
     /// The heap's external-bytes account.
@@ -739,16 +793,47 @@ struct NamespaceCharge {
     /// introduced globals' identities and index. A running sum, kept by the
     /// buffers' writers ([`Environment::charge_entries`]).
     entries: Cell<usize>,
+    /// The binding records this namespace holds, as the heap's running sum
+    /// counts them (`Heap::binding_records`, #834): given back when it drops.
+    records: Cell<usize>,
+    /// The cells of its own its records name now, as the heap's running sum
+    /// counts them (`Heap::cells`, #834): given back when it drops.
+    cells: Cell<usize>,
 }
 
 impl NamespaceCharge {
+    /// A namespace's charge, which counts it among the heap's namespaces
+    /// (`Heap::namespaces`) until it drops.
     fn new(account: ExternalBytes) -> Self {
+        account.namespace_made();
         Self {
             account,
             charged: Cell::new(0),
             names: Cell::new((0, 0)),
             entries: Cell::new(0),
+            records: Cell::new(0),
+            cells: Cell::new(0),
         }
+    }
+
+    /// The namespace made `records` binding records and `cells` cells of
+    /// its own: added to its sums and the heap's, borrow-free.
+    fn count(&self, records: usize, cells: usize) {
+        if records > 0 {
+            self.records.set(self.records.get() + records);
+            self.account.records_made(records);
+        }
+        if cells > 0 {
+            self.cells.set(self.cells.get() + cells);
+            self.account.cells_made(cells);
+        }
+    }
+
+    /// One of the namespace's records was re-pointed away from an own cell.
+    fn let_go_cell(&self) {
+        debug_assert!(self.cells.get() > 0, "an own cell let go, but none counted");
+        self.cells.set(self.cells.get().saturating_sub(1));
+        self.account.cells_let_go(1);
     }
 
     /// One spelling's buffers went from `before` bytes to `after`: add the
@@ -788,6 +873,8 @@ impl NamespaceCharge {
 
 impl Drop for NamespaceCharge {
     fn drop(&mut self) {
+        self.account
+            .namespace_dropped(self.records.get(), self.cells.get());
         self.account.release(self.charged.get());
     }
 }
@@ -885,24 +972,24 @@ fn fresh_env_id() -> u64 {
 /// Each read or write of a namespace's binding takes `heap: &RefCell<Heap>`,
 /// the first parameter after the receiver, and borrows it at the
 /// **namespace step**: shared where a hit is read, mutable where a binding
-/// is written. From 4b.6's records on, that borrow covers the record the
-/// slot word names; until then it carries only a debug check that `heap` is
-/// this environment's. The borrows are taken in every build, so a caller
-/// that holds the heap across a namespace access panics in release as it
-/// will once the borrow is needed.
+/// is written. The borrow covers the binding's record, which is the word in
+/// a namespace's slot or scoped entry, and the cell it names
+/// (`binding_record.rs`), with a debug check that `heap` is this
+/// environment's. A caller that holds the heap across a namespace access
+/// panics, in every build.
 ///
 /// A frame's own binding takes no borrow. A frame's import borrows the heap,
-/// shared to read it and mutably to write it, whatever kind its owner is (a
-/// library's namespace, or the marker frame a declaration view imports from
-/// through `Cx::share_binding_in_frame`): from 4b.6's records on, it reads a
-/// cell on the heap. The step is found by the environment's kind where a
+/// shared to read it and mutably to write it, since it reads or writes a
+/// cell on the heap: the library's, or a declaration's free cell that a
+/// declaration view imports through `Cx::import_cell_in_frame`. Installing
+/// it takes none. The step is found by the environment's kind where a
 /// binding is hit, never by whether it has a parent, and a miss takes no
 /// borrow.
 ///
-/// The `_in` cores take the heap already borrowed: `slot_value_in`,
-/// `set_slot_value_in` and `define_in` are the step's own bodies, and
-/// `define_in` and the test-only `local_value_in` serve the tests in this
-/// crate that hold the heap borrowed.
+/// The `_in` cores take the heap already borrowed: `slot_value_in` and
+/// `set_slot_value_in` are the step's own bodies, and `define_in` and the
+/// test-only `local_value_in` serve the tests in this crate that hold the
+/// heap borrowed.
 ///
 /// ## Deliberately not `Clone`
 ///
@@ -917,9 +1004,10 @@ fn fresh_env_id() -> u64 {
 ///
 /// ## Its trace
 ///
-/// Derived (#686): the value in each of its slots, and each environment it
-/// keeps live — the target of each macro-expansion alias and the owner of
-/// each binding it imported — but not its parent. `SlotVisitor::env` walks an
+/// Derived (#686): the value in each of its slots, which in a namespace is
+/// the binding's record, and so its cell and value; each cell a frame
+/// imports (`frame_imports`); the target of each macro-expansion alias; not
+/// its parent. `SlotVisitor::env` walks an
 /// environment with the chain it heads, and the collector follows the
 /// parent by reference, since nearly every environment has one: queueing it
 /// as well cost a hash lookup and a reference count per environment, about
@@ -1156,7 +1244,8 @@ impl Environment {
 
     /// Slot index of `name` in *this* environment's simple bindings
     /// (parents are not consulted). Slot indices are stable for the life
-    /// of the environment: redefinition overwrites the slot in place.
+    /// of the environment: redefinition keeps the slot, storing into the
+    /// cell its record names in a namespace and overwriting it in a frame.
     #[inline]
     pub fn local_slot(&self, name: &str) -> Option<u32> {
         self.bindings.borrow().slot_of(name)
@@ -1164,11 +1253,13 @@ impl Environment {
 
     /// Read the value in a slot previously obtained from `local_slot`.
     ///
-    /// An imported binding is read from the library that owns it, so this is
-    /// the *binding's* current value, never a snapshot.
+    /// An imported binding is read from the cell it shares with the library
+    /// that owns it, so this is the *binding's* current value, never a
+    /// snapshot.
     ///
-    /// The namespace step's read (#834): a namespace borrows `heap` shared;
-    /// a frame borrows it only for an import, whatever kind its owner is.
+    /// The namespace step's read (#834): a namespace borrows `heap` shared,
+    /// and reads the value through the slot's record and its cell; a frame
+    /// borrows it only for an import, to read the import's cell.
     #[inline]
     pub fn slot_value(&self, heap: &RefCell<Heap>, slot: u32) -> TaggedValue {
         if let Some(step) = self.read_step(heap) {
@@ -1183,37 +1274,41 @@ impl Environment {
     #[inline(never)]
     fn frame_slot_value(&self, heap: &RefCell<Heap>, slot: u32) -> TaggedValue {
         let tv = self.bindings.borrow().read_slot(slot);
-        if tv == TaggedValue::FORWARDED {
-            return self.shared_value(heap, slot);
+        if tv == TaggedValue::IMPORTED {
+            return self.frame_import_value(heap, slot);
         }
         tv
     }
 
     /// [`slot_value`](Self::slot_value) with the heap already borrowed: the
-    /// namespace step's own body, an import's read at its owner, and the
-    /// VM's `LoadGlobal`, which reads a cached slot under the borrow it took
-    /// to find the frame's globals (#834). Any environment's slot, a frame's
-    /// included. Raw, as every `Environment` method is.
+    /// namespace step's own body, and the VM's `LoadGlobal`, which reads a
+    /// cached slot under the borrow it took to find the frame's globals
+    /// (#834). Any environment's slot, a frame's included. Raw, as every
+    /// `Environment` method is.
     #[inline]
     pub fn slot_value_in(&self, heap: &Heap, slot: u32) -> TaggedValue {
         self.check_heap(heap);
         let tv = self.bindings.borrow().read_slot(slot);
-        if tv == TaggedValue::FORWARDED {
-            return self.shared_value_in(heap, slot);
+        if self.is_namespace() {
+            return Record::from_word(tv).value(heap);
+        }
+        if tv == TaggedValue::IMPORTED {
+            return self.frame_import_value_in(heap, slot);
         }
         tv
     }
 
     /// Overwrite the value in a slot previously obtained from `local_slot`.
     ///
-    /// An imported binding is written where it lives: the library sees the
-    /// assignment, as it does under chibi and Gauche. R7RS §5.2 calls
-    /// assigning an imported binding "an error", so any answer conforms; this
-    /// is the one that keeps a location one location.
+    /// An imported binding is written where it lives, into the cell it
+    /// shares with the library: the library sees the assignment, as it does
+    /// under chibi and Gauche. R7RS §5.2 calls assigning an imported binding
+    /// "an error", so any answer conforms; this is the one that keeps a
+    /// location one location.
     ///
     /// The namespace step's write (#834): a namespace borrows `heap`
-    /// mutably; a frame borrows it only for an import, whatever kind its
-    /// owner is.
+    /// mutably, and stores into the cell the slot's record names; a frame
+    /// borrows it only for an import, to store into the import's cell.
     #[inline]
     pub fn set_slot_value(&self, heap: &RefCell<Heap>, slot: u32, value: TaggedValue) {
         if let Some(mut step) = self.write_step(heap) {
@@ -1225,133 +1320,132 @@ impl Environment {
 
     /// [`set_slot_value`](Self::set_slot_value) for a frame, out of line as
     /// [`frame_slot_value`](Self::frame_slot_value) is. A plain slot is
-    /// written with no borrow; an import borrows `heap` mutably in
-    /// `write_shared`, whatever kind its owner is, before anything is
-    /// recorded.
+    /// written with no borrow; an import borrows `heap` mutably before
+    /// anything is recorded, and stores into its cell.
     #[inline(never)]
     fn frame_set_slot_value(&self, heap: &RefCell<Heap>, slot: u32, value: TaggedValue) {
-        let forwarded = {
+        let imported = {
             let mut bindings = self.bindings.borrow_mut();
-            let forwarded = bindings.read_slot(slot) == TaggedValue::FORWARDED;
-            if !forwarded {
-                crate::census::store(crate::census::Site::EnvSetSlot, None, value);
+            let imported = bindings.read_slot(slot) == TaggedValue::IMPORTED;
+            if !imported {
+                crate::census::store(Site::EnvSetSlot, None, value);
                 bindings.write_slot(slot, value);
             }
-            forwarded
+            imported
         };
-        if forwarded {
-            self.write_shared(heap, slot, value);
+        if imported {
+            let mut step = self.borrow_write(heap);
+            let cell = self.frame_import_cell(slot);
+            cell.store(&mut step, value, Site::EnvSetSlot);
         }
     }
 
     /// [`set_slot_value`](Self::set_slot_value) with the heap already
-    /// borrowed mutably: the namespace step's body, and an import's owner's.
+    /// borrowed mutably: the namespace step's body, a store into the cell
+    /// the slot's record names. A frame's slot is written as
+    /// [`frame_set_slot_value`](Self::frame_set_slot_value) writes it, with
+    /// the heap in hand.
     fn set_slot_value_in(&self, heap: &mut Heap, slot: u32, value: TaggedValue) {
         self.check_heap(heap);
-        crate::census::store(crate::census::Site::EnvSetSlot, None, value);
-        let forwarded = {
-            let mut bindings = self.bindings.borrow_mut();
-            let forwarded = bindings.read_slot(slot) == TaggedValue::FORWARDED;
-            if !forwarded {
-                bindings.write_slot(slot, value);
-            }
-            forwarded
-        };
-        if forwarded {
-            let (owner, owner_slot) = self.shared_target(slot);
-            owner.set_slot_value_in(heap, owner_slot, value);
+        let word = self.bindings.borrow().read_slot(slot);
+        if self.is_namespace() {
+            let cell = Record::from_word(word).cell(heap);
+            cell.store(heap, value, Site::EnvSetSlot);
+        } else if word == TaggedValue::IMPORTED {
+            let cell = self.frame_import_cell(slot);
+            cell.store(heap, value, Site::EnvSetSlot);
+        } else {
+            crate::census::store(Site::EnvSetSlot, None, value);
+            self.bindings.borrow_mut().write_slot(slot, value);
         }
     }
 
-    /// The owner of a slot that holds the marker.
-    fn shared_target(&self, slot: u32) -> Owner {
-        // `forward` writes the marker and the link together and `define`
-        // drops them together, so a marker without a link is a bug here, not
-        // a state a program can reach.
-        self.owner_of(slot)
-            .unwrap_or_else(|| unreachable!("slot {slot} is forwarded but has no owner"))
-    }
-
-    /// Kept out of line: `slot_value` is inlined into the VM's `LoadGlobal`,
-    /// and most globals a program reads there are its own. Measured
-    /// 2026-09-19: a read that comes through here costs the VM about 2 ns
-    /// more than one that does not, and a loop calling `for-each` — imported,
-    /// and defined in Scheme — runs at parity with `main`.
-    ///
-    /// Reads the owner under this table's borrow rather than through
-    /// `shared_target`, which would clone the owner's `Rc` — a count up and
-    /// down on every read of an imported global. Nothing on a read path
-    /// borrows a link table mutably, so holding this one across the owner's
-    /// read is safe.
-    #[inline(never)]
-    fn shared_value_in(&self, heap: &Heap, slot: u32) -> TaggedValue {
-        let links = self.rare.get().map(|rare| rare.links.borrow());
-        match links.as_ref().and_then(|links| links.get(slot as usize)) {
-            Some(Some((owner, owner_slot))) => owner.slot_value_in(heap, *owner_slot),
-            // As `shared_target` says: not a state a program can reach.
-            _ => unreachable!("slot {slot} is forwarded but has no owner"),
-        }
-    }
-
-    /// A frame's import, read: it borrows `heap` shared whatever kind its
-    /// owner is (a library's namespace, or a declaration's marker frame),
-    /// since from 4b.6's records on it reads a cell on the heap.
-    #[inline(never)]
-    fn shared_value(&self, heap: &RefCell<Heap>, slot: u32) -> TaggedValue {
-        self.shared_value_in(&self.borrow_read(heap), slot)
-    }
-
-    /// A frame's import, written: it borrows `heap` mutably first, whatever
-    /// kind its owner is, as [`shared_value`](Self::shared_value) borrows it
-    /// shared. Recorded once here and once at the owner, as a namespace's
-    /// import is.
-    #[inline(never)]
-    fn write_shared(&self, heap: &RefCell<Heap>, slot: u32, value: TaggedValue) {
-        let mut step = self.borrow_write(heap);
-        crate::census::store(crate::census::Site::EnvSetSlot, None, value);
-        let (owner, owner_slot) = self.shared_target(slot);
-        owner.set_slot_value_in(&mut step, owner_slot, value);
-    }
-
-    /// The owner of `slot`'s binding, when that is not this environment.
-    fn owner_of(&self, slot: u32) -> Option<Owner> {
+    /// The cell a frame's imported slot names: its entry in
+    /// `frame_imports`. An imported slot is written with its entry
+    /// (`frame_import`) and a definition over it drops both
+    /// (`define_here`), so a marker without a cell is a bug here, not a
+    /// state a program can reach.
+    fn frame_import_cell(&self, slot: u32) -> BindingCell {
         self.rare
             .get()
-            .and_then(|rare| rare.links.borrow().get(slot as usize).cloned())
+            .and_then(|rare| rare.frame_imports.borrow().get(slot as usize).copied())
             .flatten()
+            .unwrap_or_else(|| {
+                unreachable!("slot {slot} holds the import marker but names no cell")
+            })
     }
 
-    fn set_owner(&self, slot: u32, owner: Owner) {
-        let rare = self.rare.get_or_init(Default::default);
-        let mut grew = false;
-        {
-            let mut owners = rare.owners.borrow_mut();
-            if !owners.iter().any(|known| Rc::ptr_eq(known, &owner.0)) {
-                grew = owners.len() == owners.capacity();
-                owners.push(Rc::clone(&owner.0));
+    /// A frame's import, read with the heap borrowed. Kept out of line:
+    /// `slot_value_in` is inlined into the VM's `LoadGlobal`, and a frame's
+    /// import is rare there (a host's environment, until 4b.8).
+    #[inline(never)]
+    fn frame_import_value_in(&self, heap: &Heap, slot: u32) -> TaggedValue {
+        self.frame_import_cell(slot).value(heap)
+    }
+
+    /// A frame's import, read: it borrows `heap` shared, to read the cell.
+    #[inline(never)]
+    fn frame_import_value(&self, heap: &RefCell<Heap>, slot: u32) -> TaggedValue {
+        let cell = self.frame_import_cell(slot);
+        cell.value(&self.borrow_read(heap))
+    }
+
+    /// Make `slot` of this frame an import of `cell`, or, for `None`, the
+    /// frame's own binding again. Allocates nothing on the heap and takes
+    /// no borrow of it. Frames never charge, so nothing is recharged.
+    fn set_frame_import(&self, slot: u32, cell: Option<BindingCell>) {
+        debug_assert!(!self.is_namespace(), "a namespace's import is a record");
+        let slot = slot as usize;
+        match cell {
+            None => {
+                if let Some(rare) = self.rare.get()
+                    && let Some(entry) = rare.frame_imports.borrow_mut().get_mut(slot)
+                {
+                    *entry = None;
+                }
             }
-        }
-        {
-            let mut links = rare.links.borrow_mut();
-            let slot = slot as usize;
-            if links.len() <= slot {
-                let capacity = links.capacity();
-                links.resize(slot + 1, None);
-                grew |= links.capacity() != capacity;
+            Some(cell) => {
+                let rare = self.rare.get_or_init(Default::default);
+                let mut imports = rare.frame_imports.borrow_mut();
+                if imports.len() <= slot {
+                    imports.resize(slot + 1, None);
+                }
+                imports[slot] = Some(cell);
             }
-            links[slot] = Some(owner);
-        }
-        if grew {
-            self.recharge();
         }
     }
 
-    /// The slot is this environment's own from now on.
-    fn drop_owner(&self, slot: u32) {
-        if let Some(rare) = self.rare.get()
-            && let Some(link) = rare.links.borrow_mut().get_mut(slot as usize)
-        {
-            *link = None;
+    /// Bind `name` in this frame as an import of `cell`: the marker in its
+    /// slot and the cell in `frame_imports`. No borrow, no allocation.
+    fn frame_import(&self, name: Rc<str>, cell: BindingCell) {
+        let (slot, _) = self.define_slot(name, TaggedValue::IMPORTED);
+        self.set_frame_import(slot, Some(cell));
+    }
+
+    /// This namespace made `records` binding records and `cells` cells of
+    /// its own (#834): counted on its charge and in the heap's sums. A
+    /// frame counts nothing.
+    fn count(&self, records: usize, cells: usize) {
+        let charge = self.rare.get().and_then(|rare| rare.namespace.as_ref());
+        debug_assert!(
+            charge.is_some() || !self.is_namespace(),
+            "a namespace counts its records on its charge"
+        );
+        if let Some(charge) = charge {
+            charge.count(records, cells);
+        }
+    }
+
+    /// One of this namespace's records was re-pointed away from an own cell
+    /// (#834), which an importer's record or an export may still keep.
+    fn count_cell_let_go(&self) {
+        let charge = self.rare.get().and_then(|rare| rare.namespace.as_ref());
+        debug_assert!(
+            charge.is_some() || !self.is_namespace(),
+            "a namespace counts its cells on its charge"
+        );
+        if let Some(charge) = charge {
+            charge.let_go_cell();
         }
     }
 
@@ -1367,8 +1461,8 @@ impl Environment {
     }
 
     /// The namespace step's shared borrow (#834): taken where a hit in a
-    /// namespace is read, which from 4b.6's records is the record the slot
-    /// word names. `None` for a frame, whose own bindings take no borrow.
+    /// namespace is read, through the record the slot word names. `None` for
+    /// a frame, whose own bindings take no borrow.
     #[inline(always)]
     #[must_use = "the step's borrow must span the access"]
     fn read_step<'h>(&self, heap: &'h RefCell<Heap>) -> Option<Ref<'h, Heap>> {
@@ -1390,7 +1484,7 @@ impl Environment {
     }
 
     /// The step's shared borrow whatever the kind, with the debug identity
-    /// check: for a frame's import, which is the library's binding.
+    /// check: for a frame's import, which reads its cell.
     #[inline(always)]
     fn borrow_read<'h>(&self, heap: &'h RefCell<Heap>) -> Ref<'h, Heap> {
         let heap = heap.borrow();
@@ -1408,7 +1502,7 @@ impl Environment {
     }
 
     /// That `heap` is the one this environment's values live on, in a debug
-    /// build: until 4b.6's records, all the namespace step's borrow carries.
+    /// build.
     #[inline(always)]
     fn check_heap(&self, heap: &Heap) {
         debug_assert_eq!(
@@ -1493,10 +1587,9 @@ impl Environment {
             let RareTables {
                 introduced_global_names,
                 scoped_index,
-                links,
+                frame_imports,
                 import_aliases,
                 relink_aliases,
-                owners,
                 // A heap value, in the arenas.
                 specifier: _,
                 // This account.
@@ -1507,10 +1600,10 @@ impl Environment {
                     introduced_global_names.borrow().capacity(),
                 )
                 + hash_table_bytes::<Rc<str>, ScopeIndex>(scoped_index.borrow().capacity())
-                + links.borrow().capacity() * size_of::<Option<Owner>>()
-                + hash_table_bytes::<(u64, u32), ImportAliases>(import_aliases.borrow().capacity())
-                + hash_table_bytes::<RelinkKey, Rc<str>>(relink_aliases.borrow().capacity())
-                + owners.borrow().capacity() * size_of::<Rc<Environment>>();
+                // Always empty in a namespace, whose imports are records.
+                + frame_imports.borrow().capacity() * size_of::<Option<BindingCell>>()
+                + hash_table_bytes::<u64, ImportAliases>(import_aliases.borrow().capacity())
+                + hash_table_bytes::<RelinkKey, Rc<str>>(relink_aliases.borrow().capacity());
         }
         bytes
     }
@@ -1555,76 +1648,250 @@ impl Environment {
     /// This is the primary API - accepts TaggedValue directly.
     ///
     /// A namespace borrows `heap` mutably on entry, for an insert, a store
-    /// or a re-point alike (#834); a frame takes no borrow.
+    /// or a re-point alike (#834), each a write of the name's record
+    /// (`define_record`); a frame takes no borrow.
     pub fn define(&self, heap: &RefCell<Heap>, name: impl Into<Rc<str>>, value: TaggedValue) {
         if let Some(mut step) = self.write_step(heap) {
-            self.define_in(&mut step, name, value);
+            self.define_record(&mut step, name.into(), value);
             return;
         }
         self.define_here(name.into(), value);
     }
 
-    /// [`define`](Self::define) with the heap already borrowed mutably: the
-    /// namespace step's body, and a definition for this crate's tests that
-    /// hold the heap.
+    /// [`define`](Self::define) with the heap already borrowed mutably: a
+    /// definition for this crate's tests that hold the heap.
+    #[cfg(test)]
     pub(crate) fn define_in(&self, heap: &mut Heap, name: impl Into<Rc<str>>, value: TaggedValue) {
         self.check_heap(heap);
-        self.define_here(name.into(), value);
+        if self.is_namespace() {
+            self.define_record(heap, name.into(), value);
+        } else {
+            self.define_here(name.into(), value);
+        }
     }
 
-    /// `define`'s body, under whatever step its caller took.
+    /// `define`'s body for a frame, which takes no step: a frame's own
+    /// binding is the word in its slot.
     #[inline]
     fn define_here(&self, name: Rc<str>, value: TaggedValue) {
-        crate::census::store(crate::census::Site::EnvDefine, None, value);
-        let (slot, was_forwarded) = self.define_slot(name, value);
+        debug_assert!(
+            !self.is_namespace(),
+            "a namespace's definition is a record (`define_record`)"
+        );
+        crate::census::store(Site::EnvDefine, None, value);
+        let (slot, was_imported) = self.define_slot(name, value);
         // A definition is a new binding of this environment's own, whatever
         // the name was before — so an importer that defines a name it
         // imported shadows it here and leaves the library's alone, which is
         // what chibi and Gauche do.
-        if was_forwarded {
-            self.drop_owner(slot);
+        if was_imported {
+            self.set_frame_import(slot, None);
         }
     }
 
-    /// Make `name` here the same binding as `source_name` in `source` — what
-    /// an import does. `false`, having done nothing, when `source` has no
-    /// plain binding of that name for this to be: the caller then installs
-    /// the value it has, which is what every import used to do.
+    /// `define` in a namespace, under its mutable step (#834): an insert, a
+    /// store or a re-point of `name`'s record.
     ///
-    /// That fallback is reached by an export that is not a plain definition —
-    /// one a macro introduced under its scopes, or one reached through a
-    /// macro-expansion alias. Those stay a copy (#406 leaves them as they
-    /// were).
-    ///
-    /// See [`Owner`] for why every import shares, primitives included.
-    ///
-    /// Borrows `heap` shared at `source`'s step, to read who owns the
-    /// binding, and mutably at this environment's, to write it (#834).
-    pub fn share_binding(
-        &self,
-        heap: &RefCell<Heap>,
-        name: impl Into<Rc<str>>,
-        source: &Rc<Environment>,
-        source_name: &str,
-    ) -> bool {
-        self.take_binding(heap, name.into(), source, source_name, true)
+    /// - A **store** when the record names a cell of this namespace's own:
+    ///   the value goes into it, and the record and the slot stay.
+    /// - A **re-point** when it names another's (a definition over an
+    ///   import): a fresh cell of this namespace's own, holding `value`, and
+    ///   the record names it. The library's cell is left alone, as chibi and
+    ///   Gauche leave it, and the slot keeps its record.
+    /// - An **insert** for a fresh name: a cell and a record, in a new slot.
+    fn define_record(&self, heap: &mut Heap, name: Rc<str>, value: TaggedValue) {
+        // A plain binding is reachable by name and by nothing else, so
+        // `byname=true` here is a property of the table, not a decision.
+        crate::scope_trace::bind(&name, &ScopeSet::new(), true);
+        match self.local_slot(&name) {
+            Some(slot) => {
+                let record = Record::from_word(self.bindings.borrow().read_slot(slot));
+                let cell = record.cell(heap);
+                if cell.owned_by(heap, self.env_id) {
+                    cell.store(heap, value, Site::EnvDefine);
+                } else {
+                    crate::census::store(Site::EnvDefine, None, value);
+                    self.forget_alias(&name, cell);
+                    let fresh = BindingCell::new_own(heap, value, self.env_id);
+                    record.repoint(heap, fresh);
+                    self.count(0, 1);
+                }
+            }
+            None => {
+                crate::census::store(Site::EnvDefine, None, value);
+                // Both allocations are under one `&mut Heap`, which a
+                // collection needs, and allocation never collects
+                // (`docs/GC_DESIGN.md` §6): the cell, held only in this
+                // local until the record holds it, cannot be swept between.
+                let cell = BindingCell::new_own(heap, value, self.env_id);
+                let record = Record::new(heap, cell);
+                self.append_slot(name, record.word());
+                self.count(1, 1);
+            }
+        }
     }
 
-    /// Copy a binding without making the source environment its owner.
-    /// Used for non-owning staging environments; import modifiers now select
-    /// original export names directly, without staging environments (#592).
+    /// A slot for `name`, which has none here, holding `word`: a namespace's
+    /// fresh record (#834). Recharges if a table grew.
+    fn append_slot(&self, name: Rc<str>, word: TaggedValue) -> u32 {
+        let Inserted { slot, grew, .. } = self.bindings.borrow_mut().append(name, word);
+        if grew {
+            self.recharge();
+        }
+        slot
+    }
+
+    /// This namespace's record for `name`, or `None` for a frame or a name
+    /// with no slot here.
+    pub(crate) fn local_record(&self, name: &str) -> Option<Record> {
+        if !self.is_namespace() {
+            return None;
+        }
+        let bindings = self.bindings.borrow();
+        let slot = bindings.slot_of(name)?;
+        Some(Record::from_word(bindings.read_slot(slot)))
+    }
+
+    /// Make `name` here the binding `cell` is: an import (R7RS §5.2, #406).
+    /// What every import in both backends comes to (`Library::import_into`).
     ///
-    /// The difference from [`share_binding`] is who may own a location. A
-    /// library owns what it defined; a staging environment owns nothing, it
-    /// only carries bindings through. So a forwarded slot arrives as the same
-    /// forward, and a plain value — the fallback copy described on
-    /// `share_binding` — as that value, rather than as a forward into an
+    /// In a namespace, under its mutable step (#834):
+    /// - an **insert** when the name has no slot here: a record naming
+    ///   `cell`;
+    /// - a **re-point** when it has one, a definition or another import:
+    ///   the slot keeps its record, which names `cell` from now on;
+    /// - a cell of this namespace's own, imported under another name, is
+    ///   **copied** by `define`'s rules: two names of one namespace sharing a
+    ///   cell would make a later `define` of either assign both.
+    ///
+    /// In a frame, the marker in its slot and the cell beside it
+    /// (`frame_imports`): no borrow of the heap and no allocation.
+    ///
+    /// See [`BindingCell`] for why every import shares, primitives included.
+    pub fn import_cell(&self, heap: &RefCell<Heap>, name: impl Into<Rc<str>>, cell: BindingCell) {
+        match self.write_step(heap) {
+            Some(mut step) => self.bind_cell(&mut step, name.into(), cell),
+            None => self.frame_import(name.into(), cell),
+        }
+    }
+
+    /// [`import_cell`](Self::import_cell) in a namespace, under its step.
+    fn bind_cell(&self, heap: &mut Heap, name: Rc<str>, cell: BindingCell) {
+        let existing = self.local_record(&name);
+        if cell.owned_by(heap, self.env_id) {
+            // Two names of one namespace never share a cell, or a later
+            // `define` of either would assign both: copied, as a forward to
+            // itself was copied before records.
+            if existing.is_none_or(|record| record.cell(heap) != cell) {
+                let value = cell.value(heap);
+                self.define_record(heap, name, value);
+            }
+            return;
+        }
+        // Every import is traced as a binding by name, a re-point included,
+        // as it was when it went through `define_slot`.
+        crate::scope_trace::bind(&name, &ScopeSet::new(), true);
+        match existing {
+            Some(record) => {
+                let old = record.cell(heap);
+                if old == cell {
+                    return;
+                }
+                self.forget_alias(&name, old);
+                if old.owned_by(heap, self.env_id) {
+                    self.count_cell_let_go();
+                }
+                record.repoint(heap, cell);
+            }
+            None => {
+                let record = Record::new(heap, cell);
+                self.append_slot(name, record.word());
+                self.count(1, 0);
+            }
+        }
+    }
+
+    /// `name`'s record is re-pointed away from `cell`, so it is no longer an
+    /// alias [`import_alias`](Self::import_alias) minted for `cell`, and its
+    /// entry goes. An entry lives only while its alias's record names its
+    /// cell, which keeps the cell alive, so no key outlives its cell and
+    /// meets a cell made in its slot after a collection (the rulings of
+    /// 2026-11-03). Another spelling's entry for `cell` stays.
+    fn forget_alias(&self, name: &str, cell: BindingCell) {
+        let Some(rare) = self.rare.get() else {
+            return;
+        };
+        let key = cell.key();
+        let mut table = rare.import_aliases.borrow_mut();
+        if let Some(aliases) = table.get_mut(&key) {
+            aliases.retain(|(_, alias)| &**alias != name);
+            if aliases.is_empty() {
+                table.remove(&key);
+            }
+        }
+    }
+
+    /// The cell this environment's own binding of `name` names: a namespace
+    /// slot's record's cell; a namespace visible scoped entry's record's
+    /// cell, the name-only view [`get`](Self::get) reads; a frame's import's
+    /// cell. `None` for a frame's own binding, a name reached only through a
+    /// macro-expansion alias (refused for export by #847), or through the
+    /// parent.
+    ///
+    /// What a library exports (`build_library`), and what a test hands
+    /// [`import_cell`](Self::import_cell). A namespace borrows `heap`
+    /// shared at its step.
+    pub fn cell_of(&self, heap: &RefCell<Heap>, name: &str) -> Option<BindingCell> {
+        if let Some(slot) = self.local_slot(name) {
+            let word = self.bindings.borrow().read_slot(slot);
+            if let Some(step) = self.read_step(heap) {
+                return Some(Record::from_word(word).cell(&step));
+            }
+            return (word == TaggedValue::IMPORTED).then(|| self.frame_import_cell(slot));
+        }
+        // `get` follows an alias before the name-only view: so does this,
+        // to agree with it, and an alias is no binding to name.
+        if self.has_aliases.get() && self.alias_target(name).is_some() {
+            return None;
+        }
+        let i = self.visible_scoped_index(name)?;
+        let step = self.read_step(heap)?;
+        let table = self.scoped_bindings.borrow();
+        let entry = table.get(name)?.get(i)?;
+        Some(Record::from_word(entry.tagged_value).cell(&step))
+    }
+
+    /// Each name [`local_names`](Self::local_names) lists, with its cell:
+    /// the tree-walker's export of a Rust-built library. A namespace; a
+    /// frame answers its imports alone.
+    pub fn cells(&self, heap: &RefCell<Heap>) -> Vec<(String, BindingCell)> {
+        let slots = self.visible_slots(heap);
+        let step = self.read_step(heap);
+        let bindings = self.bindings.borrow();
+        slots
+            .into_iter()
+            .filter_map(|(slot, name)| {
+                let word = bindings.read_slot(slot);
+                let cell = match &step {
+                    Some(step) => Record::from_word(word).cell(step),
+                    None if word == TaggedValue::IMPORTED => self.frame_import_cell(slot),
+                    None => return None,
+                };
+                Some((name, cell))
+            })
+            .collect()
+    }
+
+    /// Carry `staged_name` from the staging frame `staging` into this
+    /// environment as `name`: a staged import arrives as an import of the
+    /// same cell (by [`import_cell`](Self::import_cell)'s rules); a staged
+    /// own binding as a [`define`](Self::define). `false`, having done
+    /// nothing, when `staging` does not bind the name itself.
+    ///
+    /// For the desugarer's staged import (`desugar_with_imports`): a staging
+    /// environment owns nothing, it only carries bindings through, so its
+    /// imports arrive as the libraries' cells and not as bindings of an
     /// environment about to be dropped.
-    ///
-    /// Borrows `heap` as [`share_binding`] does, or as a read of `staging`
-    /// and a [`define`](Self::define) here for a staged value.
-    ///
-    /// [`share_binding`]: Self::share_binding
     pub fn copy_binding(
         &self,
         heap: &RefCell<Heap>,
@@ -1632,41 +1899,21 @@ impl Environment {
         staging: &Rc<Environment>,
         staged_name: &str,
     ) -> bool {
-        self.take_binding(heap, name.into(), staging, staged_name, false)
-    }
-
-    fn take_binding(
-        &self,
-        heap: &RefCell<Heap>,
-        name: Rc<str>,
-        source: &Rc<Environment>,
-        source_name: &str,
-        source_owns: bool,
-    ) -> bool {
-        let Some(slot) = source.local_slot(source_name) else {
+        debug_assert!(!staging.is_namespace(), "a staging environment is a frame");
+        let Some(slot) = staging.local_slot(staged_name) else {
             return false;
         };
-        // The source's hit, read at its step: from 4b.6's records, whose
-        // binding it is lives in the record its slot names.
-        let owner = {
-            let _step = source.read_step(heap);
-            source.owner_of(slot)
-        };
-        let owner = match owner {
-            Some(owner) => owner,
-            None if source_owns => (Rc::clone(source), slot),
-            None => {
-                let value = source.slot_value(heap, slot);
-                self.define(heap, name, value);
-                return true;
-            }
-        };
-        self.forward(heap, name, owner);
+        let word = staging.bindings.borrow().read_slot(slot);
+        if word == TaggedValue::IMPORTED {
+            self.import_cell(heap, name, staging.frame_import_cell(slot));
+        } else {
+            self.define(heap, name, word);
+        }
         true
     }
 
-    /// `define` without its bookkeeping: writes the slot, and reports it and
-    /// whether an imported binding was there before.
+    /// A frame's `define` without its bookkeeping: writes the slot, and
+    /// reports it and whether an import was there before.
     #[inline]
     fn define_slot(&self, name: Rc<str>, value: TaggedValue) -> (u32, bool) {
         // A plain binding is reachable by name and by nothing else, so
@@ -1674,31 +1921,13 @@ impl Environment {
         crate::scope_trace::bind(&name, &ScopeSet::new(), true);
         let Inserted {
             slot,
-            was_forwarded,
+            was_imported,
             grew,
         } = self.bindings.borrow_mut().insert(name, value);
         if grew {
             self.recharge();
         }
-        (slot, was_forwarded)
-    }
-
-    /// Point `name` here at `owner`'s binding: a re-point or an insert,
-    /// under this environment's mutable step.
-    fn forward(&self, heap: &RefCell<Heap>, name: Rc<str>, owner: Owner) {
-        // An environment cannot hold an `Rc` to itself without leaking, and
-        // has no need to: a name that would forward to this environment is a
-        // second name for a value already here.
-        if std::ptr::eq(Rc::as_ptr(&owner.0), self) {
-            if self.local_slot(&name) != Some(owner.1) {
-                let value = self.slot_value(heap, owner.1);
-                self.define(heap, name, value);
-            }
-            return;
-        }
-        let _step = self.write_step(heap);
-        let (slot, _) = self.define_slot(name, TaggedValue::FORWARDED);
-        self.set_owner(slot, owner);
+        (slot, was_imported)
     }
 
     /// A name of this environment's own for the *location* `name` is imported
@@ -1714,9 +1943,10 @@ impl Environment {
     /// template's reference. Bound to this alias instead, the reference is to
     /// the location.
     ///
-    /// The alias is an ordinary forwarded slot, so it reads, writes and caches
-    /// like the import it stands beside; it is minted once per name for a
-    /// location (`mint` runs only then) and shared by every expansion after.
+    /// The alias is a second record over the same cell (#834), so it reads,
+    /// writes and caches like the import it stands beside; it is minted once
+    /// per name for a location (`mint` runs only then) and shared by every
+    /// expansion after. It stays a name until 4b.10.
     ///
     /// Per *name*, not per location alone: a location this environment
     /// imported under two names — `car`, and `first` by a `rename` — gets an
@@ -1726,32 +1956,35 @@ impl Environment {
     ///
     /// Being an ordinary slot, it can be defined over like one, by a program
     /// that happens to spell it — `car.17` is a legal identifier, and
-    /// machine-written Scheme is full of names like it. The remembered alias
-    /// is therefore checked to still *be* the forward it was minted as, and
-    /// replaced when it is not: what was bound to the old one is lost to that
-    /// definition, but nothing expanded afterwards follows it there. For the
-    /// same reason `mint` is asked again while the spelling it offers is
-    /// already bound here, since forwarding a name overwrites what it held.
-    /// (Only a *reference* is ever given this name — `Desugarer::early_bound`
-    /// — so nothing Patina does defines over one.)
+    /// machine-written Scheme is full of names like it. A definition over it
+    /// re-points its record and forgets it as an alias (`forget_alias`), so
+    /// the next request mints another: what was bound to the old one is lost
+    /// to that definition, but nothing expanded afterwards follows it there.
+    /// For the same reason `mint` is asked again while the spelling it
+    /// offers is already bound here. (Only a *reference* is ever given this
+    /// name — `Desugarer::early_bound` — so nothing Patina does defines over
+    /// one.)
     ///
-    /// Borrows `heap` shared over the lookup, and mutably to insert a fresh
-    /// alias (#834).
+    /// A namespace's only: a frame answers `None`, and `Desugarer::import_of`
+    /// asks the root, a namespace. Borrows `heap` shared over the lookup,
+    /// and mutably to insert a fresh alias (#834).
     pub fn import_alias(
         &self,
         heap: &RefCell<Heap>,
         name: &str,
         mut mint: impl FnMut() -> Rc<str>,
     ) -> Option<Rc<str>> {
-        let slot = self.local_slot(name)?;
+        let record = self.local_record(name)?;
         let rare = self.rare.get()?;
-        let (owner, key) = {
-            // One step over the lookup: the import's owner, the alias
-            // remembered for it, and whether that still forwards there.
-            let _step = self.read_step(heap);
-            let owner = self.owner_of(slot)?;
-            let key = (owner.0.env_id(), owner.1);
-            // Out of the borrow first: `owner_of` borrows a table beside it.
+        let (cell, key) = {
+            // One step over the lookup: the imported cell, the alias
+            // remembered for it, and whether that still names it.
+            let step = self.borrow_read(heap);
+            let cell = record.cell(&step);
+            if cell.owned_by(&step, self.env_id) {
+                return None;
+            }
+            let key = cell.key();
             let known = rare.import_aliases.borrow().get(&key).and_then(|aliases| {
                 aliases
                     .iter()
@@ -1759,15 +1992,16 @@ impl Environment {
                     .map(|(_, alias)| Rc::clone(alias))
             });
             if let Some(alias) = known {
-                let still_forwards = self
-                    .local_slot(&alias)
-                    .and_then(|slot| self.owner_of(slot))
-                    .is_some_and(|(env, slot)| Rc::ptr_eq(&env, &owner.0) && slot == owner.1);
-                if still_forwards {
+                // `forget_alias` makes a mismatch impossible; checked anyway,
+                // as the defence the reuse tests exercise.
+                let still_names = self
+                    .local_record(&alias)
+                    .is_some_and(|alias_record| alias_record.cell(&step) == cell);
+                if still_names {
                     return Some(alias);
                 }
             }
-            (owner, key)
+            (cell, key)
         };
         let alias = loop {
             let candidate = mint();
@@ -1775,7 +2009,7 @@ impl Environment {
                 break candidate;
             }
         };
-        self.forward(heap, Rc::clone(&alias), owner);
+        self.bind_cell(&mut self.borrow_write(heap), Rc::clone(&alias), cell);
         let grew = {
             let mut table = rare.import_aliases.borrow_mut();
             let capacity = table.capacity();
@@ -1794,14 +2028,14 @@ impl Environment {
     }
 
     /// The value of a binding in this environment's own table, read through
-    /// to its owner when it was imported. Every by-name read of the table
-    /// goes through here; `Bindings` has no `get` of its own, so none can
-    /// hand out the marker.
+    /// its record in a namespace and through its cell for a frame's import.
+    /// Every by-name read of the table goes through here; `Bindings` has no
+    /// `get` of its own, so none can hand out a record or the marker.
     ///
     /// A hit in a namespace is read at its step, under a shared borrow of
     /// `heap`; a miss takes none, and nor does a frame's own binding (#834).
-    /// A frame's import borrows it shared, whatever kind its owner is. Both
-    /// branches stay inline: the tree-walker's frames are hot.
+    /// A frame's import borrows it shared. Both branches stay inline: the
+    /// tree-walker's frames are hot.
     #[inline(always)]
     fn local_value(&self, heap: &RefCell<Heap>, name: &str) -> Option<TaggedValue> {
         let (slot, tv) = {
@@ -1810,14 +2044,10 @@ impl Environment {
             (slot, bindings.read_slot(slot))
         };
         if let Some(step) = self.read_step(heap) {
-            return Some(if tv == TaggedValue::FORWARDED {
-                self.shared_value_in(&step, slot)
-            } else {
-                tv
-            });
+            return Some(Record::from_word(tv).value(&step));
         }
-        if tv == TaggedValue::FORWARDED {
-            return Some(self.shared_value(heap, slot));
+        if tv == TaggedValue::IMPORTED {
+            return Some(self.frame_import_value(heap, slot));
         }
         Some(tv)
     }
@@ -1832,8 +2062,11 @@ impl Environment {
             let slot = bindings.slot_of(name)?;
             (slot, bindings.read_slot(slot))
         };
-        if tv == TaggedValue::FORWARDED {
-            return Some(self.shared_value_in(heap, slot));
+        if self.is_namespace() {
+            return Some(Record::from_word(tv).value(heap));
+        }
+        if tv == TaggedValue::IMPORTED {
+            return Some(self.frame_import_value_in(heap, slot));
         }
         Some(tv)
     }
@@ -1885,10 +2118,15 @@ impl Environment {
             // macro-generated macro's template assigns to a definition its
             // expansion introduced, which arrives relinked to the bare name.
             if let Some(i) = env.visible_scoped_index(name) {
-                let _step = env.write_step(heap);
+                let mut step = env.write_step(heap);
                 if let Some(bindings) = env.scoped_bindings.borrow_mut().get_mut(name) {
-                    crate::census::store(crate::census::Site::EnvSetScoped, None, value);
-                    bindings[i].tagged_value = value;
+                    write_entry(
+                        step.as_deref_mut(),
+                        &mut bindings[i],
+                        value,
+                        Site::EnvSetScoped,
+                        true,
+                    );
                     return Ok(());
                 }
             }
@@ -1930,10 +2168,10 @@ impl Environment {
             if env.has_visible_scoped.get()
                 && let Some(i) = env.visible_scoped_index(name)
             {
-                let _step = env.read_step(heap);
+                let step = env.read_step(heap);
                 return env.scoped_bindings.borrow()[name]
                     .get(i)
-                    .map(|b| b.tagged_value);
+                    .map(|b| resolve(step.as_deref(), b.tagged_value));
             }
             env = env.parent.as_deref()?;
         }
@@ -1948,20 +2186,16 @@ impl Environment {
     /// shared walk is Track Q's Q7.3; until then they mirror by hand.
     ///
     /// A hit in a namespace is located at its step, under a shared borrow of
-    /// `heap`, which from 4b.6's records is where whose binding it is lives
-    /// (#834). A frame's hit takes none: a frame's import names its owner
-    /// and reads no value.
+    /// `heap`: the cell its record names, own or imported (#834). A frame's
+    /// hit takes none: a frame's import names its cell, and a frame's own
+    /// binding is its slot, and neither reads the heap.
     ///
     /// [`get`]: Self::get
     pub fn binding_location(&self, heap: &RefCell<Heap>, name: &str) -> Option<BindingLocation> {
         let mut env = self;
         loop {
             if let Some(slot) = env.local_slot(name) {
-                let _step = env.read_step(heap);
-                return Some(match env.owner_of(slot) {
-                    Some((owner, owner_slot)) => BindingLocation::Slot(owner.env_id(), owner_slot),
-                    None => BindingLocation::Slot(env.env_id(), slot),
-                });
+                return Some(env.slot_location(heap, slot));
             }
             if env.has_aliases.get()
                 && let Some(target) = env.alias_target(name)
@@ -1969,17 +2203,33 @@ impl Environment {
                 return target.location(env, heap);
             }
             if let Some(i) = env.visible_scoped_index(name) {
-                let _step = env.read_step(heap);
+                let step = env.read_step(heap);
                 let table = env.scoped_bindings.borrow();
-                let (spelling, _) = table.get_key_value(name)?;
-                return Some(BindingLocation::Scoped(
-                    env.env_id(),
-                    Rc::clone(spelling),
-                    i,
-                ));
+                let (spelling, bindings) = table.get_key_value(name)?;
+                return Some(match step {
+                    Some(step) => Record::from_word(bindings.get(i)?.tagged_value)
+                        .cell(&step)
+                        .location(),
+                    None => BindingLocation::Scoped(env.env_id(), Rc::clone(spelling), i),
+                });
             }
             env = env.parent.as_deref()?;
         }
+    }
+
+    /// Where this environment's `slot` lives, as `binding_location` names
+    /// it: a namespace's record's cell, read at its step; a frame's
+    /// import's cell; or a frame's own slot.
+    fn slot_location(&self, heap: &RefCell<Heap>, slot: u32) -> BindingLocation {
+        let step = self.read_step(heap);
+        let word = self.bindings.borrow().read_slot(slot);
+        if let Some(step) = step {
+            return Record::from_word(word).cell(&step).location();
+        }
+        if word == TaggedValue::IMPORTED {
+            return self.frame_import_cell(slot).location();
+        }
+        BindingLocation::Slot(self.env_id(), slot)
     }
 
     /// Whether this environment indexes a spelling's scoped bindings when it
@@ -2067,15 +2317,17 @@ impl Environment {
         name: &str,
         scopes: &ScopeSet,
     ) -> Option<BindingLocation> {
-        let _step = self.read_step(heap);
+        let step = self.read_step(heap);
         let table = self.scoped_bindings.borrow();
         let (spelling, bindings) = table.get_key_value(name)?;
         let index = self.scoped_position(name, bindings, scopes)?;
-        Some(BindingLocation::Scoped(
-            self.env_id(),
-            Rc::clone(spelling),
-            index,
-        ))
+        Some(match step {
+            // A namespace's entry is a record: its cell (#834).
+            Some(step) => Record::from_word(bindings[index].tagged_value)
+                .cell(&step)
+                .location(),
+            None => BindingLocation::Scoped(self.env_id(), Rc::clone(spelling), index),
+        })
     }
 
     /// What that definition holds — [`scoped_definition_location`]'s read.
@@ -2087,11 +2339,11 @@ impl Environment {
         name: &str,
         scopes: &ScopeSet,
     ) -> Option<TaggedValue> {
-        let _step = self.read_step(heap);
+        let step = self.read_step(heap);
         let table = self.scoped_bindings.borrow();
         let bindings = table.get(name)?;
         let position = self.scoped_position(name, bindings, scopes)?;
-        Some(bindings[position].tagged_value)
+        Some(resolve(step.as_deref(), bindings[position].tagged_value))
     }
 
     /// Assign that definition — [`scoped_definition_location`]'s write. `Err`
@@ -2107,7 +2359,7 @@ impl Environment {
         scopes: &ScopeSet,
         value: TaggedValue,
     ) -> Result<(), String> {
-        let _step = self.write_step(heap);
+        let mut step = self.write_step(heap);
         let mut table = self.scoped_bindings.borrow_mut();
         let binding = table.get_mut(name).and_then(|bindings| {
             let position = self.scoped_position(name, bindings, scopes)?;
@@ -2115,7 +2367,13 @@ impl Environment {
         });
         match binding {
             Some(binding) => {
-                binding.tagged_value = value;
+                write_entry(
+                    step.as_deref_mut(),
+                    binding,
+                    value,
+                    Site::EnvSetScoped,
+                    false,
+                );
                 Ok(())
             }
             None => Err(name.to_string()),
@@ -2657,13 +2915,98 @@ impl Environment {
         }
         // The step first, before the trace, the latch or the table: a
         // refused borrow then panics with nothing written.
-        let _step = self.write_step(heap);
-        self.insert_scoped_here(name, scopes, value, visible_by_name);
+        match self.write_step(heap) {
+            Some(mut step) => {
+                self.insert_scoped_record(&mut step, name, scopes, value, visible_by_name)
+            }
+            None => self.insert_scoped_here(name, scopes, value, visible_by_name),
+        }
     }
 
-    /// [`insert_scoped`](Self::insert_scoped)'s body, for non-empty `scopes`,
-    /// under whatever step its caller took: the namespace's, or none for a
-    /// frame's own binding.
+    /// [`insert_scoped`](Self::insert_scoped) in a namespace, under its
+    /// mutable step (#834): every scoped entry a namespace holds is a
+    /// record over a cell of its own, the tree-walker's introduced
+    /// definitions, the splicing `let-syntax` keywords the desugarer files
+    /// at top level and a visible definition alike, so that one invariant
+    /// covers the table and an overwrite never changes what an entry is.
+    ///
+    /// A vacant spelling, or a scope set the spelling has no entry at, gets
+    /// a fresh record and cell; an entry at exactly `scopes` is stored into,
+    /// and keeps its record.
+    fn insert_scoped_record(
+        &self,
+        heap: &mut Heap,
+        name: Rc<str>,
+        scopes: ScopeSet,
+        value: TaggedValue,
+        visible_by_name: bool,
+    ) {
+        crate::scope_trace::bind(&name, &scopes, visible_by_name);
+        if visible_by_name {
+            self.has_visible_scoped.set(true);
+        }
+        let env_id = self.env_id;
+        // Both allocations are under one `&mut Heap`, which a collection
+        // needs, and allocation never collects (`docs/GC_DESIGN.md` §6): the
+        // cell, held only in a local until its record holds it, cannot be
+        // swept between. Allocating with the scoped table borrowed is
+        // sound: the heap is another `RefCell`.
+        let fresh = |heap: &mut Heap| {
+            let cell = BindingCell::new_own(heap, value, env_id);
+            Record::new(heap, cell).word()
+        };
+        let (grew, made) = {
+            let mut table = self.scoped_bindings.borrow_mut();
+            let capacity = table.capacity();
+            let (spelling_grew, made) = match table.entry(name) {
+                Entry::Vacant(vacant) => {
+                    let record = fresh(heap);
+                    vacant.insert(smallvec::smallvec![ScopedBinding {
+                        scopes,
+                        tagged_value: record,
+                        visible_by_name,
+                    }]);
+                    (false, true)
+                }
+                Entry::Occupied(mut occupied) => {
+                    match self.scoped_position(occupied.key(), occupied.get(), &scopes) {
+                        Some(position) => {
+                            let existing = &mut occupied.get_mut()[position];
+                            existing.visible_by_name = visible_by_name;
+                            let cell = Record::from_word(existing.tagged_value).cell(heap);
+                            cell.store(heap, value, Site::EnvDefine);
+                            (false, false)
+                        }
+                        None => {
+                            let before = list_bytes(occupied.get());
+                            let record = fresh(heap);
+                            occupied.get_mut().push(ScopedBinding {
+                                scopes,
+                                tagged_value: record,
+                                visible_by_name,
+                            });
+                            let (spelling, bindings) = (occupied.key(), occupied.get());
+                            let list_grew = self.charge_entries(before, list_bytes(bindings));
+                            let index_grew = self.indexes(bindings.len())
+                                && self.index_scoped(spelling, bindings);
+                            (list_grew || index_grew, true)
+                        }
+                    }
+                }
+            };
+            (table.capacity() != capacity || spelling_grew, made)
+        };
+        if made {
+            self.count(1, 1);
+        }
+        if grew {
+            self.recharge();
+        }
+    }
+
+    /// [`insert_scoped`](Self::insert_scoped)'s body for a frame, for
+    /// non-empty `scopes`: no heap and no step. A namespace's goes through
+    /// [`insert_scoped_record`](Self::insert_scoped_record).
     #[inline]
     fn insert_scoped_here(
         &self,
@@ -2926,11 +3269,17 @@ impl Environment {
             }
             Ok(Some(index)) => {
                 let (env, position) = candidates[index].1;
-                let _step = env.write_step(heap);
+                let mut step = env.write_step(heap);
                 let mut scoped = env.scoped_bindings.borrow_mut();
                 match scoped.get_mut(name).and_then(|bs| bs.get_mut(position)) {
                     Some(binding) => {
-                        binding.tagged_value = value;
+                        write_entry(
+                            step.as_deref_mut(),
+                            binding,
+                            value,
+                            Site::EnvSetScoped,
+                            false,
+                        );
                         drop(scoped);
                         crate::scope_trace::wrote(name, scopes, "scoped");
                         Ok(())
@@ -3015,10 +3364,16 @@ impl Environment {
                     );
                     if crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
                         drop(table);
-                        let _step = env.write_step(heap);
+                        let mut step = env.write_step(heap);
                         let mut table = env.scoped_bindings.borrow_mut();
                         if let Some(binding) = table.get_mut(name).and_then(|bs| bs.get_mut(i)) {
-                            binding.tagged_value = value;
+                            write_entry(
+                                step.as_deref_mut(),
+                                binding,
+                                value,
+                                Site::EnvSetScoped,
+                                false,
+                            );
                             return Ok(());
                         }
                         return Err(name.to_string());
@@ -3207,7 +3562,7 @@ impl Environment {
             if env.has_visible_scoped.get()
                 && let Some(i) = env.visible_scoped_index(name)
             {
-                let _step = env.read_step(heap);
+                let step = env.read_step(heap);
                 let table = env.scoped_bindings.borrow();
                 // `.get(i)`, as `get` reads the same table — the two copies of
                 // this walk must not disagree on out-of-bounds behavior. One
@@ -3227,7 +3582,7 @@ impl Environment {
                          candidate for {scopes} — resolution should have chosen it"
                     );
                     if crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
-                        return Some(binding.tagged_value);
+                        return Some(resolve(step.as_deref(), binding.tagged_value));
                     }
                 }
                 // Rejected for these scopes: fall through to the parent rather
@@ -3416,8 +3771,9 @@ impl Environment {
         loop {
             let scoped = env.scoped_bindings.borrow();
             if let Some(bindings) = scoped.get(name) {
-                // Each candidate's value is read at the namespace's step.
-                let _step = env.read_step(heap);
+                // Each candidate's value is read at the namespace's step,
+                // through its record (#834).
+                let step = env.read_step(heap);
                 // A spelling's index shows only the bindings filed under the
                 // reference's scopes, so with one the debug trace lists those.
                 env.visit_scoped_candidates(
@@ -3434,7 +3790,10 @@ impl Environment {
                             );
                         }
                         if is_candidate {
-                            candidates.push((binding.scopes.clone(), binding.tagged_value));
+                            candidates.push((
+                                binding.scopes.clone(),
+                                resolve(step.as_deref(), binding.tagged_value),
+                            ));
                         }
                     },
                 );
@@ -3566,38 +3925,43 @@ impl Environment {
     fn visible_slots(&self, heap: &RefCell<Heap>) -> Vec<(u32, String)> {
         // A table, not a scan per name: an importer that expands library
         // macros holds an alias for each location their templates mention.
-        let hidden: FxHashMap<Rc<str>, (u64, u32)> =
+        // Each alias's spelling, with the key of the cell it was minted for.
+        let hidden: FxHashMap<Rc<str>, u64> =
             self.rare.get().map_or_else(FxHashMap::default, |rare| {
                 rare.import_aliases
                     .borrow()
                     .iter()
-                    .flat_map(|(location, aliases)| {
-                        aliases
-                            .iter()
-                            .map(|(_, alias)| (Rc::clone(alias), *location))
+                    .flat_map(|(key, aliases)| {
+                        aliases.iter().map(|(_, alias)| (Rc::clone(alias), *key))
                     })
                     .collect()
             });
-        // Whether an alias is still the forward it was minted as is read at
-        // the step, where from 4b.6's records the alias's binding is.
-        let _step = if hidden.is_empty() {
+        // Whether an alias still names the cell it was minted for is read at
+        // the step, through its record (#834). Only a namespace mints one.
+        let step = if hidden.is_empty() {
             None
         } else {
             self.read_step(heap)
         };
-        self.bindings
-            .borrow()
+        let bindings = self.bindings.borrow();
+        bindings
             .names()
             .enumerate()
             .filter(|(slot, name)| {
-                // Hidden only while it is still the forward it was minted as.
-                // A program that defined the alias's spelling bound a name,
-                // and `import_aliases` goes on listing it until the location
-                // is next asked for (`import_alias` replaces it then).
-                hidden.get(&***name).is_none_or(|location| {
-                    self.owner_of(*slot as u32)
-                        .is_none_or(|(env, owner_slot)| (env.env_id(), owner_slot) != *location)
-                })
+                // Hidden only while it still names the cell it was minted
+                // for. `forget_alias` drops the entry of an alias a program
+                // defined over or imported over, so a mismatch cannot
+                // happen; compared all the same, as the defence the reuse
+                // tests exercise.
+                match (hidden.get(&***name), &step) {
+                    (Some(&key), Some(step)) => {
+                        Record::from_word(bindings.read_slot(*slot as u32))
+                            .cell(step)
+                            .key()
+                            != key
+                    }
+                    _ => true,
+                }
             })
             .map(|(slot, name)| (slot as u32, name.to_string()))
             .collect()
@@ -3612,11 +3976,101 @@ impl Environment {
     /// a namespace's step (#834).
     pub fn bindings(&self, heap: &RefCell<Heap>) -> Vec<(String, TaggedValue)> {
         // Names first and values after: an imported binding's value is read
-        // from its owner, and that read must not happen under this borrow.
+        // from its cell, and that read must not happen under this borrow.
         self.visible_slots(heap)
             .into_iter()
             .map(|(slot, name)| (name, self.slot_value(heap, slot)))
             .collect()
+    }
+
+    /// Each macro-introduced top-level definition of `name` this namespace
+    /// holds a record for (#834): the VM's (`Introduced` → the renamed
+    /// global's slot, once its `Define` ran) and the tree-walker's (the
+    /// scoped list's entries that are not name-visible and hold no macro,
+    /// which leaves the splicing keywords out). Empty for a frame. Reads at
+    /// the namespace's step. Raw, for 5c and the tests.
+    pub fn introduced_records(&self, heap: &RefCell<Heap>, name: &str) -> Vec<IntroducedRecord> {
+        let Some(step) = self.read_step(heap) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let entry = |identity: &ScopeSet, record: Record, value: TaggedValue| IntroducedRecord {
+            identity: identity.clone(),
+            scope: identity.introducing_scope(),
+            value,
+            record: record.key(),
+        };
+        if let Some(rare) = self.rare.get()
+            && let Some(introduced) = rare.introduced_global_names.borrow().get(name)
+        {
+            for (identity, renamed) in &introduced.identities {
+                if let Some(record) = self.local_record(renamed) {
+                    out.push(entry(identity, record, record.value(&step)));
+                }
+            }
+        }
+        if let Some(list) = self.scoped_bindings.borrow().get(name) {
+            for binding in list.iter().filter(|binding| !binding.visible_by_name) {
+                let record = Record::from_word(binding.tagged_value);
+                let value = record.value(&step);
+                if step.get_macro(value).is_none() {
+                    out.push(entry(&binding.scopes, record, value));
+                }
+            }
+        }
+        out
+    }
+
+    /// The records and own cells this namespace holds, counted from its
+    /// tables rather than kept as running sums: for the tests, to check the
+    /// sums (`NamespaceCharge`). A frame holds none.
+    #[cfg(test)]
+    pub(crate) fn recount(&self, heap: &Heap) -> (usize, usize) {
+        if !self.is_namespace() {
+            return (0, 0);
+        }
+        let mut records = 0;
+        let mut cells = 0;
+        let mut tally = |word: TaggedValue| {
+            records += 1;
+            if Record::from_word(word)
+                .cell(heap)
+                .owned_by(heap, self.env_id)
+            {
+                cells += 1;
+            }
+        };
+        for (_, word) in &self.bindings.borrow().slots {
+            tally(*word);
+        }
+        for list in self.scoped_bindings.borrow().values() {
+            for binding in list {
+                tally(binding.tagged_value);
+            }
+        }
+        (records, cells)
+    }
+
+    /// The running sums of records and own cells this namespace's charge
+    /// keeps, for the tests beside [`recount`](Self::recount).
+    #[cfg(test)]
+    pub(crate) fn counted(&self) -> (usize, usize) {
+        self.rare
+            .get()
+            .and_then(|rare| rare.namespace.as_ref())
+            .map_or((0, 0), |charge| (charge.records.get(), charge.cells.get()))
+    }
+
+    /// What a scoped entry of this environment's stands for: in a namespace
+    /// the value its record's cell holds, read at the step; in a frame, its
+    /// word. For the tests that walk the scoped table.
+    #[cfg(test)]
+    pub(crate) fn scoped_entry_value(
+        &self,
+        heap: &RefCell<Heap>,
+        entry: &ScopedBinding,
+    ) -> TaggedValue {
+        resolve(self.read_step(heap).as_deref(), entry.tagged_value)
     }
 
     // =========================================================================
@@ -4236,14 +4690,13 @@ mod scoped_index_tests {
             library.scoped_definition_value(&heap, "count", &identity(11)),
             Some(n(41))
         );
-        let located = |alias| match user.binding_location(&heap, alias) {
-            Some(BindingLocation::Scoped(id, spelling, index)) => {
-                assert_eq!((id, &*spelling), (library.env_id(), "count"));
-                index
-            }
-            other => panic!("{alias} located at {other:?}"),
-        };
-        assert_eq!((located("oldest"), located("newest")), (0, 11));
+        // Each alias locates the cell its definition's record names (#834).
+        let located = |alias| user.binding_location(&heap, alias);
+        let definition = |k| library.scoped_definition_location(&heap, "count", &identity(k));
+        assert!(matches!(located("oldest"), Some(BindingLocation::Cell(..))));
+        assert_eq!(located("oldest"), definition(0));
+        assert_eq!(located("newest"), definition(11));
+        assert_ne!(located("oldest"), located("newest"));
 
         library
             .set_with_scopes(&heap, "count", &scopes(&[4, 104, 500]), n(44))
@@ -4380,10 +4833,29 @@ mod name_view_tests {
 #[path = "hygiene_properties.rs"]
 mod hygiene_properties;
 
+/// Import `source_name` from `source` into `env` as `name`, as a library's
+/// export is imported: `env` takes the cell `source`'s binding names
+/// (`cell_of`, `import_cell`; #834). For the tests that imported with
+/// `share_binding` before binding records.
+#[cfg(test)]
+fn share(
+    heap: &SharedHeap,
+    env: &Environment,
+    name: &str,
+    source: &Environment,
+    source_name: &str,
+) {
+    let cell = source
+        .cell_of(heap, source_name)
+        .unwrap_or_else(|| panic!("`{source_name}` names no cell"));
+    env.import_cell(heap, name, cell);
+}
+
 /// What an import installs (#406): the library's location, not a copy of what
 /// it held. `tests/scheme/stdlib/library-bindings.scm` says the same from
 /// Scheme, with Gauche arbitrating; these pin the parts only Rust can see —
-/// which slots forward, which copy, and what retires a link.
+/// which records name the library's cell, which copy, and that an importer
+/// holds a cell and no environment (#834).
 #[cfg(test)]
 mod shared_binding_tests {
     use super::*;
@@ -4403,7 +4875,8 @@ mod shared_binding_tests {
 
     /// The environments the collector is shown from `env`, by its trace and
     /// as its parent. None of these tests gives an importer a parent or an
-    /// alias, so these are its owners.
+    /// alias, and an import is a cell, not an edge to its library (#834),
+    /// so there are none.
     fn edges_to_environments(env: &Environment) -> Vec<*const Environment> {
         /// Records the environments it is given, and ignores the rest.
         struct Envs(Vec<*const Environment>);
@@ -4427,7 +4900,7 @@ mod shared_binding_tests {
     fn a_shared_binding_reads_what_its_owner_holds_now() {
         let heap = new_shared_heap();
         let (library, importer) = library_and_importer(&heap);
-        assert!(importer.share_binding(&heap, "count", &library, "count"));
+        share(&heap, &importer, "count", &library, "count");
         library.set(&heap, "count", n(2)).unwrap();
 
         assert_eq!(importer.get(&heap, "count"), Some(n(2)));
@@ -4448,7 +4921,7 @@ mod shared_binding_tests {
     fn a_write_to_a_shared_binding_lands_in_its_owner() {
         let heap = new_shared_heap();
         let (library, importer) = library_and_importer(&heap);
-        importer.share_binding(&heap, "count", &library, "count");
+        share(&heap, &importer, "count", &library, "count");
 
         importer.set(&heap, "count", n(10)).unwrap();
         assert_eq!(library.get(&heap, "count"), Some(n(10)));
@@ -4463,7 +4936,7 @@ mod shared_binding_tests {
     fn a_definition_over_a_shared_binding_is_the_importers_own() {
         let heap = new_shared_heap();
         let (library, importer) = library_and_importer(&heap);
-        importer.share_binding(&heap, "count", &library, "count");
+        share(&heap, &importer, "count", &library, "count");
         let slot = importer.local_slot("count").unwrap();
 
         importer.define(&heap, "count", n(99));
@@ -4484,7 +4957,7 @@ mod shared_binding_tests {
         importer.define(&heap, "count", n(7));
         let slot = importer.local_slot("count").unwrap();
 
-        importer.share_binding(&heap, "count", &library, "count");
+        share(&heap, &importer, "count", &library, "count");
         assert_eq!(importer.local_slot("count"), Some(slot));
         assert_eq!(importer.slot_value(&heap, slot), n(0));
     }
@@ -4493,9 +4966,9 @@ mod shared_binding_tests {
     fn a_re_export_forwards_to_the_owner_and_not_to_the_library_between() {
         let heap = new_shared_heap();
         let (library, relay) = library_and_importer(&heap);
-        relay.share_binding(&heap, "relayed", &library, "count");
+        share(&heap, &relay, "relayed", &library, "count");
         let importer = Rc::new(Environment::with_heap(&heap));
-        importer.share_binding(&heap, "again", &relay, "relayed");
+        share(&heap, &importer, "again", &relay, "relayed");
 
         library.set(&heap, "count", n(3)).unwrap();
         assert_eq!(importer.get(&heap, "again"), Some(n(3)));
@@ -4506,19 +4979,28 @@ mod shared_binding_tests {
         library.set(&heap, "count", n(4)).unwrap();
         assert_eq!(importer.get(&heap, "again"), Some(n(4)));
 
-        assert_eq!(edges_to_environments(&importer), vec![Rc::as_ptr(&library)]);
+        // The importer holds the library's cell, and no environment.
+        assert_eq!(
+            edges_to_environments(&importer),
+            Vec::<*const Environment>::new()
+        );
+        assert_eq!(
+            importer.binding_location(&heap, "again"),
+            library.binding_location(&heap, "count")
+        );
     }
 
     #[test]
     fn a_staging_environment_carries_a_binding_without_owning_it() {
         let heap = new_shared_heap();
-        let (library, staging) = library_and_importer(&heap);
-        staging.share_binding(&heap, "count", &library, "count");
-        // The fallback an import takes for an export that is not a plain
-        // binding: the staging environment is given the value outright.
+        let (library, importer) = library_and_importer(&heap);
+        // A staging frame, as the desugarer stages an import over the
+        // environment it then copies into.
+        let staging = Rc::new(Environment::child_frame(Rc::clone(&importer)));
+        share(&heap, &staging, "count", &library, "count");
+        // A binding of the staging frame's own, given its value outright.
         staging.define(&heap, "loose", n(5));
 
-        let importer = Rc::new(Environment::with_heap(&heap));
         assert!(importer.copy_binding(&heap, "c:count", &staging, "count"));
         assert!(importer.copy_binding(&heap, "c:loose", &staging, "loose"));
         assert!(!importer.copy_binding(&heap, "c:absent", &staging, "absent"));
@@ -4527,10 +5009,18 @@ mod shared_binding_tests {
         library.set(&heap, "count", n(2)).unwrap();
         assert_eq!(importer.get(&heap, "c:count"), Some(n(2)));
 
-        // A value, not a forward into an environment about to be dropped.
+        // A value, not a binding of an environment about to be dropped; and
+        // the staged import arrived as the library's cell.
         staging.set(&heap, "loose", n(6)).unwrap();
         assert_eq!(importer.get(&heap, "c:loose"), Some(n(5)));
-        assert_eq!(edges_to_environments(&importer), vec![Rc::as_ptr(&library)]);
+        assert_eq!(
+            importer.binding_location(&heap, "c:count"),
+            library.binding_location(&heap, "count")
+        );
+        assert_eq!(
+            edges_to_environments(&importer),
+            Vec::<*const Environment>::new()
+        );
     }
 
     #[test]
@@ -4541,13 +5031,13 @@ mod shared_binding_tests {
         // a binding down the chain, and an importer then saw a library's
         // assignment only if the import happened to come after it.
         let (primitives, base) = library_and_importer(&heap);
-        base.share_binding(&heap, "count", &primitives, "count");
+        share(&heap, &base, "count", &primitives, "count");
         let early = Rc::new(Environment::with_heap(&heap));
-        early.share_binding(&heap, "count", &base, "count");
+        share(&heap, &early, "count", &base, "count");
 
         base.set(&heap, "count", n(50)).unwrap();
         let late = Rc::new(Environment::with_heap(&heap));
-        late.share_binding(&heap, "count", &base, "count");
+        share(&heap, &late, "count", &base, "count");
 
         for env in [&primitives, &base, &early, &late] {
             assert_eq!(env.get(&heap, "count"), Some(n(50)));
@@ -4559,48 +5049,149 @@ mod shared_binding_tests {
     }
 
     #[test]
-    fn the_collector_is_shown_each_owner_once() {
-        let heap = new_shared_heap();
-        let (library, importer) = library_and_importer(&heap);
-        library.define(&heap, "other", n(1));
-        let second = Rc::new(Environment::with_heap(&heap));
-        second.define(&heap, "third", n(2));
-        importer.share_binding(&heap, "count", &library, "count");
-        importer.share_binding(&heap, "third", &second, "third");
-        importer.share_binding(&heap, "other", &library, "other");
-
-        assert_eq!(
-            edges_to_environments(&importer),
-            vec![Rc::as_ptr(&library), Rc::as_ptr(&second)]
-        );
-    }
-
-    #[test]
     fn a_name_the_source_does_not_bind_plainly_is_left_to_the_caller() {
         let heap = new_shared_heap();
         let (library, importer) = library_and_importer(&heap);
-        assert!(!importer.share_binding(&heap, "missing", &library, "missing"));
+        assert_eq!(library.cell_of(&heap, "missing"), None);
         assert_eq!(importer.get(&heap, "missing"), None);
 
         // A parent's binding is not the source's own location to share.
         let child = Rc::new(Environment::child_frame(Rc::clone(&library)));
-        assert!(!importer.share_binding(&heap, "count", &child, "count"));
+        assert_eq!(child.cell_of(&heap, "count"), None);
+        // Nor is a frame's own binding a cell.
+        child.define(&heap, "own", n(1));
+        assert_eq!(child.cell_of(&heap, "own"), None);
     }
 
+    /// A namespace's own cell imported under another name is copied: two
+    /// names of one namespace never share a cell, or a later `define` of
+    /// either would assign both. Imported under its own name, it is left
+    /// alone.
     #[test]
-    fn an_environment_never_forwards_to_itself() {
+    fn an_own_cell_imported_under_another_name_is_copied() {
         let heap = new_shared_heap();
         let (library, _) = library_and_importer(&heap);
-        assert!(library.share_binding(&heap, "count", &library, "count"));
-        assert!(library.share_binding(&heap, "also", &library, "count"));
+        share(&heap, &library, "count", &library, "count");
+        share(&heap, &library, "also", &library, "count");
         assert_eq!(library.get(&heap, "count"), Some(n(0)));
         assert_eq!(library.get(&heap, "also"), Some(n(0)));
-
+        assert_ne!(
+            library.binding_location(&heap, "also"),
+            library.binding_location(&heap, "count")
+        );
+        library.define(&heap, "also", n(1));
+        assert_eq!(library.get(&heap, "count"), Some(n(0)));
+        assert_eq!(library.recount(&heap.borrow()), library.counted());
         assert_eq!(
             edges_to_environments(&library),
             Vec::<*const Environment>::new(),
             "a self-reference would leak the environment"
         );
+    }
+
+    /// An importer holds the library's cell, not the library (#834): its
+    /// trace shows the collector no environment, and each word it pins is a
+    /// record naming the library's cell. So once the library drops, a
+    /// collection rooted at the importer alone keeps the cell and its value,
+    /// where an import owner kept the whole library before.
+    #[test]
+    fn an_importer_holds_the_cell_and_not_the_library() {
+        use crate::heap::sentinels::Sentinels;
+        use crate::heap::trace_sentinels::collect_only;
+
+        /// The environments and the pinned words a trace shows.
+        #[derive(Default)]
+        struct Shown {
+            envs: usize,
+            pinned: Vec<TaggedValue>,
+        }
+        impl crate::SlotVisitor for Shown {
+            fn slot(&mut self, cell: &Cell<TaggedValue>) {
+                self.pinned.push(cell.get());
+            }
+            fn pinned(&mut self, value: TaggedValue) {
+                self.pinned.push(value);
+            }
+            fn env(&mut self, _: &Rc<Environment>) {
+                self.envs += 1;
+            }
+            fn continuation(&mut self, _: &Rc<crate::CpsContinuation>) {}
+            fn cont_env(&mut self, _: &crate::cont_value::ContEnv) {}
+            fn expr_literals(&mut self, _: &crate::cps_expr::CpsExpr) {}
+        }
+
+        let heap = new_shared_heap();
+        let mut s = Sentinels::new(&mut heap.borrow_mut());
+        let value = s.pair(&mut heap.borrow_mut(), "the library's cell's value");
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "count", value);
+        let cell = library.cell_of(&heap, "count").unwrap();
+        let importer = Rc::new(Environment::with_heap(&heap));
+        share(&heap, &importer, "count", &library, "count");
+
+        let mut shown = Shown::default();
+        // The environment's own trace, not its `Rc`'s, which is the edge.
+        Environment::trace(&importer, &mut shown);
+        assert_eq!(shown.envs, 0, "an import is no edge to its library");
+        assert_eq!(
+            shown.pinned.len(),
+            1,
+            "the import's record: {:?}",
+            shown.pinned
+        );
+        {
+            let h = heap.borrow();
+            for &word in &shown.pinned {
+                assert!(
+                    word.is_pair(),
+                    "a namespace's slot holds a record: {word:?}"
+                );
+                assert_eq!(Record::from_word(word).cell(&h), cell);
+            }
+        }
+
+        drop(library);
+        assert_eq!(heap.borrow().namespaces(), 1, "the library dropped");
+        collect_only(&mut heap.borrow_mut(), |visitor| visitor.env(&importer));
+        s.assert_survived(&heap.borrow());
+        assert_eq!(importer.get(&heap, "count"), Some(value));
+        assert_eq!(importer.cell_of(&heap, "count"), Some(cell));
+    }
+
+    /// A definition over an import re-points the importer's record at a cell
+    /// of its own (#834): the slot keeps its word, the same record, which is
+    /// what the VM's per-site global caches rest on, and the library's cell
+    /// keeps the library's value.
+    #[test]
+    fn a_define_over_an_import_repoints_its_record() {
+        let heap = new_shared_heap();
+        let (library, importer) = library_and_importer(&heap);
+        share(&heap, &importer, "count", &library, "count");
+        let library_cell = library.cell_of(&heap, "count").unwrap();
+        let slot = importer.local_slot("count").unwrap();
+        let record = importer.local_record("count").unwrap();
+        let word = importer.bindings.borrow().read_slot(slot);
+        assert_eq!(record.cell(&heap.borrow()), library_cell);
+
+        importer.define(&heap, "count", n(99));
+
+        assert_eq!(importer.local_slot("count"), Some(slot));
+        assert_eq!(importer.local_record("count"), Some(record));
+        assert_eq!(
+            importer.bindings.borrow().read_slot(slot),
+            word,
+            "the slot's word is unchanged"
+        );
+        {
+            let h = heap.borrow();
+            assert_eq!(record.value(&h), n(99));
+            let own = record.cell(&h);
+            assert_ne!(own, library_cell, "re-pointed");
+            assert!(own.owned_by(&h, importer.env_id()), "at a cell of its own");
+            assert_eq!(library_cell.value(&h), n(0));
+        }
+        assert_eq!(library.get(&heap, "count"), Some(n(0)));
+        assert_eq!(importer.recount(&heap.borrow()), importer.counted());
     }
 }
 
@@ -4637,10 +5228,10 @@ mod binding_location_tests {
         let library = Rc::new(Environment::with_heap(&heap));
         library.define(&heap, "X", zero());
         let relay = Rc::new(Environment::with_heap(&heap));
-        relay.share_binding(&heap, "relayed", &library, "X");
+        share(&heap, &relay, "relayed", &library, "X");
         let program = Rc::new(Environment::with_heap(&heap));
-        program.share_binding(&heap, "direct", &library, "X");
-        program.share_binding(&heap, "through-relay", &relay, "relayed");
+        share(&heap, &program, "direct", &library, "X");
+        share(&heap, &program, "through-relay", &relay, "relayed");
 
         let home = library.binding_location(&heap, "X");
         assert!(home.is_some());
@@ -4708,17 +5299,17 @@ mod binding_location_tests {
         // `get` reaches it by name where nothing plain has the name, and then
         // it is that definition, not whatever else holds an equal value.
         assert_eq!(env.get(&heap, "X"), Some(zero()));
+        // A namespace's scoped entry is a record over a cell (#834).
         let here = env.binding_location(&heap, "X");
-        assert!(matches!(here, Some(BindingLocation::Scoped(..))));
+        assert!(matches!(here, Some(BindingLocation::Cell(..))));
         assert_ne!(here, other.binding_location(&heap, "X"));
 
         // A plain binding of the name takes the by-name view, as it does for
-        // `get`.
+        // `get`, and is a cell of its own.
         env.define(&heap, "X", zero());
-        assert!(matches!(
-            env.binding_location(&heap, "X"),
-            Some(BindingLocation::Slot(..))
-        ));
+        let plain = env.binding_location(&heap, "X");
+        assert!(matches!(plain, Some(BindingLocation::Cell(..))));
+        assert_ne!(plain, here);
     }
 }
 
@@ -4800,7 +5391,7 @@ mod introduced_definition_tests {
         assert_eq!(program.get(&heap, "count"), Some(n(-1)));
 
         let first = program.binding_location(&heap, "count.1");
-        assert!(matches!(first, Some(BindingLocation::Scoped(..))));
+        assert!(matches!(first, Some(BindingLocation::Cell(..))));
         assert_ne!(first, program.binding_location(&heap, "count.2"));
         assert_ne!(first, library.binding_location(&heap, "count"));
     }
@@ -4882,7 +5473,7 @@ mod import_alias_tests {
         let library = Rc::new(Environment::with_heap(heap));
         library.define(heap, "count", n(0));
         let program = Rc::new(Environment::with_heap(heap));
-        program.share_binding(heap, "count", &library, "count");
+        share(heap, &program, "count", &library, "count");
         (library, program)
     }
 
@@ -4940,7 +5531,7 @@ mod import_alias_tests {
         // A second name for the same location — a prefixed import. The
         // desugarer reads the spelling a reference was written with back off
         // its alias, so the two names cannot share one.
-        program.share_binding(&heap, "c:count", &library, "count");
+        share(&heap, &program, "c:count", &library, "count");
         let prefixed = program.import_alias(&heap, "c:count", &mut mint).unwrap();
         assert_ne!(first, prefixed);
         assert_eq!(
@@ -5054,6 +5645,343 @@ mod import_alias_tests {
     }
 }
 
+/// Spike 4b.1's condition (#829; the owner's rulings of 2026-11-03 on
+/// #782): `import_aliases` keys an imported cell by its word less a check
+/// build's generation stamp (`BindingCell::key`), and the arena reuses a
+/// slot once its cell is swept. A key must not outlive every record that
+/// names its cell, or it meets the key of a cell made in that slot after a
+/// collection: it would then hide a name the program bound under the
+/// alias's spelling (`visible_slots`), and be taken for that cell's alias
+/// (`import_alias`). `forget_alias` drops it as the alias's record leaves
+/// the cell, on each of the two paths that re-point a record; each test
+/// below holds one of them, and fails without it in either build.
+#[cfg(test)]
+mod import_alias_reuse_tests {
+    use super::*;
+    use crate::heap::new_shared_heap;
+    use crate::heap::trace_sentinels::collect_only;
+
+    fn n(i: i64) -> TaggedValue {
+        TaggedValue::fixnum(i)
+    }
+
+    /// The cell `env`'s record for `name` names.
+    fn cell_of(heap: &SharedHeap, env: &Environment, name: &str) -> BindingCell {
+        let record = env.local_record(name).expect("a namespace's name");
+        record.cell(&heap.borrow())
+    }
+
+    /// An importer mints the alias `f.1` for a library's `f`, the library
+    /// drops, as a redefined one's does since #834, and `repoint` moves
+    /// both spellings off the library's cell, so that nothing names it but
+    /// the alias's key, if that is still there. A collection sweeps the
+    /// cell, a second library makes a cell in its slot, and the program
+    /// imports that cell as `f.1` and as `f`.
+    fn reuse_case(repoint: impl FnOnce(&SharedHeap, &Environment)) {
+        let heap = new_shared_heap();
+        let importer = Rc::new(Environment::with_heap(&heap));
+        let minted = Cell::new(0);
+        let mint = || {
+            minted.set(minted.get() + 1);
+            Rc::<str>::from(format!("f.{}", minted.get()))
+        };
+        let old = {
+            let library = Rc::new(Environment::with_heap(&heap));
+            library.define(&heap, "f", n(1));
+            share(&heap, &importer, "f", &library, "f");
+            assert_eq!(
+                importer.import_alias(&heap, "f", mint).as_deref(),
+                Some("f.1")
+            );
+            cell_of(&heap, &importer, "f")
+        };
+        repoint(&heap, &importer);
+        collect_only(&mut heap.borrow_mut(), |visitor| visitor.env(&importer));
+
+        // The keys are never traced, so nothing kept the cell: swept, and
+        // the next pair allocated takes its slot.
+        let slot = old.word().heap_index();
+        assert!(
+            heap.borrow().free_pair_slots().contains(&slot),
+            "nothing names the library's cell, so the collection swept it"
+        );
+        let exporter = Rc::new(Environment::with_heap(&heap));
+        {
+            let mut held = heap.borrow_mut();
+            while held.free_pair_slots().last() != Some(&slot) {
+                held.alloc_pair(TaggedValue::UNSPECIFIED, TaggedValue::UNSPECIFIED);
+            }
+        }
+        exporter.define(&heap, "h", n(4));
+        let fresh = cell_of(&heap, &exporter, "h");
+        assert_eq!(fresh.word().heap_index(), slot, "the slot is reused");
+        assert_eq!(
+            fresh.key(),
+            old.key(),
+            "and the key with it, in every build"
+        );
+
+        share(&heap, &importer, "f.1", &exporter, "h");
+        share(&heap, &importer, "f", &exporter, "h");
+        assert!(
+            importer.local_names(&heap).iter().any(|name| name == "f.1"),
+            "`f.1` is the program's import, not an alias: {:?}",
+            importer.local_names(&heap)
+        );
+        let alias = importer.import_alias(&heap, "f", mint);
+        assert!(
+            alias.as_deref().is_some_and(|alias| alias != "f.1"),
+            "a fresh alias, not the program's `f.1`: {alias:?}"
+        );
+        assert_eq!(importer.get(&heap, "f.1"), Some(n(4)));
+        assert_eq!(importer.get(&heap, &alias.unwrap()), Some(n(4)));
+        assert_eq!(importer.recount(&heap.borrow()), importer.counted());
+    }
+
+    /// Both spellings defined over: the alias leaves its cell through
+    /// `define_record`'s re-point.
+    #[test]
+    fn an_alias_key_never_meets_a_cell_made_in_its_cells_slot() {
+        reuse_case(|heap, importer| {
+            importer.define(heap, "f", n(2));
+            importer.define(heap, "f.1", n(3));
+        });
+    }
+
+    /// Both spellings imported over: the alias leaves its cell through
+    /// `bind_cell`'s re-point.
+    #[test]
+    fn an_alias_imported_over_leaves_no_key_either() {
+        reuse_case(|heap, importer| {
+            let other = Rc::new(Environment::with_heap(heap));
+            other.define(heap, "g", n(5));
+            share(heap, importer, "f", &other, "g");
+            share(heap, importer, "f.1", &other, "g");
+        });
+    }
+}
+
+/// No read of a namespace answers a record or a cell (#834, critique D2): a
+/// namespace's every binding is a record over a cell, and every path that
+/// reads one dereferences it, whatever kind of binding it is. Each kind
+/// holds a fixnum of its own, so an answer that is a record, a cell or
+/// another binding's value fails by value.
+#[cfg(test)]
+mod record_read_tests {
+    use super::*;
+    use crate::NamespaceView;
+    use crate::heap::new_shared_heap;
+    use crate::library::Library;
+
+    fn n(i: i64) -> TaggedValue {
+        TaggedValue::fixnum(i)
+    }
+
+    fn scopes(ids: &[usize]) -> ScopeSet {
+        let mut set = ScopeSet::new();
+        for id in ids {
+            set.add_scope(ScopeId(*id));
+        }
+        set
+    }
+
+    #[test]
+    fn no_namespace_read_answers_a_record() {
+        let heap = new_shared_heap();
+        // Where the imports come from, and where the two macro-expansion
+        // aliases point.
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "lib", n(2));
+        library.define(&heap, "aliased-lib", n(8));
+        let other = Rc::new(Environment::with_heap(&heap));
+        other.define(&heap, "target", n(6));
+        other.define_with_scopes(&heap, "deep", scopes(&[7]), n(7));
+        let mut exporting = Library::with_env(vec!["t13".to_string()], Rc::clone(&library));
+        exporting.export_value(&heap, "free".to_string(), n(9));
+
+        let ns = Rc::new(Environment::with_heap(&heap));
+        // Its own binding, and an import.
+        ns.define(&heap, "own", n(1));
+        share(&heap, &ns, "imported", &library, "lib");
+        // A visible scoped definition, and an invisible one: the tree-walker's
+        // introduced definition.
+        ns.define_scoped_definition(&heap, "visible", scopes(&[3]), n(3));
+        ns.define_with_scopes(&heap, "hidden", scopes(&[4]), n(4));
+        // The VM's introduced definition: its identity recorded at compile
+        // time, its renamed global defined when the code runs.
+        ns.define_introduced_global("renamed".into(), scopes(&[5]), "renamed #5".into());
+        ns.define(&heap, "renamed #5", n(5));
+        // A plain alias and a scoped one.
+        ns.define_alias("plain-alias", Rc::clone(&other), "target".into());
+        ns.define_scoped_alias(
+            "scoped-alias",
+            Rc::clone(&other),
+            "deep".into(),
+            scopes(&[7]),
+        );
+        // An import alias (#438), a second record over an import's cell.
+        share(&heap, &ns, "aliased", &library, "aliased-lib");
+        let alias = ns
+            .import_alias(&heap, "aliased", || "aliased.1".into())
+            .unwrap();
+        // A free cell's export.
+        assert!(exporting.import_into(&heap, &ns, "free", "free"));
+
+        let by_name: Vec<(&str, i64)> = vec![
+            ("own", 1),
+            ("imported", 2),
+            ("visible", 3),
+            ("renamed #5", 5),
+            ("plain-alias", 6),
+            ("scoped-alias", 7),
+            ("aliased", 8),
+            (&*alias, 8),
+            ("free", 9),
+        ];
+        let unscoped = ScopeSet::new();
+        for &(name, value) in &by_name {
+            let want = Some(n(value));
+            assert_eq!(ns.get(&heap, name), want, "get {name}");
+            assert_eq!(
+                ns.get_with_scopes(&heap, name, &unscoped).unwrap(),
+                want,
+                "get_with_scopes {name}"
+            );
+            assert_eq!(
+                ns.resolve_with_scopes(&heap, name, &unscoped).unwrap().0,
+                want,
+                "resolve_with_scopes {name}"
+            );
+            assert_eq!(
+                NamespaceView::of(&ns).get(&heap, name),
+                want,
+                "NamespaceView::get {name}"
+            );
+            let (looked_up, resolved) = crate::NoGcScope::with_cx(&heap, |cx| {
+                let looked_up = cx.lookup(&ns, name).map(|value| value.tagged());
+                let resolved = cx
+                    .resolve_with_scopes(&ns, name, &unscoped)
+                    .unwrap()
+                    .0
+                    .map(|value| value.tagged());
+                (looked_up, resolved)
+            });
+            assert_eq!(looked_up, want, "Cx::lookup {name}");
+            assert_eq!(resolved, want, "Cx::resolve_with_scopes {name}");
+        }
+
+        // The scoped definitions, by their identities, and by a reference
+        // that carries one more scope.
+        for (name, identity, value) in [("visible", 3, 3), ("hidden", 4, 4)] {
+            let want = Some(n(value));
+            for reference in [scopes(&[identity]), scopes(&[identity, 40])] {
+                assert_eq!(
+                    ns.get_with_scopes(&heap, name, &reference).unwrap(),
+                    want,
+                    "get_with_scopes {name} {reference}"
+                );
+                assert_eq!(
+                    ns.resolve_with_scopes(&heap, name, &reference).unwrap(),
+                    (want, true),
+                    "resolve_with_scopes {name} {reference}"
+                );
+                let resolved = crate::NoGcScope::with_cx(&heap, |cx| {
+                    cx.resolve_with_scopes(&ns, name, &reference)
+                        .unwrap()
+                        .0
+                        .map(|value| value.tagged())
+                });
+                assert_eq!(resolved, want, "Cx::resolve_with_scopes {name} {reference}");
+            }
+            assert_eq!(
+                ns.scoped_definition_value(&heap, name, &scopes(&[identity])),
+                want,
+                "scoped_definition_value {name}"
+            );
+        }
+        assert_eq!(ns.get(&heap, "hidden"), None, "not visible by name");
+
+        // An alias's target, read as each walk reads it.
+        let target = |alias: &str| ns.alias_target(alias).unwrap().get(&ns, &heap);
+        assert_eq!(target("plain-alias"), Some(n(6)));
+        assert_eq!(target("scoped-alias"), Some(n(7)));
+
+        // By slot, as the VM reads.
+        for (name, value) in [
+            ("own", 1),
+            ("imported", 2),
+            ("renamed #5", 5),
+            ("aliased", 8),
+            (&*alias, 8),
+            ("free", 9),
+        ] {
+            let slot = ns.local_slot(name).unwrap();
+            let view = NamespaceView::of(&ns);
+            assert_eq!(ns.slot_value(&heap, slot), n(value), "slot_value {name}");
+            assert_eq!(
+                ns.slot_value_in(&heap.borrow(), slot),
+                n(value),
+                "slot_value_in {name}"
+            );
+            assert_eq!(
+                view.slot_value(&heap, slot),
+                n(value),
+                "NamespaceView::slot_value {name}"
+            );
+            assert_eq!(
+                view.slot_value_in(&heap.borrow(), slot),
+                n(value),
+                "NamespaceView::slot_value_in {name}"
+            );
+        }
+
+        // Enumerated, as an import set reads a library: the import alias is
+        // bookkeeping and left out.
+        let mut bindings = ns.bindings(&heap);
+        bindings.sort_by(|a, b| a.0.cmp(&b.0));
+        let expected: Vec<(String, TaggedValue)> = [
+            ("aliased", 8),
+            ("free", 9),
+            ("imported", 2),
+            ("own", 1),
+            ("renamed #5", 5),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), n(value)))
+        .collect();
+        assert_eq!(bindings, expected);
+
+        // The introduced definitions' records, the VM's and the
+        // tree-walker's, each read through its cell.
+        let renamed = ns.introduced_records(&heap, "renamed");
+        assert_eq!(renamed.len(), 1, "{renamed:?}");
+        assert_eq!(
+            (&renamed[0].identity, renamed[0].scope, renamed[0].value),
+            (&scopes(&[5]), Some(ScopeId(5)), n(5))
+        );
+        let hidden = ns.introduced_records(&heap, "hidden");
+        assert_eq!(hidden.len(), 1, "{hidden:?}");
+        assert_eq!(
+            (&hidden[0].identity, hidden[0].scope, hidden[0].value),
+            (&scopes(&[4]), Some(ScopeId(4)), n(4))
+        );
+        assert!(
+            ns.introduced_records(&heap, "visible").is_empty(),
+            "a visible definition is no introduced one"
+        );
+
+        // A library's export, read off its cell.
+        assert_eq!(exporting.get_export_tagged(&heap, "free"), Some(n(9)));
+        let exports: Vec<(String, TaggedValue)> = exporting
+            .exports_iter_tagged(&heap)
+            .map(|(name, value)| (name.clone(), value))
+            .collect();
+        assert_eq!(exports, [("free".to_string(), n(9))]);
+
+        assert_eq!(ns.recount(&heap.borrow()), ns.counted());
+    }
+}
+
 /// A namespace's charge on the heap's external bytes (#615): made, grown,
 /// given back; and a frame's, which is nothing.
 #[cfg(test)]
@@ -5094,6 +6022,30 @@ mod namespace_charge_tests {
 
         drop(env);
         assert_eq!(external(&heap), 0);
+    }
+
+    /// The heap counts a namespace while it lives, and its records and own
+    /// cells with it (#834): made, +1; dropped, −1 and what it held. A frame
+    /// is not a namespace, and its own bindings are not records.
+    #[test]
+    fn a_namespace_is_counted_while_it_lives() {
+        let heap = new_shared_heap();
+        let counts = || {
+            let h = heap.borrow();
+            (h.namespaces(), h.binding_records(), h.cells())
+        };
+        assert_eq!(counts(), (0, 0, 0));
+        let ns = Rc::new(Environment::with_heap(&heap));
+        assert_eq!(counts(), (1, 0, 0));
+        let frame = Rc::new(Environment::child_frame(Rc::clone(&ns)));
+        frame.define(&heap, "the frame's own", n(1));
+        assert_eq!(counts(), (1, 0, 0), "a frame is counted nowhere");
+        ns.define(&heap, "x", n(2));
+        assert_eq!(counts(), (1, 1, 1));
+        drop(frame);
+        assert_eq!(counts(), (1, 1, 1));
+        drop(ns);
+        assert_eq!(counts(), (0, 0, 0));
     }
 
     /// A set of one scope, `id`: the identity of one expansion's definition.
@@ -5248,8 +6200,9 @@ mod namespace_charge_tests {
     }
 
     /// An `environment` is built by import: what it holds is its slots,
-    /// their names, the index, and the links to the owners of what it
-    /// imported — each charged to the importer, none to the library.
+    /// their names and the index — each charged to the importer, none to
+    /// the library. Each import's record is a pair, charged in the live
+    /// bytes and not here (#834).
     #[test]
     fn an_imported_binding_charges_the_importer() {
         let heap = new_shared_heap();
@@ -5262,10 +6215,10 @@ mod namespace_charge_tests {
         let before = importer.charged_bytes().unwrap();
         for i in 0..300 {
             let name = format!("export-{i}");
-            assert!(importer.share_binding(&heap, name.as_str(), &library, &name));
+            share(&heap, &importer, name.as_str(), &library, &name);
         }
         let after = importer.charged_bytes().unwrap();
-        let least = 300 * (size_of::<(Rc<str>, TaggedValue)>() + size_of::<Option<Owner>>());
+        let least = 300 * size_of::<(Rc<str>, TaggedValue)>();
         assert!(after >= before + least, "{before} then {after}");
         assert_eq!(library.charged_bytes(), Some(library_charge));
         assert_eq!(external(&heap), library_charge + after);
@@ -5423,7 +6376,7 @@ mod layout_tests {
 
 /// Every edge the collector follows out of an environment, each to a value
 /// nothing else reaches (#623): a plain binding, a scoped one, the binding an
-/// alias forwards to (#38), an imported binding's owner, and the parent's
+/// alias forwards to (#38), a frame's imported cell (#834), and the parent's
 /// binding. The environment is built by a struct literal, so a new field
 /// breaks this test as well as `for_each_gc_edge`; the reads before the
 /// collection show the literal is the environment the API would build.
@@ -5444,7 +6397,7 @@ mod gc_edge_tests {
         let plain = s.pair(&mut h, "Environment.bindings");
         let scoped = s.vector(&mut h, "Environment.scoped_bindings");
         let aliased = s.string(&mut h, "Environment.alias_bindings");
-        let imported = s.object(&mut h, "Environment.rare: RareTables.owners");
+        let imported = s.object(&mut h, "Environment.rare: RareTables.frame_imports");
         let specifier = s.object(&mut h, "Environment.rare: RareTables.specifier");
         let inherited = s.pair(&mut h, "Environment.parent");
         drop(h);
@@ -5453,9 +6406,11 @@ mod gc_edge_tests {
         parent.define(&heap, "inherited", inherited);
         let alias_target = Rc::new(Environment::with_heap(&heap));
         alias_target.define(&heap, "private", aliased);
+        // The library itself is never traced: the frame's import keeps its
+        // cell, and so the value, alone.
         let library = Rc::new(Environment::with_heap(&heap));
         library.define(&heap, "exported", imported);
-        let owner_slot = library.local_slot("exported").unwrap();
+        let exported = library.cell_of(&heap, "exported").unwrap();
 
         let mut scopes = ScopeSet::new();
         scopes.add_scope(ScopeId(7));
@@ -5482,7 +6437,7 @@ mod gc_edge_tests {
             bindings: RefCell::new(Bindings {
                 slots: smallvec![
                     (Rc::from("plain"), plain),
-                    (Rc::from("exported"), TaggedValue::FORWARDED),
+                    (Rc::from("exported"), TaggedValue::IMPORTED),
                 ],
                 index: None,
             }),
@@ -5495,10 +6450,9 @@ mod gc_edge_tests {
             rare: OnceCell::from(Box::new(RareTables {
                 introduced_global_names: RefCell::default(),
                 scoped_index: RefCell::default(),
-                links: RefCell::new(vec![None, Some((Rc::clone(&library), owner_slot))]),
+                frame_imports: RefCell::new(vec![None, Some(exported)]),
                 import_aliases: RefCell::default(),
                 relink_aliases: RefCell::default(),
-                owners: RefCell::new(vec![Rc::clone(&library)]),
                 specifier: Cell::new(Some(specifier)),
                 namespace: None,
             })),
@@ -5518,6 +6472,115 @@ mod gc_edge_tests {
         let mut h = heap.borrow_mut();
         collect_only(&mut h, |visitor| visitor.env(&env));
         s.assert_survived(&h);
+    }
+
+    /// A namespace's slot and scoped entry each hold a record, which holds
+    /// its cell, which holds the value (#834): the collector marks all three
+    /// from the namespace's trace alone, with no trace code of the records'
+    /// own.
+    #[test]
+    fn a_namespace_record_keeps_its_cell_and_value() {
+        let heap = new_shared_heap();
+        let mut h = heap.borrow_mut();
+        let mut s = Sentinels::new(&mut h);
+        let slotted = s.pair(&mut h, "Environment.bindings: a slot's record's cell");
+        let scoped = s.vector(
+            &mut h,
+            "Environment.scoped_bindings: an entry's record's cell",
+        );
+        drop(h);
+
+        let ns = Rc::new(Environment::with_heap(&heap));
+        ns.define(&heap, "slotted", slotted);
+        let mut identity = ScopeSet::new();
+        identity.add_scope(ScopeId(9));
+        ns.define_with_scopes(&heap, "scoped", identity.clone(), scoped);
+        assert!(ns.local_record("slotted").is_some());
+
+        collect_only(&mut heap.borrow_mut(), |visitor| visitor.env(&ns));
+        s.assert_survived(&heap.borrow());
+        assert_eq!(ns.get(&heap, "slotted"), Some(slotted));
+        assert_eq!(
+            ns.get_with_scopes(&heap, "scoped", &identity).unwrap(),
+            Some(scoped)
+        );
+    }
+
+    /// A cell an importer's record names outlives the namespace that made
+    /// it (#834): the importer holds the cell and not its exporter, so once
+    /// the exporter drops, a collection rooted at the importer alone keeps
+    /// the cell and its value.
+    #[test]
+    fn a_cell_only_an_importer_holds_outlives_its_exporter() {
+        let heap = new_shared_heap();
+        let mut h = heap.borrow_mut();
+        let mut s = Sentinels::new(&mut h);
+        let exported = s.string(&mut h, "an imported cell, its exporter dropped");
+        drop(h);
+
+        let importer = Rc::new(Environment::with_heap(&heap));
+        let cell = {
+            let exporter = Rc::new(Environment::with_heap(&heap));
+            exporter.define(&heap, "exported", exported);
+            let cell = exporter.cell_of(&heap, "exported").unwrap();
+            importer.import_cell(&heap, "imported", cell);
+            cell
+        };
+        assert_eq!(heap.borrow().namespaces(), 1, "the exporter dropped");
+
+        collect_only(&mut heap.borrow_mut(), |visitor| visitor.env(&importer));
+        s.assert_survived(&heap.borrow());
+        assert_eq!(importer.get(&heap, "imported"), Some(exported));
+        assert_eq!(importer.cell_of(&heap, "imported"), Some(cell));
+    }
+
+    /// The stale-reference check (#621) guards a read through a record
+    /// (#834, critique D4): a namespace's record and cell, once the
+    /// namespace drops and a collection sweeps them, panic as freed when
+    /// read, before anything is allocated in their slots. Every read goes
+    /// through `Record::value` and `BindingCell::value`, so an unchecked
+    /// fast read added later fails here.
+    #[test]
+    #[cfg(any(debug_assertions, feature = "gc-check"))]
+    fn a_freed_record_is_refused_in_a_check_build() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        /// The message of the panic `read` raises.
+        fn refused(read: impl FnOnce()) -> String {
+            let payload = catch_unwind(AssertUnwindSafe(read)).expect_err("a panic");
+            match payload.downcast::<String>() {
+                Ok(message) => *message,
+                Err(payload) => payload
+                    .downcast_ref::<&str>()
+                    .map(|message| message.to_string())
+                    .unwrap_or_default(),
+            }
+        }
+
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        ns.define(&heap, "x", TaggedValue::fixnum(1));
+        let record = ns.local_record("x").unwrap();
+        let cell = ns.cell_of(&heap, "x").unwrap();
+        assert_eq!(record.value(&heap.borrow()), TaggedValue::fixnum(1));
+        drop(ns);
+        collect_only(&mut heap.borrow_mut(), |_| {});
+
+        let h = heap.borrow();
+        let read_record = refused(|| {
+            record.value(&h);
+        });
+        assert!(
+            read_record.contains("use-after-free"),
+            "a freed record: {read_record}"
+        );
+        let read_cell = refused(|| {
+            cell.value(&h);
+        });
+        assert!(
+            read_cell.contains("use-after-free"),
+            "a freed cell: {read_cell}"
+        );
     }
 }
 
@@ -5798,10 +6861,10 @@ mod relink_alias_tests {
 
 /// The namespace step (#834): every read or write of a namespace's binding
 /// borrows the heap, shared for a read and mutably for a write, in every
-/// build; a frame's own binding takes no borrow. Until 4b.6's records the
-/// borrow carries nothing but a debug identity check, so what this pins is
-/// that it is taken where step 4 will need it, and before anything is
-/// written. Run with `--release` too, where the borrows must still be taken.
+/// build; a frame's own binding takes no borrow. The borrow covers the
+/// binding's record and cell (#834), so what this pins is that it is taken
+/// before anything is read or written. Run with `--release` too, where the
+/// borrows must still be taken.
 #[cfg(test)]
 mod heap_step_tests {
     use super::*;
@@ -5870,10 +6933,12 @@ mod heap_step_tests {
         ns.define(&heap, "own", n(2));
         ns.define_with_scopes(&heap, "x", scopes(&[1]), n(3));
         ns.define_scoped_definition(&heap, "vis", scopes(&[2]), n(4));
-        assert!(ns.share_binding(&heap, "imported", &library, "lib"));
+        share(&heap, &ns, "imported", &library, "lib");
         let frame = Rc::new(Environment::child_frame(Rc::clone(&ns)));
         frame.define(&heap, "local", n(5));
-        assert!(frame.share_binding(&heap, "frame-import", &library, "lib"));
+        share(&heap, &frame, "frame-import", &library, "lib");
+        // Taken before any borrow: it reads the library at its step.
+        let lib_cell = library.cell_of(&heap, "lib").unwrap();
         let own = ns.local_slot("own").unwrap();
         let local = frame.local_slot("local").unwrap();
 
@@ -5955,8 +7020,8 @@ mod heap_step_tests {
                     }),
                 ),
                 (
-                    "ns.share_binding re-pointing an import",
-                    Box::new(|| ignore(ns.share_binding(&heap, "imported", &library, "lib"))),
+                    "ns.import_cell re-pointing an import",
+                    Box::new(|| ns.import_cell(&heap, "imported", lib_cell)),
                 ),
                 (
                     "frame.set of its import",
@@ -5985,14 +7050,18 @@ mod heap_step_tests {
         assert_eq!(ns.local_slot("fresh"), None);
 
         // A frame's own binding, under the heap borrowed mutably: no borrow.
+        // Nor does installing a frame's import, which allocates nothing
+        // (#834, ruling D5/D6).
         let held = heap.borrow_mut();
         assert_eq!(frame.get(&heap, "local"), Some(n(5)));
         frame.define(&heap, "frame-fresh", n(6));
         frame.set(&heap, "local", n(7)).unwrap();
         frame.define_with_scopes(&heap, "y", scopes(&[3]), n(8));
         assert_eq!(frame.slot_value(&heap, local), n(7));
+        frame.import_cell(&heap, "frame-import-2", lib_cell);
         drop(held);
         assert_eq!(frame.get(&heap, "frame-fresh"), Some(n(6)));
+        assert_eq!(frame.get(&heap, "frame-import-2"), Some(n(1)));
         assert_eq!(
             frame.get_with_scopes(&heap, "y", &scopes(&[3])).unwrap(),
             Some(n(8))

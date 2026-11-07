@@ -776,7 +776,10 @@ name-selection policy for program imports, library imports, `eval`/`load`, and
 `environment` on both backends. It maps each importing name to its original
 library export. Loading and evaluating the library stay with the backend (or
 `ApplyContext`); installation uses `Library::import_into`, with the VM's
-`import_export` wrapper preserving primitive-shadow invalidation. The selector
+`import_export` wrapper preserving primitive-shadow invalidation.
+`import_into` makes the importing name a binding record over the export's
+cell, the cell the library's own binding names (#834), so the importer and
+the library share one location. The selector
 holds strings, not Scheme values or temporary environments. A program's bare
 top-level `import` reaches the same backend functions from the backend's top
 level rather than from the expansion (#677), and so shares the policy.
@@ -789,7 +792,7 @@ level rather than from the expansion (#677), and so shares the policy.
 | `rename` | Require each source name to exist (#489); rename simultaneously so swaps work. Keep unmentioned exports. An empty list changes nothing. |
 | Nested modifiers | Work from the library outward. Validation sees the names produced by the enclosed set, not the library's original spellings. |
 | Syntax exports | Macros and core syntax participate in selection and renaming exactly like variables. Macro references keep their definition-site bindings. |
-| Exported binding identity | Every alias still denotes the original exported location (#406), including a library's renamed exports. Later assignments by the library remain visible. |
+| Exported binding identity | Every alias still denotes the original exported location (#406), the export's cell (#834), including a library's renamed exports. Later assignments by the library remain visible. |
 | Failure effects | Loading/initialization is not rolled back. Preserve the existing final-`only` behavior: names before the first missing name are installed; an inner modifier failure installs nothing in the outer destination. |
 
 This preserves Patina's established policy, not a claim that every Scheme must
@@ -1123,8 +1126,9 @@ what is bound in it, on both backends (#620):
   which 4b.8 rewrites to the owner's charging ruling.
 
 #835's tests pin what host code reads and writes, what its closures keep and
-what its macros introduce, before 4b.6's binding records and 4b.8's host
-namespaces change how it is linked. Each holds on both backends at its base:
+what its macros introduce, from before 4b.6's binding records (#834) changed
+how it is linked. Each held on both backends at its base and holds under the
+records, and 4b.8's host namespaces must keep it:
 
 - a `set!` of a name only the global environment binds, which writes the
   global binding and binds nothing in the host environment, and one of a
@@ -1149,6 +1153,16 @@ namespaces change how it is linked. Each holds on both backends at its base:
 - an import into the environment, which shares the library's location: the
   library's later assignment is seen there, and a definition there gives the
   environment a binding of its own, leaving the library's alone (#834).
+
+The binding records add two more (#834), on both backends: `lookup` and
+`lookup_in` of an own name, an imported name and a host frame's import each
+answer the value, never a record (`no_namespace_read_answers_a_record`,
+whose core half reads nine kinds of binding through every read path); and a
+read makes no record: an unbound name evaluated bare, from compiled code and
+through `lookup_in` leaves `binding-records`, and the names the host
+environment and the global environment list, as they were
+(`a_read_makes_no_record`), which fails on either backend when its miss
+path makes one.
 
 With either of the table's environment traces removed, the tests of that
 trace fail, and so does its sentinel test. Without the VM's alpha-renaming
@@ -1290,15 +1304,24 @@ size and four times it, each collect about every 8 MiB of namespaces, hold
 under 16 MiB of external bytes between collections at either size, and leave
 `external-bytes` where it started after a `(gc)`; `interaction-environment`
 answers one specifier, and 1,000,000 calls of it collect no more often and
-allocate no more than 1,000,000 of `(cons 1 2)`, which collect; 2,000 kept
-environments collect three times, not nine; and the global environment's
-growth under `eval` is charged, while frames charge nothing, read while
-they are alive. 200 closures, each `eval`'d in a fresh specifier the program
-drops, keep their namespaces charged, about 40 KB each, while they live, and
-give every charge back once they are collected (decision 26 on #782, #834).
-A replaced library's namespace (#614's path) keeps its
-charge while an importer holds it and gives it back when the last holder
-drops (`library_registry.rs`).
+allocate no more than 1,000,000 of `(cons 1 2)`, which collect; 2,200 kept
+environments, about 80 MB, collect three times, not nine; and the global
+environment's growth under `eval` is charged, while frames charge nothing,
+read while they are alive. 200 closures, each `eval`'d in a fresh specifier
+the program drops, keep their namespaces charged and counted (`namespaces`),
+each at least 95% of one specifier's charge, about 32 KB, calibrated in the
+test from one environment made and dropped first, while they live, and give
+every charge and count back once they are collected (decision 26 on #782,
+#834). A replaced library's namespace (#614's path) drops with the
+replacement, since an importer holds the library's cell and not its
+namespace (#834): the importer reads the old binding through the cell, a
+collection rooted at it alone included, and the external bytes and the
+`namespaces` count fall at the replacement (`library_registry.rs`). Through
+the CLI, a library whose procedure refers to itself, redefined and imported
+again, is counted and charged after two `(gc)`s as it was before the
+redefinition, on both backends
+(`a_replaced_library_with_a_procedure_is_released`, the steady-state lane's
+`library-stream` shape).
 
 `crates/patina-repl/tests/file_descriptors.rs`, in the Test Suite, runs
 #607's programs through the CLI in a shell that lowers `RLIMIT_NOFILE`
@@ -1418,7 +1441,8 @@ the row can see; **SS2**, footprint (`committed-bytes` plus `external-bytes`)
 per cycle (`cpu-us` less `pause-total-us`) over [3N, 4N) ≤ 1.5× that over
 [N, 2N), each segment the minimum of the three runs; **SS5**, each per-owner
 count of `(gc-stats)` at 4N within max(16, 5%) of N, one clause per key:
-`SS5:symbols` and `SS5:ports` since #832. The runner's `PER_OWNER_KEYS` and
+`SS5:symbols` and `SS5:ports` since #832, and `SS5:namespaces`, `SS5:cells`
+and `SS5:binding-records` since #834. The runner's `PER_OWNER_KEYS` and
 `driver.scm`'s `steady-per-owner-keys` are that list, a test keeps them equal,
 and a key joins both in the PR that adds it to `(gc-stats)`. A row that
 drops a peak also requires L below a
@@ -1428,8 +1452,12 @@ retention a sub-stage can move gets a **pin**, its cost per cycle,
 (L(4N) − L(N))/3N, as the PR that pins it measured it on each backend, held
 to 1.05× (`pin`, beside SS1; K17, and the owner's ruling R9 on #782):
 `hidden-define`'s from its re-baseline, 225 bytes on the VM and 97 on the
-tree-walker since #833, and `library-stream`'s and `unbound-ref`'s from the
-4b PR that first moves each (R9), so neither has one yet. No mark may name a
+tree-walker since #833, re-pinned by the owner at 257 and 129 for the
+binding records' 32 bytes a cycle (#834, its question 2);
+`library-stream`'s, whose SS1 passes since #834, at about 90.84 bytes, so
+that its 1.05× is SS1's bound per cycle at its N until 4b.11 promotes the
+clause (question 4); and `unbound-ref`'s from the 4b PR that first moves it
+(R9), so it has none yet. No mark may name a
 pin, so a cost past it fails the lane until the owner raises it, and a
 pinned row that reaches the resident-size cap fails too. A pin holds at the
 row's own N only, and is not held under `--scale`: a namespace charges its
@@ -1450,7 +1478,12 @@ row declares. (#611's four rows, `macro-eval-guard` and the three
 `hidden-define`'s SS4 on both backends when #613's index made its time per
 expansion flat. Its SS1 is stage 5c's on both backends: red on the VM since
 the lane began, and on the tree-walker since #833 counted the retention it
-already had, a re-baseline under its pins.) Every run is
+already had, a re-baseline under its pins; so are its `SS5:cells` and
+`SS5:binding-records`, which grow one a cycle on both backends since #834
+counted each expansion's record and cell, a re-baseline under R1 on #782.
+`library-stream`'s SS1, red for #614, passes since #834, an importer
+holding the library's cell and not its namespace, and is called out for
+promotion, which 4b.11 makes.) Every run is
 watched: a timeout, a non-zero exit or a missing reading fails the row,
 whatever its marks, and the resident-size cap fails it too, except on a row
 with a clause marked red on that backend, where a cap hit is reported red,
@@ -1468,7 +1501,13 @@ which stage 2's teardown work adds, nor the thread rows of stage 9.
 is the `def-getter` shape the stages that reclaim macro-introduced
 definitions must keep: 7 on both backends, as on chibi and Gauche. Its
 `_a_collection` twin runs a `(gc)` between the forms, as chibi and Gauche
-answer 7 with their own collection calls (#834).
+answer 7 with their own collection calls (#834). Beside them,
+`an_introduced_definitions_record_carries_its_identity_and_scope` holds each
+introduced definition's binding record (#834) to the scope trace
+(`PATINA_SCOPE_TRACE`), on both backends, each shape in a child process: its
+identity is the one the definition was bound at, and its scope that
+identity's largest, the expansion's that introduced it, in six shapes, among
+them a generated macro's, where the largest scope and the smallest differ.
 
 **GC benchmarks (#649).** `scripts/run_gc_benchmarks.sh` (the `gc` mode of
 `scripts/benchmarks.py`, in `scripts/gc_bench.py`) runs the workloads of

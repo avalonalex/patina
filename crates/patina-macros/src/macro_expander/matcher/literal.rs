@@ -115,14 +115,20 @@ fn local_binding(
 /// are told apart. A name bound on one side and unbound on the other matches
 /// as it did, as does a name with no site to look it up in.
 ///
-/// The value check is for the one import that is not the library's location:
-/// an export `share_binding` cannot share — a definition a macro introduced,
-/// or one reached through an alias — is installed as a copy, so the importer
-/// has a location of its own holding what the library's holds. By location
-/// alone a library that exports such a name and uses it as its macro's
-/// literal stopped matching its own importer's use of it, where chibi, Gauche
-/// and the matcher before #450 all match. A program's definition over an
-/// import holds a value of its own, so this does not undo #450.
+/// The value check was for the one import that was not the library's
+/// location: an export with no plain binding to share — a definition a macro
+/// introduced, or one reached through an alias — was installed as a copy, a
+/// location of the importer's own holding what the library's holds. By
+/// location alone a library that exported such a name and used it as its
+/// macro's literal stopped matching its own importer's use of it, where
+/// chibi, Gauche and the matcher before #450 all match. No import is a copy
+/// now: every import is the exporter's cell (#834), #427 refuses an
+/// introduced definition's bare export and #847 an alias's. The check stays
+/// for a binding of the use site's own that holds what the library's holds,
+/// the copy's shape, as a host's `define` of an import's value makes
+/// (`an_import_installed_as_a_copy_still_matches_the_librarys_literal`). A
+/// program's definition over an import holds a value of its own, so this
+/// does not undo #450.
 ///
 /// [`Environment::binding_location`]: patina_runtime::Environment::binding_location
 fn distinct_globals(

@@ -118,6 +118,22 @@ impl<'gc> DerefMut for FormCx<'_, 'gc> {
     }
 }
 
+/// Clears a form's declarations, views and all, when it drops: at the end of
+/// `Desugarer::desugar_tagged`, whether the form desugared, failed or
+/// unwound. Their declaration cells are values of the form's context, which
+/// a collection after it may sweep (#834).
+struct ResetDeclarations<'a>(&'a RefCell<declarations::Declarations>);
+
+impl Drop for ResetDeclarations<'_> {
+    fn drop(&mut self) {
+        // `try_borrow_mut`: an unwind out of a borrow of the table must not
+        // panic again here; the borrow's own drop runs first in that case.
+        if let Ok(mut declarations) = self.0.try_borrow_mut() {
+            *declarations = declarations::Declarations::default();
+        }
+    }
+}
+
 /// Whether a desugared body contributes any definition, looking through
 /// `Begin`.
 ///
@@ -1246,11 +1262,11 @@ impl<'a> Desugarer<'a> {
             //
             // It asks whether the two environments reach one *location* by
             // this name, which they do for anything both imported, by any
-            // route: an import is the exporting library's location (#406).
-            // (An export `share_binding` cannot share — a macro-introduced
-            // definition — is still a copy, so it reads as two and is
-            // aliased to the library's; right, at the cost of the alias.)
-            // Until that was true there was nothing to ask but whether they
+            // route: an import is the exporting library's location (#406),
+            // the cell its binding names (#834), and no export is installed
+            // as a copy (#427 refuses a macro-introduced definition's bare
+            // export, #847 an export spelled as an alias). Until imports
+            // shared, there was nothing to ask but whether they
             // held equal values, and two variables that are both `0`, `#f`
             // or `'()` — which is what variables start as — read as one
             // binding. A library macro's `(set! X (+ X 1))` over its private
@@ -1496,8 +1512,8 @@ impl<'a> Desugarer<'a> {
     /// asks what the name is bound to, so the alias is recognised as the name
     /// is. A new fast path has to do the same, or this binding defeats it.
     ///
-    /// The alias is `Environment::import_alias`: an ordinary forwarded slot
-    /// for the same location, one per imported name rather than one per
+    /// The alias is `Environment::import_alias`: a second record over the
+    /// same cell (#834), one per imported name rather than one per
     /// expansion — and per name, not per location, because `bound` below is
     /// how `settle_early_bindings` reads back what a reference was written as.
     /// The reference keeps its scopes, which is what lets
@@ -1961,6 +1977,15 @@ impl<'a> Desugarer<'a> {
             self.early.is_idle() && self.open_forms.borrow().is_empty(),
             "`desugar_tagged` is the per-form entry point; recurse through `desugar_form`"
         );
+        // A form's declarations hold cells of its context (#834), so none
+        // may outlive the form: cleared at entry, and on the way out by a
+        // guard, so that a form that unwinds clears them too.
+        debug_assert!(
+            self.declarations.borrow().is_empty(),
+            "a form's declarations outlived it"
+        );
+        let _reset = ResetDeclarations(&self.declarations);
+        *self.declarations.borrow_mut() = declarations::Declarations::default();
         self.form.set(NEXT_FORM.fetch_add(1, Ordering::Relaxed));
         let mut cx = FormCx {
             cx,
@@ -1969,7 +1994,6 @@ impl<'a> Desugarer<'a> {
         };
         let result = self.desugar_form(tagged, &mut cx);
         let finished = self.early.finish_form();
-        *self.declarations.borrow_mut() = declarations::Declarations::default();
         result.map(|expr| Self::settle_early_bindings(expr, finished))
     }
 

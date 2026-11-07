@@ -66,18 +66,30 @@ pub enum Site {
     /// A machine's own `force`: the VM's `force_stub`, and since #708 the
     /// tree-walker's CPS `force`, in the study's spelling.
     PromiseForceVm,
-    /// The environment sites hold their values off the heap, so their
-    /// holder is never young or old.
+    /// The environment sites. A frame's own binding is off the heap (holder
+    /// `None`), and a scoped assignment writes a frame's scoped entry
+    /// unlogged. A namespace's binding, scoped entries included, and any
+    /// import is a cell, which is the holder of every store into it (#834):
+    /// `EnvDefine` for a definition over the namespace's own binding,
+    /// `EnvSetSlot` and `EnvSetScoped` for an assignment. A by-name
+    /// definition's first value initialises a fresh cell and is logged with
+    /// no holder; a scoped one's fresh cell is initialised unlogged. A
+    /// record's re-point is `EnvRecordRepoint`, with the record as holder.
     EnvDefine,
     EnvSetSlot,
     EnvSetScoped,
     /// A tree-walker continuation's `define`, recorded here instead of as
     /// the `EnvDefine` it makes.
     TwContinuationDefine,
+    /// A binding record re-pointed at another cell (#834,
+    /// `Heap::set_record_cell`), with the record as holder: the record may
+    /// be old and the cell young, an old-to-young edge stage 7's barrier
+    /// must see. Last, so that the sites before it keep their indices.
+    EnvRecordRepoint,
 }
 
 impl Site {
-    pub const ALL: [Site; 17] = [
+    pub const ALL: [Site; 18] = [
         Site::SetCar,
         Site::SetCdr,
         Site::VectorSet,
@@ -95,6 +107,7 @@ impl Site {
         Site::EnvSetSlot,
         Site::EnvSetScoped,
         Site::TwContinuationDefine,
+        Site::EnvRecordRepoint,
     ];
 
     /// The name in the summary, the study's spelling.
@@ -117,6 +130,7 @@ impl Site {
             Site::EnvSetSlot => "env_set_slot_value",
             Site::EnvSetScoped => "env_set_scoped",
             Site::TwContinuationDefine => "tw_cont_define",
+            Site::EnvRecordRepoint => "env_record_repoint",
         }
     }
 }

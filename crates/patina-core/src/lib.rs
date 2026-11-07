@@ -43,6 +43,7 @@
 // which resolves inside this crate too through this alias (#686).
 extern crate self as patina_core;
 
+mod binding_record;
 pub mod census;
 pub mod compiled_macro;
 pub mod cont_value;
@@ -78,6 +79,7 @@ pub mod vfs;
 pub mod walk;
 
 // Re-export main types for convenience
+pub use binding_record::BindingCell;
 pub use compiled_macro::{CompiledMacro, CompiledRule, Identifier, LiteralId, Pattern, Template};
 pub use continuation::{
     CpsContinuation, DynamicWindRecord, WindRecord, next_dynamic_wind_id, next_prompt_id,
@@ -89,7 +91,8 @@ pub use core_expr::{
 pub use core_syntax::{ALL_CORE_FORMS, CoreForm};
 pub use cps_expr::{CpsExpr, CpsExprKind, CpsParam, CpsPrimitive, PromptTag};
 pub use environment::{
-    BindingLocation, Environment, IntroducedDefinition, ScopedBinding, ScopedSetError,
+    BindingLocation, Environment, IntroducedDefinition, IntroducedRecord, ScopedBinding,
+    ScopedSetError,
 };
 pub use error::{ErrorDetail, ErrorKind, ExceptionKind, ExceptionObject, SourceLocation};
 pub use heap::PromiseState;

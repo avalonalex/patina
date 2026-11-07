@@ -39,12 +39,15 @@ class Parsing(unittest.TestCase):
     def test_readings_are_found_behind_a_prompt(self):
         out = ('patina> STEADY at=10 cpu-us=5 pause-total-us=1 collections=2\n'
                'STEADY-AFTER at=10 live-bytes=7 committed-bytes=9 external-bytes=none symbols=40'
-               ' ports=3 resident-bytes=none\n'
+               ' ports=3 namespaces=12 cells=900 binding-records=1500 resident-bytes=none\n'
                'something else\n')
         readings = steady.parse(out)
         self.assertEqual(readings['pre'][10], {'cpu-us': 5, 'pause-total-us': 1, 'collections': 2})
         self.assertEqual(readings['after'][10]['external-bytes'], None)
         self.assertEqual((readings['after'][10]['symbols'], readings['after'][10]['ports']), (40, 3))
+        # A hyphenated key is read whole.
+        self.assertEqual({key: readings['after'][10][key] for key in ('namespaces', 'cells', 'binding-records')},
+                         {'namespaces': 12, 'cells': 900, 'binding-records': 1500})
         self.assertEqual(readings['after'][10]['resident-bytes'], None)
 
 
@@ -85,10 +88,13 @@ class Clauses(unittest.TestCase):
         self.assertFalse(holds)
 
     def test_ss5_is_one_clause_per_per_owner_key(self):
-        self.assertTrue({'symbols', 'ports'} <= set(steady.PER_OWNER_KEYS))
+        self.assertTrue({'symbols', 'ports', 'namespaces', 'cells', 'binding-records'}
+                        <= set(steady.PER_OWNER_KEYS))
         results = steady.evaluate(self.row, 'vm', [run(10, counts={'ports': (40, 57)})], 10)
         self.assertEqual(results['SS5:symbols'], (0, 16, True))
         self.assertEqual(results['SS5:ports'], (17, 16, False))
+        for key in ('namespaces', 'cells', 'binding-records'):
+            self.assertEqual(results[f'SS5:{key}'], (0, 16, True), key)
         self.assertNotIn('SS5', results)
 
     def test_ss5_allows_max_of_16_and_5_percent(self):
@@ -147,6 +153,48 @@ class Clauses(unittest.TestCase):
         self.assertEqual(row.red_reason('SS2', 'vm'), '#2')
         self.assertIsNone(row.red_reason('SS2', 'tree-walker'))
 
+    def test_new_per_owner_marks_are_accepted(self):
+        # #834's keys are marked as any other per-owner key: by name, on one
+        # backend or both, and each silences its own key only.
+        row = steady.Row('r', 'REPL', 'x.scm', {}, clauses=steady.REPL,
+                         red={'SS5:namespaces/vm': '#1', 'SS5:cells': '#2', 'SS5:binding-records': '#3'})
+        self.assertEqual(steady.mark_errors(row), [])
+        self.assertEqual(row.red_reason('SS5:namespaces', 'vm'), '#1')
+        self.assertIsNone(row.red_reason('SS5:namespaces', 'tree-walker'))
+        for backend in steady.BACKENDS:
+            self.assertEqual(row.red_reason('SS5:cells', backend), '#2')
+            self.assertEqual(row.red_reason('SS5:binding-records', backend), '#3')
+            self.assertIsNone(row.red_reason('SS5:symbols', backend))
+        self.assertEqual(row.checks()[-3:], ['SS5:namespaces', 'SS5:cells', 'SS5:binding-records'])
+
+    def test_hidden_define_records_and_cells_are_stage_5c(self):
+        # Each expansion's introduced definition is a record and a cell
+        # (#834), so `cells` and `binding-records` grow one a cycle on both
+        # backends until stage 5c reclaims introduced definitions (R1); the
+        # other per-owner keys stay held.
+        rows = {row.name: row for row in steady.ROWS}
+        hidden = rows['hidden-define']
+        self.assertEqual(steady.mark_errors(hidden), [])
+        for backend in steady.BACKENDS:
+            for key in ('cells', 'binding-records'):
+                self.assertEqual(hidden.red_reason(f'SS5:{key}', backend), 'stage 5c', (key, backend))
+            for key in ('namespaces', 'symbols', 'ports'):
+                self.assertIsNone(hidden.red_reason(f'SS5:{key}', backend), (key, backend))
+            # A reference to an unbound name makes no record (R22).
+            for key in ('namespaces', 'cells', 'binding-records'):
+                self.assertIsNone(rows['unbound-ref'].red_reason(f'SS5:{key}', backend), (key, backend))
+        # The owner's re-pin for the records (question 2 on #834).
+        self.assertEqual(hidden.pin, {'vm': 257, 'tree-walker': 129})
+
+    def test_library_stream_s_pin_is_ss1_s_bound(self):
+        # Its SS1 passes since #834; until 4b.11 promotes it, the pin's 1.05x
+        # is SS1's bound per cycle at the row's N (question 4 on #834).
+        row = next(row for row in steady.ROWS if row.name == 'library-stream')
+        self.assertEqual(row.red_reason('SS1', 'vm'), '#614')
+        for backend in steady.BACKENDS:
+            self.assertAlmostEqual(steady.PIN_TOLERANCE * row.pin[backend], steady.leak_floor(row.n[backend]))
+        self.assertIn('pin', row.checks())
+
     def test_ss5_marks_name_one_key(self):
         row = steady.Row('r', 'churn', 'x.scm', {}, red={'SS5:ports/vm': '#1'})
         self.assertEqual(row.red_reason('SS5:ports', 'vm'), '#1')
@@ -162,7 +210,7 @@ class Clauses(unittest.TestCase):
             self.assertEqual(steady.mark_errors(row), [], row.name)
         # A bare SS5 would silence every per-owner key; a key the list lacks
         # names no clause; and a mark must name a clause the row declares.
-        for red in ({'SS5': '#1'}, {'SS5/vm': '#1'}, {'SS5:cells': '#1'}, {'SS2': '#1'},
+        for red in ({'SS5': '#1'}, {'SS5/vm': '#1'}, {'SS5:no-such-key': '#1'}, {'SS2': '#1'},
                     {'SS1/arm': '#1'}, {'pin': '#1'}, {'pin/vm': '#1'}):
             row = steady.Row('r', 'REPL', 'x.scm', {}, clauses=steady.REPL, red=red,
                              pin={'vm': 1, 'tree-walker': 1})

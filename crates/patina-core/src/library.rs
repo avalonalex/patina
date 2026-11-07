@@ -4,6 +4,7 @@
 //! The library loading and resolution logic is in the evaluator.
 
 use crate::Trace;
+use crate::binding_record::BindingCell;
 use crate::environment::Environment;
 use crate::heap::Heap;
 use crate::tagged_value::TaggedValue;
@@ -16,22 +17,27 @@ use std::rc::Rc;
 ///
 /// A library encapsulates:
 /// - A unique name (e.g., (scheme base) → ["scheme", "base"])
-/// - Exported bindings (name → TaggedValue mapping)
+/// - Exported bindings (name → the cell each export is)
 /// - Internal environment (for library-private definitions)
 /// - Optional source location (for debugging)
 ///
-/// Library exports are stored as `TaggedValue` for memory efficiency.
+/// Each export is the cell its binding named when the library was built,
+/// resolved one hop to the owning cell (#834): a re-export is the cell of
+/// the library that defined it. Build-time cells are not observable,
+/// because no library namespace is written after its load (#823): a
+/// definition there would re-point the library's record, not the export.
+/// A `Library` clone carries untraced copies of the registry's cell words,
+/// safe while the registry entry or an importer's record keeps the cell.
 ///
 /// **The raw layer** (#831): the type's name is inside the embedding API's
 /// promise, since a promised signature answers one
 /// (`ApplyContext::load_scheme_library`), but its fields, methods and impls
 /// are not (`docs/README.md`, "Changing the embedding API"). They change
-/// without a deprecated twin; 4b.6 makes the exports cells.
+/// without a deprecated twin; its exports are cells since #834.
 ///
 /// Its trace (derived, #686) reports its two root sets (`docs/GC_DESIGN.md`
-/// §5.3): each export's value, pinned until stage 4b makes the exports
-/// cells, and the library's environment. Pinned by the sentinel test
-/// `gc_edge_tests::library_exports_and_environment`.
+/// §5.3): each export's cell, and the library's environment. Pinned by the
+/// sentinel test `gc_edge_tests::library_exports_and_environment`.
 #[derive(Debug, Clone, Trace)]
 pub struct Library {
     /// Library name as a list of strings
@@ -39,25 +45,14 @@ pub struct Library {
     #[trace(skip, reason = "the library's name")]
     pub name: Vec<String>,
 
-    /// Exported bindings: identifier name → TaggedValue
-    /// Only these bindings are visible when the library is imported
-    /// Stored as TaggedValue for memory efficiency
-    pub exports: HashMap<String, TaggedValue>,
+    /// Exported bindings: identifier name → the cell it is. Only these
+    /// bindings are visible when the library is imported, and an import is
+    /// the cell, not a copy of what it holds (#406).
+    pub exports: HashMap<String, BindingCell>,
 
     /// Library's internal environment
     /// Contains both exported and private bindings
     pub env: Rc<Environment>,
-
-    /// For an export the library renamed — `(export (rename count tally))` —
-    /// the name it has inside: `tally` → `count`. An export absent from here
-    /// goes by the same name in `env`.
-    ///
-    /// `exports` records what each export *held* when the library was built,
-    /// which cannot say where it lives. An import needs that: it is the
-    /// library's binding, not a copy of its value (#406), and for a renamed
-    /// export the location is under the other name.
-    #[trace(skip, reason = "export name → internal name, as strings")]
-    internal_names: HashMap<String, String>,
 
     /// Optional source file path (for error messages and debugging)
     #[trace(skip, reason = "a file path")]
@@ -71,48 +66,48 @@ impl Library {
             name,
             exports: HashMap::new(),
             env,
-            internal_names: HashMap::new(),
             source: None,
         }
     }
 
-    /// Add an exported binding
-    pub fn export_tagged(&mut self, name: String, value: TaggedValue) {
-        self.internal_names.remove(&name);
-        self.exports.insert(name, value);
+    /// Export `cell` as `name`: the binding a loader read off the library's
+    /// environment (`Environment::cell_of`), under the library's name for it
+    /// or a renamed one.
+    pub fn export_cell(&mut self, name: String, cell: BindingCell) {
+        self.exports.insert(name, cell);
     }
 
-    /// Forget every export, for a caller about to rebuild the table. `exports`
-    /// is public and has been cleared directly, which would leave a renamed
-    /// export's internal name behind to misdirect a later plain export of
-    /// the same name.
+    /// Export `value` as `name` with no binding behind it: a free cell,
+    /// which every importer shares and which no namespace counts among its
+    /// cells. For a library assembled by hand, as the registry's tests do.
+    pub fn export_value(&mut self, heap: &RefCell<Heap>, name: String, value: TaggedValue) {
+        self.export_free(&mut heap.borrow_mut(), name, value);
+    }
+
+    /// [`export_value`](Self::export_value) with the heap in hand, for this
+    /// crate's tests.
+    pub(crate) fn export_free(&mut self, heap: &mut Heap, name: String, value: TaggedValue) {
+        let cell = BindingCell::free(heap, value);
+        self.exports.insert(name, cell);
+    }
+
+    /// Forget every export, for a caller about to rebuild the table.
     pub fn clear_exports(&mut self) {
         self.exports.clear();
-        self.internal_names.clear();
-    }
-
-    /// Add an exported binding that the library knows by another name:
-    /// `(export (rename internal external))`.
-    pub fn export_renamed(&mut self, internal: String, external: String, value: TaggedValue) {
-        self.exports.insert(external.clone(), value);
-        self.internal_names.insert(external, internal);
     }
 
     /// Import `export` into `env` as `name`: the same binding the library
-    /// has, so that what the library assigns afterwards the importer sees
-    /// (R7RS §5.2; #406). `false` when the library has no such export.
+    /// has, its cell, so that what the library assigns afterwards the
+    /// importer sees (R7RS §5.2; #406). `false` when the library has no
+    /// such export.
     ///
     /// Every import in both backends comes through here, so that "what an
     /// import installs" is decided in one place, through the namespace view
-    /// ([`NamespaceView::share_binding`](crate::NamespaceView::share_binding),
-    /// an insert or a re-point). Falls back to the value the export held
-    /// when the library was built, for an export that is not a plain binding
-    /// in `env` — see `Environment::share_binding` for which those are — by
-    /// [`NamespaceView::define`](crate::NamespaceView::define).
+    /// ([`NamespaceView::import_cell`](crate::NamespaceView::import_cell),
+    /// an insert or a re-point).
     ///
-    /// `heap` is the one the library's and `env`'s values live on, which the
-    /// namespace steps borrow (#834): shared to read the library's binding,
-    /// mutably to write `env`'s when it is a namespace.
+    /// `heap` is the one the library's and `env`'s values live on, which a
+    /// namespace's step borrows mutably to write `env`'s record (#834).
     pub fn import_into(
         &self,
         heap: &RefCell<Heap>,
@@ -120,18 +115,10 @@ impl Library {
         name: impl Into<Rc<str>>,
         export: &str,
     ) -> bool {
-        let Some(&value) = self.exports.get(export) else {
+        let Some(&cell) = self.exports.get(export) else {
             return false;
         };
-        let name = name.into();
-        let internal = self
-            .internal_names
-            .get(export)
-            .map_or(export, String::as_str);
-        let view = crate::NamespaceView::of(env);
-        if !view.share_binding(heap, Rc::clone(&name), &self.env, internal) {
-            view.define(heap, name, value);
-        }
+        crate::NamespaceView::of(env).import_cell(heap, name, cell);
         true
     }
 
@@ -151,9 +138,11 @@ impl Library {
         self.exports.contains_key(name)
     }
 
-    /// Get an exported value by name
-    pub fn get_export_tagged(&self, name: &str) -> Option<TaggedValue> {
-        self.exports.get(name).copied()
+    /// What the export `name` holds now: its cell's value, read under a
+    /// shared borrow of `heap`.
+    pub fn get_export_tagged(&self, heap: &RefCell<Heap>, name: &str) -> Option<TaggedValue> {
+        let cell = *self.exports.get(name)?;
+        Some(cell.value(&heap.borrow()))
     }
 
     /// Get all export names
@@ -161,9 +150,15 @@ impl Library {
         self.exports.keys().map(|s| s.as_str()).collect()
     }
 
-    /// Iterate over exports as (name, TaggedValue) pairs
-    pub fn exports_iter_tagged(&self) -> impl Iterator<Item = (&String, TaggedValue)> + '_ {
-        self.exports.iter().map(|(k, tv)| (k, *tv))
+    /// Iterate over exports as (name, what its cell holds now) pairs, each
+    /// read under a shared borrow of `heap` taken for that item alone.
+    pub fn exports_iter_tagged<'a>(
+        &'a self,
+        heap: &'a RefCell<Heap>,
+    ) -> impl Iterator<Item = (&'a String, TaggedValue)> + 'a {
+        self.exports
+            .iter()
+            .map(move |(name, cell)| (name, cell.value(&heap.borrow())))
     }
 }
 
@@ -200,8 +195,8 @@ mod tests {
         let heap = new_shared_heap();
         let mut lib = library(&heap, &["test"]);
 
-        lib.export_tagged("foo".to_string(), TaggedValue::fixnum(42));
-        lib.export_tagged("bar".to_string(), TaggedValue::TRUE);
+        lib.export_value(&heap, "foo".to_string(), TaggedValue::fixnum(42));
+        lib.export_value(&heap, "bar".to_string(), TaggedValue::TRUE);
 
         assert!(lib.exports_identifier("foo"));
         assert!(lib.exports_identifier("bar"));
@@ -217,12 +212,9 @@ mod tests {
         let heap = new_shared_heap();
         let mut lib = library(&heap, &["counter"]);
         lib.env.define(&heap, "count", TaggedValue::fixnum(0));
-        lib.export_tagged("count".to_string(), TaggedValue::fixnum(0));
-        lib.export_renamed(
-            "count".to_string(),
-            "tally".to_string(),
-            TaggedValue::fixnum(0),
-        );
+        let cell = lib.env.cell_of(&heap, "count").unwrap();
+        lib.export_cell("count".to_string(), cell);
+        lib.export_cell("tally".to_string(), cell);
 
         let importer = Environment::with_heap(&heap);
         assert!(lib.import_into(&heap, &importer, "count", "count"));
@@ -230,7 +222,7 @@ mod tests {
         assert!(!lib.import_into(&heap, &importer, "nope", "nope"));
 
         // The library assigns; the importer sees it under both names, because
-        // the renamed export was found under the name the library uses.
+        // the renamed export is the cell the library's name names.
         lib.env.set(&heap, "count", TaggedValue::fixnum(2)).unwrap();
         assert_eq!(importer.get(&heap, "count"), Some(TaggedValue::fixnum(2)));
         assert_eq!(importer.get(&heap, "c:tally"), Some(TaggedValue::fixnum(2)));
@@ -238,15 +230,31 @@ mod tests {
     }
 
     #[test]
-    fn an_export_with_no_binding_behind_it_is_imported_by_value() {
+    fn an_export_value_is_a_free_cell() {
         // A library assembled by hand, as the registry's own tests do: the
-        // export table is all there is, so its value is what gets installed.
+        // export is a free cell, which every importer shares and which no
+        // namespace counts among its own cells.
         let heap = new_shared_heap();
         let mut lib = library(&heap, &["bare"]);
-        lib.export_tagged("v".to_string(), TaggedValue::fixnum(7));
-        let importer = Environment::with_heap(&heap);
-        assert!(lib.import_into(&heap, &importer, "v", "v"));
-        assert_eq!(importer.get(&heap, "v"), Some(TaggedValue::fixnum(7)));
+        let cells = heap.borrow().cells();
+        lib.export_value(&heap, "v".to_string(), TaggedValue::fixnum(7));
+        assert_eq!(heap.borrow().cells(), cells, "a free cell is no one's");
+        let first = Environment::with_heap(&heap);
+        let second = Environment::with_heap(&heap);
+        assert!(lib.import_into(&heap, &first, "v", "v"));
+        assert!(lib.import_into(&heap, &second, "v", "v"));
+        assert_eq!(first.get(&heap, "v"), Some(TaggedValue::fixnum(7)));
+        assert_eq!(
+            first.binding_location(&heap, "v"),
+            second.binding_location(&heap, "v")
+        );
+        first.set(&heap, "v", TaggedValue::fixnum(8)).unwrap();
+        assert_eq!(second.get(&heap, "v"), Some(TaggedValue::fixnum(8)));
+        assert_eq!(
+            lib.get_export_tagged(&heap, "v"),
+            Some(TaggedValue::fixnum(8))
+        );
+        assert_eq!(heap.borrow().cells(), cells);
     }
 
     #[test]
@@ -277,11 +285,13 @@ mod gc_edge_tests {
         let private = s.vector(&mut h, "Library.env");
         drop(h);
 
+        // A free cell the environment does not reach, so the export alone
+        // keeps its value.
+        let exported = BindingCell::free(&mut heap.borrow_mut(), exported);
         let library = Library {
             name: vec!["sentinel".to_string()],
             exports: HashMap::from([("exported".to_string(), exported)]),
             env: env_holding(&heap, private),
-            internal_names: HashMap::new(),
             source: None,
         };
         let mut h = heap.borrow_mut();

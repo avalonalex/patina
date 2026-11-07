@@ -46,10 +46,10 @@ impl RustLibraryLoader {
         // Create the library
         let mut lib = Library::with_env(name.to_vec(), env);
 
-        // Populate exports
+        // Populate exports, each the cell its binding names (#834)
         for export_name in exports {
-            if let Some(value) = lib.env.get(heap, &export_name) {
-                lib.export_tagged(export_name, value);
+            if let Some(cell) = lib.env.cell_of(heap, &export_name) {
+                lib.export_cell(export_name, cell);
             }
         }
 
@@ -147,8 +147,11 @@ mod tests {
         assert!(!lib.exports_identifier("internal")); // Not exported
 
         // Check export values
-        assert_eq!(lib.get_export_tagged("foo"), Some(TaggedValue::fixnum(42)));
-        assert_eq!(lib.get_export_tagged("bar"), Some(TaggedValue::TRUE));
+        assert_eq!(
+            lib.get_export_tagged(&heap, "foo"),
+            Some(TaggedValue::fixnum(42))
+        );
+        assert_eq!(lib.get_export_tagged(&heap, "bar"), Some(TaggedValue::TRUE));
 
         // Internal value should be in environment but not exported
         assert!(lib.env.get(&heap, "internal").is_some());

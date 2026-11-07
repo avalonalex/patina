@@ -433,9 +433,9 @@ fn a_host_environment_reaches_what_a_global_expansion_introduced() {
 
 // ---------------------------------------------------------------------------
 // What host code reads and writes, what its closures keep, and what its
-// macros introduce, pinned before 4b.6's binding records and 4b.8's host
-// namespaces change how it is linked (#835's tests PR). Each holds at the
-// PR's base; the records and the host-namespace kind must keep it.
+// macros introduce, pinned before 4b.6's binding records (#834) changed how
+// it is linked (#835's tests PR). Each held at the PR's base and holds under
+// the records; 4b.8's host-namespace kind must keep it.
 // ---------------------------------------------------------------------------
 
 /// A `set!` in host code of a name only the global environment binds writes
@@ -798,4 +798,108 @@ fn an_import_into_a_host_environment_shares_the_librarys_location() {
         import_shares_the_location(tree_walker_interpreter()),
         expected
     );
+}
+
+/// `(host4b reads)` exports `imported`, which the program imports, and a
+/// host environment imports again under another name.
+const READS_LIBRARY: &str = "(import (scheme base))
+    (define-library (host4b reads)
+      (export imported)
+      (import (scheme base))
+      (begin (define imported 834)))
+    (import (host4b reads))
+    (define own 13)";
+
+/// What the host reads of an own binding, an import, and a host frame's
+/// import (#834, critique D2): the value each binding's record, or the
+/// frame's import, leads to, never the record or the cell itself.
+fn host_reads<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
+    interp.eval_program_owned(READS_LIBRARY).unwrap();
+    let env = interp.new_environment();
+    interp
+        .eval_program_in(
+            &env,
+            "(import (rename (host4b reads) (imported host-imported)))",
+        )
+        .unwrap();
+    let read = |value: Option<patina_interpreter::Owned>| {
+        value.map_or_else(
+            || "unbound".to_string(),
+            |value| interp.display_tagged(&value),
+        )
+    };
+    vec![
+        read(interp.lookup("own")),
+        read(interp.lookup("imported")),
+        read(interp.lookup_in(&env, "own")),
+        read(interp.lookup_in(&env, "imported")),
+        read(interp.lookup_in(&env, "host-imported")),
+        read(interp.lookup("host-imported")),
+    ]
+}
+
+#[test]
+fn no_namespace_read_answers_a_record() {
+    let expected = ["13", "834", "13", "834", "834", "unbound"];
+    assert_eq!(host_reads(vm_interpreter()), expected);
+    assert_eq!(host_reads(tree_walker_interpreter()), expected);
+}
+
+/// The binding records the heap counts, read by a form that calls only
+/// procedures, so that expanding it mints no import alias.
+const RECORDS: &str = "(cdr (assq 'binding-records (gc-stats)))";
+
+/// A read of a name nothing binds makes no binding record (#834, critique
+/// E3): a bare reference the backend misses, a reference from compiled code
+/// that misses when it runs, and a host's lookup. No macro is expanded and
+/// nothing is defined between the readings, and every name is fresh, so a
+/// miss that made a record, however late, would show in the count. Frames
+/// are not counted, so the names each environment lists are checked as
+/// well.
+fn read_makes_no_record<B: Backend>(interp: Interpreter<B>, backend: &str) {
+    interp
+        .eval_program_owned("(import (scheme base) (patina debug))")
+        .unwrap();
+    let env = interp.new_environment();
+    let heap = interp.backend().heap();
+    let names = || {
+        (
+            interp.raw_environment(&env).local_names(heap),
+            interp.global_env().local_names(heap),
+        )
+    };
+    let records = || {
+        let value = interp.eval_str_owned(RECORDS).unwrap();
+        interp.display_tagged(&value)
+    };
+    // The reading form, read once before the baseline.
+    records();
+    interp.eval_str_owned("(gc)").unwrap();
+    let before = records();
+    let listed = names();
+
+    assert!(
+        interp.eval_str_owned("never-bound-name-834").is_err(),
+        "{backend}: a bare unbound reference answered"
+    );
+    assert!(
+        interp
+            .eval_str_owned("((lambda () never-bound-name-834b))")
+            .is_err(),
+        "{backend}: an unbound reference from compiled code answered"
+    );
+    assert!(
+        interp.lookup_in(&env, "never-bound-name-834c").is_none(),
+        "{backend}: a host's lookup of an unbound name answered"
+    );
+
+    interp.eval_str_owned("(gc)").unwrap();
+    assert_eq!(records(), before, "{backend}: a miss made a binding record");
+    assert_eq!(names(), listed, "{backend}: a miss bound a name");
+}
+
+#[test]
+fn a_read_makes_no_record() {
+    read_makes_no_record(vm_interpreter(), "vm");
+    read_makes_no_record(tree_walker_interpreter(), "tree-walker");
 }

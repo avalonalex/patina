@@ -188,10 +188,12 @@ fn the_interaction_environment_is_charged_once() {
     }
 }
 
-/// Namespaces a program keeps are live bytes, which raise the interval: 2,000
+/// Namespaces a program keeps are live bytes, which raise the interval: 2,200
 /// kept environments, about 80 MB, collect three times, where a trigger that
 /// left their tables out of L would collect at every 8 MiB of them, nine
-/// times.
+/// times. 2,200 since #834 took each namespace's import links and owners
+/// out: an environment is about 37 KB with its binding records, where it
+/// was about 41 KB, and 2,000 of them stopped short of the third collection.
 #[test]
 fn kept_namespaces_raise_the_interval() {
     let program = "(gc)
@@ -199,7 +201,7 @@ fn kept_namespaces_raise_the_interval() {
 (define a0 (stat 'bytes-allocated))
 (define kept '())
 (let loop ((i 0))
-  (when (< i 2000)
+  (when (< i 2200)
     (set! kept (cons (environment '(scheme base)) kept))
     (loop (+ i 1))))
 (write (list (- (stat 'collections) c0) (- (stat 'bytes-allocated) a0) (stat 'live-bytes)))
@@ -210,7 +212,7 @@ fn kept_namespaces_raise_the_interval() {
             panic!("{backend:?}: want three counts, got {counts:?}")
         };
         let what = format!("{backend:?}: {counts:?}");
-        assert!(allocated as u64 > 2000 * 30_000, "{what}");
+        assert!(allocated as u64 > 2200 * 30_000, "{what}");
         assert!(collections >= 1, "{what}");
         // L counted the namespaces the last collection kept: most of what was
         // made before it.
@@ -320,17 +322,28 @@ fn macro_introduced_definitions_are_charged() {
 /// A specifier's namespace lives while code compiled in it does (decision 26
 /// on #782, #834): 200 closures, each `eval`'d in a fresh
 /// `(environment '(scheme base))` whose specifier the program does not keep.
-/// While the closures live, each one's namespace stays charged, about 40 KB;
-/// once they are dropped and collected, every charge is given back. On the
-/// VM a closure's globals hold its namespace, on the tree-walker its captured
-/// environment. 4b.6's binding records must keep both: the namespace's
-/// records die with it, and nothing else holds it.
+/// While the closures live, each one's namespace stays charged and counted:
+/// one specifier's charge, about 32 KB once its import links and owners
+/// went with #834, calibrated here from one environment made and dropped
+/// first; once they are dropped and collected, every charge is given back
+/// and every namespace uncounted. On the VM a closure's globals hold its
+/// namespace, on the tree-walker its captured environment. The binding
+/// records keep both: the namespace's records die with it, and nothing else
+/// holds it.
 #[test]
 fn a_specifier_namespace_lives_while_code_compiled_in_it_does() {
     let program = "(define closures '())
+(define one #f)
 (define before 0)
+(define ns-before 0)
+(define one-charge 0)
+(define ns-one 0)
+(define base 0)
+(define ns-base 0)
 (define held 0)
+(define ns-held 0)
 (define after 0)
+(define ns-after 0)
 (define (make n)
   (let loop ((i 0))
     (when (< i n)
@@ -339,19 +352,85 @@ fn a_specifier_namespace_lives_while_code_compiled_in_it_does() {
       (loop (+ i 1)))))
 (define (settled) (gc) (gc) (stat 'external-bytes))
 (set! before (settled))
+(set! ns-before (stat 'namespaces))
+(set! one (environment '(scheme base)))
+(set! one-charge (- (settled) before))
+(set! ns-one (- (stat 'namespaces) ns-before))
+(set! one #f)
+(set! base (settled))
+(set! ns-base (stat 'namespaces))
 (make 200)
 (set! held (settled))
+(set! ns-held (stat 'namespaces))
 (set! closures '())
 (set! after (settled))
-(write (list before held after))
+(set! ns-after (stat 'namespaces))
+(write (list one-charge ns-one base held ns-base ns-held after ns-after))
 (newline)";
     for backend in BOTH_BACKENDS {
         let counts = run(backend, program);
-        let [before, held, after] = counts[..] else {
-            panic!("{backend:?}: want three counts, got {counts:?}")
+        let [
+            one_charge,
+            ns_one,
+            base,
+            held,
+            ns_base,
+            ns_held,
+            after,
+            ns_after,
+        ] = counts[..]
+        else {
+            panic!("{backend:?}: want eight counts, got {counts:?}")
         };
         let what = format!("{backend:?}: {counts:?}");
-        assert!(held - before >= 200 * 40_000, "{what}");
-        assert_eq!(after, before, "{what}");
+        assert_eq!(ns_one, 1, "one specifier is one namespace: {what}");
+        assert!(one_charge >= 20_000, "{what}");
+        assert!(
+            (held - base) * 100 >= 95 * 200 * one_charge,
+            "200 namespaces held, each about one specifier's charge: {what}"
+        );
+        assert_eq!(ns_held - ns_base, 200, "{what}");
+        assert_eq!(after, base, "{what}");
+        assert_eq!(ns_after, ns_base, "{what}");
+    }
+}
+
+/// A library redefined and imported again gives its old namespace back
+/// (#834): the program's import names the new export's cell, and nothing
+/// holds the old namespace once the registry replaces it, where an import
+/// owner held every replaced one before. The library's procedure refers to
+/// itself, so its code holds the library's namespace too, and that goes with
+/// it. The steady-state lane's `library-stream` shape, in file mode: after
+/// the redefinition and two collections the namespaces are counted and
+/// charged as they were before it.
+#[test]
+fn a_replaced_library_with_a_procedure_is_released() {
+    let program = "(define ns0 0)
+(define ext0 0)
+(define ns1 0)
+(define ext1 0)
+(define-library (stream lib) (import (scheme base)) (export f) (begin (define (f) f)))
+(import (stream lib))
+(gc)
+(gc)
+(set! ns0 (stat 'namespaces))
+(set! ext0 (stat 'external-bytes))
+(define-library (stream lib) (import (scheme base)) (export f) (begin (define (f) f)))
+(import (stream lib))
+(gc)
+(gc)
+(set! ns1 (stat 'namespaces))
+(set! ext1 (stat 'external-bytes))
+(write (list ns0 ns1 ext0 ext1 (if (eq? (f) f) 1 0)))
+(newline)";
+    for backend in BOTH_BACKENDS {
+        let counts = run(backend, program);
+        let [ns0, ns1, ext0, ext1, same] = counts[..] else {
+            panic!("{backend:?}: want five counts, got {counts:?}")
+        };
+        let what = format!("{backend:?}: {counts:?}");
+        assert_eq!(same, 1, "the new library's `f`: {what}");
+        assert_eq!(ns1, ns0, "the replaced namespace was released: {what}");
+        assert_eq!(ext1, ext0, "and gave its charge back: {what}");
     }
 }

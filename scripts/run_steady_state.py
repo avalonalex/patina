@@ -56,10 +56,15 @@ CLAUSES = ('SS1', 'SS2', 'SS4', 'SS5')
 # The per-owner counts of (gc-stats) SS5 holds, one clause each
 # (PRD/GC_PRD.md §17.1; 4b's start decision 11 on #782). driver.scm prints
 # them, from its `steady-per-owner-keys`, which must be this list. A key
-# joins both in the PR that adds it to (gc-stats), with its table.
-PER_OWNER_KEYS = ('symbols', 'ports')
+# joins both in the PR that adds it to (gc-stats), with its table:
+# `namespaces`, `cells` and `binding-records` with #834's binding records
+# (R1 and R11 on #782).
+PER_OWNER_KEYS = ('symbols', 'ports', 'namespaces', 'cells', 'binding-records')
 # What a pin allows above the cost it pins: the owner's ruling R9 on #782.
 PIN_TOLERANCE = 1.05
+# `library-stream`'s pin: SS1's bound per cycle at its N of 250 (`leak_floor`,
+# 95.38 B) over PIN_TOLERANCE, about 90.84 B (question 4 on #834).
+LIBRARY_STREAM_PIN = (3 * 250 * 8 + 64 * KIB) / (3 * 250) / PIN_TOLERANCE
 
 
 @dataclasses.dataclass(frozen=True)
@@ -160,10 +165,18 @@ ROWS = [
     # name-index entry (about 128 B) and its recorded identity and index; on
     # the tree-walker a binding in the spelling's list of scoped bindings and
     # its index; the last two about 97 B a cycle at the buffers' capacities.
-    # The pins are #833's readings at this N, which stays 2,000, since a
-    # capacity charge steps with N: the owner raises them (K17).
+    # Since #834 each expansion's introduced definition is also a record and
+    # a cell, two pairs (32 B), on both backends (no record word on
+    # `Introduced`, ruling D8); `SS5:cells` and `SS5:binding-records` grow
+    # one a cycle, re-baselined 'stage 5c' (R1 on #782, which amends start
+    # decision 11). The pins are #834's readings at this N, 256.98 B on the
+    # VM and 128.53 B on the tree-walker, re-pinned by the owner (question 2
+    # on #834, 2026-11-06) from #833's 225 and 97: the record and its cell.
+    # N stays 2,000, since a capacity charge steps with N, and only the owner
+    # raises a pin (K17).
     Row('hidden-define', 'REPL', 'hidden-define.scm', {'vm': 2000, 'tree-walker': 2000}, clauses=REPL,
-        red={'SS1': 'stage 5c'}, pin={'vm': 225, 'tree-walker': 97}),
+        red={'SS1': 'stage 5c', 'SS5:cells': 'stage 5c', 'SS5:binding-records': 'stage 5c'},
+        pin={'vm': 257, 'tree-walker': 129}),
     Row('unbound-ref', 'REPL', 'unbound-ref.scm', {'vm': 4000, 'tree-walker': 4000}, clauses=REPL,
         red={'SS1': 'stage 5c', 'SS5:symbols': 'stage 5c'}),
     Row('load-repeat', 'REPL', 'load-repeat.scm', {'vm': 1000, 'tree-walker': 1000}, clauses=REPL),
@@ -179,8 +192,16 @@ ROWS = [
         mode='stdin'),
     Row('guard-stream-repl', 'REPL', 'stream:guard', {'vm': 1000, 'tree-walker': 1000}, clauses=REPL,
         mode='repl'),
+    # Each cycle redefines a library and imports it again. Since #834 an
+    # importer holds the export's cell, not the library's namespace, and the
+    # import owners that kept every replaced namespace are gone: SS1 reads
+    # 0 B a cycle on both backends, from about 40.8 KB. 4b.11 promotes SS1
+    # (start decision 12); until then its pin, whose 1.05x is SS1's bound
+    # per cycle at this N, holds the row as SS1 will (question 4 on #834,
+    # 2026-11-06), so the '#614' label silences nothing.
     Row('library-stream', 'REPL', 'stream:library', {'vm': 250, 'tree-walker': 250}, clauses=REPL,
-        red={'SS1': '#614'}),
+        red={'SS1': '#614'},
+        pin={'vm': LIBRARY_STREAM_PIN, 'tree-walker': LIBRARY_STREAM_PIN}),
     # Server-style.
     Row('steady-alloc', 'server', 'steady-alloc.scm', {'vm': 100000, 'tree-walker': 50000}, pr=True,
         red={'SS2/vm': '#616'}),

@@ -259,6 +259,26 @@ impl ScopeSet {
         self.scopes.last()
     }
 
+    /// The scope of the expansion whose template introduced a *top-level*
+    /// (namespace) definition at this identity: its largest scope.
+    ///
+    /// Holds because scopes are minted in increasing order (`ScopeId::fresh`,
+    /// a process-wide counter), sets are kept sorted, an expansion's own
+    /// scope is minted after every scope its template already carried, a
+    /// pass-through identifier's set is unchanged by an expansion, and at
+    /// namespace level no desugarer walk adds a scope after expansion:
+    /// splicing `let-syntax`'s scope is stripped from define targets
+    /// (`spliced_definition_scopes`), and `scope_body` runs only in lambda
+    /// bodies.
+    ///
+    /// **Namespace-level only.** A frame's introduced define carries its
+    /// body's binding scope, minted later, and a splicing keyword carries its
+    /// `let-syntax` scope: do not apply this to either. Stored nowhere
+    /// (#834, ruling D9); 5c's live-scope test (#789) asks it of an identity.
+    pub fn introducing_scope(&self) -> Option<ScopeId> {
+        self.largest().copied()
+    }
+
     /// Check if a specific scope is in the set
     pub fn contains(&self, scope: &ScopeId) -> bool {
         self.scopes.binary_search(scope).is_ok()
@@ -355,6 +375,20 @@ mod tests {
         assert_eq!(s3.0, 3);
         assert_ne!(s1, s2);
         assert_ne!(s2, s3);
+    }
+
+    /// The introducing scope is the set's largest, whatever order its scopes
+    /// were added in, and no scope for the empty set (#834, ruling D9).
+    #[test]
+    fn the_introducing_scope_is_the_largest() {
+        let set = ScopeSet::from_iter([ScopeId(7), ScopeId(3), ScopeId(11), ScopeId(5)]);
+        assert_eq!(set.introducing_scope(), Some(ScopeId(11)));
+        assert_eq!(set.introducing_scope(), set.largest().copied());
+        assert_eq!(
+            ScopeSet::singleton(ScopeId(4)).introducing_scope(),
+            Some(ScopeId(4))
+        );
+        assert_eq!(ScopeSet::new().introducing_scope(), None);
     }
 
     #[test]

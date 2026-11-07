@@ -346,6 +346,131 @@ fn the_census_counts_each_kind_of_source_key() {
     }
 }
 
+/// How far `site`'s `key` grew from the census `from` to the census `to`.
+fn grew(from: &Census, to: &Census, site: &str, key: &str) -> i64 {
+    to.site(site, key) as i64 - from.site(site, key) as i64
+}
+
+/// `site`'s growth from `from` to `to`, as (total, with no holder).
+fn site_growth(from: &Census, to: &Census, site: &str) -> (i64, i64) {
+    (
+        grew(from, to, site, "total"),
+        grew(from, to, site, "target_unknown"),
+    )
+}
+
+/// A record's re-point is a store into the record, logged at its own site
+/// with the record as its holder (#834, choice C9): it can be an old record
+/// given a young cell, an old-to-young edge a generational barrier must
+/// see. The program defines a name it imported, which re-points its record
+/// at a fresh cell of its own, and defines it again, which stores into that
+/// cell, with the cell as the holder of `env_define`'s store. Each is read
+/// as the growth over the same program without it, so that the load of
+/// `(scheme base)`, which shares the census, cannot answer for it.
+#[test]
+fn a_record_repoint_is_logged_with_a_heap_holder() {
+    if !GC_CENSUS {
+        return;
+    }
+    let program = |defines: &str| {
+        format!("(import (scheme base) (scheme write))\n{defines}(display \"done\")\n")
+    };
+    for backend in BOTH_BACKENDS {
+        let none = census(backend, &program(""), &[]);
+        let once = census(backend, &program("(define list-copy 0)\n"), &[]);
+        let twice = census(
+            backend,
+            &program("(define list-copy 0)\n(define list-copy 1)\n"),
+            &[],
+        );
+        assert_eq!(
+            site_growth(&none, &once, "env_record_repoint"),
+            (1, 0),
+            "{backend:?}: the first define re-points the imported record, which it names"
+        );
+        assert_eq!(
+            site_growth(&none, &once, "env_define"),
+            (1, 1),
+            "{backend:?}: the first define's value initialises a fresh cell, with no holder"
+        );
+        assert_eq!(
+            site_growth(&once, &twice, "env_define"),
+            (1, 0),
+            "{backend:?}: the second define stores into the cell, which it names"
+        );
+        assert_eq!(
+            site_growth(&once, &twice, "env_record_repoint"),
+            (0, 0),
+            "{backend:?}: a define over the namespace's own binding re-points nothing"
+        );
+    }
+}
+
+/// Every store into a cell is logged with the cell as its holder (#834), a
+/// namespace's scoped entries' included: an introduced definition defined
+/// again at its own scope set, and a template's `set!` of one. The
+/// tree-walker keeps both in the global namespace's scoped table, the VM in
+/// the renamed global's slot. Each is read as the growth over the same
+/// program without that form.
+#[test]
+fn a_store_into_an_introduced_definition_names_its_cell() {
+    if !GC_CENSUS {
+        return;
+    }
+    let definitions = |defines: &str| {
+        format!(
+            "(import (scheme base) (scheme write))
+(define-syntax def-hidden
+  (syntax-rules () ((_) (begin {defines}))))
+(def-hidden)
+(display \"done\")
+"
+        )
+    };
+    let assignment = |set: &str| {
+        format!(
+            "(import (scheme base) (scheme write))
+(define-syntax def-getter
+  (syntax-rules ()
+    ((_ get set)
+     (begin
+       (define secret 1)
+       (define-syntax get (syntax-rules () ((_) secret)))
+       (define-syntax set (syntax-rules () ((_ v) (set! secret v))))))))
+(def-getter get-secret set-secret!)
+{set}(get-secret)
+(display \"done\")
+"
+        )
+    };
+    for backend in BOTH_BACKENDS {
+        let once = census(backend, &definitions("(define hidden 1)"), &[]);
+        let twice = census(
+            backend,
+            &definitions("(define hidden 1) (define hidden 2)"),
+            &[],
+        );
+        assert_eq!(
+            site_growth(&once, &twice, "env_define"),
+            (1, 0),
+            "{backend:?}: defining an introduced definition again stores into its cell, \
+             which it names: {:?}",
+            twice.sites.get("env_define")
+        );
+
+        let read = census(backend, &assignment(""), &[]);
+        let written = census(backend, &assignment("(set-secret! 7)\n"), &[]);
+        let slot = site_growth(&read, &written, "env_set_slot_value");
+        let scoped = site_growth(&read, &written, "env_set_scoped");
+        assert_eq!(
+            (slot.0 + scoped.0, slot.1 + scoped.1),
+            (1, 0),
+            "{backend:?}: a template's `set!` of an introduced definition stores into its cell, \
+             which it names: slot {slot:?}, scoped {scoped:?}"
+        );
+    }
+}
+
 #[test]
 fn heaps_are_counted_per_process() {
     if !GC_CENSUS {

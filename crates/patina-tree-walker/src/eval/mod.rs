@@ -613,10 +613,11 @@ impl Evaluator {
         if loaded_via_rust {
             let mut registry = self.library_registry.borrow_mut();
             if let Some(library) = registry.get_mut(name) {
-                let all_bindings = library.env.bindings(&self.heap);
+                // Each the cell its binding names, as every export is (#834).
+                let cells = library.env.cells(&self.heap);
                 library.clear_exports();
-                for (binding_name, value) in all_bindings {
-                    library.export_tagged(binding_name, value);
+                for (binding_name, cell) in cells {
+                    library.export_cell(binding_name, cell);
                 }
             }
         }

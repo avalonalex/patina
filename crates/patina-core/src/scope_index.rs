@@ -59,10 +59,11 @@ const NONE: u32 = u32::MAX;
 ///
 /// **Why the largest.** Scopes are numbered as they are made, so a set's
 /// largest is the one minted last, which for a macro-introduced definition is
-/// typically the scope of the expansion that introduced it: the scope its
-/// rivals of the same spelling do not share. `n` expansions of one macro
-/// file `n` bindings of one spelling under `n` keys, one each, and a
-/// reference from inside one expansion probes one bucket that holds one
+/// typically the scope of the expansion that introduced it, and at top level
+/// always is (`ScopeSet::introducing_scope` says why, and where it is not):
+/// the scope its rivals of the same spelling do not share. `n` expansions of
+/// one macro file `n` bindings of one spelling under `n` keys, one each, and
+/// a reference from inside one expansion probes one bucket that holds one
 /// binding. Any scope of the set would be correct; this one is selective.
 ///
 /// **Positions, not bindings.** The list a position points into stays the
