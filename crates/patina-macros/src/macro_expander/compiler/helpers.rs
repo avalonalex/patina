@@ -139,14 +139,14 @@ impl<'gc> Compiler<'gc> {
         // meaning direction of every other guess in this function, and no
         // program in the suites reaches it; noted so the next audit of this
         // caller does not rediscover the dependency.
-        let Ok(Some(tv)) = env.get_with_scopes(super::super::utils::ELLIPSIS, &scopes) else {
+        let Ok((Some(tv), _)) = cx.resolve_with_scopes(env, super::super::utils::ELLIPSIS, &scopes)
+        else {
             return false;
         };
-        // The binding is a word the environment holds, which is compared by
-        // identity with the one `CoreForm::Ellipsis` marker rather than read
-        // through the context (#704).
+        // The binding is compared by identity with the one
+        // `CoreForm::Ellipsis` marker (#704).
         cx.interned_core_syntax(patina_core::CoreForm::Ellipsis)
-            .is_none_or(|marker| marker.tagged() != tv)
+            .is_none_or(|marker| marker.tagged() != tv.tagged())
     }
 
     /// Check if a form is the ellipsis symbol

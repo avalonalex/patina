@@ -553,7 +553,7 @@ impl VmState {
             let proc =
                 Procedure::primitive(name, arity, Rc::from(qualified_name.as_str()), Some(index));
             let tv = self.heap.borrow_mut().alloc_procedure(proc);
-            NamespaceView::of(&self.globals).define(name, tv);
+            NamespaceView::of(&self.globals).define(&self.heap, name, tv);
         }
     }
 
@@ -1128,7 +1128,7 @@ fn vm_evaluate_parsed_library(
     run(state)?;
 
     // Step 3: Assemble the library and resolve its exports
-    build_library(parsed.into_declarations(), lib_env)
+    build_library(&state.heap, parsed.into_declarations(), lib_env)
 }
 
 /// Resolve an import set into the given environment.
@@ -2010,18 +2010,33 @@ fn dispatch_one_instruction(
         }
 
         Instruction::LoadGlobal { dst, ref name } => {
-            // Per-site inline cache (Track P P4): see `GlobalCacheEntry`.
-            let globals = frame_globals(state);
-            let view = NamespaceView::of(&globals);
-            let val = match GlobalCacheEntry::probe(&code.global_cache[pc], view, name) {
-                Some(slot) => view.slot_value(slot),
+            // Per-site inline cache (Track P P4): see `GlobalCacheEntry`. A hit
+            // finds the frame's globals and reads the slot under one shared
+            // borrow of the heap, with no `Rc` clone (#834).
+            let hit = {
+                let heap = state.heap.borrow();
+                let closure_globals = state
+                    .execution
+                    .frames()
+                    .last()
+                    .and_then(CallFrame::closure)
+                    .and_then(|closure| heap.vm_closure_globals_ref(closure));
+                let view = NamespaceView::of(closure_globals.unwrap_or(&state.globals));
+                GlobalCacheEntry::probe(&code.global_cache[pc], view, name)
+                    .map(|slot| view.slot_value_in(&heap, slot))
+            };
+            let val = match hit {
+                Some(val) => val,
                 // Not a local slot. Fall back to the full lookup rather than
                 // straight to the parent: `get` also follows macro-expansion
                 // aliases recorded on this environment, which is how a template
                 // reaches a binding private to the library that defined it.
-                None => view
-                    .get(name)
-                    .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?,
+                None => {
+                    let globals = frame_globals(state);
+                    NamespaceView::of(&globals)
+                        .get(&state.heap, name)
+                        .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?
+                }
             };
             state.set_reg_at(base, dst, val);
         }
@@ -2032,9 +2047,9 @@ fn dispatch_one_instruction(
             let view = NamespaceView::of(&globals);
             match GlobalCacheEntry::probe(&code.global_cache[pc], view, name) {
                 Some(slot) => {
-                    let old = view.slot_value(slot);
+                    let old = view.slot_value(&state.heap, slot);
                     mark_if_shadowing_primitive_value(state, old, val);
-                    view.set_slot_value(slot, val);
+                    view.set_slot_value(&state.heap, slot, val);
                 }
                 // Not a local slot. Use the full `set` rather than going
                 // straight to the parent: it also follows macro-expansion
@@ -2042,7 +2057,7 @@ fn dispatch_one_instruction(
                 // library that defined it, matching what `get` already does.
                 None => {
                     mark_if_shadowing_primitive(state, view, name, val);
-                    view.set(name, val)
+                    view.set(&state.heap, name, val)
                         .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
                 }
             }
@@ -3058,7 +3073,9 @@ fn mark_if_shadowing_primitive(
     name: &str,
     new_val: TaggedValue,
 ) {
-    let Some(old) = globals.get(name) else { return };
+    let Some(old) = globals.get(&state.heap, name) else {
+        return;
+    };
     mark_if_shadowing_primitive_value(state, old, new_val);
 }
 
@@ -3081,9 +3098,11 @@ pub(crate) fn define_global(
 ) {
     let view = NamespaceView::of(env);
     if let Some(slot) = view.local_slot(&name) {
-        mark_if_shadowing_primitive_value(state, view.slot_value(slot), value);
+        // Read first: the mark takes `state` mutably.
+        let old = view.slot_value(&state.heap, slot);
+        mark_if_shadowing_primitive_value(state, old, value);
     }
-    view.define(name, value);
+    view.define(&state.heap, name, value);
 }
 
 /// Value-taking core of [`mark_if_shadowing_primitive`], for callers that
@@ -3135,8 +3154,8 @@ pub(crate) fn import_export(
     export: &str,
 ) {
     let view = NamespaceView::of(env);
-    let old = view.get(&name);
-    library.import_into(env, name.as_str(), export);
+    let old = view.get(&state.heap, &name);
+    library.import_into(&state.heap, env, name.as_str(), export);
     mark_if_import_rebound(state, view, &name, old);
 }
 
@@ -3150,7 +3169,7 @@ fn mark_if_import_rebound(
     // library environment — so there is nothing to have shadowed, and no
     // reason to look the name up a second time.
     let Some(old) = old else { return };
-    if let Some(new) = env.get(name) {
+    if let Some(new) = env.get(&state.heap, name) {
         mark_if_shadowing_primitive_value(state, old, new);
     }
 }

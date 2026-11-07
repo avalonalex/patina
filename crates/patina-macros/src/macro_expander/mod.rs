@@ -438,7 +438,12 @@ mod ambiguous_literal_tests {
             )]
             let use_site_env = Rc::new(Environment::child_frame(definition_env));
             for scopes in bindings {
-                use_site_env.define_with_scopes("else", scopes.clone(), TaggedValue::UNSPECIFIED);
+                use_site_env.define_with_scopes(
+                    &heap,
+                    "else",
+                    scopes.clone(),
+                    TaggedValue::UNSPECIFIED,
+                );
             }
             let input = cx.alloc_identifier(Rc::from("else"), reference);
             let tail = cx.alloc_pair(input, Value::NULL);

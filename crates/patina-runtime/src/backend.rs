@@ -143,7 +143,7 @@ pub trait Backend {
     /// `Environment::define` and `Environment::set` are the raw layer, which
     /// write the binding and nothing else.
     fn define(&self, env: &Rc<Environment>, name: &str, value: TaggedValue) {
-        patina_core::NamespaceView::of(env).define(name, value);
+        patina_core::NamespaceView::of(env).define(self.heap(), name, value);
     }
 
     /// Apply the procedure `f` to `args` as a top-level form: a driver
@@ -257,14 +257,17 @@ mod tests {
         let backend = MockBackend::new();
         let global = backend.global_env().clone();
         backend.define(&global, "answer", TaggedValue::fixnum(42));
-        assert_eq!(global.get("answer"), Some(TaggedValue::fixnum(42)));
+        assert_eq!(
+            global.get(backend.heap(), "answer"),
+            Some(TaggedValue::fixnum(42))
+        );
     }
 
     #[test]
     fn test_backend_eval_with_env() {
         let backend = MockBackend::new();
 
-        let custom_env = Rc::new(Environment::new());
+        let custom_env = Rc::new(Environment::with_heap(backend.heap()));
         let expr = TaggedValue::TRUE;
         let result = backend.eval(expr, &custom_env).unwrap();
 

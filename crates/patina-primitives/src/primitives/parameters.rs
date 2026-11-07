@@ -19,7 +19,7 @@
 use crate::apply_context::ApplyContext;
 use crate::registry::{Step, done_with_result};
 use patina_core::port::Port;
-use patina_core::{ConvertedParamValue, Cx, ParamValue, Value};
+use patina_core::{ConvertedParamValue, Cx, NamespaceView, ParamValue, Value};
 use patina_frontend::Parser;
 use patina_runtime::EvalError;
 use smallvec::smallvec;
@@ -284,7 +284,7 @@ fn compile_each<'gc>(
     let base = ctx.load_scheme_library(cx, &["scheme".to_string(), "base".to_string()])?;
     let env = Rc::new(cx.new_namespace());
     for name in base.export_names() {
-        base.import_into(&env, name, name);
+        cx.import_into(&base, NamespaceView::of(&env), name, name);
     }
     let source = Port::new_input_string(PARAMETERIZE_EACH.to_string());
     let expr = Parser::read_from_port(source, cx)

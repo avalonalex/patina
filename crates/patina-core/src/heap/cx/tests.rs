@@ -285,3 +285,20 @@ fn syntax_identifiers_map_through_the_context() {
         assert_eq!(cx.car(list), x, "the original is unchanged");
     });
 }
+
+/// A frame write through a shared context takes no borrow and allocates
+/// nothing (#834), which is why it needs no `&mut`; a namespace's write
+/// borrows the heap mutably, and is refused there rather than taken.
+#[test]
+#[should_panic(expected = "a frame's own binding")]
+fn a_frame_write_through_a_shared_context_refuses_a_namespace() {
+    with_cx(|cx| {
+        let namespace = cx.new_namespace();
+        cx.define_with_scopes_in_frame(
+            crate::NamespaceView::of(&namespace),
+            "x",
+            ScopeSet::new(),
+            Value::UNSPECIFIED,
+        );
+    });
+}

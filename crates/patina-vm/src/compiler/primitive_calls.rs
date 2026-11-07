@@ -196,7 +196,9 @@ pub fn resolve_primitive_calls(
         if view.local_slot(&name).is_none() {
             continue;
         }
-        let Some(val) = view.get(&name) else { continue };
+        let Some(val) = view.get(heap, &name) else {
+            continue;
+        };
         let Some(proc) = heap.borrow().get_procedure(val) else {
             continue;
         };

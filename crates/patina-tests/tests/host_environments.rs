@@ -136,7 +136,9 @@ fn evaluated_in_the_environment<B: Backend>(
     };
     let x = interp.display_tagged(eval("x"));
     let closure = eval("(lambda () x)");
-    interp.global_env().define("f", closure);
+    interp
+        .global_env()
+        .define(interp.backend().heap(), "f", closure);
     let called = interp.display_tagged(interp.eval_str_owned("(f)").unwrap());
     eval("(define y 42)");
     let in_env = interp.display_tagged(interp.lookup_in(&env, "y").unwrap());
@@ -277,7 +279,7 @@ fn charged_as_a_frame<B: Backend>(interp: Interpreter<B>) {
         interp.define_in(&env, &format!("name-{i}"), &value);
     }
     let raw = interp.raw_environment(&env);
-    assert_eq!(raw.local_names().len(), 100);
+    assert_eq!(raw.local_names(interp.backend().heap()).len(), 100);
     assert_eq!(raw.charged_bytes(), None);
 }
 
@@ -446,7 +448,9 @@ fn set_writes_the_global_binding<B: Backend>(interp: Interpreter<B>) {
         .eval_program_in(&env, "(define (bump!) (set! g (+ g 1))) (bump!) (bump!)")
         .unwrap();
     assert_eq!(interp.display_tagged(interp.lookup("g").unwrap()), "3");
-    let own = interp.raw_environment(&env).local_names();
+    let own = interp
+        .raw_environment(&env)
+        .local_names(interp.backend().heap());
     assert!(
         !own.iter().any(|name| &**name == "g"),
         "the host environment bound `g` of its own: {own:?}"
@@ -726,7 +730,7 @@ fn macro_introduced_in_the_environment<B: Backend>(interp: Interpreter<B>) -> Ve
     answers.push(format!(
         "global renamed count: {}",
         global
-            .local_names()
+            .local_names(interp.backend().heap())
             .iter()
             .any(|name| name.starts_with("count "))
     ));

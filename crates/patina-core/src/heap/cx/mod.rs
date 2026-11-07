@@ -160,12 +160,15 @@ use num_rational::BigRational;
 use super::mutator::Mutator;
 use super::{Heap, HeapObjectData, PromiseState};
 use crate::compiled_macro::{CompiledMacro, LiteralId};
-use crate::environment::Environment;
+use crate::environment::{BindingLocation, Environment, IntroducedDefinition};
 use crate::error::{ExceptionKind, SourceLocation};
 use crate::instance::Instance;
+use crate::library::Library;
+use crate::namespace_view::NamespaceView;
 use crate::port::Port;
 use crate::record_type::RecordTypeDescriptor;
 use crate::scope::ScopeSet;
+use crate::scope_resolve::AmbiguousReference;
 use crate::tagged_value::TaggedValue;
 use crate::value::Value;
 use crate::{RootProvider, RootToken};
@@ -479,7 +482,7 @@ impl<'gc> Cx<'gc> {
             "Cx::lookup: an environment of another heap"
         );
         crate::NamespaceView::of(env)
-            .get(name)
+            .get(self.heap, name)
             .map(|word| self.brand(word))
     }
 
@@ -509,11 +512,12 @@ impl<'gc> Cx<'gc> {
             env.heap_id() == self.heap.borrow().id(),
             "Cx::resolve_with_scopes: an environment of another heap"
         );
-        let (word, selected) = env.resolve_with_scopes(name, scopes)?;
+        let (word, selected) = env.resolve_with_scopes(self.heap, name, scopes)?;
         Ok((word.map(|word| self.brand(word)), selected))
     }
 
-    /// [`Environment::scoped_macro_binding`] on this context's heap.
+    /// [`Environment::scoped_macro_binding`] on this context's heap, which
+    /// each namespace's step borrows for its read and releases after.
     #[inline]
     pub fn scoped_macro_binding(
         &self,
@@ -521,7 +525,181 @@ impl<'gc> Cx<'gc> {
         name: &str,
         scopes: &ScopeSet,
     ) -> Option<(Rc<Environment>, ScopeSet)> {
-        env.scoped_macro_binding(name, scopes, &self.heap.borrow())
+        env.scoped_macro_binding(self.heap, name, scopes)
+    }
+
+    // ------------------------------------------------------------------------
+    // Namespace operations over a view (#834)
+    //
+    // Each takes a `NamespaceView`, a raw type, so each is raw under
+    // `docs/README.md`'s method rule. Each hands the view this context's
+    // heap, which the environment borrows at the namespace step and
+    // releases: no method returns the heap or a guard. Reads take `&self`;
+    // writes take `&mut self`, since from 4b.6's records a namespace's write
+    // allocates.
+    // ------------------------------------------------------------------------
+
+    /// The location `name` reaches in `ns` ([`NamespaceView::binding_location`]).
+    /// Raw: names `NamespaceView`.
+    #[inline]
+    pub fn binding_location(&self, ns: NamespaceView<'_>, name: &str) -> Option<BindingLocation> {
+        ns.binding_location(self.heap, name)
+    }
+
+    /// Which scoped binding `name` at `scopes` denotes in `ns`
+    /// ([`NamespaceView::scoped_binding_of`]). Raw: names `NamespaceView`.
+    #[inline]
+    pub fn scoped_binding_of(
+        &self,
+        ns: NamespaceView<'_>,
+        name: &str,
+        scopes: &ScopeSet,
+    ) -> Result<Option<ScopeSet>, Box<AmbiguousReference>> {
+        ns.scoped_binding_of(self.heap, name, scopes)
+    }
+
+    /// Whether `name`'s name-only view in `ns` is the binding `scopes`
+    /// denote ([`NamespaceView::name_reaches_binding_of`]). Raw: names
+    /// `NamespaceView`.
+    #[inline]
+    pub fn name_reaches_binding_of(
+        &self,
+        ns: NamespaceView<'_>,
+        name: &str,
+        scopes: &ScopeSet,
+    ) -> Result<bool, Box<AmbiguousReference>> {
+        ns.name_reaches_binding_of(self.heap, name, scopes)
+    }
+
+    /// The macro-introduced top-level definition `scopes` select for `name`
+    /// in `ns`'s root ([`NamespaceView::introduced_definition`]). Raw: names
+    /// `NamespaceView`.
+    #[inline]
+    pub fn introduced_definition(
+        &self,
+        ns: NamespaceView<'_>,
+        name: &str,
+        scopes: &ScopeSet,
+    ) -> Option<IntroducedDefinition> {
+        ns.introduced_definition(self.heap, name, scopes)
+    }
+
+    /// The names a program bound in `ns` only ([`NamespaceView::local_names`]).
+    /// Raw: names `NamespaceView`.
+    #[inline]
+    pub fn local_names(&self, ns: NamespaceView<'_>) -> Vec<String> {
+        ns.local_names(self.heap)
+    }
+
+    /// Define `name` as `value` in `ns` ([`NamespaceView::define`]): an
+    /// insert, a store or a re-point. Raw: names `NamespaceView`.
+    #[inline]
+    pub fn define(&mut self, ns: NamespaceView<'_>, name: impl Into<Rc<str>>, value: Value<'gc>) {
+        ns.define(self.heap, name, value.tagged());
+    }
+
+    /// Define `name` at `scopes` in `ns` ([`NamespaceView::define_with_scopes`]).
+    /// Raw: names `NamespaceView`.
+    #[inline]
+    pub fn define_with_scopes(
+        &mut self,
+        ns: NamespaceView<'_>,
+        name: impl Into<Rc<str>>,
+        scopes: ScopeSet,
+        value: Value<'gc>,
+    ) {
+        ns.define_with_scopes(self.heap, name, scopes, value.tagged());
+    }
+
+    /// Carry `staged_name` from `staging` into `ns` as `name`
+    /// ([`NamespaceView::copy_binding`]). Raw: names `NamespaceView`.
+    #[inline]
+    pub fn copy_binding(
+        &mut self,
+        ns: NamespaceView<'_>,
+        name: impl Into<Rc<str>>,
+        staging: &Rc<Environment>,
+        staged_name: &str,
+    ) -> bool {
+        ns.copy_binding(self.heap, name, staging, staged_name)
+    }
+
+    /// A name of `ns`'s own for the location `name` imports
+    /// ([`NamespaceView::import_alias`]), minted by `mint` the first time.
+    /// Raw: names `NamespaceView`.
+    #[inline]
+    pub fn import_alias(
+        &mut self,
+        ns: NamespaceView<'_>,
+        name: &str,
+        mint: impl FnMut() -> Rc<str>,
+    ) -> Option<Rc<str>> {
+        ns.import_alias(self.heap, name, mint)
+    }
+
+    /// Import `library`'s `export` into `ns` as `name`
+    /// ([`Library::import_into`]): the library's binding, not a copy. Raw:
+    /// names `NamespaceView`.
+    #[inline]
+    pub fn import_into(
+        &mut self,
+        library: &Library,
+        ns: NamespaceView<'_>,
+        name: impl Into<Rc<str>>,
+        export: &str,
+    ) -> bool {
+        library.import_into(self.heap, ns.env(), name, export)
+    }
+
+    /// [`define_with_scopes`](Self::define_with_scopes) for a frame, through
+    /// a shared context: a frame's own binding takes no borrow and allocates
+    /// nothing, now or under 4b.6's records, so it needs no `&mut`. For the
+    /// desugarer's binding forms and declarations, which run where only
+    /// `&Cx` is in hand. Raw: names `NamespaceView`.
+    ///
+    /// # Panics
+    ///
+    /// When `frame` views a namespace, whose write takes the heap mutably.
+    #[inline]
+    pub fn define_with_scopes_in_frame(
+        &self,
+        frame: NamespaceView<'_>,
+        name: impl Into<Rc<str>>,
+        scopes: ScopeSet,
+        value: Value<'gc>,
+    ) {
+        assert!(
+            !frame.env().is_namespace(),
+            "Cx::define_with_scopes_in_frame: a frame's own binding, which takes no borrow and \
+             allocates nothing"
+        );
+        frame.define_with_scopes(self.heap, name, scopes, value.tagged());
+    }
+
+    /// [`NamespaceView::share_binding`] from a frame into a frame, through a
+    /// shared context: neither frame's step borrows the heap, and a frame's
+    /// import allocates nothing, so it needs no `&mut`. A read through the
+    /// import it makes borrows the heap shared, as a read of any frame's
+    /// import does, whatever kind its owner is. For the desugarer's
+    /// declaration views. Raw: names `NamespaceView`.
+    ///
+    /// # Panics
+    ///
+    /// When `frame` or `source` is a namespace.
+    #[inline]
+    pub fn share_binding_in_frame(
+        &self,
+        frame: NamespaceView<'_>,
+        name: impl Into<Rc<str>>,
+        source: &Rc<Environment>,
+        source_name: &str,
+    ) -> bool {
+        assert!(
+            !frame.env().is_namespace() && !source.is_namespace(),
+            "Cx::share_binding_in_frame: a frame's own binding, which takes no borrow and \
+             allocates nothing"
+        );
+        frame.share_binding(self.heap, name, source, source_name)
     }
 
     /// [`Heap::source`], cloned.

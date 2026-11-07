@@ -27,7 +27,7 @@
 //! until it drops (#677; see [`ParsedLibrary::new`]).
 
 use crate::Environment;
-use crate::heap::SharedHeap;
+use crate::heap::{Heap, SharedHeap};
 use crate::library::Library;
 use crate::library_registry::{LibraryError, Loading};
 use patina_core::TaggedValue;
@@ -84,8 +84,10 @@ pub enum ExportSpec {
 /// `export` declarations against the environment its body produced.
 ///
 /// Shared by both backends, which evaluate library bodies independently but
-/// must agree on what a valid export is.
+/// must agree on what a valid export is. `heap` is the one `lib_env`'s values
+/// live on, which reading each export borrows (#834).
 pub fn build_library(
+    heap: &RefCell<Heap>,
     declarations: LibraryDeclarations,
     lib_env: Rc<Environment>,
 ) -> Result<Library, LibraryError> {
@@ -122,11 +124,11 @@ pub fn build_library(
             // export it, and saying so is right rather than lenient — the
             // importer would have got nothing either way, and before stage 2
             // only the desugarer's spelling fallback hid that.
-            ExportSpec::Identifier(name) => match library.env.get(name) {
+            ExportSpec::Identifier(name) => match library.env.get(heap, name) {
                 Some(value) => library.export_tagged(name.clone(), value),
                 None => return Err(reject(name, "not defined")),
             },
-            ExportSpec::Rename { internal, external } => match library.env.get(internal) {
+            ExportSpec::Rename { internal, external } => match library.env.get(heap, internal) {
                 // Renaming a keyword works like renaming anything else: the
                 // marker goes out under the new name, and the importer's
                 // desugarer dispatches on the form rather than the spelling.
@@ -692,7 +694,10 @@ mod tests {
         let name = vec!["inline".to_string()];
         libraries
             .borrow_mut()
-            .register(Library::new(name.clone()))
+            .register(Library::with_env(
+                name.clone(),
+                Rc::new(Environment::with_heap(&heap)),
+            ))
             .unwrap();
         LibraryLoaderRegistry::install_availability_checker(&heap, &libraries, &loaders);
         let checker = heap.borrow().library_availability().unwrap();
@@ -716,10 +721,13 @@ mod tests {
             &self,
             name: &[String],
             _search_paths: &[PathBuf],
-            _heap: &SharedHeap,
+            heap: &SharedHeap,
         ) -> Result<Library, LibraryError> {
             if self.can_load(name) {
-                Ok(Library::new(name.to_vec()))
+                Ok(Library::with_env(
+                    name.to_vec(),
+                    Rc::new(Environment::with_heap(heap)),
+                ))
             } else {
                 Err(LibraryError::not_found(name))
             }

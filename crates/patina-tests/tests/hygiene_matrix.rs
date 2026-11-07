@@ -1447,11 +1447,11 @@ fn an_import_installed_as_a_copy_still_matches_the_librarys_literal() {
             )
             .unwrap();
         let env = interp.backend().global_env();
-        let shared = env.binding_location("kw");
-        let value = env.get("kw").unwrap();
+        let shared = env.binding_location(interp.backend().heap(), "kw");
+        let value = env.get(interp.backend().heap(), "kw").unwrap();
         // The fallback import representation: same value, its own location.
-        env.define("kw", value);
-        assert_ne!(env.binding_location("kw"), shared);
+        env.define(interp.backend().heap(), "kw", value);
+        assert_ne!(env.binding_location(interp.backend().heap(), "kw"), shared);
         assert_eq!(
             interp.eval_program("(eq? (m kw) 'lit)").unwrap(),
             patina_core::TaggedValue::TRUE,

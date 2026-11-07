@@ -186,7 +186,10 @@ impl<'gc> Compiler<'gc> {
                 return Ok(Template::Symbol(Identifier::with_scopes(s, scopes)));
             } else {
                 // Fall back to marks-and-ribs hygiene (no scopes available)
-                let should_capture = self.env.as_ref().is_some_and(|env| env.get(&s).is_some());
+                let should_capture = self
+                    .env
+                    .as_ref()
+                    .is_some_and(|env| cx.lookup(env, &s).is_some());
 
                 if should_capture {
                     return Ok(Template::Symbol(Identifier::with_scopes(

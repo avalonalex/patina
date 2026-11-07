@@ -93,8 +93,9 @@ mod tests {
         let env = interp.global_env();
 
         // Global environment should have primitives loaded
-        assert!(env.get("cons").is_some());
-        assert!(env.get("+").is_some());
+        let heap = &interp.evaluator().heap;
+        assert!(env.get(heap, "cons").is_some());
+        assert!(env.get(heap, "+").is_some());
     }
 
     #[test]

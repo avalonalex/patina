@@ -121,15 +121,18 @@ impl<'a> CpsEvaluator<'a> {
                     // source binds by name, for the source references that
                     // reach it that way, and at the scopes it stands in, for
                     // the macro-introduced ones that resolve by scope.
+                    //
+                    // A frame's own bindings, made with no heap and no kind
+                    // test (#834).
                     let bind = |param: &ScopedParam, value: TaggedValue| {
                         if !param.scopes.is_empty() {
-                            new_env.define_with_scopes(
+                            new_env.bind_with_scopes(
                                 Rc::clone(&param.name),
                                 param.scopes.clone(),
                                 value,
                             );
                         } else if binding_scopes.is_empty() {
-                            new_env.define(Rc::clone(&param.name), value);
+                            new_env.bind(Rc::clone(&param.name), value);
                         } else {
                             // One cell, reachable both ways: by name for the
                             // references written in source, and under the
@@ -140,7 +143,7 @@ impl<'a> CpsEvaluator<'a> {
                             // about, where a `set!` through one path leaves
                             // the other stale. That is Larceny triage family
                             // 38's obstacle, and this is what removes it.
-                            new_env.define_scoped_definition(
+                            new_env.bind_scoped_definition(
                                 Rc::clone(&param.name),
                                 (**binding_scopes).clone(),
                                 value,

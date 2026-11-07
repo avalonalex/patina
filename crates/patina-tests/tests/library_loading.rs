@@ -18,25 +18,31 @@ fn build_simple_math(
     env: Rc<Environment>,
     heap: &patina_core::SharedHeap,
 ) -> Vec<String> {
-    let mut heap = heap.borrow_mut();
+    let mut h = heap.borrow_mut();
 
-    let pi_tv = heap.alloc_real(std::f64::consts::PI);
-    let e_tv = heap.alloc_real(std::f64::consts::E);
-    let desc_tv = heap.alloc_string("Simple math constants".to_string());
-    drop(heap);
+    let pi_tv = h.alloc_real(std::f64::consts::PI);
+    let e_tv = h.alloc_real(std::f64::consts::E);
+    let desc_tv = h.alloc_string("Simple math constants".to_string());
+    drop(h);
 
-    env.define("pi".to_string(), pi_tv);
-    env.define("e".to_string(), e_tv);
-    env.define("description".to_string(), desc_tv);
+    env.define(heap, "pi".to_string(), pi_tv);
+    env.define(heap, "e".to_string(), e_tv);
+    env.define(heap, "description".to_string(), desc_tv);
 
     // Export only the constants
     vec!["pi".to_string(), "e".to_string()]
 }
 
+/// An empty library named `name`, its namespace on a heap of its own.
+fn empty_library(name: Vec<String>) -> Library {
+    let heap = patina_core::new_shared_heap();
+    Library::with_env(name, Rc::new(Environment::with_heap(&heap)))
+}
+
 #[test]
 fn test_library_creation_basic() {
     // Create a simple library
-    let lib = Library::new(vec!["test".to_string()]);
+    let lib = empty_library(vec!["test".to_string()]);
     assert_eq!(lib.name, vec!["test"]);
     assert_eq!(lib.name_string(), "(test)");
 }
@@ -54,12 +60,12 @@ fn test_rust_library_builder() {
     assert!(exports.contains(&"e".to_string()));
 
     // Verify values are in environment
-    assert!(env.get("pi").is_some());
-    assert!(env.get("e").is_some());
-    assert!(env.get("description").is_some()); // Private, not exported
+    assert!(env.get(&heap, "pi").is_some());
+    assert!(env.get(&heap, "e").is_some());
+    assert!(env.get(&heap, "description").is_some()); // Private, not exported
 
     // Verify pi value
-    let tv = env.get("pi").expect("pi should be defined");
+    let tv = env.get(&heap, "pi").expect("pi should be defined");
     let pi = heap
         .borrow()
         .get_real(tv)
@@ -69,7 +75,7 @@ fn test_rust_library_builder() {
 
 #[test]
 fn test_library_with_exports() {
-    let mut lib = Library::new(vec!["test".to_string()]);
+    let mut lib = empty_library(vec!["test".to_string()]);
 
     // Add exports
     lib.export_tagged("foo".to_string(), patina_core::TaggedValue::fixnum(42));
@@ -102,10 +108,10 @@ fn test_evaluator_library_registry() {
 
 #[test]
 fn test_library_display_format() {
-    let lib1 = Library::new(vec!["scheme".to_string(), "base".to_string()]);
+    let lib1 = empty_library(vec!["scheme".to_string(), "base".to_string()]);
     assert_eq!(lib1.to_string(), "#<library:(scheme base)>");
 
-    let lib2 = Library::new(vec!["srfi".to_string(), "1".to_string()]);
+    let lib2 = empty_library(vec!["srfi".to_string(), "1".to_string()]);
     assert_eq!(lib2.to_string(), "#<library:(srfi 1)>");
 }
 

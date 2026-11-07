@@ -3782,7 +3782,7 @@ pub(super) fn exec_call_primitive(
     if state.is_primitive_shadowed(func_id.0 as usize) {
         let globals = frame_globals(state);
         let func_val = NamespaceView::of(&globals)
-            .get(name)
+            .get(state.heap(), name)
             .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?;
         // Tail-shape detection (PRD P8.2): pass 5 lowers a tail-position
         // primitive site to `<prim-op> dst; Return dst`. When the deopt

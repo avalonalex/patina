@@ -188,7 +188,7 @@ fn apply_is_excluded_on_purpose() {
         Head::Intercepted
     ));
 
-    let with_other = Subject::new(|env, _| env.define("apply", TaggedValue::fixnum(0)));
+    let with_other = Subject::new(|env, heap| env.define(heap, "apply", TaggedValue::fixnum(0)));
     assert!(matches!(
         desugar_head(&with_other, "apply"),
         Head::CallOfItself

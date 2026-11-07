@@ -543,10 +543,18 @@ fn control_forms_follow_the_binding_under_another_name() {
     // What a renamed import, or the alias early binding gives a library
     // template's reference, looks like to the compiler.
     let state = state_with_control_forms();
-    let cwv = state.global_env().get("call-with-values").unwrap();
-    let dw = state.global_env().get("dynamic-wind").unwrap();
-    state.global_env().define("receive-values", cwv);
-    state.global_env().define("wind", dw);
+    let cwv = state
+        .global_env()
+        .get(state.heap(), "call-with-values")
+        .unwrap();
+    let dw = state
+        .global_env()
+        .get(state.heap(), "dynamic-wind")
+        .unwrap();
+    state
+        .global_env()
+        .define(state.heap(), "receive-values", cwv);
+    state.global_env().define(state.heap(), "wind", dw);
     let instrs = compile_all_in(&state, &cwv_call("receive-values"));
     assert_eq!(
         guarded(&instrs, ControlForm::CallWithValues),
@@ -562,9 +570,13 @@ fn control_forms_spelled_so_but_bound_elsewhere_are_ordinary_calls() {
     // The program's own definitions: the name is the form's, the binding is
     // not, so the site calls what it is bound to.
     let state = state_with_control_forms();
-    let list = state.global_env().get("list").unwrap();
-    state.global_env().define("call-with-values", list);
-    state.global_env().define("dynamic-wind", list);
+    let list = state.global_env().get(state.heap(), "list").unwrap();
+    state
+        .global_env()
+        .define(state.heap(), "call-with-values", list);
+    state
+        .global_env()
+        .define(state.heap(), "dynamic-wind", list);
     for expr in [cwv_call("call-with-values"), dw_call("dynamic-wind")] {
         let instrs = compile_all_in(&state, &expr);
         assert_eq!(

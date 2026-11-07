@@ -22,7 +22,10 @@ pub(super) struct Declarations {
 }
 
 impl Declarations {
-    pub fn declare(&mut self, env: Rc<Environment>, name: Rc<str>, scopes: ScopeSet) {
+    /// Declare `name` at `scopes` in `env`, in a marker frame of its own.
+    /// Through a shared context: a frame's own binding takes no borrow of
+    /// the heap and allocates nothing (#834).
+    pub fn declare(&mut self, env: Rc<Environment>, name: Rc<str>, scopes: ScopeSet, cx: &Cx<'_>) {
         self.forget(&env, &name, &scopes);
         #[expect(
             clippy::disallowed_methods,
@@ -30,7 +33,12 @@ impl Declarations {
                       immediate, so it holds no heap value, and it lives for one form's expansion"
         )]
         let marker = Rc::new(Environment::child_frame(env.clone()));
-        marker.define_with_scopes(name.clone(), scopes.clone(), TaggedValue::UNSPECIFIED);
+        cx.define_with_scopes_in_frame(
+            NamespaceView::of(&marker),
+            name.clone(),
+            scopes.clone(),
+            Value::UNSPECIFIED,
+        );
         self.bindings.push(Declaration {
             env,
             name,
@@ -56,7 +64,10 @@ impl Declarations {
     /// Use the ordinary environment resolver, including its scope ordering and
     /// ambiguity checks. The views are never captured by compiled macros or
     /// runtime aliases; those retain the real, live environments.
-    pub fn view(&mut self, env: &Rc<Environment>) -> Rc<Environment> {
+    ///
+    /// Through a shared context, as [`declare`](Self::declare) is: the view
+    /// and the markers are frames, whose binds take no borrow (#834).
+    pub fn view(&mut self, env: &Rc<Environment>, cx: &Cx<'_>) -> Rc<Environment> {
         if self.bindings.is_empty() {
             return env.clone();
         }
@@ -87,16 +98,18 @@ impl Declarations {
                     // Every view must name the same declaration location, or
                     // a local macro would mistake its own global for a foreign
                     // binding and relink it to the value preceding the define.
-                    view.share_binding(
+                    cx.share_binding_in_frame(
+                        NamespaceView::of(&view),
                         declaration.name.clone(),
                         &declaration.marker,
                         &declaration.name,
                     );
                 } else {
-                    view.define_with_scopes(
+                    cx.define_with_scopes_in_frame(
+                        NamespaceView::of(&view),
                         declaration.name.clone(),
                         declaration.scopes.clone(),
-                        TaggedValue::UNSPECIFIED,
+                        Value::UNSPECIFIED,
                     );
                 }
             }
@@ -108,11 +121,16 @@ impl Declarations {
 }
 
 impl Desugarer<'_> {
-    pub(super) fn expansion_env(&self, env: &Rc<Environment>) -> Rc<Environment> {
-        self.declarations.borrow_mut().view(env)
+    pub(super) fn expansion_env(&self, env: &Rc<Environment>, cx: &Cx<'_>) -> Rc<Environment> {
+        self.declarations.borrow_mut().view(env, cx)
     }
 
-    pub(super) fn declare_top_level_variable(&self, name: &Rc<str>, scopes: &ScopeSet) {
+    pub(super) fn declare_top_level_variable(
+        &self,
+        name: &Rc<str>,
+        scopes: &ScopeSet,
+        cx: &Cx<'_>,
+    ) {
         if self.top_level.get() {
             let env = self
                 .splicing
@@ -120,7 +138,7 @@ impl Desugarer<'_> {
                 .map_or(&self.env, |context| &context.env);
             self.declarations
                 .borrow_mut()
-                .declare(env.clone(), name.clone(), scopes.clone());
+                .declare(env.clone(), name.clone(), scopes.clone(), cx);
             self.early.imports.borrow_mut().clear();
         }
     }
@@ -134,11 +152,11 @@ impl Desugarer<'_> {
         form: Value<'gc>,
         cx: &mut Cx<'gc>,
     ) -> std::result::Result<patina_macros::MacroExpansion<'gc>, patina_macros::MacroError> {
-        let use_env = self.expansion_env(&self.env);
+        let use_env = self.expansion_env(&self.env, cx);
         let definition_env = compiled
             .definition_env
             .as_ref()
-            .map(|env| self.expansion_env(env));
+            .map(|env| self.expansion_env(env, cx));
         let depth = self.open_forms.borrow().depth();
         patina_macros::macro_expander::expand_macro_at_sites(
             mac,

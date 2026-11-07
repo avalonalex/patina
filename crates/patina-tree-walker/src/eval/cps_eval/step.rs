@@ -73,7 +73,7 @@ impl<'a> CpsEvaluator<'a> {
                 );
                 patina_core::census::skip_next_env_define();
                 if extends_in_place(&current_env) {
-                    current_env.define(name, value);
+                    current_env.bind(name, value);
                 } else {
                     #[expect(
                         clippy::disallowed_methods,
@@ -83,7 +83,7 @@ impl<'a> CpsEvaluator<'a> {
                                   it roots a `LetVal` frame"
                     )]
                     let frame = Rc::new(Environment::for_temporaries(current_env));
-                    frame.define(name, value);
+                    frame.bind(name, value);
                     current_env = frame;
                 }
             }
@@ -172,7 +172,7 @@ impl<'a> CpsEvaluator<'a> {
                     let val =
                         try_catchable!(self.eval_trivial_tagged(value, &current_env, &cont_env));
                     if extends_in_place(&current_env) {
-                        current_env.define(Rc::clone(name), val);
+                        current_env.bind(Rc::clone(name), val);
                     } else {
                         #[expect(
                             clippy::disallowed_methods,
@@ -186,7 +186,7 @@ impl<'a> CpsEvaluator<'a> {
                                       §11.4 keeps it under `NoGcScope`)"
                         )]
                         let new_env = Rc::new(Environment::for_temporaries(current_env));
-                        new_env.define(Rc::clone(name), val);
+                        new_env.bind(Rc::clone(name), val);
                         current_env = new_env;
                     }
                     current_expr = Rc::clone(body);
@@ -255,9 +255,19 @@ impl<'a> CpsEvaluator<'a> {
                     // records which definitions need a name-only view.
                     let def_env = definition_environment(&current_env);
                     if *visible_by_name {
-                        def_env.define_scoped_definition(Rc::clone(name), scopes.clone(), val);
+                        def_env.define_scoped_definition(
+                            &self.evaluator.heap,
+                            Rc::clone(name),
+                            scopes.clone(),
+                            val,
+                        );
                     } else {
-                        def_env.define_with_scopes(Rc::clone(name), scopes.clone(), val);
+                        def_env.define_with_scopes(
+                            &self.evaluator.heap,
+                            Rc::clone(name),
+                            scopes.clone(),
+                            val,
+                        );
                     }
                     current_expr = Rc::clone(cont);
                 }

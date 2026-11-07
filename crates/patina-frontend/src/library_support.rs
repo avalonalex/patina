@@ -133,7 +133,7 @@ fn top_level_head(
             None => heap.get_identifier_data_any(head)?,
         }
     };
-    let binding = env.get_with_scopes(&name, &scopes).ok()?;
+    let binding = env.get_with_scopes(heap, &name, &scopes).ok()?;
     Some((name, binding))
 }
 
@@ -722,10 +722,10 @@ mod tests {
         let env = Environment::with_heap(&heap);
         let marker = heap.borrow_mut().core_syntax(CoreForm::Import);
         for name in bindings {
-            env.define(*name, marker);
+            env.define(&heap, *name, marker);
         }
         if let Some(name) = fixnum {
-            env.define(name, TaggedValue::fixnum(1));
+            env.define(&heap, name, TaggedValue::fixnum(1));
         }
         let form = NoGcScope::with_cx(&heap, |cx| {
             let mut parser = Parser::new(source)?;

@@ -1502,9 +1502,10 @@ the workspace's callers) and `for_temporaries` (#681), since an environment
 built with one is reachable from no root unless its caller makes it so
 (#620). A host's is held by an `OwnedEnvironment`
 (`Interpreter::new_environment`, the replacement `with_parent`'s deprecation
-names). Only the frame constructors are listed, as #622 scoped it: an
-environment from `Environment::new` or `with_heap` that is held across a
-re-entry is named in that call's reason instead (the loaders' `lib_env`). A
+names). Only the frame constructors are listed, as #622 scoped it: a
+namespace from `with_heap`, the one public namespace constructor since #834's
+heap threading, that is held across a re-entry is named in that call's
+reason instead (the loaders' `lib_env`). A
 call made beneath a context is not listed: a higher-order primitive's
 `ApplyContext::apply_in` and `load_scheme_library` take its context, so it
 holds only values of it across them, which the brand covers, and no borrow of

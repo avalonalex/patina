@@ -444,7 +444,7 @@ impl Evaluator {
             .get(&["scheme".to_string(), "base".to_string()])
         {
             for name in lib.export_names() {
-                lib.import_into(&self.global_env, name, name);
+                lib.import_into(&self.heap, &self.global_env, name, name);
             }
         }
 
@@ -459,7 +459,7 @@ impl Evaluator {
             .get(&["patina".to_string(), "debug".to_string()])
         {
             for name in lib.export_names() {
-                lib.import_into(&self.global_env, name, name);
+                lib.import_into(&self.heap, &self.global_env, name, name);
             }
         }
         base
@@ -613,7 +613,7 @@ impl Evaluator {
         if loaded_via_rust {
             let mut registry = self.library_registry.borrow_mut();
             if let Some(library) = registry.get_mut(name) {
-                let all_bindings = library.env.bindings();
+                let all_bindings = library.env.bindings(&self.heap);
                 library.clear_exports();
                 for (binding_name, value) in all_bindings {
                     library.export_tagged(binding_name, value);
@@ -837,7 +837,7 @@ impl Evaluator {
         }
 
         // Step 3: Assemble the library and resolve its exports
-        patina_runtime::library_loader::build_library(declarations, lib_env)
+        patina_runtime::library_loader::build_library(&self.heap, declarations, lib_env)
     }
 
     /// Process a single import set
@@ -855,7 +855,7 @@ impl Evaluator {
         let library = self.load_library_with(import_set.library_name(), context)?;
         for binding in import_set.resolve_bindings(library.export_names()) {
             let (name, export) = binding?;
-            library.import_into(lib_env, name, &export);
+            library.import_into(&self.heap, lib_env, name, &export);
         }
         Ok(())
     }

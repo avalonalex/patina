@@ -192,7 +192,13 @@ fn main() {
                 .as_fixnum(),
             Some(42)
         );
-        assert!(pipeline.evaluator().global_env.get("host-local").is_none());
+        assert!(
+            pipeline
+                .evaluator()
+                .global_env
+                .get(&pipeline.evaluator().heap, "host-local")
+                .is_none()
+        );
         assert!(pipeline.eval("42 (", &child).is_err());
         assert_eq!(
             pipeline.eval_program("", &child).unwrap(),

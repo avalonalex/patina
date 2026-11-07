@@ -5,7 +5,9 @@
 
 use crate::Trace;
 use crate::environment::Environment;
+use crate::heap::Heap;
 use crate::tagged_value::TaggedValue;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -63,17 +65,6 @@ pub struct Library {
 }
 
 impl Library {
-    /// Create a new empty library with the given name
-    pub fn new(name: Vec<String>) -> Self {
-        Self {
-            name,
-            exports: HashMap::new(),
-            env: Rc::new(Environment::new()),
-            internal_names: HashMap::new(),
-            source: None,
-        }
-    }
-
     /// Create a library with an existing environment
     pub fn with_env(name: Vec<String>, env: Rc<Environment>) -> Self {
         Self {
@@ -118,7 +109,17 @@ impl Library {
     /// when the library was built, for an export that is not a plain binding
     /// in `env` — see `Environment::share_binding` for which those are — by
     /// [`NamespaceView::define`](crate::NamespaceView::define).
-    pub fn import_into(&self, env: &Environment, name: impl Into<Rc<str>>, export: &str) -> bool {
+    ///
+    /// `heap` is the one the library's and `env`'s values live on, which the
+    /// namespace steps borrow (#834): shared to read the library's binding,
+    /// mutably to write `env`'s when it is a namespace.
+    pub fn import_into(
+        &self,
+        heap: &RefCell<Heap>,
+        env: &Environment,
+        name: impl Into<Rc<str>>,
+        export: &str,
+    ) -> bool {
         let Some(&value) = self.exports.get(export) else {
             return false;
         };
@@ -128,8 +129,8 @@ impl Library {
             .get(export)
             .map_or(export, String::as_str);
         let view = crate::NamespaceView::of(env);
-        if !view.share_binding(Rc::clone(&name), &self.env, internal) {
-            view.define(name, value);
+        if !view.share_binding(heap, Rc::clone(&name), &self.env, internal) {
+            view.define(heap, name, value);
         }
         true
     }
@@ -175,10 +176,20 @@ impl std::fmt::Display for Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::heap::{SharedHeap, new_shared_heap};
+
+    /// An empty library named `name`, its namespace on `heap`.
+    fn library(heap: &SharedHeap, name: &[&str]) -> Library {
+        Library::with_env(
+            name.iter().map(|part| part.to_string()).collect(),
+            Rc::new(Environment::with_heap(heap)),
+        )
+    }
 
     #[test]
     fn test_library_creation() {
-        let lib = Library::new(vec!["scheme".to_string(), "base".to_string()]);
+        let heap = new_shared_heap();
+        let lib = library(&heap, &["scheme", "base"]);
         assert_eq!(lib.name, vec!["scheme", "base"]);
         assert_eq!(lib.name_string(), "(scheme base)");
         assert!(lib.exports.is_empty());
@@ -186,7 +197,8 @@ mod tests {
 
     #[test]
     fn test_library_exports() {
-        let mut lib = Library::new(vec!["test".to_string()]);
+        let heap = new_shared_heap();
+        let mut lib = library(&heap, &["test"]);
 
         lib.export_tagged("foo".to_string(), TaggedValue::fixnum(42));
         lib.export_tagged("bar".to_string(), TaggedValue::TRUE);
@@ -202,8 +214,9 @@ mod tests {
 
     #[test]
     fn an_import_is_the_librarys_binding_under_either_of_its_names() {
-        let mut lib = Library::new(vec!["counter".to_string()]);
-        lib.env.define("count", TaggedValue::fixnum(0));
+        let heap = new_shared_heap();
+        let mut lib = library(&heap, &["counter"]);
+        lib.env.define(&heap, "count", TaggedValue::fixnum(0));
         lib.export_tagged("count".to_string(), TaggedValue::fixnum(0));
         lib.export_renamed(
             "count".to_string(),
@@ -211,33 +224,35 @@ mod tests {
             TaggedValue::fixnum(0),
         );
 
-        let importer = Environment::new();
-        assert!(lib.import_into(&importer, "count", "count"));
-        assert!(lib.import_into(&importer, "c:tally", "tally"));
-        assert!(!lib.import_into(&importer, "nope", "nope"));
+        let importer = Environment::with_heap(&heap);
+        assert!(lib.import_into(&heap, &importer, "count", "count"));
+        assert!(lib.import_into(&heap, &importer, "c:tally", "tally"));
+        assert!(!lib.import_into(&heap, &importer, "nope", "nope"));
 
         // The library assigns; the importer sees it under both names, because
         // the renamed export was found under the name the library uses.
-        lib.env.set("count", TaggedValue::fixnum(2)).unwrap();
-        assert_eq!(importer.get("count"), Some(TaggedValue::fixnum(2)));
-        assert_eq!(importer.get("c:tally"), Some(TaggedValue::fixnum(2)));
-        assert_eq!(importer.get("nope"), None);
+        lib.env.set(&heap, "count", TaggedValue::fixnum(2)).unwrap();
+        assert_eq!(importer.get(&heap, "count"), Some(TaggedValue::fixnum(2)));
+        assert_eq!(importer.get(&heap, "c:tally"), Some(TaggedValue::fixnum(2)));
+        assert_eq!(importer.get(&heap, "nope"), None);
     }
 
     #[test]
     fn an_export_with_no_binding_behind_it_is_imported_by_value() {
         // A library assembled by hand, as the registry's own tests do: the
         // export table is all there is, so its value is what gets installed.
-        let mut lib = Library::new(vec!["bare".to_string()]);
+        let heap = new_shared_heap();
+        let mut lib = library(&heap, &["bare"]);
         lib.export_tagged("v".to_string(), TaggedValue::fixnum(7));
-        let importer = Environment::new();
-        assert!(lib.import_into(&importer, "v", "v"));
-        assert_eq!(importer.get("v"), Some(TaggedValue::fixnum(7)));
+        let importer = Environment::with_heap(&heap);
+        assert!(lib.import_into(&heap, &importer, "v", "v"));
+        assert_eq!(importer.get(&heap, "v"), Some(TaggedValue::fixnum(7)));
     }
 
     #[test]
     fn test_library_display() {
-        let lib = Library::new(vec!["mylib".to_string(), "utils".to_string()]);
+        let heap = new_shared_heap();
+        let lib = library(&heap, &["mylib", "utils"]);
         assert_eq!(lib.to_string(), "#<library:(mylib utils)>");
     }
 }

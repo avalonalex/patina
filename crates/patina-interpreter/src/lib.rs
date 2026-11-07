@@ -970,7 +970,7 @@ impl<B: Backend> Interpreter<B> {
     /// # }
     /// ```
     pub fn lookup(&self, name: &str) -> Option<Owned> {
-        let value = NamespaceView::of(self.backend.global_env()).get(name)?;
+        let value = NamespaceView::of(self.backend.global_env()).get(self.backend.heap(), name)?;
         Some(self.hold(value))
     }
 
@@ -1249,7 +1249,7 @@ impl<B: Backend> Interpreter<B> {
     /// `None` when neither does. Panics on a handle another interpreter
     /// made.
     pub fn lookup_in(&self, env: &OwnedEnvironment, name: &str) -> Option<Owned> {
-        let value = NamespaceView::of(&self.raw_environment(env)).get(name)?;
+        let value = NamespaceView::of(&self.raw_environment(env)).get(self.backend.heap(), name)?;
         Some(self.hold(value))
     }
 

@@ -9,7 +9,14 @@
 mod common;
 
 use patina_interpreter::TreeWalkInterpreter;
-use patina_runtime::Library;
+use patina_runtime::{Environment, Library};
+use std::rc::Rc;
+
+/// An empty library named `name`, its namespace on a heap of its own.
+fn empty_library(name: Vec<String>) -> Library {
+    let heap = patina_core::new_shared_heap();
+    Library::with_env(name, Rc::new(Environment::with_heap(&heap)))
+}
 
 /// Every export of `(patina debug)`, called on both backends (#742). Of the
 /// nine names it exported, the VM had no primitive for seven, and neither
@@ -41,7 +48,7 @@ fn the_debug_names_without_an_implementation_are_not_exported() {
 #[test]
 fn test_library_value_creation() {
     // Create a library and verify its display format
-    let lib = Library::new(vec!["test".to_string(), "lib".to_string()]);
+    let lib = empty_library(vec!["test".to_string(), "lib".to_string()]);
     assert_eq!(lib.to_string(), "#<library:(test lib)>");
 }
 
@@ -69,7 +76,7 @@ fn test_library_predicate() {
 
 #[test]
 fn test_library_with_exports() {
-    let mut lib = Library::new(vec!["mylib".to_string()]);
+    let mut lib = empty_library(vec!["mylib".to_string()]);
 
     // Add some exports
     lib.export_tagged("foo".to_string(), patina_core::TaggedValue::fixnum(42));
@@ -99,15 +106,15 @@ fn test_library_with_exports() {
 #[test]
 fn test_library_name_formatting() {
     // Single-part name
-    let lib1 = Library::new(vec!["base".to_string()]);
+    let lib1 = empty_library(vec!["base".to_string()]);
     assert_eq!(lib1.name_string(), "(base)");
 
     // Multi-part name
-    let lib2 = Library::new(vec!["scheme".to_string(), "base".to_string()]);
+    let lib2 = empty_library(vec!["scheme".to_string(), "base".to_string()]);
     assert_eq!(lib2.name_string(), "(scheme base)");
 
     // Long name
-    let lib3 = Library::new(vec![
+    let lib3 = empty_library(vec![
         "mycompany".to_string(),
         "myproject".to_string(),
         "utils".to_string(),

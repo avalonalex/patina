@@ -51,15 +51,16 @@ pub(crate) fn collect_from(heap: &mut Heap, roots: &[TaggedValue]) {
 /// An environment on `heap` whose one binding holds `value`.
 pub(crate) fn env_holding(heap: &SharedHeap, value: TaggedValue) -> Rc<Environment> {
     let env = Rc::new(Environment::with_heap(heap));
-    env.define("held", value);
+    env.define(heap, "held", value);
     env
 }
 
-/// [`env_holding`] for a test that holds the heap, `held`, borrowed: the
-/// namespace takes its account from it rather than borrowing it again.
-fn env_holding_on(held: &Heap, value: TaggedValue) -> Rc<Environment> {
+/// [`env_holding`] for a test that holds the heap, `held`, borrowed mutably:
+/// the namespace takes its account from it rather than borrowing it again,
+/// and its binding is defined through the namespace step's core.
+fn env_holding_on(held: &mut Heap, value: TaggedValue) -> Rc<Environment> {
     let env = Rc::new(Environment::namespace(held));
-    env.define("held", value);
+    env.define_in(held, "held", value);
     env
 }
 
