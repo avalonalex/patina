@@ -19,6 +19,13 @@
 //! `gc-check` build. Only this crate makes or reads one; a program never
 //! sees either as a value, since every read path of `Environment`
 //! dereferences it.
+//!
+//! A host namespace's read-through record (#835) is a third pair shape,
+//! `(unbound . parent)`: its parent namespace's record for the name in the
+//! cdr, where a record of its own holds its flags fixnum, and in the car a
+//! cell that names no binding. It is never in a slot. A define or an import
+//! in the host namespace adopts it: the record becomes one of its own, in a
+//! slot, keeping its word.
 
 use crate::Trace;
 use crate::census::Site;
@@ -165,9 +172,59 @@ impl Record {
         self.0
     }
 
-    /// The cell this record names now.
+    /// A host namespace's read-through record over `parent`, its parent
+    /// namespace's record for the same name (#835): the pair
+    /// `(unbound . parent)`. `unbound` is the host namespace's cell holding
+    /// `TaggedValue::UNBOUND`, so a read that does not ask whether it reads
+    /// through answers that marker rather than a stale value.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "made only by `link_record`, which 4b.9's linker calls (#836)"
+        )
+    )]
+    pub(crate) fn read_through(heap: &mut Heap, unbound: BindingCell, parent: Record) -> Self {
+        debug_assert_eq!(unbound.value(heap), TaggedValue::UNBOUND);
+        debug_assert!(
+            parent.parent_record(heap).is_none(),
+            "a record reads through an own record"
+        );
+        Record(heap.alloc_pair(unbound.0, parent.0))
+    }
+
+    /// The record this one reads through, or `None` for a record of its own.
+    #[inline]
+    pub(crate) fn parent_record(self, heap: &Heap) -> Option<Record> {
+        let flags = heap.cdr(self.0);
+        flags.is_pair().then_some(Record(flags))
+    }
+
+    /// The cell this record's binding is now: its own, or for a read-through
+    /// record the cell its parent's record names now. A `set!` through it
+    /// stores here, into the parent's cell (#835).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "4b.9's linked reads and stores resolve through it (#836)"
+        )
+    )]
+    pub(crate) fn resolved_cell(self, heap: &Heap) -> BindingCell {
+        match self.parent_record(heap) {
+            Some(parent) => parent.cell(heap),
+            None => self.cell(heap),
+        }
+    }
+
+    /// The cell this record names now. A read-through record's is the cell
+    /// that names no binding, so a check build refuses to read one here: its
+    /// binding is its parent's ([`Record::resolved_cell`], #835).
     #[inline(always)]
     pub(crate) fn cell(self, heap: &Heap) -> BindingCell {
+        if crate::heap::GC_CHECK && self.parent_record(heap).is_some() {
+            read_through_as_own();
+        }
         BindingCell(heap.car(self.0))
     }
 
@@ -190,6 +247,17 @@ impl Record {
     pub(crate) fn key(self) -> u64 {
         stamp_free(self.0)
     }
+}
+
+/// A check build's failure: a read-through record read as a record of its
+/// own (`Record::cell`).
+#[cold]
+#[inline(never)]
+fn read_through_as_own() -> ! {
+    panic!(
+        "a read-through record read as a record of its own: its cell is its parent's \
+         (`Record::resolved_cell`, #835)"
+    );
 }
 
 #[cfg(test)]
@@ -323,6 +391,80 @@ mod tests {
         assert_eq!(record.cell(&heap), foreign);
         assert_eq!(record.value(&heap), n(2));
         assert_eq!(own.value(&heap), n(1), "the old cell is left alone");
+    }
+
+    /// A read-through record (#835) is the pair `(unbound . parent)`: it
+    /// answers its parent's record, and resolves to the cell that record
+    /// names now, through a store into it and a re-point of it alike. A
+    /// record of its own answers no parent and resolves to its own cell.
+    #[test]
+    fn a_read_through_record_resolves_through_its_parent() {
+        let mut heap = Heap::new();
+        let own = BindingCell::new_own(&mut heap, n(1), 3);
+        let parent = Record::new(&mut heap, own);
+        let unbound = BindingCell::free(&mut heap, TaggedValue::UNBOUND);
+        let child = Record::read_through(&mut heap, unbound, parent);
+        assert_eq!(
+            heap.car(child.word()),
+            unbound.0,
+            "the car names no binding"
+        );
+        assert_eq!(
+            heap.cdr(child.word()),
+            parent.word(),
+            "the cdr is the parent"
+        );
+
+        assert_eq!(child.parent_record(&heap), Some(parent));
+        assert_eq!(parent.parent_record(&heap), None);
+        assert_eq!(parent.resolved_cell(&heap), own, "an own record's own cell");
+        assert_eq!(child.resolved_cell(&heap), own);
+
+        // A store through it lands in the parent's cell.
+        child
+            .resolved_cell(&heap)
+            .store(&mut heap, n(5), Site::EnvSetSlot);
+        assert_eq!(parent.value(&heap), n(5));
+
+        // A re-point of the parent's record is seen through it.
+        let foreign = BindingCell::new_own(&mut heap, n(2), 8);
+        parent.repoint(&mut heap, foreign);
+        assert_eq!(child.resolved_cell(&heap), foreign);
+        assert_eq!(child.parent_record(&heap), Some(parent), "the same record");
+        assert_eq!(
+            unbound.value(&heap),
+            TaggedValue::UNBOUND,
+            "the cell that names no binding is left alone"
+        );
+    }
+
+    /// A read-through record's own cell names no binding: a check build
+    /// refuses to read it as a record of its own (#835), and a plain release
+    /// build reads the `UNBOUND` marker, never a stale value.
+    #[test]
+    fn a_read_through_record_read_as_its_own_is_refused_in_a_check_build() {
+        let mut heap = Heap::new();
+        let own = BindingCell::new_own(&mut heap, n(1), 3);
+        let parent = Record::new(&mut heap, own);
+        let unbound = BindingCell::free(&mut heap, TaggedValue::UNBOUND);
+        let child = Record::read_through(&mut heap, unbound, parent);
+        let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| child.cell(&heap)));
+        if GC_CHECK {
+            let payload = read.expect_err("a check build refuses the read");
+            let message = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|m| m.to_string()))
+                .unwrap_or_default();
+            assert!(
+                message.contains("a read-through record read as a record of its own"),
+                "{message}"
+            );
+        } else {
+            let cell = read.expect("a plain release build reads the car");
+            assert_eq!(cell, unbound);
+            assert_eq!(cell.value(&heap), TaggedValue::UNBOUND);
+        }
     }
 
     /// A record's derived trace pins its word, and the collector marks

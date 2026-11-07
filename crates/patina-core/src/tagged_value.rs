@@ -107,6 +107,13 @@ impl TaggedValue {
     /// produced by any constructor and never handed out: every read of a
     /// slot resolves it, so a program cannot see it and cannot forge one.
     pub(crate) const IMPORTED: Self = Self(0xF0 | Self::TAG_SPECIAL);
+    /// What a cell holds that names no binding: the cell a host namespace's
+    /// read-through records name (#835), and from 4b.9 a placeholder's. Never
+    /// produced by any constructor and never handed out: every read of a
+    /// read-through record resolves it through its parent's record first
+    /// (`Record::resolved_cell`), and a read that does not, a check build
+    /// refuses (`Record::cell`).
+    pub(crate) const UNBOUND: Self = Self(0xE0 | Self::TAG_SPECIAL);
     /// What the VM writes into a register its per-pc liveness map calls dead,
     /// before a collection or a capture, in a check build
     /// ([`GC_CHECK`](crate::heap::GC_CHECK)); a plain release build writes
@@ -931,10 +938,33 @@ mod tests {
             TaggedValue::UNSPECIFIED,
             TaggedValue::GC_POISON,
             TaggedValue::IMPORTED,
+            TaggedValue::UNBOUND,
         ] {
             assert_ne!(dead, other);
         }
         assert_eq!(dead.to_string(), "#<dead>");
+    }
+
+    /// What a read-through record's cell holds (#835) is a special
+    /// immediate of its own: no heap reference for the marker to follow,
+    /// and equal to no value a program can make, nor to any other marker.
+    #[test]
+    fn unbound_is_a_distinct_immediate() {
+        let unbound = TaggedValue::UNBOUND;
+        assert!(unbound.is_special() && unbound.is_immediate());
+        assert!(!unbound.is_heap_pointer());
+        for other in [
+            TaggedValue::FALSE,
+            TaggedValue::TRUE,
+            TaggedValue::NULL,
+            TaggedValue::EOF,
+            TaggedValue::UNSPECIFIED,
+            TaggedValue::GC_POISON,
+            TaggedValue::IMPORTED,
+            TaggedValue::DEAD_SLOT,
+        ] {
+            assert_ne!(unbound, other, "{other:?}");
+        }
     }
 
     #[cfg(any(debug_assertions, feature = "gc-check"))]
