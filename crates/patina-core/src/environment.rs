@@ -1873,10 +1873,13 @@ impl Environment {
     /// parent's, made the first time and the same one after. `None` for a
     /// frame, for a name no slot of this namespace or its parent holds (a
     /// name only an alias or a scoped definition reaches is read by name, as
-    /// today), and for a parentless namespace that does not bind it (4b.9's
-    /// placeholders). Takes the write step. The reads by name (`get`,
-    /// `get_with_scopes`, `Interpreter::lookup_in`, the tree-walker's) never
-    /// call it, so a read makes no record.
+    /// today), for a name this host namespace reaches by an alias or a
+    /// visible scoped definition of its own, which [`get`](Self::get) finds
+    /// before the parent's binding and which is read by name too, and for a
+    /// parentless namespace that does not bind it (4b.9's placeholders).
+    /// Takes the write step. The reads by name (`get`, `get_with_scopes`,
+    /// `Interpreter::lookup_in`, the tree-walker's) never call it, so a read
+    /// makes no record.
     #[cfg_attr(
         not(test),
         expect(
@@ -1891,6 +1894,14 @@ impl Environment {
             return Some(own);
         }
         if self.kind != Kind::HostNamespace {
+            return None;
+        }
+        // `get`'s order: an alias here, then a visible scoped definition
+        // here, both before the parent. A record over the parent's would
+        // read another binding than `get` does.
+        if (self.has_aliases.get() && self.alias_target(name).is_some())
+            || self.visible_scoped_index(name).is_some()
+        {
             return None;
         }
         let parent = self
@@ -6946,6 +6957,35 @@ mod read_through_tests {
         assert_eq!(frame.link_record(&heap, "x"), None, "a frame links nothing");
         assert_eq!(global.link_record(&heap, "missing"), None);
         assert_eq!(global.link_record(&heap, "x"), global.local_record("x"));
+    }
+
+    /// A name the host namespace reaches by an alias or a visible scoped
+    /// definition of its own, over a name the global namespace binds in a
+    /// slot, is left to be read by name: `get` finds either before the
+    /// parent's binding, and a read-through record would read the parent's.
+    #[test]
+    fn link_record_leaves_a_host_alias_or_scoped_definition_to_be_read_by_name() {
+        let heap = new_shared_heap();
+        let (global, host) = global_and_host(&heap);
+        global.define(&heap, "y", n(2));
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "target", n(100));
+
+        host.define_alias("x", Rc::clone(&library), Rc::from("target"));
+        assert_eq!(host.get(&heap, "x"), Some(n(100)), "the alias first");
+        assert_eq!(host.link_record(&heap, "x"), None, "an alias here");
+
+        let mut scopes = ScopeSet::new();
+        scopes.add_scope(crate::scope::ScopeId(7));
+        host.define_scoped_definition(&heap, "y", scopes, n(20));
+        assert_eq!(host.get(&heap, "y"), Some(n(20)), "the scoped one first");
+        assert_eq!(
+            host.link_record(&heap, "y"),
+            None,
+            "a visible scoped definition here"
+        );
+
+        assert!(table(&host).is_none(), "neither made a record");
     }
 
     /// The table is the host namespace's alone: once it drops, a collection
