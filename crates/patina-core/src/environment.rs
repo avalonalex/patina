@@ -55,14 +55,18 @@ fn resolve(step: Option<&Heap>, word: TaggedValue) -> TaggedValue {
 
 /// Write `value` into the binding a scoped entry is: in a namespace (`step`
 /// is its mutable borrow, from `write_step`) a store into the cell the
-/// entry's record names, logged at `site` with the cell as holder (#834); in
-/// a frame, the entry's word itself, logged at `site` with no holder.
+/// entry's record names, logged at `site` with the cell as holder, as every
+/// store into a cell is (#834); in a frame, the entry's word itself, off the
+/// heap, logged at `site` with no holder where `log_frame` says so. Only
+/// [`Environment::set`]'s by-name step logs a frame's entry; the scoped
+/// assignments write it unlogged, as they did before #834.
 #[inline]
 fn write_entry(
     step: Option<&mut Heap>,
     entry: &mut ScopedBinding,
     value: TaggedValue,
-    site: Option<Site>,
+    site: Site,
+    log_frame: bool,
 ) {
     match step {
         Some(heap) => {
@@ -70,7 +74,7 @@ fn write_entry(
             cell.store(heap, value, site);
         }
         None => {
-            if let Some(site) = site {
+            if log_frame {
                 crate::census::store(site, None, value);
             }
             entry.tagged_value = value;
@@ -1332,7 +1336,7 @@ impl Environment {
         if imported {
             let mut step = self.borrow_write(heap);
             let cell = self.frame_import_cell(slot);
-            cell.store(&mut step, value, Some(Site::EnvSetSlot));
+            cell.store(&mut step, value, Site::EnvSetSlot);
         }
     }
 
@@ -1346,10 +1350,10 @@ impl Environment {
         let word = self.bindings.borrow().read_slot(slot);
         if self.is_namespace() {
             let cell = Record::from_word(word).cell(heap);
-            cell.store(heap, value, Some(Site::EnvSetSlot));
+            cell.store(heap, value, Site::EnvSetSlot);
         } else if word == TaggedValue::IMPORTED {
             let cell = self.frame_import_cell(slot);
-            cell.store(heap, value, Some(Site::EnvSetSlot));
+            cell.store(heap, value, Site::EnvSetSlot);
         } else {
             crate::census::store(Site::EnvSetSlot, None, value);
             self.bindings.borrow_mut().write_slot(slot, value);
@@ -1704,7 +1708,7 @@ impl Environment {
                 let record = Record::from_word(self.bindings.borrow().read_slot(slot));
                 let cell = record.cell(heap);
                 if cell.owned_by(heap, self.env_id) {
-                    cell.store(heap, value, Some(Site::EnvDefine));
+                    cell.store(heap, value, Site::EnvDefine);
                 } else {
                     crate::census::store(Site::EnvDefine, None, value);
                     self.forget_alias(&name, cell);
@@ -2120,7 +2124,8 @@ impl Environment {
                         step.as_deref_mut(),
                         &mut bindings[i],
                         value,
-                        Some(Site::EnvSetScoped),
+                        Site::EnvSetScoped,
+                        true,
                     );
                     return Ok(());
                 }
@@ -2362,7 +2367,13 @@ impl Environment {
         });
         match binding {
             Some(binding) => {
-                write_entry(step.as_deref_mut(), binding, value, None);
+                write_entry(
+                    step.as_deref_mut(),
+                    binding,
+                    value,
+                    Site::EnvSetScoped,
+                    false,
+                );
                 Ok(())
             }
             None => Err(name.to_string()),
@@ -2963,7 +2974,7 @@ impl Environment {
                             let existing = &mut occupied.get_mut()[position];
                             existing.visible_by_name = visible_by_name;
                             let cell = Record::from_word(existing.tagged_value).cell(heap);
-                            cell.store(heap, value, None);
+                            cell.store(heap, value, Site::EnvDefine);
                             (false, false)
                         }
                         None => {
@@ -3262,7 +3273,13 @@ impl Environment {
                 let mut scoped = env.scoped_bindings.borrow_mut();
                 match scoped.get_mut(name).and_then(|bs| bs.get_mut(position)) {
                     Some(binding) => {
-                        write_entry(step.as_deref_mut(), binding, value, None);
+                        write_entry(
+                            step.as_deref_mut(),
+                            binding,
+                            value,
+                            Site::EnvSetScoped,
+                            false,
+                        );
                         drop(scoped);
                         crate::scope_trace::wrote(name, scopes, "scoped");
                         Ok(())
@@ -3350,7 +3367,13 @@ impl Environment {
                         let mut step = env.write_step(heap);
                         let mut table = env.scoped_bindings.borrow_mut();
                         if let Some(binding) = table.get_mut(name).and_then(|bs| bs.get_mut(i)) {
-                            write_entry(step.as_deref_mut(), binding, value, None);
+                            write_entry(
+                                step.as_deref_mut(),
+                                binding,
+                                value,
+                                Site::EnvSetScoped,
+                                false,
+                            );
                             return Ok(());
                         }
                         return Err(name.to_string());

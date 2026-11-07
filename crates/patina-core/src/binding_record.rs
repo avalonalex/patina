@@ -110,9 +110,9 @@ impl BindingCell {
     }
 
     /// Store `value` into the cell, logged at `site` with the cell as holder
-    /// when the caller logs one ([`Heap::store_cell`]).
+    /// ([`Heap::store_cell`]).
     #[inline(always)]
-    pub(crate) fn store(self, heap: &mut Heap, value: TaggedValue, site: Option<Site>) {
+    pub(crate) fn store(self, heap: &mut Heap, value: TaggedValue, site: Site) {
         heap.store_cell(self.0, value, site);
     }
 
@@ -268,25 +268,25 @@ mod tests {
             assert!(!cell.owned_by(&heap, env_id), "env {env_id}");
         }
         assert_eq!(cell.value(&heap), n(3));
-        cell.store(&mut heap, n(4), None);
+        cell.store(&mut heap, n(4), Site::EnvSetSlot);
         assert_eq!(cell.value(&heap), n(4));
         assert_eq!(heap.cdr(cell.0), n(0), "a store leaves the owner word");
     }
 
-    /// `store_cell` writes the value word alone, with a census site or none,
-    /// and a record reads the store through its cell. Its census site is
-    /// `Site`'s, so the new `EnvRecordRepoint` is appended: the sites before
-    /// it keep the indices the summary's arrays are laid out by.
+    /// `store_cell` writes the value word alone, under the census site
+    /// every store into a cell names, and a record reads the store through
+    /// its cell. Its census site is `Site`'s, so the new `EnvRecordRepoint`
+    /// is appended: the sites before it keep the indices the summary's
+    /// arrays are laid out by.
     #[test]
-    fn a_store_lands_in_the_cell_under_its_census_site_or_none() {
+    fn a_store_lands_in_the_cell_under_its_census_site() {
         let mut heap = Heap::new();
         let cell = BindingCell::new_own(&mut heap, n(1), 3);
         let record = Record::new(&mut heap, cell);
         for (site, value) in [
-            (Some(Site::EnvSetSlot), n(2)),
-            (Some(Site::EnvDefine), n(3)),
-            (Some(Site::EnvSetScoped), n(4)),
-            (None, n(5)),
+            (Site::EnvSetSlot, n(2)),
+            (Site::EnvDefine, n(3)),
+            (Site::EnvSetScoped, n(4)),
         ] {
             cell.store(&mut heap, value, site);
             assert_eq!(cell.value(&heap), value, "{site:?}");
@@ -359,7 +359,7 @@ mod tests {
         let mut heap = Heap::new();
         let cell = BindingCell::new_own(&mut heap, n(1), 2);
         collect_from(&mut heap, &[]);
-        cell.store(&mut heap, n(2), Some(Site::EnvSetSlot));
+        cell.store(&mut heap, n(2), Site::EnvSetSlot);
     }
 
     #[test]

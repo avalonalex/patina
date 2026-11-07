@@ -1101,21 +1101,21 @@ impl Heap {
 
     /// Store `value` into a binding cell's value word (#834,
     /// `binding_record.rs`): the funnel's checks, then the census at `site`
-    /// with the cell as holder, when the caller logs one. A cell is a pair,
-    /// but this is not `set-car!`, so it never counts as `SetCar`.
+    /// with the cell as holder. Every store into a cell names its site: the
+    /// cell may be old and the value young, an old-to-young edge stage 7's
+    /// barrier must see. A cell is a pair, but this is not `set-car!`, so it
+    /// never counts as `SetCar`.
     #[inline(always)]
     pub(crate) fn store_cell(
         &mut self,
         cell: TaggedValue,
         value: TaggedValue,
-        site: Option<crate::census::Site>,
+        site: crate::census::Site,
     ) {
         debug_assert!(cell.is_pair());
         self.pair_checks.check("pair", cell);
         check_storable(value, "binding cell");
-        if let Some(site) = site {
-            crate::census::store(site, Some(cell), value);
-        }
+        crate::census::store(site, Some(cell), value);
         store_word(&mut self.pairs[cell.heap_index() as usize].0, value);
     }
 

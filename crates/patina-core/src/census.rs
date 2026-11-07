@@ -67,10 +67,14 @@ pub enum Site {
     /// tree-walker's CPS `force`, in the study's spelling.
     PromiseForceVm,
     /// The environment sites. A frame's own binding is off the heap (holder
-    /// `None`). A namespace's binding and any import is a cell, which is the
-    /// holder of a store into it (#834). A definition's first value
-    /// initialises a fresh cell and is logged with no holder. A record's
-    /// re-point is `EnvRecordRepoint`, with the record as holder.
+    /// `None`), and a scoped assignment writes a frame's scoped entry
+    /// unlogged. A namespace's binding, scoped entries included, and any
+    /// import is a cell, which is the holder of every store into it (#834):
+    /// `EnvDefine` for a definition over the namespace's own binding,
+    /// `EnvSetSlot` and `EnvSetScoped` for an assignment. A by-name
+    /// definition's first value initialises a fresh cell and is logged with
+    /// no holder; a scoped one's fresh cell is initialised unlogged. A
+    /// record's re-point is `EnvRecordRepoint`, with the record as holder.
     EnvDefine,
     EnvSetSlot,
     EnvSetScoped,

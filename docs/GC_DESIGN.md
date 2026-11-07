@@ -615,15 +615,20 @@ them.
   checks the pair's generation, so a freed record or cell panics with
   "use-after-free" in a debug or `gc-check` build
   (`gc_edge_tests::a_freed_record_is_refused_in_a_check_build`).
-- **Census sites (#651).** A store into a cell is logged at its caller's
-  site with the cell as holder: `EnvDefine` for a `define` over the
-  namespace's own binding, `EnvSetSlot` and `EnvSetScoped` for an
-  assignment. A definition's first value initialises a fresh cell and is
-  logged at `EnvDefine` with no holder, one `EnvDefine` per `define`, on
-  which the tree-walker's `TwContinuationDefine` relies. A record's
-  re-point is logged at `EnvRecordRepoint` with the record as holder: the
-  record may be old and the cell young, an old-to-young edge stage 7's
-  barrier must see (`gc_census.rs`'s
+- **Census sites (#651).** Every store into a cell is logged at its
+  caller's site with the cell as holder, since the cell may be old and the
+  value young (`Heap::store_cell` takes the site, not an `Option` of one):
+  `EnvDefine` for a `define` over the namespace's own binding, by name or
+  at a scope set it already holds, and `EnvSetSlot` and `EnvSetScoped` for
+  an assignment, a scoped entry's included (`gc_census.rs`'s
+  `a_store_into_an_introduced_definition_names_its_cell`). A by-name
+  definition's first value initialises a fresh cell and is logged at
+  `EnvDefine` with no holder, one `EnvDefine` per by-name `define`, on
+  which the tree-walker's `TwContinuationDefine` relies; a scoped
+  definition's fresh cell is initialised unlogged, as its entry was before
+  the records. A record's re-point is logged at `EnvRecordRepoint` with the
+  record as holder: the record may be old and the cell young, an
+  old-to-young edge stage 7's barrier must see (`gc_census.rs`'s
   `a_record_repoint_is_logged_with_a_heap_holder`).
 - **The identity condition.** `RareTables::import_aliases` keys each
   imported cell by `BindingCell::key`, its word less a check build's
