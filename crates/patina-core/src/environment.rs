@@ -1114,6 +1114,18 @@ pub struct Environment {
     /// changed.
     #[trace(skip, reason = "what the environment is, set at construction")]
     kind: Kind,
+    /// 1 for a frame of either kind, 0 for a namespace of either kind, set
+    /// from `kind` at construction ([`Kind::frame_flag`]).
+    /// [`Environment::is_namespace`], asked at each read and write of a
+    /// binding, tests it against zero: one load and a `cbz` or `cbnz`, laid
+    /// out by LLVM's zero heuristic as `kind == Kind::Namespace` was before
+    /// host namespaces, the frame case the fall-through at 39 of its 47
+    /// inlined sites. A test of the kind for two namespace values, a range
+    /// compare or a single-bit test, gives LLVM no such heuristic: the frame
+    /// case was the taken branch at 43 of the 47, and the bit test read +1.25%
+    /// tree-walker cycles against main on the aligned GBS (#835).
+    #[trace(skip, reason = "a flag set from the kind at construction")]
+    frame: u8,
     /// The tables only a global or a library environment ever fills
     /// ([`RareTables`]), absent until one of them is first written and one
     /// pointer wide either way.
@@ -1136,12 +1148,8 @@ pub struct Environment {
 
 /// What an environment is, set by its constructor and never changed (4b's
 /// start decision 4 on #782): one type serves namespaces and frames, and the
-/// kind says which. The low bit of a kind's discriminant is set for the two
-/// frame kinds and clear for the two namespace kinds, so that
-/// [`Environment::is_namespace`], asked at every binding's read and write,
-/// is one bit test (#835).
+/// kind says which.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
 enum Kind {
     /// A parentless namespace: the global environment, a library's or a
     /// specifier's, each made without a parent and on a heap
@@ -1149,7 +1157,7 @@ enum Kind {
     /// tables ([`NamespaceCharge`]), indexes a spelling's scoped bindings
     /// past [`INDEX_ABOVE`], and borrows the heap at each read or write of a
     /// binding (the namespace step, #834).
-    Namespace = 0,
+    Namespace,
     /// A host namespace (#835): the namespace `Interpreter::new_environment`
     /// answers, whose parent is the global namespace, a parentless one
     /// ([`Environment::host_namespace`]). Every namespace path is its own:
@@ -1159,21 +1167,29 @@ enum Kind {
     /// (`RareTables::read_through`), which are in no slot. It charges its
     /// heap's account for its tables as a parentless namespace does
     /// ([`NamespaceCharge`]), and indexes past [`INDEX_ABOVE`] as one does.
-    HostNamespace = 2,
+    HostNamespace,
     /// A frame ([`Environment::child_frame`]): a call's or a body's, and the
     /// desugarer's scopes. It never charges, and indexes past
     /// [`FRAME_INDEX_ABOVE`].
-    Frame = 1,
+    Frame,
     /// A frame the tree-walker made for its CPS code's temporaries, a `let`
     /// temporary's or a continuation's parameter
     /// ([`Environment::for_temporaries`]), where no definition belongs: a
     /// `define` evaluated with it binds in the nearest environment above it
     /// that is not one (#680). Otherwise a frame.
-    Temporaries = 3,
+    Temporaries,
 }
 
-/// The bit of a [`Kind`]'s discriminant set for a frame of either kind.
-const FRAME_KIND_BIT: u8 = 1;
+impl Kind {
+    /// [`Environment`]'s `frame` flag for an environment of this kind: 0 for
+    /// a namespace of either kind, 1 for a frame of either kind.
+    const fn frame_flag(self) -> u8 {
+        match self {
+            Kind::Namespace | Kind::HostNamespace => 0,
+            Kind::Frame | Kind::Temporaries => 1,
+        }
+    }
+}
 
 impl Environment {
     /// Create a new empty namespace whose values live on `heap`: the global
@@ -1257,6 +1273,7 @@ impl Environment {
             has_aliases: Cell::new(false),
             has_visible_scoped: Cell::new(false),
             kind,
+            frame: kind.frame_flag(),
             rare: OnceCell::from(Box::new(RareTables {
                 namespace: charge,
                 ..RareTables::default()
@@ -1312,6 +1329,7 @@ impl Environment {
             has_aliases: Cell::new(false),
             has_visible_scoped: Cell::new(false),
             kind,
+            frame: kind.frame_flag(),
             rare: OnceCell::new(),
             parent: Some(parent),
         }
@@ -1554,13 +1572,13 @@ impl Environment {
     /// and indexes at the namespace's threshold ([`Environment::indexes`]).
     /// Asked before a table that frames fill too is measured, so that a frame
     /// skips the measuring for the price of a field read: the kind is in the
-    /// struct, where the charge is behind the `rare` box. A test of one bit
-    /// of the kind ([`FRAME_KIND_BIT`]): one instruction, where a test of two
-    /// adjacent discriminants was a compare and a branch at each of some
-    /// fifty inlined sites (#835).
+    /// struct, where the charge is behind the `rare` box. It tests the
+    /// `frame` flag set from the kind, a load and a `cbz` with the frame case
+    /// the fall-through (#835).
     #[inline(always)]
     pub(crate) fn is_namespace(&self) -> bool {
-        self.kind as u8 & FRAME_KIND_BIT == 0
+        debug_assert_eq!(self.frame, self.kind.frame_flag());
+        self.frame == 0
     }
 
     /// The namespace step's shared borrow (#834): taken where a hit in a
@@ -1662,6 +1680,7 @@ impl Environment {
             has_aliases: _,
             has_visible_scoped: _,
             kind: _,
+            frame: _,
             rare,
             // An environment of its own, which charges for itself if it is a
             // namespace.
@@ -7159,6 +7178,7 @@ mod gc_edge_tests {
             has_aliases: Cell::new(true),
             has_visible_scoped: Cell::new(true),
             kind: Kind::Frame,
+            frame: Kind::Frame.frame_flag(),
             rare: OnceCell::from(Box::new(RareTables {
                 introduced_global_names: RefCell::default(),
                 scoped_index: RefCell::default(),
@@ -7231,6 +7251,7 @@ mod gc_edge_tests {
             has_aliases: Cell::new(false),
             has_visible_scoped: Cell::new(false),
             kind: Kind::HostNamespace,
+            frame: Kind::HostNamespace.frame_flag(),
             rare: OnceCell::from(Box::new(RareTables {
                 read_through: OnceCell::from(Box::new(RefCell::new(ReadThrough {
                     unbound,
