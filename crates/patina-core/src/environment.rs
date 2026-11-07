@@ -726,6 +726,10 @@ struct RareTables {
 /// sweep, which holds the heap mutably while it drops a dead specifier's
 /// `Rc`. Each namespace is charged once however many specifiers name it:
 /// `interaction-environment` and `load` wrap the one global environment.
+///
+/// **Counted** (#834): `new` counts the namespace in `Heap::namespaces`, and
+/// `Drop` takes it off again with its `records` and `cells`, through the same
+/// handle and for the same reason.
 #[derive(Debug)]
 struct NamespaceCharge {
     /// The heap's external-bytes account.
@@ -739,15 +743,26 @@ struct NamespaceCharge {
     /// introduced globals' identities and index. A running sum, kept by the
     /// buffers' writers ([`Environment::charge_entries`]).
     entries: Cell<usize>,
+    /// The binding records this namespace holds, as the heap's running sum
+    /// counts them (`Heap::binding_records`, #834): given back when it drops.
+    records: Cell<usize>,
+    /// The cells of its own its records name now, as the heap's running sum
+    /// counts them (`Heap::cells`, #834): given back when it drops.
+    cells: Cell<usize>,
 }
 
 impl NamespaceCharge {
+    /// A namespace's charge, which counts it among the heap's namespaces
+    /// (`Heap::namespaces`) until it drops.
     fn new(account: ExternalBytes) -> Self {
+        account.namespace_made();
         Self {
             account,
             charged: Cell::new(0),
             names: Cell::new((0, 0)),
             entries: Cell::new(0),
+            records: Cell::new(0),
+            cells: Cell::new(0),
         }
     }
 
@@ -788,6 +803,8 @@ impl NamespaceCharge {
 
 impl Drop for NamespaceCharge {
     fn drop(&mut self) {
+        self.account
+            .namespace_dropped(self.records.get(), self.cells.get());
         self.account.release(self.charged.get());
     }
 }

@@ -87,6 +87,33 @@
 //! - `minors` and `majors`: collections by kind. Every collection is a major
 //!   until a nursery comes (GC_PRD stage 7), so `minors` is 0 and `majors` is
 //!   `collections`.
+//!
+//! Counts per owner: what one kind of holder keeps, each a count of things
+//! rather than bytes, which the steady-state lane holds flat (its SS5).
+//!
+//! - `symbols`: the interned symbols. The intern table is a root, so a
+//!   symbol, once interned, stays for the heap's life.
+//! - `ports`: the port objects' entries in the `PortTable`, above.
+//! - `namespaces`: the live namespaces, each of which charges its tables to
+//!   `external-bytes`: the global environment, each loaded library's, each
+//!   live environment specifier's, and `%parameterize-swap!`'s compile
+//!   namespace. A host's environment is a frame, and is not counted.
+//! - `binding-records` (#834): the binding records the live namespaces hold,
+//!   one for each slot, each scoped entry (the splicing `let-syntax`
+//!   keywords filed at top level among them) and each import alias.
+//! - `cells` (#834): the cells of their own the live namespaces' records name
+//!   now. Not counted: a frame's imports, a free cell (an export with no
+//!   binding behind it, a declaration's location), and a cell only an
+//!   importer's record or an export keeps once its namespace dropped or
+//!   re-pointed away from it.
+//!
+//! The last two are running sums: raised as a namespace makes a record or a
+//! cell, `cells` lowered as a record is re-pointed away from its namespace's
+//! own cell, and both lowered by what a namespace holds when it drops. So
+//! they are exact once the dead namespaces have dropped, which a
+//! collection's sweep does for the specifiers it frees: the steady-state
+//! driver reads them after `(gc) (gc)`. A record and a cell are each a pair,
+//! so both are counted in `pairs` as well.
 
 use crate::apply_context::ApplyContext;
 use crate::registry::PrimitiveFn;
@@ -197,6 +224,9 @@ fn gc_stats<'gc>(cx: &mut Cx<'gc>, _args: &[Value<'gc>]) -> Result<Value<'gc>, E
             "descriptor-limit",
             patina_core::heap::descriptor_limit().map_or(Value::FALSE, n),
         ),
+        ("namespaces", n(stats.namespaces)),
+        ("cells", n(stats.cells)),
+        ("binding-records", n(stats.binding_records)),
     ];
 
     let mut alist: Vec<Value<'gc>> = entries

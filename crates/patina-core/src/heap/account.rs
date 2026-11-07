@@ -418,6 +418,9 @@ impl ByteAccount {
                 posted: Cell::new(None),
                 open_window: Cell::new(None),
                 wait_site: Cell::new(None),
+                namespaces: Cell::new(0),
+                binding_records: Cell::new(0),
+                cells: Cell::new(0),
             }),
             through_last_gc: 0,
             reclaimed: 0,
@@ -473,6 +476,19 @@ pub(super) struct SharedCounts {
     /// The first deferral window that held the collection pending now:
     /// open when it was posted, or opened while it waited.
     pub(super) wait_site: Cell<Option<&'static std::panic::Location<'static>>>,
+    /// The live namespaces (`Environment`'s `NamespaceCharge`), counted
+    /// when one is made and when it drops: here for the reason the external
+    /// bytes are, since a namespace usually drops inside a sweep.
+    pub(super) namespaces: Cell<usize>,
+    /// The binding records the live namespaces hold (#834): a running sum,
+    /// raised as a namespace makes one and lowered by its records when it
+    /// drops.
+    pub(super) binding_records: Cell<usize>,
+    /// The cells of their own the live namespaces' records name now (#834):
+    /// a running sum, raised as a namespace makes one, lowered when one of
+    /// its records is re-pointed away from its own cell, and by its cells
+    /// when it drops.
+    pub(super) cells: Cell<usize>,
 }
 
 impl SharedCounts {
@@ -609,6 +625,71 @@ impl ExternalBytes {
     pub fn release(&self, bytes: usize) {
         self.0.release_external(bytes);
     }
+
+    /// A namespace was made: one more in [`Heap::namespaces`]. Crate-private,
+    /// as the four below are, so that a host holding the raw handle cannot
+    /// forge the counts.
+    pub(crate) fn namespace_made(&self) {
+        let namespaces = &self.0.namespaces;
+        namespaces.set(namespaces.get() + 1);
+    }
+
+    /// A namespace dropped, holding `records` binding records and `cells`
+    /// cells of its own: it leaves [`Heap::namespaces`], and they leave
+    /// [`Heap::binding_records`] and [`Heap::cells`]. Borrow-free, since a
+    /// namespace usually drops inside a sweep.
+    pub(crate) fn namespace_dropped(&self, records: usize, cells: usize) {
+        let counts = &self.0;
+        debug_assert!(
+            counts.namespaces.get() > 0,
+            "a namespace dropped, but none is counted"
+        );
+        counts
+            .namespaces
+            .set(counts.namespaces.get().saturating_sub(1));
+        lower(&counts.binding_records, records, "binding records");
+        lower(&counts.cells, cells, "cells");
+    }
+
+    /// A namespace made `n` binding records (#834).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by #834's records, the next commit")
+    )]
+    pub(crate) fn records_made(&self, n: usize) {
+        let records = &self.0.binding_records;
+        records.set(records.get() + n);
+    }
+
+    /// A namespace made `n` cells of its own (#834).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by #834's records, the next commit")
+    )]
+    pub(crate) fn cells_made(&self, n: usize) {
+        let cells = &self.0.cells;
+        cells.set(cells.get() + n);
+    }
+
+    /// A namespace's records stopped naming `n` cells of its own: each was
+    /// re-pointed away from its cell, which an importer's record or an
+    /// export may still keep (#834).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by #834's records, the next commit")
+    )]
+    pub(crate) fn cells_let_go(&self, n: usize) {
+        lower(&self.0.cells, n, "cells");
+    }
+}
+
+/// Take `n` off the running sum `count` of `what`. Taking off more than is
+/// counted is a bug in the counting: it panics in debug builds, and floors
+/// at 0 in release.
+fn lower(count: &Cell<usize>, n: usize, what: &str) {
+    let held = count.get();
+    debug_assert!(n <= held, "{n} {what} let go, but only {held} are counted");
+    count.set(held.saturating_sub(n));
 }
 
 /// A host's account of the bytes it holds outside the heap on its values'
@@ -707,6 +788,32 @@ impl Heap {
     /// without borrowing the heap ([`ExternalBytes`]).
     pub fn external_bytes_handle(&self) -> ExternalBytes {
         ExternalBytes(Rc::clone(&self.account.shared))
+    }
+
+    /// The live namespaces, each of which charges its tables
+    /// (`Environment`'s `NamespaceCharge`): the global environment, each
+    /// loaded library's, each live environment specifier's, and
+    /// `%parameterize-swap!`'s compile namespace. A host's environment is a
+    /// frame, and is not counted. `(gc-stats)`'s `namespaces`.
+    pub fn namespaces(&self) -> usize {
+        self.account.shared.namespaces.get()
+    }
+
+    /// The binding records the live namespaces hold (#834): each slot's,
+    /// each scoped entry's and each import alias's. A frame's imports are
+    /// not counted. A running sum, exact once the dead namespaces have
+    /// dropped. `(gc-stats)`'s `binding-records`.
+    pub fn binding_records(&self) -> usize {
+        self.account.shared.binding_records.get()
+    }
+
+    /// The cells of their own the live namespaces' records name now (#834).
+    /// Not counted: a free cell, and a cell only an importer's record or an
+    /// export keeps once its namespace dropped or re-pointed away from it. A
+    /// running sum, exact once the dead namespaces have dropped.
+    /// `(gc-stats)`'s `cells`.
+    pub fn cells(&self) -> usize {
+        self.account.shared.cells.get()
     }
 
     /// The memory the arenas hold now, live or not: every arena's capacity in
@@ -819,5 +926,48 @@ impl Heap {
     /// threshold with no collection pending already.
     pub fn descriptor_collections(&self) -> u64 {
         self.descriptor_collections
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The per-owner counts (#834) move only with the events that name
+    /// them, through a handle and with no heap borrow, and a namespace's
+    /// drop gives back what it holds.
+    #[test]
+    fn the_namespace_counts_move_with_their_events() {
+        let heap = Heap::new();
+        let counts = || (heap.namespaces(), heap.binding_records(), heap.cells());
+        assert_eq!(counts(), (0, 0, 0));
+        let handle = heap.external_bytes_handle();
+        handle.namespace_made();
+        handle.namespace_made();
+        handle.records_made(3);
+        handle.cells_made(2);
+        assert_eq!(counts(), (2, 3, 2));
+        handle.cells_let_go(1);
+        assert_eq!(counts(), (2, 3, 1));
+        handle.namespace_dropped(2, 1);
+        assert_eq!(counts(), (1, 1, 0));
+        let stats = heap.stats();
+        assert_eq!(
+            (stats.namespaces, stats.binding_records, stats.cells),
+            (1, 1, 0)
+        );
+        handle.namespace_dropped(1, 0);
+        assert_eq!(counts(), (0, 0, 0));
+    }
+
+    /// Letting go of more than is counted is a bug in the counting.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore = "a debug assertion")]
+    #[should_panic(expected = "2 cells let go, but only 1 are counted")]
+    fn letting_go_of_more_cells_than_are_counted_is_refused() {
+        let heap = Heap::new();
+        let handle = heap.external_bytes_handle();
+        handle.cells_made(1);
+        handle.cells_let_go(2);
     }
 }

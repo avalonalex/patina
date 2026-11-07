@@ -798,6 +798,14 @@ impl Heap {
         }
     }
 
+    /// The pair slots the next allocations take, the last first: a test's
+    /// view of the free list, for the tests of a key that must not outlive
+    /// its cell (#834; spike 4b.1's reuse test, #829).
+    #[cfg(test)]
+    pub(crate) fn free_pair_slots(&self) -> &[HeapIndex] {
+        &self.free_pairs
+    }
+
     // =========================================================================
     // Handles (heap/handles.rs, #605)
     // =========================================================================
@@ -1089,6 +1097,47 @@ impl Heap {
         check_storable(value, "pair");
         crate::census::store(crate::census::Site::SetCdr, Some(ptr), value);
         store_word(&mut self.pairs[ptr.heap_index() as usize].1, value);
+    }
+
+    /// Store `value` into a binding cell's value word (#834,
+    /// `binding_record.rs`): the funnel's checks, then the census at `site`
+    /// with the cell as holder, when the caller logs one. A cell is a pair,
+    /// but this is not `set-car!`, so it never counts as `SetCar`.
+    #[inline(always)]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by #834's records, the next commit")
+    )]
+    pub(crate) fn store_cell(
+        &mut self,
+        cell: TaggedValue,
+        value: TaggedValue,
+        site: Option<crate::census::Site>,
+    ) {
+        debug_assert!(cell.is_pair());
+        self.pair_checks.check("pair", cell);
+        check_storable(value, "binding cell");
+        if let Some(site) = site {
+            crate::census::store(site, Some(cell), value);
+        }
+        store_word(&mut self.pairs[cell.heap_index() as usize].0, value);
+    }
+
+    /// Re-point a binding record at `cell` (#834, `binding_record.rs`).
+    /// Logged at `EnvRecordRepoint` with the record as holder: the record
+    /// may be old and the cell young, an old-to-young edge stage 7's barrier
+    /// must see.
+    #[inline]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by #834's records, the next commit")
+    )]
+    pub(crate) fn set_record_cell(&mut self, record: TaggedValue, cell: TaggedValue) {
+        debug_assert!(record.is_pair() && cell.is_pair());
+        self.pair_checks.check("pair", record);
+        self.pair_checks.check("pair", cell);
+        crate::census::store(crate::census::Site::EnvRecordRepoint, Some(record), cell);
+        store_word(&mut self.pairs[record.heap_index() as usize].0, cell);
     }
 
     // =========================================================================
@@ -3793,6 +3842,9 @@ impl Heap {
             bytes_reclaimed: self.bytes_reclaimed(),
             committed_bytes: self.committed_bytes(),
             external_bytes: self.external_bytes(),
+            namespaces: self.namespaces(),
+            binding_records: self.binding_records(),
+            cells: self.cells(),
         }
     }
 }
@@ -3838,6 +3890,15 @@ pub struct HeapStats {
     /// [`Heap::external_bytes`]: what is held outside the arenas on heap
     /// objects' behalf, now.
     pub external_bytes: usize,
+    /// [`Heap::namespaces`]: the live namespaces, each of which charges its
+    /// tables.
+    pub namespaces: usize,
+    /// [`Heap::binding_records`]: the binding records the live namespaces
+    /// hold (#834).
+    pub binding_records: usize,
+    /// [`Heap::cells`]: the cells of their own the live namespaces' records
+    /// name now (#834).
+    pub cells: usize,
 }
 
 // ============================================================================
