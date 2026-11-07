@@ -1248,35 +1248,23 @@ fn shapes_score_as_recorded() {
 /// right. [`every_shape_answers_the_same_in_a_host_namespace`] fails on a row
 /// listed here that answers the same, so an entry leaves with its defect.
 const HOST_EXEMPT: &[(&str, &str)] = &[
-    // The eight `redefined` rows, on both backends: the host imports `X`
-    // from the library and defines its own afterwards, and the template's
-    // `X`, the library's, follows the host's definition — a read answers
-    // `(use use)`, a write lands on the host's `X`. #438 binds such a
-    // reference to the import's alias, and the desugarer asks the global
-    // environment for one, which here imports nothing of `(hm gen)`. With
-    // the global environment importing `(hm gen)` first, all eight answer
-    // what they record, as #851's shape does with `(srfi 1)`.
-    ("written/read/library/redefined", "#851"),
-    ("written/write/library/redefined", "#851"),
-    ("generated/read/library/redefined", "#851"),
-    ("generated/write/library/redefined", "#851"),
-    ("generated-arg/read/library/redefined", "#851"),
-    ("generated-arg/write/library/redefined", "#851"),
-    ("generated/read/library-generator/redefined", "#851"),
-    ("generated/write/library-generator/redefined", "#851"),
+    // Empty since the host-namespace kind (#835). The eight `redefined`
+    // rows were listed here until the desugarer asked the host namespace
+    // for a library template's import alias before the global environment,
+    // which imported nothing of `(hm gen)` (#851).
 ];
 
 /// Every shape answers in a host namespace what it records (#835): its
 /// program runs through `Interpreter::eval_program_in` on a fresh
 /// `new_environment()`, on a fresh interpreter, on both backends. A row that
-/// already answered differently in a host before the host-namespace kind is
-/// listed in [`HOST_EXEMPT`] with its issue.
+/// answers differently in a host is listed in [`HOST_EXEMPT`] with its
+/// issue.
 ///
 /// The other tests make no host environment, so without this one the matrix
 /// says nothing about one. A host's form imports into the host and defines
 /// there, and reaches the global environment's bindings past its own; what
-/// `new_environment()` answers changes from a frame to a host namespace with
-/// #835, and this holds the change to the answers the program gives at top
+/// `new_environment()` answers changed from a frame to a host namespace with
+/// #835, and this held the change to the answers the program gives at top
 /// level.
 #[test]
 fn every_shape_answers_the_same_in_a_host_namespace() {

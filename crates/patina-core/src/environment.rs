@@ -2173,8 +2173,9 @@ impl Environment {
     /// one.)
     ///
     /// A namespace's only: a frame answers `None`, and `Desugarer::import_of`
-    /// asks the root, a namespace. Borrows `heap` shared over the lookup,
-    /// and mutably to insert a fresh alias (#834).
+    /// asks a namespace, the nearest and then each above it (#835). Borrows
+    /// `heap` shared over the lookup, and mutably to insert a fresh alias
+    /// (#834).
     pub fn import_alias(
         &self,
         heap: &RefCell<Heap>,
@@ -2808,11 +2809,27 @@ impl Environment {
     /// Macro-expansion aliases must be installed where the code will actually
     /// be resolved. A desugar-time environment may be a transient child made
     /// for a `let-syntax` or internal-define body and dropped once desugaring
-    /// finishes, so aliases go to the root instead.
+    /// finishes, so aliases go to the root instead. For a host form the root
+    /// is the global namespace, past its host namespace: a relink alias goes
+    /// there, and only an import alias is asked of the host namespace first
+    /// ([`namespace_root`](Self::namespace_root), #835).
     pub fn root(self: &Rc<Self>) -> Rc<Environment> {
         let mut env = self.clone();
         while let Some(parent) = env.parent.clone() {
             env = parent;
+        }
+        env
+    }
+
+    /// The nearest namespace at or above this environment: itself if it is a
+    /// namespace of either kind, else the namespace its frames hang from. For
+    /// a host form that is its host namespace; otherwise the parentless root
+    /// (#835, the owner's ruling on question 3). Raw, as [`root`](Self::root)
+    /// is.
+    pub fn namespace_root(self: &Rc<Self>) -> Rc<Environment> {
+        let mut env = Rc::clone(self);
+        while !env.is_namespace() {
+            env = Rc::clone(env.parent.as_ref().expect("a frame has its parent"));
         }
         env
     }

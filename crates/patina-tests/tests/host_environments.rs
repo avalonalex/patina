@@ -780,6 +780,53 @@ fn a_definition_a_macro_introduces_in_a_host_namespace() {
     );
 }
 
+/// `(host4b sum)` exports `sum-list`, a macro whose template calls the
+/// `fold` the library imports from `(srfi 1)`. The global environment
+/// imports `(scheme base)` and nothing of `(srfi 1)`.
+const SUM_LIBRARY: &str = "(import (scheme base))
+    (define-library (host4b sum)
+      (export sum-list)
+      (import (scheme base) (srfi 1))
+      (begin (define-syntax sum-list (syntax-rules () ((_ l) (fold + 0 l))))))";
+
+/// The program each environment runs after its imports: `sum-list`'s
+/// `fold` is the library's, whatever the use site defines afterwards.
+const SUM_PROGRAM: &str = "(define (f) (sum-list '(1 2 3))) (define fold 'captured) (f)";
+
+/// A library macro used in a host namespace that imports the binding its
+/// template names keeps that binding past a later host definition of the
+/// name, as the same program does at top level (#851). The desugarer binds
+/// the template's `fold` early to an import alias of the nearest namespace
+/// that imports it, the host namespace, before asking the global namespace,
+/// which here imports nothing of `(srfi 1)` (#835, the owner's ruling on
+/// question 3). The host's own `fold` is its definition all the same.
+fn library_macro_keeps_its_import<B: Backend>(interp: Interpreter<B>) -> [String; 3] {
+    interp.eval_program_owned(SUM_LIBRARY).unwrap();
+    let shown = |result: Result<_, _>| match result {
+        Ok(value) => interp.display_tagged(&value),
+        Err(e) => format!("error: {e}"),
+    };
+    let env = interp.new_environment();
+    let host = shown(interp.eval_program_in(
+        &env,
+        &format!("(import (scheme base) (srfi 1) (host4b sum)) {SUM_PROGRAM}"),
+    ));
+    let host_fold = shown(interp.eval_str_in(&env, "fold"));
+    let global =
+        shown(interp.eval_program_owned(&format!("(import (srfi 1) (host4b sum)) {SUM_PROGRAM}")));
+    [host, host_fold, global]
+}
+
+#[test]
+fn a_library_macro_in_a_host_namespace_keeps_its_import() {
+    let expected = ["6", "captured", "6"];
+    assert_eq!(library_macro_keeps_its_import(vm_interpreter()), expected);
+    assert_eq!(
+        library_macro_keeps_its_import(tree_walker_interpreter()),
+        expected
+    );
+}
+
 /// `(host4b cell)` exports `value` and a procedure that assigns it.
 const CELL_LIBRARY: &str = "(import (scheme base) (scheme eval))
     (define-library (host4b cell)

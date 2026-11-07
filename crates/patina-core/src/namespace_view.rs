@@ -316,8 +316,9 @@ impl<'e> NamespaceView<'e> {
     /// nothing, or a fresh one `mint` offers, inserted as an import of the
     /// same location. `None` when `name` is not an import here, and always
     /// for a frame, whose imports hold no record: a namespace's only, as
-    /// `Desugarer::import_of` asks the root (#834). Borrows `heap` shared
-    /// over the lookup and mutably to insert.
+    /// `Desugarer::import_of` asks a namespace, the nearest and then each
+    /// above it (#834, #835). Borrows `heap` shared over the lookup and
+    /// mutably to insert.
     #[inline]
     pub fn import_alias(
         self,
