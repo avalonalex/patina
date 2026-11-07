@@ -1704,11 +1704,12 @@ fn an_introduced_definition_only_templates_reach_survives() {
 
 /// The `def-getter` shape with a collection between its forms (4b's start
 /// decision 8 on #782, #834): `secret` is reached by nothing but the two
-/// templates while each `(gc)` runs, and it must survive both. It holds the
-/// stages that give an introduced definition a record (4b.6) and that reclaim
-/// introduced definitions (5c) to the shape's answer. Chibi 0.12 (`(chibi
-/// ast)`'s `gc`) and Gauche 0.9.15 (`(gauche base)`'s `gc`) print 7 with
-/// their own collection call in place of each `(gc)`, measured 2026-11-06.
+/// templates while each `(gc)` runs, and it must survive both. It held the
+/// stage that gave an introduced definition a record (4b.6, #834) to the
+/// shape's answer, and holds the one that reclaims introduced definitions
+/// (5c) to it. Chibi 0.12 (`(chibi ast)`'s `gc`) and Gauche 0.9.15
+/// (`(gauche base)`'s `gc`) print 7 with their own collection call in place
+/// of each `(gc)`, measured 2026-11-06.
 #[test]
 fn an_introduced_definition_only_templates_reach_survives_a_collection() {
     let program = r#"

@@ -143,10 +143,17 @@ Both global instructions consult a per-site inline cache (Track P P4): each
 `CodeObject` carries a pc-indexed table of `(environment id, slot)` entries.
 After the first execution against a given globals environment, the name
 lookup collapses to an id compare plus a slot read into the environment's
-append-only slot table — redefinition overwrites a binding's slot in place,
-so hits always see the current value. Names that resolve through a parent
-environment are never cached. The cache is invisible to the ISA: operands,
-semantics, and error behavior are unchanged.
+append-only slot table. In a namespace the slot holds the binding's record,
+so a hit takes one hop more, record → cell → value, until the link tables
+of `PRD/GC_PRD.md` §11.6 replace the cache (#834): redefinition stores into
+the cell, and a definition over an import or an import over a definition
+re-points the record, never the slot, so hits always see the current value.
+An imported name's record names the exporting library's cell, so its read
+costs the same hop. In a frame (a host's environment) the slot holds the
+value, overwritten in place by a redefinition, or the import marker beside
+the imported cell. Names that resolve through a parent environment are
+never cached. The cache is invisible to the ISA: operands, semantics, and
+error behavior are unchanged.
 
 ### 4.2 MutableCell Operations
 

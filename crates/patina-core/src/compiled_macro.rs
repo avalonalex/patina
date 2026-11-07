@@ -591,14 +591,15 @@ pub struct CompiledMacro {
     /// for the form of each expansion (#446). Empty for a written macro.
     ///
     /// Traced. Early binding asks these environments only where a name's
-    /// binding lives, never for a value, and today each is rooted another
-    /// way as well: by the registry while its library is registered, and
-    /// after a redefinition replaces the library, by the `owners` list of
-    /// whatever imported the generator, which never shrinks (#614). Traced all
-    /// the same, because the macro holds them by `Rc` for as long as it lives,
-    /// and an environment kept alive with its values swept is #38's shape:
-    /// #614's fix drops an owner once no link points into it, and this edge is
-    /// then what keeps such an environment's values. Otherwise one or two
+    /// binding lives, never for a value. The registry roots each while its
+    /// library is registered; once a redefinition replaces the library,
+    /// nothing else need: an importer holds the library's cells, not its
+    /// environment, since the import owners that kept every replaced one
+    /// went with #834's binding records. So this edge can be what keeps such
+    /// an environment, and it is traced because the macro holds them by `Rc`
+    /// for as long as it lives, and an environment kept alive with its values
+    /// swept is #38's shape. It is one of the holders of a replaced library's
+    /// namespace that #614's release settles. Otherwise one or two
     /// environments the walk has nearly always seen already.
     pub foreign_expansions: Vec<(ScopeId, Rc<Environment>)>,
 }

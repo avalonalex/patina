@@ -1262,11 +1262,11 @@ impl<'a> Desugarer<'a> {
             //
             // It asks whether the two environments reach one *location* by
             // this name, which they do for anything both imported, by any
-            // route: an import is the exporting library's location (#406).
-            // (An export `share_binding` cannot share — a macro-introduced
-            // definition — is still a copy, so it reads as two and is
-            // aliased to the library's; right, at the cost of the alias.)
-            // Until that was true there was nothing to ask but whether they
+            // route: an import is the exporting library's location (#406),
+            // the cell its binding names (#834), and no export is installed
+            // as a copy (#427 refuses a macro-introduced definition's bare
+            // export, #847 an export spelled as an alias). Until imports
+            // shared, there was nothing to ask but whether they
             // held equal values, and two variables that are both `0`, `#f`
             // or `'()` — which is what variables start as — read as one
             // binding. A library macro's `(set! X (+ X 1))` over its private
@@ -1512,8 +1512,8 @@ impl<'a> Desugarer<'a> {
     /// asks what the name is bound to, so the alias is recognised as the name
     /// is. A new fast path has to do the same, or this binding defeats it.
     ///
-    /// The alias is `Environment::import_alias`: an ordinary forwarded slot
-    /// for the same location, one per imported name rather than one per
+    /// The alias is `Environment::import_alias`: a second record over the
+    /// same cell (#834), one per imported name rather than one per
     /// expansion — and per name, not per location, because `bound` below is
     /// how `settle_early_bindings` reads back what a reference was written as.
     /// The reference keeps its scopes, which is what lets

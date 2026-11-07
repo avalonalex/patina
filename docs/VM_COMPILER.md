@@ -167,6 +167,17 @@ Later forms and definition-environment relinking resolve through those binding
 identities, so same-expansion references and generated library accessors reach
 their private state.
 
+In a namespace the renamed global is a binding like any other, a record over a
+cell in its slot (`docs/GC_DESIGN.md` §4.7, #834), born when the global's
+`Define` runs. The recorded identity holds no record word: the record is
+reached by the identity, its renamed global and that global's slot, so it
+exists only once the `Define` has run, and nothing is filled at compile time.
+The scope that introduced the definition is derived from the identity, its
+largest scope (`ScopeSet::introducing_scope`), and stored nowhere;
+`Environment::introduced_records` answers each record with it, for stage 5c's
+reclamation and the tests. In a host's environment, a frame until stage 4b.8,
+the renamed global is a plain slot of the frame, with no record.
+
 Since #427, the compiler installs no alias under the bare spelling. Such an
 alias let an unrelated expansion — even a reference compiled before the
 definition — reach a private global by name. With it removed, those references

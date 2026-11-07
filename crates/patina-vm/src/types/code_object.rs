@@ -201,18 +201,22 @@ impl TraceThroughRc for CodeObject {}
 ///   **never reused** — unlike an address — so an entry left over from a
 ///   dead environment can only miss, never falsely hit.
 /// - A binding's slot in an environment's local table is **stable for the
-///   environment's life**: redefinition overwrites the slot in place
-///   (see `Bindings` in patina-core), so a hit always reads the current
-///   value of the same name.
+///   environment's life**: slots are append-only (see `Bindings` in
+///   patina-core), so a hit always reads the current value of the same name.
+///   In a namespace the slot holds the binding's record, which names its
+///   cell (`binding_record.rs`, #834): a redefinition stores into the cell,
+///   and a definition over an import or an import over a definition
+///   re-points the record at another cell, never the slot, so the slot a
+///   site cached names one record for the namespace's life. In a frame a
+///   redefinition overwrites the slot in place.
 /// - Only names that resolve in the queried environment's **own** table are
 ///   cached; parent-resolved names always take the full lookup, so a later
 ///   local (re)definition that would change resolution can never be masked.
-/// - An *imported* name is in that table too, and what its slot holds is a
-///   forward to the library that owns the binding (`Owner` in patina-core,
-///   #406). The cache needs to know nothing about that: `slot_value` and
-///   `set_slot_value` follow the forward on every access, and importing over
-///   a definition or defining over an import both rewrite the slot in place,
-///   so the slot a site cached stays the right one to ask.
+/// - An *imported* name is in that table too: in a namespace its record
+///   names the exporter's cell (#406), and in a frame its slot holds the
+///   import marker beside the cell. The cache needs to know nothing about
+///   that: `slot_value` and `set_slot_value` read and write the cell on every
+///   access, so the slot a site cached stays the right one to ask.
 #[derive(Debug, Clone, Copy)]
 pub struct GlobalCacheEntry {
     /// `Environment::env_id` of the resolved environment; 0 = empty entry.

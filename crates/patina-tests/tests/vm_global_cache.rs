@@ -1,10 +1,11 @@
 //! Semantic tests for the per-site global inline cache (Track P P4).
 //!
 //! `LoadGlobal`/`StoreGlobal` cache `(env_id, slot)` per call site after the
-//! first execution. These tests pin the invariant that makes that sound:
-//! redefinition and `set!` overwrite the binding's slot in place, so a hit
-//! can never observe a stale value. They run against `VmBackend` explicitly —
-//! the cache only exists in the VM.
+//! first execution. These tests pin the invariant that makes that sound: a
+//! binding's slot never moves, and redefinition and `set!` write the location
+//! it names — in a namespace the cell its record names (#834), in a frame
+//! the slot itself — so a hit can never observe a stale value. They run
+//! against `VmBackend` explicitly — the cache only exists in the VM.
 
 mod common;
 use common::eval_program_vm as eval;

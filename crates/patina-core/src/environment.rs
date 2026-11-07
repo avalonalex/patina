@@ -369,7 +369,7 @@ fn visit_candidates<T>(
 /// holding its own name, with a hash index built only for large environments.
 ///
 /// Slots are append-only: a binding's slot never moves or disappears once
-/// created, and redefining a name overwrites its slot in place. The VM's
+/// created, and redefining a name keeps its slot (below). The VM's
 /// per-site global caches rest on this invariant (see `GlobalCacheEntry`
 /// in patina-vm), so every mutation must go through these methods.
 ///
@@ -696,9 +696,10 @@ struct RareTables {
 /// without a parent ([`Environment::with_heap`]): the global environment, a library's, and the
 /// ones `environment`, `scheme-report-environment` and `null-environment`
 /// build. Their tables are Rust allocations the trigger would otherwise not
-/// see: an `(environment '(scheme base))` holds about 40 KiB in them and
-/// costs the heap one specifier slot, so a loop of those piled up 2.9 GiB of
-/// dead namespaces between collections. A frame ([`Environment::child_frame`])
+/// see: an `(environment '(scheme base))` holds about 32 KB in them (about
+/// 40 KB until #834 took out its import links and owners) and costs the heap
+/// one specifier slot, so a loop of those piled up 2.9 GiB of dead
+/// namespaces between collections. A frame ([`Environment::child_frame`])
 /// is never one: the tree-walker builds one per call and per `let`-bound
 /// temporary, and what its bindings hold is short-lived and small, so its
 /// path does as little of the measuring as it can. A scoped binding or an
@@ -1239,7 +1240,8 @@ impl Environment {
 
     /// Slot index of `name` in *this* environment's simple bindings
     /// (parents are not consulted). Slot indices are stable for the life
-    /// of the environment: redefinition overwrites the slot in place.
+    /// of the environment: redefinition keeps the slot, storing into the
+    /// cell its record names in a namespace and overwriting it in a frame.
     #[inline]
     pub fn local_slot(&self, name: &str) -> Option<u32> {
         self.bindings.borrow().slot_of(name)
@@ -3951,7 +3953,7 @@ impl Environment {
     /// a namespace's step (#834).
     pub fn bindings(&self, heap: &RefCell<Heap>) -> Vec<(String, TaggedValue)> {
         // Names first and values after: an imported binding's value is read
-        // from its owner, and that read must not happen under this borrow.
+        // from its cell, and that read must not happen under this borrow.
         self.visible_slots(heap)
             .into_iter()
             .map(|(slot, name)| (name, self.slot_value(heap, slot)))
