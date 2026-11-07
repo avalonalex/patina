@@ -1003,7 +1003,8 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   made without a parent (`Environment::with_heap`): the global environment,
   a library's, and the ones `environment`, `scheme-report-environment` and
   `null-environment` build; or a host namespace, whose parent is the global
-  one (`Heap::new_host_namespace`, #835, the owner's ruling on question 2)
+  one (`Heap::new_host_namespace`, #835; question 2's option (a) there,
+  pending the owner's ruling)
   — charges its tables once when it is made and
   again whenever one reallocates, and gives them back in `Drop`
   (`NamespaceCharge` in `environment.rs` says what is counted: the struct,

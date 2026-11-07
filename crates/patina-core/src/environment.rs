@@ -623,8 +623,9 @@ struct RareTables {
     /// namespace included (#835). Nothing asserts which. `introduced_global`
     /// and `for_each_introduced_candidate` read this environment's table
     /// alone; `has_introduced_definition` reads its root's, which for a host
-    /// form is the global namespace's (the owner's ruling on question 3 on
-    /// #835 moved only the import lookup to the nearest namespace).
+    /// form is the global namespace's (question 3's option (c) on #835,
+    /// pending the owner's ruling, moves only the import lookup to the
+    /// nearest namespace).
     #[trace(
         skip,
         reason = "spellings, scope sets and the names of renamed globals"
@@ -1215,7 +1216,8 @@ impl Environment {
         );
         // Charged to its parent's account, its heap's, which every
         // parentless namespace has (#834), as a parentless namespace is
-        // charged (the owner's ruling on question 2).
+        // charged (question 2's option (a) on #835, pending the owner's
+        // ruling).
         let charge = Some(NamespaceCharge::new(
             parent
                 .rare
@@ -2839,8 +2841,8 @@ impl Environment {
     /// The nearest namespace at or above this environment: itself if it is a
     /// namespace of either kind, else the namespace its frames hang from. For
     /// a host form that is its host namespace; otherwise the parentless root
-    /// (#835, the owner's ruling on question 3). Raw, as [`root`](Self::root)
-    /// is.
+    /// (question 3's option (c) on #835, pending the owner's ruling). Raw, as
+    /// [`root`](Self::root) is.
     pub fn namespace_root(self: &Rc<Self>) -> Rc<Environment> {
         let mut env = Rc::clone(self);
         while !env.is_namespace() {
@@ -5002,9 +5004,9 @@ mod scoped_index_tests {
     }
 
     /// A host namespace indexes a spelling past `INDEX_ABOVE`, as every
-    /// namespace does, and not at a frame's threshold (#835, the owner's
-    /// ruling on question 2); the index is charged with the rest of its
-    /// tables.
+    /// namespace does, and not at a frame's threshold (question 2's option
+    /// (a) on #835, pending the owner's ruling); the index is charged with
+    /// the rest of its tables.
     #[test]
     fn a_host_namespace_is_indexed_at_the_namespace_threshold() {
         let heap = new_shared_heap();
@@ -6336,10 +6338,10 @@ mod namespace_charge_tests {
     }
 
     /// A host namespace is counted while it lives, as a parentless one is
-    /// (#835, the owner's ruling on question 2): made, +1; a define, a record
-    /// and a cell; a read-through record, a record, its table charged; its
-    /// adoption by a define, a cell; dropped, every count and its charge
-    /// back where they started.
+    /// (question 2's option (a) on #835, pending the owner's ruling): made,
+    /// +1; a define, a record and a cell; a read-through record, a record,
+    /// its table charged; its adoption by a define, a cell; dropped, every
+    /// count and its charge back where they started.
     #[test]
     fn a_host_namespace_is_counted_while_it_lives() {
         let heap = new_shared_heap();
@@ -6650,8 +6652,8 @@ mod namespace_charge_tests {
             host.rare.get().is_some(),
             "its rare tables are built eagerly"
         );
-        // Charged, as a parentless namespace is (the owner's ruling on
-        // question 2).
+        // Charged, as a parentless namespace is (question 2's option (a) on
+        // #835, pending the owner's ruling).
         assert!(host.charged_bytes().is_some());
     }
 

@@ -1128,14 +1128,16 @@ namespace since #835, to rooting what is bound in it, on both backends
   interpreter alive (#704);
 - the legacy pipeline, whose caller's environment the heap traces while the
   caller holds it;
-- a host namespace charged as a namespace (#835, the owner's ruling on
-  question 2): counted among the heap's namespaces while it lives, its
-  charge growing with its tables, and both given back when its handle drops;
+- a host namespace charged as a namespace (question 2's option (a) on
+  #835, pending the owner's ruling): counted among the heap's namespaces
+  while it lives, its charge growing with its tables, and both given back
+  when its handle drops;
 - a library macro used in a host namespace that imports the binding its
   template names, which keeps that binding past a later host definition of
   the name, as at top level, while the global environment imports nothing
-  of it (#851; #835's ruling on question 3 has the desugarer ask the host
-  namespace for the import alias before the global environment);
+  of it (#851; question 3's option (c) on #835, pending the owner's
+  ruling, has the desugarer ask the host namespace for the import alias
+  before the global environment);
 - the same macro used in a host namespace that imports nothing, after the
   global environment imports it and the binding its template names, which
   keeps the global environment's import: the desugarer asks the global

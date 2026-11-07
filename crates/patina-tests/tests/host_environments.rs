@@ -270,11 +270,11 @@ fn a_host_environment_is_a_child_of_the_global_environment() {
     a_child_of_the_global_environment(tree_walker_interpreter());
 }
 
-/// A host namespace is charged as a parentless namespace is (#835, the
-/// owner's ruling on question 2): counted among the heap's namespaces while
-/// it lives, charging the heap's external bytes for its tables as they
-/// grow, and giving both back when its handle drops. No closure was made in
-/// it, so nothing but the handle holds it.
+/// A host namespace is charged as a parentless namespace is (question 2's
+/// option (a) on #835, pending the owner's ruling): counted among the
+/// heap's namespaces while it lives, charging the heap's external bytes for
+/// its tables as they grow, and giving both back when its handle drops. No
+/// closure was made in it, so nothing but the handle holds it.
 fn charged_as_a_namespace<B: Backend>(interp: Interpreter<B>) {
     interp
         .eval_program_owned("(import (scheme base) (patina debug)) (gc)")
@@ -802,8 +802,9 @@ const SUM_PROGRAM: &str = "(define (f) (sum-list '(1 2 3))) (define fold 'captur
 /// name, as the same program does at top level (#851). The desugarer binds
 /// the template's `fold` early to an import alias of the nearest namespace
 /// that imports it, the host namespace, before asking the global namespace,
-/// which here imports nothing of `(srfi 1)` (#835, the owner's ruling on
-/// question 3). The host's own `fold` is its definition all the same.
+/// which here imports nothing of `(srfi 1)` (question 3's option (c) on
+/// #835, pending the owner's ruling). The host's own `fold` is its
+/// definition all the same.
 fn library_macro_keeps_its_import<B: Backend>(interp: Interpreter<B>) -> [String; 3] {
     interp.eval_program_owned(SUM_LIBRARY).unwrap();
     let shown = |result: Result<_, _>| match result {
@@ -835,9 +836,9 @@ fn a_library_macro_in_a_host_namespace_keeps_its_import() {
 /// global namespace imports `(srfi 1)` and `(host4b sum)`: the host
 /// namespace holds no import of `fold`'s location, so the desugarer asks the
 /// global namespace next, whose import alias keeps the template's `fold`
-/// the library's, as it did before #835 (question 3's option (c), pending
-/// the owner's ruling). The host's `fold` is its own definition, and the
-/// global's is still `(srfi 1)`'s.
+/// the library's, as before the host-namespace kind (question 3's option
+/// (c) on #835, pending the owner's ruling). The host's `fold` is its own
+/// definition, and the global's is still `(srfi 1)`'s.
 fn library_macro_keeps_the_global_import<B: Backend>(interp: Interpreter<B>) -> [String; 3] {
     interp.eval_program_owned(SUM_LIBRARY).unwrap();
     interp
@@ -966,8 +967,8 @@ const RECORDS: &str = "(cdr (assq 'binding-records (gc-stats)))";
 /// expanded and nothing is defined between the readings, and every unbound
 /// name is fresh, so a read that made a record, however late, would show
 /// in the count. The host namespace's records are counted with the rest
-/// (the owner's ruling on question 2); the names each environment lists are
-/// checked as well.
+/// (question 2's option (a) on #835, pending the owner's ruling); the names
+/// each environment lists are checked as well.
 fn read_makes_no_record<B: Backend>(interp: Interpreter<B>, backend: &str) {
     interp
         .eval_program_owned("(import (scheme base) (patina debug))")
