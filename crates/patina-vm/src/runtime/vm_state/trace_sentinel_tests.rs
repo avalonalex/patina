@@ -8,7 +8,11 @@
 //! directly, through `collect_for_tests`, as in `weak_continuation_tests.rs`.
 //!
 //! Beside them, the test that the provider reports its slots where they live,
-//! by a visitor that writes into each and puts it back (#682).
+//! by a visitor that writes into each and puts it back (#682); and the
+//! tests of tracing by code id (#836), each of which loads a unit, links its
+//! table by hand in a namespace it then drops, and puts the unit in one
+//! place only, to show that a holder there keeps the table, its records and
+//! its namespace, and that the code store alone keeps none of them.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -17,7 +21,7 @@ use std::sync::Arc;
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::heap::gc::collect_for_tests;
-use patina_core::heap::sentinels::Sentinels;
+use patina_core::heap::sentinels::{Sentinels, assert_freed};
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{GcController, Heap, LinkTable};
 use patina_primitives::PrimitiveRegistry;
@@ -31,7 +35,7 @@ use crate::types::code_object::{Arity, CodeObject};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use crate::types::{CallFrame, CodeObjectId};
+use crate::types::{CallFrame, CodeObjectId, FrameCode};
 
 /// Code with these constants and nothing else.
 fn code_holding(constants: Vec<TaggedValue>) -> Rc<CodeObject> {
@@ -59,7 +63,7 @@ fn frame(code: &Rc<CodeObject>, closure: TaggedValue) -> CallFrame {
         num_regs: 1,
         closure: Cell::new(closure),
         return_reg: 0,
-        code: Rc::clone(code),
+        code: FrameCode(Rc::clone(code)),
     }
 }
 
@@ -144,6 +148,7 @@ fn every_vm_state_root_is_traced() {
         next_reentry: 1,
         reentry_kept: None,
         code_store: vec![Rc::clone(&code)],
+        trace_epoch: Cell::new(0),
         empty_code: code_holding(Vec::new()),
         free_code_ids: Vec::new(),
         code_units: FxHashMap::default(),
@@ -401,4 +406,234 @@ fn for_each_slot(state: &VmState, mut each: impl FnMut(&Cell<TaggedValue>)) {
     {
         each(slot);
     }
+}
+
+// ----------------------------------------------------------------------------
+// Link tables, traced by code id (#836)
+// ----------------------------------------------------------------------------
+
+/// The two values a unit's linked table keeps: `x`, which the table links,
+/// through its entry, the record and its cell; and `y`, which only the
+/// namespace binds, through the namespace the table was linked in.
+fn linked_values(heap: &mut Heap, s: &mut Sentinels) -> (TaggedValue, TaggedValue) {
+    (
+        s.pair(heap, "LinkTable.entries: x, through its record and cell"),
+        s.vector(heap, "LinkTable.namespace: y, bound only there"),
+    )
+}
+
+/// Load `code` as a unit of its own, through `load_unit` so that its id
+/// resolves, with a link table over `names`, linked in a fresh namespace
+/// that binds `x`, and `y`, which the table does not name. The namespace's
+/// `Rc` is dropped here, so only the table holds it, and only the code
+/// store holds the unit: each test puts the unit where the edge it tests
+/// runs from.
+fn load_linked(
+    state: &mut VmState,
+    mut code: CodeObject,
+    names: &[&str],
+    x: TaggedValue,
+    y: TaggedValue,
+) -> CodeObjectId {
+    code.links = Rc::new(LinkTable::new(
+        names.iter().map(|&name| Rc::from(name)).collect(),
+    ));
+    let id = state.load_unit(code, Vec::new());
+    let ns = Rc::new(Environment::with_heap(&state.heap));
+    ns.define(&state.heap, "x", x);
+    ns.define(&state.heap, "y", y);
+    (state.code_object(id).expect("just loaded").links).link_in(&state.heap, &ns);
+    id
+}
+
+/// A full continuation whose one frame runs `code`.
+fn full_capture_of(code: &Rc<CodeObject>) -> VmContinuation {
+    VmContinuation {
+        frames: vec![frame(code, CallFrame::NO_CLOSURE)],
+        dynamic_winds: Vec::new(),
+        prompt_stack: Vec::new(),
+        exception_handlers: Vec::new(),
+        registers: vec![Cell::new(TaggedValue::NULL)],
+        deliver_reg: 0,
+        exit_status: None,
+        abort_landing: false,
+        reentry: Rc::from(Vec::new()),
+    }
+}
+
+/// A delimited continuation whose one frame runs `code`.
+fn delimited_capture_of(code: &Rc<CodeObject>) -> VmDelimitedContinuation {
+    VmDelimitedContinuation {
+        frames: vec![frame(code, CallFrame::NO_CLOSURE)],
+        dynamic_winds: Vec::new(),
+        registers: vec![Cell::new(TaggedValue::NULL)],
+        base_at_capture: 0,
+        deliver_reg: None,
+        depth_at_capture: 0,
+        wind_depth_at_capture: 0,
+        handler_depth_at_capture: 0,
+        prompt_stack: Vec::new(),
+        exception_handlers: Vec::new(),
+    }
+}
+
+/// A machine state whose registers are `registers` and whose frames are
+/// `frames`, with no extent.
+fn running(registers: Vec<TaggedValue>, frames: Vec<CallFrame>) -> ExecutionState {
+    ExecutionState::from_parts(
+        registers.into_iter().map(Cell::new).collect(),
+        frames,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
+/// (a) A unit whose only holder is a closure of it in a register: marking
+/// the closure queues its code id, and the code-id round traces the unit's
+/// table. The closure's globals are the machine's, never the namespace the
+/// table was linked in, so only the table reaches `x` and `y`.
+#[test]
+fn a_closure_keeps_its_units_link_table() {
+    let mut state = VmState::on_a_fresh_heap();
+    let mut s = Sentinels::new(&mut state.heap.borrow_mut());
+    let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
+    let id = load_linked(&mut state, super::tests::code(), &["x"], x, y);
+    let globals = Rc::clone(state.global_env());
+    let closure = (state.heap.borrow_mut()).alloc_vm_closure(id.0, Vec::new(), globals);
+    state.execution = running(vec![closure], Vec::new());
+
+    collect(&state);
+    s.assert_survived(&state.heap.borrow());
+}
+
+/// (b) A unit whose only holder is a frame running it: the frame's code
+/// reports its id (`FrameCode`).
+#[test]
+fn a_frame_keeps_its_units_link_table() {
+    let mut state = VmState::on_a_fresh_heap();
+    let mut s = Sentinels::new(&mut state.heap.borrow_mut());
+    let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
+    let id = load_linked(&mut state, super::tests::code(), &["x"], x, y);
+    let code = state.code_object(id).expect("loaded");
+    state.execution = running(
+        vec![TaggedValue::NULL],
+        vec![frame(&code, CallFrame::NO_CLOSURE)],
+    );
+    drop(code);
+
+    collect(&state);
+    s.assert_survived(&state.heap.borrow());
+}
+
+/// (c) A unit whose only holder is a frame of a full continuation whose ref
+/// is in a register: the frame reports its id when the weak-id round traces
+/// the payload, so the code-id round that traces the table is a later one.
+/// A unit is loaded first, so that this one's code id is not the
+/// continuation ref's (both count from 0) and only the code-id path keeps
+/// the table.
+#[test]
+fn a_full_continuations_frame_keeps_its_units_link_table() {
+    let mut state = VmState::on_a_fresh_heap();
+    let earlier = state.load_unit(super::tests::code(), Vec::new());
+    let mut s = Sentinels::new(&mut state.heap.borrow_mut());
+    let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
+    let id = load_linked(&mut state, super::tests::code(), &["x"], x, y);
+    let code = state.code_object(id).expect("loaded");
+    let continuation = state.alloc_vm_continuation(full_capture_of(&code));
+    drop(code);
+    let continuation_id = state.heap.borrow().get_vm_continuation_ref(continuation);
+    assert_eq!(
+        continuation_id,
+        Some(earlier.0),
+        "the colliding id is the other unit's"
+    );
+    state.execution = running(vec![continuation], Vec::new());
+
+    collect(&state);
+    assert_eq!(state.continuation_store.borrow().len(), 1);
+    s.assert_survived(&state.heap.borrow());
+}
+
+/// (d) As (c), for a delimited continuation.
+#[test]
+fn a_delimited_continuations_frame_keeps_its_units_link_table() {
+    let mut state = VmState::on_a_fresh_heap();
+    let earlier = state.load_unit(super::tests::code(), Vec::new());
+    let mut s = Sentinels::new(&mut state.heap.borrow_mut());
+    let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
+    let id = load_linked(&mut state, super::tests::code(), &["x"], x, y);
+    let code = state.code_object(id).expect("loaded");
+    let continuation = state.alloc_vm_delimited_continuation(delimited_capture_of(&code));
+    drop(code);
+    let continuation_id = (state.heap.borrow()).get_vm_delimited_continuation_ref(continuation);
+    assert_eq!(
+        continuation_id,
+        Some(earlier.0),
+        "the colliding id is the other unit's"
+    );
+    state.execution = running(vec![continuation], Vec::new());
+
+    collect(&state);
+    assert_eq!(state.delimited_continuation_store.borrow().len(), 1);
+    s.assert_survived(&state.heap.borrow());
+}
+
+/// (e) A unit that only the code store holds: the store traces its code's
+/// constants and never its table (`CodeObject::links`), so a collection
+/// frees what only the table and the namespace it holds reach. The test
+/// reads nothing through the namespace afterwards; the table drops it with
+/// the machine, which reads no heap word.
+#[test]
+fn the_code_store_keeps_no_units_link_table() {
+    let mut state = VmState::on_a_fresh_heap();
+    let (x, y) = {
+        let mut heap = state.heap.borrow_mut();
+        let x = heap.alloc_pair(TaggedValue::fixnum(0), TaggedValue::NULL);
+        let y = heap.alloc_vector(vec![TaggedValue::fixnum(1)]);
+        (x, y)
+    };
+    let id = load_linked(&mut state, super::tests::code(), &["x"], x, y);
+
+    collect(&state);
+    let heap = state.heap.borrow();
+    assert_freed(&heap, x, "x, which only the unit's table links");
+    assert_freed(&heap, y, "y, bound only in the namespace the table holds");
+    drop(heap);
+    assert!(
+        state.code_object(id).is_ok(),
+        "the store still holds the unit"
+    );
+}
+
+/// (f) A placeholder the unit's table links, which only the table reaches:
+/// a namespace's placeholder store is never traced, so the placeholder
+/// lives because the frame running the unit reports its code id and the
+/// table's entry marks it, and the sweep's pass keeps it. A dropped one
+/// would give its record and its cell back from the heap's counts.
+#[test]
+fn a_frame_keeps_a_placeholder_its_units_table_links() {
+    let mut state = VmState::on_a_fresh_heap();
+    let mut s = Sentinels::new(&mut state.heap.borrow_mut());
+    let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
+    let id = load_linked(&mut state, super::tests::code(), &["x", "later"], x, y);
+    let code = state.code_object(id).expect("loaded");
+    state.execution = running(
+        vec![TaggedValue::NULL],
+        vec![frame(&code, CallFrame::NO_CLOSURE)],
+    );
+    drop(code);
+    let counts = |state: &VmState| {
+        let heap = state.heap.borrow();
+        (heap.binding_records(), heap.cells())
+    };
+    let before = counts(&state);
+
+    collect(&state);
+    s.assert_survived(&state.heap.borrow());
+    assert_eq!(
+        counts(&state),
+        before,
+        "later's placeholder, its record and cell"
+    );
 }

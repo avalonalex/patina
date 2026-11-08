@@ -19,6 +19,16 @@
 //! visitor method of its own. It is a value like the frame's registers now
 //! (#682).
 //!
+//! A third is each unit's link table (#836), which the code store never
+//! traces (`CodeObject::links`): a frame's code (`FrameCode`) and a marked
+//! closure report their code's id, the collector queues each id once, and
+//! `trace_code_ids` traces the table of the unit each one names, once a
+//! collection (`LinkTable::trace_once`, by `trace_epoch`), in the same
+//! fixpoint as the continuation ids, since a continuation's frames report
+//! theirs only when its payload is traced. The VM does not link its units at
+//! load yet, so a table this traces has every entry `UNBOUND` and no
+//! namespace, and only the tests link one.
+//!
 //! The registers and the frames' closures, live and in captured
 //! continuations, are reported as slots, where they live (#682). Everything
 //! else is pinned until a stage makes it heap data: the extents' records and
@@ -39,11 +49,11 @@
 use patina_core::{GC_CHECK, GcVisitor, RootProvider, SlotVisitor, Trace};
 use rustc_hash::FxHashMap;
 
-use crate::types::CallFrame;
+use crate::types::{CallFrame, CodeObjectId};
 use patina_core::TaggedValue;
 use std::cell::Cell;
 
-use super::VmState;
+use super::{VmState, loaded};
 
 /// What retirement writes into a register its frame's map calls dead. In a
 /// check build (`GC_CHECK`: debug, or release with `gc-check`) that is
@@ -105,9 +115,30 @@ mod wrong_maps {
 use crate::test_support as wrong_maps;
 
 impl RootProvider for VmState {
-    /// `VmState`'s derived trace (#686), whose fields say what each holds.
+    /// `VmState`'s derived trace (#686), whose fields say what each holds,
+    /// in a new epoch: `trace_roots` runs once, first, in each collection.
     fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
+        self.trace_epoch.set(self.trace_epoch.get() + 1);
         Trace::trace(self, visitor);
+    }
+
+    fn trace_code_ids(&self, ids: &[u64], visitor: &mut dyn SlotVisitor) {
+        // Each id was reported by something running its code: a marked
+        // closure, a frame (live or in a traced continuation), the running
+        // code. Generation-checked, so an id whose unit was let go, or
+        // another machine's, finds nothing; the unit's members share one
+        // table, traced once this epoch. Its entries are slots, and the
+        // namespace it was linked in goes to `visitor.env`.
+        let epoch = self.trace_epoch.get();
+        for &id in ids {
+            let Some(code) = loaded(&self.code_store, CodeObjectId(id)) else {
+                continue;
+            };
+            if code.links.trace_once(epoch) {
+                continue;
+            }
+            code.links.trace(visitor);
+        }
     }
 
     fn trace_weak_ids(&self, ids: &[u64], visitor: &mut dyn SlotVisitor) {

@@ -50,8 +50,10 @@ use std::sync::Arc;
 /// extents, the parked escape value and the scratch arguments, every loaded
 /// code object's constants, the global environment and the ones set aside,
 /// and the step tracer's snapshots. The continuation stores are weak, traced
-/// by `trace_weak_ids` for the ids marking reached. Pinned by the sentinel
-/// test `every_vm_state_root_is_traced`.
+/// by `trace_weak_ids` for the ids marking reached, and the units' link
+/// tables are traced by `trace_code_ids` for the code ids marking reached
+/// (#836): a frame's, a marked closure's, the running code's. Pinned by the
+/// sentinel test `every_vm_state_root_is_traced`.
 #[derive(Trace)]
 pub struct VmState {
     /// Coupled frame/register and dynamic-extent storage (VM_RUNTIME §5.6).
@@ -132,9 +134,21 @@ pub struct VmState {
     /// Traced: every loaded code object's constants. A form's code stays here
     /// only while a frame, a captured continuation or a live closure can still
     /// run it (#338), so the trace follows the code in use rather than
-    /// everything ever compiled, and it covers every frame's `code` too: a
+    /// everything ever compiled, and it covers every frame's constants too: a
     /// frame holding a code object is itself what keeps that object here.
+    /// Never its link table (`CodeObject::links`, skipped): a unit's table is
+    /// traced by code id (`trace_code_ids`), when something running it was
+    /// reached, so that a unit whose code names its own binding can still be
+    /// let go.
     code_store: Vec<Rc<CodeObject>>,
+    /// The collection this machine was last traced in, counted by
+    /// `trace_roots`, which runs once, first, in each collection it is lent
+    /// to: the epoch `LinkTable::trace_once` records, so that a unit's table,
+    /// which all its members share, is traced once a collection (#836). The
+    /// provider cannot read the heap's count of collections, which the
+    /// collection holds mutably.
+    #[trace(skip, reason = "a collection count")]
+    trace_epoch: Cell<u64>,
     /// What an empty slot of `code_store` holds: code with no instructions,
     /// named by a label, which no loaded code's id is. A lookup then checks
     /// only that the slot's code has the id asked for, which turns away an
@@ -399,6 +413,7 @@ impl VmState {
             next_reentry: 1,
             reentry_kept: None,
             code_store: Vec::new(),
+            trace_epoch: Cell::new(0),
             empty_code: Rc::new(CodeObject {
                 id: CodeObjectId::label(),
                 name: None,
@@ -919,13 +934,14 @@ impl VmState {
     }
 
     pub(super) fn current_code(&self) -> Result<Rc<CodeObject>, VmError> {
-        Ok(self
-            .execution
-            .frames()
-            .last()
-            .expect("no active frame")
-            .code
-            .clone())
+        Ok(Rc::clone(
+            &self
+                .execution
+                .frames()
+                .last()
+                .expect("no active frame")
+                .code,
+        ))
     }
 }
 
@@ -2468,7 +2484,10 @@ fn dispatch_one_instruction(
             // one dispatch out. `window`, opened before the pop, asserts it
             // (#624): `push_invoke_step` closes it once the next stub holds
             // `cont` and `value`, and the last step holds it until the
-            // captured frames are appended.
+            // captured frames are appended. `dc`, the store's clone, lives
+            // to the arm's end, past the window only across the next
+            // thunk's call, which polls nowhere, with `cont` in the next
+            // stub (`push_invoke_step`; #836).
 
             let dc =
                 state

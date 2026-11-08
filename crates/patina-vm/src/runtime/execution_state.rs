@@ -4,11 +4,11 @@
 
 use super::control::abort_step;
 use crate::error::VmError;
-use crate::types::CallFrame;
 use crate::types::code_object::CodeObject;
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
+use crate::types::{CallFrame, FrameCode};
 use patina_core::{TaggedValue, Trace};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -90,7 +90,7 @@ impl ExecutionState {
             num_regs,
             closure: Cell::new(closure),
             return_reg,
-            code,
+            code: FrameCode(code),
         });
         base
     }
@@ -129,7 +129,7 @@ impl ExecutionState {
         }
         frame.pc = 0;
         frame.closure.set(closure);
-        frame.code = code;
+        frame.code = FrameCode(code);
         frame.register_base
     }
 
@@ -146,7 +146,7 @@ impl ExecutionState {
     pub(super) fn restart_stub(&mut self, code: Rc<CodeObject>) {
         let frame = self.frames.last_mut().expect("the stub frame");
         debug_assert!(code.num_regs <= frame.num_regs);
-        frame.code = code;
+        frame.code = FrameCode(code);
         frame.pc = 0;
     }
 
@@ -154,7 +154,7 @@ impl ExecutionState {
     pub(super) fn dispatch_frame(&mut self, cur_code: &mut Rc<CodeObject>) -> (usize, usize) {
         let frame = self.frames.last_mut().expect("empty frame stack");
         if !Rc::ptr_eq(cur_code, &frame.code) {
-            *cur_code = frame.code.clone();
+            *cur_code = Rc::clone(&frame.code);
         }
         let pc = frame.pc;
         frame.pc = pc + 1;
@@ -482,6 +482,6 @@ pub(super) fn push_abort_stub(
         num_regs: abort_step::NUM_REGS,
         closure: Cell::new(CallFrame::NO_CLOSURE),
         return_reg,
-        code,
+        code: FrameCode(code),
     });
 }

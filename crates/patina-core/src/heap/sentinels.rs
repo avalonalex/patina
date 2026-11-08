@@ -116,6 +116,18 @@ impl Sentinels {
     }
 }
 
+/// Assert, right after a collection and before anything allocates, that it
+/// swept `value`, which stands in `what`: a test that some structure stops
+/// keeping a value (#836's unit that only the code store holds), beside the
+/// sentinels a test shows it keeps. The test reads nothing through `value`
+/// afterwards.
+pub fn assert_freed(heap: &Heap, value: TaggedValue, what: &str) {
+    assert!(
+        on_a_free_list(heap, value),
+        "{what}: survived the collection, so something still reaches it"
+    );
+}
+
 /// Whether `value`'s slot is on its arena's free list: swept by the last
 /// collection and not reused since.
 fn on_a_free_list(heap: &Heap, value: TaggedValue) -> bool {

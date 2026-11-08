@@ -132,7 +132,7 @@ impl Arity {
 /// VM traces each loaded one from its code store ([`TraceThroughRc`]): a
 /// form's code stays there only while a frame, a captured continuation or a
 /// live closure can still run it (#338). Its link table, `links`, is not
-/// traced from the store.
+/// traced from the store, but by code id (#836).
 #[derive(Debug, Clone, Trace)]
 pub struct CodeObject {
     /// Its slot and generation once loaded, a label before (see
@@ -192,7 +192,7 @@ pub struct CodeObject {
     /// global operand, the runtime's stubs among it, has an empty one.
     #[trace(
         skip,
-        reason = "spellings, and entries that stay UNBOUND, an immediate, until the VM links its units at load (#836); a linked table is to be traced by its unit's code id, never from the code store (4b's start decision 3)"
+        reason = "traced by its unit's code id (`VmState::trace_code_ids`), when a frame, a marked closure or the running code names the unit, never from the code store (4b's start decision 3)"
     )]
     pub links: Rc<LinkTable>,
 

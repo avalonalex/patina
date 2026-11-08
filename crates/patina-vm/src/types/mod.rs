@@ -14,8 +14,8 @@ pub use continuation::{
 };
 pub use instruction::Instruction;
 
-use patina_core::Trace;
 use patina_core::tagged_value::TaggedValue;
+use patina_core::{SlotVisitor, Trace};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -39,7 +39,8 @@ pub type LabelId = usize; // instruction index (absolute within a CodeObject)
 /// *caller's* window where the return value should be written. The `Return`
 /// instruction reads this field without needing to inspect the caller's frame.
 ///
-/// Its trace (derived, #686) reports its closure, a slot like a register.
+/// Its trace (derived, #686) reports its closure, a slot like a register,
+/// and its code by id ([`FrameCode`], #836).
 #[derive(Debug, Clone, Trace)]
 pub struct CallFrame {
     /// Program counter — index of the next instruction to execute.
@@ -70,12 +71,42 @@ pub struct CallFrame {
     /// Code objects are immutable after loading, so caching the `Rc` here is
     /// safe and lets the dispatch loop fetch instructions without a
     /// `code_store` lookup per instruction. Its id is `code.id` — the
-    /// frame stores no separate copy that could drift out of sync.
-    #[trace(
-        skip,
-        reason = "its constants are traced through `code_store`, which keeps every code object a frame or a captured continuation can run (#338)"
-    )]
-    pub code: Rc<CodeObject>,
+    /// frame stores no separate copy that could drift out of sync. Traced by
+    /// that id ([`FrameCode`]): the unit's link table through
+    /// `trace_code_ids`, the constants through `code_store`, which keeps
+    /// every code object a frame or a captured continuation can run (#338).
+    pub code: FrameCode,
+}
+
+/// A frame's code (#836): what the dispatch loop runs, and the frame's edge
+/// to its unit's link table. Its trace reports the code's id, which the
+/// collector resolves to the unit's table (`VmState::trace_code_ids`); the
+/// constants stay traced from `code_store` until 4e. A newtype, because the
+/// derive cannot report an id, an `Rc<CodeObject>` unskipped would trace
+/// the constants through it, and a field of `CodeObject` that reported its
+/// id would be reported from `code_store` too, which would keep every
+/// loaded unit's table.
+///
+/// It is the `Rc` alone, so `CallFrame` keeps its size, and the
+/// continuation snapshots that copy frames their charge (#606).
+#[derive(Debug, Clone)]
+pub struct FrameCode(pub Rc<CodeObject>);
+
+impl std::ops::Deref for FrameCode {
+    type Target = Rc<CodeObject>;
+
+    #[inline(always)]
+    fn deref(&self) -> &Rc<CodeObject> {
+        &self.0
+    }
+}
+
+/// Its one field by name (`scripts/check_gc_trace_names.py`).
+impl Trace for FrameCode {
+    fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
+        let FrameCode(code) = self;
+        visitor.code(code.id.0);
+    }
 }
 
 impl CallFrame {
