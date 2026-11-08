@@ -152,7 +152,7 @@ class Lanes(unittest.TestCase):
         self.assert_lane_fails(self.run_script('run_gc_stress_tests.sh', mode='zero'),
                                'FAIL gc_vm at 16: ok. 99 passed')
         self.assert_lane_fails(self.run_script('run_gc_stress_tests.sh', mode='zero'),
-                               '0 collections, pinned minimum 9160')
+                               '0 collections, pinned minimum 10167')
 
     def test_per_pr_lane_fails_a_run_the_variables_did_not_reach(self):
         self.assert_lane_fails(self.run_script('run_gc_stress_tests.sh', mode='no-record'),
@@ -163,7 +163,7 @@ class Lanes(unittest.TestCase):
     def test_per_pr_lane_fails_a_run_that_did_not_run_every_test(self):
         result = self.run_script('run_gc_stress_tests.sh', mode='filtered')
         self.assert_lane_fails(result, '2 test(s) filtered out')
-        self.assertIn('1 test(s) passed, pinned 27', result.stdout)
+        self.assertIn('1 test(s) passed, pinned 29', result.stdout)
 
     def test_per_pr_lane_fails_a_failing_target(self):
         result = self.run_script('run_gc_stress_tests.sh', mode='fail')

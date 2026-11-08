@@ -1920,8 +1920,8 @@ every lane: `vm_interpreter_zeal` and `tree_walker_interpreter_zeal`, which
 `gc_shared_tests!`'s `$eval_zeal` and #836's host test run on. A zeal
 interpreter collects whatever the lane's variable says, and its collections
 land in the stress lane's record, so `gc_vm` and `gc_tree_walker` collect
-without stress too (1285 and 3358 times, 2026-11-07), which their minimums
-must stay above.
+without stress too (3078 and 6458 times, 2026-11-07, since #836's
+`code-units` tests), which their minimums must stay above.
 
 The nightly lane's `time` suite measures wall-clock time: one assertion
 requires a one-second loop to stop within 100 ms of its deadline. It passes

@@ -200,6 +200,18 @@ fi
 # #836's test of a host's forward references across collections, on the
 # backend's interpreter and on a zeal one, its 27 other tests making 115588,
 # as before, and the new test 382, its count without stress 431, up from 125;
+# gc_vm's and gc_tree_walker's test counts and minimums re-pinned again that
+# day for #836's tests of `(gc-stats)`'s `code-units`: on the VM, that it
+# does not grow across `eval`s of fresh forms a collection lets go, and that
+# a unit a live closure keeps is counted until the closure dies, the second
+# run on a zeal interpreter too, the first on one and on a collection-off
+# one; on the tree-walker, that it reads 0 throughout the same shapes, on a
+# zeal interpreter too. Their other tests made 18321 and 27136, as before,
+# and 1285 and 3358 without stress; the new tests 2013 on the VM (1793
+# without stress) and 3164 on the tree-walker (3100), whose test runs ten
+# `eval`s where the VM's runs fifty, since fifty made 12908 (12780): the
+# zeal interpreters collect at every outermost safe point whatever the
+# lane's variable says;
 # the minimums at half their counts measured that day)
 TARGETS=(
     "callability 16 31 13"                    # 1543 (0)
@@ -208,8 +220,8 @@ TARGETS=(
     "ephemerons 16 289 30"                    # 578 (204)
     "escape_from_primitive 16 3669 18"        # 7338 (90)
     "finished_forms_release_code 16 1450 11"  # 3677 (13)
-    "gc_tree_walker 16 13568 22"              # 27136 (3358)
-    "gc_vm 16 9160 27"                        # 18321 (1285)
+    "gc_tree_walker 16 15150 23"              # 30300 (6458)
+    "gc_vm 16 10167 29"                       # 20334 (3078)
     "host_environments 16 57985 28"           # 115970 (431)
     "hygiene_matrix 16 11136 17"              # 22273 (6)
     "interpreter_api 16 138 28"               # 2277 (4)

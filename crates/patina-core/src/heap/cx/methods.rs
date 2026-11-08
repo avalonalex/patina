@@ -275,6 +275,12 @@ impl<'gc> Cx<'gc> {
         self.brand(r)
     }
 
+    /// [`Heap::code_units`](crate::Heap::code_units) on this context's heap.
+    #[inline]
+    pub fn code_units(&self) -> usize {
+        self.heap.borrow().code_units()
+    }
+
     /// [`Heap::core_syntax`](crate::Heap::core_syntax) on this context's heap.
     #[inline]
     pub fn core_syntax(&mut self, form: crate::core_syntax::CoreForm) -> Value<'gc> {

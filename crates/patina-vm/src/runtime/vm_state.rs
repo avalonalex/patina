@@ -613,7 +613,17 @@ impl VmState {
             self.code_store[slot] = Rc::new(code);
         }
         self.code_units.insert(top_id, members);
+        self.note_code_units();
         top_id
+    }
+
+    /// Write the number of units loaded to the heap's count, `(gc-stats)`'s
+    /// `code-units` (#836), after the table of units has changed. It borrows
+    /// the heap for the write alone, and none of its callers (`load_unit`,
+    /// `release_unit_if_unused`, `release_dead_code`) holds a borrow of the
+    /// heap across it.
+    fn note_code_units(&self) {
+        self.heap.borrow().set_code_units(self.code_units.len());
     }
 
     /// The id to give the next code loaded: an empty slot's, or a new slot's.
@@ -648,6 +658,7 @@ impl VmState {
             top,
             &nested,
         );
+        self.note_code_units();
     }
 
     #[inline(always)]
@@ -735,6 +746,7 @@ impl VmState {
             }
             in_use
         });
+        self.note_code_units();
     }
 
     /// Fetch a loaded `CodeObject` by id.
