@@ -820,9 +820,12 @@ impl Heap {
     /// form, a library body form, a datum `eval` compiled) with the code of
     /// the lambdas nested in it, kept and let go whole. The VM writes the
     /// count ([`Heap::set_code_units`]) as it loads a unit and as it lets
-    /// units go, when a form returns and after a collection, so it is exact
-    /// once a collection has run. The tree-walker loads no code, and it
-    /// reads 0 there. `(gc-stats)`'s `code-units`.
+    /// units go, when a form returns and after a collection. A loaded unit's
+    /// constants are roots, so after a collection the count can still
+    /// include a unit kept only by a closure that the constants of a unit
+    /// the same collection let go reached; the next collection lets it go.
+    /// The tree-walker loads no code, and it reads 0 there. `(gc-stats)`'s
+    /// `code-units`.
     pub fn code_units(&self) -> usize {
         self.account.shared.code_units.get()
     }

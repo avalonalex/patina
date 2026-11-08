@@ -125,9 +125,15 @@
 //! when it drops. So they are exact once the dead namespaces have dropped,
 //! which a collection's sweep does for the specifiers it frees: the
 //! steady-state driver reads them after `(gc) (gc)`. A record and a cell are
-//! each a pair, so both are counted in `pairs` as well. `code-units` is exact
-//! after a collection too: a `(gc)` that collects lets go of the units
-//! nothing can run any longer before it returns.
+//! each a pair, so both are counted in `pairs` as well. `code-units` is the
+//! size of the VM's table of units, written whenever the table changes. A
+//! `(gc)` that collects lets go, before it returns, of every unit no live
+//! closure, frame or continuation holds; but a loaded unit's constants are
+//! roots, so a closure that only the constants of a unit the same
+//! collection lets go reach (code `eval` compiled from a datum holding a
+//! procedure) is marked by it, and keeps its own unit until the next
+//! collection, one more for each such link. The steady-state driver reads
+//! it after `(gc) (gc)` as well.
 
 use crate::apply_context::ApplyContext;
 use crate::registry::PrimitiveFn;

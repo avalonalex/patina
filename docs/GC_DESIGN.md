@@ -1231,9 +1231,14 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   (§5.2's `code_store` row). The VM writes the count beside the
   namespaces' counts as it loads a unit and as it lets units go: when a
   form returns, and after each collection, which a `(gc)` that collects
-  finishes before it returns. So it is exact after a collection, and the
-  reading form's own unit is counted. The tree-walker loads no code, and
-  reads 0, never `#f`. A trigger the GC mode does not use reads `#f`.
+  finishes before it returns. A loaded unit's constants are roots (§5.2's
+  row), so a closure that only the constants of a unit the same collection
+  lets go reach (code `eval` compiled from a datum holding a procedure) is
+  marked by it, and keeps its own unit until the next collection, one more
+  for each such link: the count after a collection can include such units,
+  and the steady-state driver reads it after `(gc) (gc)`. The reading
+  form's own unit is counted. The tree-walker loads no code, and reads 0,
+  never `#f`. A trigger the GC mode does not use reads `#f`.
   `minors` and `majors` count collections by kind: every one is a major
   until a nursery.
   For a tree-walker closure, the first four count the estimate of the frame
