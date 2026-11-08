@@ -479,53 +479,89 @@ fn an_unbound_global_is_reported_by_its_operands_name() {
 
 /// A shadowed primitive's site looks up the name its own operand names:
 /// here a name nothing binds, so the deoptimization reports that name, not
-/// the primitive's (#836). Built by hand, since compiled code resolves a
+/// the primitive's (#836). Each of the three kinds of site that hand their
+/// operand to the deoptimization is run: a `CallPrimitive`, an inline
+/// opcode and a fused test. Built by hand, since compiled code resolves a
 /// site's primitive from the binding its operand names, which a rebinding
 /// never removes.
 #[test]
 fn a_shadowed_primitives_site_looks_up_its_operands_name() {
     use patina_core::LinkTable;
     use patina_vm::error::VmError;
-    use patina_vm::types::instruction::{Instruction, PrimitiveFnId};
+    use patina_vm::types::instruction::{Instruction, PrimitiveFnId, TestOp};
     use patina_vm::types::{Arity, GlobalCacheEntry};
 
-    let mut state = fresh_state();
-    let car = state
-        .primitive_registry()
-        .resolve_index("scheme.base/car")
-        .expect("`car` is registered");
-    let instructions = vec![
-        Instruction::LoadImmediate {
-            dst: 0,
-            val: TaggedValue::fixnum(1),
-        },
-        // (define car 1): `car` is shadowed from here on.
-        Instruction::Define { link: 0, src: 0 },
-        Instruction::CallPrimitive {
-            func_id: PrimitiveFnId(car as u32),
+    // Runs `(define <primitive> 1)`, which shadows the primitive, then the
+    // site `site` builds for it, whose operand is link 1, then `Return r1`,
+    // in a unit whose table is `[<primitive>, never-bound]`.
+    let run_site = |primitive: &str, site: &dyn Fn(PrimitiveFnId) -> Vec<Instruction>| {
+        let mut state = fresh_state();
+        let func_id = state
+            .primitive_registry()
+            .resolve_index(&format!("scheme.base/{primitive}"))
+            .unwrap_or_else(|| panic!("`{primitive}` is registered"));
+        let mut instructions = vec![
+            Instruction::LoadImmediate {
+                dst: 0,
+                val: TaggedValue::fixnum(1),
+            },
+            // (define <primitive> 1): shadowed from here on.
+            Instruction::Define { link: 0, src: 0 },
+        ];
+        instructions.extend(site(PrimitiveFnId(func_id as u32)));
+        instructions.push(Instruction::Return { val: 1 });
+        let names: Vec<Rc<str>> = vec![Rc::from(primitive), Rc::from("never-bound")];
+        let code = CodeObject {
+            id: CodeObjectId::label(),
+            name: None,
+            global_cache: GlobalCacheEntry::table(&instructions),
+            links: Rc::new(LinkTable::new(names.into_boxed_slice())),
+            instructions,
+            constants: Vec::new(),
+            num_regs: 2,
+            arity: Arity::Fixed(0),
+            source_map: Vec::new(),
+            register_roots: None,
+            live_closures: std::cell::Cell::new(0),
+        };
+        let id = state.load_unit(code, Vec::new());
+        match execute(&mut state, id) {
+            Err(VmError::UnboundVariable { name }) => {
+                assert_eq!(&*name, "never-bound", "at a site of `{primitive}`")
+            }
+            other => panic!("at a site of `{primitive}`, not an unbound variable: {other:?}"),
+        }
+    };
+    run_site("car", &|func_id| {
+        vec![Instruction::CallPrimitive {
+            func_id,
             link: 1,
             args: vec![0],
             dst: 1,
-        },
-        Instruction::Return { val: 1 },
-    ];
-    let names: Vec<Rc<str>> = vec![Rc::from("car"), Rc::from("never-bound")];
-    let code = CodeObject {
-        id: CodeObjectId::label(),
-        name: None,
-        global_cache: GlobalCacheEntry::table(&instructions),
-        links: Rc::new(LinkTable::new(names.into_boxed_slice())),
-        instructions,
-        constants: Vec::new(),
-        num_regs: 2,
-        arity: Arity::Fixed(0),
-        source_map: Vec::new(),
-        register_roots: None,
-        live_closures: std::cell::Cell::new(0),
-    };
-    let id = state.load_unit(code, Vec::new());
-    match execute(&mut state, id) {
-        Err(VmError::UnboundVariable { name }) => assert_eq!(&*name, "never-bound"),
-        other => panic!("not an unbound variable: {other:?}"),
-    }
+        }]
+    });
+    run_site("car", &|func_id| {
+        vec![Instruction::Car {
+            src: 0,
+            dst: 1,
+            func_id,
+            link: 1,
+        }]
+    });
+    // The fused test at pc 2, its kept `JumpUnless` at 3, both to the
+    // `Return` at 4.
+    run_site("null?", &|func_id| {
+        vec![
+            Instruction::TestJumpUnless {
+                test: TestOp::NullP,
+                a: 0,
+                b: 0,
+                dst: 1,
+                target: 4,
+                func_id,
+                link: 1,
+            },
+            Instruction::JumpUnless { cond: 1, target: 4 },
+        ]
+    });
 }
