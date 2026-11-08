@@ -1183,6 +1183,20 @@ environment binds, which makes no read-through record (#835), leave
 environment list, as they were (`a_read_makes_no_record`), which fails on
 either backend when its miss path makes one.
 
+The VM's refusal of a frame adds one more (#835), where the backends
+diverge: `a_raw_frame_is_refused_by_the_vm`. A raw frame of the global
+namespace, one of a host namespace and a frame of temporaries are each given
+`Backend::eval`, an `import` by `eval_with_source_map`, and `eval_str_in` and
+`eval_program_in` through the deprecated `Heap::hold_environment`. On the VM
+each answers an error naming the frame's kind, not a panic; the refused
+`import` binds nothing, and a `define-library` refused in the global
+namespace's frame loads nothing, so a later global `import` of it fails.
+After each refusal the next form evaluates. The tree-walker evaluates in each
+frame by name, as both backends did before the refusal, and its answers are
+pinned at the base's (e392fe3d). The test fails when the VM evaluates a
+frame, and when it asks the kind only after a `define-library` or an
+`import`.
+
 With either of the table's environment traces removed, the tests of that
 trace fail, and so does its sentinel test. Without the VM's alpha-renaming
 walking the environment's parents for introduced definitions, the global
