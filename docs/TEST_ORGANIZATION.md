@@ -1200,6 +1200,27 @@ test fails when the VM evaluates a frame, when it asks the kind only after a
 `define-library` or an `import`, and when either backend's `Backend::define`
 skips a frame or writes the global namespace instead.
 
+Scheme `eval` and `load` through an environment specifier over a frame are
+refused alike (#853): `a_specifier_over_a_raw_frame_is_refused_by_the_vm`.
+The host makes an immutable and a mutable specifier over each of the same
+three kinds of frame, a fresh frame for each specifier, with
+`Cx::alloc_environment_specifier`, and calls `eval` through
+`Interpreter::call` with a `let` and an `import`; through the mutable
+specifier also with a `define`, and `load` with a file that defines. The
+frame of temporaries is given neither the `define` nor the `load`, since the
+tree-walker binds a definition made there in the global namespace above it
+(#680). A procedure defined at top level evaluates `(+ 1 2)` through each
+specifier under a `guard` that answers `caught`. On the VM each `eval` and
+`load` answers the error naming the frame's kind, which the `guard` catches,
+and nothing binds, neither in the frame nor in the global namespace; after
+each the next form evaluates. The tree-walker evaluates through each frame
+by name, its answers pinned at the base's (12ec31e1). A specifier over a host
+namespace and the global namespace's mutable specifier still evaluate and
+define on both backends. The test fails when the VM's `compile_for_eval`
+asks no kind, when it asks only after the expansion (the `import` binds
+`iota` in the frame), when the refusal is an error no `guard` can catch (a
+`Compile` error), and when it refuses a host namespace.
+
 With either of the table's environment traces removed, the tests of that
 trace fail, and so does its sentinel test. Without the VM's alpha-renaming
 walking the environment's parents for introduced definitions, the global

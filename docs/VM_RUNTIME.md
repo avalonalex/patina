@@ -78,7 +78,11 @@ program's environment, during a library's load as after it. A library's body
 form runs as a closure whose globals are the library's environment
 (`execute_in` at a top-level `import`, `execute_nested` on the nested loads,
 and `eval`'s code the same way), so its frame resolves its globals against
-the library's wherever a continuation restores it (#779; §5.6). Nothing
+the library's wherever a continuation restores it (#779; §5.6). Each such
+environment is a namespace: the backend's entries refuse a frame with an
+error naming its kind (`eval_datum`, #835), and so does the compile of
+Scheme `eval`'s and `load`'s code, for a specifier a host made over a frame,
+before it expands anything (`compile_for_eval`, #853). Nothing
 swaps `globals` any more (#823): `with_globals`, which pointed them at the
 library for the body's run and kept what it set aside on the traced
 `saved_globals` (#677), is gone. So a frame with no closure, a program form
