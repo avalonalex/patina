@@ -215,6 +215,7 @@ pub trait SlotVisitor {
     fn continuation(&mut self, k: &Rc<CpsContinuation>); // settled when 4f starts
     fn cont_env(&mut self, cont_env: &ContEnv);         // its walk stays
     fn expr_literals(&mut self, expr: &CpsExpr);        // its walk stays
+    fn code(&mut self, id: u64);                        // a VM code id (#836)
 }
 
 /// The collector's marker, one `SlotVisitor`: it marks a slot's value and a
@@ -243,6 +244,12 @@ pub trait Trace {
 pub trait RootProvider {
     fn trace_roots(&self, v: &mut dyn SlotVisitor);
     fn ready(&self) -> bool { true }  // a collection waits for every one
+    // The fixpoint's rounds (§9.5), each a no-op by default: the payloads
+    // keyed by continuation ids marking reached, and what a provider keys
+    // by the VM code ids it reached (#836); then the weak tables' pruning.
+    fn trace_weak_ids(&self, ids: &[u64], v: &mut dyn SlotVisitor) {}
+    fn trace_code_ids(&self, ids: &[u64], v: &mut dyn SlotVisitor) {}
+    fn sweep_weak(&self, v: &GcVisitor<'_>) {}
 }
 
 /// The providers registered with one heap (`Heap::root_set`).
@@ -349,13 +356,13 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs`):
 | `Promise` | delayed thunk / forced value (through `Rc<Interior<PromiseState>>`) |
 | `Values` | each element |
 | `MutableCell` | inner value |
-| `VmClosure` | each of `free_vars` + **`visit_env(globals)`** |
+| `VmClosure` | each of `free_vars` + **`visit_env(globals)`** + queues `code_id` for `trace_code_ids`, unless retired (#836) |
 | `Procedure` | captured env (`visit_env`) + **body-expression literals** (§4.4) |
 | `Macro` | each of its `literals`, which its patterns and templates name by index (#718, §9.6); and its body, `CompiledMacro`: `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623; the registry also roots each while its library is registered, and since #834 nothing else need once a redefinition replaces it, since an importer holds the library's cells and not its environment (`CompiledMacro`'s derived trace, #686) |
 | `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` — each record's before/after thunks and the handler stack it captured at its `dynamic-wind` call (`WindRecord`'s derived trace, the one tracing point for a record wherever it sits: a stack, a continuation, a prompt frame, or a `DynamicWindSetup`/`Jump` cont value), `exception_handlers`, `prompt_stack` — each frame's handler and the continuation below it (derived; the tag is a plain `Rc` struct), `captured_cont_env` (deduplicated worklist), `resume` (`ContValue`'s derived trace), body literals (§4.4) |
 | `EnvironmentSpecifier` | `visit_env(env)` |
-| `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id; the payload in `VmState`'s side tables is traced only for recorded ids, via the `RootProvider::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5) |
-| `Ephemeron` | **weak key** — neither field is traced on arrival; the pair is recorded, and its key *and* datum are traced only once the key is marked by some other path. Unretained pairs are broken (both fields cleared) before the sweep, so a dead key's datum stops being a root. Shares one fixpoint with the row above, in `run_mark_phase` — separate fixpoints lose a continuation payload whose ref only a late ephemeron retention marks (SRFI 124) |
+| `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id, the two kinds sharing the heap's ids; the payload in `VmState`'s side tables is traced only for recorded ids, via the `RootProvider::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5). VM code ids — a marked closure's, each frame's code's (`FrameCode`), the running code's (`RunningCode`) — are recorded in a set of their own, since a `VmState` mints them from 0 too, and broadcast through `RootProvider::trace_code_ids` in the same fixpoint, which traces each one's unit's link table (#836) |
+| `Ephemeron` | **weak key** — neither field is traced on arrival; the pair is recorded, and its key *and* datum are traced only once the key is marked by some other path. Unretained pairs are broken (both fields cleared) before the sweep, so a dead key's datum stops being a root. Shares one fixpoint with both id kinds of the row above, in `run_mark_phase` — separate fixpoints lose a continuation payload whose ref only a late ephemeron retention marks (SRFI 124), or a unit's table whose closure only an ephemeron's datum reaches |
 
 \* `Library` heap objects wrap `Rc<Library>` whose `exports` map and `env` are
 also reachable via `LibraryRegistry`; tracing them from the registry root
@@ -702,8 +709,9 @@ record (below).
   (`RareTables::read_through`): its `unbound` cell and each read-through
   record, and through the record the parent's; it skips the placeholder
   store, whose entries are weak (#836); `Library`'s reports each export's
-  cell, and a `LinkTable`'s each linked entry (`link_table_fields`). The
-  sentinels are
+  cell, and a `LinkTable`'s each linked entry and the namespace it was
+  linked in (`link_table_fields`), which the VM traces by its unit's code
+  id (§9.5), never from the code store. The sentinels are
   `gc_edge_tests::environment_edges` (a frame's import),
   `gc_edge_tests::read_through_edges` (a host namespace's read-through
   table),
@@ -825,15 +833,16 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 |-------|-------|-------|
 | `registers` | **yes** | Slots (`Cell`s, #682), the whole vector, after completed expression temporaries are cleared using per-PC compiler maps (#423); local bindings remain conservative |
 | `frames[*].closure` | **yes** | A slot, reported as the registers are: the frame's `VmClosure`, or the immediate `CallFrame::NO_CLOSURE` (`types/mod.rs`). A bare `Option<ObjectIndex>` with a visitor method of its own until #683 |
+| `frames[*].code`, `running` | by id | Each frame's code (`FrameCode`, `types/mod.rs`) and the code the dispatch loop's `cur_code` holds (`RunningCode`, `execution_state.rs`, written where `cur_code` changes and put back when a nested loop ends) report their code id through `SlotVisitor::code`; the code-id round of the fixpoint (§9.5) hands each id once to `trace_code_ids`, which traces that unit's link table once a collection (`LinkTable::trace_once`, by `trace_epoch`), generation-checked. The constants stay traced from `code_store`, which never traces a table (#836). The VM does not link its units at load yet, so a table it traces has only `UNBOUND` entries and no namespace; the sentinels link theirs by hand |
 | `pending_escape` | **yes** | Pinned. Value parked while crossing a Rust re-entry boundary; multiple values otherwise travel in ordinary registers as heap values |
 | `scratch_args` | yes | Pinned. Empty at every safe point: `mem::take`n while a primitive call holds it, and emptied when the call is done (since #639: the last call's arguments had stayed in it, and a dead key passed to `make-ephemeron` survived a `(gc)`). Rooting it is free and future-proof |
 | `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | Pinned until stage 4e makes them heap data. `tag`/`handler`/`before`/`after` values, and a wind record's `handlers` — the stack of its own `dynamic-wind` call, which its thunks run under and which nothing else holds once the live stack has moved on (`types/continuation.rs`). An `ExceptionHandler` is one procedure now — it used to also carry the wind depth `raise` unwound to, which no raise path needs since Track L families 22/28 |
 | `code_store[*].constants` | **yes** | Pinned until stage 4e makes them a descriptor's. Kept while a frame, a captured continuation or a live closure can run the code; a finished form's code is released with its constants (#338). `(gc-stats)`'s `code-units` counts the units loaded (§6, #836) |
 | `globals` | **yes** | `env`: the program's environment, during a library's load as after it (#823). `saved_globals`, which held the environments a load's swap set aside so that a library body under it could collect (#677), went with the swap |
-| `continuation_store` / `delimited_continuation_store` | **weak** (since #19) | `VmContinuation` snapshots hold full `registers` copies and frames, each with its closure, all slots as the live ones are, and wind/prompt/handler stacks, pinned as theirs are (`types/continuation.rs:59,:101`). Heap-side `VmContinuationRef { id, bytes }` is opaque (its `bytes` charges the snapshot to the trigger, §6); only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_ids` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
+| `continuation_store` / `delimited_continuation_store` | **weak** (since #19) | `VmContinuation` snapshots hold full `registers` copies and frames, each with its closure, all slots as the live ones are, and its code, reported by id as a live frame's is (#836), and wind/prompt/handler stacks, pinned as theirs are (`types/continuation.rs:83,:185`). Heap-side `VmContinuationRef { id, bytes }` is opaque (its `bytes` charges the snapshot to the trigger, §6); only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_ids` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
 | `tracer` | yes | Pinned: `StepTracer.pre_regs`/`pre_all_regs`, copies of registers for display (`crates/patina-vm/src/tracer.rs`) |
 | `library_registry` | yes | §5.3 |
-| `primitive_registry`, `shadowed_primitives`, `fs` | no | No TaggedValues |
+| `primitive_registry`, `shadowed_primitives`, `fs`, `trace_epoch` | no | No TaggedValues; `trace_epoch` counts the collections the state was lent to, bumped first in `trace_roots` (#836) |
 
 **Temporary retirement (#423):** the compiler records possible-root bitsets at
 instruction boundaries (`docs/VM_COMPILER.md` §10.4). Before an outermost
@@ -952,12 +961,17 @@ a traced struct, or a root provider meets two rules:
    saying what it holds instead of a value or which test pins the decision.
    A new field is then error E0027 until someone decides.
    `scripts/check_gc_trace_names.py` enforces both in CI's Clippy job, over
-   the functions it lists: `trace_object_children` and the marker's walks
-   (`visit_env`, `visit_promise`) in `heap/gc.rs`; the VM's weak
-   continuation tables (`trace_weak_ids`), until stage 4e; and each root
-   provider's `trace_roots`, a call to its derived trace — `VmState`'s, the
-   tree-walker's `Evaluator`'s and `StepRoots`', and the library
-   registry's. A new trace function joins that list,
+   the functions it lists: `trace_object_children`, `trace_children` and the
+   marker's walks (`visit_env`, `visit_env_chain`, `visit_promise`, `drain`)
+   and `run_mark_phase` in `heap/gc.rs`; the VM's weak continuation tables
+   (`trace_weak_ids`), until stage 4e; the VM's tracing by code id (#836):
+   its `trace_code_ids`, and the hand-written traces of a frame's code
+   (`FrameCode`, `types/mod.rs`) and of the running code (`RunningCode`,
+   `execution_state.rs`), each its one field by name, which report an id the
+   derive cannot; and each root provider's `trace_roots`, a call to its
+   derived trace — `VmState`'s, the tree-walker's `Evaluator`'s and
+   `StepRoots`', the library registry's and a compilation's literal pool's
+   (`literal_pool.rs`). A new trace function joins that list,
    and an `impl RootProvider for` outside test code in a file the list does not
    name with `trace_roots` fails the script, so a new root provider cannot
    go unread.
@@ -973,10 +987,14 @@ a traced struct, or a root provider meets two rules:
    branches, not only one. The tests live beside the code:
    `heap/trace_sentinels.rs` for heap kinds, the macro object with each
    of its literals and its body's environments, `CpsContinuation`, `ContValue`
-   and each branch of the expression-literal walk; the
+   and each branch of the expression-literal walk, and the code-id round's
+   broadcast (#836); the
    `gc_edge_tests` modules of `environment.rs` and `library.rs`;
    `link_table.rs`'s `link_table_fields` for a unit's link table (#836);
-   `vm_state/trace_sentinel_tests.rs` for the VM's records, on the VM;
+   `vm_state/trace_sentinel_tests.rs` for the VM's records, on the VM, and
+   for each holder that reports a unit's code id (a closure, a frame, a
+   frame of either continuation kind, the running code), with the code
+   store alone keeping none (#836);
    `cps_eval/gc_roots/sentinel_tests.rs` for the tree-walker's, on the
    tree-walker; and `library_registry.rs`'s `gc_root_tests`.
 
@@ -1405,7 +1423,8 @@ deferred, run at a later safe point) or `call` (`(gc)`, an open or a
 library read retried after `EMFILE`, at the call that asked) — read from
 the counts at the
 collection, so the allocation path decides nothing new; the **phase times**
-of roots, marking, the weak fixpoint, the providers' `sweep_weak`, the heap's
+of roots, marking, the weak fixpoint (its code-id rounds too, #836), the
+providers' `sweep_weak`, the heap's
 sweep (classification included) and the work after it, the drain's and the
 backend's, whose sum is the pause; the bytes
 allocated since the last collection, found live, freed and held externally;
@@ -2085,14 +2104,17 @@ This is why every `Rc`-shared structure the visitor walks has a dedup set
 such a structure to its `SlotVisitor` whole (`env`, `continuation`,
 `cont_env`, `expr_literals`) rather than walking it: the visitor walks it
 once however many paths reach it. **On the VM:** `VmContinuation`
-snapshots and `CodeObject` sharing have the same potential; if a VM root
-provider comes to walk an `Rc` graph, it hands it over the same way, through
-a method of its own. The tree-walker's walks are kept: its frames remain
-`Rc<Environment>` (`PRD/GC_PRD.md` §11.4), and 4f's host payloads go on
-holding frames, continuation environments and code, so the final contract
-keeps a deduplicated walk of `env`, `cont_env` and `expr_literals`
-(`PRD/GC_PRD.md` §14). Where it declares them, and whether `continuation`
-stays with them, is settled when 4f starts.
+snapshots and `CodeObject` sharing have the same potential, so a frame hands
+its code over by id, through a method of its own, `SlotVisitor::code`
+(#836): every frame of a deep recursion reports the same id, the marker
+passes over a repeat of the last id it saw and queues each id once
+(`GcVisitor::note_code_id`), and the VM traces each unit's link table once a
+collection (`LinkTable::trace_once`). The tree-walker's walks are kept:
+its frames remain `Rc<Environment>` (`PRD/GC_PRD.md` §11.4), and 4f's host
+payloads go on holding frames, continuation environments and code, so the
+final contract keeps a deduplicated walk of `env`, `cont_env` and
+`expr_literals` (`PRD/GC_PRD.md` §14). Where it declares them, and whether
+`continuation` stays with them, is settled when 4f starts.
 
 **Dedup does not bound the Rust call stack.** Larceny family 6 exposed this
 on 2026-09-12: `trace_cont_value(Local)` called `trace_cont_env`, which called
@@ -2151,6 +2173,19 @@ work after the other has stopped. Termination is unchanged in character — an
 id enters the queue at most once, and each retaining round permanently removes
 a pair from a finite pending set.
 
+The VM's code ids are a third kind in the same loop (#836): a marked closure,
+a frame's code and the running code report the id of the code they run, the
+marker queues each once in a set of its own, and a round of the loop, before
+the ephemeron pass, broadcasts the new ones to
+`RootProvider::trace_code_ids`, after which it drains and counts as progress.
+The VM traces each id's unit's link table, whose records reach closures,
+continuation refs and ephemerons, and a continuation's frames report their
+code only when its payload is traced and an ephemeron's datum can be a
+closure, so every pair of the three kinds feeds the others and the round
+belongs inside the loop. Termination is unchanged: a code id enters its
+queue at most once. A heap that runs no VM code, the tree-walker's, queues
+none, and pays one length test a round.
+
 The stores are now weak tables keyed by their ref objects, resolved as an
 ephemeron-style fixpoint: `trace_roots` skips the stores; marking records the
 id of every `VmContinuationRef` / `VmDelimitedContinuationRef` it reaches;
@@ -2158,10 +2193,14 @@ id of every `VmContinuationRef` / `VmDelimitedContinuationRef` it reaches;
 payloads for newly recorded ids — which may mark further refs) with worklist
 drains until quiescent, and `RootProvider::sweep_weak` prunes entries whose id was
 never recorded. A whole dead chain goes in one collection because dead
-payloads are never traced at all. Ids are minted by the `Heap` from one
-counter shared by both continuation kinds and every `VmState` on the heap, so
-an id names at most one side-table entry ever — which is what makes the
-single shared id namespace and the broadcast to every provider sound.
+payloads are never traced at all. Continuation ids are minted by the `Heap`
+from one counter shared by both continuation kinds and every `VmState` on the
+heap, so an id names at most one side-table entry ever — which is what makes
+the single shared id namespace and the broadcast to every provider sound.
+Code ids are not in it: a `VmState` mints them by slot and generation, from
+0, so they overlap continuation ids as the normal case and have their own
+set; a provider resolves only the code ids it loaded, generation-checked, and
+two machines on one heap could only over-trace each other's.
 Soundness otherwise rests on the existing safe-point discipline: capture and
 invocation each touch a store only within one instruction dispatch, and
 nested loops defer, so at a collecting safe point an unmarked ref proves its
