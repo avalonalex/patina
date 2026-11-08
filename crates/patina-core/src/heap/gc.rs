@@ -3282,6 +3282,77 @@ mod tests {
         );
     }
 
+    /// A namespace a dead specifier held, holding a placeholder (#836),
+    /// drops inside the sweep that frees the specifier, after the pass has
+    /// taken the unmarked placeholder out of its store, and its handle takes
+    /// the store off the list there, borrow-free and with no access open
+    /// (S11): the store's count and charge leave with the namespace's.
+    #[test]
+    fn a_namespace_dropped_by_a_sweep_takes_its_placeholder_store_off_the_list() {
+        let shared: SharedHeap = Rc::new(RefCell::new(Heap::new()));
+        let kept = Rc::new(Environment::with_heap(&shared));
+        let dead = Rc::new(Environment::with_heap(&shared));
+        for i in 0..100 {
+            dead.define(&shared, format!("binding-{i}"), TaggedValue::fixnum(i));
+        }
+        dead.link_record(&shared, "later").expect("a placeholder");
+        let dead_id = dead.env_id();
+        let kept_charge = kept.charged_bytes().unwrap();
+        let store_charge = dead.weak_entries().unwrap().charged();
+        assert_eq!(
+            shared.borrow().external_bytes(),
+            kept_charge + dead.charged_bytes().unwrap() + store_charge
+        );
+        assert!(shared.borrow().handles.placeholders().holds(dead_id));
+        let mut roots = TestRoots::default();
+        {
+            let mut heap = shared.borrow_mut();
+            roots
+                .values
+                .push(heap.alloc_environment_specifier(Rc::clone(&kept), false));
+            heap.alloc_environment_specifier(dead, false);
+        }
+        drop(kept);
+        let counts = |heap: &Heap| (heap.namespaces(), heap.binding_records(), heap.cells());
+        assert_eq!(counts(&shared.borrow()), (2, 101, 101));
+
+        let mut controller = GcController::new(GcMode::On);
+        controller.collect(&mut shared.borrow_mut(), &[&roots], false);
+        let heap = shared.borrow();
+        assert!(!heap.handles.placeholders().holds(dead_id), "off the list");
+        assert_eq!(heap.external_bytes(), kept_charge);
+        assert_eq!(counts(&heap), (1, 0, 0));
+    }
+
+    /// The heap keeps one `PlaceholderList` for its life (#836): the handle
+    /// table teardown starts takes it over, so teardown's sweep, which marks
+    /// nothing, empties the store of a namespace that outlives the heap, its
+    /// counts given back, before the pair sweep frees what it held (S15). A
+    /// later link in the namespace makes a fresh placeholder.
+    #[test]
+    fn teardown_keeps_the_placeholder_list_and_empties_every_store() {
+        let shared = crate::heap::new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&shared));
+        ns.link_record(&shared, "a").expect("a placeholder");
+        ns.link_record(&shared, "b").expect("a placeholder");
+        let list = Rc::clone(shared.borrow().handles.placeholders());
+        assert_eq!(ns.weak_entries().unwrap().counted(), (2, 2));
+
+        crate::heap::teardown(&shared);
+        assert!(Rc::ptr_eq(shared.borrow().handles.placeholders(), &list));
+        assert!(list.holds(ns.env_id()), "the namespace lives on");
+        let store = ns.weak_entries().unwrap();
+        assert_eq!(store.counted(), (0, 0), "its store emptied");
+        assert_eq!(store.get("a"), None);
+        let heap = shared.borrow();
+        assert_eq!((heap.binding_records(), heap.cells()), (0, 0));
+        drop(heap);
+
+        let again = ns.link_record(&shared, "a").expect("a fresh placeholder");
+        assert_eq!(store.get("a"), Some(again));
+        assert!(again.is_placeholder(&shared.borrow()));
+    }
+
     /// An open file port is charged its buffer and its place in descriptor
     /// pressure when it gets its heap object, once, and gives both back when
     /// it closes, or when the collection that finds its object dead queues

@@ -6246,6 +6246,32 @@ mod import_alias_tests {
         assert_eq!(program.get(&heap, "count.0"), Some(n(42)));
     }
 
+    /// [`minting_never_forwards_over_a_name_already_bound`]'s twin (#836):
+    /// a name a placeholder holds is taken too, or the alias's install would
+    /// adopt the placeholder, and code that linked the unbound name would
+    /// read the import.
+    #[test]
+    fn minting_never_forwards_over_a_name_a_placeholder_holds() {
+        let heap = new_shared_heap();
+        let (_, program) = library_and_program(&heap);
+        let placeholder = program
+            .link_record(&heap, "count.0")
+            .expect("a placeholder");
+        let mut offered = ["count.0", "count.1"].into_iter();
+        let alias = program
+            .import_alias(&heap, "count", || offered.next().unwrap().into())
+            .unwrap();
+
+        assert_eq!(&*alias, "count.1");
+        assert_eq!(program.get(&heap, "count.0"), None, "still unbound");
+        assert_eq!(
+            program.link_record(&heap, "count.0"),
+            Some(placeholder),
+            "and still the placeholder"
+        );
+        assert!(placeholder.is_placeholder(&heap.borrow()));
+    }
+
     #[test]
     fn every_enumeration_of_names_leaves_an_alias_out() {
         let heap = new_shared_heap();
@@ -7417,6 +7443,400 @@ mod read_through_tests {
 }
 
 #[cfg(test)]
+mod placeholder_tests {
+    //! Placeholders and weak read-through records (#836): adopted by every
+    //! bind, kept while linked, dropped by the sweep's pass once nothing
+    //! links them, and counted in the heap's sums by their stores.
+    use super::*;
+    use crate::heap::new_shared_heap;
+    use crate::heap::trace_sentinels::collect_only;
+    use crate::link_table::LinkTable;
+
+    fn n(i: i64) -> TaggedValue {
+        TaggedValue::fixnum(i)
+    }
+
+    /// The heap's sums of binding records and cells.
+    fn sums(heap: &SharedHeap) -> (usize, usize) {
+        let h = heap.borrow();
+        (h.binding_records(), h.cells())
+    }
+
+    /// What `env`'s placeholder store counts, if it has one.
+    fn stored(env: &Environment) -> (usize, usize) {
+        env.weak_entries().map_or((0, 0), PlaceholderStore::counted)
+    }
+
+    /// Whether `env`'s placeholder store holds `name`.
+    fn in_store(env: &Environment, name: &str) -> bool {
+        env.weak_entries()
+            .is_some_and(|store| store.get(name).is_some())
+    }
+
+    /// Whether `host`'s table of strong read-through records holds `name`.
+    fn in_read_through(host: &Environment, name: &str) -> bool {
+        host.rare
+            .get()
+            .and_then(|rare| rare.read_through.get())
+            .is_some_and(|table| table.borrow().records.contains_key(name))
+    }
+
+    /// Every count agrees: each namespace's running sums with its tables,
+    /// each store's with its entries, and the heap's sums with theirs.
+    /// `envs` is every namespace alive on `heap`.
+    fn assert_counts_agree(heap: &SharedHeap, envs: &[&Environment]) {
+        let h = heap.borrow();
+        let mut total = (0, 0);
+        for env in envs {
+            assert_eq!(env.recount(&h), env.counted(), "a namespace's sums");
+            if let Some(store) = env.weak_entries() {
+                assert_eq!(store.recount(&h), store.counted(), "a store's sums");
+            }
+            let ((records, cells), (in_store, its_cells)) = (env.counted(), stored(env));
+            total = (total.0 + records + in_store, total.1 + cells + its_cells);
+        }
+        assert_eq!(
+            (h.binding_records(), h.cells()),
+            total,
+            "the heap's sums are the namespaces' and their stores'"
+        );
+    }
+
+    /// Whether the pair `word` named was freed.
+    fn freed(heap: &SharedHeap, word: TaggedValue) -> bool {
+        heap.borrow().free_pair_slots().contains(&word.heap_index())
+    }
+
+    /// The global namespace binding `x` to 1, and a host namespace over it.
+    fn global_and_host(heap: &SharedHeap) -> (Rc<Environment>, Rc<Environment>) {
+        let global = Rc::new(Environment::with_heap(heap));
+        global.define(heap, "x", n(1));
+        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
+        (global, host)
+    }
+
+    /// What `record` resolves to now.
+    fn resolved(heap: &SharedHeap, record: Record) -> TaggedValue {
+        let h = heap.borrow();
+        record.resolved_cell(&h).value(&h)
+    }
+
+    /// A define adopts a placeholder: its word, in a fresh slot, flags 0,
+    /// over a fresh cell of the namespace's own holding the value, so code
+    /// that linked it reads the binding from now on. The store lets go of a
+    /// record and a cell and the namespace counts them, so the heap's sums
+    /// do not move. Bound, it is never dropped: a collection rooted at the
+    /// namespace alone keeps it, and frees the placeholder's own cell.
+    #[test]
+    fn a_define_adopts_a_placeholder_and_keeps_its_word() {
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        let placeholder = ns.link_record(&heap, "later").expect("a placeholder");
+        let unbound = heap.borrow().car(placeholder.word());
+        let before = sums(&heap);
+        let (records, cells) = ns.counted();
+        assert_eq!(stored(&ns), (1, 1));
+
+        ns.define(&heap, "later", n(5));
+        assert_eq!(
+            ns.local_record("later"),
+            Some(placeholder),
+            "its word, in a slot"
+        );
+        {
+            let h = heap.borrow();
+            assert_eq!(h.cdr(placeholder.word()), n(0), "its flag cleared");
+            let cell = placeholder.cell(&h);
+            assert!(cell.owned_by(&h, ns.env_id()));
+            assert_ne!(cell.word(), unbound, "a fresh cell");
+            assert_eq!(cell.value(&h), n(5));
+        }
+        assert_eq!(ns.get(&heap, "later"), Some(n(5)));
+        assert!(!ns.holds_placeholder("later"));
+        assert_eq!(stored(&ns), (0, 0), "the store let go of it");
+        assert_eq!(sums(&heap), before, "moved from the store to the namespace");
+        assert_eq!(ns.counted(), (records + 1, cells + 1));
+        assert_counts_agree(&heap, &[&ns]);
+        assert_eq!(ns.link_record(&heap, "later"), Some(placeholder));
+
+        collect_only(&mut heap.borrow_mut(), |visitor| visitor.env(&ns));
+        assert!(
+            !freed(&heap, placeholder.word()),
+            "a bound placeholder stays"
+        );
+        assert!(freed(&heap, unbound), "its own cell is garbage");
+        assert_eq!(ns.get(&heap, "later"), Some(n(5)));
+        assert_counts_agree(&heap, &[&ns]);
+    }
+
+    /// An import adopts a placeholder: its word, in a fresh slot, re-pointed
+    /// at the exporter's cell, so what the library assigns later the code
+    /// that linked it reads. The namespace counts a record and no cell, so
+    /// the heap's cells fall by the placeholder's own. A cell of the
+    /// namespace's own imported under a placeholder's name is copied, as
+    /// `define` would, and adopts it the same way.
+    #[test]
+    fn an_import_adopts_a_placeholder_over_the_exporters_cell() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "v", n(20));
+        let exported = library.cell_of(&heap, "v").unwrap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        let placeholder = ns.link_record(&heap, "later").expect("a placeholder");
+        let (records, cells) = sums(&heap);
+        let counted = ns.counted();
+
+        ns.import_cell(&heap, "later", exported);
+        assert_eq!(ns.local_record("later"), Some(placeholder));
+        {
+            let h = heap.borrow();
+            assert_eq!(h.cdr(placeholder.word()), n(0), "its flag cleared");
+            assert_eq!(placeholder.cell(&h), exported);
+        }
+        library.define(&heap, "v", n(21));
+        assert_eq!(ns.get(&heap, "later"), Some(n(21)), "the library's store");
+        assert_eq!(stored(&ns), (0, 0));
+        assert_eq!(sums(&heap), (records, cells - 1), "its own cell let go");
+        assert_eq!(ns.counted(), (counted.0 + 1, counted.1));
+        assert_counts_agree(&heap, &[&library, &ns]);
+
+        ns.define(&heap, "own", n(7));
+        let own = ns.cell_of(&heap, "own").unwrap();
+        let copied = ns.link_record(&heap, "copied").expect("a placeholder");
+        ns.import_cell(&heap, "copied", own);
+        assert_eq!(ns.local_record("copied"), Some(copied));
+        {
+            let h = heap.borrow();
+            assert_ne!(copied.cell(&h), own, "a copy");
+            assert!(copied.cell(&h).owned_by(&h, ns.env_id()));
+        }
+        assert_eq!(ns.get(&heap, "copied"), Some(n(7)));
+        assert_counts_agree(&heap, &[&library, &ns]);
+    }
+
+    /// A host namespace that links a name its parent does not bind (R7)
+    /// gets a weak read-through record over the parent's placeholder, in its
+    /// store and not its table, counted there, and the same one when asked
+    /// again. Once the parent binds the name, adopting the placeholder, the
+    /// record reads the binding through it, and the next link promotes it
+    /// into the table, counted by the namespace from then. One of the two
+    /// tables holds it at every step, never both (S9). A name the parent
+    /// reaches by an alias gets neither a record nor a placeholder.
+    #[test]
+    fn a_host_links_a_weak_child_over_the_parents_placeholder_and_promotes_it() {
+        let heap = new_shared_heap();
+        let (global, host) = global_and_host(&heap);
+        let (records, cells) = sums(&heap);
+        let counted = (global.counted(), host.counted());
+        let one_table = |name: &str| {
+            assert!(
+                !(in_read_through(&host, name) && in_store(&host, name)),
+                "{name} in both of the host's tables"
+            );
+        };
+
+        let child = host.link_record(&heap, "y").expect("a weak child");
+        let placeholder = global
+            .weak_entries()
+            .and_then(|store| store.get("y"))
+            .expect("the global's placeholder");
+        {
+            let h = heap.borrow();
+            assert_eq!(child.parent_record(&h), Some(placeholder));
+            assert!(placeholder.is_placeholder(&h));
+        }
+        assert!(in_store(&host, "y") && !in_read_through(&host, "y"), "weak");
+        one_table("y");
+        assert_eq!(
+            sums(&heap),
+            (records + 2, cells + 1),
+            "the child, and the placeholder and its cell"
+        );
+        assert_eq!(
+            (global.counted(), host.counted()),
+            counted,
+            "the stores count them"
+        );
+        assert_eq!(host.link_record(&heap, "y"), Some(child), "the same one");
+        assert_counts_agree(&heap, &[&global, &host]);
+
+        global.define(&heap, "y", n(5));
+        assert_eq!(global.local_record("y"), Some(placeholder), "adopted");
+        assert_eq!(resolved(&heap, child), n(5), "read through it");
+        assert!(in_store(&host, "y"), "still weak until linked again");
+        one_table("y");
+        assert_counts_agree(&heap, &[&global, &host]);
+
+        let (host_records, host_cells) = host.counted();
+        assert_eq!(
+            host.link_record(&heap, "y"),
+            Some(child),
+            "promoted, not remade"
+        );
+        assert!(in_read_through(&host, "y") && !in_store(&host, "y"));
+        one_table("y");
+        assert_eq!(host.counted(), (host_records + 1, host_cells));
+        assert_eq!(sums(&heap), (records + 2, cells + 1));
+        assert_counts_agree(&heap, &[&global, &host]);
+
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "target", n(100));
+        global.define_alias("aliased", Rc::clone(&library), Rc::from("target"));
+        assert_eq!(host.link_record(&heap, "aliased"), None, "read by name");
+        assert!(!in_store(&global, "aliased") && !in_store(&host, "aliased"));
+        assert_counts_agree(&heap, &[&global, &host, &library]);
+    }
+
+    /// #836's question 11, pending the owner's ruling: a weak read-through
+    /// record whose parent placeholder was bound since stays weak until it
+    /// is linked again, so a collection that no link table marks it in
+    /// drops it, and keeps the parent's record, bound in its slot. The next
+    /// link makes a strong record over that.
+    #[test]
+    fn an_unlinked_weak_child_over_a_parent_bound_since_is_dropped() {
+        let heap = new_shared_heap();
+        let (global, host) = global_and_host(&heap);
+        let child = host.link_record(&heap, "z").expect("a weak child");
+        global.define(&heap, "z", n(3));
+        let parent = global.local_record("z").unwrap();
+
+        collect_only(&mut heap.borrow_mut(), |visitor| {
+            visitor.env(&global);
+            visitor.env(&host);
+        });
+        assert!(
+            freed(&heap, child.word()),
+            "dropped, though its parent is bound"
+        );
+        assert!(!freed(&heap, parent.word()));
+        assert!(!in_store(&host, "z"));
+        assert_eq!(global.get(&heap, "z"), Some(n(3)));
+        assert_counts_agree(&heap, &[&global, &host]);
+
+        let strong = host.link_record(&heap, "z").expect("a strong child");
+        assert!(in_read_through(&host, "z") && !in_store(&host, "z"));
+        assert_eq!(strong.parent_record(&heap.borrow()), Some(parent));
+        assert_eq!(resolved(&heap, strong), n(3));
+        assert_counts_agree(&heap, &[&global, &host]);
+    }
+
+    /// A weak read-through record goes alone: while code linked in the
+    /// parent links its placeholder, a collection that marks the
+    /// placeholder through that link table, and not the record, drops the
+    /// record and keeps the placeholder in the parent's store.
+    #[test]
+    fn a_weak_child_goes_alone_while_its_parents_placeholder_is_linked() {
+        let heap = new_shared_heap();
+        let (global, host) = global_and_host(&heap);
+        let child = host.link_record(&heap, "w").expect("a weak child");
+        let linked = LinkTable::new(vec![Rc::<str>::from("w")].into_boxed_slice());
+        linked.link_in(&heap, &global);
+        let placeholder = Record::from_word(linked.entry(0));
+        assert_eq!(child.parent_record(&heap.borrow()), Some(placeholder));
+
+        collect_only(&mut heap.borrow_mut(), |visitor| {
+            visitor.env(&global);
+            visitor.env(&host);
+            linked.trace(visitor);
+        });
+        assert!(freed(&heap, child.word()), "the record goes");
+        assert!(!freed(&heap, placeholder.word()), "its parent stays");
+        assert!(in_store(&global, "w") && !in_store(&host, "w"));
+        assert_counts_agree(&heap, &[&global, &host]);
+    }
+
+    /// A define in the host namespace adopts its weak read-through record
+    /// as it does a strong one: the record's word, in a slot, flags 0, over
+    /// a fresh cell; the host's store lets go of it, and the namespace counts
+    /// a record and a cell. The parent's placeholder it read through is
+    /// left, and dropped by the next collection nothing links it in. An
+    /// import adopts one the same way, over the exporter's cell, counting a
+    /// record and no cell.
+    #[test]
+    fn a_host_define_or_import_adopts_its_weak_child() {
+        let heap = new_shared_heap();
+        let (global, host) = global_and_host(&heap);
+        let child = host.link_record(&heap, "y").expect("a weak child");
+        let placeholder = global
+            .weak_entries()
+            .and_then(|store| store.get("y"))
+            .unwrap();
+        let (records, cells) = host.counted();
+
+        host.define(&heap, "y", n(9));
+        assert_eq!(host.local_record("y"), Some(child), "its word, in a slot");
+        {
+            let h = heap.borrow();
+            assert_eq!(h.cdr(child.word()), n(0), "an own record now");
+            assert!(child.cell(&h).owned_by(&h, host.env_id()));
+            assert_eq!(child.value(&h), n(9));
+        }
+        assert!(!in_store(&host, "y") && !in_read_through(&host, "y"));
+        assert_eq!(host.counted(), (records + 1, cells + 1));
+        assert_eq!(global.get(&heap, "y"), None);
+        assert_counts_agree(&heap, &[&global, &host]);
+
+        collect_only(&mut heap.borrow_mut(), |visitor| {
+            visitor.env(&global);
+            visitor.env(&host);
+        });
+        assert!(
+            freed(&heap, placeholder.word()),
+            "the placeholder, orphaned"
+        );
+        assert!(!freed(&heap, child.word()));
+        assert!(!in_store(&global, "y"));
+        assert_eq!(host.get(&heap, "y"), Some(n(9)));
+        assert_counts_agree(&heap, &[&global, &host]);
+
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "v", n(20));
+        let exported = library.cell_of(&heap, "v").unwrap();
+        let imported = host.link_record(&heap, "y2").expect("a weak child");
+        let (records, cells) = host.counted();
+        host.import_cell(&heap, "y2", exported);
+        assert_eq!(host.local_record("y2"), Some(imported));
+        assert_eq!(imported.cell(&heap.borrow()), exported);
+        assert_eq!(
+            host.counted(),
+            (records + 1, cells),
+            "an import makes no cell"
+        );
+        assert!(!in_store(&host, "y2"));
+        assert_eq!(host.get(&heap, "y2"), Some(n(20)));
+        assert_counts_agree(&heap, &[&global, &host, &library]);
+    }
+
+    /// A scoped definition of a name a placeholder holds leaves it in its
+    /// store (S14): flagged and over `UNBOUND` still, in no slot, while a
+    /// read under the scopes finds the scoped binding, as before. Only a
+    /// define or an import by name adopts one.
+    #[test]
+    fn a_scoped_definition_leaves_the_placeholder_in_its_store() {
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        let placeholder = ns.link_record(&heap, "foo").expect("a placeholder");
+        let mut scopes = ScopeSet::new();
+        scopes.add_scope(ScopeId(7));
+        ns.define_with_scopes(&heap, "foo", scopes.clone(), n(4));
+
+        assert!(in_store(&ns, "foo"));
+        {
+            let h = heap.borrow();
+            assert!(placeholder.is_placeholder(&h));
+            assert_eq!(placeholder.value(&h), TaggedValue::UNBOUND);
+        }
+        assert_eq!(
+            ns.get_with_scopes(&heap, "foo", &scopes).unwrap(),
+            Some(n(4))
+        );
+        assert_eq!(ns.local_slot("foo"), None);
+        assert_eq!(ns.link_record(&heap, "foo"), Some(placeholder));
+        assert_counts_agree(&heap, &[&ns]);
+    }
+}
+
+#[cfg(test)]
 mod layout_tests {
     /// Not a style rule: this struct's size is a measured cost. The
     /// tree-walker allocates one per call and per `let`-bound temporary, and
@@ -7898,6 +8318,34 @@ mod relink_alias_tests {
         assert_eq!(minted.get(), 2);
         assert_eq!(program.get(&heap, &as_written), Some(n(1)));
         assert_eq!(program.get(&heap, &as_generated), Some(n(1)));
+    }
+
+    /// The mint skips a name a placeholder holds (#836): an alias there
+    /// would leave code that linked the name reading the placeholder where
+    /// `get` reads the alias.
+    #[test]
+    fn minting_skips_a_name_a_placeholder_holds() {
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
+        let placeholder = program
+            .link_record(&heap, "helper.1")
+            .expect("a placeholder");
+        let minted = Cell::new(0);
+        let mut mint = || {
+            minted.set(minted.get() + 1);
+            Rc::<str>::from(format!("helper.{}", minted.get()))
+        };
+        let alias = program.relink_alias(
+            Rc::clone(&library),
+            "helper".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        assert_eq!(&*alias, "helper.2");
+        assert_eq!(program.get(&heap, &alias), Some(n(1)));
+        assert_eq!(program.get(&heap, "helper.1"), None, "still unbound");
+        assert_eq!(program.link_record(&heap, "helper.1"), Some(placeholder));
     }
 
     #[test]

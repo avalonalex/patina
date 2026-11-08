@@ -234,6 +234,72 @@ mod tests {
         assert_eq!(ns.get(&heap, "alias"), Some(TaggedValue::fixnum(100)));
     }
 
+    /// The pass at the sweep's start (#836) keeps a placeholder a traced
+    /// link table marks, in its store, with its pairs, and drops the ones
+    /// nothing marks: out of the store, their counts and charges given back,
+    /// and their pairs freed by the sweep. The namespace is rooted too, so a
+    /// store or list traced as a root would keep the unmarked ones and fail
+    /// this; two are unmarked, so a pass that skipped one leaves it, which a
+    /// check build's `check_swept` refuses.
+    #[test]
+    fn the_pass_keeps_a_marked_placeholder_and_drops_the_unmarked() {
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        let linked = table(&["kept"]);
+        linked.link_in(&heap, &ns);
+        let kept = linked.entry(0);
+        let dropped = ["dropped-1", "dropped-2"]
+            .map(|name| ns.link_record(&heap, name).expect("a placeholder").word());
+        let cell = |record: TaggedValue| heap.borrow().car(record);
+        let kept_cell = cell(kept);
+        let dropped_cells = dropped.map(cell);
+        let store = ns.weak_entries().expect("the store");
+        let counts = |heap: &crate::Heap| (heap.binding_records(), heap.cells());
+        let (records, cells) = counts(&heap.borrow());
+        let (charged, external) = (store.charged(), heap.borrow().external_bytes());
+        assert_eq!(store.counted(), (3, 3));
+
+        collect_only(&mut heap.borrow_mut(), |visitor| {
+            visitor.env(&ns);
+            linked.trace(visitor);
+        });
+        {
+            let h = heap.borrow();
+            let free = h.free_pair_slots();
+            assert!(!free.contains(&kept.heap_index()), "the linked placeholder");
+            assert!(!free.contains(&kept_cell.heap_index()), "and its cell");
+            for word in dropped.iter().chain(&dropped_cells) {
+                assert!(free.contains(&word.heap_index()), "an unlinked one's pair");
+            }
+        }
+        assert_eq!(
+            store.get("kept").map(Record::word),
+            Some(kept),
+            "the marked one stays in its store"
+        );
+        assert_eq!(store.get("dropped-1"), None, "the unmarked ones leave it");
+        assert_eq!(store.get("dropped-2"), None);
+        assert_eq!(store.counted(), (1, 1));
+        assert_eq!(store.recount(&heap.borrow()), (1, 1));
+        assert_eq!(
+            counts(&heap.borrow()),
+            (records - 2, cells - 2),
+            "their counts given back"
+        );
+        assert!(store.charged() < charged, "and their names' bytes");
+        assert_eq!(
+            heap.borrow().external_bytes(),
+            external - (charged - store.charged())
+        );
+        assert_eq!(
+            ns.link_record(&heap, "kept").map(Record::word),
+            Some(kept),
+            "a link answers the same word"
+        );
+        linked.link_in(&heap, &ns);
+        assert_eq!(linked.entry(0), kept);
+    }
+
     /// The table's sentinel test (#623): its one traced field, `entries`,
     /// holds a record that only it reaches once the namespace that linked
     /// it is dropped, and a collection with the table as the only root keeps

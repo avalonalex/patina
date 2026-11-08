@@ -471,7 +471,43 @@ impl fmt::Debug for PlaceholderHandle {
 mod tests {
     use super::*;
     use crate::binding_record::BindingCell;
+    use crate::environment::Environment;
+    use crate::heap::new_shared_heap;
     use crate::heap::trace_sentinels::collect_from;
+
+    /// A namespace's drop takes its store off its heap's list at once (M2),
+    /// and the store gives back the records, cells and bytes it counted and
+    /// charged: the heap's sums and external bytes return to what they were
+    /// before the namespace. The list holds the store, never the namespace.
+    #[test]
+    fn a_namespace_s_drop_takes_its_store_off_the_list_and_gives_back_its_counts() {
+        let heap = new_shared_heap();
+        let sums = |heap: &Heap| {
+            (
+                heap.namespaces(),
+                heap.binding_records(),
+                heap.cells(),
+                heap.external_bytes(),
+            )
+        };
+        let before = sums(&heap.borrow());
+        let list = Rc::clone(heap.borrow().placeholder_list());
+        let ns = Rc::new(Environment::with_heap(&heap));
+        let env_id = ns.env_id();
+        ns.link_record(&heap, "a").expect("a placeholder");
+        ns.link_record(&heap, "b").expect("a placeholder");
+        assert!(list.holds(env_id), "listed");
+        assert_eq!(Rc::strong_count(&ns), 1, "the list holds no namespace");
+        let (namespaces, records, cells, _) = sums(&heap.borrow());
+        assert_eq!(
+            (namespaces, records, cells),
+            (before.0 + 1, before.1 + 2, before.2 + 2)
+        );
+
+        drop(ns);
+        assert!(!list.holds(env_id), "off the list at once");
+        assert_eq!(sums(&heap.borrow()), before, "everything given back");
+    }
 
     /// `check_swept`'s positive control: a store entry over a pair a sweep
     /// freed, which only a pass that left it would leave. The store is on a
