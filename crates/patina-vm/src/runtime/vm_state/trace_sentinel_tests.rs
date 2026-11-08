@@ -305,6 +305,7 @@ impl patina_core::SlotVisitor for Rewriter {
     fn continuation(&mut self, _k: &Rc<patina_core::CpsContinuation>) {}
     fn cont_env(&mut self, _cont_env: &patina_core::cont_value::ContEnv) {}
     fn expr_literals(&mut self, _expr: &patina_core::CpsExpr) {}
+    fn code(&mut self, _id: u64) {}
 }
 
 impl Rewriter {

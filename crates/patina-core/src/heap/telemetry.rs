@@ -65,8 +65,8 @@ pub struct PhaseTimes {
     pub roots: Duration,
     /// Marking from the roots (`GcVisitor::drain`).
     pub mark: Duration,
-    /// The fixpoint over weak ids and ephemerons, and breaking the
-    /// ephemerons it left.
+    /// The fixpoint over continuation ids, VM code ids (#836) and
+    /// ephemerons, and breaking the ephemerons it left.
     pub weak: Duration,
     /// The providers' `sweep_weak`.
     pub prune: Duration,

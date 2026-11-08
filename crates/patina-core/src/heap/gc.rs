@@ -283,6 +283,14 @@ pub trait SlotVisitor {
 
     /// The literals of code held outside the heap.
     fn expr_literals(&mut self, expr: &CpsExpr);
+
+    /// A code id a structure runs: a VM frame's (`FrameCode`) or the
+    /// dispatch loop's (`RunningCode`). The marker queues it for
+    /// [`RootProvider::trace_code_ids`], which traces that code's unit's
+    /// link table (#836); another visitor ignores it. Required, as every
+    /// method but `slots` is: a visitor that forgot it would leave a running
+    /// unit's table untraced.
+    fn code(&mut self, id: u64);
 }
 
 /// Implemented by anything that owns live values (`PRD/GC_PRD.md` §14). A
@@ -315,6 +323,20 @@ pub trait RootProvider {
     ///
     /// The default is a no-op for providers with no weak tables.
     fn trace_weak_ids(&self, _ids: &[u64], _visitor: &mut dyn SlotVisitor) {}
+
+    /// One round of the code-id fixpoint (#836), driven by `run_mark_phase`
+    /// in the same loop as [`Self::trace_weak_ids`]: `ids` are code ids
+    /// marking reached (a marked VM closure's, a frame's, the dispatch
+    /// loop's running code's). Trace what this provider keys by them: the
+    /// VM traces each one's unit's link table. Unlike continuation ids, code
+    /// ids are a provider's own (a `VmState` mints them by slot and
+    /// generation, from 0, so they overlap continuation ids as the normal
+    /// case), so a provider resolves only ids it loaded, generation checked,
+    /// and skips the rest; two `VmState`s on one heap could only over-trace
+    /// each other's, which is conservative.
+    ///
+    /// The default is a no-op for providers that run no code by id.
+    fn trace_code_ids(&self, _ids: &[u64], _visitor: &mut dyn SlotVisitor) {}
 
     /// Called once per collection after marking reaches its weak fixpoint:
     /// drop weak-table entries whose keys did not survive
@@ -1271,11 +1293,27 @@ pub struct GcVisitor<'h> {
     /// Weak-key discovery for the VM's continuation side tables (design
     /// §9.5): every id whose `VmContinuationRef` /
     /// `VmDelimitedContinuationRef` heap object has been marked. One
-    /// namespace for both kinds — `Heap` mints their ids from one counter.
-    /// The queue holds the subset [`run_mark_phase`] has not yet broadcast
-    /// to [`RootProvider::trace_weak_ids`].
+    /// namespace for those two kinds — `Heap` mints their ids from one
+    /// counter, from 0. The queue holds the subset [`run_mark_phase`] has
+    /// not yet broadcast to [`RootProvider::trace_weak_ids`].
     live_weak_ids: FxHashSet<u64>,
     new_weak_ids: Vec<u64>,
+    /// The third kind, kept apart (#836): every VM code id marking reached,
+    /// a marked closure's, a frame's (`FrameCode`) or the running code's
+    /// (`RunningCode`), through [`SlotVisitor::code`]. Code ids are a
+    /// `VmState`'s, `slot | generation << 32` from slot 0, not the heap's,
+    /// so the two ranges overlap as the normal case: the first capture and
+    /// the first unit loaded both have id 0. One shared set would let a
+    /// marked continuation ref stand in for an unreached unit, or the
+    /// reverse. The queue holds the subset [`run_mark_phase`] has not yet
+    /// broadcast to [`RootProvider::trace_code_ids`]. Both stay empty, and
+    /// allocate nothing, on a heap that runs no VM code.
+    live_code_ids: FxHashSet<u64>,
+    new_code_ids: Vec<u64>,
+    /// The id [`Self::note_code_id`] saw last: a deep recursion reports one
+    /// id per frame, and this spares each repeat the set's probe. Starts at
+    /// `Heap::RETIRED_VM_CLOSURE_CODE`, which is never queued.
+    last_code_id: u64,
     /// Ephemerons reached during marking, awaiting the fixpoint in
     /// [`run_mark_phase`]. An entry leaves when its key turns out to be
     /// reachable; whatever is left at the end has a dead key and is broken.
@@ -1314,6 +1352,9 @@ impl<'h> GcVisitor<'h> {
             seen_shared: FxHashSet::default(),
             live_weak_ids: FxHashSet::default(),
             new_weak_ids: Vec::new(),
+            live_code_ids: FxHashSet::default(),
+            new_code_ids: Vec::new(),
+            last_code_id: Heap::RETIRED_VM_CLOSURE_CODE,
             pending_ephemerons: Vec::new(),
         };
         // A host's handles are roots on the same terms, whichever backend
@@ -1483,6 +1524,28 @@ impl<'h> GcVisitor<'h> {
     /// was never reached is dead.
     pub fn weak_continuation_id_is_live(&self, id: u64) -> bool {
         self.live_weak_ids.contains(&id)
+    }
+
+    /// Queue a VM code id marking reached (#836), once, for
+    /// [`RootProvider::trace_code_ids`]: a retired closure's names no code
+    /// and queues nothing, and a repeat of the last id (a deep recursion's
+    /// frames) is passed over before the set is probed.
+    #[inline]
+    fn note_code_id(&mut self, id: u64) {
+        if id == Heap::RETIRED_VM_CLOSURE_CODE || id == self.last_code_id {
+            return;
+        }
+        self.last_code_id = id;
+        if self.live_code_ids.insert(id) {
+            self.new_code_ids.push(id);
+        }
+    }
+
+    /// Did marking reach this VM code id (#836)? For the sentinels, beside
+    /// [`Self::weak_continuation_id_is_live`]: a set apart from the
+    /// continuation ids', which the same number can also name.
+    pub fn code_id_is_live(&self, id: u64) -> bool {
+        self.live_code_ids.contains(&id)
     }
 
     /// Finish marking: drain the worklists to a fixed point and return the
@@ -1701,16 +1764,21 @@ impl<'h> GcVisitor<'h> {
                 self.visit(inner);
             }
             HeapObjectData::VmClosure {
-                // The VM's code id. The code's constants are rooted by the
-                // VM's `code_store`, which keeps the code while a live
-                // closure can run it (#338).
-                code_id: _,
+                // The VM's code id, queued for `RootProvider::trace_code_ids`,
+                // which traces its unit's link table (#836); a retired
+                // closure's names no code and queues nothing. The code's
+                // constants stay rooted by the VM's `code_store`, which keeps
+                // the code while a live closure can run it (#338), until 4e.
+                code_id,
                 free_vars,
+                // Still visited: #836 deletes the field once every unit
+                // links in its namespace at load.
                 globals,
             } => {
                 for &free_var in free_vars {
                     self.visit(free_var);
                 }
+                self.note_code_id(*code_id);
                 self.visit_env(globals);
             }
             HeapObjectData::Continuation(k) => {
@@ -2089,17 +2157,19 @@ impl Default for MarkSweepCollector {
     }
 }
 
-/// The complete mark phase: root tracing, one fixpoint over *both* weak
-/// reference kinds — weak ids (design §9.5) and ephemerons (SRFI 124) —
-/// breaking the ephemerons that fixpoint left unretained, and weak-entry
-/// pruning, in the one order that is sound.
+/// The complete mark phase: root tracing, one fixpoint over all three kinds
+/// of reference that marking resolves through a provider or a pair rather
+/// than an edge — continuation ids (design §9.5), VM code ids (#836) and
+/// ephemerons (SRFI 124) — breaking the ephemerons that fixpoint left
+/// unretained, and weak-entry pruning, in the one order that is sound.
 ///
 /// One function so a collector composes *around* it (triggering, sweep
 /// strategy) without being able to mis-order its interior. Skipping the
-/// fixpoint would sweep live continuation payloads, skipping `sweep_weak`
-/// would reinstate the §9.5 monotonic leak, and the two weak kinds share one
-/// loop for the reason the comment on it gives. Crate-private, like every
-/// other way to run a collection (#624).
+/// fixpoint would sweep live continuation payloads and running units'
+/// link tables, skipping `sweep_weak` would reinstate the §9.5 monotonic
+/// leak, and the three kinds share one loop for the reason the comment on
+/// it gives. Crate-private, like every other way to run a collection
+/// (#624).
 pub(crate) fn run_mark_phase(heap: &Heap, roots: &[&dyn RootProvider]) -> (MarkBits, PhaseTimes) {
     let mut phases = PhaseTimes::default();
     let mut clock = Instant::now();
@@ -2116,11 +2186,17 @@ pub(crate) fn run_mark_phase(heap: &Heap, roots: &[&dyn RootProvider]) -> (MarkB
     visitor.drain();
     lap(&mut phases.mark);
 
-    // One fixpoint over *both* kinds of weak reference, because each can feed
-    // the other and neither is quiescent until both are.
+    // One fixpoint over all three kinds, because each can feed the others and
+    // none is quiescent until all are.
     //
     // - Weak ids (design §9.5): a marked `VmContinuationRef` means its payload
     //   in `VmState`'s side tables is live; broadcasting the batch traces it.
+    // - Code ids (#836): a marked VM closure, a frame or the running code
+    //   names a unit whose link table is live; broadcasting the batch traces
+    //   each table, its entries and the namespace it was linked in. A
+    //   continuation's frames report theirs only when its payload is traced,
+    //   in this loop, and an ephemeron's datum can be a closure, so the
+    //   batch must be taken here and not once after the roots.
     // - Ephemerons (SRFI 124): a pair whose key is *already* marked is
     //   retained, and only then are its key and datum traced.
     //
@@ -2130,13 +2206,16 @@ pub(crate) fn run_mark_phase(heap: &Heap, roots: &[&dyn RootProvider]) -> (MarkB
     // went untraced while `sweep_weak` kept the store entry — a continuation
     // pointing at swept slots. The reverse hazard is just as real: tracing a
     // weak payload can reach an ephemeron, which must not arrive after the
-    // ephemeron loop has stopped.
+    // ephemeron loop has stopped. A link table's records reach closures,
+    // continuation refs and ephemerons alike.
     //
-    // Terminates because progress is finite in both directions: an id enters
-    // the queue at most once (the set-guard in `trace_object_children`), and
-    // each retaining round permanently removes at least one pair from a finite
-    // `pending_ephemerons`. Note it is *not* that `pending` shrinks each round
-    // — `drain` can discover new ephemerons and grow it.
+    // Terminates because progress is finite in every direction: a weak id
+    // enters its queue at most once (the set-guard in
+    // `trace_object_children`), so does a code id (the set-guard in
+    // `note_code_id`), and each retaining round permanently removes at least
+    // one pair from a finite `pending_ephemerons`. Note it is *not* that
+    // `pending` shrinks each round — `drain` can discover new ephemerons and
+    // grow it.
     loop {
         let mut progressed = false;
 
@@ -2144,6 +2223,18 @@ pub(crate) fn run_mark_phase(heap: &Heap, roots: &[&dyn RootProvider]) -> (MarkB
         if !ids.is_empty() {
             for provider in roots {
                 provider.trace_weak_ids(&ids, &mut visitor);
+            }
+            visitor.drain();
+            progressed = true;
+        }
+
+        // Tested before it is taken: a heap that runs no VM code, the
+        // tree-walker's, never queues a code id, and pays this one test a
+        // round.
+        if !visitor.new_code_ids.is_empty() {
+            let code_ids = std::mem::take(&mut visitor.new_code_ids);
+            for provider in roots {
+                provider.trace_code_ids(&code_ids, &mut visitor);
             }
             visitor.drain();
             progressed = true;
@@ -2292,6 +2383,11 @@ impl SlotVisitor for GcVisitor<'_> {
     fn expr_literals(&mut self, expr: &CpsExpr) {
         self.visit_expr_literals(expr);
     }
+
+    #[inline]
+    fn code(&mut self, id: u64) {
+        self.note_code_id(id);
+    }
 }
 
 /// What an environment's trace reports to during `GcVisitor::visit_env`'s
@@ -2330,6 +2426,10 @@ impl SlotVisitor for EnvEdges<'_, '_> {
 
     fn expr_literals(&mut self, expr: &CpsExpr) {
         self.marker.visit_expr_literals(expr);
+    }
+
+    fn code(&mut self, id: u64) {
+        self.marker.note_code_id(id);
     }
 }
 

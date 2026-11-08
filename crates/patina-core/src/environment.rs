@@ -5515,6 +5515,7 @@ mod shared_binding_tests {
             fn continuation(&mut self, _: &Rc<crate::CpsContinuation>) {}
             fn cont_env(&mut self, _: &crate::cont_value::ContEnv) {}
             fn expr_literals(&mut self, _: &crate::cps_expr::CpsExpr) {}
+            fn code(&mut self, _: u64) {}
         }
         let mut envs = Envs(Vec::new());
         env.trace(&mut envs);
@@ -5744,6 +5745,7 @@ mod shared_binding_tests {
             fn continuation(&mut self, _: &Rc<crate::CpsContinuation>) {}
             fn cont_env(&mut self, _: &crate::cont_value::ContEnv) {}
             fn expr_literals(&mut self, _: &crate::cps_expr::CpsExpr) {}
+            fn code(&mut self, _: u64) {}
         }
 
         let heap = new_shared_heap();

@@ -7,10 +7,11 @@
 //! `environment.rs` and `library.rs`; the backends' records are tested on
 //! their own backend.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use super::gc::{Collector, MarkSweepCollector, RootProvider, SlotVisitor};
+use super::gc::{Collector, GcVisitor, MarkSweepCollector, RootProvider, SlotVisitor};
 use super::sentinels::Sentinels;
 use super::trace::Trace;
 use super::{Heap, HeapObjectData, Interior, PromiseState, SharedHeap, new_shared_heap};
@@ -640,17 +641,211 @@ fn mutable_cell_contents() {
     });
 }
 
+/// A VM closure, every field: its free variables and its globals are
+/// visited, and its code id is queued for `RootProvider::trace_code_ids`
+/// (#836), which `Recording` records. Until #836's PR-7 deletes `globals`.
 #[test]
 fn vm_closure_free_variables_and_globals() {
-    objects_keep_their_sentinels(|_shared, heap, s| {
-        let free_var = s.pair(heap, "HeapObjectData::VmClosure.free_vars");
-        let global = s.vector(heap, "HeapObjectData::VmClosure.globals");
-        vec![HeapObjectData::VmClosure {
-            code_id: 0,
-            free_vars: vec![free_var],
-            globals: env_holding_on(heap, global),
-        }]
+    let shared = new_shared_heap();
+    let mut heap = shared.borrow_mut();
+    let mut s = Sentinels::new(&mut heap);
+    let free_var = s.pair(&mut heap, "HeapObjectData::VmClosure.free_vars");
+    let global = s.vector(&mut heap, "HeapObjectData::VmClosure.globals");
+    let globals = env_holding_on(&mut heap, global);
+    let closure = heap.alloc_object(HeapObjectData::VmClosure {
+        code_id: 7,
+        free_vars: vec![free_var],
+        globals,
     });
+    let recording = Recording {
+        roots: vec![closure],
+        ..Recording::default()
+    };
+    MarkSweepCollector::new().collect(&mut heap, &[&recording]);
+    s.assert_survived(&heap);
+    assert_eq!(
+        *recording.code_ids.borrow(),
+        [7],
+        "HeapObjectData::VmClosure.code_id: queued for trace_code_ids"
+    );
+}
+
+// ----------------------------------------------------------------------------
+// Code ids (#836)
+// ----------------------------------------------------------------------------
+
+/// A provider standing in for the VM: it roots `roots`; records each batch
+/// of code ids and of continuation ids the fixpoint broadcasts to it; for
+/// a code id it is given, keeps the value `keyed` pairs with it, as the VM
+/// traces the unit's link table; and records, for each id in `probe`,
+/// whether marking reached it as a code id and as a continuation id.
+#[derive(Default)]
+struct Recording {
+    roots: Vec<TaggedValue>,
+    keyed: Vec<(u64, TaggedValue)>,
+    probe: Vec<u64>,
+    code_ids: RefCell<Vec<u64>>,
+    weak_ids: RefCell<Vec<u64>>,
+    /// `(id, code_id_is_live, weak_continuation_id_is_live)`.
+    live: RefCell<Vec<(u64, bool, bool)>>,
+}
+
+impl RootProvider for Recording {
+    fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
+        for &value in &self.roots {
+            visitor.pinned(value);
+        }
+    }
+
+    fn trace_weak_ids(&self, ids: &[u64], _visitor: &mut dyn SlotVisitor) {
+        self.weak_ids.borrow_mut().extend_from_slice(ids);
+    }
+
+    fn trace_code_ids(&self, ids: &[u64], visitor: &mut dyn SlotVisitor) {
+        self.code_ids.borrow_mut().extend_from_slice(ids);
+        for &(id, value) in &self.keyed {
+            if ids.contains(&id) {
+                visitor.pinned(value);
+            }
+        }
+    }
+
+    fn sweep_weak(&self, visitor: &GcVisitor<'_>) {
+        let mut live = self.live.borrow_mut();
+        for &id in &self.probe {
+            live.push((
+                id,
+                visitor.code_id_is_live(id),
+                visitor.weak_continuation_id_is_live(id),
+            ));
+        }
+    }
+}
+
+/// A VM closure with code id `code_id` over `free_vars`, in an empty
+/// namespace.
+fn vm_closure(heap: &mut Heap, code_id: u64, free_vars: Vec<TaggedValue>) -> TaggedValue {
+    let globals = Rc::new(Environment::namespace(heap));
+    heap.alloc_vm_closure(code_id, free_vars, globals)
+}
+
+/// A closure reachable only from a root broadcasts its code id to
+/// `trace_code_ids`, which keeps what the provider keys by it: here a
+/// sentinel nothing else reaches, as a unit's table is in the VM. Its id is
+/// live by `code_id_is_live` and not by the continuation ids' test.
+#[test]
+fn a_marked_closure_broadcasts_its_code_id() {
+    let mut heap = Heap::new();
+    let mut s = Sentinels::new(&mut heap);
+    let keyed = s.pair(&mut heap, "trace_code_ids(7): what the provider keys by it");
+    let closure = vm_closure(&mut heap, 7, Vec::new());
+    let recording = Recording {
+        roots: vec![closure],
+        keyed: vec![(7, keyed)],
+        probe: vec![7],
+        ..Recording::default()
+    };
+    MarkSweepCollector::new().collect(&mut heap, &[&recording]);
+    s.assert_survived(&heap);
+    assert_eq!(*recording.code_ids.borrow(), [7]);
+    assert_eq!(*recording.live.borrow(), [(7, true, false)]);
+}
+
+/// A retired closure names no code and broadcasts nothing. It is reached
+/// through closure 7's free variable, so it is traced after closure 7 has
+/// queued its id and moved `note_code_id`'s last id off
+/// `RETIRED_VM_CLOSURE_CODE`, where it starts: a retired closure traced
+/// first would be passed over by that fast path alone, and could not show
+/// the retired id's own test.
+#[test]
+fn a_retired_closure_broadcasts_no_code_id() {
+    let mut heap = Heap::new();
+    let retired = vm_closure(&mut heap, Heap::RETIRED_VM_CLOSURE_CODE, Vec::new());
+    let closure = vm_closure(&mut heap, 7, vec![retired]);
+    let recording = Recording {
+        roots: vec![closure],
+        probe: vec![Heap::RETIRED_VM_CLOSURE_CODE],
+        ..Recording::default()
+    };
+    MarkSweepCollector::new().collect(&mut heap, &[&recording]);
+    assert_eq!(
+        *recording.code_ids.borrow(),
+        [7],
+        "the retired id is not queued"
+    );
+    assert_eq!(
+        *recording.live.borrow(),
+        [(Heap::RETIRED_VM_CLOSURE_CODE, false, false)]
+    );
+}
+
+/// Code ids and continuation ids are apart (S6): both count from 0, so on a
+/// fresh heap the first continuation ref and a closure of the first unit a
+/// VM loads have the same id, and each must still reach its own provider
+/// method and its own liveness test, whichever is marked first.
+#[test]
+fn a_code_id_equal_to_a_continuation_id_reaches_both_rounds() {
+    let mut heap = Heap::new();
+    let mut s = Sentinels::new(&mut heap);
+    let keyed = s.pair(&mut heap, "trace_code_ids(0): what the provider keys by it");
+    let (continuation, id) = heap.alloc_vm_continuation_ref(0);
+    assert_eq!(id, 0, "the first continuation id a heap mints");
+    let closure = vm_closure(&mut heap, 0, Vec::new());
+    let recording = Recording {
+        roots: vec![continuation, closure],
+        keyed: vec![(0, keyed)],
+        probe: vec![0],
+        ..Recording::default()
+    };
+    MarkSweepCollector::new().collect(&mut heap, &[&recording]);
+    s.assert_survived(&heap);
+    assert_eq!(*recording.code_ids.borrow(), [0], "the code id");
+    assert_eq!(*recording.weak_ids.borrow(), [0], "the continuation id");
+    assert_eq!(*recording.live.borrow(), [(0, true, true)]);
+}
+
+/// A closure reachable only through an ephemeron's datum (S5) is marked in
+/// the fixpoint's ephemeron pass, after the round's code ids were taken, so
+/// its id is broadcast in the next round: the code-id round is in the
+/// loop, not once after the roots.
+#[test]
+fn a_closure_under_an_ephemeron_broadcasts_in_a_later_round() {
+    let mut heap = Heap::new();
+    let mut s = Sentinels::new(&mut heap);
+    let keyed = s.pair(&mut heap, "trace_code_ids(9): what the provider keys by it");
+    let key = heap.alloc_pair(TaggedValue::fixnum(0), TaggedValue::NULL);
+    let datum = vm_closure(&mut heap, 9, Vec::new());
+    let ephemeron = heap.alloc_object(HeapObjectData::Ephemeron(Interior::new(Some((key, datum)))));
+    let recording = Recording {
+        roots: vec![ephemeron, key],
+        keyed: vec![(9, keyed)],
+        ..Recording::default()
+    };
+    MarkSweepCollector::new().collect(&mut heap, &[&recording]);
+    s.assert_survived(&heap);
+    assert_eq!(*recording.code_ids.borrow(), [9]);
+}
+
+/// A code-id round that marks a continuation ref is followed by a weak-id
+/// round that broadcasts it: the code-id round counts as progress, so the
+/// loop does not stop with the ref marked and its payload untraced.
+#[test]
+fn a_code_id_round_feeds_the_weak_id_round() {
+    let mut heap = Heap::new();
+    let (continuation, id) = heap.alloc_vm_continuation_ref(0);
+    let closure = vm_closure(&mut heap, 7, Vec::new());
+    let recording = Recording {
+        roots: vec![closure],
+        keyed: vec![(7, continuation)],
+        ..Recording::default()
+    };
+    MarkSweepCollector::new().collect(&mut heap, &[&recording]);
+    assert_eq!(*recording.code_ids.borrow(), [7]);
+    assert_eq!(
+        *recording.weak_ids.borrow(),
+        [id],
+        "broadcast in a later round"
+    );
 }
 
 /// An ephemeron keeps its datum while its key is reachable some other way:

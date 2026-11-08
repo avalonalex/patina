@@ -359,6 +359,9 @@ mod tests {
         fn expr_literals(&mut self, _: &CpsExpr) {
             unreachable!("the chain holds no code")
         }
+        fn code(&mut self, _: u64) {
+            unreachable!("the chain holds no VM code id")
+        }
     }
 
     /// A chain of continuation values is walked in a loop, through each
