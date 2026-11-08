@@ -34,7 +34,9 @@
 //! hold its heap (#704), so no cycle runs through the table
 //! (`a_held_environment_does_not_keep_its_heap_alive`). The heap's
 //! `PortTable` and `FinalRegistry`, which the table also holds, are not
-//! dropped: the table teardown starts takes them over (#785).
+//! dropped: the table teardown starts takes them over (#785), and so does
+//! its `PlaceholderList` (#836), so that the teardown sweep's pass empties
+//! the placeholder store of every namespace that outlives the heap.
 
 use std::fmt;
 use std::rc::{Rc, Weak};
@@ -46,6 +48,7 @@ use super::table::HeapTable;
 use crate::Trace;
 use crate::environment::Environment;
 use crate::instance::CurrentPort;
+use crate::placeholder_store::PlaceholderList;
 use crate::tagged_value::TaggedValue;
 
 /// One heap's handles: the values and environments its hosts keep, each
@@ -109,6 +112,16 @@ pub struct HandleTable {
         reason = "weak by design: each entry names its object by slot index, so that a collection can find it dead"
     )]
     finals: Rc<FinalRegistry>,
+    /// The placeholder stores of the heap's namespaces, by `env_id` (#836):
+    /// the list the pass at the sweep's start walks to drop every weak entry
+    /// no traced link table marked. One list for the heap's life: teardown's
+    /// new handle table takes it over ([`HandleTable::after_teardown`]).
+    /// Here and not on `Heap`, for `root_set`'s reason.
+    #[trace(
+        skip,
+        reason = "weak (R1, #836): never traced, or every listed namespace's placeholders would be marked; it holds stores by `env_id`, never a namespace"
+    )]
+    placeholders: Rc<PlaceholderList>,
 }
 
 #[derive(Trace)]
@@ -137,20 +150,32 @@ enum Entry {
 impl HandleTable {
     /// An empty table for the heap numbered `heap_id`.
     pub(crate) fn new(heap_id: u64) -> Rc<Self> {
-        Self::with_ports(heap_id, PortTable::new(), FinalRegistry::new())
+        Self::with_ports(
+            heap_id,
+            PortTable::new(),
+            FinalRegistry::new(),
+            PlaceholderList::new(),
+        )
     }
 
-    /// The empty table teardown starts, which keeps this one's `PortTable`
-    /// and `FinalRegistry`: the heap has one of each for its life (#785).
+    /// The empty table teardown starts, which keeps this one's `PortTable`,
+    /// `FinalRegistry` and `PlaceholderList`: the heap has one of each for
+    /// its life (#785, #836).
     pub(crate) fn after_teardown(&self) -> Rc<Self> {
         Self::with_ports(
             self.heap_id,
             Rc::clone(&self.ports),
             Rc::clone(&self.finals),
+            Rc::clone(&self.placeholders),
         )
     }
 
-    fn with_ports(heap_id: u64, ports: Rc<PortTable>, finals: Rc<FinalRegistry>) -> Rc<Self> {
+    fn with_ports(
+        heap_id: u64,
+        ports: Rc<PortTable>,
+        finals: Rc<FinalRegistry>,
+        placeholders: Rc<PlaceholderList>,
+    ) -> Rc<Self> {
         Rc::new(HandleTable {
             heap_id,
             entries: HeapTable::new(Entries {
@@ -163,6 +188,7 @@ impl HandleTable {
             parameterize_each: HeapTable::new(None),
             ports,
             finals,
+            placeholders,
         })
     }
 
@@ -176,6 +202,12 @@ impl HandleTable {
     #[inline]
     pub(crate) fn finals(&self) -> &Rc<FinalRegistry> {
         &self.finals
+    }
+
+    /// The heap's list of placeholder stores (#836).
+    #[inline]
+    pub(crate) fn placeholders(&self) -> &Rc<PlaceholderList> {
+        &self.placeholders
     }
 
     /// The root providers registered with the heap.
@@ -504,6 +536,8 @@ mod tests {
             parameterize_each: HeapTable::new(Some(each)),
             ports: PortTable::new(),
             finals: FinalRegistry::new(),
+            // Weak, never traced (#836): it holds no value to keep.
+            placeholders: PlaceholderList::new(),
         });
         collect_only(&mut heap, |_| {});
         s.assert_survived(&heap);

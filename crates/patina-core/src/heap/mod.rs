@@ -833,6 +833,14 @@ impl Heap {
         self.handles.len()
     }
 
+    /// The heap's list of its namespaces' placeholder stores (#836), which
+    /// a namespace's first weak entry registers its store on
+    /// (`Environment::link_record`).
+    #[inline]
+    pub(crate) fn placeholder_list(&self) -> &Rc<crate::placeholder_store::PlaceholderList> {
+        self.handles.placeholders()
+    }
+
     /// A handle on `env`, an environment of this heap, which roots it and
     /// what is bound in it until the handle is dropped (#620).
     ///

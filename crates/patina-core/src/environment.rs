@@ -2,6 +2,7 @@ use crate::Trace;
 use crate::binding_record::{BindingCell, Record};
 use crate::census::Site;
 use crate::heap::{ExternalBytes, Heap, SharedHeap};
+use crate::placeholder_store::{PlaceholderHandle, PlaceholderStore, StoreKind};
 use crate::scope::{ScopeId, ScopeSet};
 use crate::scope_index::{FRAME_INDEX_ABOVE, INDEX_ABOVE, ScopeIndex};
 use crate::scope_resolve::AmbiguousReference;
@@ -697,6 +698,17 @@ struct RareTables {
     /// the first time a linker asks for one: never in another kind. One
     /// pointer wide either way.
     read_through: OnceCell<Box<RefCell<ReadThrough>>>,
+    /// A namespace's weak entries (#836, R1, R7): a parentless namespace's
+    /// placeholders, or a host namespace's read-through records over a
+    /// parent placeholder, in a store made the first time a linker asks for
+    /// one and listed on the heap's `PlaceholderList`; never in a frame. The
+    /// handle takes the store off the list when this namespace drops (M2).
+    /// The store counts and charges its own (`placeholder_store.rs`).
+    #[trace(
+        skip,
+        reason = "weak (R1, R7, #836): a link table marks an entry, and the sweep's pass drops each it did not"
+    )]
+    placeholders: OnceCell<PlaceholderHandle>,
 }
 
 /// A host namespace's read-through records (#835): for each name its parent
@@ -707,6 +719,13 @@ struct RareTables {
 /// name here adopts its record and takes it out of this table. Dies with the
 /// host namespace: nothing else holds the table, and the parent's records do
 /// not name their children.
+///
+/// These are the strong children. A child over a parent's placeholder, made
+/// for a name the parent did not bind (R7, #836), is weak, and lives in the
+/// host namespace's placeholder store instead (`RareTables::placeholders`),
+/// though it names this table's `unbound` cell. A link of its name once the
+/// parent binds it promotes it here, out of the store, so a name has one
+/// child across the two.
 #[derive(Debug, Trace)]
 struct ReadThrough {
     /// The free cell every record here names in its car: `(UNBOUND . 0)`.
@@ -802,7 +821,12 @@ struct ReadThrough {
 /// keywords filed at top level among them) and per import alias, each of
 /// which is a slot, and per read-through record of a host namespace's,
 /// which is in no slot until a define or an import adopts it (#835); and
-/// `cells`, the cells of its own its records name now.
+/// `cells`, the cells of its own its records name now. Its weak entries
+/// (#836) are not among them: its placeholder store counts a placeholder and
+/// its cell, and a host namespace's weak read-through record, in the heap's
+/// sums itself, and charges its own buffer and names, until an entry is
+/// dropped or adopted into a slot, where this charge counts it from then.
+/// The slots stay append-only either way (D1).
 /// Each is a running sum, raised as a record or a cell is made
 /// (`Environment::count`), `cells` lowered as a record is re-pointed away
 /// from an own cell (`Environment::count_cell_let_go`), and both given back
@@ -1739,6 +1763,9 @@ impl Environment {
                 // This account.
                 namespace: _,
                 read_through,
+                // The weak entries' store charges itself, through the same
+                // account (#836).
+                placeholders: _,
             } = &**rare;
             bytes += size_of::<RareTables>()
                 + hash_table_bytes::<Rc<str>, Introduced>(
@@ -1920,42 +1947,41 @@ impl Environment {
         Some(Record::from_word(bindings.read_slot(slot)))
     }
 
-    /// The record code compiled in this namespace links for `name` (#835):
-    /// its own ([`local_record`](Self::local_record)); or, in a host
-    /// namespace that does not bind `name`, its read-through record over its
-    /// parent's, made the first time and the same one after. `None` for a
-    /// frame, for a name no slot of this namespace or its parent holds (a
-    /// name only an alias or a scoped definition reaches is read by name, as
-    /// today), for a name this host namespace reaches by an alias or a
-    /// visible scoped definition of its own, which [`get`](Self::get) finds
-    /// before the parent's binding and which is read by name too, and for a
-    /// parentless namespace that does not bind it (4b.9's placeholders).
+    /// The record code compiled in this namespace links for `name` (#835,
+    /// #836), made the first time and the same one after:
+    /// - its own ([`local_record`](Self::local_record)), in a slot;
+    /// - `None` for a frame, and for a name this namespace reaches by an
+    ///   alias or a visible scoped definition of its own, which
+    ///   [`get`](Self::get) finds first and which is read by name;
+    /// - in a parentless namespace that does not bind `name`, a placeholder
+    ///   (#836): a record of its own with its flag set, over a cell of its
+    ///   own holding `TaggedValue::UNBOUND`, kept weakly in its placeholder
+    ///   store, never in a slot, until a define or an import adopts it;
+    /// - in a host namespace that does not bind `name`, a read-through record
+    ///   over its parent's: over the parent's record in a slot, strong, in
+    ///   [`ReadThrough`] (a weak one made earlier is promoted there); `None`
+    ///   where the parent reaches `name` by an alias or a visible scoped
+    ///   definition; otherwise over the parent's placeholder, weak, in this
+    ///   namespace's placeholder store (R7).
+    ///
     /// Takes the write step. The reads by name (`get`, `get_with_scopes`,
     /// `Interpreter::lookup_in`, the tree-walker's) never call it, so a read
-    /// makes no record.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "4b.9's linker links host units through it (#836); until then only the \
-                      tests do (#835)"
-        )
-    )]
+    /// makes no record. A placeholder and a weak read-through record live
+    /// while code that links them is traced, and the sweep's pass drops them
+    /// once none is (`placeholder_store.rs`).
     pub(crate) fn link_record(&self, heap: &RefCell<Heap>, name: &str) -> Option<Record> {
         let mut step = self.write_step(heap)?;
         if let Some(own) = self.local_record(name) {
             return Some(own);
         }
-        if self.kind != Kind::HostNamespace {
+        // `get`'s order: an alias here, then a visible scoped definition
+        // here, both before the parent and before an unbound name. A record
+        // would read another binding than `get` does.
+        if self.read_by_name(name) {
             return None;
         }
-        // `get`'s order: an alias here, then a visible scoped definition
-        // here, both before the parent. A record over the parent's would
-        // read another binding than `get` does.
-        if (self.has_aliases.get() && self.alias_target(name).is_some())
-            || self.visible_scoped_index(name).is_some()
-        {
-            return None;
+        if self.kind != Kind::HostNamespace {
+            return Some(self.placeholder(&mut step, name).1);
         }
         let parent = self
             .parent
@@ -1963,42 +1989,185 @@ impl Environment {
             .expect("a host namespace has its parent");
         // The parent's slot name, shared: this table counts no name of its
         // own.
-        let (key, parent_record) = {
+        let bound = {
             let bindings = parent.bindings.borrow();
-            let slot = bindings.slot_of(name)?;
-            let (key, word) = &bindings.slots[slot as usize];
-            (Rc::clone(key), Record::from_word(*word))
+            bindings.slot_of(name).map(|slot| {
+                let (key, word) = &bindings.slots[slot as usize];
+                (Rc::clone(key), Record::from_word(*word))
+            })
         };
+        match bound {
+            Some((key, parent_record)) => Some(self.strong_child(&mut step, key, parent_record)),
+            // The parent's own `get` finds an alias or a visible scoped
+            // definition of its own there: read by name, and no placeholder.
+            None if parent.read_by_name(name) => None,
+            None => {
+                let (key, placeholder) = parent.placeholder(&mut step, name);
+                Some(self.weak_child(&mut step, key, placeholder))
+            }
+        }
+    }
+
+    /// Whether `get` finds `name` here by an alias or a visible scoped
+    /// definition, before any slot's binding but this namespace's own:
+    /// [`link_record`](Self::link_record) leaves such a name to be read by
+    /// name.
+    fn read_by_name(&self, name: &str) -> bool {
+        (self.has_aliases.get() && self.alias_target(name).is_some())
+            || self.visible_scoped_index(name).is_some()
+    }
+
+    /// This namespace's weak entries' store, if a linker has made one
+    /// (#836).
+    #[inline]
+    pub(crate) fn weak_entries(&self) -> Option<&PlaceholderStore> {
+        self.rare
+            .get()?
+            .placeholders
+            .get()
+            .map(PlaceholderHandle::store)
+    }
+
+    /// This namespace's weak entries' store, made of `kind` and listed on
+    /// `step`'s placeholder list the first time (#836), counting and
+    /// charging through this namespace's account.
+    fn weak_entries_or_make(&self, step: &Heap, kind: StoreKind) -> &PlaceholderStore {
+        let rare = self
+            .rare
+            .get()
+            .expect("a namespace has its tables from construction");
+        let store = rare
+            .placeholders
+            .get_or_init(|| {
+                let account = rare
+                    .namespace
+                    .as_ref()
+                    .expect("a namespace has its charge (#834)")
+                    .account
+                    .clone();
+                PlaceholderHandle::new(
+                    step.placeholder_list(),
+                    PlaceholderStore::new(self.env_id, account, kind),
+                )
+            })
+            .store();
+        debug_assert_eq!(
+            store.kind(),
+            kind,
+            "a namespace's weak entries are of one kind"
+        );
+        store
+    }
+
+    /// This parentless namespace's placeholder for `name`, which it does not
+    /// bind (#836), with the name its store holds it under: the one in its
+    /// store, or a new one, made and held there, counted a record and a cell
+    /// in the heap's sums by the store and charged there.
+    fn placeholder(&self, step: &mut Heap, name: &str) -> (Rc<str>, Record) {
+        debug_assert_eq!(
+            self.kind,
+            Kind::Namespace,
+            "a host namespace makes no placeholder"
+        );
+        let store = self.weak_entries_or_make(step, StoreKind::Placeholders);
+        if let Some(found) = store.get_key_value(name) {
+            return found;
+        }
+        // Allocation never collects (`docs/GC_DESIGN.md` §6), and both
+        // allocations are under the one step: the cell, held in a local,
+        // cannot be swept before the record holds it, nor the record before
+        // the store does.
+        let cell = BindingCell::new_own(step, TaggedValue::UNBOUND, self.env_id);
+        let record = Record::placeholder(step, cell);
+        let key: Rc<str> = Rc::from(name);
+        store.insert(Rc::clone(&key), record);
+        (key, record)
+    }
+
+    /// This host namespace's read-through records, made the first time, and
+    /// whether this call made them.
+    fn read_through_table<'a>(&'a self, step: &mut Heap) -> (&'a RefCell<ReadThrough>, bool) {
         let rare = self
             .rare
             .get()
             .expect("a host namespace has its tables from construction");
         let made = rare.read_through.get().is_none();
         let table = rare.read_through.get_or_init(|| {
-            let unbound = BindingCell::free(&mut step, TaggedValue::UNBOUND);
+            let unbound = BindingCell::free(step, TaggedValue::UNBOUND);
             Box::new(RefCell::new(ReadThrough {
                 unbound,
                 records: FxHashMap::default(),
             }))
         });
+        (table, made)
+    }
+
+    /// This host namespace's read-through record over `parent_record`, its
+    /// parent's record for the name in the slot `key` names (#835): the one
+    /// in its table, or one made earlier over the parent's placeholder,
+    /// which the parent has since adopted, promoted there out of the
+    /// placeholder store (#836), or a new one.
+    fn strong_child(&self, step: &mut Heap, key: Rc<str>, parent_record: Record) -> Record {
+        let (table, made) = self.read_through_table(step);
         let mut table = table.borrow_mut();
-        if let Some(&child) = table.records.get(name) {
-            return Some(child);
+        if let Some(&child) = table.records.get(&*key) {
+            return child;
         }
-        // Allocation never collects (`docs/GC_DESIGN.md` §6), and both
-        // allocations are under the one step: the cell is held by the table
-        // before the record is made.
-        let child = Record::read_through(&mut step, table.unbound, parent_record);
+        // A weak child (R7) is promoted, so that it is held and dies with
+        // this namespace as any child over a bound parent does (SD3): its
+        // count moves from the store to this namespace's charge, as the
+        // store lets go of it and the count below takes it on. One child a
+        // name across the two tables, or a define here would adopt one and
+        // leave the other reading the parent.
+        let promoted = self.weak_entries().and_then(|store| store.take(&key));
+        let child = match promoted {
+            Some(child) => {
+                debug_assert_eq!(
+                    child.parent_record(step),
+                    Some(parent_record),
+                    "a weak child reads through the placeholder its parent adopted"
+                );
+                child
+            }
+            // Allocation never collects (`docs/GC_DESIGN.md` §6), and both
+            // allocations are under the one step: the cell is held by the
+            // table before the record is made.
+            None => Record::read_through(step, table.unbound, parent_record),
+        };
         let capacity = table.records.capacity();
         table.records.insert(key, child);
         let grew = made || table.records.capacity() != capacity;
         drop(table);
-        drop(step);
         self.count(1, 0);
         if grew {
             self.recharge();
         }
-        Some(child)
+        child
+    }
+
+    /// This host namespace's weak read-through record over `placeholder`,
+    /// its parent's for the name `key` (R7, #836): the one in its placeholder
+    /// store, or a new one held there, counted a record in the heap's sums by
+    /// the store. It names the host's one `unbound` cell, as a strong child
+    /// does.
+    fn weak_child(&self, step: &mut Heap, key: Rc<str>, placeholder: Record) -> Record {
+        let (table, made) = self.read_through_table(step);
+        let unbound = table.borrow().unbound;
+        if made {
+            self.recharge();
+        }
+        let store = self.weak_entries_or_make(step, StoreKind::Children);
+        if let Some(child) = store.get(&key) {
+            debug_assert_eq!(
+                child.parent_record(step),
+                Some(placeholder),
+                "a weak child reads through its parent's placeholder"
+            );
+            return child;
+        }
+        let child = Record::read_through(step, unbound, placeholder);
+        store.insert(key, child);
+        child
     }
 
     /// The read-through record this host namespace made for `name`, taken
@@ -6983,21 +7152,34 @@ mod read_through_tests {
     }
 
     /// One read-through record per name, however often it is asked for. An
-    /// own name answers its own record; a name neither namespace binds, a
-    /// frame, and a parentless namespace asked for a name it does not bind
-    /// answer `None`; none of those makes a record.
+    /// own name answers its own record and a frame `None`. A name neither
+    /// namespace binds answers a weak read-through record over the global
+    /// namespace's placeholder, and a parentless namespace asked for a name
+    /// it does not bind its placeholder (#836): each the same one when asked
+    /// again, and in no slot.
     #[test]
     fn link_record_answers_one_record_per_name() {
         let heap = new_shared_heap();
         let (global, host) = global_and_host(&heap);
 
-        assert_eq!(host.link_record(&heap, "nowhere"), None);
-        assert!(table(&host).is_none(), "a miss makes no table");
+        let nowhere = host
+            .link_record(&heap, "nowhere")
+            .expect("a weak child over the global's placeholder (#836)");
+        assert_eq!(host.link_record(&heap, "nowhere"), Some(nowhere));
+        assert!(
+            table(&host).is_some_and(|table| table.borrow().records.is_empty()),
+            "the weak child names the table's cell and is not in the table"
+        );
+        assert_eq!(host.local_slot("nowhere"), None);
+        assert_eq!(global.local_slot("nowhere"), None);
 
         host.define(&heap, "own", n(2));
         let own = host.local_record("own").unwrap();
         assert_eq!(host.link_record(&heap, "own"), Some(own));
-        assert!(table(&host).is_none(), "an own name makes no child");
+        assert!(
+            table(&host).is_some_and(|table| table.borrow().records.is_empty()),
+            "an own name makes no child"
+        );
 
         let first = host.link_record(&heap, "x").unwrap();
         let second = host.link_record(&heap, "x").unwrap();
@@ -7013,7 +7195,11 @@ mod read_through_tests {
 
         let frame = Environment::child_frame(Rc::clone(&global));
         assert_eq!(frame.link_record(&heap, "x"), None, "a frame links nothing");
-        assert_eq!(global.link_record(&heap, "missing"), None);
+        let missing = global
+            .link_record(&heap, "missing")
+            .expect("a placeholder (#836)");
+        assert_eq!(global.link_record(&heap, "missing"), Some(missing));
+        assert_eq!(global.local_slot("missing"), None, "in no slot");
         assert_eq!(global.link_record(&heap, "x"), global.local_record("x"));
     }
 
@@ -7216,6 +7402,8 @@ mod gc_edge_tests {
                 namespace: None,
                 // A host namespace's: `read_through_edges`.
                 read_through: OnceCell::new(),
+                // Weak, never traced (#836): a namespace's alone.
+                placeholders: OnceCell::new(),
             })),
             parent: Some(parent),
         };

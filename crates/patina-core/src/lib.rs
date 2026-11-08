@@ -63,6 +63,7 @@ pub mod literal_pool;
 pub mod macro_debug;
 pub mod namespace_view;
 pub mod numeric;
+mod placeholder_store;
 pub mod port;
 pub mod procedure;
 pub mod pvref;

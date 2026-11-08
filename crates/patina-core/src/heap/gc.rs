@@ -1784,7 +1784,9 @@ impl Heap {
     /// load-bearing for objects (`Rc` payloads) and vectors/strings (element
     /// buffers). A dead port's `PortTable` entry is taken out here too,
     /// except a file port's, which the drain after the collection takes
-    /// (`heap/finalize.rs`, #785). Pairs are `Copy` with nothing to drop, so a plain release
+    /// (`heap/finalize.rs`, #785), and so is every namespace's placeholder
+    /// and weak read-through record that nothing marked (`PlaceholderList`,
+    /// #836). Pairs are `Copy` with nothing to drop, so a plain release
     /// build skips the store; a check build writes a poison value, so a
     /// stale reference that marking reaches traces nothing from the dead
     /// pair.
@@ -1819,6 +1821,20 @@ impl Heap {
             .ports()
             .take_dead_plain(|object| marks.objects.get(object as usize));
         drop(dead_ports);
+        // The namespaces' weak entries (§9.9 step 6, as built; #836): every
+        // placeholder, and every host read-through record over one, that no
+        // traced link table marked, taken out of its namespace's store while
+        // the bits are complete and before the pair arena's sweep frees its
+        // pairs, which then frees them as the garbage they are. Their counts
+        // and charges are given back borrow-free through each store's
+        // account, before the account is settled, and their names dropped
+        // after the list's access (`HeapTable`'s rule). One access over an
+        // empty list until something links.
+        let dead_placeholders = self
+            .handles
+            .placeholders()
+            .take_dead(|record| marks.pairs.get(record.heap_index() as usize));
+        drop(dead_placeholders);
         // What the account holds for the tree-walker closures, which a check
         // build compares with the live ones' and the dead ones' once the
         // object arena's sweep has measured those.
@@ -1975,8 +1991,11 @@ impl Heap {
     /// hosts' handles go with their table (#605): one kept past it holds a
     /// dead reference, which the heap refuses to read. The heap's
     /// `PortTable` and `FinalRegistry` do not: the new handle table takes
-    /// them over (#785). A second teardown frees nothing. It is not a
-    /// collection, and leaves the count of them as it was.
+    /// them over (#785). Nor does its `PlaceholderList` (#836), so the
+    /// sweep's pass, which marks nothing live here, empties the placeholder
+    /// store of every namespace that outlives the heap before the pair
+    /// arena's sweep frees what each held. A second teardown frees nothing.
+    /// It is not a collection, and leaves the count of them as it was.
     ///
     /// The half of [`super::teardown`] that holds the heap: every entry of
     /// the `FinalRegistry` is queued first, so that none names a slot this
