@@ -73,6 +73,11 @@ pub trait Backend {
     /// - `expr`: The expression to evaluate (as a TaggedValue)
     /// - `env`: The environment in which to evaluate the expression
     ///
+    /// A backend may refuse an environment it cannot run code in: the VM
+    /// runs code only in a namespace, and answers an error naming the kind
+    /// for a frame, a raw one or one under a host namespace (#835); the
+    /// tree-walker evaluates a frame by name.
+    ///
     /// # Returns
     ///
     /// The resulting TaggedValue, or a backend-specific error.
@@ -111,7 +116,8 @@ pub trait Backend {
     /// Every caller that reads a program with positions — a file, standard
     /// input, a session — evaluates through this, which is what lets that
     /// reading be written once for all backends. A backend that does not
-    /// track positions evaluates the expression as `eval` does.
+    /// track positions evaluates the expression as `eval` does. Either way
+    /// it refuses the environments `eval` refuses: the VM a frame (#835).
     #[expect(
         clippy::disallowed_methods,
         reason = "holds nothing it reads as a value: the source map is keyed by raw bits it \

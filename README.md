@@ -295,6 +295,25 @@ namespace `new_environment()` answers, held. `Environment`'s other
 constructors and `Heap::track_environment` are raw, outside the promise
 ([Changing the embedding API](docs/README.md#changing-the-embedding-api)).
 
+**Migration for a host that evaluates in a frame:** the VM now refuses one
+([#835](https://github.com/avalonalex/patina/issues/835)). A raw frame, or a
+frame under a host namespace, handed to `Backend::eval` or
+`eval_with_source_map`, or to `eval_str_in` or `eval_program_in` through the
+deprecated `Heap::hold_environment` or `Cx::hold_environment`, answers an
+error naming its kind, and loads and binds nothing; the VM used to evaluate
+in it by name. The tree-walker still evaluates in one by name, and
+`Backend::define`, so `define_in` on a held frame, still writes one on either
+backend. Evaluate in the host namespace `new_environment()` answers instead.
+For a frame of the global namespace that means what the frame meant: what is
+defined in it stays in it, and every other name resolves in the global
+namespace. A frame under a host namespace has no equivalent on the VM, since
+a host namespace's parent must be a parentless namespace (the global
+namespace, for `new_environment()`), so no namespace sits under one: define
+the frame's names in the host namespace itself, where all of its code sees
+them, or evaluate on the tree-walker. Scheme `eval` through a specifier a
+host makes over a frame is not refused yet
+([#853](https://github.com/avalonalex/patina/issues/853)).
+
 `interrupt_handle()` answers an `InterruptHandle`, which a host uses to
 interrupt a running evaluation from another thread, a timer or a signal
 handler ([#701](https://github.com/avalonalex/patina/issues/701)). Its

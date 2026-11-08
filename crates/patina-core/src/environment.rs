@@ -1240,8 +1240,8 @@ impl Environment {
         );
         // Charged to its parent's account, its heap's, which every
         // parentless namespace has (#834), as a parentless namespace is
-        // charged (question 2's option (a) on #835, pending the owner's
-        // ruling).
+        // charged (the owner's ruling (a) of 2026-11-07 on #835's question
+        // 2).
         let charge = Some(NamespaceCharge::new(
             parent
                 .rare
@@ -1290,7 +1290,9 @@ impl Environment {
     /// Deprecated for hosts (#831): nothing roots a frame built here between
     /// calls (#620), and `Interpreter::new_environment` answers a host
     /// namespace held (#835). It goes at stage 5e. The workspace builds its
-    /// frames with [`Environment::child_frame`].
+    /// frames with [`Environment::child_frame`]. The VM refuses to evaluate
+    /// in a frame built here, with an error naming its kind, where the
+    /// tree-walker evaluates in one by name (#835).
     #[deprecated(
         note = "use `Interpreter::new_environment`, which answers an environment held between \
                 calls; nothing roots a frame built here (#620), and this goes at stage 5e (#831)"
@@ -1347,6 +1349,24 @@ impl Environment {
     #[inline]
     pub fn holds_temporaries(&self) -> bool {
         self.kind == Kind::Temporaries
+    }
+
+    /// What frame this is, for an error that names it: `None` for a
+    /// namespace of either kind, which the VM evaluates in, and
+    /// `Some("frame")` or `Some("frame of temporaries")` otherwise, which it
+    /// refuses (`VmBackend`'s `eval_datum`, #835). Hidden, as
+    /// [`Environment::child_frame`] and [`Environment::for_temporaries`]
+    /// are, and raw, as every `Environment` method is. The predicate the
+    /// holder asks, `is_namespace`, stays crate-private (#831's ruling on
+    /// question 1; the owner's ruling (a) of 2026-11-07 on #835's question
+    /// 5).
+    #[doc(hidden)]
+    pub fn frame_kind(&self) -> Option<&'static str> {
+        match self.kind {
+            Kind::Namespace | Kind::HostNamespace => None,
+            Kind::Frame => Some("frame"),
+            Kind::Temporaries => Some("frame of temporaries"),
+        }
     }
 
     /// Process-unique, never-reused id for this environment's simple
@@ -6641,7 +6661,8 @@ mod namespace_charge_tests {
     /// (#835), and the frame constructors make frames, which have a parent.
     /// What answers to the kind answers as it did when it read the parent: a
     /// namespace of either kind charges its heap's account, which every
-    /// parentless namespace has since #834.
+    /// parentless namespace has since #834. `frame_kind` names each frame
+    /// and no namespace, as the VM's refusal reads it (#835).
     #[test]
     fn each_constructor_sets_its_kind() {
         let heap = new_shared_heap();
@@ -6650,6 +6671,7 @@ mod namespace_charge_tests {
         for namespace in [&global, &in_hand] {
             assert_eq!(namespace.kind, Kind::Namespace);
             assert!(namespace.is_namespace() && !namespace.holds_temporaries());
+            assert_eq!(namespace.frame_kind(), None);
             assert!(namespace.parent().is_none());
         }
         assert!(global.charged_bytes().is_some() && in_hand.charged_bytes().is_some());
@@ -6657,9 +6679,11 @@ mod namespace_charge_tests {
         let frame = Environment::child_frame(Rc::clone(&global));
         assert_eq!(frame.kind, Kind::Frame);
         assert!(!frame.is_namespace() && !frame.holds_temporaries());
+        assert_eq!(frame.frame_kind(), Some("frame"));
         let temporaries = Environment::for_temporaries(Rc::clone(&global));
         assert_eq!(temporaries.kind, Kind::Temporaries);
         assert!(!temporaries.is_namespace() && temporaries.holds_temporaries());
+        assert_eq!(temporaries.frame_kind(), Some("frame of temporaries"));
         for frame in [&frame, &temporaries] {
             assert!(
                 frame
@@ -6672,6 +6696,7 @@ mod namespace_charge_tests {
         let host = Environment::host_namespace(Rc::clone(&global));
         assert_eq!(host.kind, Kind::HostNamespace);
         assert!(host.is_namespace() && !host.holds_temporaries());
+        assert_eq!(host.frame_kind(), None);
         assert!(
             host.parent()
                 .is_some_and(|parent| Rc::ptr_eq(parent, &global))

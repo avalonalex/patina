@@ -150,7 +150,7 @@ What `patina-interpreter` exports, at its root unless a module is named:
 | `Desugarer` | raw | |
 | `prune_freed_locations` | inside, deprecated | a no-op, until 5e (#643) |
 | `Backend` | inside | its methods change by the convention, and its words keep the "# Words" rules |
-| `Environment` | type inside, members raw | `with_parent` is deprecated (#831) and goes at 5e; the workspace builds its frames with the `#[doc(hidden)]` `child_frame`, on #622's list; `for_temporaries` is hidden too; `namespace_root`, the nearest namespace, is raw as `root` is (#835) |
+| `Environment` | type inside, members raw | `with_parent` is deprecated (#831) and goes at 5e; the workspace builds its frames with the `#[doc(hidden)]` `child_frame`, on #622's list; `for_temporaries` is hidden too; `namespace_root`, the nearest namespace, is raw as `root` is (#835); `frame_kind`, which names a frame's kind for the VM's refusal and answers `None` for a namespace, is hidden and raw (#835) |
 | `Procedure` | raw | a heap payload no promised signature names; 4f changes its `CpsLambda` arm |
 | `Prim`, `ApplyContext`, `CallArgs`, `HostPrimitives`, `PrimClass`, `ResumableStart`, `ResumableResume`, `Step` | inside | `Prim` is `CxHandler`, and `CallArgs` a `smallvec::SmallVec` |
 | `VmBackend` (vm); `TreeWalker`, `Evaluator` (tree-walker) | type and setup inside, other members raw | setup: `new`, `with_fs`, `TreeWalker::from_evaluator`, `Default`, `add_library_search_path`, `prepend_library_search_path`, `bootstrap_error`; raw: the other inherent methods, `#[doc(hidden)]` ones included, and `Evaluator`'s pub fields |

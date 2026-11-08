@@ -14,8 +14,10 @@
 //! The VM evaluated in the global environment whatever environment
 //! `Backend::eval` was given; it now evaluates where the tree-walker does,
 //! running the code as a closure whose globals are the environment, and
-//! `eval_str_in` and `eval_program_in` evaluate in a handle's environment on
-//! both backends.
+//! `eval_str_in` and `eval_program_in` evaluate in a handle's namespace on
+//! both backends. The VM evaluates only in a namespace: a raw frame, or a
+//! frame under a host namespace, it refuses with an error naming the kind,
+//! where the tree-walker evaluates one by name (#835).
 
 mod common;
 use common::{tree_walker_interpreter, vm_interpreter};
@@ -1019,4 +1021,193 @@ fn read_makes_no_record<B: Backend>(interp: Interpreter<B>, backend: &str) {
 fn a_read_makes_no_record() {
     read_makes_no_record(vm_interpreter(), "vm");
     read_makes_no_record(tree_walker_interpreter(), "tree-walker");
+}
+
+/// The library a raw frame of the global namespace is given to define:
+/// a name no other test loads.
+const REFUSED_LIBRARY: &str = "(define-library (host4b refused)
+      (export refused-value)
+      (import (scheme base))
+      (begin (define refused-value 'loaded)))";
+
+/// What each entry answers for three raw frames: one of the global
+/// namespace, one of a host namespace, and one of temporaries over the
+/// global namespace. Each frame is given `Backend::eval`, an `import` by
+/// `eval_with_source_map`, and, held through the deprecated
+/// `Heap::hold_environment`, `eval_str_in` and `eval_program_in`; after each
+/// entry the interpreter evaluates a global form. Each is then given
+/// `Backend::define`, which answers no `Result`. The frame of the global
+/// namespace is also given a `define-library`, which a later global
+/// `import` asks for. No frame is given a `define` form: the tree-walker
+/// binds a frame of temporaries' definitions in the environment above it
+/// (#680), where `Backend::define` writes the frame it is given.
+#[allow(
+    deprecated,
+    reason = "builds the raw frames the refusal is for: `with_parent` and \
+              `hold_environment` go at stage 5e (#831)"
+)]
+fn raw_frames<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
+    use patina_interpreter::Environment;
+    interp.eval_program_owned("(import (scheme base))").unwrap();
+    let host = interp.new_environment();
+    let heap = interp.backend().heap().clone();
+    let shown = |result: Result<TaggedValue, B::Error>| match result {
+        Ok(value) => interp.display_tagged(value),
+        Err(e) => format!("error: {e}"),
+    };
+    let shown_owned = |result: Result<_, _>| match result {
+        Ok(value) => interp.display_tagged(&value),
+        Err(e) => format!("error: {e}"),
+    };
+    let next = || interp.display_tagged(interp.eval_str_owned("(+ 40 2)").unwrap());
+    let frames = [
+        Rc::new(Environment::with_parent(interp.global_env())),
+        Rc::new(Environment::with_parent(interp.raw_environment(&host))),
+        Rc::new(Environment::for_temporaries(interp.global_env())),
+    ];
+    let mut out = Vec::new();
+    for frame in &frames {
+        out.push(shown(
+            interp.backend().eval(read("(let ((x 7)) x)", &heap), frame),
+        ));
+        out.push(next());
+        let source_map = Rc::new(RefCell::new(SourceMap::new()));
+        out.push(shown(interp.backend().eval_with_source_map(
+            read("(import (srfi 1))", &heap),
+            frame,
+            &source_map,
+        )));
+        out.push(next());
+        out.push(format!(
+            "frame binds iota: {}",
+            frame.local_names(&heap).iter().any(|name| name == "iota")
+        ));
+        out.push(format!(
+            "global binds iota: {}",
+            interp.lookup("iota").is_some()
+        ));
+        let held = heap.borrow().hold_environment(Rc::clone(frame));
+        out.push(shown_owned(interp.eval_str_in(&held, "(+ 1 2)")));
+        out.push(next());
+        out.push(shown_owned(
+            interp.eval_program_in(&held, "(+ 1 2) (* 2 3)"),
+        ));
+        out.push(next());
+        interp
+            .backend()
+            .define(frame, "defined-here", TaggedValue::fixnum(5));
+        out.push(format!(
+            "frame binds defined-here: {}",
+            frame
+                .local_names(&heap)
+                .iter()
+                .any(|name| name == "defined-here")
+        ));
+        out.push(format!(
+            "global binds defined-here: {}",
+            interp.lookup("defined-here").is_some()
+        ));
+    }
+    out.push(shown(
+        interp
+            .backend()
+            .eval(read(REFUSED_LIBRARY, &heap), &frames[0]),
+    ));
+    out.push(next());
+    out.push(shown_owned(
+        interp.eval_program_owned("(import (host4b refused)) refused-value"),
+    ));
+    out.push(next());
+    out
+}
+
+/// An answer of [`raw_frames`], with the VM's refusal shortened to the kind
+/// it names.
+fn refusal_named(answer: String) -> String {
+    const REFUSAL: &str = "the VM evaluates only in a namespace, and was given a ";
+    match answer.split_once(REFUSAL) {
+        Some((before, kind)) if before.starts_with("error: ") => {
+            format!("refused: {}", kind.split(':').next().unwrap_or(kind))
+        }
+        _ => answer,
+    }
+}
+
+/// The VM evaluates only in a namespace, and refuses a frame with an error
+/// naming its kind, not a panic (#835): a raw frame of the global
+/// namespace, one of a host namespace, and one of temporaries, by
+/// `Backend::eval`, by `eval_with_source_map`, and by `eval_str_in` and
+/// `eval_program_in` on a frame held through the deprecated
+/// `Heap::hold_environment`. The kind is asked before anything else, so an
+/// `import` refused binds nothing, and a `define-library` refused loads
+/// nothing: a later global `import` of the library fails. After each
+/// refusal the next form evaluates. The tree-walker evaluates each frame by
+/// name, as it did before the refusal: the answers below are the base's
+/// (e392fe3d), where the VM answered the same. `Backend::define` still
+/// writes each frame on both backends, a frame of temporaries included, and
+/// binds nothing in the global namespace.
+#[test]
+fn a_raw_frame_is_refused_by_the_vm() {
+    let by_vm: Vec<String> = raw_frames(vm_interpreter())
+        .into_iter()
+        .map(refusal_named)
+        .collect();
+    let mut expected = Vec::new();
+    for kind in ["frame", "frame", "frame of temporaries"] {
+        let refused = format!("refused: {kind}");
+        expected.extend(
+            [
+                refused.as_str(),
+                "42",
+                &refused,
+                "42",
+                "frame binds iota: false",
+                "global binds iota: false",
+                &refused,
+                "42",
+                &refused,
+                "42",
+                "frame binds defined-here: true",
+                "global binds defined-here: false",
+            ]
+            .map(String::from),
+        );
+    }
+    expected.extend(["refused: frame", "42"].map(String::from));
+    assert_eq!(by_vm.len(), expected.len() + 2, "VM: {by_vm:?}");
+    assert_eq!(by_vm[..expected.len()], expected, "VM");
+    let library = &by_vm[expected.len()];
+    assert!(
+        library.starts_with("error: ") && library.contains("Library (host4b refused) not found"),
+        "VM: the refused library was loaded: {library}"
+    );
+    assert_eq!(
+        by_vm[expected.len() + 1],
+        "42",
+        "VM: the form after the library's import"
+    );
+
+    let mut expected = Vec::new();
+    for _ in 0..3 {
+        expected.extend([
+            "7",
+            "42",
+            "#<unspecified>",
+            "42",
+            "frame binds iota: true",
+            "global binds iota: false",
+            "3",
+            "42",
+            "6",
+            "42",
+            "frame binds defined-here: true",
+            "global binds defined-here: false",
+        ]);
+    }
+    expected.extend(["#<unspecified>", "42", "loaded", "42"]);
+    assert_eq!(
+        raw_frames(tree_walker_interpreter()),
+        expected,
+        "tree-walker"
+    );
 }

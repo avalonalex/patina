@@ -409,7 +409,9 @@ impl<'gc> Cx<'gc> {
     /// [`Heap::hold_environment`](crate::Heap::hold_environment) on this context's heap.
     ///
     /// Deprecated with it (#831): it holds any environment of the heap, a
-    /// frame included, on a type inside the embedding API's promise.
+    /// frame included, on a type inside the embedding API's promise. The VM
+    /// refuses to evaluate in a frame it holds, as `Heap::hold_environment`
+    /// says (#835).
     #[deprecated(
         note = "use `Interpreter::new_environment`, which answers an environment held; this \
                 holds any environment of the heap, a frame included, and goes at stage 5e (#831)"

@@ -272,16 +272,39 @@ impl VmBackend {
     /// Shared body of `eval` and `eval_with_source_map` — the two entries
     /// differ only in desugarer construction.
     ///
-    /// Evaluates in `env`, as the tree-walker does: the datum is expanded and
-    /// compiled there, its imports bind there, and its code reads and defines
-    /// there. The global environment's code runs as a top-level frame, any
-    /// other's as a closure whose globals are `env` (`execute_in`, #620).
+    /// Evaluates in `env`, a namespace, as the tree-walker does: the datum is
+    /// expanded and compiled there, its imports bind there, and its code
+    /// reads and defines there. The global environment's code runs as a
+    /// top-level frame, any other's as a closure whose globals are `env`
+    /// (`execute_in`, #620).
+    ///
+    /// A frame is refused with an error naming its kind
+    /// ([`Environment::frame_kind`], #835): a raw frame, or a frame under a
+    /// host namespace, handed to `Backend::eval` or `eval_with_source_map`,
+    /// or to a handle form through the deprecated `Heap::hold_environment`
+    /// or `Cx::hold_environment`.
+    /// The kind is asked first, so a refused frame neither loads a library
+    /// nor binds an import. The global namespace, a host namespace and a
+    /// parentless namespace (a library's, a specifier's) run as before. The
+    /// tree-walker still evaluates a frame by name. Scheme `eval` and `load`
+    /// do not come here: they compile through `compile_for_eval`, which asks
+    /// no kind, so a specifier a host makes over a frame is not refused yet
+    /// (#853).
     fn eval_datum(
         &self,
         expr: TaggedValue,
         env: &Rc<Environment>,
         source_map: Option<&Rc<RefCell<patina_frontend::SourceMap>>>,
     ) -> Result<TaggedValue, VmBackendError> {
+        if let Some(kind) = env.frame_kind() {
+            return Err(VmBackendError::Runtime {
+                message: format!(
+                    "the VM evaluates only in a namespace, and was given a {kind}: a host \
+                     evaluates in the environment `Interpreter::new_environment` answers (#835)"
+                ),
+                location: None,
+            });
+        }
         let heap = self.heap.clone();
 
         // An inline (define-library ...) is a library definition, not an
