@@ -1311,3 +1311,248 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
     });
     Ok(())
 }
+
+/// The unit's link indices (#836): one interner for the whole unit, so one
+/// table, shared by every member, in first-emission order.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler::compile_with_qq_resolving;
+    use crate::runtime::VmState;
+    use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
+    use patina_core::{Lit, LiteralPool};
+
+    fn var(name: &str) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::Var {
+            name: Rc::from(name),
+            scopes: Default::default(),
+        })
+    }
+
+    fn lit(n: i64) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::Literal(Lit::immediate(TaggedValue::fixnum(
+            n,
+        ))))
+    }
+
+    fn app(func: CoreExpr, args: Vec<CoreExpr>) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::App {
+            func: Rc::new(func),
+            args,
+        })
+    }
+
+    fn call(name: &str, args: Vec<CoreExpr>) -> CoreExpr {
+        app(var(name), args)
+    }
+
+    fn lambda(params: &[&str], body: Vec<CoreExpr>) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::Lambda {
+            params: Formals::Fixed(
+                params
+                    .iter()
+                    .map(|p| ScopedParam::simple(Rc::from(*p)))
+                    .collect(),
+            ),
+            body,
+            binding_scopes: Rc::new(patina_core::ScopeSet::new()),
+        })
+    }
+
+    fn begin(forms: Vec<CoreExpr>) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::Begin(forms))
+    }
+
+    fn define(name: &str, value: CoreExpr) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::Define {
+            name: Rc::from(name),
+            scopes: Default::default(),
+            value: Rc::new(value),
+        })
+    }
+
+    fn set(name: &str, value: CoreExpr) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::Set {
+            var: Rc::from(name),
+            scopes: Default::default(),
+            value: Rc::new(value),
+        })
+    }
+
+    fn if_(test: CoreExpr, then: CoreExpr, else_: CoreExpr) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::If {
+            test: Rc::new(test),
+            then: Rc::new(then),
+            else_: Rc::new(else_),
+        })
+    }
+
+    /// Compile `expr` against a fresh VM's globals, primitives installed, so
+    /// that primitive calls compile to `CallPrimitive` and the inline
+    /// opcodes.
+    fn compile(expr: &CoreExpr) -> (CodeObject, Vec<CodeObject>) {
+        let mut state = VmState::on_a_fresh_heap();
+        state.install_primitives();
+        let heap = state.heap().clone();
+        let env = state.global_env().clone();
+        let literals = LiteralPool::new(&heap.borrow());
+        compile_with_qq_resolving(expr, &literals, &heap, &env, state.primitive_registry())
+            .expect("compiles")
+    }
+
+    /// The spelling each global operand of `code` names, in pc order.
+    fn operand_names(code: &CodeObject) -> Vec<&str> {
+        code.instructions
+            .iter()
+            .filter_map(Instruction::link)
+            .map(|k| &**code.links.name(k))
+            .collect()
+    }
+
+    fn table(code: &CodeObject) -> Vec<&str> {
+        code.links.names().iter().map(|name| &**name).collect()
+    }
+
+    /// A program whose operands are of every kind pass 5 gives a link:
+    /// `Define`, `StoreGlobal`, `LoadGlobal`, `CallPrimitive`, inline
+    /// opcodes, their immediate forms and a fused test, in the top-level code
+    /// and in a lambda nested two deep.
+    fn every_kind_of_operand() -> CoreExpr {
+        begin(vec![
+            define("x", lit(1)),
+            set("x", call("+", vec![var("x"), lit(1), lit(2)])),
+            define(
+                "f",
+                lambda(
+                    &["a", "b"],
+                    vec![if_(
+                        call("<", vec![var("a"), var("b")]),
+                        call("+", vec![var("a"), lit(1)]),
+                        lambda(
+                            &["v"],
+                            vec![call(
+                                "car",
+                                vec![call(
+                                    "cons",
+                                    vec![call("*", vec![var("a"), var("x")]), var("v")],
+                                )],
+                            )],
+                        ),
+                    )],
+                ),
+            ),
+            call("f", vec![lit(1), lit(2)]),
+        ])
+    }
+
+    #[test]
+    fn a_lambda_and_the_code_around_it_name_one_global_by_one_index() {
+        // (begin (g 1) (lambda (y) (g y)) (car (g 2)))
+        let (top, nested) = compile(&begin(vec![
+            call("g", vec![lit(1)]),
+            lambda(&["y"], vec![call("g", vec![var("y")])]),
+            call("car", vec![call("g", vec![lit(2)])]),
+        ]));
+        let index_of_g = |code: &CodeObject| -> Vec<LinkIdx> {
+            code.instructions
+                .iter()
+                .filter(|instr| matches!(instr, Instruction::LoadGlobal { .. }))
+                .filter_map(Instruction::link)
+                .collect()
+        };
+        assert_eq!(nested.len(), 1);
+        let (outer, inner) = (index_of_g(&top), index_of_g(&nested[0]));
+        assert_eq!((outer.len(), inner.len()), (2, 1), "{top:?} {nested:?}");
+        assert!(
+            outer.iter().chain(&inner).all(|&k| k == inner[0]),
+            "`g` has more than one index: {outer:?} {inner:?}"
+        );
+        assert_eq!(table(&top), ["g", "car"]);
+    }
+
+    #[test]
+    fn every_operand_names_an_entry_and_every_entry_is_named_once() {
+        let (top, nested) = compile(&every_kind_of_operand());
+        let names = top.links.names().len();
+        let mut named = vec![false; names];
+        for code in std::iter::once(&top).chain(&nested) {
+            for instr in &code.instructions {
+                if let Some(k) = instr.link() {
+                    assert!((k as usize) < names, "{instr:?} is past a table of {names}");
+                    named[k as usize] = true;
+                }
+            }
+        }
+        assert!(
+            named.iter().all(|&n| n),
+            "an entry no operand names: {:?}",
+            table(&top)
+        );
+        let mut distinct = table(&top);
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), names, "a spelling twice: {:?}", table(&top));
+        // Every kind of operand is there, so each was given its index.
+        let kinds = std::iter::once(&top)
+            .chain(&nested)
+            .flat_map(|code| &code.instructions)
+            .filter(|instr| instr.link().is_some())
+            .map(|instr| {
+                format!("{instr:?}")
+                    .split([' ', '{'])
+                    .next()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        for kind in [
+            "Define",
+            "StoreGlobal",
+            "LoadGlobal",
+            "CallPrimitive",
+            "AddImm",
+            "TestJumpUnless",
+            "Mul",
+            "Cons",
+            "Car",
+        ] {
+            assert!(kinds.contains(kind), "no {kind} among {kinds:?}");
+        }
+    }
+
+    #[test]
+    fn every_member_shares_the_tops_table() {
+        let (top, nested) = compile(&every_kind_of_operand());
+        assert_eq!(nested.len(), 2, "a lambda and one nested in it");
+        for member in &nested {
+            assert!(
+                Rc::ptr_eq(&member.links, &top.links),
+                "{:?} has a table of its own",
+                member.id
+            );
+        }
+    }
+
+    #[test]
+    fn indices_are_given_in_the_order_operands_are_first_emitted() {
+        // (begin (b) (a) (lambda () (c) (a)) (d)): the lambda's body is
+        // emitted where the lambda is, between the code around it.
+        let expr = begin(vec![
+            call("b", vec![]),
+            call("a", vec![]),
+            lambda(&[], vec![call("c", vec![]), call("a", vec![])]),
+            call("d", vec![]),
+        ]);
+        let (top, nested) = compile(&expr);
+        assert_eq!(table(&top), ["b", "a", "c", "d"]);
+        assert_eq!(operand_names(&top), ["b", "a", "d"]);
+        assert_eq!(operand_names(&nested[0]), ["c", "a"]);
+        // The same unit gets the same indices.
+        let (again, _) = compile(&expr);
+        assert_eq!(table(&again), table(&top));
+        let links = |code: &CodeObject| -> Vec<Option<LinkIdx>> {
+            code.instructions.iter().map(Instruction::link).collect()
+        };
+        assert_eq!(links(&again), links(&top));
+    }
+}

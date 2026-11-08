@@ -446,3 +446,86 @@ fn a_closure_made_by_code_in_reused_slots_runs_its_own_code() {
     assert_eq!(value.as_fixnum(), Some(42));
     assert_eq!(id.generation(), 1, "{id:?} was not given a slot let go");
 }
+
+/// Run `expr`, which must fail, and answer the error.
+fn run_err(expr: CoreExpr) -> patina_vm::error::VmError {
+    let (top, nested) = compile(&expr).expect("compile error");
+    let mut state = fresh_state();
+    let top_id = state.load_unit(top, nested);
+    execute(&mut state, top_id).expect_err("ran without an error")
+}
+
+/// The name an unbound-variable error reports, read from the unit's link
+/// table (#836): each program names other globals first, so an operand that
+/// read the wrong entry would report another name.
+#[test]
+fn an_unbound_global_is_reported_by_its_operands_name() {
+    use patina_vm::error::VmError;
+    let unbound = |error: VmError| match error {
+        VmError::UnboundVariable { name } => name.to_string(),
+        other => panic!("not an unbound variable: {other:?}"),
+    };
+    // (begin (define x 1) (define y x) never-read)
+    let read = begin(vec![
+        define("x", lit(1)),
+        define("y", var("x")),
+        var("never-read"),
+    ]);
+    assert_eq!(unbound(run_err(read)), "never-read");
+    // (begin (define x 1) (set! never-set x))
+    let write = begin(vec![define("x", lit(1)), set("never-set", var("x"))]);
+    assert_eq!(unbound(run_err(write)), "never-set");
+}
+
+/// A shadowed primitive's site looks up the name its own operand names:
+/// here a name nothing binds, so the deoptimization reports that name, not
+/// the primitive's (#836). Built by hand, since compiled code resolves a
+/// site's primitive from the binding its operand names, which a rebinding
+/// never removes.
+#[test]
+fn a_shadowed_primitives_site_looks_up_its_operands_name() {
+    use patina_core::LinkTable;
+    use patina_vm::error::VmError;
+    use patina_vm::types::instruction::{Instruction, PrimitiveFnId};
+    use patina_vm::types::{Arity, GlobalCacheEntry};
+
+    let mut state = fresh_state();
+    let car = state
+        .primitive_registry()
+        .resolve_index("scheme.base/car")
+        .expect("`car` is registered");
+    let instructions = vec![
+        Instruction::LoadImmediate {
+            dst: 0,
+            val: TaggedValue::fixnum(1),
+        },
+        // (define car 1): `car` is shadowed from here on.
+        Instruction::Define { link: 0, src: 0 },
+        Instruction::CallPrimitive {
+            func_id: PrimitiveFnId(car as u32),
+            link: 1,
+            args: vec![0],
+            dst: 1,
+        },
+        Instruction::Return { val: 1 },
+    ];
+    let names: Vec<Rc<str>> = vec![Rc::from("car"), Rc::from("never-bound")];
+    let code = CodeObject {
+        id: CodeObjectId::label(),
+        name: None,
+        global_cache: GlobalCacheEntry::table(&instructions),
+        links: Rc::new(LinkTable::new(names.into_boxed_slice())),
+        instructions,
+        constants: Vec::new(),
+        num_regs: 2,
+        arity: Arity::Fixed(0),
+        source_map: Vec::new(),
+        register_roots: None,
+        live_closures: std::cell::Cell::new(0),
+    };
+    let id = state.load_unit(code, Vec::new());
+    match execute(&mut state, id) {
+        Err(VmError::UnboundVariable { name }) => assert_eq!(&*name, "never-bound"),
+        other => panic!("not an unbound variable: {other:?}"),
+    }
+}
