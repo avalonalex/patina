@@ -57,8 +57,9 @@
 //! A `define` and an import each keep one signature, and can insert, re-point
 //! or store depending on what the name held; each method says which outcome
 //! is which. The view asserts no kind: the VM reads a namespace of either
-//! kind through it, a host namespace among them since #835, and a raw frame
-//! a host hands it, and the desugarer's relinks write a speculative scan's
+//! kind through it, a host namespace among them since #835, and writes a
+//! raw frame a host hands its `Backend::define`, though it evaluates in no
+//! frame since #835, and the desugarer's relinks write a speculative scan's
 //! private frame. Its lookups by name walk to the parent as
 //! [`Environment::get`] does.
 
@@ -87,7 +88,8 @@ pub struct NamespaceView<'e> {
 impl<'e> NamespaceView<'e> {
     /// The view of `env`: a namespace of either kind, or a frame the VM or
     /// the desugarer reads and writes as one (a raw frame a host hands the
-    /// VM, a scan's private frame).
+    /// VM's `Backend::define`, though the VM evaluates in no frame since
+    /// #835; a scan's private frame).
     #[inline(always)]
     pub fn of(env: &'e Environment) -> Self {
         NamespaceView { env }

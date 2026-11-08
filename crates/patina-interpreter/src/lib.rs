@@ -1249,8 +1249,9 @@ impl<B: Backend> Interpreter<B> {
     /// forms do not cover, such as `Backend::eval`. The handle roots it, not
     /// this `Rc`: keep the handle while the environment is in use, and read
     /// a value from it, or write one, as raw, as with
-    /// [`Interpreter::global_env`]. Panics on a handle another interpreter
-    /// made.
+    /// [`Interpreter::global_env`]. A frame built over it is refused by the
+    /// VM, as one over the global environment is (#835). Panics on a handle
+    /// another interpreter made.
     pub fn raw_environment(&self, env: &OwnedEnvironment) -> Rc<Environment> {
         self.backend.heap().borrow().held_environment(env)
     }
@@ -1318,8 +1319,10 @@ impl<B: Backend> Interpreter<B> {
     /// stays bound to it, so once the program rebinds the name a later
     /// evaluation that collects can free it; [`Interpreter::lookup`] answers
     /// a handle instead. A frame a host builds over it is not rooted between
-    /// calls (#620); [`Interpreter::new_environment`] answers a host
-    /// namespace over it that is (#835).
+    /// calls (#620), and the VM refuses to evaluate in one, answering an
+    /// error naming its kind, where the tree-walker evaluates one by name;
+    /// [`Interpreter::new_environment`] answers a host namespace over it
+    /// that is rooted, which both evaluate in (#835).
     ///
     /// Its `define` and `set` are raw too: they write the binding and
     /// nothing else. The VM compiles a call to a primitive's binding into a
