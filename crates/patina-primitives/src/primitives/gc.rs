@@ -109,14 +109,31 @@
 //!   namespace's read-through records name), and a cell only an importer's
 //!   record or an export keeps once its namespace dropped or re-pointed away
 //!   from it.
+//! - `code-units` (#836): the code units the VM has loaded and not released.
+//!   A unit is what one compilation loaded, kept and let go whole: a form's
+//!   top code object (a program's form, a library body form, a datum `eval`
+//!   compiled) with the code of the lambdas nested in it. The VM lets a unit
+//!   go when its form returns, unless a frame, a captured continuation or a
+//!   live closure still holds its code; such a unit goes at the first
+//!   collection after nothing does. The form that reads the count is
+//!   running, so its own unit is counted. The tree-walker loads no code, and
+//!   reads 0, never `#f`.
 //!
-//! The last two are running sums: raised as a namespace makes a record or a
-//! cell, `cells` lowered as a record is re-pointed away from its namespace's
-//! own cell, and both lowered by what a namespace holds when it drops. So
-//! they are exact once the dead namespaces have dropped, which a
-//! collection's sweep does for the specifiers it frees: the steady-state
-//! driver reads them after `(gc) (gc)`. A record and a cell are each a pair,
-//! so both are counted in `pairs` as well.
+//! `binding-records` and `cells` are running sums: raised as a namespace
+//! makes a record or a cell, `cells` lowered as a record is re-pointed away
+//! from its namespace's own cell, and both lowered by what a namespace holds
+//! when it drops. So they are exact once the dead namespaces have dropped,
+//! which a collection's sweep does for the specifiers it frees: the
+//! steady-state driver reads them after `(gc) (gc)`. A record and a cell are
+//! each a pair, so both are counted in `pairs` as well. `code-units` is the
+//! size of the VM's table of units, written whenever the table changes. A
+//! `(gc)` that collects lets go, before it returns, of every unit no live
+//! closure, frame or continuation holds; but a loaded unit's constants are
+//! roots, so a closure that only the constants of a unit the same
+//! collection lets go reach (code `eval` compiled from a datum holding a
+//! procedure) is marked by it, and keeps its own unit until the next
+//! collection, one more for each such link. The steady-state driver reads
+//! it after `(gc) (gc)` as well.
 
 use crate::apply_context::ApplyContext;
 use crate::registry::PrimitiveFn;
@@ -230,6 +247,7 @@ fn gc_stats<'gc>(cx: &mut Cx<'gc>, _args: &[Value<'gc>]) -> Result<Value<'gc>, E
         ("namespaces", n(cx.namespaces())),
         ("cells", n(cx.cells())),
         ("binding-records", n(cx.binding_records())),
+        ("code-units", n(cx.code_units())),
     ];
 
     let mut alist: Vec<Value<'gc>> = entries

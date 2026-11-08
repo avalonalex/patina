@@ -122,3 +122,38 @@ fn deeply_nested_continuations_collect_promptly() {
         "collection at continuation depth 30 took {elapsed:?} — tracing is likely exponential again"
     );
 }
+
+#[test]
+fn code_units_read_zero_on_the_tree_walker() {
+    // `code-units` (#836) counts the VM's loaded code units. The
+    // tree-walker loads no code, so it reads 0 on every reading, never `#f`:
+    // before and after `eval`s of forms that make closures, while a
+    // procedure `eval` compiled is kept, and after collections. `gc_vm.rs`
+    // has the VM's readings of the same shapes, with fifty forms where this
+    // runs ten: the count is 0 however many run, and under zeal, which
+    // collects at each of the tree-walker's outermost safe points, the test
+    // made 12,780 collections with fifty and makes 3,084 with ten
+    // (2026-11-08), against 3,358 for the rest of this target. Under zeal
+    // too. Each `(gc)` is written where it runs, once a call, so that the
+    // zeal half's check that zeal collected beyond the program's `(gc)`s
+    // counts every one of them.
+    assert_gc_and_zeal_eval_to(
+        r#"
+        (import (scheme base) (scheme eval) (patina debug))
+        (define (units) (cdr (assq 'code-units (gc-stats))))
+        (define env (environment '(scheme base)))
+        (define (closing i) `(car (map (lambda (x) (+ x ,i)) (list 1 2 3))))
+        (define (run-forms make-form)
+          (let loop ((i 0))
+            (if (< i 10) (begin (eval (make-form i) env) (loop (+ i 1))))))
+        (define keep #f)
+        (define u0 #f) (define u1 #f) (define u2 #f) (define u3 #f)
+        (set! u0 (begin (gc) (gc) (units)))
+        (set! u1 (begin (run-forms closing) (units)))
+        (set! u2 (begin (set! keep (eval '(lambda (x) (* x 3)) env)) (units)))
+        (set! u3 (begin (gc) (gc) (units)))
+        (list (keep 14) u0 u1 u2 u3)
+        "#,
+        "(42 0 0 0 0)",
+    );
+}

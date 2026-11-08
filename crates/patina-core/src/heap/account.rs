@@ -422,6 +422,7 @@ impl ByteAccount {
                 namespaces: Cell::new(0),
                 binding_records: Cell::new(0),
                 cells: Cell::new(0),
+                code_units: Cell::new(0),
             }),
             through_last_gc: 0,
             reclaimed: 0,
@@ -490,6 +491,12 @@ pub(super) struct SharedCounts {
     /// its records is re-pointed away from its own cell, and by its cells
     /// when it drops.
     pub(super) cells: Cell<usize>,
+    /// The code units the VM has loaded and not released (#836): its count,
+    /// written whenever its table of units changes ([`Heap::set_code_units`]).
+    /// Here rather than a field of `Heap`, where one more field moves the
+    /// allocator's hot fields (`HandleTable`'s `root_set` has the
+    /// measurement).
+    pub(super) code_units: Cell<usize>,
 }
 
 impl SharedCounts {
@@ -808,6 +815,30 @@ impl Heap {
         self.account.shared.cells.get()
     }
 
+    /// The code units the VM has loaded and not released (#836). A unit is
+    /// what one compilation loaded: a form's top code object (a program's
+    /// form, a library body form, a datum `eval` compiled) with the code of
+    /// the lambdas nested in it, kept and let go whole. The VM writes the
+    /// count ([`Heap::set_code_units`]) as it loads a unit and as it lets
+    /// units go, when a form returns and after a collection. A loaded unit's
+    /// constants are roots, so after a collection the count can still
+    /// include a unit kept only by a closure that the constants of a unit
+    /// the same collection let go reached; the next collection lets it go.
+    /// The tree-walker loads no code, and it reads 0 there. `(gc-stats)`'s
+    /// `code-units`.
+    pub fn code_units(&self) -> usize {
+        self.account.shared.code_units.get()
+    }
+
+    /// Record `n` as the VM's count of loaded code units
+    /// ([`Heap::code_units`]), which the VM writes as its table of units
+    /// changes. A diagnostic that nothing in the heap reads: a host that
+    /// writes it corrupts only what `(gc-stats)` reports.
+    #[doc(hidden)]
+    pub fn set_code_units(&self, n: usize) {
+        self.account.shared.code_units.set(n);
+    }
+
     /// The memory the arenas hold now, live or not: every arena's capacity in
     /// slots (occupied, free, or reserved by its `Vec`) and the payloads of
     /// the occupied slots. A free slot holds a tombstone and no payload. It
@@ -945,6 +976,18 @@ mod tests {
         assert_eq!(counts(), (1, 1, 0));
         handle.namespace_dropped(1, 0);
         assert_eq!(counts(), (0, 0, 0));
+    }
+
+    /// The code units' count is what the VM last wrote, 0 on a heap no VM
+    /// runs on (#836).
+    #[test]
+    fn the_code_units_count_is_what_was_last_written() {
+        let heap = Heap::new();
+        assert_eq!(heap.code_units(), 0);
+        heap.set_code_units(3);
+        assert_eq!(heap.code_units(), 3);
+        heap.set_code_units(1);
+        assert_eq!(heap.code_units(), 1);
     }
 
     /// Letting go of more than is counted is a bug in the counting.

@@ -185,3 +185,111 @@ fn rebound_control_operator_keeps_operands_after_a_larger_expression() {
         "(alive)",
     );
 }
+
+#[test]
+fn code_units_do_not_grow_across_forms_a_collection_lets_go() {
+    // `code-units` (#836) counts the units the VM has loaded and not let go.
+    // Fifty `eval`s of fresh forms that make no closure each let their unit
+    // go as the form returns, so the count reads as it did before them.
+    // Fifty that make a closure, which dies with the form, are each kept by
+    // the closure's count until a collection frees it, and two `(gc)`s let
+    // them all go: the count after them reads as the count before. A unit
+    // nothing can run that a collection did not let go would leave the
+    // count above where it started. Collecting only where `(gc)` asks, the
+    // second batch is counted until then, fifty more; at every outermost
+    // safe point each goes at the one after it, and the call that reads the
+    // count is one; in the environment's mode, anywhere between.
+    //
+    // The last reading follows fifty more of them and a single `(gc)`,
+    // which frees their closures and lets their units go before it returns,
+    // so the count reads as it did before them in every mode: a write of
+    // the count before the collection's release, which a second `(gc)`
+    // would correct, leaves it fifty above where collection waits for
+    // `(gc)`. One collection is enough here because no form's code quotes a
+    // closure: a closure only a released unit's constants reach is marked
+    // by the collection that releases that unit, and goes at the next.
+    //
+    // Each reading is taken in the form that did the work before it, with
+    // no form loaded between: a load writes the count afresh, and would
+    // hide a release that did not. Every reading form counts its own unit,
+    // the same one each time. Both batches run once first, so that whatever
+    // their first run keeps for good is kept before the first reading. The
+    // count is positive, if only for the units the program's own procedures
+    // keep; its value is held to the VM's table of units by
+    // `the_heaps_count_of_code_units_is_the_tables_size` in `vm_state.rs`,
+    // since these readings, compared with each other, would pass a count
+    // off by a constant.
+    let code = r#"
+        (import (scheme base) (scheme eval) (patina debug))
+        (define (units) (cdr (assq 'code-units (gc-stats))))
+        (define (settled) (gc) (gc) (units))
+        (define env (environment '(scheme base)))
+        (define (plain i) (list '+ i 1))
+        (define (closing i) `(car (map (lambda (x) (+ x ,i)) (list 1 2 3))))
+        (define (run-forms make-form)
+          (let loop ((i 0))
+            (if (< i 50) (begin (eval (make-form i) env) (loop (+ i 1))))))
+        (define u0 #f) (define u1 #f) (define u2 #f) (define u3 #f) (define u4 #f)
+        (run-forms plain)
+        (run-forms closing)
+        (set! u0 (settled))
+        (set! u1 (begin (run-forms plain) (units)))
+        (set! u2 (begin (run-forms closing) (units)))
+        (set! u3 (settled))
+        (set! u4 (begin (run-forms closing) (gc) (units)))
+        (list (> u0 0) (- u1 u0) (- u2 u0) (- u3 u0) (- u4 u0))
+        "#;
+    assert_eq!(eval_program_vm_gc_off(code), "(#t 0 50 0 0)");
+    assert_eq!(eval_program_vm_zeal(code), "(#t 0 0 0 0)");
+    let plain = eval_program_vm(code);
+    let readings: Vec<&str> = plain
+        .trim_matches(|c| c == '(' || c == ')')
+        .split_whitespace()
+        .collect();
+    let [positive, after_plain, closing, after_gc, after_one_gc] = readings[..] else {
+        panic!("expected five readings: {plain}")
+    };
+    assert_eq!(
+        (positive, after_plain, after_gc, after_one_gc),
+        ("#t", "0", "0", "0"),
+        "readings {plain}"
+    );
+    assert!(
+        closing.parse::<i64>().is_ok_and(|n| (0..=50).contains(&n)),
+        "the forms that made closures read {closing} units above the start: {plain}"
+    );
+}
+
+#[test]
+fn code_units_count_a_unit_a_live_closure_keeps() {
+    // A procedure `eval` compiled keeps its unit for as long as it lives:
+    // `keep` holds it, and the count is one above the reading before it, as
+    // it is after two `(gc)`s, which leave the unit loaded because the
+    // closure is live. Once `keep` lets the closure go, one `(gc)` frees it
+    // and lets the unit go before it returns, and the count reads as it did
+    // before. Each reading is taken in the form that did the work before
+    // it, as in `code_units_do_not_grow_across_forms_a_collection_lets_go`.
+    // `eval` is warmed up first, its closure dropped and collected before
+    // the first reading. Under zeal too, with a collection at every
+    // outermost safe point. Each `(gc)` is written where it runs, once a
+    // call, so that the zeal half's check that zeal collected beyond the
+    // program's `(gc)`s counts every one of them.
+    assert_gc_and_zeal_eval_to(
+        r#"
+        (import (scheme base) (scheme eval) (patina debug))
+        (define (units) (cdr (assq 'code-units (gc-stats))))
+        (define env (environment '(scheme base)))
+        (define keep (eval '(lambda (x) (* x 3)) env))
+        (define answer #f)
+        (define u0 #f) (define u1 #f) (define u2 #f) (define u3 #f)
+        (set! keep #f)
+        (set! u0 (begin (gc) (gc) (units)))
+        (set! u1 (begin (set! keep (eval '(lambda (x) (* x 3)) env)) (units)))
+        (set! u2 (begin (gc) (gc) (units)))
+        (set! answer (keep 14))
+        (set! u3 (begin (set! keep #f) (gc) (units)))
+        (list answer (> u0 0) (- u1 u0) (- u2 u0) (- u3 u0))
+        "#,
+        "(42 #t 1 1 0)",
+    );
+}
