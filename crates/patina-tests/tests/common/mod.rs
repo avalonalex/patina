@@ -181,6 +181,21 @@ pub fn tree_walker_interpreter_gc_off() -> TreeWalkInterpreter {
     tree_walker_interpreter_with(Interpreter::new(TreeWalker::with_gc_mode(GcMode::Off)))
 }
 
+/// [`vm_interpreter`], collecting at every outermost safe point
+/// (`GcMode::Zeal`, what `PATINA_GC_ZEAL=entry` selects), whatever the
+/// environment says: for a test that must hold with a collection between
+/// any two steps, allocating or not, in every lane, the plain debug run
+/// included. Stress counts allocations, so a stretch that allocates nothing
+/// never collects under it (#625).
+pub fn vm_interpreter_zeal() -> Interpreter<VmBackend> {
+    vm_interpreter_with(VmBackend::with_gc_mode(GcMode::Zeal))
+}
+
+/// The tree-walker half of [`vm_interpreter_zeal`].
+pub fn tree_walker_interpreter_zeal() -> TreeWalkInterpreter {
+    tree_walker_interpreter_with(Interpreter::new(TreeWalker::with_gc_mode(GcMode::Zeal)))
+}
+
 /// A path inside a caller-owned [`tempfile::TempDir`], which deletes the
 /// whole directory when it drops. Tests that hand a path to a Scheme program
 /// need it as a `String`; the guard stays with the caller so the directory
@@ -682,6 +697,24 @@ pub fn eval_program_tree_walker_gc_off(code: &str) -> String {
     }
 }
 
+/// [`eval_program_vm`] on [`vm_interpreter_zeal`]: a collection at every
+/// outermost safe point.
+pub fn eval_program_vm_zeal(code: &str) -> String {
+    match run_on(vm_interpreter_zeal(), code, Mode::Program) {
+        Ok(v) => v,
+        Err(e) => panic!("Failed to evaluate program: {}\n{code}", e.message),
+    }
+}
+
+/// [`eval_program_tree_walker`] on [`tree_walker_interpreter_zeal`]: a
+/// collection at every outermost safe point.
+pub fn eval_program_tree_walker_zeal(code: &str) -> String {
+    match run_on(tree_walker_interpreter_zeal(), code, Mode::Program) {
+        Ok(v) => v,
+        Err(e) => panic!("Failed to evaluate program: {}\n{code}", e.message),
+    }
+}
+
 /// Assert that a multi-expression program produces expected result on both backends
 pub fn assert_program_eval_to(code: &str, expected: &str) {
     expect_value(Which::Both, code, expected, Mode::Program);
@@ -715,7 +748,12 @@ pub fn assert_eval_with_scheme_char(expr: &str, expected: &str) {
 /// (`eval_program_tree_walker_gc_off`, `eval_program_vm_gc_off`), for the three
 /// tests that need to know when collections run: they must pass under the
 /// stress lanes' `PATINA_GC_STRESS` too, which a backend made from the
-/// environment obeys (#626).
+/// environment obeys (#626). `$eval_zeal` is the same backend collecting at
+/// every outermost safe point (`eval_program_tree_walker_zeal`,
+/// `eval_program_vm_zeal`), for the tests that must hold with a collection
+/// between any two steps, allocating or not, in every lane: the plain run's
+/// adaptive trigger seldom collects in these tests' small programs, and stress
+/// only after allocations.
 ///
 /// These take a *single-backend* evaluator on purpose. Several cases read
 /// `(gc-stats)` counters, which legitimately differ between the backends —
@@ -723,7 +761,7 @@ pub fn assert_eval_with_scheme_char(expr: &str, expected: &str) {
 /// tree-walker — so routing them through the agreement-asserting
 /// `eval_program` would fail on a difference that is not a divergence.
 macro_rules! gc_shared_tests {
-    ($eval:path, $eval_gc_off:path) => {
+    ($eval:path, $eval_gc_off:path, $eval_zeal:path) => {
         /// Pull one `(gc-stats)` field out of the alist the primitive returns.
         fn stat(code_before: &str, field: &str) -> i64 {
             stat_on($eval, code_before, field)
@@ -807,6 +845,27 @@ macro_rules! gc_shared_tests {
             assert!(
                 collections > 0,
                 "no collection was recorded after (gc): {collections}"
+            );
+            // `$eval_zeal` collects with no `(gc)` asked, allocation or not:
+            // a loop of 1000 iterations that allocates nothing passes a safe
+            // point each iteration, and collects at each
+            // (`crates/patina-repl/tests/gc_zeal.rs`' control). Were it
+            // collecting as the environment says, or as stress does, only
+            // after allocations, the tests' zeal halves would test nothing.
+            let [spun] = integers(
+                $eval_zeal,
+                r#"(import (patina debug))
+                   (define (spin n) (if (> n 0) (spin (- n 1))))
+                   (define (collections) (cdr (assq 'collections (gc-stats))))
+                   (define before (collections))
+                   (spin 1000)
+                   (list (- (collections) before))"#,
+            )[..] else {
+                panic!("expected one count")
+            };
+            assert!(
+                spun >= 1000,
+                "{spun} collections under zeal across 1000 iterations that allocate nothing"
             );
         }
 
