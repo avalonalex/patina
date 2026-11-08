@@ -1775,7 +1775,10 @@ const FORWARD_LIBRARY: &str = "(import (scheme base) (patina debug))
 /// and `forward-value` imported by the global namespace, and `x` defined by
 /// the host namespace, whose definition leaves the global namespace without
 /// one. Each name is also read by name once bound, where it was bound.
-fn forward_references_across_a_collection<B: Backend>(interp: Interpreter<B>) -> [String; 3] {
+/// Answers the three reads, and the collections the interpreter ran in all.
+fn forward_references_across_a_collection<B: Backend>(
+    interp: Interpreter<B>,
+) -> ([String; 3], u64) {
     interp.eval_program_owned(FORWARD_LIBRARY).unwrap();
     let env = interp.new_environment();
     interp
@@ -1813,10 +1816,11 @@ fn forward_references_across_a_collection<B: Backend>(interp: Interpreter<B>) ->
             "`{name}` is not bound by name where it was bound"
         );
     }
-    ["(g)", "(read-forward)", "(read-x)"].map(|call| {
+    let answers = ["(g)", "(read-forward)", "(read-x)"].map(|call| {
         let value = interp.eval_str_in(&env, call).unwrap();
         interp.display_tagged(value)
-    })
+    });
+    (answers, collections(&interp))
 }
 
 /// Host code reads the global definition, the global import and the host
@@ -1833,26 +1837,27 @@ fn forward_references_across_a_collection<B: Backend>(interp: Interpreter<B>) ->
 /// where a linked record reads unbound; the reads by name show that each
 /// definition left its name where a unit loaded later finds it. Run on each
 /// backend's interpreter and on a zeal one, which also collects at the entry
-/// of each host unit's frame, before its closures are made.
+/// of each host unit's frame, before its closures are made, and must have
+/// collected beyond the two collections the host asks for: a zeal helper
+/// that collected only when asked would pass the answers and test nothing.
 #[test]
 fn a_host_forward_reference_reads_the_global_definition_made_after_a_collection() {
     let expected = ["9", "imported", "local"];
-    assert_eq!(
-        forward_references_across_a_collection(vm_interpreter()),
-        expected
+    let (answers, _) = forward_references_across_a_collection(vm_interpreter());
+    assert_eq!(answers, expected);
+    let (answers, collected) = forward_references_across_a_collection(vm_interpreter_zeal());
+    assert_eq!(answers, expected, "under zeal");
+    assert!(
+        collected > 2,
+        "{collected} collections under zeal on the VM, and the host asks for 2"
     );
-    assert_eq!(
-        forward_references_across_a_collection(vm_interpreter_zeal()),
-        expected,
-        "under zeal"
-    );
-    assert_eq!(
-        forward_references_across_a_collection(tree_walker_interpreter()),
-        expected
-    );
-    assert_eq!(
-        forward_references_across_a_collection(tree_walker_interpreter_zeal()),
-        expected,
-        "under zeal"
+    let (answers, _) = forward_references_across_a_collection(tree_walker_interpreter());
+    assert_eq!(answers, expected);
+    let (answers, collected) =
+        forward_references_across_a_collection(tree_walker_interpreter_zeal());
+    assert_eq!(answers, expected, "under zeal");
+    assert!(
+        collected > 2,
+        "{collected} collections under zeal on the tree-walker, and the host asks for 2"
     );
 }
