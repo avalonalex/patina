@@ -806,6 +806,16 @@ macro_rules! gc_shared_tests {
             );
         }
 
+        /// [`assert_gc_eval_to`], and the same under `$eval_zeal`.
+        fn assert_gc_and_zeal_eval_to(code: &str, expected: &str) {
+            assert_gc_eval_to(code, expected);
+            let result = $eval_zeal(code);
+            assert_eq!(
+                result, expected,
+                "\nUnder zeal\nProgram:\n{code}\nExpected: {expected}\nGot: {result}"
+            );
+        }
+
         #[test]
         fn gc_runs_and_reclaims_unreachable_pairs() {
             // Allocate 5000 conses, each garbage at once, and collect: the
@@ -1238,6 +1248,62 @@ macro_rules! gc_shared_tests {
             assert!(
                 reclaimed >= 19 * 5000 * PAIR_BYTES,
                 "20 rounds of 5000 conses, and {reclaimed} bytes reclaimed"
+            );
+        }
+
+        #[test]
+        fn a_forward_reference_links_the_definition_made_after_a_collection() {
+            // `g`'s code reads `h` before anything binds it, and `h` is
+            // defined only after two collections. The read goes by name
+            // today, and finds the definition whenever it is made. Once
+            // 4b.9 links a unit's names when it loads (#836), `g`'s unit
+            // links `h` to a placeholder: a record nothing binds, which a
+            // collection keeps only while live code's link table holds it.
+            // `g`'s closure is live, so the collections must keep it, and
+            // the definition must adopt it, or `g` reads a record the
+            // definition never wrote. Under zeal too, with a collection at
+            // every safe point between the forms.
+            assert_gc_and_zeal_eval_to(
+                r#"
+                (import (patina debug))
+                (define (g) (h))
+                (gc) (gc)
+                (define (h) 9)
+                (g)
+                "#,
+                "9",
+            );
+        }
+
+        #[test]
+        fn a_placeholder_only_a_captured_continuation_links_survives_a_collection() {
+            // `later` is read only by the anonymous procedure's code, and
+            // once its form has returned nothing holds that code but the
+            // continuation `k` captured inside it. `(k #f)` re-enters it
+            // after the collections and the definition: the rest of the
+            // procedure's body runs again, with `n` at 2, so `seen` is set
+            // only on the re-entry. On both backends a continuation a
+            // top-level form captured ends with that form, and the program
+            // goes on after the form that invoked it, so the forms between
+            // do not run again. Once 4b.9 links names at load (#836), the
+            // placeholder for `later` is held only through the frames of
+            // that continuation, whose code a collection must trace: were
+            // it dropped, the definition would bind a new record that the
+            // resumed code never reads. Under zeal too.
+            assert_gc_and_zeal_eval_to(
+                r#"
+                (import (patina debug))
+                (define k #f) (define n 0) (define seen 'none)
+                ((lambda ()
+                   (call/cc (lambda (c) (set! k c)))
+                   (set! n (+ n 1))
+                   (if (> n 1) (set! seen later))))
+                (gc) (gc)
+                (define later 7)
+                (if (= n 1) (k #f))
+                seen
+                "#,
+                "7",
             );
         }
     };
