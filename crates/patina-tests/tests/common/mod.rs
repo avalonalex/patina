@@ -183,10 +183,12 @@ pub fn tree_walker_interpreter_gc_off() -> TreeWalkInterpreter {
 
 /// [`vm_interpreter`], collecting at every outermost safe point
 /// (`GcMode::Zeal`, what `PATINA_GC_ZEAL=entry` selects), whatever the
-/// environment says: for a test that must hold with a collection between
-/// any two steps, allocating or not, in every lane, the plain debug run
-/// included. Stress counts allocations, so a stretch that allocates nothing
-/// never collects under it (#625).
+/// environment says: for a test that must hold with a collection at each
+/// of them, allocating or not, in every lane, the plain debug run included.
+/// On the VM that is a frame's entry or a generic call's return (#700).
+/// Stress counts allocations, so a stretch that allocates nothing never
+/// collects under it (#625). Its collections count in the stress lane's
+/// record whatever the lane's variable says.
 pub fn vm_interpreter_zeal() -> Interpreter<VmBackend> {
     vm_interpreter_with(VmBackend::with_gc_mode(GcMode::Zeal))
 }
@@ -751,9 +753,11 @@ pub fn assert_eval_with_scheme_char(expr: &str, expected: &str) {
 /// environment obeys (#626). `$eval_zeal` is the same backend collecting at
 /// every outermost safe point (`eval_program_tree_walker_zeal`,
 /// `eval_program_vm_zeal`), for the tests that must hold with a collection
-/// between any two steps, allocating or not, in every lane: the plain run's
+/// at each of them, allocating or not, in every lane: the plain run's
 /// adaptive trigger seldom collects in these tests' small programs, and stress
-/// only after allocations.
+/// only after allocations. `collection_is_recorded_in_stats` checks that it
+/// collects where nothing allocates, and `assert_gc_and_zeal_eval_to` that it
+/// collected in each program it runs beyond the `(gc)`s the program asks for.
 ///
 /// These take a *single-backend* evaluator on purpose. Several cases read
 /// `(gc-stats)` counters, which legitimately differ between the backends —
@@ -806,13 +810,24 @@ macro_rules! gc_shared_tests {
             );
         }
 
-        /// [`assert_gc_eval_to`], and the same under `$eval_zeal`.
+        /// [`assert_gc_eval_to`], and the same under `$eval_zeal`, which must
+        /// have collected beyond the `(gc)`s `code` asks for: run again with
+        /// a last form that reads `collections`, it counts more than them. A
+        /// zeal helper that collected only when asked, or as the adaptive
+        /// trigger does, would pass the answer and test nothing.
         fn assert_gc_and_zeal_eval_to(code: &str, expected: &str) {
             assert_gc_eval_to(code, expected);
             let result = $eval_zeal(code);
             assert_eq!(
                 result, expected,
                 "\nUnder zeal\nProgram:\n{code}\nExpected: {expected}\nGot: {result}"
+            );
+            let asked = code.matches("(gc)").count() as i64;
+            let collections = stat_on($eval_zeal, code, "collections");
+            assert!(
+                collections > asked,
+                "{collections} collections under zeal, and the program asks for {asked}\
+                 \nProgram:\n{code}"
             );
         }
 
@@ -857,25 +872,28 @@ macro_rules! gc_shared_tests {
                 "no collection was recorded after (gc): {collections}"
             );
             // `$eval_zeal` collects with no `(gc)` asked, allocation or not:
-            // a loop of 1000 iterations that allocates nothing passes a safe
+            // a loop of 100 iterations that allocates nothing passes a safe
             // point each iteration, and collects at each
-            // (`crates/patina-repl/tests/gc_zeal.rs`' control). Were it
-            // collecting as the environment says, or as stress does, only
-            // after allocations, the tests' zeal halves would test nothing.
+            // (`crates/patina-repl/tests/gc_zeal.rs`'s control, at a tenth of
+            // its 1000: the plain mode collects 0 times across it and stress
+            // at 1 a few, and the tree-walker's 8 collections an iteration
+            // cost it 0.66 s at 1000). Were it collecting as the environment
+            // says, or as stress does, only after allocations, the tests'
+            // zeal halves would test nothing.
             let [spun] = integers(
                 $eval_zeal,
                 r#"(import (patina debug))
                    (define (spin n) (if (> n 0) (spin (- n 1))))
                    (define (collections) (cdr (assq 'collections (gc-stats))))
                    (define before (collections))
-                   (spin 1000)
+                   (spin 100)
                    (list (- (collections) before))"#,
             )[..] else {
                 panic!("expected one count")
             };
             assert!(
-                spun >= 1000,
-                "{spun} collections under zeal across 1000 iterations that allocate nothing"
+                spun >= 100,
+                "{spun} collections under zeal across 100 iterations that allocate nothing"
             );
         }
 
@@ -1259,51 +1277,110 @@ macro_rules! gc_shared_tests {
             // 4b.9 links a unit's names when it loads (#836), `g`'s unit
             // links `h` to a placeholder: a record nothing binds, which a
             // collection keeps only while live code's link table holds it.
-            // `g`'s closure is live, so the collections must keep it, and
-            // the definition must adopt it, or `g` reads a record the
-            // definition never wrote. Under zeal too, with a collection at
-            // every safe point between the forms.
+            // `g`'s closure is live, so the collections must keep it: `(g)`
+            // reads through the link, and a read of a record they freed is
+            // what a check build's stale-reference check refuses (#621),
+            // where a release build may find the slot reused and answer 9.
+            //
+            // The answer cannot show that the definition adopts the
+            // placeholder: where a linked record reads unbound, the VM's
+            // cold read goes by name, and finds a record the definition
+            // made beside it. `binding-records` shows it. Between its
+            // readings the program defines `g` and `h`, two records on both
+            // backends, today and once the definitions adopt what the load
+            // linked; a definition that made a record of its own would
+            // leave its placeholder counted beside it, one more. `(h)` in
+            // the last form is linked when that form loads, after the
+            // definition, so finds `h` by name: a definition that took the
+            // placeholder out of the namespace's store without giving the
+            // namespace its slot would leave it unbound. The readings'
+            // variables are defined before the first and then `set!`, so
+            // that no definition but `g`'s and `h`'s falls between them.
+            // Under zeal too, with a collection at every outermost safe
+            // point between the forms.
             assert_gc_and_zeal_eval_to(
                 r#"
                 (import (patina debug))
+                (define (records) (cdr (assq 'binding-records (gc-stats))))
+                (define r0 #f) (define r1 #f)
+                (set! r0 (records))
                 (define (g) (h))
                 (gc) (gc)
                 (define (h) 9)
-                (g)
+                (set! r1 (records))
+                (list (g) (h) (- r1 r0))
                 "#,
-                "9",
+                "(9 9 2)",
             );
         }
 
         #[test]
         fn a_placeholder_only_a_captured_continuation_links_survives_a_collection() {
-            // `later` is read only by the anonymous procedure's code, and
-            // once its form has returned nothing holds that code but the
-            // continuation `k` captured inside it. `(k #f)` re-enters it
-            // after the collections and the definition: the rest of the
-            // procedure's body runs again, with `n` at 2, so `seen` is set
-            // only on the re-entry. On both backends a continuation a
-            // top-level form captured ends with that form, and the program
-            // goes on after the form that invoked it, so the forms between
-            // do not run again. Once 4b.9 links names at load (#836), the
-            // placeholder for `later` is held only through the frames of
-            // that continuation, whose code a collection must trace: were
-            // it dropped, the definition would bind a new record that the
-            // resumed code never reads. Under zeal too.
+            // `later` is read only on a re-entry of the continuation `k`,
+            // captured inside a top-level form, and once that form has
+            // returned nothing holds the code that reads it but `k`.
+            // `(k #f)` re-enters it after the collections and the
+            // definition: the rest of the form runs again, with `n` at 2,
+            // so `seen` is set only on the re-entry. On both backends a
+            // continuation a top-level form captured ends with that form,
+            // and the program goes on after the form that invoked it, so
+            // the forms between do not run again. Once 4b.9 links names at
+            // load (#836), the placeholder for `later` is held only through
+            // `k`, whose code a collection must trace; a read of a record
+            // freed under it is what a check build's stale-reference check
+            // refuses (#621).
+            //
+            // Two programs, since `k` holds code two ways. In the first the
+            // read is in an anonymous procedure's code, and `k`'s frames
+            // hold that procedure's closure in a slot as well as running its
+            // code. In the second it is in the form's own code, whose frame
+            // makes no closure, so only the frame's code reaches the unit
+            // that links `later`: `(if #t ...)` keeps the form one
+            // expression, where a top-level `begin` would be spliced into
+            // forms of their own. Each counts `binding-records` across the
+            // definition, one record, today and once the definition adopts
+            // the placeholder the load linked, as in
+            // `a_forward_reference_links_the_definition_made_after_a_collection`.
+            // Under zeal too.
             assert_gc_and_zeal_eval_to(
                 r#"
                 (import (patina debug))
+                (define (records) (cdr (assq 'binding-records (gc-stats))))
+                (define r0 #f) (define r1 #f)
                 (define k #f) (define n 0) (define seen 'none)
+                (set! r0 (records))
                 ((lambda ()
                    (call/cc (lambda (c) (set! k c)))
                    (set! n (+ n 1))
                    (if (> n 1) (set! seen later))))
                 (gc) (gc)
                 (define later 7)
+                (set! r1 (records))
                 (if (= n 1) (k #f))
-                seen
+                (list seen n (- r1 r0))
                 "#,
-                "7",
+                "(7 2 1)",
+            );
+            assert_gc_and_zeal_eval_to(
+                r#"
+                (import (patina debug))
+                (define (records) (cdr (assq 'binding-records (gc-stats))))
+                (define r0 #f) (define r1 #f)
+                (define k #f) (define n 0) (define seen 'none)
+                (define (capture!) (call/cc (lambda (c) (set! k c))))
+                (set! r0 (records))
+                (if #t
+                    (begin
+                      (capture!)
+                      (set! n (+ n 1))
+                      (if (> n 1) (set! seen later))))
+                (gc) (gc)
+                (define later 7)
+                (set! r1 (records))
+                (if (= n 1) (k #f))
+                (list seen n (- r1 r0))
+                "#,
+                "(7 2 1)",
             );
         }
     };
