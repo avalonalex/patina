@@ -966,6 +966,7 @@ a traced struct, or a root provider meets two rules:
    of its literals and its body's environments, `CpsContinuation`, `ContValue`
    and each branch of the expression-literal walk; the
    `gc_edge_tests` modules of `environment.rs` and `library.rs`;
+   `link_table.rs`'s `link_table_fields` for a unit's link table (#836);
    `vm_state/trace_sentinel_tests.rs` for the VM's records, on the VM;
    `cps_eval/gc_roots/sentinel_tests.rs` for the tree-walker's, on the
    tree-walker; and `library_registry.rs`'s `gc_root_tests`.

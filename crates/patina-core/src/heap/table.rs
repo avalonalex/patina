@@ -4,7 +4,8 @@
 //! The redesign gives each heap tables that Rust owns and more than one
 //! owner reaches: the handle table, its standard port parameters, the root
 //! set, the literal pool, the `PortTable` and the `FinalRegistry` (stage 4a,
-//! #785; the registry's young and old lists at 5a) now, then the
+//! #785; the registry's young and old lists at 5a), and the namespaces'
+//! placeholder stores and the heap's list of them (4b, #836) now, then the
 //! `CodeStore` (4e), the `HostPayloadTable` (4f) and the thread table (9).
 //! Under N carriers each needs a lock. Behind one wrapper from the start,
 //! that is one change in one place, not a hunt through every table for the

@@ -187,11 +187,12 @@ pub struct CodeObject {
     /// The unit's link table (#836): the spelling of each global operand
     /// (`LoadGlobal`, `StoreGlobal`, `Define`, `CallPrimitive` and the
     /// inline opcodes carry an index into it), made by pass 5 and shared by
-    /// every member of the unit through this one `Rc`. Code with no global
-    /// operand, the runtime's stubs among it, has an empty one.
+    /// every member of the unit through this one `Rc`, and an entry beside
+    /// each for the record it will link, `UNBOUND` until then. Code with no
+    /// global operand, the runtime's stubs among it, has an empty one.
     #[trace(
         skip,
-        reason = "spellings only, no heap value; once linked, a table is traced by its unit's code id, never from the code store (4b's start decision 3)"
+        reason = "spellings, and entries that stay UNBOUND, an immediate, until the VM links its units at load (#836); a linked table is to be traced by its unit's code id, never from the code store (4b's start decision 3)"
     )]
     pub links: Rc<LinkTable>,
 

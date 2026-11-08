@@ -129,6 +129,7 @@ mod tests {
     use crate::heap::trace::Trace as _;
     use crate::heap::trace_sentinels::collect_only;
     use crate::tagged_value::TaggedValue;
+    use std::cell::Cell;
     use std::rc::Rc;
 
     /// An unlinked table over `names`, as pass 5 makes one.
@@ -300,10 +301,12 @@ mod tests {
         assert_eq!(linked.entry(0), kept);
     }
 
-    /// The table's sentinel test (#623): its one traced field, `entries`,
-    /// holds a record that only it reaches once the namespace that linked
-    /// it is dropped, and a collection with the table as the only root keeps
-    /// the record, its cell and the value.
+    /// The table's sentinel test (#623): built by a struct literal, so a
+    /// field added to the table stops this compiling until its tracing is
+    /// decided (`docs/GC_DESIGN.md` §5.4, rule 2). Its one traced field,
+    /// `entries`, holds a record that only it reaches once the namespace
+    /// that bound it is dropped, and a collection with the table as the only
+    /// root keeps the record, its cell and the value.
     #[test]
     fn link_table_fields() {
         let heap = new_shared_heap();
@@ -312,12 +315,15 @@ mod tests {
             &mut heap.borrow_mut(),
             "LinkTable.entries[0]: through x's record and its cell",
         );
-        let linked = table(&["x"]);
-        {
+        let record = {
             let ns = Rc::new(Environment::with_heap(&heap));
             ns.define(&heap, "x", value);
-            linked.link_in(&heap, &ns);
-        }
+            ns.local_record("x").expect("x's record").word()
+        };
+        let linked = LinkTable {
+            entries: Box::new([Cell::new(record)]),
+            names: Box::new([Rc::from("x")]),
+        };
         collect_only(&mut heap.borrow_mut(), |visitor| linked.trace(visitor));
         s.assert_survived(&heap.borrow());
     }

@@ -1480,8 +1480,9 @@ function to take its struct apart by name. Sentinel tests, in the Test Suite,
 put a fresh value in each traced field of each traced struct, root the struct
 alone, collect, and check each value survived (`heap::sentinels`); each fails
 with its field's trace line deleted. They live beside the code they test:
-`patina-core`'s `heap::trace_sentinels`, `environment::gc_edge_tests` and
-`library::gc_edge_tests`, `patina-vm`'s `trace_sentinel_tests`, the
+`patina-core`'s `heap::trace_sentinels`, `environment::gc_edge_tests`,
+`library::gc_edge_tests` and `link_table::tests::link_table_fields`,
+`patina-vm`'s `trace_sentinel_tests`, the
 tree-walker's `gc_roots::sentinel_tests` and `patina-runtime`'s
 `gc_root_tests`.
 
