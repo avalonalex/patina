@@ -1259,8 +1259,10 @@ impl<B: Backend> Interpreter<B> {
     /// Evaluate a string containing one expression in the host environment
     /// `env`, and answer a handle on its value: [`Interpreter::eval_str_owned`]
     /// in `env` rather than the global environment (#620). What it defines
-    /// stays in `env`, and what it imports is bound there. Panics on a handle
-    /// another interpreter made.
+    /// stays in `env`, and what it imports is bound there. On the VM, a
+    /// handle that holds a frame (from the deprecated `hold_environment`)
+    /// answers an error naming its kind (#835). Panics on a handle another
+    /// interpreter made.
     pub fn eval_str_in(
         &self,
         env: &OwnedEnvironment,
@@ -1281,7 +1283,9 @@ impl<B: Backend> Interpreter<B> {
     /// answer a handle on the last result:
     /// [`Interpreter::eval_program_owned`] in `env` rather than the global
     /// environment (#620). What the program defines stays in `env`, and what
-    /// it imports is bound there. Panics on a handle another interpreter made.
+    /// it imports is bound there. On the VM, a handle that holds a frame
+    /// (from the deprecated `hold_environment`) answers an error naming its
+    /// kind (#835). Panics on a handle another interpreter made.
     ///
     /// ```
     /// # #[cfg(feature = "vm")]

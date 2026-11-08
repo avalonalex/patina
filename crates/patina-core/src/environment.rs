@@ -1240,8 +1240,8 @@ impl Environment {
         );
         // Charged to its parent's account, its heap's, which every
         // parentless namespace has (#834), as a parentless namespace is
-        // charged (question 2's option (a) on #835, pending the owner's
-        // ruling).
+        // charged (the owner's ruling (a) of 2026-11-07 on #835's question
+        // 2).
         let charge = Some(NamespaceCharge::new(
             parent
                 .rare

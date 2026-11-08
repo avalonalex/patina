@@ -838,6 +838,8 @@ impl Heap {
     ///
     /// Deprecated (#831): it holds any environment of the heap, a frame
     /// included, where a host's comes from `Interpreter::new_environment`.
+    /// The VM refuses to evaluate in a frame it holds, with an error naming
+    /// its kind, where the tree-walker evaluates in one (#835).
     /// [`Heap::hold_namespace`] holds only a namespace (#835); this goes at
     /// stage 5e.
     #[deprecated(

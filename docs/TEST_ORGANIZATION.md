@@ -1135,9 +1135,9 @@ namespace since #835, to rooting what is bound in it, on both backends
 - a library macro used in a host namespace that imports the binding its
   template names, which keeps that binding past a later host definition of
   the name, as at top level, while the global environment imports nothing
-  of it (#851; question 3's option (c) on #835, pending the owner's
-  ruling, has the desugarer ask the host namespace for the import alias
-  before the global environment);
+  of it (#851; the owner's ruling (c) of 2026-11-07 on #835's question 3
+  has the desugarer ask the host namespace for the import alias before the
+  global environment);
 - the same macro used in a host namespace that imports nothing, after the
   global environment imports it and the binding its template names, which
   keeps the global environment's import: the desugarer asks the global

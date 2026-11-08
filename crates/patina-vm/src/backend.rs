@@ -281,7 +281,8 @@ impl VmBackend {
     /// A frame is refused with an error naming its kind
     /// ([`Environment::frame_kind`], #835): a raw frame, or a frame under a
     /// host namespace, handed to `Backend::eval` or `eval_with_source_map`,
-    /// or to a handle form through the deprecated `Heap::hold_environment`.
+    /// or to a handle form through the deprecated `Heap::hold_environment`
+    /// or `Cx::hold_environment`.
     /// The kind is asked first, so a refused frame neither loads a library
     /// nor binds an import. The global namespace, a host namespace and a
     /// parentless namespace (a library's, a specifier's) run as before. The

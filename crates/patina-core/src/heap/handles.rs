@@ -442,7 +442,8 @@ impl fmt::Debug for Owned {
 /// It holds a namespace: a host namespace from an interpreter's
 /// `new_environment`, or one `Heap::hold_namespace` held. The deprecated
 /// holders hold any environment of the heap until stage 5e, so the
-/// guarantee holds from then (#831). The interpreter that made it uses it;
+/// guarantee holds from then (#831); the VM refuses to evaluate in a frame
+/// one of them held (#835). The interpreter that made it uses it;
 /// it panics on a handle from another interpreter. Like [`Owned`], the
 /// handle keeps neither the heap nor its interpreter alive, and dropping it
 /// after the interpreter does nothing.
