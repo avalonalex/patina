@@ -1035,10 +1035,12 @@ const REFUSED_LIBRARY: &str = "(define-library (host4b refused)
 /// global namespace. Each frame is given `Backend::eval`, an `import` by
 /// `eval_with_source_map`, and, held through the deprecated
 /// `Heap::hold_environment`, `eval_str_in` and `eval_program_in`; after each
-/// entry the interpreter evaluates a global form. The frame of the global
+/// entry the interpreter evaluates a global form. Each is then given
+/// `Backend::define`, which answers no `Result`. The frame of the global
 /// namespace is also given a `define-library`, which a later global
-/// `import` asks for. No frame is given a `define`: the tree-walker binds a
-/// frame of temporaries' definitions in the environment above it (#680).
+/// `import` asks for. No frame is given a `define` form: the tree-walker
+/// binds a frame of temporaries' definitions in the environment above it
+/// (#680), where `Backend::define` writes the frame it is given.
 #[allow(
     deprecated,
     reason = "builds the raw frames the refusal is for: `with_parent` and \
@@ -1091,6 +1093,20 @@ fn raw_frames<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
             interp.eval_program_in(&held, "(+ 1 2) (* 2 3)"),
         ));
         out.push(next());
+        interp
+            .backend()
+            .define(frame, "defined-here", TaggedValue::fixnum(5));
+        out.push(format!(
+            "frame binds defined-here: {}",
+            frame
+                .local_names(&heap)
+                .iter()
+                .any(|name| name == "defined-here")
+        ));
+        out.push(format!(
+            "global binds defined-here: {}",
+            interp.lookup("defined-here").is_some()
+        ));
     }
     out.push(shown(
         interp
@@ -1127,7 +1143,9 @@ fn refusal_named(answer: String) -> String {
 /// nothing: a later global `import` of the library fails. After each
 /// refusal the next form evaluates. The tree-walker evaluates each frame by
 /// name, as it did before the refusal: the answers below are the base's
-/// (e392fe3d), where the VM answered the same.
+/// (e392fe3d), where the VM answered the same. `Backend::define` still
+/// writes each frame on both backends, a frame of temporaries included, and
+/// binds nothing in the global namespace.
 #[test]
 fn a_raw_frame_is_refused_by_the_vm() {
     let by_vm: Vec<String> = raw_frames(vm_interpreter())
@@ -1149,6 +1167,8 @@ fn a_raw_frame_is_refused_by_the_vm() {
                 "42",
                 &refused,
                 "42",
+                "frame binds defined-here: true",
+                "global binds defined-here: false",
             ]
             .map(String::from),
         );
@@ -1180,6 +1200,8 @@ fn a_raw_frame_is_refused_by_the_vm() {
             "42",
             "6",
             "42",
+            "frame binds defined-here: true",
+            "global binds defined-here: false",
         ]);
     }
     expected.extend(["#<unspecified>", "42", "loaded", "42"]);

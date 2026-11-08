@@ -1193,9 +1193,12 @@ each answers an error naming the frame's kind, not a panic; the refused
 namespace's frame loads nothing, so a later global `import` of it fails.
 After each refusal the next form evaluates. The tree-walker evaluates in each
 frame by name, as both backends did before the refusal, and its answers are
-pinned at the base's (e392fe3d). The test fails when the VM evaluates a
-frame, and when it asks the kind only after a `define-library` or an
-`import`.
+pinned at the base's (e392fe3d). Each frame is also given `Backend::define`,
+which answers no `Result` and writes the frame itself on both backends, a
+frame of temporaries included, binding nothing in the global namespace. The
+test fails when the VM evaluates a frame, when it asks the kind only after a
+`define-library` or an `import`, and when either backend's `Backend::define`
+skips a frame or writes the global namespace instead.
 
 With either of the table's environment traces removed, the tests of that
 trace fail, and so does its sentinel test. Without the VM's alpha-renaming
