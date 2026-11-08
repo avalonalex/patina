@@ -17,7 +17,11 @@ mod common;
 use common::*;
 use patina_interpreter::Backend;
 
-gc_shared_tests!(eval_program_tree_walker, eval_program_tree_walker_gc_off);
+gc_shared_tests!(
+    eval_program_tree_walker,
+    eval_program_tree_walker_gc_off,
+    eval_program_tree_walker_zeal
+);
 
 #[test]
 fn closure_environment_survives_collection() {

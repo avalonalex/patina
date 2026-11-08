@@ -1235,6 +1235,24 @@ asks (`eval_closure`, for `eval`, `load` and `Step::Eval`, or
 `vm_eval_expr`, for `eval_expr`), and when the message at either refusing
 site drifts from the other's.
 
+4b.9's forward references add one more (#836), on both backends:
+`a_host_forward_reference_reads_the_global_definition_made_after_a_collection`.
+A host namespace compiles reads of `h`, `forward-value` and `x` while
+nothing binds them, as `lookup_in` checks; after two collections the global
+namespace defines `h` and imports `(host4b forward)`, and the host namespace
+defines `x`. The reads answer `9`, `imported` and `local`, each name reads
+by name where it was bound, and the global namespace binds no `x`. It runs
+on each backend's interpreter and on a zeal one, which must have collected
+beyond the two collections the host asks for. It holds on the base, where
+such a read goes by name, and guards 4b.9's placeholders and the host's
+read-through records; its mutation check (2026-11-07) failed it when a host
+namespace's `define` bound the global namespace, when a host namespace read
+through its parent only what the parent bound at the last collection (the
+plain runs), when a collection let go of the code of a live closure, when
+one let go of a just-loaded host unit at its frame's entry, before its
+closures were made, and when the zeal interpreter collected only when asked
+(the zeal runs).
+
 With either of the table's environment traces removed, the tests of that
 trace fail, and so does its sentinel test. Without the VM's alpha-renaming
 walking the environment's parents for introduced definitions, the global
@@ -1302,7 +1320,7 @@ later as a wrong answer or not at all (#621, #624, #625).
 |---|---|---|---|---|---|
 | Differential | `scripts/run_gc_differential.sh [binary]` | the chibi suite under GC off, the adaptive default and stress, on both backends, with the tally pinned; plus two reclamation proofs per backend, in bytes (below) | `PATINA_GC_STRESS_INTERVAL`, default 16; 1 in the release lane | the release lane's step took 5.9 min on the runner and the debug lane's 1.1 min (2026-10-03) | `ci.yml`, every change: release `gc-check` at 1, and debug at 16 |
 | Zeal | `scripts/run_gc_zeal.sh [binary]` | `tests/scheme/control/*.scm` except `tail-recursion.scm` under GC off and zeal, on both backends; each file must match, exit 0, print its SRFI 64 summary and have collected, and the binary must first pass a probe that it honours zeal (below) | `PATINA_GC_ZEAL=entry`: every outermost safe point, which on the VM is a frame's entry or a generic call's return (#700) | 10 min on the runner (2026-10-03), within the job's 60 | `gc-zeal.yml`, release `gc-check`, when a change touches the VM's runtime, compiler or types, `patina-core`'s heap, `tagged_value.rs`, `environment.rs` or `library.rs`, the library loader or registry, the runtime's `import_set.rs`, either backend's `backend.rs`, the tree-walker's evaluator, the toolchain, or the lane's own files, and weekly on `main`; it also runs `finished_forms_release_code` under zeal |
-| Stress, per PR | `scripts/run_gc_stress_tests.sh` | 16 `cargo test` targets that drive the collector, control flow and library loading through the embedding API (`callability`, `control_flow_matrix`, `cps_features`, `ephemerons`, `escape_from_primitive`, `finished_forms_release_code`, `gc_tree_walker`, `gc_vm`, `host_environments`, `hygiene_matrix`, `interpreter_api`, `library_loading`, `macro_definition_env`, `owned_handles`, `rooted_loading`, `vm_callprimitive`), and `scheme_suite.rs`; each must run its pinned number of tests, none filtered out, pass, and report at least its pinned number of collections | `PATINA_GC_STRESS=16`; 4096 for `scheme_suite.rs` | about a minute: 62 s here (2026-10-02), 37 s of it the 13 targets, 28 s of those `gc_tree_walker`, nearly all one deep-recursion test; the step's limit is 15 min | `ci.yml`'s Test Suite, every change, on ubuntu and macOS, in the debug build that job has just tested |
+| Stress, per PR | `scripts/run_gc_stress_tests.sh` | 16 `cargo test` targets that drive the collector, control flow and library loading through the embedding API (`callability`, `control_flow_matrix`, `cps_features`, `ephemerons`, `escape_from_primitive`, `finished_forms_release_code`, `gc_tree_walker`, `gc_vm`, `host_environments`, `hygiene_matrix`, `interpreter_api`, `library_loading`, `macro_definition_env`, `owned_handles`, `rooted_loading`, `vm_callprimitive`), and `scheme_suite.rs`; each must run its pinned number of tests, none filtered out, pass, and report at least its pinned number of collections | `PATINA_GC_STRESS=16`; 4096 for `scheme_suite.rs` | about a minute: 66 s here (2026-11-07) after `cargo test --all --lib --tests`, whose build it reuses, as CI runs it, 49 s of it the 16 targets, 27 s of those `gc_tree_walker`, nearly all one deep-recursion test, and 17 s `scheme_suite.rs`; 105–117 s that day in runs that had cargo build around each target first, their tests taking the same 67–68 s; the step's limit is 15 min | `ci.yml`'s Test Suite, every change, on ubuntu and macOS, in the debug build that job has just tested |
 | Stress, nightly | `scripts/run_larceny_gc_stress.sh [--tree-walker] [--r6rs]` | Larceny's R7RS and `(r6rs ...)` suites at the pinned commit, on both backends; each suite's tally must be its row in `scheme_tests/reports/larceny_gc_stress.tsv`, its exit status the one its tally implies, with no panic, no timeout, at least the row's pinned number of collections, and only the job's backend in its process | 16; 4096 for `char`, `flonum`, `lazy`, `sort` and `stream`; `ephemeron` left out until #609 | a job per backend, each limited to 75 min; on the runner (2026-10-03) the VM's R7RS lane took 434 s and its `(r6rs ...)` lane 24 s, a 9-minute job, and the tree-walker's 1774 s and 51 s, a 31-minute job, about 2.2 times the time on an M-series Mac (307 s, 20–22 s, 757–1008 s, 29–36 s); a suite may take 600 s on the VM and 1500 s on the tree-walker, whose slowest, `stream`, took 783 s | `nightly.yml`, release `gc-check`, daily on `main`, and on a pull request that changes the lane |
 
 Zeal costs about 7× stress 1, so it never runs the whole suite: the chibi suite
@@ -1625,6 +1643,17 @@ stage is judged by (`PRD/GC_PRD.md` §16). The sets:
 - **large-live**: 10 and 20 million objects live, run only with
   `--large-live`.
 
+`tak`, Larceny's `tak` at count 500 on 18, 12, 6, is in no set: it is the
+global-path workload of at least 1 s that row 4b's gate names (#836),
+1.24–1.34 s wall on the VM here in single runs (2026-11-07; #836 measured
+1.07–1.09 s), run with `--workload tak`, pending the owner's ruling on
+#836's question 1 (recommended: in no set through stage 4b, with the
+stage-4 exit baseline, decision 25 on #782, still open, deciding whether it
+joins `gbs`). Names
+given with `--workload` replace the sets, silently: `--set gbs --workload
+tak` runs only `tak`. So a gate that names it runs two A/Bs, the sets and
+then `--workload tak`.
+
 The Larceny-derived workloads are LGPL and are not vendored. They run from
 the checkout that `run_larceny_tests.sh` uses (`LARCENY_DIR`, by default
 `~/Project/reference/larceny`). Without it they are reported as `SKIPPED`
@@ -1678,6 +1707,7 @@ one build here; a comparison takes three times that.
 ./scripts/run_gc_benchmarks.sh --rounds 3                    # this build, every set
 ./scripts/run_gc_benchmarks.sh --base main --set gbs         # main/branch/main
 ./scripts/run_gc_benchmarks.sh --workload queue3 --workload libload --rounds 5
+./scripts/run_gc_benchmarks.sh --base main --workload tak    # row 4b's tak, apart from the sets
 ```
 
 The report goes to `target/benchmark-runs/<stamp>/report.json`, with every
@@ -1885,6 +1915,13 @@ not. They name their mode instead: `gc_shared_tests!`'s
 `a_form_whose_continuation_has_died_lets_its_code_go_at_a_collection`, which
 since #629 keeps every continuation it captures and passes in every mode, so
 it still reads the environment, and the zeal lane still runs it under zeal.
+The zeal helpers name theirs too, to collect at every outermost safe point in
+every lane: `vm_interpreter_zeal` and `tree_walker_interpreter_zeal`, which
+`gc_shared_tests!`'s `$eval_zeal` and #836's host test run on. A zeal
+interpreter collects whatever the lane's variable says, and its collections
+land in the stress lane's record, so `gc_vm` and `gc_tree_walker` collect
+without stress too (1285 and 3358 times, 2026-11-07), which their minimums
+must stay above.
 
 The nightly lane's `time` suite measures wall-clock time: one assertion
 requires a one-second loop to stop within 100 ms of its deadline. It passes
