@@ -1290,7 +1290,9 @@ impl Environment {
     /// Deprecated for hosts (#831): nothing roots a frame built here between
     /// calls (#620), and `Interpreter::new_environment` answers a host
     /// namespace held (#835). It goes at stage 5e. The workspace builds its
-    /// frames with [`Environment::child_frame`].
+    /// frames with [`Environment::child_frame`]. The VM refuses to evaluate
+    /// in a frame built here, with an error naming its kind, where the
+    /// tree-walker evaluates in one by name (#835).
     #[deprecated(
         note = "use `Interpreter::new_environment`, which answers an environment held between \
                 calls; nothing roots a frame built here (#620), and this goes at stage 5e (#831)"

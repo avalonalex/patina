@@ -286,7 +286,10 @@ impl VmBackend {
     /// The kind is asked first, so a refused frame neither loads a library
     /// nor binds an import. The global namespace, a host namespace and a
     /// parentless namespace (a library's, a specifier's) run as before. The
-    /// tree-walker still evaluates a frame by name.
+    /// tree-walker still evaluates a frame by name. Scheme `eval` and `load`
+    /// do not come here: they compile through `compile_for_eval`, which asks
+    /// no kind, so a specifier a host makes over a frame is not refused yet
+    /// (#853).
     fn eval_datum(
         &self,
         expr: TaggedValue,

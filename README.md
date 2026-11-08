@@ -307,9 +307,12 @@ backend. Evaluate in the host namespace `new_environment()` answers instead.
 For a frame of the global namespace that means what the frame meant: what is
 defined in it stays in it, and every other name resolves in the global
 namespace. A frame under a host namespace has no equivalent on the VM, since
-a host namespace's parent is the global namespace and none sits under
-another: define the frame's names in the host namespace itself, where all of
-its code sees them, or evaluate on the tree-walker.
+a host namespace's parent must be a parentless namespace (the global
+namespace, for `new_environment()`), so no namespace sits under one: define
+the frame's names in the host namespace itself, where all of its code sees
+them, or evaluate on the tree-walker. Scheme `eval` through a specifier a
+host makes over a frame is not refused yet
+([#853](https://github.com/avalonalex/patina/issues/853)).
 
 `interrupt_handle()` answers an `InterruptHandle`, which a host uses to
 interrupt a running evaluation from another thread, a timer or a signal
