@@ -1625,6 +1625,12 @@ stage is judged by (`PRD/GC_PRD.md` §16). The sets:
 - **large-live**: 10 and 20 million objects live, run only with
   `--large-live`.
 
+`tak`, Larceny's `tak` at count 500 on 18, 12, 6, is in no set: it is the
+global-path workload of at least 1 s that row 4b's gate names (#836), run
+with `--workload tak`, pending the owner's ruling on #836's question 1. A
+run takes names or sets, not both, so a gate that names it runs the sets
+and `--workload tak` apart.
+
 The Larceny-derived workloads are LGPL and are not vendored. They run from
 the checkout that `run_larceny_tests.sh` uses (`LARCENY_DIR`, by default
 `~/Project/reference/larceny`). Without it they are reported as `SKIPPED`
