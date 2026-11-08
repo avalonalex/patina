@@ -5,7 +5,9 @@
 
 use crate::types::code_object::{Arity, CodeObject, CodeObjectId};
 use crate::types::instruction::Instruction;
+use patina_core::LinkIdx;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// Pretty-print a `CodeObject` and all nested lambdas reachable from it.
 ///
@@ -48,7 +50,7 @@ fn disassemble_one(
     let mut nested_ids: Vec<CodeObjectId> = Vec::new();
 
     for (pc, instr) in co.instructions.iter().enumerate() {
-        let line = format_instruction(instr, &mut nested_ids);
+        let line = format_instruction(instr, co.links.names(), &mut nested_ids);
         println!("{}│  {:>4}  {}", indent, pc, line);
     }
 
@@ -64,12 +66,7 @@ fn disassemble_one(
 }
 
 /// Format an inline primitive opcode (Track P P3): `Mnemonic  rD ← name(rA, …)`.
-fn fmt_inline_prim(
-    mnemonic: &str,
-    dst: u16,
-    name: &patina_core::core_expr::Symbol,
-    args: &[u16],
-) -> String {
+fn fmt_inline_prim(mnemonic: &str, dst: u16, name: &str, args: &[u16]) -> String {
     let a: Vec<String> = args.iter().map(|r| format!("r{}", r)).collect();
     fmt_prim_operands(mnemonic, dst, name, &a)
 }
@@ -77,7 +74,7 @@ fn fmt_inline_prim(
 fn fmt_imm_prim(
     mnemonic: &str,
     dst: u16,
-    name: &patina_core::core_expr::Symbol,
+    name: &str,
     a: u16,
     imm: patina_core::tagged_value::TaggedValue,
 ) -> String {
@@ -90,12 +87,7 @@ fn fmt_imm_prim(
 }
 
 /// Shared layout for every inline-primitive mnemonic line.
-fn fmt_prim_operands(
-    mnemonic: &str,
-    dst: u16,
-    name: &patina_core::core_expr::Symbol,
-    operands: &[String],
-) -> String {
+fn fmt_prim_operands(mnemonic: &str, dst: u16, name: &str, operands: &[String]) -> String {
     format!(
         "{:<13}r{} ← {}({})",
         mnemonic,
@@ -105,7 +97,14 @@ fn fmt_prim_operands(
     )
 }
 
-pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -> String {
+/// One instruction's line, a global operand printed as the spelling `names`
+/// (its code's link table's) holds at its index.
+pub fn format_instruction(
+    instr: &Instruction,
+    names: &[Rc<str>],
+    nested: &mut Vec<CodeObjectId>,
+) -> String {
+    let name = |link: &LinkIdx| &*names[*link as usize];
     match instr {
         Instruction::LoadImmediate { dst, val } => {
             format!("LoadImm      r{} ← {:?}", dst, val)
@@ -119,11 +118,11 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
         Instruction::LoadClosure { dst, slot } => {
             format!("LoadClosure  r{} ← closure[{}]", dst, slot)
         }
-        Instruction::LoadGlobal { dst, name } => {
-            format!("LoadGlobal   r{} ← globals[{}]", dst, name)
+        Instruction::LoadGlobal { dst, link } => {
+            format!("LoadGlobal   r{} ← globals[{}]", dst, name(link))
         }
-        Instruction::StoreGlobal { name, src } => {
-            format!("StoreGlobal  globals[{}] ← r{}", name, src)
+        Instruction::StoreGlobal { link, src } => {
+            format!("StoreGlobal  globals[{}] ← r{}", name(link), src)
         }
         Instruction::AllocCell { dst, src } => {
             format!("AllocCell    r{} ← box(r{})", dst, src)
@@ -185,7 +184,7 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
         }
         Instruction::CallPrimitive {
             func_id,
-            name,
+            link,
             args,
             dst,
         } => {
@@ -193,81 +192,91 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
             format!(
                 "CallPrim     r{} ← {}#{}({})",
                 dst,
-                name,
+                name(link),
                 func_id.0,
                 a.join(", ")
             )
         }
         Instruction::Add {
-            a, b, dst, name, ..
-        } => fmt_inline_prim("Add", *dst, name, &[*a, *b]),
+            a, b, dst, link, ..
+        } => fmt_inline_prim("Add", *dst, name(link), &[*a, *b]),
         Instruction::Sub {
-            a, b, dst, name, ..
-        } => fmt_inline_prim("Sub", *dst, name, &[*a, *b]),
+            a, b, dst, link, ..
+        } => fmt_inline_prim("Sub", *dst, name(link), &[*a, *b]),
         Instruction::Mul {
-            a, b, dst, name, ..
-        } => fmt_inline_prim("Mul", *dst, name, &[*a, *b]),
+            a, b, dst, link, ..
+        } => fmt_inline_prim("Mul", *dst, name(link), &[*a, *b]),
         Instruction::Lt {
-            a, b, dst, name, ..
-        } => fmt_inline_prim("Lt", *dst, name, &[*a, *b]),
+            a, b, dst, link, ..
+        } => fmt_inline_prim("Lt", *dst, name(link), &[*a, *b]),
         Instruction::NumEq {
-            a, b, dst, name, ..
-        } => fmt_inline_prim("NumEq", *dst, name, &[*a, *b]),
+            a, b, dst, link, ..
+        } => fmt_inline_prim("NumEq", *dst, name(link), &[*a, *b]),
         Instruction::Eq {
-            a, b, dst, name, ..
-        } => fmt_inline_prim("Eq", *dst, name, &[*a, *b]),
+            a, b, dst, link, ..
+        } => fmt_inline_prim("Eq", *dst, name(link), &[*a, *b]),
         Instruction::Cons {
-            a, b, dst, name, ..
-        } => fmt_inline_prim("Cons", *dst, name, &[*a, *b]),
-        Instruction::Car { src, dst, name, .. } => fmt_inline_prim("Car", *dst, name, &[*src]),
-        Instruction::Cdr { src, dst, name, .. } => fmt_inline_prim("Cdr", *dst, name, &[*src]),
-        Instruction::Not { src, dst, name, .. } => fmt_inline_prim("Not", *dst, name, &[*src]),
+            a, b, dst, link, ..
+        } => fmt_inline_prim("Cons", *dst, name(link), &[*a, *b]),
+        Instruction::Car { src, dst, link, .. } => {
+            fmt_inline_prim("Car", *dst, name(link), &[*src])
+        }
+        Instruction::Cdr { src, dst, link, .. } => {
+            fmt_inline_prim("Cdr", *dst, name(link), &[*src])
+        }
+        Instruction::Not { src, dst, link, .. } => {
+            fmt_inline_prim("Not", *dst, name(link), &[*src])
+        }
         Instruction::TestJumpUnless {
             test,
             a,
             b,
             dst,
             target,
-            name,
+            link,
             ..
         } => {
             let operands = [*a, *b];
             format!(
                 "{} → {}",
-                fmt_inline_prim("TestJumpU", *dst, name, &operands[..test.arity()]),
+                fmt_inline_prim("TestJumpU", *dst, name(link), &operands[..test.arity()]),
                 target
             )
         }
         Instruction::AddImm {
-            a, imm, dst, name, ..
-        } => fmt_imm_prim("AddImm", *dst, name, *a, *imm),
+            a, imm, dst, link, ..
+        } => fmt_imm_prim("AddImm", *dst, name(link), *a, *imm),
         Instruction::SubImm {
-            a, imm, dst, name, ..
-        } => fmt_imm_prim("SubImm", *dst, name, *a, *imm),
+            a, imm, dst, link, ..
+        } => fmt_imm_prim("SubImm", *dst, name(link), *a, *imm),
         Instruction::LtImm {
-            a, imm, dst, name, ..
-        } => fmt_imm_prim("LtImm", *dst, name, *a, *imm),
+            a, imm, dst, link, ..
+        } => fmt_imm_prim("LtImm", *dst, name(link), *a, *imm),
         Instruction::NumEqImm {
-            a, imm, dst, name, ..
-        } => fmt_imm_prim("NumEqImm", *dst, name, *a, *imm),
-        Instruction::NullP { src, dst, name, .. } => fmt_inline_prim("NullP", *dst, name, &[*src]),
-        Instruction::PairP { src, dst, name, .. } => fmt_inline_prim("PairP", *dst, name, &[*src]),
-        Instruction::VectorP { src, dst, name, .. } => {
-            fmt_inline_prim("VectorP", *dst, name, &[*src])
+            a, imm, dst, link, ..
+        } => fmt_imm_prim("NumEqImm", *dst, name(link), *a, *imm),
+        Instruction::NullP { src, dst, link, .. } => {
+            fmt_inline_prim("NullP", *dst, name(link), &[*src])
+        }
+        Instruction::PairP { src, dst, link, .. } => {
+            fmt_inline_prim("PairP", *dst, name(link), &[*src])
+        }
+        Instruction::VectorP { src, dst, link, .. } => {
+            fmt_inline_prim("VectorP", *dst, name(link), &[*src])
         }
         Instruction::VectorRef {
-            v, i, dst, name, ..
-        } => fmt_inline_prim("VectorRef", *dst, name, &[*v, *i]),
+            v, i, dst, link, ..
+        } => fmt_inline_prim("VectorRef", *dst, name(link), &[*v, *i]),
         Instruction::VectorSet {
             v,
             i,
             val,
             dst,
-            name,
+            link,
             ..
-        } => fmt_inline_prim("VectorSet", *dst, name, &[*v, *i, *val]),
-        Instruction::Define { name, src } => {
-            format!("Define       globals[{}] ← r{}", name, src)
+        } => fmt_inline_prim("VectorSet", *dst, name(link), &[*v, *i, *val]),
+        Instruction::Define { link, src } => {
+            format!("Define       globals[{}] ← r{}", name(link), src)
         }
         Instruction::AbortToPrompt { tag, val, dst } => {
             format!("AbortToPrompt tag=r{}, val=r{} (hole r{})", tag, val, dst)

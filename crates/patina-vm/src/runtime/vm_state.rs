@@ -22,14 +22,13 @@ use crate::types::continuation::{
 };
 use crate::types::instruction::{ControlForm, Instruction, TestOp};
 use crate::types::{CallFrame, CodeObjectId};
-use patina_core::NamespaceView;
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{
     AssertNoGc, AssertNoGcCount, Carrier, CollectKind, GC_CHECK, GcController, GcDriver, GcMode,
-    NoGcScope, Trace,
+    LinkTable, NamespaceView, NoGcScope, Trace,
 };
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::HasDiagnostic;
@@ -410,6 +409,7 @@ impl VmState {
                 source_map: Vec::new(),
                 register_roots: None,
                 global_cache: Vec::new(),
+                links: LinkTable::empty(),
                 live_closures: Cell::new(0),
             }),
             free_code_ids: Vec::new(),
@@ -568,6 +568,10 @@ impl VmState {
                 .any(|instr| matches!(instr, Instruction::MakeClosure { .. })),
             "a code object loaded alone makes a closure, of code not loaded with it"
         );
+        debug_assert!(
+            code.instructions.iter().all(|instr| instr.link().is_none()),
+            "a code object loaded alone names a global, which only a unit's link table holds"
+        );
         let id = self.next_code_id();
         code.id = id;
         self.code_store[id.index()] = Rc::new(code);
@@ -579,7 +583,8 @@ impl VmState {
     ///
     /// Each code object is given a slot here, and the labels the compiler
     /// named it by, in its own id and in the `MakeClosure`s that make a
-    /// closure of it, are replaced by that slot's id (#352).
+    /// closure of it, are replaced by that slot's id (#352). Every member
+    /// holds the unit's one link table, as pass 5 made it (#836).
     ///
     /// Once it has run, [`VmState::release_unit_if_unused`] lets it go if
     /// nothing it left behind can run it again (#338).
@@ -595,9 +600,24 @@ impl VmState {
         );
         let top_id = ids[&top.id];
         let members = nested.iter().map(|code| ids[&code.id]).collect();
+        let links = Rc::clone(&top.links);
         for mut code in std::iter::once(top).chain(nested) {
             code.id = ids[&code.id];
+            debug_assert!(
+                Rc::ptr_eq(&code.links, &links),
+                "{:?} holds a link table of its own, not its unit's",
+                code.id
+            );
             for instr in &mut code.instructions {
+                debug_assert!(
+                    instr
+                        .link()
+                        .is_none_or(|k| (k as usize) < links.names().len()),
+                    "{:?} names link {:?}, past its unit's table of {}",
+                    code.id,
+                    instr.link(),
+                    links.names().len()
+                );
                 if let Instruction::MakeClosure { code_id, .. } = instr {
                     // The compiler returns the code of every lambda it
                     // compiled alongside the code that makes it.
@@ -1958,7 +1978,7 @@ pub(super) fn frame_globals(state: &VmState) -> Rc<Environment> {
 /// here means an opcode arm contains only its genuinely opcode-specific
 /// fast path.
 macro_rules! inline_primitive {
-    ($state:ident, $base:ident, $exit_depth:ident, $func_id:ident, $name:ident, $dst:ident,
+    ($state:ident, $base:ident, $exit_depth:ident, $func_id:ident, $link:ident, $dst:ident,
      [$($arg:expr),+], $fast:block) => {
         let fast = if !$state.is_primitive_shadowed($func_id.0 as usize) {
             $fast
@@ -1969,7 +1989,7 @@ macro_rules! inline_primitive {
             Some(val) => $state.set_reg_at($base, $dst, val),
             None => {
                 if let Some(escaped) = exec_call_primitive(
-                    $state, $base, $func_id, $name, &[$($arg),+], $dst, $exit_depth,
+                    $state, $base, $func_id, $link, &[$($arg),+], $dst, $exit_depth,
                 )? {
                     return Ok(Some(escaped));
                 }
@@ -2053,7 +2073,7 @@ fn dispatch_one_instruction(
             state.set_reg_at(base, dst, val);
         }
 
-        Instruction::LoadGlobal { dst, ref name } => {
+        Instruction::LoadGlobal { dst, link } => {
             // Per-site inline cache (Track P P4): see `GlobalCacheEntry`. A hit
             // finds the frame's globals and reads the slot under one shared
             // borrow of the heap, with no `Rc` clone (#834).
@@ -2066,7 +2086,7 @@ fn dispatch_one_instruction(
                     .and_then(CallFrame::closure)
                     .and_then(|closure| heap.vm_closure_globals_ref(closure));
                 let view = NamespaceView::of(closure_globals.unwrap_or(&state.globals));
-                GlobalCacheEntry::probe(&code.global_cache[pc], view, name)
+                GlobalCacheEntry::probe(&code.global_cache[pc], view, &code.links, link)
                     .map(|slot| view.slot_value_in(&heap, slot))
             };
             let val = match hit {
@@ -2076,6 +2096,7 @@ fn dispatch_one_instruction(
                 // aliases recorded on this environment, which is how a template
                 // reaches a binding private to the library that defined it.
                 None => {
+                    let name = code.links.name(link);
                     let globals = frame_globals(state);
                     NamespaceView::of(&globals)
                         .get(&state.heap, name)
@@ -2085,11 +2106,11 @@ fn dispatch_one_instruction(
             state.set_reg_at(base, dst, val);
         }
 
-        Instruction::StoreGlobal { ref name, src } => {
+        Instruction::StoreGlobal { link, src } => {
             let val = state.reg_at(base, src);
             let globals = frame_globals(state);
             let view = NamespaceView::of(&globals);
-            match GlobalCacheEntry::probe(&code.global_cache[pc], view, name) {
+            match GlobalCacheEntry::probe(&code.global_cache[pc], view, &code.links, link) {
                 Some(slot) => {
                     let old = view.slot_value(&state.heap, slot);
                     mark_if_shadowing_primitive_value(state, old, val);
@@ -2100,6 +2121,7 @@ fn dispatch_one_instruction(
                 // aliases, so a template can assign to a binding private to the
                 // library that defined it, matching what `get` already does.
                 None => {
+                    let name = code.links.name(link);
                     mark_if_shadowing_primitive(state, view, name, val);
                     view.set(&state.heap, name, val)
                         .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
@@ -2107,10 +2129,10 @@ fn dispatch_one_instruction(
             }
         }
 
-        Instruction::Define { ref name, src } => {
+        Instruction::Define { link, src } => {
             let val = state.reg_at(base, src);
             let globals = frame_globals(state);
-            define_global(state, &globals, Rc::clone(name), val);
+            define_global(state, &globals, Rc::clone(code.links.name(link)), val);
         }
 
         // ── Closure Creation ────────────────────────────────────────────
@@ -2611,7 +2633,7 @@ fn dispatch_one_instruction(
         // ── Primitives ──────────────────────────────────────────────────
         Instruction::CallPrimitive {
             func_id,
-            ref name,
+            link,
             ref args,
             dst,
         } => {
@@ -2622,7 +2644,7 @@ fn dispatch_one_instruction(
             debug_assert!(arg_vals.is_empty());
             arg_vals.extend(args.iter().map(|&r| state.reg_at(base, r)));
             let result =
-                exec_call_primitive(state, base, func_id, name, &arg_vals, dst, exit_depth);
+                exec_call_primitive(state, base, func_id, link, &arg_vals, dst, exit_depth);
             // Emptied before it goes back: see `VmState::scratch_args`.
             arg_vals.clear();
             state.scratch_args = arg_vals;
@@ -2658,10 +2680,10 @@ fn dispatch_one_instruction(
             b,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let (x, y) = (state.reg_at(base, a), state.reg_at(base, b));
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, y], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x, y], {
                 // Overflow returns None from fixnum_add; the handler promotes.
                 (x.is_fixnum() && y.is_fixnum())
                     .then(|| x.fixnum_add(y))
@@ -2674,10 +2696,10 @@ fn dispatch_one_instruction(
             b,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let (x, y) = (state.reg_at(base, a), state.reg_at(base, b));
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, y], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x, y], {
                 (x.is_fixnum() && y.is_fixnum())
                     .then(|| x.fixnum_sub(y))
                     .flatten()
@@ -2689,10 +2711,10 @@ fn dispatch_one_instruction(
             b,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let (x, y) = (state.reg_at(base, a), state.reg_at(base, b));
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, y], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x, y], {
                 (x.is_fixnum() && y.is_fixnum())
                     .then(|| x.fixnum_mul(y))
                     .flatten()
@@ -2704,10 +2726,10 @@ fn dispatch_one_instruction(
             b,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let (x, y) = (state.reg_at(base, a), state.reg_at(base, b));
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, y], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x, y], {
                 (x.is_fixnum() && y.is_fixnum()).then(|| TaggedValue::boolean(x.fixnum_lt(y)))
             });
         }
@@ -2717,10 +2739,10 @@ fn dispatch_one_instruction(
             b,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let (x, y) = (state.reg_at(base, a), state.reg_at(base, b));
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, y], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x, y], {
                 (x.is_fixnum() && y.is_fixnum()).then(|| TaggedValue::boolean(x.fixnum_eq(y)))
             });
         }
@@ -2730,10 +2752,10 @@ fn dispatch_one_instruction(
             b,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let (x, y) = (state.reg_at(base, a), state.reg_at(base, b));
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, y], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x, y], {
                 Some(TaggedValue::boolean(state.heap.borrow().values_eq(x, y)))
             });
         }
@@ -2743,10 +2765,10 @@ fn dispatch_one_instruction(
             b,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let (x, y) = (state.reg_at(base, a), state.reg_at(base, b));
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, y], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x, y], {
                 Some(state.heap.borrow_mut().alloc_pair(x, y))
             });
         }
@@ -2755,10 +2777,10 @@ fn dispatch_one_instruction(
             src,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let x = state.reg_at(base, src);
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x], {
                 // Native pairs only; boxed pairs and type errors go to the handler.
                 x.is_pair().then(|| state.heap.borrow().car(x))
             });
@@ -2768,10 +2790,10 @@ fn dispatch_one_instruction(
             src,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let x = state.reg_at(base, src);
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x], {
                 x.is_pair().then(|| state.heap.borrow().cdr(x))
             });
         }
@@ -2780,10 +2802,10 @@ fn dispatch_one_instruction(
             src,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let x = state.reg_at(base, src);
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x], {
                 Some(TaggedValue::boolean(!x.is_truthy()))
             });
         }
@@ -2795,7 +2817,7 @@ fn dispatch_one_instruction(
             dst,
             target,
             func_id,
-            ref name,
+            link,
         } => {
             // Emission contract (see the If arm in pass 5): the plain
             // `JumpUnless dst` must sit at the next pc — it is the deopt
@@ -2866,7 +2888,7 @@ fn dispatch_one_instruction(
                     let operands = [x, state.reg_at(base, b)];
                     let args = &operands[..test.arity()];
                     if let Some(escaped) =
-                        exec_call_primitive(state, base, func_id, name, args, dst, exit_depth)?
+                        exec_call_primitive(state, base, func_id, link, args, dst, exit_depth)?
                     {
                         return Ok(Some(escaped));
                     }
@@ -2879,14 +2901,14 @@ fn dispatch_one_instruction(
             imm,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             // The compiler only absorbs fixnum literals (`primitive_operands`),
             // so `imm.is_fixnum()` holds by construction — asserted, not
             // re-checked on the hot path. Same for the other *Imm arms.
             debug_assert!(imm.is_fixnum());
             let x = state.reg_at(base, a);
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, imm], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x, imm], {
                 // Overflow returns None from fixnum_add; the handler promotes.
                 x.is_fixnum().then(|| x.fixnum_add(imm)).flatten()
             });
@@ -2897,11 +2919,11 @@ fn dispatch_one_instruction(
             imm,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             debug_assert!(imm.is_fixnum());
             let x = state.reg_at(base, a);
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, imm], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x, imm], {
                 x.is_fixnum().then(|| x.fixnum_sub(imm)).flatten()
             });
         }
@@ -2911,10 +2933,10 @@ fn dispatch_one_instruction(
             imm,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let x = state.reg_at(base, a);
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, imm], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x, imm], {
                 (x.is_fixnum() && imm.is_fixnum()).then(|| TaggedValue::boolean(x.fixnum_lt(imm)))
             });
         }
@@ -2924,10 +2946,10 @@ fn dispatch_one_instruction(
             imm,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let x = state.reg_at(base, a);
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x, imm], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x, imm], {
                 (x.is_fixnum() && imm.is_fixnum()).then(|| TaggedValue::boolean(x.fixnum_eq(imm)))
             });
         }
@@ -2936,10 +2958,10 @@ fn dispatch_one_instruction(
             src,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let x = state.reg_at(base, src);
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x], {
                 Some(TaggedValue::boolean(x.is_null()))
             });
         }
@@ -2948,10 +2970,10 @@ fn dispatch_one_instruction(
             src,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let x = state.reg_at(base, src);
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x], {
                 Some(TaggedValue::boolean(x.is_pair()))
             });
         }
@@ -2960,10 +2982,10 @@ fn dispatch_one_instruction(
             src,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let x = state.reg_at(base, src);
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [x], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [x], {
                 Some(TaggedValue::boolean(x.is_vector()))
             });
         }
@@ -2973,10 +2995,10 @@ fn dispatch_one_instruction(
             i,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let (vec, idx) = (state.reg_at(base, v), state.reg_at(base, i));
-            inline_primitive!(state, base, exit_depth, func_id, name, dst, [vec, idx], {
+            inline_primitive!(state, base, exit_depth, func_id, link, dst, [vec, idx], {
                 // Out-of-bounds (`get` misses, including negative indices)
                 // falls back so the handler's error message is used.
                 (vec.is_vector() && idx.is_fixnum())
@@ -2994,7 +3016,7 @@ fn dispatch_one_instruction(
             val,
             dst,
             func_id,
-            ref name,
+            link,
         } => {
             let (vec, idx, x) = (
                 state.reg_at(base, v),
@@ -3006,7 +3028,7 @@ fn dispatch_one_instruction(
                 base,
                 exit_depth,
                 func_id,
-                name,
+                link,
                 dst,
                 [vec, idx, x],
                 {
@@ -3249,6 +3271,7 @@ mod tests {
             id: CodeObjectId::label(),
             name: None,
             global_cache: GlobalCacheEntry::table(&instructions),
+            links: LinkTable::empty(),
             instructions,
             constants: Vec::new(),
             num_regs: 1,
@@ -3296,7 +3319,10 @@ mod tests {
         let mut state = VmState::on_a_fresh_heap();
         let counts = |state: &VmState| (state.heap.borrow().code_units(), state.code_units.len());
         assert_eq!(counts(&state), (0, 0), "fresh");
-        let nested = state.load_unit(code(), vec![code()]);
+        // The members of a unit share its one link table.
+        let (top, mut member) = (code(), code());
+        member.links = Rc::clone(&top.links);
+        let nested = state.load_unit(top, vec![member]);
         assert_eq!(counts(&state), (1, 1), "a unit with nested code loaded");
         state.load_unit(code(), Vec::new());
         assert_eq!(counts(&state), (2, 2), "a second unit loaded");

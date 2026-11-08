@@ -12,6 +12,12 @@
 //! names so forward references within the same compilation unit work.
 //! (In A2 this is a no-op because globals are resolved at runtime.)
 //!
+//! Link indices (#836): an instruction that names a global carries an index
+//! into the unit's link table in place of the name. One interner serves the
+//! whole unit, passed down into each lambda's `Codegen` and back, so a
+//! spelling has one index across the unit, given in the order its first
+//! operand is emitted; every member holds the one table it becomes.
+//!
 //! See VM_COMPILER.md §Pass 5.
 
 use super::pass4_registers::{AllocatedExpr, CaptureSource, RegExpr, RegExprKind, RegLambda};
@@ -22,6 +28,9 @@ use crate::types::instruction::{ControlForm, Instruction, TestOp};
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
+use patina_core::{LinkIdx, LinkTable};
+use rustc_hash::FxHashMap;
+use std::cell::Cell;
 use std::rc::Rc;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -32,9 +41,9 @@ struct Codegen {
     name: Option<Symbol>,
     instructions: Vec<Instruction>,
     constants: Vec<TaggedValue>,
-    /// All nested CodeObjects emitted during this compilation unit.
-    /// Returned alongside the top-level CodeObject.
-    nested: Vec<CodeObject>,
+    /// All nested members emitted during this compilation unit, which
+    /// become the `CodeObject`s returned alongside the top-level one.
+    nested: Vec<Member>,
     /// Source location map: (pc, source_location).
     source_map: Vec<(usize, SourceLocation)>,
     /// Global callee names that resolved to registry primitives at compile
@@ -44,10 +53,57 @@ struct Codegen {
     /// Expression lifetime ends at instruction boundaries; these generate
     /// GC metadata, not instructions on the execution path (#423).
     retirements: Vec<(usize, std::ops::Range<u16>)>,
+    /// The unit's global operands so far, one interner for the whole unit:
+    /// `gen_lambda` moves it into each child `Codegen` and back.
+    links: UnitLinks,
+}
+
+/// The unit's global operands as pass 5 emits them (#836): each distinct
+/// spelling's [`LinkIdx`], given in the order the first operand naming it
+/// is emitted, so the same unit always gets the same indices. Becomes the
+/// unit's one [`LinkTable`] once every member is compiled.
+#[derive(Default)]
+struct UnitLinks {
+    index: FxHashMap<Symbol, LinkIdx>,
+    names: Vec<Symbol>,
+}
+
+/// A member of the unit being compiled, all of its `CodeObject` but the
+/// link table, which exists only once the whole unit is compiled:
+/// `Pass5Codegen::run` makes every member's `CodeObject` with the unit's
+/// one table, so no member is ever given another.
+struct Member {
+    id: CodeObjectId,
+    name: Option<Symbol>,
+    global_cache: Vec<Cell<GlobalCacheEntry>>,
+    instructions: Vec<Instruction>,
+    constants: Vec<TaggedValue>,
+    num_regs: u16,
+    arity: Arity,
+    source_map: Vec<(usize, SourceLocation)>,
+    register_roots: Vec<Vec<u64>>,
+}
+
+impl Member {
+    fn into_code(self, links: &Rc<LinkTable>) -> CodeObject {
+        CodeObject {
+            id: self.id,
+            name: self.name,
+            global_cache: self.global_cache,
+            links: Rc::clone(links),
+            live_closures: Cell::new(0),
+            instructions: self.instructions,
+            constants: self.constants,
+            num_regs: self.num_regs,
+            arity: self.arity,
+            source_map: self.source_map,
+            register_roots: Some(self.register_roots),
+        }
+    }
 }
 
 impl Codegen {
-    fn new(name: Option<Symbol>, prim_calls: Rc<PrimitiveCallMap>) -> Self {
+    fn new(name: Option<Symbol>, prim_calls: Rc<PrimitiveCallMap>, links: UnitLinks) -> Self {
         Self {
             name,
             instructions: Vec::new(),
@@ -56,7 +112,26 @@ impl Codegen {
             source_map: Vec::new(),
             prim_calls,
             retirements: Vec::new(),
+            links,
         }
+    }
+
+    /// The link index of the global `name`, given now if no operand of the
+    /// unit has named it yet.
+    fn link(&mut self, name: &Symbol) -> Result<LinkIdx, CompileError> {
+        let links = &mut self.links;
+        if let Some(&k) = links.index.get(name) {
+            return Ok(k);
+        }
+        let k = LinkIdx::try_from(links.names.len()).map_err(|_| {
+            CompileError::Internal(format!(
+                "a unit names more than {} globals, past what a link index holds",
+                u64::from(LinkIdx::MAX) + 1
+            ))
+        })?;
+        links.index.insert(Rc::clone(name), k);
+        links.names.push(Rc::clone(name));
+        Ok(k)
     }
 
     fn emit(&mut self, instr: Instruction) -> usize {
@@ -129,32 +204,39 @@ impl Pass5Codegen {
     ///
     /// Returns the primary `CodeObject` plus any nested ones (from lambdas).
     /// The caller should load them together with `VmState::load_unit`.
+    ///
+    /// Every one of them holds the unit's one link table, through one `Rc`.
     pub fn run(
         allocated: &AllocatedExpr,
         prim_calls: PrimitiveCallMap,
     ) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
         let expr = &allocated.expr;
         let id = CodeObjectId::label();
-        let mut cg = Codegen::new(None, Rc::new(prim_calls));
+        let mut cg = Codegen::new(None, Rc::new(prim_calls), UnitLinks::default());
         gen_expr(expr, &mut cg)?;
         // Top-level: emit a Return of the expression's result.
         cg.emit(Instruction::Return { val: expr.dst });
         let global_cache = finalize_instructions(&mut cg.instructions);
         let register_roots = register_root_maps(&cg, allocated.num_regs.max(1), 0);
-        let nested = cg.nested;
-        let code = CodeObject {
+        let links = Rc::new(LinkTable::new(cg.links.names.into_boxed_slice()));
+        let code = Member {
             id,
             name: cg.name,
             global_cache,
-            live_closures: std::cell::Cell::new(0),
             instructions: cg.instructions,
             constants: cg.constants,
             // Use the Pass 4 high-water mark so all temps are covered.
             num_regs: allocated.num_regs.max(1),
             arity: Arity::Fixed(0),
             source_map: cg.source_map,
-            register_roots: Some(register_roots),
-        };
+            register_roots,
+        }
+        .into_code(&links);
+        let nested = cg
+            .nested
+            .into_iter()
+            .map(|member| member.into_code(&links))
+            .collect();
         Ok((code, nested))
     }
 }
@@ -208,9 +290,7 @@ fn thread_returns(instructions: &mut [Instruction]) {
 /// Finalize a finished instruction stream: run the in-place rewrites, then
 /// build the pc-aligned global cache table. One owner for the ordering so
 /// both CodeObject construction sites (top-level and lambda) stay in step.
-fn finalize_instructions(
-    instructions: &mut [Instruction],
-) -> Vec<std::cell::Cell<GlobalCacheEntry>> {
+fn finalize_instructions(instructions: &mut [Instruction]) -> Vec<Cell<GlobalCacheEntry>> {
     thread_returns(instructions);
     GlobalCacheEntry::table(instructions)
 }
@@ -398,20 +478,12 @@ fn fuse_test_into_branch(cond: u16, cg: &mut Codegen) -> Option<usize> {
     if dst != cond {
         return None;
     }
-    // Pop by value so the predicate's `name` moves into the fused
-    // instruction rather than being cloned.
-    let name = match cg.instructions.pop() {
-        Some(
-            Instruction::Not { name, .. }
-            | Instruction::NullP { name, .. }
-            | Instruction::PairP { name, .. }
-            | Instruction::VectorP { name, .. }
-            | Instruction::Eq { name, .. }
-            | Instruction::Lt { name, .. }
-            | Instruction::NumEq { name, .. },
-        ) => name,
-        _ => unreachable!("just matched a fusable test"),
-    };
+    // The predicate's global operand carries over to the fused instruction.
+    let link = cg
+        .instructions
+        .pop()
+        .and_then(|test| test.link())
+        .expect("a fusable test names its primitive's global");
     Some(cg.emit(Instruction::TestJumpUnless {
         test,
         a,
@@ -419,7 +491,7 @@ fn fuse_test_into_branch(cond: u16, cg: &mut Codegen) -> Option<usize> {
         dst,
         target: 0,
         func_id,
-        name,
+        link,
     }))
 }
 
@@ -488,7 +560,7 @@ fn primitive_operands(
 fn primitive_call_instruction(
     inline: Option<InlineOp>,
     resolved: ResolvedPrimitive,
-    name: Symbol,
+    link: LinkIdx,
     regs: &[u16],
     imm: Option<TaggedValue>,
     dst: u16,
@@ -504,28 +576,28 @@ fn primitive_call_instruction(
                 imm,
                 dst,
                 func_id,
-                name,
+                link,
             },
             InlineOp::Sub => Instruction::SubImm {
                 a,
                 imm,
                 dst,
                 func_id,
-                name,
+                link,
             },
             InlineOp::Lt => Instruction::LtImm {
                 a,
                 imm,
                 dst,
                 func_id,
-                name,
+                link,
             },
             InlineOp::NumEq => Instruction::NumEqImm {
                 a,
                 imm,
                 dst,
                 func_id,
-                name,
+                link,
             },
             op => unreachable!("no imm form for {:?}", op),
         };
@@ -533,7 +605,7 @@ fn primitive_call_instruction(
     let Some(op) = inline else {
         return Instruction::CallPrimitive {
             func_id,
-            name,
+            link,
             args: regs.to_vec(),
             dst,
         };
@@ -544,92 +616,92 @@ fn primitive_call_instruction(
             b: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Sub => Instruction::Sub {
             a: regs[0],
             b: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Mul => Instruction::Mul {
             a: regs[0],
             b: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Lt => Instruction::Lt {
             a: regs[0],
             b: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::NumEq => Instruction::NumEq {
             a: regs[0],
             b: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Eq => Instruction::Eq {
             a: regs[0],
             b: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Cons => Instruction::Cons {
             a: regs[0],
             b: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Car => Instruction::Car {
             src: regs[0],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Cdr => Instruction::Cdr {
             src: regs[0],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Not => Instruction::Not {
             src: regs[0],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::NullP => Instruction::NullP {
             src: regs[0],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::PairP => Instruction::PairP {
             src: regs[0],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::VectorP => Instruction::VectorP {
             src: regs[0],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::VectorRef => Instruction::VectorRef {
             v: regs[0],
             i: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::VectorSet => Instruction::VectorSet {
             v: regs[0],
@@ -637,7 +709,7 @@ fn primitive_call_instruction(
             val: regs[2],
             dst,
             func_id,
-            name,
+            link,
         },
     }
 }
@@ -744,9 +816,10 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
         }
 
         RegExprKind::GlobalRef { name } => {
+            let link = cg.link(name)?;
             cg.emit(Instruction::LoadGlobal {
                 dst: expr.dst,
-                name: name.clone(),
+                link,
             });
         }
 
@@ -850,8 +923,9 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
         RegExprKind::SetGlobal { name, value } => {
             gen_expr(value, cg)?;
             cg.record_source(&expr.source);
+            let link = cg.link(name)?;
             cg.emit(Instruction::StoreGlobal {
-                name: name.clone(),
+                link,
                 src: value.dst,
             });
             cg.emit(Instruction::LoadImmediate {
@@ -872,8 +946,9 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
 
         RegExprKind::Define { name, value } => {
             gen_expr(value, cg)?;
+            let link = cg.link(name)?;
             cg.emit(Instruction::Define {
-                name: name.clone(),
+                link,
                 src: value.dst,
             });
             cg.emit(Instruction::LoadImmediate {
@@ -930,13 +1005,9 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
                 let inline = resolved.inline.filter(|op| op.arity() == args.len());
                 let (regs, imm) = primitive_operands(args, arg_tmps, inline, cg)?;
                 cg.record_source(&expr.source);
+                let link = cg.link(name)?;
                 cg.emit(primitive_call_instruction(
-                    inline,
-                    resolved,
-                    name.clone(),
-                    &regs,
-                    imm,
-                    expr.dst,
+                    inline, resolved, link, &regs, imm, expr.dst,
                 ));
                 if *is_tail {
                     cg.emit(Instruction::Return { val: expr.dst });
@@ -1138,7 +1209,13 @@ fn gen_inline_control(
 /// Compile a nested lambda, emit `MakeClosure` into `cg`, result in `dst`.
 fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), CompileError> {
     let child_id = CodeObjectId::label();
-    let mut child_cg = Codegen::new(None, Rc::clone(&cg.prim_calls));
+    // The unit's interner goes down into the child and comes back before the
+    // captures below, which the parent emits.
+    let mut child_cg = Codegen::new(
+        None,
+        Rc::clone(&cg.prim_calls),
+        std::mem::take(&mut cg.links),
+    );
 
     // Prologue: wrap each boxed param register in a MutableCell.
     // The param already lives in reg[r]; emit AllocCell r←r to box it in-place.
@@ -1175,6 +1252,7 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
             gen_discarded_expr(e, &mut child_cg)?;
         }
     }
+    cg.links = std::mem::take(&mut child_cg.links);
 
     let arity = if lam.rest_param {
         Arity::Variadic(lam.num_params.saturating_sub(1))
@@ -1184,17 +1262,16 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
 
     let global_cache = finalize_instructions(&mut child_cg.instructions);
     let register_roots = register_root_maps(&child_cg, lam.num_regs, lam.num_params);
-    let child_code = CodeObject {
+    let child_code = Member {
         id: child_id,
         name: None,
         global_cache,
-        live_closures: std::cell::Cell::new(0),
         instructions: child_cg.instructions,
         constants: child_cg.constants,
         num_regs: lam.num_regs,
         arity,
         source_map: child_cg.source_map,
-        register_roots: Some(register_roots),
+        register_roots,
     };
 
     // Collect nested from child.
@@ -1220,10 +1297,8 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
                 });
             }
             CaptureSource::Global(name) => {
-                cg.emit(Instruction::LoadGlobal {
-                    dst: scratch,
-                    name: name.clone(),
-                });
+                let link = cg.link(name)?;
+                cg.emit(Instruction::LoadGlobal { dst: scratch, link });
             }
         }
         capture_regs.push(scratch);
