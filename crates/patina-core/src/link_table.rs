@@ -123,7 +123,7 @@ impl LinkTable {
 mod tests {
     use super::LinkTable;
     use crate::binding_record::{PLACEHOLDER, Record};
-    use crate::environment::Environment;
+    use crate::environment::{Environment, RC_COUNTS};
     use crate::heap::new_shared_heap;
     use crate::heap::sentinels::Sentinels;
     use crate::heap::trace::Trace as _;
@@ -287,7 +287,11 @@ mod tests {
             (records - 2, cells - 2),
             "their counts given back"
         );
-        assert!(store.charged() < charged, "and their names' bytes");
+        assert_eq!(
+            charged - store.charged(),
+            2 * (RC_COUNTS + "dropped-1".len()),
+            "and exactly both names' bytes, as the table keeps its capacity"
+        );
         assert_eq!(
             heap.borrow().external_bytes(),
             external - (charged - store.charged())
