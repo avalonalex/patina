@@ -19,11 +19,11 @@ name: GC zeal
 # backends' backend.rs, which stage 4b rewrites (decision 23 on #782); the
 # tree-walker's trampoline and evaluator, which poll the same way; the
 # toolchain; and the lane's own inputs. A weekly run catches what the
-# filter misses (the primitives,
-# lib/scheme, Cargo.lock), at one lane's cost a week. The filter has the
-# limits ci.yml's has (docs/TEST_ORGANIZATION.md, "CI trigger scope"): a
-# whole workflow filtered out leaves a required check pending, and none is
-# required today.
+# filter misses (the primitives, lib/scheme, Cargo.lock), at one lane's
+# cost a week. The filter has the limits ci.yml's has
+# (docs/TEST_ORGANIZATION.md, "CI trigger scope"): a whole workflow
+# filtered out leaves a required check pending, and none is required
+# today.
 on:
   push:
     branches: [ main ]
