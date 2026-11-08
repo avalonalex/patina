@@ -1313,7 +1313,8 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
 }
 
 /// The unit's link indices (#836): one interner for the whole unit, so one
-/// table, shared by every member, in first-emission order.
+/// table, shared by every member, in first-emission order, and the spelling
+/// the disassembler prints for each.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1447,27 +1448,80 @@ mod tests {
 
     #[test]
     fn a_lambda_and_the_code_around_it_name_one_global_by_one_index() {
-        // (begin (g 1) (lambda (y) (g y)) (car (g 2)))
+        // (begin (g 1) (lambda (y) (h) (g y)) (k) (g 2)): the lambda names
+        // `h` before its `g`, and the code around it names `k` after the
+        // lambda and before its second `g`, so a lambda compiled with an
+        // interner of its own, or one that did not give the unit's back,
+        // gives some `g` a second index or leaves `h` or `k` out of the
+        // table.
         let (top, nested) = compile(&begin(vec![
             call("g", vec![lit(1)]),
-            lambda(&["y"], vec![call("g", vec![var("y")])]),
-            call("car", vec![call("g", vec![lit(2)])]),
+            lambda(&["y"], vec![call("h", vec![]), call("g", vec![var("y")])]),
+            call("k", vec![]),
+            call("g", vec![lit(2)]),
         ]));
-        let index_of_g = |code: &CodeObject| -> Vec<LinkIdx> {
+        let links = |code: &CodeObject| -> Vec<LinkIdx> {
             code.instructions
                 .iter()
-                .filter(|instr| matches!(instr, Instruction::LoadGlobal { .. }))
                 .filter_map(Instruction::link)
                 .collect()
         };
         assert_eq!(nested.len(), 1);
-        let (outer, inner) = (index_of_g(&top), index_of_g(&nested[0]));
-        assert_eq!((outer.len(), inner.len()), (2, 1), "{top:?} {nested:?}");
-        assert!(
-            outer.iter().chain(&inner).all(|&k| k == inner[0]),
+        let (outer, inner) = (links(&top), links(&nested[0]));
+        assert_eq!((outer.len(), inner.len()), (3, 2), "{top:?} {nested:?}");
+        // The operands naming `g`: the first and third around the lambda,
+        // and the lambda's second.
+        assert_eq!(
+            [outer[0], outer[2], inner[1]],
+            [0; 3],
             "`g` has more than one index: {outer:?} {inner:?}"
         );
-        assert_eq!(table(&top), ["g", "car"]);
+        assert_eq!(table(&top), ["g", "h", "k"]);
+        assert_eq!(operand_names(&top), ["g", "k", "g"]);
+        assert_eq!(operand_names(&nested[0]), ["h", "g"]);
+    }
+
+    /// A global a lambda captures is loaded by the code around the lambda,
+    /// after the lambda's body is emitted, so it is given its index after
+    /// every global the body names, by the interner the body gave back.
+    /// Pass 4 gives no lambda such a capture today (pass 2 keeps globals out
+    /// of capture lists), so the unit is pass 4's output, built by hand.
+    #[test]
+    fn a_global_a_lambda_captures_is_given_its_index_after_the_lambdas_body() {
+        use crate::compiler::pass1_analysis::NodeId;
+        let expr = |kind, dst, temp_end| RegExpr {
+            kind,
+            dst,
+            temp_end,
+            source: None,
+        };
+        // (lambda () h), capturing the global `g` into its slot 0.
+        let lambda = RegLambda {
+            node_id: NodeId(0),
+            num_params: 0,
+            rest_param: false,
+            num_regs: 1,
+            body: vec![expr(
+                RegExprKind::GlobalRef {
+                    name: Rc::from("h"),
+                },
+                0,
+                1,
+            )],
+            captures: vec![CaptureSource::Global(Rc::from("g"))],
+            boxed_params: Default::default(),
+            internal_define_regs: Vec::new(),
+        };
+        let unit = AllocatedExpr {
+            expr: expr(RegExprKind::Lambda(Box::new(lambda)), 0, 2),
+            num_regs: 2,
+        };
+        let (top, nested) =
+            Pass5Codegen::run(&unit, PrimitiveCallMap::default()).expect("compiles");
+        assert_eq!(table(&top), ["h", "g"]);
+        assert_eq!(operand_names(&nested[0]), ["h"]);
+        assert_eq!(operand_names(&top), ["g"]);
+        assert!(Rc::ptr_eq(&nested[0].links, &top.links));
     }
 
     #[test]
@@ -1520,6 +1574,38 @@ mod tests {
         }
     }
 
+    /// The disassembler prints each global operand as the spelling its
+    /// unit's table holds at its index, where `--dump` and `--trace` printed
+    /// the name the instruction carried before the operand was an index.
+    #[test]
+    fn the_disassembler_prints_the_spelling_each_operand_names() {
+        let (top, nested) = compile(&every_kind_of_operand());
+        let names = top.links.names();
+        let mut shown_at_another_index = 0;
+        for code in std::iter::once(&top).chain(&nested) {
+            for instr in &code.instructions {
+                let Some(k) = instr.link() else { continue };
+                let line = crate::disasm::format_instruction(instr, names, &mut Vec::new());
+                let name = &names[k as usize];
+                let shown = match instr {
+                    Instruction::LoadGlobal { .. } => format!("← globals[{name}]"),
+                    Instruction::StoreGlobal { .. } | Instruction::Define { .. } => {
+                        format!("globals[{name}] ←")
+                    }
+                    Instruction::CallPrimitive { .. } => format!("← {name}#"),
+                    _ => format!("← {name}("),
+                };
+                assert!(line.contains(&shown), "{line:?} does not show {shown:?}");
+                shown_at_another_index += usize::from(k != 0);
+            }
+        }
+        assert!(
+            shown_at_another_index > 0,
+            "every operand is at index 0: {:?}",
+            table(&top)
+        );
+    }
+
     #[test]
     fn every_member_shares_the_tops_table() {
         let (top, nested) = compile(&every_kind_of_operand());
@@ -1535,17 +1621,26 @@ mod tests {
 
     #[test]
     fn indices_are_given_in_the_order_operands_are_first_emitted() {
-        // (begin (b) (a) (lambda () (c) (a)) (d)): the lambda's body is
-        // emitted where the lambda is, between the code around it.
+        // (begin (b) (a) (lambda () (c) (a)) (d)
+        //        (define x (car (e))) (set! y (f))):
+        // the lambda's body is emitted where the lambda is, between the code
+        // around it, and a primitive site, a `define` and a `set!` are
+        // emitted after their operands and values, so their globals are
+        // given indices after the globals those name.
         let expr = begin(vec![
             call("b", vec![]),
             call("a", vec![]),
             lambda(&[], vec![call("c", vec![]), call("a", vec![])]),
             call("d", vec![]),
+            define("x", call("car", vec![call("e", vec![])])),
+            set("y", call("f", vec![])),
         ]);
         let (top, nested) = compile(&expr);
-        assert_eq!(table(&top), ["b", "a", "c", "d"]);
-        assert_eq!(operand_names(&top), ["b", "a", "d"]);
+        assert_eq!(table(&top), ["b", "a", "c", "d", "e", "car", "x", "f", "y"]);
+        assert_eq!(
+            operand_names(&top),
+            ["b", "a", "d", "e", "car", "x", "f", "y"]
+        );
         assert_eq!(operand_names(&nested[0]), ["c", "a"]);
         // The same unit gets the same indices.
         let (again, _) = compile(&expr);

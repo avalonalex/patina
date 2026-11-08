@@ -693,3 +693,194 @@ const _: () = assert!(std::mem::size_of::<Instruction>() <= 40);
 /// built at startup. The VM resolves it to a function pointer at load time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PrimitiveFnId(pub u32);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `link` answers the operand of each of the 24 variants that name a
+    /// global, and nothing for a variant that names none, the two beside
+    /// them that carry no link (`CallPrimitiveDirect`, `MakeClosure`) among
+    /// them (#836).
+    #[test]
+    fn link_answers_the_operand_of_every_variant_that_names_a_global() {
+        let f = PrimitiveFnId(0);
+        let imm = TaggedValue::fixnum(1);
+        let naming = [
+            Instruction::LoadGlobal { dst: 0, link: 0 },
+            Instruction::StoreGlobal { link: 1, src: 0 },
+            Instruction::Define { link: 2, src: 0 },
+            Instruction::CallPrimitive {
+                func_id: f,
+                link: 3,
+                args: vec![0],
+                dst: 0,
+            },
+            Instruction::Add {
+                a: 0,
+                b: 0,
+                dst: 0,
+                func_id: f,
+                link: 4,
+            },
+            Instruction::Sub {
+                a: 0,
+                b: 0,
+                dst: 0,
+                func_id: f,
+                link: 5,
+            },
+            Instruction::Mul {
+                a: 0,
+                b: 0,
+                dst: 0,
+                func_id: f,
+                link: 6,
+            },
+            Instruction::Lt {
+                a: 0,
+                b: 0,
+                dst: 0,
+                func_id: f,
+                link: 7,
+            },
+            Instruction::NumEq {
+                a: 0,
+                b: 0,
+                dst: 0,
+                func_id: f,
+                link: 8,
+            },
+            Instruction::Eq {
+                a: 0,
+                b: 0,
+                dst: 0,
+                func_id: f,
+                link: 9,
+            },
+            Instruction::Cons {
+                a: 0,
+                b: 0,
+                dst: 0,
+                func_id: f,
+                link: 10,
+            },
+            Instruction::Car {
+                src: 0,
+                dst: 0,
+                func_id: f,
+                link: 11,
+            },
+            Instruction::Cdr {
+                src: 0,
+                dst: 0,
+                func_id: f,
+                link: 12,
+            },
+            Instruction::Not {
+                src: 0,
+                dst: 0,
+                func_id: f,
+                link: 13,
+            },
+            Instruction::TestJumpUnless {
+                test: TestOp::NullP,
+                a: 0,
+                b: 0,
+                dst: 0,
+                target: 0,
+                func_id: f,
+                link: 14,
+            },
+            Instruction::AddImm {
+                a: 0,
+                imm,
+                dst: 0,
+                func_id: f,
+                link: 15,
+            },
+            Instruction::SubImm {
+                a: 0,
+                imm,
+                dst: 0,
+                func_id: f,
+                link: 16,
+            },
+            Instruction::LtImm {
+                a: 0,
+                imm,
+                dst: 0,
+                func_id: f,
+                link: 17,
+            },
+            Instruction::NumEqImm {
+                a: 0,
+                imm,
+                dst: 0,
+                func_id: f,
+                link: 18,
+            },
+            Instruction::NullP {
+                src: 0,
+                dst: 0,
+                func_id: f,
+                link: 19,
+            },
+            Instruction::PairP {
+                src: 0,
+                dst: 0,
+                func_id: f,
+                link: 20,
+            },
+            Instruction::VectorP {
+                src: 0,
+                dst: 0,
+                func_id: f,
+                link: 21,
+            },
+            Instruction::VectorRef {
+                v: 0,
+                i: 0,
+                dst: 0,
+                func_id: f,
+                link: 22,
+            },
+            Instruction::VectorSet {
+                v: 0,
+                i: 0,
+                val: 0,
+                dst: 0,
+                func_id: f,
+                link: 23,
+            },
+        ];
+        for (k, instr) in naming.iter().enumerate() {
+            assert_eq!(instr.link(), Some(k as LinkIdx), "{instr:?}");
+        }
+        let not_naming = [
+            Instruction::CallPrimitiveDirect {
+                func_id: f,
+                args: vec![0],
+                dst: 0,
+            },
+            Instruction::MakeClosure {
+                dst: 0,
+                code_id: CodeObjectId::label(),
+                free_vars: vec![0],
+            },
+            Instruction::LoadConst { dst: 0, idx: 0 },
+            Instruction::LoadClosure { dst: 0, slot: 0 },
+            Instruction::Call {
+                func: 0,
+                args: vec![0],
+                dst: 0,
+            },
+            Instruction::JumpUnless { cond: 0, target: 0 },
+            Instruction::Return { val: 0 },
+            Instruction::Nop,
+        ];
+        for instr in &not_naming {
+            assert_eq!(instr.link(), None, "{instr:?}");
+        }
+    }
+}
