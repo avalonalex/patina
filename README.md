@@ -321,7 +321,7 @@ one. Each form is refused where the machine would compile it, so what comes
 before that is not covered: `eval`'s check of a definition through an
 immutable specifier answers an error of its own, and expands the form in
 the frame first, where a `define-syntax` inside a `begin` passes the check
-and leaves its transformer bound; and a `load` of a file with no forms
+and leaves its transformer bound (#855); and a `load` of a file with no forms
 answers without a refusal. The tree-walker evaluates in such a frame by
 name.
 

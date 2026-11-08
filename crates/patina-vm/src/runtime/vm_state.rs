@@ -1209,7 +1209,7 @@ pub(super) fn vm_eval_expr(
 /// (`primitive_eval` in patina-primitives), and refuses a definition with
 /// an error of its own; a `define-syntax` inside a `begin` passes that check
 /// and leaves its transformer bound in `env`, a frame included, before this
-/// refuses the form. A `load` of a file with no forms hands the machine
+/// refuses the form (#855). A `load` of a file with no forms hands the machine
 /// nothing to compile, and answers without a refusal.
 ///
 /// # State contract
