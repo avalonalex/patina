@@ -287,10 +287,12 @@ impl VmBackend {
     /// nor binds an import. The global namespace, a host namespace and a
     /// parentless namespace (a library's, a specifier's) run as before. The
     /// tree-walker still evaluates a frame by name. Scheme `eval` and `load`
-    /// do not come here: they compile through `compile_for_eval`, which
-    /// refuses the same frames with the same message, first too
-    /// ([`frame_refusal`], #853), so a specifier a host makes over a frame
-    /// is refused as well.
+    /// do not come here, nor a primitive's `Step::Eval`: they compile through
+    /// `compile_for_eval`, which refuses the same frames with the same
+    /// message, first too ([`frame_refusal`], #853), so a specifier a host
+    /// makes over a frame, and a host primitive's `Step::Eval` in one, are
+    /// refused as well. The message is the same; the error around it is that
+    /// path's, a Scheme condition a `guard` catches.
     fn eval_datum(
         &self,
         expr: TaggedValue,

@@ -1153,14 +1153,14 @@ pub(crate) fn vm_process_import_set(
 /// Evaluate a datum expression in the given environment using the VM.
 ///
 /// `VmApplyContext::eval_expr`: for a caller with no frame to run the code
-/// in, which runs a resumable primitive's `Step::Eval` synchronously. The
-/// `eval` primitive itself has its datum run as a frame ([`eval_closure`],
-/// #477), since a continuation cannot carry this Rust frame. Executes in the
-/// main VmState using `execute_nested` (which respects the current frame
-/// depth), in a frame whose closure has `env` as its globals; the machine's
-/// own `globals` stay the program's environment (#823). `env` is a
-/// namespace: a frame is refused before anything runs ([`compile_for_eval`],
-/// #853).
+/// in, which runs a resumable primitive's `Step::Eval` synchronously, or a
+/// host's primitive that evaluates from Rust. The `eval` primitive itself
+/// has its datum run as a frame ([`eval_closure`], #477), since a
+/// continuation cannot carry this Rust frame. Executes in the main VmState
+/// using `execute_nested` (which respects the current frame depth), in a
+/// frame whose closure has `env` as its globals; the machine's own `globals`
+/// stay the program's environment (#823). `env` is a namespace: a frame is
+/// refused before anything runs ([`compile_for_eval`], #853).
 pub(super) fn vm_eval_expr(
     state: &mut VmState,
     expr: TaggedValue,
@@ -1191,17 +1191,26 @@ pub(super) fn vm_eval_expr(
 /// (#482).
 ///
 /// `env` must be a namespace, as for the backend's top level (`VmBackend`'s
-/// `eval_datum`, #835). A frame reaches here only through an environment
-/// specifier a host made over one: every specifier the workspace makes holds
-/// a namespace. Its kind is asked first, before the expander runs or any
-/// import binds, and a frame answers the error `eval_datum` answers
-/// ([`frame_refusal`], #853): a `Runtime` error, which the dispatch loop
-/// hands to the program's handlers as it does this function's other errors,
-/// so a `guard` around `eval` or `load` catches it. The tree-walker
-/// evaluates such a frame by name. What runs before this is the
-/// primitive's: for an immutable specifier, `eval`'s check for a definition
-/// expands the datum in `env` on either backend before the machine is
-/// handed it (`primitive_eval` in patina-primitives).
+/// `eval_datum`, #835). A frame reaches here only from a host: through an
+/// environment specifier it made over one, which Scheme `eval` and `load`
+/// hand on in their `Step::Eval`; in a `Step::Eval` its own resumable
+/// primitive answers ([`eval_closure`]); or through `ApplyContext::eval_expr`
+/// from its primitive ([`vm_eval_expr`]). Every specifier and `Step::Eval`
+/// the workspace makes holds a namespace. The kind is asked first, before
+/// the expander runs or any import binds, and a frame answers the message
+/// `eval_datum` answers ([`frame_refusal`], #853), as a `Runtime` error,
+/// which the dispatch loop hands to the program's handlers as it does this
+/// function's other errors, so a `guard` around the call catches it. The
+/// tree-walker evaluates in such a frame by name.
+///
+/// What runs before this is the caller's, and the check does not cover it.
+/// For an immutable specifier, `eval`'s check for a definition expands the
+/// datum in `env` on either backend before the machine is handed it
+/// (`primitive_eval` in patina-primitives), and refuses a definition with
+/// an error of its own; a `define-syntax` inside a `begin` passes that check
+/// and leaves its transformer bound in `env`, a frame included, before this
+/// refuses the form. A `load` of a file with no forms hands the machine
+/// nothing to compile, and answers without a refusal.
 ///
 /// # State contract
 ///
@@ -1272,7 +1281,8 @@ fn compile_for_eval(
 /// frame call (#477). Its frames read and define `env`'s globals as any
 /// closure's do, so nothing is swapped, and its code lives as long as the
 /// closure or a frame running it, as any unit's does. `env` is a namespace:
-/// a frame is refused before anything runs ([`compile_for_eval`], #853).
+/// a frame, which only a host's specifier or `Step::Eval` can name here, is
+/// refused before anything runs ([`compile_for_eval`], #853).
 ///
 /// # State contract
 ///

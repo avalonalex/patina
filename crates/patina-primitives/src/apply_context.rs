@@ -80,7 +80,11 @@ pub trait ApplyContext {
 
     /// Evaluate a datum expression in the given environment.
     ///
-    /// Used by `eval` and `interaction-environment` primitives.
+    /// Used by `run_synchronously`, for a resumable primitive's
+    /// [`Step::Eval`](crate::Step::Eval) where no machine runs it; `eval`
+    /// itself answers the step. On the VM `env` must be a namespace, as for
+    /// `Step::Eval`: a frame answers an error naming its kind, where the
+    /// tree-walker evaluates in it by name (#853).
     fn eval_expr(&self, expr: TaggedValue, env: &Rc<Environment>)
     -> Result<TaggedValue, EvalError>;
 

@@ -2491,7 +2491,9 @@ impl patina_primitives::ApplyContext for VmApplyContext {
         clippy::disallowed_methods,
         reason = "holds nothing: `expr` moves into the compile, and `vm_eval_expr` runs it in a \
                   frame whose closure holds `env`, with the machine's `globals` left as they \
-                  are. Its one caller, `run_synchronously`, is one this machine never reaches"
+                  are. Its one caller in the workspace, `run_synchronously`, is one this machine \
+                  never reaches; a host's primitive that calls it holds values of its context, \
+                  beneath which the nested loop the run takes does not collect"
     )]
     fn eval_expr(
         &self,
