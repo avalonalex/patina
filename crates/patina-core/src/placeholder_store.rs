@@ -509,6 +509,39 @@ mod tests {
         assert_eq!(sums(&heap.borrow()), before, "everything given back");
     }
 
+    /// The pass visits every store on the list: three namespaces, each
+    /// with a placeholder nothing links, all rooted, and one collection
+    /// empties every store and frees every placeholder, whichever store the
+    /// list holds first. A pass that stopped early would leave a dead entry,
+    /// which a check build's `check_swept` refuses too.
+    #[test]
+    fn the_pass_empties_every_store_on_the_list() {
+        let heap = new_shared_heap();
+        let namespaces: Vec<Rc<Environment>> = (0..3)
+            .map(|_| Rc::new(Environment::with_heap(&heap)))
+            .collect();
+        let placeholders: Vec<Record> = namespaces
+            .iter()
+            .map(|ns| ns.link_record(&heap, "later").expect("a placeholder"))
+            .collect();
+        collect_only(&mut heap.borrow_mut(), |visitor| {
+            for ns in &namespaces {
+                visitor.env(ns);
+            }
+        });
+        let h = heap.borrow();
+        for (ns, placeholder) in namespaces.iter().zip(&placeholders) {
+            let store = ns.weak_entries().expect("its store");
+            assert_eq!(store.get("later"), None, "every store emptied");
+            assert!(
+                h.free_pair_slots()
+                    .contains(&placeholder.word().heap_index()),
+                "every placeholder freed"
+            );
+        }
+        assert_eq!((h.binding_records(), h.cells()), (0, 0));
+    }
+
     /// `check_swept`'s positive control: a store entry over a pair a sweep
     /// freed, which only a pass that left it would leave. The store is on a
     /// list the heap's pass never sees, counted through the heap's account so
