@@ -431,12 +431,21 @@ one access and no allocation. A check build then asserts, after the arenas
 and beside the ports' check, that every entry left names a live pair in its
 generation, and so does what it reaches, a placeholder's cell and a weak
 read-through record's cell and parent, and that a placeholder is still one,
-flagged and over `UNBOUND` (`PlaceholderList::check_swept`, with its positive
-control `a_check_build_refuses_a_dead_placeholder_the_pass_left`). Moving the
-pass to just after the pair arena's sweep, still before the check, is a
-change no test can see — a slot the sweep frees keeps its bit clear, so the
-pass would drop the same entries — so its place and its comment are what
-hold it before the pair sweep.
+flagged and over `UNBOUND` (`PlaceholderList::check_swept`). Its positive
+controls are a store entry over a pair a sweep freed
+(`a_check_build_refuses_a_dead_placeholder_the_pass_left`); a bound entry
+left in a store, a placeholder or a weak read-through record, which the
+sweep's own call of the check refuses
+(`placeholder_store::tests::a_check_build_refuses_a_bound_…`); and an entry
+the pass kept over a cell or a parent that marks made by hand left unmarked,
+as only a trace that missed one would
+(`heap::gc::tests::a_check_build_refuses_a_kept_…`). The slots' one writer,
+`Environment::append_slot`, refuses a flagged record in a check build too
+(`a_check_build_refuses_a_placeholder_in_a_slot`). Moving the pass to just
+after the pair arena's sweep, still before the check, is a change no test can
+see — a slot the sweep frees keeps its bit clear, so the pass would drop the
+same entries — so its place and its comment are what hold it before the pair
+sweep.
 
 *The passes' order deviates from §9.9's.* Both passes are step 6's (the weak
 tables), and both run inside `Heap::sweep`, so after classification, step 7

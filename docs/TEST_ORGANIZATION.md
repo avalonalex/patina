@@ -1342,8 +1342,12 @@ sweep frees whose entry is the registry's but was never queued, as a
 constructor that did not register it would leave; and the placeholder list's
 (`placeholder_store::tests::a_check_build_refuses_…`, #836): a namespace's
 store entry over a pair a sweep freed, which only a sweep's pass that left it
-would leave. A build without the checks reports them
-ignored. `crates/patina-repl/tests/gc_zeal.rs` is the control for zeal
+would leave, and a bound entry left in a store, a placeholder or a weak
+read-through record, which the sweep's own check refuses; beside it, a kept
+entry over a cell or a parent that marks made by hand left unmarked
+(`heap::gc::tests::a_check_build_refuses_…`), and a namespace slot handed a
+placeholder (`environment::placeholder_tests::a_check_build_refuses_…`). A
+build without the checks reports them ignored. `crates/patina-repl/tests/gc_zeal.rs` is the control for zeal
 itself, in every build: a loop that allocates nothing collects at every
 iteration under zeal and hardly at all at stress 1. It runs in `ci.yml`'s Test
 Suite, not against the zeal lane's binary, so the lane runs the same loop on

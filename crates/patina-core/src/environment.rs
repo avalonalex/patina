@@ -7965,6 +7965,22 @@ mod placeholder_tests {
         assert_counts_agree(&heap, &[&global]);
     }
 
+    /// `append_slot`'s check (Rule 1, #836): the one writer of a namespace's
+    /// slots refuses a placeholder, as an adoption that left its flag set
+    /// would hand it, so no slot holds a record the sweep's pass could drop.
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "a slot for \"later\" given a placeholder or a read-through record")]
+    fn a_check_build_refuses_a_placeholder_in_a_slot() {
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        let placeholder = ns.link_record(&heap, "later").expect("a placeholder");
+        ns.append_slot(&heap.borrow(), Rc::from("later"), placeholder.word());
+    }
+
     /// `insert_scoped_record`'s assertion (#836): a visible scoped
     /// definition, which only the tree-walker makes, and it links nothing,
     /// is refused over a host namespace's weak read-through record, as over

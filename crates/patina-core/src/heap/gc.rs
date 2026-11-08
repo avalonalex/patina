@@ -2340,7 +2340,9 @@ impl SlotVisitor for EnvEdges<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binding_record::{BindingCell, Record};
     use crate::cps_expr::{CpsExpr, CpsExprKind};
+    use crate::placeholder_store::{PlaceholderHandle, PlaceholderStore, StoreKind};
     use std::cell::RefCell;
     use std::mem::size_of;
 
@@ -3351,6 +3353,63 @@ mod tests {
         let again = ns.link_record(&shared, "a").expect("a fresh placeholder");
         assert_eq!(store.get("a"), Some(again));
         assert!(again.is_placeholder(&shared.borrow()));
+    }
+
+    /// A store on the heap's own list (#836), counting through its account
+    /// so that its drop as a control's panic unwinds gives back what it
+    /// counted.
+    fn listed_store(heap: &Heap, kind: StoreKind) -> PlaceholderHandle {
+        PlaceholderHandle::new(
+            heap.placeholder_list(),
+            PlaceholderStore::new(7, heap.external_bytes_handle(), kind),
+        )
+    }
+
+    /// `check_swept`'s control for a placeholder kept over a freed cell
+    /// (#836): the trace marks a kept record's car and cdr, so only marks
+    /// made by hand, as a trace that missed the cell would leave them,
+    /// reach this. The pass keeps the marked record, the pair sweep frees
+    /// its cell, and the check refuses the entry before anything reads the
+    /// cell.
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "the sweep's pass left a dead placeholder: \"later\"'s entry")]
+    fn a_check_build_refuses_a_kept_placeholder_over_a_freed_cell() {
+        let mut heap = Heap::new();
+        let handle = listed_store(&heap, StoreKind::Placeholders);
+        let cell = BindingCell::new_own(&mut heap, TaggedValue::UNBOUND, 7);
+        let record = Record::placeholder(&mut heap, cell);
+        handle.store().insert(Rc::from("later"), record);
+        let mut marks = MarkBits::for_heap(&heap);
+        marks.pairs.set(record.word().heap_index() as usize);
+        heap.sweep(&mut marks);
+    }
+
+    /// The same for a weak read-through record kept over a freed parent
+    /// (#836): marks made by hand keep the record and the cell it names,
+    /// and the pair sweep frees the parent placeholder under it, which the
+    /// check refuses.
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "the sweep's pass left a dead placeholder: \"y\"'s entry")]
+    fn a_check_build_refuses_a_kept_read_through_record_over_a_freed_parent() {
+        let mut heap = Heap::new();
+        let handle = listed_store(&heap, StoreKind::Children);
+        let parent_cell = BindingCell::new_own(&mut heap, TaggedValue::UNBOUND, 6);
+        let parent = Record::placeholder(&mut heap, parent_cell);
+        let unbound = BindingCell::free(&mut heap, TaggedValue::UNBOUND);
+        let child = Record::read_through(&mut heap, unbound, parent);
+        handle.store().insert(Rc::from("y"), child);
+        let mut marks = MarkBits::for_heap(&heap);
+        marks.pairs.set(child.word().heap_index() as usize);
+        marks.pairs.set(unbound.word().heap_index() as usize);
+        heap.sweep(&mut marks);
     }
 
     /// An open file port is charged its buffer and its place in descriptor

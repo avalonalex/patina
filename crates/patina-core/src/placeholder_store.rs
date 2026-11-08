@@ -473,7 +473,7 @@ mod tests {
     use crate::binding_record::BindingCell;
     use crate::environment::Environment;
     use crate::heap::new_shared_heap;
-    use crate::heap::trace_sentinels::collect_from;
+    use crate::heap::trace_sentinels::{collect_from, collect_only};
 
     /// A namespace's drop takes its store off its heap's list at once (M2),
     /// and the store gives back the records, cells and bytes it counted and
@@ -534,5 +534,52 @@ mod tests {
         handle.store().insert(Rc::from("later"), record);
         collect_from(&mut heap, &[]);
         unseen.check_swept(&heap);
+    }
+
+    /// `check_swept`'s control through the heap's own sweep, for Rule 1: a
+    /// placeholder a define adopted, put back in its namespace's store as an
+    /// adoption that left it there would leave it. Its slot marks it, so the
+    /// pass keeps it, and the check the sweep runs after the arenas refuses
+    /// a bound entry in a store, which the pass could later drop under the
+    /// binding.
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "a placeholder store holds \"later\"'s entry, bound")]
+    fn a_check_build_refuses_a_bound_placeholder_left_in_its_store() {
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        let placeholder = ns.link_record(&heap, "later").expect("a placeholder");
+        ns.define(&heap, "later", TaggedValue::fixnum(5));
+        let store = ns.weak_entries().expect("its store");
+        store.insert(Rc::from("later"), placeholder);
+        collect_only(&mut heap.borrow_mut(), |visitor| visitor.env(&ns));
+    }
+
+    /// The same for a host namespace's weak read-through record (Rule 1): a
+    /// define adopted it, flags 0 over a cell of its own, and it is put back
+    /// in the host's store. Its slot marks it, the pass keeps it, and the
+    /// sweep's check refuses a record in a store of read-through records
+    /// that reads through nothing.
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "a placeholder store holds \"y\"'s entry, bound")]
+    fn a_check_build_refuses_a_bound_read_through_record_left_in_its_store() {
+        let heap = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(&heap));
+        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
+        let child = host.link_record(&heap, "y").expect("a weak child");
+        host.define(&heap, "y", TaggedValue::fixnum(9));
+        let store = host.weak_entries().expect("its store");
+        store.insert(Rc::from("y"), child);
+        collect_only(&mut heap.borrow_mut(), |visitor| {
+            visitor.env(&global);
+            visitor.env(&host);
+        });
     }
 }
