@@ -58,6 +58,7 @@ pub mod features;
 pub mod heap;
 pub mod instance;
 pub mod library;
+pub mod link_table;
 pub mod literal_pool;
 pub mod macro_debug;
 pub mod namespace_view;
@@ -102,6 +103,7 @@ pub use heap::cx::{
 };
 pub use instance::{CurrentPort, Instance};
 pub use library::Library;
+pub use link_table::{LinkIdx, LinkTable};
 pub use literal_pool::{Lit, LiteralPool};
 pub use namespace_view::NamespaceView;
 pub use port::{Port, PortData, PortDirection, PortKind, StdioKind, StringPortData};
