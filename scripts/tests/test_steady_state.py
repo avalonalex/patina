@@ -88,12 +88,12 @@ class Clauses(unittest.TestCase):
         self.assertFalse(holds)
 
     def test_ss5_is_one_clause_per_per_owner_key(self):
-        self.assertTrue({'symbols', 'ports', 'namespaces', 'cells', 'binding-records'}
+        self.assertTrue({'symbols', 'ports', 'namespaces', 'cells', 'binding-records', 'code-units'}
                         <= set(steady.PER_OWNER_KEYS))
         results = steady.evaluate(self.row, 'vm', [run(10, counts={'ports': (40, 57)})], 10)
         self.assertEqual(results['SS5:symbols'], (0, 16, True))
         self.assertEqual(results['SS5:ports'], (17, 16, False))
-        for key in ('namespaces', 'cells', 'binding-records'):
+        for key in ('namespaces', 'cells', 'binding-records', 'code-units'):
             self.assertEqual(results[f'SS5:{key}'], (0, 16, True), key)
         self.assertNotIn('SS5', results)
 
@@ -154,18 +154,23 @@ class Clauses(unittest.TestCase):
         self.assertIsNone(row.red_reason('SS2', 'tree-walker'))
 
     def test_new_per_owner_marks_are_accepted(self):
-        # #834's keys are marked as any other per-owner key: by name, on one
-        # backend or both, and each silences its own key only.
+        # #834's keys and #836's `code-units` are marked as any other
+        # per-owner key: by name, on one backend or both, and each silences
+        # its own key only.
         row = steady.Row('r', 'REPL', 'x.scm', {}, clauses=steady.REPL,
-                         red={'SS5:namespaces/vm': '#1', 'SS5:cells': '#2', 'SS5:binding-records': '#3'})
+                         red={'SS5:namespaces/vm': '#1', 'SS5:cells': '#2', 'SS5:binding-records': '#3',
+                              'SS5:code-units/vm': '#4'})
         self.assertEqual(steady.mark_errors(row), [])
         self.assertEqual(row.red_reason('SS5:namespaces', 'vm'), '#1')
         self.assertIsNone(row.red_reason('SS5:namespaces', 'tree-walker'))
+        self.assertEqual(row.red_reason('SS5:code-units', 'vm'), '#4')
+        self.assertIsNone(row.red_reason('SS5:code-units', 'tree-walker'))
         for backend in steady.BACKENDS:
             self.assertEqual(row.red_reason('SS5:cells', backend), '#2')
             self.assertEqual(row.red_reason('SS5:binding-records', backend), '#3')
             self.assertIsNone(row.red_reason('SS5:symbols', backend))
-        self.assertEqual(row.checks()[-3:], ['SS5:namespaces', 'SS5:cells', 'SS5:binding-records'])
+        self.assertEqual(row.checks()[-4:],
+                         ['SS5:namespaces', 'SS5:cells', 'SS5:binding-records', 'SS5:code-units'])
 
     def test_hidden_define_records_and_cells_are_stage_5c(self):
         # Each expansion's introduced definition is a record and a cell

@@ -1536,8 +1536,11 @@ the row can see; **SS2**, footprint (`committed-bytes` plus `external-bytes`)
 per cycle (`cpu-us` less `pause-total-us`) over [3N, 4N) ≤ 1.5× that over
 [N, 2N), each segment the minimum of the three runs; **SS5**, each per-owner
 count of `(gc-stats)` at 4N within max(16, 5%) of N, one clause per key:
-`SS5:symbols` and `SS5:ports` since #832, and `SS5:namespaces`, `SS5:cells`
-and `SS5:binding-records` since #834. The runner's `PER_OWNER_KEYS` and
+`SS5:symbols` and `SS5:ports` since #832, `SS5:namespaces`, `SS5:cells`
+and `SS5:binding-records` since #834, and `SS5:code-units`, the VM's loaded
+code units, which the tree-walker reads as 0, since #836's second PR, ahead
+of 4b.9's link tables so that the PRs that build them hold it. The runner's
+`PER_OWNER_KEYS` and
 `driver.scm`'s `steady-per-owner-keys` are that list, a test keeps them equal,
 and a key joins both in the PR that adds it to `(gc-stats)`. A row that
 drops a peak also requires L below a

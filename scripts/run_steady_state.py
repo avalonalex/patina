@@ -58,8 +58,10 @@ CLAUSES = ('SS1', 'SS2', 'SS4', 'SS5')
 # them, from its `steady-per-owner-keys`, which must be this list. A key
 # joins both in the PR that adds it to (gc-stats), with its table:
 # `namespaces`, `cells` and `binding-records` with #834's binding records
-# (R1 and R11 on #782).
-PER_OWNER_KEYS = ('symbols', 'ports', 'namespaces', 'cells', 'binding-records')
+# (R1 and R11 on #782); `code-units`, the VM's loaded code units (0 on the
+# tree-walker), with 4b.9's second PR, ahead of its link tables, so that the
+# PRs that build them hold it (#836, R8).
+PER_OWNER_KEYS = ('symbols', 'ports', 'namespaces', 'cells', 'binding-records', 'code-units')
 # What a pin allows above the cost it pins: the owner's ruling R9 on #782.
 PIN_TOLERANCE = 1.05
 # `library-stream`'s pin: SS1's bound per cycle at its N of 250 (`leak_floor`,

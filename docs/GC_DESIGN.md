@@ -732,7 +732,7 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 | `pending_escape` | **yes** | Pinned. Value parked while crossing a Rust re-entry boundary; multiple values otherwise travel in ordinary registers as heap values |
 | `scratch_args` | yes | Pinned. Empty at every safe point: `mem::take`n while a primitive call holds it, and emptied when the call is done (since #639: the last call's arguments had stayed in it, and a dead key passed to `make-ephemeron` survived a `(gc)`). Rooting it is free and future-proof |
 | `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | Pinned until stage 4e makes them heap data. `tag`/`handler`/`before`/`after` values, and a wind record's `handlers` — the stack of its own `dynamic-wind` call, which its thunks run under and which nothing else holds once the live stack has moved on (`types/continuation.rs`). An `ExceptionHandler` is one procedure now — it used to also carry the wind depth `raise` unwound to, which no raise path needs since Track L families 22/28 |
-| `code_store[*].constants` | **yes** | Pinned until stage 4e makes them a descriptor's. Kept while a frame, a captured continuation or a live closure can run the code; a finished form's code is released with its constants (#338) |
+| `code_store[*].constants` | **yes** | Pinned until stage 4e makes them a descriptor's. Kept while a frame, a captured continuation or a live closure can run the code; a finished form's code is released with its constants (#338). `(gc-stats)`'s `code-units` counts the units loaded (§6, #836) |
 | `globals` | **yes** | `env`: the program's environment, during a library's load as after it (#823). `saved_globals`, which held the environments a load's swap set aside so that a library body under it could collect (#677), went with the swap |
 | `continuation_store` / `delimited_continuation_store` | **weak** (since #19) | `VmContinuation` snapshots hold full `registers` copies and frames, each with its closure, all slots as the live ones are, and wind/prompt/handler stacks, pinned as theirs are (`types/continuation.rs:59,:101`). Heap-side `VmContinuationRef { id, bytes }` is opaque (its `bytes` charges the snapshot to the trigger, §6); only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_ids` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
 | `tracer` | yes | Pinned: `StepTracer.pre_regs`/`pre_all_regs`, copies of registers for display (`crates/patina-vm/src/tracer.rs`) |
@@ -1224,9 +1224,18 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   drops, so they are exact once the dead namespaces have dropped, which a
   collection's sweep does for the specifiers it frees; a test-only
   `Environment::recount` checks them against the tables. Records and cells
-  are pairs, so `pairs` counts them too. A trigger the GC mode does not use
-  reads `#f`. `minors` and `majors`
-  count collections by kind: every one is a major until a nursery.
+  are pairs, so `pairs` counts them too. `code-units` (#836) counts the
+  code units the VM has loaded and not released (`VmState::code_units`'
+  entries): a unit is what one compilation loaded, a form's top code
+  object with the code of the lambdas nested in it, kept and let go whole
+  (§5.2's `code_store` row). The VM writes the count beside the
+  namespaces' counts as it loads a unit and as it lets units go: when a
+  form returns, and after each collection, which a `(gc)` that collects
+  finishes before it returns. So it is exact after a collection, and the
+  reading form's own unit is counted. The tree-walker loads no code, and
+  reads 0, never `#f`. A trigger the GC mode does not use reads `#f`.
+  `minors` and `majors` count collections by kind: every one is a major
+  until a nursery.
   For a tree-walker closure, the first four count the estimate of the frame
   it captures (#637, above) as part of its payload: an estimate, not a
   measurement, counted once per closure, so a frame several closures share
