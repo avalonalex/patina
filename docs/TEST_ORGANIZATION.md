@@ -1626,10 +1626,13 @@ stage is judged by (`PRD/GC_PRD.md` §16). The sets:
   `--large-live`.
 
 `tak`, Larceny's `tak` at count 500 on 18, 12, 6, is in no set: it is the
-global-path workload of at least 1 s that row 4b's gate names (#836), run
-with `--workload tak`, pending the owner's ruling on #836's question 1. A
-run takes names or sets, not both, so a gate that names it runs the sets
-and `--workload tak` apart.
+global-path workload of at least 1 s that row 4b's gate names (#836), about
+1.1 s on the VM here, run with `--workload tak`, pending the owner's ruling
+on #836's question 1 (recommended: in no set through stage 4b, with the
+stage-4 exit baseline, decision 25, deciding whether it joins `gbs`). Names
+given with `--workload` replace the sets, silently: `--set gbs --workload
+tak` runs only `tak`. So a gate that names it runs two A/Bs, the sets and
+then `--workload tak`.
 
 The Larceny-derived workloads are LGPL and are not vendored. They run from
 the checkout that `run_larceny_tests.sh` uses (`LARCENY_DIR`, by default
@@ -1684,6 +1687,7 @@ one build here; a comparison takes three times that.
 ./scripts/run_gc_benchmarks.sh --rounds 3                    # this build, every set
 ./scripts/run_gc_benchmarks.sh --base main --set gbs         # main/branch/main
 ./scripts/run_gc_benchmarks.sh --workload queue3 --workload libload --rounds 5
+./scripts/run_gc_benchmarks.sh --base main --workload tak    # row 4b's tak, apart from the sets
 ```
 
 The report goes to `target/benchmark-runs/<stamp>/report.json`, with every
