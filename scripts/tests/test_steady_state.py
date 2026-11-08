@@ -176,14 +176,16 @@ class Clauses(unittest.TestCase):
         # Each expansion's introduced definition is a record and a cell
         # (#834), so `cells` and `binding-records` grow one a cycle on both
         # backends until stage 5c reclaims introduced definitions (R1); the
-        # other per-owner keys stay held.
+        # other per-owner keys stay held, `code-units` among them (#836).
         rows = {row.name: row for row in steady.ROWS}
         hidden = rows['hidden-define']
         self.assertEqual(steady.mark_errors(hidden), [])
+        held = [key for key in steady.PER_OWNER_KEYS if key not in ('cells', 'binding-records')]
+        self.assertIn('code-units', held)
         for backend in steady.BACKENDS:
             for key in ('cells', 'binding-records'):
                 self.assertEqual(hidden.red_reason(f'SS5:{key}', backend), 'stage 5c', (key, backend))
-            for key in ('namespaces', 'symbols', 'ports'):
+            for key in held:
                 self.assertIsNone(hidden.red_reason(f'SS5:{key}', backend), (key, backend))
             # A reference to an unbound name makes no record (R22).
             for key in ('namespaces', 'cells', 'binding-records'):
