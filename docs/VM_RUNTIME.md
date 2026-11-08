@@ -88,7 +88,8 @@ that compile expands anything or binds an import. What its caller ran
 before is not covered: for an immutable specifier, `eval`'s check for a
 definition has already expanded the form in the frame, on either backend,
 and a `define-syntax` inside a `begin` passes that check and leaves its
-transformer bound there (#855). Nothing
+transformer bound there (#855); a `load` of a file with no forms compiles
+nothing, and answers without a refusal. Nothing
 swaps `globals` any more (#823): `with_globals`, which pointed them at the
 library for the body's run and kept what it set aside on the traced
 `saved_globals` (#677), is gone. So a frame with no closure, a program form

@@ -1215,10 +1215,12 @@ as is what `Backend::eval` answers for the frame itself. On the VM each
 `guard` catches, with the message `Backend::eval` answers, and nothing
 binds, neither in the frame nor in the global namespace; after each the
 next form evaluates. The tree-walker evaluates through each frame by name,
-its answers pinned at those both backends gave before #853 (recorded on
-#854's head; the tree-walker's code is as at e392fe3d): over the frame of
-temporaries it binds the `define`'s and the loaded file's definitions in
-the global namespace above it (#680). A specifier over a host namespace
+its `eval` and `load` answers pinned at those both backends gave before #853
+(recorded on #854's head; the tree-walker's code is as at e392fe3d), except
+over the frame of temporaries, where it binds the `define`'s and the loaded
+file's definitions in the global namespace above it (#680) and the VM bound
+them in the frame; the message rows and the host-primitive test were added
+after that recording. A specifier over a host namespace
 and the global namespace's mutable specifier still evaluate and define on
 both backends. A host's primitive reaches the same refusal without a
 specifier: `a_host_primitive_evaluating_in_a_raw_frame_is_refused_by_the_vm`

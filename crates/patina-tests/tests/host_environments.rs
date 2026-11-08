@@ -1454,12 +1454,15 @@ fn frame_refusal(kind: &str) -> String {
 /// namespace, a host namespace's or the global namespace's, still evaluates
 /// on the VM, as on the tree-walker.
 ///
-/// The tree-walker evaluates through each frame's specifier by name: its
-/// answers below are the ones both backends gave before #853 (recorded on
-/// #854's head; the tree-walker's code is as at e392fe3d). Over the frame of
-/// temporaries it binds a definition, the `define`'s and the loaded file's,
-/// in the environment above the frame, the global namespace (#680), where
-/// the VM bound it in the frame.
+/// The tree-walker evaluates through each frame's specifier by name. Its
+/// `eval` and `load` answers below are the ones both backends gave before
+/// #853 (recorded on #854's head; the tree-walker's code is as at e392fe3d),
+/// except over the frame of temporaries, where it binds a definition, the
+/// `define`'s and the loaded file's, in the environment above the frame, the
+/// global namespace (#680), and the VM bound it in the frame. The rows that
+/// read the message and `Backend::eval`'s answer for the frame were added
+/// after that recording; `Backend::eval` already refused the frame on the VM
+/// (#835).
 #[test]
 fn a_specifier_over_a_raw_frame_is_refused_by_the_vm() {
     let by_vm: Vec<String> = specifiers_over_raw_frames(vm_interpreter())
