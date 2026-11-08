@@ -1169,9 +1169,13 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   `Evaluator::with_gc_mode`, hidden from the docs; `vm_interpreter_gc_off`
   and `tree_walker_interpreter_gc_off` in `patina-tests`' common module):
   under a stress lane's variable its not-collecting side would collect too,
-  and fail without anything being wrong (#626). `PATINA_GC_COUNT_DIR=<dir>`
-  asks each process for a record of how many collections it ran, which the
-  stress lanes read to fail a run that did not collect (§11 item 9).
+  and fail without anything being wrong (#626). So does a test that must
+  collect at every outermost safe point in every lane (`vm_interpreter_zeal`
+  and `tree_walker_interpreter_zeal`, #836), and the stress lanes' record
+  counts its collections whatever their variable says.
+  `PATINA_GC_COUNT_DIR=<dir>` asks each process for a record of how many
+  collections it ran, which the stress lanes read to fail a run that did not
+  collect (§11 item 9).
 - Manual entry points for testing and users: `(gc)` and `(gc-stats)`
   primitives, honored in **every** mode. `(gc)` collects **at its call**
   (#639): it is a resumable primitive that answers

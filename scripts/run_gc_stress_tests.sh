@@ -182,21 +182,24 @@ fi
 # minimum at half its count measured then; gc_vm's and gc_tree_walker's test
 # counts and minimums re-pinned 2026-11-07 for #836's tests of a forward
 # reference across collections, through a closure and through a captured
-# continuation, each run on the backend's interpreter and on a zeal one, and
-# for `collection_is_recorded_in_stats`'s check that the zeal interpreter
-# collects in a loop that allocates nothing: a zeal interpreter collects at
-# every outermost safe point whatever the lane's variable says, and the
-# record counts it, so their counts without stress rose with their counts
-# under it, gc_vm's from 667 to 1864 and gc_tree_walker's from 658 to 9313.
-# At 16, gc_vm's 25 tests made 17584 at the base, 996d96fb, and
-# gc_tree_walker's 20 made 24318, up from 17314 and 24151 since their counts
-# of 2026-10-27 and 2026-10-26, which no re-pin had recorded;
-# `collection_is_recorded_in_stats` now makes 1097 on the VM and 8250 on
-# the tree-walker, up from 35 and 34, and the two new tests 99 and 107 on
-# the VM and 231 and 275 on the tree-walker. host_environments's test count
-# and minimum re-pinned that day for #836's test of a host's forward
-# references across collections, its 27 other tests making 115588, as
-# before, and the new test 80, its count without stress 129, up from 125;
+# continuation (two programs, one whose code the continuation holds in a
+# closure and one in a frame alone), each counting `binding-records` and run
+# on the backend's interpreter and on a zeal one, which must have collected
+# beyond the program's `(gc)`s, and for `collection_is_recorded_in_stats`'s
+# check that the zeal interpreter collects across 100 iterations that
+# allocate nothing: a zeal interpreter collects at every outermost safe point
+# whatever the lane's variable says, and the record counts it, so their
+# counts without stress rose with their counts under it, gc_vm's from 667 to
+# 1285 and gc_tree_walker's from 658 to 3358; at 16, gc_vm's 25 tests made
+# 17584 at the base, #856's head, and gc_tree_walker's 20 made 24318, up from
+# 17314 and 24151 since their counts of 2026-10-27 and 2026-10-26, which no
+# re-pin had recorded; `collection_is_recorded_in_stats` now makes 197 on the
+# VM and 1050 on the tree-walker, up from 35 and 34, and the two new tests
+# 185 and 390 on the VM and 550 and 1252 on the tree-walker;
+# host_environments's test count and minimum re-pinned again that day for
+# #836's test of a host's forward references across collections, on the
+# backend's interpreter and on a zeal one, its 27 other tests making 115588,
+# as before, and the new test 382, its count without stress 431, up from 125;
 # the minimums at half their counts measured that day)
 TARGETS=(
     "callability 16 31 13"                    # 1543 (0)
@@ -205,9 +208,9 @@ TARGETS=(
     "ephemerons 16 289 30"                    # 578 (204)
     "escape_from_primitive 16 3669 18"        # 7338 (90)
     "finished_forms_release_code 16 1450 11"  # 3677 (13)
-    "gc_tree_walker 16 16520 22"              # 33040 (9313)
-    "gc_vm 16 9426 27"                        # 18852 (1864)
-    "host_environments 16 57834 28"           # 115668 (129)
+    "gc_tree_walker 16 13568 22"              # 27136 (3358)
+    "gc_vm 16 9160 27"                        # 18321 (1285)
+    "host_environments 16 57985 28"           # 115970 (431)
     "hygiene_matrix 16 11136 17"              # 22273 (6)
     "interpreter_api 16 138 28"               # 2277 (4)
     "library_loading 16 46 9"                 # 93 (0): see the header
