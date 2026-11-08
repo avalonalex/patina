@@ -933,15 +933,14 @@ impl VmState {
         self.delimited_continuation_store.borrow().get(&id).cloned()
     }
 
+    /// The top frame's code, which a dispatch loop takes as its `cur_code`
+    /// where it starts and where an escape lands: recorded as the running
+    /// code (`RunningCode`, #836), since each of those polls next.
     pub(super) fn current_code(&self) -> Result<Rc<CodeObject>, VmError> {
-        Ok(Rc::clone(
-            &self
-                .execution
-                .frames()
-                .last()
-                .expect("no active frame")
-                .code,
-        ))
+        let top = self.execution.frames().last().expect("no active frame");
+        let code = Rc::clone(&top.code);
+        self.execution.set_running(code.id.0);
+        Ok(code)
     }
 }
 
@@ -1613,7 +1612,12 @@ pub(super) fn run_loop_until_outcome(
     // loop's goes back when this one ends, and a driver entry's own goes back
     // to the carrier.
     let outer = std::mem::replace(&mut state.driver, driver);
+    // The running code of the loop this one runs in (#836), put back however
+    // this one ends, so that the outer loop's next poll still reports the
+    // code its stale `cur_code` holds; `dispatch_loop` writes its own.
+    let running = state.execution.running();
     let exit = dispatch_loop(state, exit_depth);
+    state.execution.set_running(running);
     drop(std::mem::replace(&mut state.driver, outer));
     drop(scope);
     exit

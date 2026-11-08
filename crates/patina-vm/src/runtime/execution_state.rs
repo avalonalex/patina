@@ -1,6 +1,7 @@
-//! The five coupled components in VM_RUNTIME §5.6. Only this module may
-//! resize/rebase live register windows or replace a dynamic-state snapshot.
-//! Transfer policy (wind travel, re-entry, error routing) stays in `control`.
+//! The five coupled components in VM_RUNTIME §5.6, and the id of the code
+//! the running dispatch loop runs. Only this module may resize/rebase live
+//! register windows or replace a dynamic-state snapshot. Transfer policy
+//! (wind travel, re-entry, error routing) stays in `control`.
 
 use super::control::abort_step;
 use crate::error::VmError;
@@ -9,13 +10,15 @@ use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
 use crate::types::{CallFrame, FrameCode};
-use patina_core::{TaggedValue, Trace};
+use patina_core::heap::Heap;
+use patina_core::{SlotVisitor, TaggedValue, Trace};
 use std::cell::Cell;
 use std::rc::Rc;
 
-/// Its trace (derived, #686) is all five components, a root of every
-/// collection through `VmState`'s. The sentinel test
-/// `every_vm_state_root_is_traced` pins each.
+/// Its trace (derived, #686) is all five components and the running code's
+/// id, a root of every collection through `VmState`'s. The sentinel test
+/// `every_vm_state_root_is_traced` pins each component, and
+/// `the_running_code_keeps_its_units_link_table` the running code.
 #[derive(Default, Trace)]
 pub(super) struct ExecutionState {
     /// Slots, so that the root provider reports each register where it
@@ -28,12 +31,42 @@ pub(super) struct ExecutionState {
     prompt_stack: Vec<PromptFrame>,
     dynamic_winds: Vec<DynamicWindRecord>,
     exception_handlers: Vec<ExceptionHandler>,
+    /// The code the innermost running dispatch loop runs, by id (#836).
+    running: RunningCode,
+}
+
+/// The code the innermost running dispatch loop's `cur_code` holds (#836),
+/// by id: written when `cur_code` changes (where a loop starts or an escape
+/// lands, `VmState::current_code`, and where a dispatch refreshes it,
+/// [`ExecutionState::dispatch_frame`]), and put back by
+/// `run_loop_until_outcome` when a nested loop ends. A tail call, a return
+/// or a stub's restart changes the frame and then polls while `cur_code`
+/// still names the code it left, which only `cur_code` then holds besides
+/// the code store; a collection there still traces that code's unit's
+/// table, since this reports the id as a frame's code does. Written once
+/// per change of `cur_code`, never per instruction, and not on a call or
+/// return that keeps the same code. `RETIRED_VM_CLOSURE_CODE`, which
+/// marking passes over, while no loop runs.
+pub(super) struct RunningCode(Cell<u64>);
+
+impl Default for RunningCode {
+    fn default() -> Self {
+        RunningCode(Cell::new(Heap::RETIRED_VM_CLOSURE_CODE))
+    }
+}
+
+/// Its one field by name (`scripts/check_gc_trace_names.py`).
+impl Trace for RunningCode {
+    fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
+        let RunningCode(id) = self;
+        visitor.code(id.get());
+    }
 }
 
 impl ExecutionState {
     /// Build a state from its five components, for tests that fill each with
-    /// a value nothing else holds. A struct literal, so a new component fails
-    /// to compile here too.
+    /// a value nothing else holds, with no running code. A struct literal,
+    /// so a new component fails to compile here too.
     #[cfg(test)]
     pub(super) fn from_parts(
         registers: Vec<Cell<TaggedValue>>,
@@ -48,7 +81,21 @@ impl ExecutionState {
             prompt_stack,
             dynamic_winds,
             exception_handlers,
+            running: RunningCode::default(),
         }
+    }
+
+    /// The id of the code the innermost running dispatch loop runs
+    /// ([`RunningCode`]).
+    #[inline(always)]
+    pub(super) fn running(&self) -> u64 {
+        self.running.0.get()
+    }
+
+    /// Record that the running dispatch loop now runs the code `id`.
+    #[inline(always)]
+    pub(super) fn set_running(&self, id: u64) {
+        self.running.0.set(id);
     }
 
     #[inline(always)]
@@ -155,6 +202,7 @@ impl ExecutionState {
         let frame = self.frames.last_mut().expect("empty frame stack");
         if !Rc::ptr_eq(cur_code, &frame.code) {
             *cur_code = Rc::clone(&frame.code);
+            self.running.0.set(frame.code.id.0);
         }
         let pc = frame.pc;
         frame.pc = pc + 1;

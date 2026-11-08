@@ -23,19 +23,19 @@ use patina_core::heap::SharedHeap;
 use patina_core::heap::gc::collect_for_tests;
 use patina_core::heap::sentinels::{Sentinels, assert_freed};
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{GcController, Heap, LinkTable};
+use patina_core::{GcController, GcMode, Heap, LinkTable};
 use patina_primitives::PrimitiveRegistry;
 use rustc_hash::FxHashMap;
 
 use super::super::control::resume_step;
 use super::super::execution_state::ExecutionState;
-use super::VmState;
+use super::{LoopExit, VmState, execute, run_loop_until_outcome};
 use crate::tracer::StepTracer;
-use crate::types::code_object::{Arity, CodeObject};
+use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use crate::types::{CallFrame, CodeObjectId, FrameCode};
+use crate::types::{CallFrame, CodeObjectId, FrameCode, Instruction};
 
 /// Code with these constants and nothing else.
 fn code_holding(constants: Vec<TaggedValue>) -> Rc<CodeObject> {
@@ -636,4 +636,213 @@ fn a_frame_keeps_a_placeholder_its_units_table_links() {
         before,
         "later's placeholder, its record and cell"
     );
+}
+
+/// (g) A unit whose only holder is the running code (`RunningCode`): its id
+/// set, as the dispatch loop sets it when `cur_code` changes, with no frame
+/// and no closure of it.
+#[test]
+fn the_running_code_keeps_its_units_link_table() {
+    let mut state = VmState::on_a_fresh_heap();
+    let mut s = Sentinels::new(&mut state.heap.borrow_mut());
+    let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
+    let id = load_linked(&mut state, super::tests::code(), &["x"], x, y);
+    state.execution.set_running(id.0);
+
+    collect(&state);
+    s.assert_survived(&state.heap.borrow());
+}
+
+// ----------------------------------------------------------------------------
+// The running code, through a run (#836)
+// ----------------------------------------------------------------------------
+
+/// Hand-assembled code with these instructions and constants, one
+/// register and no global operand.
+fn assembled(instructions: Vec<Instruction>, constants: Vec<TaggedValue>) -> CodeObject {
+    CodeObject {
+        id: CodeObjectId::label(),
+        name: None,
+        global_cache: GlobalCacheEntry::table(&instructions),
+        links: LinkTable::empty(),
+        instructions,
+        constants,
+        num_regs: 1,
+        arity: Arity::Fixed(0),
+        source_map: Vec::new(),
+        register_roots: None,
+        live_closures: Cell::new(0),
+    }
+}
+
+/// A machine that collects at every outermost poll (`GcMode::Zeal`), with a
+/// unit A that answers 42 and a closure of A, counted as `MakeClosure`
+/// counts one, so that A stays loaded while the closure lives.
+fn zeal_with_callee() -> (VmState, TaggedValue) {
+    let heap = patina_core::heap::new_shared_heap();
+    let globals = Rc::new(Environment::with_heap(&heap));
+    let mut state = VmState::with_gc_mode(heap, globals, GcMode::Zeal);
+    let a = state.load_unit(
+        assembled(
+            vec![
+                Instruction::LoadImmediate {
+                    dst: 0,
+                    val: TaggedValue::fixnum(42),
+                },
+                Instruction::Return { val: 0 },
+            ],
+            Vec::new(),
+        ),
+        Vec::new(),
+    );
+    let globals = Rc::clone(state.global_env());
+    let closure = (state.heap.borrow_mut()).alloc_vm_closure(a.0, Vec::new(), globals);
+    state.note_closure_made(a);
+    (state, closure)
+}
+
+/// Code that tail-calls the closure in its first constant.
+fn tail_calling(closure: TaggedValue) -> CodeObject {
+    assembled(
+        vec![
+            Instruction::LoadConst { dst: 0, idx: 0 },
+            Instruction::TailCall {
+                func: 0,
+                args: Vec::new(),
+            },
+        ],
+        vec![closure],
+    )
+}
+
+/// A top-level form that ends in a tail call: the loop starts with the
+/// form's unit B as its running code, and the callee's entry poll comes
+/// after `tail_replace` has given B's frame to the callee and before any
+/// dispatch has refreshed `cur_code`. A collection there finds B held only
+/// by the code store and the loop's stale `cur_code`, so only the running
+/// code's id keeps B's table, which the loop wrote where it started
+/// (`current_code`). Under zeal the run collects at the loop's start and at
+/// that entry poll, and nowhere else: the callee's `Return` passes none.
+#[test]
+fn a_tail_call_from_a_top_level_form_keeps_the_forms_link_table() {
+    let (mut state, closure) = zeal_with_callee();
+    let mut s = Sentinels::new(&mut state.heap.borrow_mut());
+    let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
+    let b = load_linked(&mut state, tail_calling(closure), &["x"], x, y);
+    let collections = state.heap.borrow().gc_collections();
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a driver entry, so its polls collect; the test holds only words a root \
+                  reaches: the closure in B's constants, and the sentinels it reads back from \
+                  the free lists"
+    )]
+    let result = execute(&mut state, b);
+    assert_eq!(result.ok(), Some(TaggedValue::fixnum(42)));
+    assert_eq!(
+        state.heap.borrow().gc_collections() - collections,
+        2,
+        "at the loop's start and at the callee's entry, after the tail call"
+    );
+    s.assert_survived(&state.heap.borrow());
+}
+
+/// The same after a return (`dispatch_frame`'s write): a frame of unit M is
+/// below the form's unit B, whose `Return` lands in M with no poll, and the
+/// next dispatch refreshes `cur_code` to M, which tail-calls A. At A's
+/// entry poll M is held only by the code store and `cur_code`, so only the
+/// running code's id, written where the dispatch changed `cur_code`, keeps
+/// M's table. The run collects twice, at the loop's start, when M's frame
+/// keeps its table, and at A's entry.
+#[test]
+fn a_tail_call_after_a_return_keeps_the_callers_link_table() {
+    let (mut state, closure) = zeal_with_callee();
+    let mut s = Sentinels::new(&mut state.heap.borrow_mut());
+    let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
+    let m = load_linked(&mut state, tail_calling(closure), &["x"], x, y);
+    let m = state.code_object(m).expect("loaded");
+    state.execution.push_frame(m, CallFrame::NO_CLOSURE, 0);
+    let b = state.load_unit(
+        assembled(
+            vec![
+                Instruction::LoadImmediate {
+                    dst: 0,
+                    val: TaggedValue::fixnum(1),
+                },
+                Instruction::Return { val: 0 },
+            ],
+            Vec::new(),
+        ),
+        Vec::new(),
+    );
+    let collections = state.heap.borrow().gc_collections();
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a driver entry, so its polls collect; the test holds only words a root \
+                  reaches: the closure in M's constants, and the sentinels it reads back from \
+                  the free lists"
+    )]
+    let result = execute(&mut state, b);
+    assert_eq!(result.ok(), Some(TaggedValue::fixnum(42)));
+    assert_eq!(
+        state.heap.borrow().gc_collections() - collections,
+        2,
+        "at the loop's start and at A's entry, after M's tail call"
+    );
+    s.assert_survived(&state.heap.borrow());
+}
+
+/// A nested loop puts back the running code of the loop it runs in when it
+/// returns, so that the outer loop's next poll still sees its own: here a
+/// unit B is the running code, a nested loop runs unit C to its return,
+/// and B's table is kept by a collection after it.
+#[test]
+fn a_nested_loop_puts_back_the_running_code_when_it_returns() {
+    let mut state = VmState::on_a_fresh_heap();
+    let mut s = Sentinels::new(&mut state.heap.borrow_mut());
+    let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
+    let b = load_linked(&mut state, super::tests::code(), &["x"], x, y);
+    state.execution.set_running(b.0);
+    let c = state.load_unit(super::tests::code(), Vec::new());
+    let c = state.code_object(c).expect("loaded");
+    state.execution.push_frame(c, CallFrame::NO_CLOSURE, 0);
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a nested loop, under its `NoGcScope`, which collects nothing; the test holds \
+                  nothing across it"
+    )]
+    let exit = run_loop_until_outcome(&mut state, 0, None);
+    assert!(matches!(exit, Ok(LoopExit::Returned(_))));
+    assert_eq!(state.execution.running(), b.0, "B's id, put back");
+
+    collect(&state);
+    s.assert_survived(&state.heap.borrow());
+}
+
+/// The same when the nested loop ends in an error no handler takes: unit
+/// C tail-calls the empty list.
+#[test]
+fn a_nested_loop_puts_back_the_running_code_when_it_fails() {
+    let mut state = VmState::on_a_fresh_heap();
+    let mut s = Sentinels::new(&mut state.heap.borrow_mut());
+    let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
+    let b = load_linked(&mut state, super::tests::code(), &["x"], x, y);
+    state.execution.set_running(b.0);
+    let c = state.load_unit(tail_calling(TaggedValue::NULL), Vec::new());
+    let c = state.code_object(c).expect("loaded");
+    state.execution.push_frame(c, CallFrame::NO_CLOSURE, 0);
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a nested loop, under its `NoGcScope`, which collects nothing; the test holds \
+                  nothing across it"
+    )]
+    let exit = run_loop_until_outcome(&mut state, 0, None);
+    assert!(exit.is_err(), "a call of the empty list, with no handler");
+    assert_eq!(state.execution.running(), b.0, "B's id, put back");
+
+    collect(&state);
+    s.assert_survived(&state.heap.borrow());
 }
