@@ -29,7 +29,9 @@
 )]
 
 mod common;
-use common::{tree_walker_interpreter, vm_interpreter};
+use common::{
+    tree_walker_interpreter, tree_walker_interpreter_zeal, vm_interpreter, vm_interpreter_zeal,
+};
 use patina_core::{Cx, Value};
 use patina_interpreter::{
     ApplyContext, Arity, Backend, Environment, EvalError, HostPrimitives, Interpreter,
@@ -1753,14 +1755,15 @@ fn a_host_primitive_evaluating_in_a_raw_frame_is_refused_by_the_vm() {
 
 // ---------------------------------------------------------------------------
 // What host code reads of a name nothing bound when it was compiled, across
-// a collection, pinned before 4b.9 links a unit's names at load (#836). Each
-// holds on the base, where such a read goes by name, and must hold once the
-// name links to a placeholder record that a collection keeps only while live
-// code holds it, and that a later definition adopts.
+// a collection, pinned before 4b.9 links a unit's names at load (#836). Its
+// three cases hold on the base, where such a read goes by name, and must hold
+// once the name links to a placeholder record that a collection keeps only
+// while live code holds it, and that a later definition adopts.
 // ---------------------------------------------------------------------------
 
 /// `(host4b forward)` exports `forward-value`, which nothing imports until
-/// after the collections.
+/// after the collections. The program also imports `(scheme base)` and
+/// `(patina debug)` into the global namespace, for the helper's `(gc)`.
 const FORWARD_LIBRARY: &str = "(import (scheme base) (patina debug))
     (define-library (host4b forward)
       (export forward-value)
@@ -1771,7 +1774,7 @@ const FORWARD_LIBRARY: &str = "(import (scheme base) (patina debug))
 /// read after two collections and the definitions made since: `h` defined
 /// and `forward-value` imported by the global namespace, and `x` defined by
 /// the host namespace, whose definition leaves the global namespace without
-/// one.
+/// one. Each name is also read by name once bound, where it was bound.
 fn forward_references_across_a_collection<B: Backend>(interp: Interpreter<B>) -> [String; 3] {
     interp.eval_program_owned(FORWARD_LIBRARY).unwrap();
     let env = interp.new_environment();
@@ -1783,6 +1786,12 @@ fn forward_references_across_a_collection<B: Backend>(interp: Interpreter<B>) ->
              (define (read-x) x)",
         )
         .unwrap();
+    for name in ["h", "forward-value", "x"] {
+        assert!(
+            interp.lookup_in(&env, name).is_none(),
+            "`{name}` was bound before the test bound it, so the case tests nothing"
+        );
+    }
     let before = collections(&interp);
     interp.eval_program_owned("(gc) (gc)").unwrap();
     assert!(collections(&interp) > before, "the program did not collect");
@@ -1794,6 +1803,16 @@ fn forward_references_across_a_collection<B: Backend>(interp: Interpreter<B>) ->
         interp.lookup("x").is_none(),
         "the host namespace's definition bound `x` in the global namespace"
     );
+    for (name, bound) in [
+        ("h", interp.lookup("h")),
+        ("forward-value", interp.lookup("forward-value")),
+        ("x", interp.lookup_in(&env, "x")),
+    ] {
+        assert!(
+            bound.is_some(),
+            "`{name}` is not bound by name where it was bound"
+        );
+    }
     ["(g)", "(read-forward)", "(read-x)"].map(|call| {
         let value = interp.eval_str_in(&env, call).unwrap();
         interp.display_tagged(value)
@@ -1805,10 +1824,16 @@ fn forward_references_across_a_collection<B: Backend>(interp: Interpreter<B>) ->
 /// compiled, each made after two collections. On the VM, once 4b.9 links
 /// names at load (#836), the host's unit links each name to a child record
 /// that reads through the global namespace's placeholder (#782's R7), and the
-/// collections must keep both, since the host's closures are live. The
-/// global definition and the import must reach the record the child reads
-/// through; the host's own definition must adopt the child, which leaves the
-/// global namespace's placeholder unbound.
+/// collections must keep both, since the host's closures are live; a read of
+/// a record they freed is what a check build's stale-reference check refuses
+/// (#621). The global definition and the import must reach the record the
+/// child reads through, and the host's own definition must leave the global
+/// namespace's placeholder unbound. The answers cannot show that a
+/// definition adopts what was linked, since the VM's cold read goes by name
+/// where a linked record reads unbound; the reads by name show that each
+/// definition left its name where a unit loaded later finds it. Run on each
+/// backend's interpreter and on a zeal one, which also collects at the entry
+/// of each host unit's frame, before its closures are made.
 #[test]
 fn a_host_forward_reference_reads_the_global_definition_made_after_a_collection() {
     let expected = ["9", "imported", "local"];
@@ -1817,7 +1842,17 @@ fn a_host_forward_reference_reads_the_global_definition_made_after_a_collection(
         expected
     );
     assert_eq!(
+        forward_references_across_a_collection(vm_interpreter_zeal()),
+        expected,
+        "under zeal"
+    );
+    assert_eq!(
         forward_references_across_a_collection(tree_walker_interpreter()),
         expected
+    );
+    assert_eq!(
+        forward_references_across_a_collection(tree_walker_interpreter_zeal()),
+        expected,
+        "under zeal"
     );
 }
