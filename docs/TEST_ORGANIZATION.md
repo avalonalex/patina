@@ -1235,6 +1235,22 @@ asks (`eval_closure`, for `eval`, `load` and `Step::Eval`, or
 `vm_eval_expr`, for `eval_expr`), and when the message at either refusing
 site drifts from the other's.
 
+4b.9's forward references add one more (#836), on both backends:
+`a_host_forward_reference_reads_the_global_definition_made_after_a_collection`.
+A host namespace compiles reads of `h`, `forward-value` and `x` while
+nothing binds them, as `lookup_in` checks; after two collections the global
+namespace defines `h` and imports `(host4b forward)`, and the host namespace
+defines `x`. The reads answer `9`, `imported` and `local`, each name reads
+by name where it was bound, and the global namespace binds no `x`. It runs
+on each backend's interpreter and on a zeal one. It holds on the base, where
+such a read goes by name, and guards 4b.9's placeholders and the host's
+read-through records; its mutation check (2026-11-07) failed it when a host
+namespace's `define` bound the global namespace, when a host namespace read
+through its parent only what the parent bound at the last collection (the
+plain runs), when a collection let go of the code of a live closure, and
+when one let go of a just-loaded host unit at its frame's entry, before its
+closures were made (the zeal runs).
+
 With either of the table's environment traces removed, the tests of that
 trace fail, and so does its sentinel test. Without the VM's alpha-renaming
 walking the environment's parents for introduced definitions, the global
