@@ -202,6 +202,13 @@ impl PlaceholderStore {
         Some(record)
     }
 
+    /// Whether the store holds an entry for `name`: a name a placeholder or
+    /// a weak read-through record holds is taken, for the minting of an
+    /// alias (`Environment::import_alias`, `relink_alias`).
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        self.state.with(|state| state.entries.contains_key(name))
+    }
+
     /// The pass's part for this store: take out every entry whose record
     /// `live` says is unmarked, its names pushed onto `dead` for the caller
     /// to drop after the accesses, its counts given back and its charge

@@ -183,6 +183,13 @@ impl Record {
         Record(heap.alloc_pair(cell.0, TaggedValue::fixnum(PLACEHOLDER)))
     }
 
+    /// Whether this record is a placeholder ([`PLACEHOLDER`]), not yet
+    /// adopted (#836).
+    #[inline]
+    pub(crate) fn is_placeholder(self, heap: &Heap) -> bool {
+        heap.cdr(self.0) == TaggedValue::fixnum(PLACEHOLDER)
+    }
+
     /// The record a namespace's slot or scoped entry holds as `word`.
     #[inline(always)]
     pub(crate) fn from_word(word: TaggedValue) -> Self {
@@ -258,14 +265,15 @@ impl Record {
         heap.set_record_cell(self.0, cell.0);
     }
 
-    /// A define or an import in the host namespace (#835): this read-through
-    /// record becomes a record of its own over `cell`, flags 0
+    /// A define or an import of the name in its namespace: this read-through
+    /// record of a host namespace's (#835), or this placeholder (#836),
+    /// becomes a record of its own over `cell`, flags 0
     /// ([`Heap::adopt_record`]). Its word does not change, so code that
     /// linked it reads `cell` from now on.
     pub(crate) fn adopt(self, heap: &mut Heap, cell: BindingCell) {
         debug_assert!(
-            self.parent_record(heap).is_some(),
-            "only a read-through record is adopted"
+            self.parent_record(heap).is_some() || self.is_placeholder(heap),
+            "only a read-through record or a placeholder is adopted"
         );
         heap.adopt_record(self.0, cell.0);
     }

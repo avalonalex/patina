@@ -78,7 +78,10 @@ pub enum Site {
     /// A host namespace's bindings are a namespace's (#835); when a define
     /// or an import there adopts a read-through record, both of the
     /// record's words are stored at `EnvRecordRepoint`, the cell and then
-    /// the flags fixnum.
+    /// the flags fixnum. A define's or an import's adoption of a
+    /// placeholder (#836) is logged the same way, the flags fixnum clearing
+    /// its flag, and a define's value initialises its fresh cell with no
+    /// holder, as any by-name definition's first value does.
     EnvDefine,
     EnvSetSlot,
     EnvSetScoped,
