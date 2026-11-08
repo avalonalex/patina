@@ -12,6 +12,12 @@
 //! names so forward references within the same compilation unit work.
 //! (In A2 this is a no-op because globals are resolved at runtime.)
 //!
+//! Link indices (#836): an instruction that names a global carries an index
+//! into the unit's link table in place of the name. One interner serves the
+//! whole unit, passed down into each lambda's `Codegen` and back, so a
+//! spelling has one index across the unit, given in the order its first
+//! operand is emitted; every member holds the one table it becomes.
+//!
 //! See VM_COMPILER.md §Pass 5.
 
 use super::pass4_registers::{AllocatedExpr, CaptureSource, RegExpr, RegExprKind, RegLambda};
@@ -22,6 +28,9 @@ use crate::types::instruction::{ControlForm, Instruction, TestOp};
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
+use patina_core::{LinkIdx, LinkTable};
+use rustc_hash::FxHashMap;
+use std::cell::Cell;
 use std::rc::Rc;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -32,9 +41,9 @@ struct Codegen {
     name: Option<Symbol>,
     instructions: Vec<Instruction>,
     constants: Vec<TaggedValue>,
-    /// All nested CodeObjects emitted during this compilation unit.
-    /// Returned alongside the top-level CodeObject.
-    nested: Vec<CodeObject>,
+    /// All nested members emitted during this compilation unit, which
+    /// become the `CodeObject`s returned alongside the top-level one.
+    nested: Vec<Member>,
     /// Source location map: (pc, source_location).
     source_map: Vec<(usize, SourceLocation)>,
     /// Global callee names that resolved to registry primitives at compile
@@ -44,10 +53,57 @@ struct Codegen {
     /// Expression lifetime ends at instruction boundaries; these generate
     /// GC metadata, not instructions on the execution path (#423).
     retirements: Vec<(usize, std::ops::Range<u16>)>,
+    /// The unit's global operands so far, one interner for the whole unit:
+    /// `gen_lambda` moves it into each child `Codegen` and back.
+    links: UnitLinks,
+}
+
+/// The unit's global operands as pass 5 emits them (#836): each distinct
+/// spelling's [`LinkIdx`], given in the order the first operand naming it
+/// is emitted, so the same unit always gets the same indices. Becomes the
+/// unit's one [`LinkTable`] once every member is compiled.
+#[derive(Default)]
+struct UnitLinks {
+    index: FxHashMap<Symbol, LinkIdx>,
+    names: Vec<Symbol>,
+}
+
+/// A member of the unit being compiled, all of its `CodeObject` but the
+/// link table, which exists only once the whole unit is compiled:
+/// `Pass5Codegen::run` makes every member's `CodeObject` with the unit's
+/// one table, so no member is ever given another.
+struct Member {
+    id: CodeObjectId,
+    name: Option<Symbol>,
+    global_cache: Vec<Cell<GlobalCacheEntry>>,
+    instructions: Vec<Instruction>,
+    constants: Vec<TaggedValue>,
+    num_regs: u16,
+    arity: Arity,
+    source_map: Vec<(usize, SourceLocation)>,
+    register_roots: Vec<Vec<u64>>,
+}
+
+impl Member {
+    fn into_code(self, links: &Rc<LinkTable>) -> CodeObject {
+        CodeObject {
+            id: self.id,
+            name: self.name,
+            global_cache: self.global_cache,
+            links: Rc::clone(links),
+            live_closures: Cell::new(0),
+            instructions: self.instructions,
+            constants: self.constants,
+            num_regs: self.num_regs,
+            arity: self.arity,
+            source_map: self.source_map,
+            register_roots: Some(self.register_roots),
+        }
+    }
 }
 
 impl Codegen {
-    fn new(name: Option<Symbol>, prim_calls: Rc<PrimitiveCallMap>) -> Self {
+    fn new(name: Option<Symbol>, prim_calls: Rc<PrimitiveCallMap>, links: UnitLinks) -> Self {
         Self {
             name,
             instructions: Vec::new(),
@@ -56,7 +112,26 @@ impl Codegen {
             source_map: Vec::new(),
             prim_calls,
             retirements: Vec::new(),
+            links,
         }
+    }
+
+    /// The link index of the global `name`, given now if no operand of the
+    /// unit has named it yet.
+    fn link(&mut self, name: &Symbol) -> Result<LinkIdx, CompileError> {
+        let links = &mut self.links;
+        if let Some(&k) = links.index.get(name) {
+            return Ok(k);
+        }
+        let k = LinkIdx::try_from(links.names.len()).map_err(|_| {
+            CompileError::Internal(format!(
+                "a unit names more than {} globals, past what a link index holds",
+                u64::from(LinkIdx::MAX) + 1
+            ))
+        })?;
+        links.index.insert(Rc::clone(name), k);
+        links.names.push(Rc::clone(name));
+        Ok(k)
     }
 
     fn emit(&mut self, instr: Instruction) -> usize {
@@ -129,32 +204,39 @@ impl Pass5Codegen {
     ///
     /// Returns the primary `CodeObject` plus any nested ones (from lambdas).
     /// The caller should load them together with `VmState::load_unit`.
+    ///
+    /// Every one of them holds the unit's one link table, through one `Rc`.
     pub fn run(
         allocated: &AllocatedExpr,
         prim_calls: PrimitiveCallMap,
     ) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
         let expr = &allocated.expr;
         let id = CodeObjectId::label();
-        let mut cg = Codegen::new(None, Rc::new(prim_calls));
+        let mut cg = Codegen::new(None, Rc::new(prim_calls), UnitLinks::default());
         gen_expr(expr, &mut cg)?;
         // Top-level: emit a Return of the expression's result.
         cg.emit(Instruction::Return { val: expr.dst });
         let global_cache = finalize_instructions(&mut cg.instructions);
         let register_roots = register_root_maps(&cg, allocated.num_regs.max(1), 0);
-        let nested = cg.nested;
-        let code = CodeObject {
+        let links = Rc::new(LinkTable::new(cg.links.names.into_boxed_slice()));
+        let code = Member {
             id,
             name: cg.name,
             global_cache,
-            live_closures: std::cell::Cell::new(0),
             instructions: cg.instructions,
             constants: cg.constants,
             // Use the Pass 4 high-water mark so all temps are covered.
             num_regs: allocated.num_regs.max(1),
             arity: Arity::Fixed(0),
             source_map: cg.source_map,
-            register_roots: Some(register_roots),
-        };
+            register_roots,
+        }
+        .into_code(&links);
+        let nested = cg
+            .nested
+            .into_iter()
+            .map(|member| member.into_code(&links))
+            .collect();
         Ok((code, nested))
     }
 }
@@ -208,9 +290,7 @@ fn thread_returns(instructions: &mut [Instruction]) {
 /// Finalize a finished instruction stream: run the in-place rewrites, then
 /// build the pc-aligned global cache table. One owner for the ordering so
 /// both CodeObject construction sites (top-level and lambda) stay in step.
-fn finalize_instructions(
-    instructions: &mut [Instruction],
-) -> Vec<std::cell::Cell<GlobalCacheEntry>> {
+fn finalize_instructions(instructions: &mut [Instruction]) -> Vec<Cell<GlobalCacheEntry>> {
     thread_returns(instructions);
     GlobalCacheEntry::table(instructions)
 }
@@ -398,20 +478,12 @@ fn fuse_test_into_branch(cond: u16, cg: &mut Codegen) -> Option<usize> {
     if dst != cond {
         return None;
     }
-    // Pop by value so the predicate's `name` moves into the fused
-    // instruction rather than being cloned.
-    let name = match cg.instructions.pop() {
-        Some(
-            Instruction::Not { name, .. }
-            | Instruction::NullP { name, .. }
-            | Instruction::PairP { name, .. }
-            | Instruction::VectorP { name, .. }
-            | Instruction::Eq { name, .. }
-            | Instruction::Lt { name, .. }
-            | Instruction::NumEq { name, .. },
-        ) => name,
-        _ => unreachable!("just matched a fusable test"),
-    };
+    // The predicate's global operand carries over to the fused instruction.
+    let link = cg
+        .instructions
+        .pop()
+        .and_then(|test| test.link())
+        .expect("a fusable test names its primitive's global");
     Some(cg.emit(Instruction::TestJumpUnless {
         test,
         a,
@@ -419,7 +491,7 @@ fn fuse_test_into_branch(cond: u16, cg: &mut Codegen) -> Option<usize> {
         dst,
         target: 0,
         func_id,
-        name,
+        link,
     }))
 }
 
@@ -488,7 +560,7 @@ fn primitive_operands(
 fn primitive_call_instruction(
     inline: Option<InlineOp>,
     resolved: ResolvedPrimitive,
-    name: Symbol,
+    link: LinkIdx,
     regs: &[u16],
     imm: Option<TaggedValue>,
     dst: u16,
@@ -504,28 +576,28 @@ fn primitive_call_instruction(
                 imm,
                 dst,
                 func_id,
-                name,
+                link,
             },
             InlineOp::Sub => Instruction::SubImm {
                 a,
                 imm,
                 dst,
                 func_id,
-                name,
+                link,
             },
             InlineOp::Lt => Instruction::LtImm {
                 a,
                 imm,
                 dst,
                 func_id,
-                name,
+                link,
             },
             InlineOp::NumEq => Instruction::NumEqImm {
                 a,
                 imm,
                 dst,
                 func_id,
-                name,
+                link,
             },
             op => unreachable!("no imm form for {:?}", op),
         };
@@ -533,7 +605,7 @@ fn primitive_call_instruction(
     let Some(op) = inline else {
         return Instruction::CallPrimitive {
             func_id,
-            name,
+            link,
             args: regs.to_vec(),
             dst,
         };
@@ -544,92 +616,92 @@ fn primitive_call_instruction(
             b: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Sub => Instruction::Sub {
             a: regs[0],
             b: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Mul => Instruction::Mul {
             a: regs[0],
             b: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Lt => Instruction::Lt {
             a: regs[0],
             b: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::NumEq => Instruction::NumEq {
             a: regs[0],
             b: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Eq => Instruction::Eq {
             a: regs[0],
             b: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Cons => Instruction::Cons {
             a: regs[0],
             b: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Car => Instruction::Car {
             src: regs[0],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Cdr => Instruction::Cdr {
             src: regs[0],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::Not => Instruction::Not {
             src: regs[0],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::NullP => Instruction::NullP {
             src: regs[0],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::PairP => Instruction::PairP {
             src: regs[0],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::VectorP => Instruction::VectorP {
             src: regs[0],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::VectorRef => Instruction::VectorRef {
             v: regs[0],
             i: regs[1],
             dst,
             func_id,
-            name,
+            link,
         },
         InlineOp::VectorSet => Instruction::VectorSet {
             v: regs[0],
@@ -637,7 +709,7 @@ fn primitive_call_instruction(
             val: regs[2],
             dst,
             func_id,
-            name,
+            link,
         },
     }
 }
@@ -744,9 +816,10 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
         }
 
         RegExprKind::GlobalRef { name } => {
+            let link = cg.link(name)?;
             cg.emit(Instruction::LoadGlobal {
                 dst: expr.dst,
-                name: name.clone(),
+                link,
             });
         }
 
@@ -850,8 +923,9 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
         RegExprKind::SetGlobal { name, value } => {
             gen_expr(value, cg)?;
             cg.record_source(&expr.source);
+            let link = cg.link(name)?;
             cg.emit(Instruction::StoreGlobal {
-                name: name.clone(),
+                link,
                 src: value.dst,
             });
             cg.emit(Instruction::LoadImmediate {
@@ -872,8 +946,9 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
 
         RegExprKind::Define { name, value } => {
             gen_expr(value, cg)?;
+            let link = cg.link(name)?;
             cg.emit(Instruction::Define {
-                name: name.clone(),
+                link,
                 src: value.dst,
             });
             cg.emit(Instruction::LoadImmediate {
@@ -930,13 +1005,9 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
                 let inline = resolved.inline.filter(|op| op.arity() == args.len());
                 let (regs, imm) = primitive_operands(args, arg_tmps, inline, cg)?;
                 cg.record_source(&expr.source);
+                let link = cg.link(name)?;
                 cg.emit(primitive_call_instruction(
-                    inline,
-                    resolved,
-                    name.clone(),
-                    &regs,
-                    imm,
-                    expr.dst,
+                    inline, resolved, link, &regs, imm, expr.dst,
                 ));
                 if *is_tail {
                     cg.emit(Instruction::Return { val: expr.dst });
@@ -1138,7 +1209,13 @@ fn gen_inline_control(
 /// Compile a nested lambda, emit `MakeClosure` into `cg`, result in `dst`.
 fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), CompileError> {
     let child_id = CodeObjectId::label();
-    let mut child_cg = Codegen::new(None, Rc::clone(&cg.prim_calls));
+    // The unit's interner goes down into the child and comes back before the
+    // captures below, which the parent emits.
+    let mut child_cg = Codegen::new(
+        None,
+        Rc::clone(&cg.prim_calls),
+        std::mem::take(&mut cg.links),
+    );
 
     // Prologue: wrap each boxed param register in a MutableCell.
     // The param already lives in reg[r]; emit AllocCell r←r to box it in-place.
@@ -1175,6 +1252,7 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
             gen_discarded_expr(e, &mut child_cg)?;
         }
     }
+    cg.links = std::mem::take(&mut child_cg.links);
 
     let arity = if lam.rest_param {
         Arity::Variadic(lam.num_params.saturating_sub(1))
@@ -1184,17 +1262,16 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
 
     let global_cache = finalize_instructions(&mut child_cg.instructions);
     let register_roots = register_root_maps(&child_cg, lam.num_regs, lam.num_params);
-    let child_code = CodeObject {
+    let child_code = Member {
         id: child_id,
         name: None,
         global_cache,
-        live_closures: std::cell::Cell::new(0),
         instructions: child_cg.instructions,
         constants: child_cg.constants,
         num_regs: lam.num_regs,
         arity,
         source_map: child_cg.source_map,
-        register_roots: Some(register_roots),
+        register_roots,
     };
 
     // Collect nested from child.
@@ -1220,10 +1297,8 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
                 });
             }
             CaptureSource::Global(name) => {
-                cg.emit(Instruction::LoadGlobal {
-                    dst: scratch,
-                    name: name.clone(),
-                });
+                let link = cg.link(name)?;
+                cg.emit(Instruction::LoadGlobal { dst: scratch, link });
             }
         }
         capture_regs.push(scratch);
@@ -1235,4 +1310,344 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
         free_vars: capture_regs,
     });
     Ok(())
+}
+
+/// The unit's link indices (#836): one interner for the whole unit, so one
+/// table, shared by every member, in first-emission order, and the spelling
+/// the disassembler prints for each.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler::compile_with_qq_resolving;
+    use crate::runtime::VmState;
+    use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
+    use patina_core::{Lit, LiteralPool};
+
+    fn var(name: &str) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::Var {
+            name: Rc::from(name),
+            scopes: Default::default(),
+        })
+    }
+
+    fn lit(n: i64) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::Literal(Lit::immediate(TaggedValue::fixnum(
+            n,
+        ))))
+    }
+
+    fn app(func: CoreExpr, args: Vec<CoreExpr>) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::App {
+            func: Rc::new(func),
+            args,
+        })
+    }
+
+    fn call(name: &str, args: Vec<CoreExpr>) -> CoreExpr {
+        app(var(name), args)
+    }
+
+    fn lambda(params: &[&str], body: Vec<CoreExpr>) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::Lambda {
+            params: Formals::Fixed(
+                params
+                    .iter()
+                    .map(|p| ScopedParam::simple(Rc::from(*p)))
+                    .collect(),
+            ),
+            body,
+            binding_scopes: Rc::new(patina_core::ScopeSet::new()),
+        })
+    }
+
+    fn begin(forms: Vec<CoreExpr>) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::Begin(forms))
+    }
+
+    fn define(name: &str, value: CoreExpr) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::Define {
+            name: Rc::from(name),
+            scopes: Default::default(),
+            value: Rc::new(value),
+        })
+    }
+
+    fn set(name: &str, value: CoreExpr) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::Set {
+            var: Rc::from(name),
+            scopes: Default::default(),
+            value: Rc::new(value),
+        })
+    }
+
+    fn if_(test: CoreExpr, then: CoreExpr, else_: CoreExpr) -> CoreExpr {
+        CoreExpr::new(CoreExprKind::If {
+            test: Rc::new(test),
+            then: Rc::new(then),
+            else_: Rc::new(else_),
+        })
+    }
+
+    /// Compile `expr` against a fresh VM's globals, primitives installed, so
+    /// that primitive calls compile to `CallPrimitive` and the inline
+    /// opcodes.
+    fn compile(expr: &CoreExpr) -> (CodeObject, Vec<CodeObject>) {
+        let mut state = VmState::on_a_fresh_heap();
+        state.install_primitives();
+        let heap = state.heap().clone();
+        let env = state.global_env().clone();
+        let literals = LiteralPool::new(&heap.borrow());
+        compile_with_qq_resolving(expr, &literals, &heap, &env, state.primitive_registry())
+            .expect("compiles")
+    }
+
+    /// The spelling each global operand of `code` names, in pc order.
+    fn operand_names(code: &CodeObject) -> Vec<&str> {
+        code.instructions
+            .iter()
+            .filter_map(Instruction::link)
+            .map(|k| &**code.links.name(k))
+            .collect()
+    }
+
+    fn table(code: &CodeObject) -> Vec<&str> {
+        code.links.names().iter().map(|name| &**name).collect()
+    }
+
+    /// A program whose operands are of every kind pass 5 gives a link:
+    /// `Define`, `StoreGlobal`, `LoadGlobal`, `CallPrimitive`, inline
+    /// opcodes, their immediate forms and a fused test, in the top-level code
+    /// and in a lambda nested two deep.
+    fn every_kind_of_operand() -> CoreExpr {
+        begin(vec![
+            define("x", lit(1)),
+            set("x", call("+", vec![var("x"), lit(1), lit(2)])),
+            define(
+                "f",
+                lambda(
+                    &["a", "b"],
+                    vec![if_(
+                        call("<", vec![var("a"), var("b")]),
+                        call("+", vec![var("a"), lit(1)]),
+                        lambda(
+                            &["v"],
+                            vec![call(
+                                "car",
+                                vec![call(
+                                    "cons",
+                                    vec![call("*", vec![var("a"), var("x")]), var("v")],
+                                )],
+                            )],
+                        ),
+                    )],
+                ),
+            ),
+            call("f", vec![lit(1), lit(2)]),
+        ])
+    }
+
+    #[test]
+    fn a_lambda_and_the_code_around_it_name_one_global_by_one_index() {
+        // (begin (g 1) (lambda (y) (h) (g y)) (k) (g 2)): the lambda names
+        // `h` before its `g`, and the code around it names `k` after the
+        // lambda and before its second `g`, so a lambda compiled with an
+        // interner of its own, or one that did not give the unit's back,
+        // gives some `g` a second index or leaves `h` or `k` out of the
+        // table.
+        let (top, nested) = compile(&begin(vec![
+            call("g", vec![lit(1)]),
+            lambda(&["y"], vec![call("h", vec![]), call("g", vec![var("y")])]),
+            call("k", vec![]),
+            call("g", vec![lit(2)]),
+        ]));
+        let links = |code: &CodeObject| -> Vec<LinkIdx> {
+            code.instructions
+                .iter()
+                .filter_map(Instruction::link)
+                .collect()
+        };
+        assert_eq!(nested.len(), 1);
+        let (outer, inner) = (links(&top), links(&nested[0]));
+        assert_eq!((outer.len(), inner.len()), (3, 2), "{top:?} {nested:?}");
+        // The operands naming `g`: the first and third around the lambda,
+        // and the lambda's second.
+        assert_eq!(
+            [outer[0], outer[2], inner[1]],
+            [0; 3],
+            "`g` has more than one index: {outer:?} {inner:?}"
+        );
+        assert_eq!(table(&top), ["g", "h", "k"]);
+        assert_eq!(operand_names(&top), ["g", "k", "g"]);
+        assert_eq!(operand_names(&nested[0]), ["h", "g"]);
+    }
+
+    /// A global a lambda captures is loaded by the code around the lambda,
+    /// after the lambda's body is emitted, so it is given its index after
+    /// every global the body names, by the interner the body gave back.
+    /// Pass 4 gives no lambda such a capture today (pass 2 keeps globals out
+    /// of capture lists), so the unit is pass 4's output, built by hand.
+    #[test]
+    fn a_global_a_lambda_captures_is_given_its_index_after_the_lambdas_body() {
+        use crate::compiler::pass1_analysis::NodeId;
+        let expr = |kind, dst, temp_end| RegExpr {
+            kind,
+            dst,
+            temp_end,
+            source: None,
+        };
+        // (lambda () h), capturing the global `g` into its slot 0.
+        let lambda = RegLambda {
+            node_id: NodeId(0),
+            num_params: 0,
+            rest_param: false,
+            num_regs: 1,
+            body: vec![expr(
+                RegExprKind::GlobalRef {
+                    name: Rc::from("h"),
+                },
+                0,
+                1,
+            )],
+            captures: vec![CaptureSource::Global(Rc::from("g"))],
+            boxed_params: Default::default(),
+            internal_define_regs: Vec::new(),
+        };
+        let unit = AllocatedExpr {
+            expr: expr(RegExprKind::Lambda(Box::new(lambda)), 0, 2),
+            num_regs: 2,
+        };
+        let (top, nested) =
+            Pass5Codegen::run(&unit, PrimitiveCallMap::default()).expect("compiles");
+        assert_eq!(table(&top), ["h", "g"]);
+        assert_eq!(operand_names(&nested[0]), ["h"]);
+        assert_eq!(operand_names(&top), ["g"]);
+        assert!(Rc::ptr_eq(&nested[0].links, &top.links));
+    }
+
+    #[test]
+    fn every_operand_names_an_entry_and_every_entry_is_named_once() {
+        let (top, nested) = compile(&every_kind_of_operand());
+        let names = top.links.names().len();
+        let mut named = vec![false; names];
+        for code in std::iter::once(&top).chain(&nested) {
+            for instr in &code.instructions {
+                if let Some(k) = instr.link() {
+                    assert!((k as usize) < names, "{instr:?} is past a table of {names}");
+                    named[k as usize] = true;
+                }
+            }
+        }
+        assert!(
+            named.iter().all(|&n| n),
+            "an entry no operand names: {:?}",
+            table(&top)
+        );
+        let mut distinct = table(&top);
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), names, "a spelling twice: {:?}", table(&top));
+        // Every kind of operand is there, so each was given its index.
+        let kinds = std::iter::once(&top)
+            .chain(&nested)
+            .flat_map(|code| &code.instructions)
+            .filter(|instr| instr.link().is_some())
+            .map(|instr| {
+                format!("{instr:?}")
+                    .split([' ', '{'])
+                    .next()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        for kind in [
+            "Define",
+            "StoreGlobal",
+            "LoadGlobal",
+            "CallPrimitive",
+            "AddImm",
+            "TestJumpUnless",
+            "Mul",
+            "Cons",
+            "Car",
+        ] {
+            assert!(kinds.contains(kind), "no {kind} among {kinds:?}");
+        }
+    }
+
+    /// The disassembler prints each global operand as the spelling its
+    /// unit's table holds at its index, where `--dump` and `--trace` printed
+    /// the name the instruction carried before the operand was an index.
+    #[test]
+    fn the_disassembler_prints_the_spelling_each_operand_names() {
+        let (top, nested) = compile(&every_kind_of_operand());
+        let names = top.links.names();
+        let mut shown_at_another_index = 0;
+        for code in std::iter::once(&top).chain(&nested) {
+            for instr in &code.instructions {
+                let Some(k) = instr.link() else { continue };
+                let line = crate::disasm::format_instruction(instr, names, &mut Vec::new());
+                let name = &names[k as usize];
+                let shown = match instr {
+                    Instruction::LoadGlobal { .. } => format!("← globals[{name}]"),
+                    Instruction::StoreGlobal { .. } | Instruction::Define { .. } => {
+                        format!("globals[{name}] ←")
+                    }
+                    Instruction::CallPrimitive { .. } => format!("← {name}#"),
+                    _ => format!("← {name}("),
+                };
+                assert!(line.contains(&shown), "{line:?} does not show {shown:?}");
+                shown_at_another_index += usize::from(k != 0);
+            }
+        }
+        assert!(
+            shown_at_another_index > 0,
+            "every operand is at index 0: {:?}",
+            table(&top)
+        );
+    }
+
+    #[test]
+    fn every_member_shares_the_tops_table() {
+        let (top, nested) = compile(&every_kind_of_operand());
+        assert_eq!(nested.len(), 2, "a lambda and one nested in it");
+        for member in &nested {
+            assert!(
+                Rc::ptr_eq(&member.links, &top.links),
+                "{:?} has a table of its own",
+                member.id
+            );
+        }
+    }
+
+    #[test]
+    fn indices_are_given_in_the_order_operands_are_first_emitted() {
+        // (begin (b) (a) (lambda () (c) (a)) (d)
+        //        (define x (car (e))) (set! y (f))):
+        // the lambda's body is emitted where the lambda is, between the code
+        // around it, and a primitive site, a `define` and a `set!` are
+        // emitted after their operands and values, so their globals are
+        // given indices after the globals those name.
+        let expr = begin(vec![
+            call("b", vec![]),
+            call("a", vec![]),
+            lambda(&[], vec![call("c", vec![]), call("a", vec![])]),
+            call("d", vec![]),
+            define("x", call("car", vec![call("e", vec![])])),
+            set("y", call("f", vec![])),
+        ]);
+        let (top, nested) = compile(&expr);
+        assert_eq!(table(&top), ["b", "a", "c", "d", "e", "car", "x", "f", "y"]);
+        assert_eq!(
+            operand_names(&top),
+            ["b", "a", "d", "e", "car", "x", "f", "y"]
+        );
+        assert_eq!(operand_names(&nested[0]), ["c", "a"]);
+        // The same unit gets the same indices.
+        let (again, _) = compile(&expr);
+        assert_eq!(table(&again), table(&top));
+        let links = |code: &CodeObject| -> Vec<Option<LinkIdx>> {
+            code.instructions.iter().map(Instruction::link).collect()
+        };
+        assert_eq!(links(&again), links(&top));
+    }
 }

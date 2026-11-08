@@ -19,7 +19,7 @@ use patina_core::heap::SharedHeap;
 use patina_core::heap::gc::collect_for_tests;
 use patina_core::heap::sentinels::Sentinels;
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{GcController, Heap};
+use patina_core::{GcController, Heap, LinkTable};
 use patina_primitives::PrimitiveRegistry;
 use rustc_hash::FxHashMap;
 
@@ -45,6 +45,7 @@ fn code_holding(constants: Vec<TaggedValue>) -> Rc<CodeObject> {
         source_map: Vec::new(),
         register_roots: None,
         global_cache: Vec::new(),
+        links: LinkTable::empty(),
         live_closures: Cell::new(0),
     })
 }

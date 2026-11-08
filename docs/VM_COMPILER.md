@@ -363,6 +363,8 @@ after its operands: the operator's range must not include those operands.
 - **Two-pass top-level define** — pre-scans all `Define` names before compiling bodies
 - **Nested lambdas** — compiled recursively, each gets own `CodeObject`, loaded
   into `code_store` with the top-level code as one unit
+- **Link indices** — an instruction that names a global carries a `LinkIdx`
+  into the unit's link table (§10.5)
 
 ### 10.2 Lambda Prologue
 
@@ -397,6 +399,33 @@ The entry map also retires stale slots in a reused tail-call window. Pending
 earlier operands and local bindings remain roots; this is expression lifetime
 tracking, not last-use analysis of local variables. Runtime-built stubs keep
 conservative maps because their register protocols are not compiler output.
+
+### 10.5 Link indices (#836)
+
+`LoadGlobal`, `StoreGlobal`, `Define`, `CallPrimitive` and the inline
+opcodes carry a `link: LinkIdx` (a `u32`), not the global's name: an index
+into the unit's link table, `CodeObject::links` (`patina_core::LinkTable`).
+
+- **One interner per unit.** `Codegen.links` gives each distinct spelling an
+  index the first time an operand naming it is emitted, so the indices are a
+  function of the unit's code. `gen_lambda` moves the interner into the
+  child `Codegen` with `std::mem::take` and back before the parent emits the
+  closure's captures, so a spelling the parent and its lambdas both name has
+  one index across the unit. The key is the spelling after `alpha_rename`,
+  under which two operands of one spelling resolve to one binding.
+- **One table per unit.** The table exists only once the whole unit is
+  compiled: a lambda's code waits as a pass-private `Member`, and
+  `Pass5Codegen::run` makes the table and then every member's `CodeObject`,
+  the top's and the nested ones', with one `Rc` of it. `VmState::load_unit`
+  asserts in debug builds that every member holds that `Rc` and that every
+  operand indexes into the table.
+- **Overflow.** A unit naming more globals than a `u32` indexes is a
+  `CompileError::Internal`, never a wrapped index.
+- **Names only.** The table holds the unit's spellings and nothing else.
+  Whatever needs an operand's name reads it there: a global lookup the
+  site's cache misses, `Define`, a shadowed primitive's deoptimization, an
+  unbound-variable error, the disassembler and the tracer, which print the
+  spelling as before. A runtime stub names no global and has an empty table.
 
 ---
 

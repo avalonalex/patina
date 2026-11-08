@@ -4,10 +4,10 @@
 //! `GlobalRef` that resolves to a registry primitive in the compile
 //! environment — and keeps the generic `Call` path everywhere else.
 
-use patina_core::Lit;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
 use patina_core::procedure::Arity;
 use patina_core::tagged_value::TaggedValue;
+use patina_core::{LinkTable, Lit};
 use patina_vm::compiler::compile_with_qq_resolving;
 use patina_vm::runtime::VmState;
 use patina_vm::types::instruction::{ControlForm, Instruction};
@@ -47,19 +47,27 @@ fn lambda(params: Vec<&str>, body: Vec<CoreExpr>) -> CoreExpr {
 }
 
 /// Compile `expr` against `state`'s globals and return every instruction
-/// from the top-level and nested code objects.
-fn compile_all_in(state: &VmState, expr: &CoreExpr) -> Vec<Instruction> {
+/// from the top-level and nested code objects, with the unit's link table,
+/// which names their global operands.
+fn compile_unit_in(state: &VmState, expr: &CoreExpr) -> (Vec<Instruction>, Rc<LinkTable>) {
     let env = state.global_env().clone();
     let heap = state.heap().clone();
     let literals = patina_core::LiteralPool::new(&heap.borrow());
     let (top, nested) =
         compile_with_qq_resolving(expr, &literals, &heap, &env, state.primitive_registry())
             .expect("compile error");
+    let links = Rc::clone(&top.links);
     let mut instrs = top.instructions;
     for co in nested {
         instrs.extend(co.instructions);
     }
-    instrs
+    (instrs, links)
+}
+
+/// Compile `expr` against `state`'s globals and return every instruction
+/// from the top-level and nested code objects.
+fn compile_all_in(state: &VmState, expr: &CoreExpr) -> Vec<Instruction> {
+    compile_unit_in(state, expr).0
 }
 
 /// Compile `expr` against a fresh VM's globals (primitives installed).
@@ -104,13 +112,16 @@ fn add_emits_call_primitive() {
     // The P2 property under test: no generic Call and no callee LoadGlobal.
     // (Which inline opcode the site gets is pinned by
     // two_arg_add_emits_inline_opcode.)
-    let instrs = compile_all_instructions(&app(var("+"), vec![lit(1), lit(2)]));
+    let mut state = VmState::on_a_fresh_heap();
+    state.install_primitives();
+    let (instrs, links) = compile_unit_in(&state, &app(var("+"), vec![lit(1), lit(2)]));
     assert_eq!(count_generic_calls(&instrs), 0, "{instrs:?}");
     // The callee is never loaded — no LoadGlobal for "+".
     assert!(
-        !instrs
-            .iter()
-            .any(|i| matches!(i, Instruction::LoadGlobal { name, .. } if &**name == "+")),
+        !instrs.iter().any(|i| matches!(
+            i,
+            Instruction::LoadGlobal { link, .. } if &**links.name(*link) == "+"
+        )),
         "{instrs:?}"
     );
 }

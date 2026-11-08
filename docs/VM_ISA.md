@@ -62,6 +62,7 @@ pub struct CodeObject {
     pub arity:        Arity,                // fixed / variadic
     pub source_map:   Vec<(usize, SourceLocation)>, // pc → source loc
     pub register_roots: Option<Vec<Vec<u64>>>, // pc → possible-root bitset
+    pub links:        Rc<LinkTable>,        // the unit's global spellings (§3)
 }
 
 pub enum Arity {
@@ -122,7 +123,17 @@ Each instruction is a Rust enum variant. The VM does not use a binary wire forma
 ```rust
 pub type Reg = u16;         // register index (frame-relative)
 pub type ConstIdx = u16;    // index into CodeObject::constants
+pub type LinkIdx = u32;     // index into CodeObject::links (patina_core)
 ```
+
+An instruction that names a global — `LoadGlobal`, `StoreGlobal`, `Define`,
+`CallPrimitive` and the inline opcodes of §4.5 — carries a `LinkIdx`, not
+the name: an index into its code unit's link table (`CodeObject::links`),
+one table per unit, made by the compiler and shared by every member of the
+unit. The table holds the unit's global spellings, each once; whatever needs
+an operand's name (a lookup the site's cache misses, a definition, a
+shadowed primitive's deoptimization, an unbound-variable error, the
+disassembler, the tracer) reads it there (#836).
 
 ---
 
@@ -136,8 +147,8 @@ pub type ConstIdx = u16;    // index into CodeObject::constants
 | `LoadImmediate` | `dst: Reg, val: TaggedValue` | `dst ← val` (fixnum/bool/char/null inline) |
 | `Move` | `dst: Reg, src: Reg` | `dst ← src` (register copy, covers local loads) |
 | `LoadClosure` | `dst: Reg, slot: u16` | `dst ← current_closure.free_vars[slot]` |
-| `LoadGlobal` | `dst: Reg, name: Symbol` | `dst ← globals[name]` (error if unbound) |
-| `StoreGlobal` | `name: Symbol, src: Reg` | `globals[name] ← src` |
+| `LoadGlobal` | `dst: Reg, link: LinkIdx` | `dst ← globals[name]`, `name` the unit's link table's entry `link` (error if unbound) |
+| `StoreGlobal` | `link: LinkIdx, src: Reg` | `globals[name] ← src`, `name` as for `LoadGlobal` |
 
 Both global instructions consult a per-site inline cache (Track P P4): each
 `CodeObject` carries a pc-indexed table of `(environment id, slot)` entries.
@@ -154,7 +165,8 @@ namespace (#835). In a frame the slot holds the value, overwritten in place
 by a redefinition, or the import marker beside the imported cell. Names that
 resolve through a parent environment are never cached, a host namespace's
 read-through records among them (#835). The cache is invisible to the ISA:
-operands, semantics, and error behavior are unchanged.
+operands, semantics, and error behavior are unchanged. A hit reads nothing of
+the link table; only a miss reads the operand's name from it (§3).
 
 ### 4.2 MutableCell Operations
 
@@ -210,13 +222,13 @@ site of that form takes the ordinary call for the rest of the run.
 | `Apply` | `func: Reg, args: Vec<Reg>, dst: Reg` | Like `Call` but last arg is spread as a list |
 | `TailApply` | `func: Reg, args: Vec<Reg>` | Like `TailCall` but last arg is spread as a list |
 | `Return` | `val: Reg` | Pop frame, write val to caller's return_reg |
-| `CallPrimitive` | `func_id: PrimitiveFnId, name: Symbol, args: Vec<Reg>, dst: Reg` | Call primitive directly without pushing a frame — but for a resumable primitive that asks for a call, which pushes `resume_stub`'s frame to make it and return the primitive's value to `dst` (§4.8); `name` supports the redefinition deopt (below) |
+| `CallPrimitive` | `func_id: PrimitiveFnId, link: LinkIdx, args: Vec<Reg>, dst: Reg` | Call primitive directly without pushing a frame — but for a resumable primitive that asks for a call, which pushes `resume_stub`'s frame to make it and return the primitive's value to `dst` (§4.8); `link`, the global the callee resolved from, supports the redefinition deopt (below) |
 
 **Inline primitive opcodes** (Track P P3). Fixed-arity fast paths for the
 hottest primitives, emitted only when the callee is a `GlobalRef` that
 resolved to that primitive at compile time *and* the call site has the exact
 arity; all other shapes use `CallPrimitive`. Every opcode carries the same
-`(func_id, name)` pair as `CallPrimitive`.
+`(func_id, link)` pair as `CallPrimitive`.
 
 | Instruction | Fast path | Falls back when |
 |---|---|---|
@@ -268,9 +280,11 @@ every fast path tests its bit (one load+mask) before firing. A definition
 marks by the environment's own binding, the only one a fast path compiled
 there stands on (`define_global`). A set bit routes
 the call through `globals[name]` + full call dispatch, which is exactly the
-pre-P2 behavior. See `PRD/TRACK_P_PERFORMANCE_PRD.md` §P3 for the design
-space if this ever needs revisiting (immutable library bindings, optimize
-levels, n-ary canonicalization).
+pre-P2 behavior; `name` is the link table's entry for the site's `link`, read
+only on this path, so the unshadowed one reads no table. See
+`PRD/TRACK_P_PERFORMANCE_PRD.md` §P3 for the design space if this ever needs
+revisiting (immutable library bindings, optimize levels, n-ary
+canonicalization).
 
 **Call dispatch order** (for `Call`/`TailCall`):
 1. Check for VM control primitive intercept (continuations, exceptions, values)
@@ -312,7 +326,7 @@ same way.
 
 | Instruction | Operands | Semantics |
 |---|---|---|
-| `Define` | `name: Symbol, src: Reg` | `globals[name] ← reg[src]` (top-level `define`) |
+| `Define` | `link: LinkIdx, src: Reg` | `globals[name] ← reg[src]` (top-level `define`), `name` the unit's link table's entry `link` |
 
 ### 4.8 Miscellaneous
 

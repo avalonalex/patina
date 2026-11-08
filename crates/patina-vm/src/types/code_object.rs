@@ -3,13 +3,14 @@
 //! See VM_ISA.md §2.3.
 
 use super::instruction::Instruction;
-use patina_core::NamespaceView;
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
+use patina_core::{LinkIdx, LinkTable, NamespaceView};
 use patina_core::{Trace, TraceThroughRc};
 use std::cell::Cell;
 use std::fmt;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Identifies a `CodeObject`: a slot in one `VmState`'s code store, and the
@@ -130,7 +131,8 @@ impl Arity {
 /// and never written, until stage 4e makes its constants a descriptor's. The
 /// VM traces each loaded one from its code store ([`TraceThroughRc`]): a
 /// form's code stays there only while a frame, a captured continuation or a
-/// live closure can still run it (#338).
+/// live closure can still run it (#338). Its link table, `links`, is not
+/// traced from the store.
 #[derive(Debug, Clone, Trace)]
 pub struct CodeObject {
     /// Its slot and generation once loaded, a label before (see
@@ -181,6 +183,17 @@ pub struct CodeObject {
     /// See [`GlobalCacheEntry`] for the soundness argument.
     #[trace(skip, reason = "environment ids and slot numbers")]
     pub global_cache: Vec<Cell<GlobalCacheEntry>>,
+
+    /// The unit's link table (#836): the spelling of each global operand
+    /// (`LoadGlobal`, `StoreGlobal`, `Define`, `CallPrimitive` and the
+    /// inline opcodes carry an index into it), made by pass 5 and shared by
+    /// every member of the unit through this one `Rc`. Code with no global
+    /// operand, the runtime's stubs among it, has an empty one.
+    #[trace(
+        skip,
+        reason = "spellings only, no heap value; once linked, a table is traced by its unit's code id, never from the code store (4b's start decision 3)"
+    )]
+    pub links: Rc<LinkTable>,
 
     /// How many live VM closures run this code (#338). A frame holds its code
     /// itself, so the `Rc` count says whether a frame needs it; a closure names
@@ -249,21 +262,25 @@ impl GlobalCacheEntry {
     }
 
     /// Probe — and on a local resolution, fill — a per-site cache entry.
-    /// Returns the binding's slot when `name` lives in `globals`' own table
-    /// (a hit costs one id compare); `None` for parent-resolved or unbound
-    /// names, which are never cached.
+    /// Returns the binding's slot when the global `links` names at `link`
+    /// lives in `globals`' own table (a hit costs one id compare); `None`
+    /// for parent-resolved or unbound names, which are never cached.
+    ///
+    /// Only a miss reads the name: `links` comes by its `Rc`'s address, so a
+    /// hit loads nothing of the table (#836's risk P9).
     #[inline(always)]
     pub fn probe(
         cell: &Cell<GlobalCacheEntry>,
         globals: NamespaceView<'_>,
-        name: &str,
+        links: &Rc<LinkTable>,
+        link: LinkIdx,
     ) -> Option<u32> {
         let entry = cell.get();
         let env_id = globals.env_id();
         if entry.env_id == env_id {
             return Some(entry.slot);
         }
-        let slot = globals.local_slot(name)?;
+        let slot = globals.local_slot(links.name(link))?;
         cell.set(GlobalCacheEntry { env_id, slot });
         Some(slot)
     }

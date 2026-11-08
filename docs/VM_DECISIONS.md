@@ -45,8 +45,10 @@ HeapObjectData::VmClosure {
 ```
 
 Free variable analysis runs at compile time. Variables are resolved to
-`Move` (local), `LoadClosure { slot }`, or `LoadGlobal { name }` at bytecode
-emission. No runtime hash lookup for local/closure variables.
+`Move` (local), `LoadClosure { slot }`, or `LoadGlobal { link }` at bytecode
+emission, `link` indexing the name in the code unit's link table
+(`docs/VM_ISA.md` §3, #836). No runtime hash lookup for local/closure
+variables.
 
 **Global variables** are never captured into closure `free_vars` — they are
 always looked up dynamically via `LoadGlobal`.

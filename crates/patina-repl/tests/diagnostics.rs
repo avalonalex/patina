@@ -73,6 +73,11 @@ fn error_categories_and_payloads_survive_both_backends_and_library_boundaries() 
                 K::UnboundIdentifier,
                 Some("odd name: `λ`"),
             ),
+            (
+                "(set! |odd set!: `λ`| 1)",
+                K::UnboundIdentifier,
+                Some("odd set!: `λ`"),
+            ),
             ("(import (reader))", K::Parse, None),
             ("(include \"bad.scm\")", K::Parse, None),
             ("(import (scheme load)) (load \"bad.scm\")", K::Parse, None),

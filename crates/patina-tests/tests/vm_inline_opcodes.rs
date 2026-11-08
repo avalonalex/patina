@@ -251,6 +251,35 @@ fn rebinding_deoptimizes_not() {
 }
 
 #[test]
+fn rebinding_deoptimizes_a_site_whose_primitive_is_not_its_units_first_global() {
+    // Each site's primitive is the second global its unit names, after `h`,
+    // so its link index is not 0: a deoptimization that read another entry
+    // of the unit's link table than the site's own would call `h`, which
+    // takes no arguments (#836).
+    assert_eq!(
+        eval(
+            "(define (h) 0) (define (f p) (h) (car p)) \
+             (define car (lambda (p) 'mine)) (f '(1 2))"
+        ),
+        "mine"
+    );
+    assert_eq!(
+        eval(
+            "(define (h) 0) (define (f x) (h) (- x 1)) \
+             (define - (lambda (a b) (list 'mine a b))) (f 10)"
+        ),
+        "(mine 10 1)"
+    );
+    assert_eq!(
+        eval(
+            "(define (h) 0) (define (f v) (h) (vector-ref v 0)) \
+             (define vector-ref (lambda (v i) 'mine)) (f (vector 1))"
+        ),
+        "mine"
+    );
+}
+
+#[test]
 fn rebinding_is_per_primitive() {
     // Rebinding + must not disturb -'s inline fast path.
     assert_eq!(eval("(define (f a b) (- a b)) (set! + *) (f 10 3)"), "7");

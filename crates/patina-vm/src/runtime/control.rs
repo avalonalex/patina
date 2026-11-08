@@ -122,13 +122,11 @@ use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
 use crate::types::continuation::{ExceptionHandler, VmContinuation, VmDelimitedContinuation};
 use crate::types::instruction::{ControlForm, Instruction, PrimitiveFnId};
 use crate::types::{CallFrame, CodeObjectId};
-use patina_core::NamespaceView;
 use patina_core::continuation::{WindStep, next_wind_step};
-use patina_core::core_expr::Symbol;
 use patina_core::heap::{PromiseState, SharedHeap};
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{AssertNoGc, CollectKind, GC_CHECK};
+use patina_core::{AssertNoGc, CollectKind, GC_CHECK, LinkIdx, LinkTable, NamespaceView};
 use patina_primitives::{TaggedCallArgs, TaggedStep};
 use patina_runtime::HasDiagnostic;
 use std::rc::Rc;
@@ -1491,6 +1489,7 @@ fn runtime_stub(
         id: CodeObjectId::label(),
         name: Some(Rc::from(name)),
         global_cache: GlobalCacheEntry::table(&instructions),
+        links: LinkTable::empty(),
         live_closures: std::cell::Cell::new(0),
         instructions,
         constants: Vec::new(),
@@ -3767,21 +3766,36 @@ pub(super) fn self_tail_call(
 ///
 /// # State contract
 ///
-/// Requires the current base, registry id, valid argument values and dst;
-/// pc is already past the instruction. A rebound callee can change all five
-/// components. Some finishes the driver normally, None continues; Err may
-/// carry a parked escape and must be propagated before any result write.
+/// Requires the current base, registry id, the site's link index, valid
+/// argument values and dst; pc is already past the instruction, whose frame
+/// is the top one. A rebound callee can change all five dynamic components.
+/// Some finishes the driver normally, None continues; Err may carry a parked
+/// escape and must be propagated before any result write.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn exec_call_primitive(
     state: &mut VmState,
     base: usize,
     func_id: PrimitiveFnId,
-    name: &Symbol,
+    link: LinkIdx,
     arg_vals: &[TaggedValue],
     dst: u16,
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
     if state.is_primitive_shadowed(func_id.0 as usize) {
+        // The site's name is read only here, from the code of the frame
+        // running it, so the unshadowed path passes a `u32` and reads no
+        // table.
+        let frame = state.execution.frames().last().expect("no active frame");
+        debug_assert_eq!(
+            frame
+                .pc
+                .checked_sub(1)
+                .and_then(|pc| frame.code.instructions.get(pc))
+                .and_then(Instruction::link),
+            Some(link),
+            "the top frame is not running the primitive site"
+        );
+        let name = frame.code.links.name(link);
         let globals = frame_globals(state);
         let func_val = NamespaceView::of(&globals)
             .get(state.heap(), name)
@@ -3795,7 +3809,6 @@ pub(super) fn exec_call_primitive(
         // semantically a tail call anyway. On the tail path the callee
         // returns directly to this frame's caller; the `Return` is never
         // executed.
-        let frame = state.execution.frames().last().expect("no active frame");
         let is_tail_site = matches!(
             frame.code.instructions.get(frame.pc),
             Some(Instruction::Return { val }) if *val == dst

@@ -121,6 +121,21 @@ fn fused_predicate_deoptimizes_on_rebind() {
 }
 
 #[test]
+fn fused_site_deoptimizes_when_its_predicate_is_not_its_units_first_global() {
+    // The predicate is the second global its unit names, after `h`, so the
+    // fused site's link index is not 0: a deoptimization that read another
+    // entry of the unit's link table than the site's own would call `h`,
+    // which takes no arguments (#836).
+    assert_eq!(
+        eval(
+            "(define (h) 0) (define (f x) (h) (if (null? x) 'empty 'full)) \
+             (define null? (lambda (v) #f)) (f '())"
+        ),
+        "full"
+    );
+}
+
+#[test]
 fn deopt_through_fused_site_keeps_tail_loop_flat() {
     // A rebound predicate at a fused site deopts into a closure call every
     // iteration, inside a tail-recursive loop. The site's next instruction

@@ -7,9 +7,8 @@
 //! See VM_ISA.md §3 and §4 for the full specification.
 
 use super::{CodeObjectId, ConstIdx, Reg};
-use patina_core::CollectKind;
-use patina_core::core_expr::Symbol;
 use patina_core::tagged_value::TaggedValue;
+use patina_core::{CollectKind, LinkIdx};
 
 /// Which predicate a [`Instruction::TestJumpUnless`] evaluates. Folding the
 /// test into the branch instruction (rather than minting one fused variant
@@ -92,11 +91,12 @@ pub enum Instruction {
     /// `dst ← current_closure.free_vars[slot]`
     LoadClosure { dst: Reg, slot: u16 },
 
-    /// `dst ← globals[name]`  (error if unbound)
-    LoadGlobal { dst: Reg, name: Symbol },
+    /// `dst ←` the global the unit's link table names at `link` (error if
+    /// unbound).
+    LoadGlobal { dst: Reg, link: LinkIdx },
 
-    /// `globals[name] ← src`
-    StoreGlobal { name: Symbol, src: Reg },
+    /// The global the unit's link table names at `link` `← src`.
+    StoreGlobal { link: LinkIdx, src: Reg },
 
     // ── MutableCell ──────────────────────────────────────────────────────────
     /// Allocate a `MutableCell` wrapping `reg[src]`, store the heap pointer in `dst`.
@@ -188,13 +188,14 @@ pub enum Instruction {
     ///
     /// `func_id` names a registered `patina-primitives` function. The compiler
     /// emits this only when the callee is a `GlobalRef` that resolved to that
-    /// primitive at compile time. `name` is the global the callee resolved
-    /// from: if the program later rebinds it (tracked per-primitive in
-    /// `VmState::shadowed_primitives`), the VM deoptimizes this site back to
-    /// the name-lookup `Call` path so redefinition semantics stay exact.
+    /// primitive at compile time. `link` names, in the unit's link table, the
+    /// global the callee resolved from: if the program later rebinds it
+    /// (tracked per-primitive in `VmState::shadowed_primitives`), the VM
+    /// deoptimizes this site back to a call of whatever that name is bound
+    /// to, so redefinition semantics stay exact.
     CallPrimitive {
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
         args: Vec<Reg>,
         dst: Reg,
     },
@@ -203,7 +204,7 @@ pub enum Instruction {
     /// the quasiquote pre-pass puts `list`, `append` and `list->vector` in
     /// operator position as `Literal` procedures, so that nothing the
     /// program imports or defines can redirect them. There is no global
-    /// binding behind such a site, hence no `name` and no deoptimization:
+    /// binding behind such a site, hence no `link` and no deoptimization:
     /// it always dispatches by index. Same registry handler as
     /// `CallPrimitive`, so results and errors are identical.
     CallPrimitiveDirect {
@@ -215,7 +216,7 @@ pub enum Instruction {
     // ── Inline primitive opcodes (Track P P3) ───────────────────────────────
     //
     // Fixed-arity fast paths for the hottest primitives, executed directly in
-    // the dispatch loop. Every opcode carries the same `(func_id, name)` pair
+    // the dispatch loop. Every opcode carries the same `(func_id, link)` pair
     // as `CallPrimitive` and obeys the same contract: the fast path fires only
     // when `!is_primitive_shadowed(func_id)` AND the operands fit the trivial
     // case (fixnums that don't overflow, a native pair, an in-bounds vector
@@ -232,7 +233,7 @@ pub enum Instruction {
         b: Reg,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 2-arg `-`.
     Sub {
@@ -240,7 +241,7 @@ pub enum Instruction {
         b: Reg,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 2-arg `*`.
     Mul {
@@ -248,7 +249,7 @@ pub enum Instruction {
         b: Reg,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 2-arg `<`.
     Lt {
@@ -256,7 +257,7 @@ pub enum Instruction {
         b: Reg,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 2-arg `=`.
     NumEq {
@@ -264,7 +265,7 @@ pub enum Instruction {
         b: Reg,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 2-arg `eq?` — total, one `values_eq` heap call.
     Eq {
@@ -272,7 +273,7 @@ pub enum Instruction {
         b: Reg,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 2-arg `cons` — total, one `alloc_pair`.
     Cons {
@@ -280,7 +281,7 @@ pub enum Instruction {
         b: Reg,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 1-arg `car`. Fast path: native pair only; boxed pairs and type errors
     /// go to the handler.
@@ -288,21 +289,21 @@ pub enum Instruction {
         src: Reg,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 1-arg `cdr`.
     Cdr {
         src: Reg,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 1-arg `not` — total truthiness test (only #f is falsy).
     Not {
         src: Reg,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// Fused test + branch (Track P P5). Emitted in place of a predicate
     /// opcode whose result feeds the `JumpUnless` that *must still follow
@@ -326,7 +327,7 @@ pub enum Instruction {
         dst: Reg,
         target: usize,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// `Add` with a literal right operand (Track P P5): absorbs the
     /// `LoadImmediate` at sites like `(+ x 1)`. Right operand only, even
@@ -338,7 +339,7 @@ pub enum Instruction {
         imm: TaggedValue,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 2-arg `-` with a literal right operand: `(- x 1)`-shaped sites only.
     SubImm {
@@ -346,7 +347,7 @@ pub enum Instruction {
         imm: TaggedValue,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 2-arg `<` with a literal right operand: `(< i n)`-shaped sites only.
     LtImm {
@@ -354,7 +355,7 @@ pub enum Instruction {
         imm: TaggedValue,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 2-arg `=` with a literal right operand: `(= x 0)`-shaped sites only.
     NumEqImm {
@@ -362,28 +363,28 @@ pub enum Instruction {
         imm: TaggedValue,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 1-arg `null?` — total bit test.
     NullP {
         src: Reg,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 1-arg `pair?` — total bit test.
     PairP {
         src: Reg,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 1-arg `vector?` — total bit test.
     VectorP {
         src: Reg,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 2-arg `vector-ref`. Fast path: vector + in-bounds fixnum index;
     /// out-of-bounds falls back so the error message comes from the handler.
@@ -392,7 +393,7 @@ pub enum Instruction {
         i: Reg,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
     /// 3-arg `vector-set!`. Writes `dst ← unspecified` on the fast path,
     /// matching the handler's return value.
@@ -402,7 +403,7 @@ pub enum Instruction {
         val: Reg,
         dst: Reg,
         func_id: PrimitiveFnId,
-        name: Symbol,
+        link: LinkIdx,
     },
 
     // ── call-with-values (instruction-level) ────────────────────────────────
@@ -570,8 +571,9 @@ pub enum Instruction {
     CollectAtCall { kind: CollectKind },
 
     // ── Global Definitions ────────────────────────────────────────────────────
-    /// Top-level `define`: `globals[name] ← reg[src]`.
-    Define { name: Symbol, src: Reg },
+    /// Top-level `define` of the global the unit's link table names at
+    /// `link`, to `reg[src]`.
+    Define { link: LinkIdx, src: Reg },
 
     // ── Continuations (SRFI-226) ──────────────────────────────────────────────
     /// Maps to `abort-current-continuation`.
@@ -608,10 +610,82 @@ pub enum Instruction {
     Nop,
 }
 
+impl Instruction {
+    /// The global operand, an index into the unit's link table, of an
+    /// instruction that names a global: `LoadGlobal`, `StoreGlobal`,
+    /// `Define`, `CallPrimitive` and the 20 inline opcodes. Exhaustive, so a
+    /// new variant says whether it names one.
+    pub fn link(&self) -> Option<LinkIdx> {
+        use Instruction::*;
+        match *self {
+            LoadGlobal { link, .. }
+            | StoreGlobal { link, .. }
+            | Define { link, .. }
+            | CallPrimitive { link, .. }
+            | Add { link, .. }
+            | Sub { link, .. }
+            | Mul { link, .. }
+            | Lt { link, .. }
+            | NumEq { link, .. }
+            | Eq { link, .. }
+            | Cons { link, .. }
+            | Car { link, .. }
+            | Cdr { link, .. }
+            | Not { link, .. }
+            | TestJumpUnless { link, .. }
+            | AddImm { link, .. }
+            | SubImm { link, .. }
+            | LtImm { link, .. }
+            | NumEqImm { link, .. }
+            | NullP { link, .. }
+            | PairP { link, .. }
+            | VectorP { link, .. }
+            | VectorRef { link, .. }
+            | VectorSet { link, .. } => Some(link),
+            LoadConst { .. }
+            | LoadImmediate { .. }
+            | Move { .. }
+            | LoadClosure { .. }
+            | AllocCell { .. }
+            | ReadCell { .. }
+            | WriteCell { .. }
+            | MakeClosure { .. }
+            | Jump { .. }
+            | JumpIf { .. }
+            | JumpUnless { .. }
+            | JumpUnlessShadowed { .. }
+            | Call { .. }
+            | TailCall { .. }
+            | Apply { .. }
+            | TailApply { .. }
+            | Return { .. }
+            | CallPrimitiveDirect { .. }
+            | CallWithValues { .. }
+            | TailCallWithValues { .. }
+            | PushWind { .. }
+            | PopWind
+            | ResumeWindJump
+            | ResumeComposableInvoke
+            | ResumeRaise
+            | ResumeForce
+            | ResumePrimitive
+            | CollectAtCall { .. }
+            | AbortToPrompt { .. }
+            | CaptureComposable { .. }
+            | InvokeContinuation { .. }
+            | Nop => None,
+        }
+    }
+}
+
 // Every dispatched instruction is fetched by value from this enum, so its
-// size is hot-loop-critical. 48 bytes is the current high-water mark
-// (`CallPrimitive`'s Vec + Symbol payload); new variants must fit under it.
-const _: () = assert!(std::mem::size_of::<Instruction>() <= 48);
+// size is hot-loop-critical. 40 bytes is the current high-water mark, held by
+// `CallPrimitive` (a `Vec` beside its `dst`, `func_id` and `link`) and
+// `MakeClosure` (a `Vec` beside its `dst` and `code_id`); the next variants
+// down are at 32, and new variants must fit under it. It was 48 while the 24
+// global-naming variants carried their name, an `Rc<str>`, in place of a
+// link index (#836).
+const _: () = assert!(std::mem::size_of::<Instruction>() <= 40);
 
 /// Identifier for a registered primitive function.
 ///
@@ -619,3 +693,194 @@ const _: () = assert!(std::mem::size_of::<Instruction>() <= 48);
 /// built at startup. The VM resolves it to a function pointer at load time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PrimitiveFnId(pub u32);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `link` answers the operand of each of the 24 variants that name a
+    /// global, and nothing for a variant that names none, the two beside
+    /// them that carry no link (`CallPrimitiveDirect`, `MakeClosure`) among
+    /// them (#836).
+    #[test]
+    fn link_answers_the_operand_of_every_variant_that_names_a_global() {
+        let f = PrimitiveFnId(0);
+        let imm = TaggedValue::fixnum(1);
+        let naming = [
+            Instruction::LoadGlobal { dst: 0, link: 0 },
+            Instruction::StoreGlobal { link: 1, src: 0 },
+            Instruction::Define { link: 2, src: 0 },
+            Instruction::CallPrimitive {
+                func_id: f,
+                link: 3,
+                args: vec![0],
+                dst: 0,
+            },
+            Instruction::Add {
+                a: 0,
+                b: 0,
+                dst: 0,
+                func_id: f,
+                link: 4,
+            },
+            Instruction::Sub {
+                a: 0,
+                b: 0,
+                dst: 0,
+                func_id: f,
+                link: 5,
+            },
+            Instruction::Mul {
+                a: 0,
+                b: 0,
+                dst: 0,
+                func_id: f,
+                link: 6,
+            },
+            Instruction::Lt {
+                a: 0,
+                b: 0,
+                dst: 0,
+                func_id: f,
+                link: 7,
+            },
+            Instruction::NumEq {
+                a: 0,
+                b: 0,
+                dst: 0,
+                func_id: f,
+                link: 8,
+            },
+            Instruction::Eq {
+                a: 0,
+                b: 0,
+                dst: 0,
+                func_id: f,
+                link: 9,
+            },
+            Instruction::Cons {
+                a: 0,
+                b: 0,
+                dst: 0,
+                func_id: f,
+                link: 10,
+            },
+            Instruction::Car {
+                src: 0,
+                dst: 0,
+                func_id: f,
+                link: 11,
+            },
+            Instruction::Cdr {
+                src: 0,
+                dst: 0,
+                func_id: f,
+                link: 12,
+            },
+            Instruction::Not {
+                src: 0,
+                dst: 0,
+                func_id: f,
+                link: 13,
+            },
+            Instruction::TestJumpUnless {
+                test: TestOp::NullP,
+                a: 0,
+                b: 0,
+                dst: 0,
+                target: 0,
+                func_id: f,
+                link: 14,
+            },
+            Instruction::AddImm {
+                a: 0,
+                imm,
+                dst: 0,
+                func_id: f,
+                link: 15,
+            },
+            Instruction::SubImm {
+                a: 0,
+                imm,
+                dst: 0,
+                func_id: f,
+                link: 16,
+            },
+            Instruction::LtImm {
+                a: 0,
+                imm,
+                dst: 0,
+                func_id: f,
+                link: 17,
+            },
+            Instruction::NumEqImm {
+                a: 0,
+                imm,
+                dst: 0,
+                func_id: f,
+                link: 18,
+            },
+            Instruction::NullP {
+                src: 0,
+                dst: 0,
+                func_id: f,
+                link: 19,
+            },
+            Instruction::PairP {
+                src: 0,
+                dst: 0,
+                func_id: f,
+                link: 20,
+            },
+            Instruction::VectorP {
+                src: 0,
+                dst: 0,
+                func_id: f,
+                link: 21,
+            },
+            Instruction::VectorRef {
+                v: 0,
+                i: 0,
+                dst: 0,
+                func_id: f,
+                link: 22,
+            },
+            Instruction::VectorSet {
+                v: 0,
+                i: 0,
+                val: 0,
+                dst: 0,
+                func_id: f,
+                link: 23,
+            },
+        ];
+        for (k, instr) in naming.iter().enumerate() {
+            assert_eq!(instr.link(), Some(k as LinkIdx), "{instr:?}");
+        }
+        let not_naming = [
+            Instruction::CallPrimitiveDirect {
+                func_id: f,
+                args: vec![0],
+                dst: 0,
+            },
+            Instruction::MakeClosure {
+                dst: 0,
+                code_id: CodeObjectId::label(),
+                free_vars: vec![0],
+            },
+            Instruction::LoadConst { dst: 0, idx: 0 },
+            Instruction::LoadClosure { dst: 0, slot: 0 },
+            Instruction::Call {
+                func: 0,
+                args: vec![0],
+                dst: 0,
+            },
+            Instruction::JumpUnless { cond: 0, target: 0 },
+            Instruction::Return { val: 0 },
+            Instruction::Nop,
+        ];
+        for instr in &not_naming {
+            assert_eq!(instr.link(), None, "{instr:?}");
+        }
+    }
+}
