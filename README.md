@@ -310,12 +310,20 @@ namespace. A frame under a host namespace has no equivalent on the VM, since
 a host namespace's parent must be a parentless namespace (the global
 namespace, for `new_environment()`), so no namespace sits under one: define
 the frame's names in the host namespace itself, where all of its code sees
-them, or evaluate on the tree-walker. Scheme `eval` and `load` through an
-environment specifier a host makes over a frame (with
-`Cx::alloc_environment_specifier` or its siblings) are refused on the VM
-too, with the same error, which a program's `guard` can catch
-([#853](https://github.com/avalonalex/patina/issues/853)); the tree-walker
-evaluates through one by name.
+them, or evaluate on the tree-walker. The VM also refuses a frame that
+reaches its compile by another route, with the same message, as a Scheme
+condition a program's `guard` can catch
+([#853](https://github.com/avalonalex/patina/issues/853)): Scheme `eval` and
+`load` through an environment specifier a host makes over a frame (with
+`Cx::alloc_environment_specifier` or its siblings), and a host primitive's
+`Step::Eval` that names a frame, or its call of `ApplyContext::eval_expr` in
+one. Each form is refused where the machine would compile it, so what comes
+before that is not covered: `eval`'s check of a definition through an
+immutable specifier answers an error of its own, and expands the form in
+the frame first, where a `define-syntax` inside a `begin` passes the check
+and leaves its transformer bound; and a `load` of a file with no forms
+answers without a refusal. The tree-walker evaluates in such a frame by
+name.
 
 `interrupt_handle()` answers an `InterruptHandle`, which a host uses to
 interrupt a running evaluation from another thread, a timer or a signal
