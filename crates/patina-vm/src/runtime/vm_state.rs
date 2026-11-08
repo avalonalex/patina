@@ -3284,6 +3284,39 @@ mod tests {
         assert!(state.code_object(last).is_err());
     }
 
+    /// The heap's count of code units, `(gc-stats)`'s `code-units` (#836),
+    /// is the size of the table of units after each change to it: a load, a
+    /// release as a form returns, and a collection's release, which writes
+    /// it once the units are gone. `gc_vm.rs`' tests of the key compare its
+    /// readings with each other, which a count off by a constant passes;
+    /// this holds its value. A unit with a lambda's code nested in it counts
+    /// once.
+    #[test]
+    fn the_heaps_count_of_code_units_is_the_tables_size() {
+        let mut state = VmState::on_a_fresh_heap();
+        let counts = |state: &VmState| (state.heap.borrow().code_units(), state.code_units.len());
+        assert_eq!(counts(&state), (0, 0), "fresh");
+        let nested = state.load_unit(code(), vec![code()]);
+        assert_eq!(counts(&state), (1, 1), "a unit with nested code loaded");
+        state.load_unit(code(), Vec::new());
+        assert_eq!(counts(&state), (2, 2), "a second unit loaded");
+        state.release_unit_if_unused(nested);
+        assert_eq!(
+            counts(&state),
+            (1, 1),
+            "the first let go as its form returned"
+        );
+        // Nothing holds the second unit's code, as after a form whose
+        // closure a collection has freed: the collection's release lets it
+        // go.
+        state.release_dead_code();
+        assert_eq!(
+            counts(&state),
+            (0, 0),
+            "the second let go after a collection"
+        );
+    }
+
     /// A definition marks the primitive it rebinds only where the
     /// environment binds the name itself, the one binding a fast path
     /// compiled there stands on: a child's definition of a name its parent
