@@ -47,10 +47,10 @@ use std::rc::Rc;
 
 use rustc_hash::FxHashMap;
 
-use crate::binding_record::Record;
+use crate::binding_record::{PLACEHOLDER, Record};
 use crate::environment::{RC_COUNTS, hash_table_bytes};
-use crate::heap::ExternalBytes;
 use crate::heap::table::HeapTable;
+use crate::heap::{ExternalBytes, Heap};
 use crate::tagged_value::TaggedValue;
 
 /// What a store's entries are, fixed when it is made: a parentless
@@ -235,6 +235,16 @@ impl PlaceholderStore {
         }
     }
 
+    /// A check build's part of the sweep, after the arenas, for this store
+    /// ([`PlaceholderList::check_swept`]).
+    fn check_swept(&self, heap: &Heap) {
+        self.state.with(|state| {
+            for (name, &record) in &state.entries {
+                check_entry(heap, self.kind, name, record);
+            }
+        });
+    }
+
     /// The records and own cells the store holds, as the heap's sums count
     /// them: one record an entry, and a placeholder's cell.
     #[cfg(test)]
@@ -323,6 +333,28 @@ impl PlaceholderList {
         })
     }
 
+    /// A check build's part of the sweep, after the arenas, beside the port
+    /// table's: every entry the pass left names a live pair in its
+    /// generation, and so do the pairs it reaches, a placeholder's cell, and
+    /// a weak read-through record's cell and parent; and a placeholder is
+    /// still one, flagged and over `UNBOUND`, as Rule 1 has every entry the
+    /// trace skips (#836). A dead entry is one the pass left, which only a
+    /// pass that skipped it or ran after the pair sweep would leave.
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check", test)),
+        expect(
+            dead_code,
+            reason = "a check build's part of the sweep, and its control's"
+        )
+    )]
+    pub(crate) fn check_swept(&self, heap: &Heap) {
+        self.0.with(|stores| {
+            for store in stores.values() {
+                store.check_swept(heap);
+            }
+        });
+    }
+
     /// Whether the list holds the store of the namespace numbered `env_id`.
     #[cfg(test)]
     pub(crate) fn holds(&self, env_id: u64) -> bool {
@@ -372,6 +404,58 @@ impl Drop for PlaceholderHandle {
     }
 }
 
+/// One entry's check ([`PlaceholderList::check_swept`]): its pairs live,
+/// each read only once its liveness is known, so a dead one is reported
+/// here rather than by the accessors' stale-reference check.
+fn check_entry(heap: &Heap, kind: StoreKind, name: &str, record: Record) {
+    let word = record.word();
+    if !heap.pair_is_live(word) {
+        dead_entry_left(name);
+    }
+    let (car, cdr) = (heap.car(word), heap.cdr(word));
+    match kind {
+        StoreKind::Placeholders => {
+            if !heap.pair_is_live(car) {
+                dead_entry_left(name);
+            }
+            if cdr != TaggedValue::fixnum(PLACEHOLDER) || heap.car(car) != TaggedValue::UNBOUND {
+                bound_entry_kept(name);
+            }
+        }
+        StoreKind::Children => {
+            if !cdr.is_pair() {
+                bound_entry_kept(name);
+            }
+            if !heap.pair_is_live(car) || !heap.pair_is_live(cdr) {
+                dead_entry_left(name);
+            }
+        }
+    }
+}
+
+/// A check build's failure: an entry the sweep's pass left in its store
+/// names a pair the sweep freed.
+#[cold]
+#[inline(never)]
+fn dead_entry_left(name: &str) -> ! {
+    panic!(
+        "the sweep's pass left a dead placeholder: {name:?}'s entry names a pair the sweep freed \
+         (#836)"
+    )
+}
+
+/// A check build's failure: a store holds an entry a define or an import
+/// adopted, which the trace marks no more than a placeholder, though it is
+/// bound (Rule 1).
+#[cold]
+#[inline(never)]
+fn bound_entry_kept(name: &str) -> ! {
+    panic!(
+        "a placeholder store holds {name:?}'s entry, bound: an adopted record left the store, or \
+         the pass could drop a binding (Rule 1, #836)"
+    )
+}
+
 /// The namespace's number alone: a `Debug` that opens no access, for
 /// `RareTables`' derived one.
 impl fmt::Debug for PlaceholderHandle {
@@ -380,5 +464,39 @@ impl fmt::Debug for PlaceholderHandle {
             .field("env_id", &self.store.env_id)
             .field("kind", &self.store.kind)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::binding_record::BindingCell;
+    use crate::heap::trace_sentinels::collect_from;
+
+    /// `check_swept`'s positive control: a store entry over a pair a sweep
+    /// freed, which only a pass that left it would leave. The store is on a
+    /// list the heap's pass never sees, counted through the heap's account so
+    /// that its drop as the panic unwinds gives back what it counted; the
+    /// collection frees the placeholder's pairs, and the check refuses the
+    /// entry with its own message, before any read of the freed pair could
+    /// panic with the stale-reference check's.
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "the sweep's pass left a dead placeholder")]
+    fn a_check_build_refuses_a_dead_placeholder_the_pass_left() {
+        let mut heap = Heap::new();
+        let unseen = PlaceholderList::new();
+        let handle = PlaceholderHandle::new(
+            &unseen,
+            PlaceholderStore::new(7, heap.external_bytes_handle(), StoreKind::Placeholders),
+        );
+        let cell = BindingCell::new_own(&mut heap, TaggedValue::UNBOUND, 7);
+        let record = Record::placeholder(&mut heap, cell);
+        handle.store().insert(Rc::from("later"), record);
+        collect_from(&mut heap, &[]);
+        unseen.check_swept(&heap);
     }
 }

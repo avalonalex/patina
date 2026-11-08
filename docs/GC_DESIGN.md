@@ -141,8 +141,12 @@ namespace `Interpreter::new_environment` answers, whose parent is the global
 namespace, is traced as any namespace is, and has one table more: its
 read-through records (`RareTables::read_through`, §4.7), whose derived trace
 reports the table's `unbound` cell and each record, a pair the collector
-follows to the global namespace's record it reads through. The trace leaves
-out the parent. `GcVisitor::visit_env` follows the parent chain by reference
+follows to the global namespace's record it reads through. A namespace's
+placeholder store (`RareTables::placeholders`, #836), its placeholders or a
+host namespace's read-through records over a parent placeholder, is skipped
+by the derive: those entries are weak, and a link table's trace is what
+marks one (§4.5, §4.7). The trace leaves out the parent.
+`GcVisitor::visit_env` follows the parent chain by reference
 and walks the other environments from a worklist, all deduplicated by
 `gc_identity`, without recursing: an environment's trace reports to
 `EnvEdges`, which marks each value and queues each environment the walk has
@@ -289,8 +293,9 @@ Notes:
   safe point waited for it before #682.
 - Every table the heap keeps in Rust takes one wrapper, `HeapTable` (#687,
   addition C3): the handle table's entries, its standard port parameters, the
-  root set, the literal pool, the `PortTable` and the `FinalRegistry` now
-  (#785), and the `CodeStore`, `HostPayloadTable` and thread table as the
+  root set, the literal pool, the `PortTable` and the `FinalRegistry`
+  (#785), and the namespaces' placeholder stores and the heap's list of them
+  (#836) now, and the `CodeStore`, `HostPayloadTable` and thread table as the
   stages that build them land. It is plain in the default build
   and the one place a `threaded` build puts a lock (`PRD/GC_PRD.md` §18.2,
   rule 9). Access is scoped to a closure and hands out nothing that holds the
@@ -408,6 +413,39 @@ the drain. A check build still collects the port objects the object arena's
 sweep frees, and asserts that the pass took out each plain one's entry and
 that the collection queued each file one's (`PortTable::check_swept`, with
 its positive control `a_check_build_refuses_a_dead_port_the_pass_left`).
+
+The namespaces' weak entries leave the same way, in a second pass right after
+the ports' (#836): a parentless namespace's placeholders, and a host
+namespace's read-through records over a parent placeholder, which no slot
+holds and no derived trace marks (§4.7). A namespace that holds one keeps them
+in its `PlaceholderStore`, and the heap lists the stores by `env_id` on its
+`HandleTable` (`PlaceholderList`, never traced, holding no namespace, carried
+across teardown). The pass takes out of each store every entry whose record's
+pair is unmarked, while the bits are complete and before the pair arena's
+sweep frees the pairs, gives back their counts and charges borrow-free
+through each store's account before the account is settled, and drops their
+names after the accesses (`PlaceholderList::take_dead`). It costs one access
+over the list and one per store, a step an entry: the stores' lengths, and
+over an empty list, as on every heap until the VM links its units at load,
+one access and no allocation. A check build then asserts, after the arenas
+and beside the ports' check, that every entry left names a live pair in its
+generation, and so does what it reaches, a placeholder's cell and a weak
+read-through record's cell and parent, and that a placeholder is still one,
+flagged and over `UNBOUND` (`PlaceholderList::check_swept`, with its positive
+control `a_check_build_refuses_a_dead_placeholder_the_pass_left`). Moving the
+pass to just after the pair arena's sweep, still before the check, is a
+change no test can see — a slot the sweep frees keeps its bit clear, so the
+pass would drop the same entries — so its place and its comment are what
+hold it before the pair sweep.
+
+*The passes' order deviates from §9.9's.* Both passes are step 6's (the weak
+tables), and both run inside `Heap::sweep`, so after classification, step 7
+(`queue_dead_finals`, which `MarkSweepCollector::collect` runs before the
+sweep): GC_PRD's order puts step 6 first. The two touch nothing in common —
+classification reads the `FinalRegistry` and the objects' marks, the passes
+the port table's other entries and the stores — so the order is not
+observable, and the passes stay where the mark bits are consumed (#818,
+#836).
 
 Sweep completion is the "collection happened" boundary: it resets the
 allocation counter and clears any pending `(gc)` request, so alternative
@@ -548,8 +586,9 @@ pairs in the pair arena (`crates/patina-core/src/binding_record.rs`). A cell
 is a binding's location, the pair `(value . owner)`, where owner is the
 fixnum `env_id << 4` of the namespace whose cell it is, or 0 for a free
 cell. A record is a namespace's hold on a location, the pair
-`(cell . flags)`, whose flags stay the fixnum 0 until 4b.9's link tables use
-them. A pair where the flags would be marks a host namespace's read-through
+`(cell . flags)`, whose flags are the fixnum 0 on every record in a slot or a
+scoped entry, and `PLACEHOLDER` on a placeholder, which is in neither (#836,
+below). A pair where the flags would be marks a host namespace's read-through
 record (below).
 
 - **Where they live.** In a namespace of either kind, a parentless one or
@@ -586,8 +625,36 @@ record (below).
   of the name in the host namespace adopts its record: the record moves
   into a fresh slot, keeping its word, re-pointed at the new cell or the
   exporter's, flags 0, and the global namespace's record is left alone.
-  Only `link_record` makes one, and until 4b.9's linker calls it only the
-  tests do.
+  For a name the global namespace does not bind, `link_record` makes the
+  global namespace's placeholder (below) and a read-through record over it,
+  which is weak (R7, #836): it is kept in the host namespace's placeholder
+  store, not in `RareTables::read_through`, though it names the same
+  `unbound` cell. A link of the name once the global namespace binds it
+  promotes it into `read_through`, and a define or an import in the host
+  namespace adopts it from either, so a name has one read-through record
+  across the two. Only `link_record` makes one, and until 4b.9's linker calls
+  it only the tests do.
+- **Placeholders (#836).** For a name a parentless namespace does not bind,
+  `link_record` makes a placeholder: a record `(cell . PLACEHOLDER)` over a
+  cell of the namespace's own holding `TaggedValue::UNBOUND`, the same one
+  each time, kept in the namespace's `PlaceholderStore`
+  (`RareTables::placeholders`, `crates/patina-core/src/placeholder_store.rs`)
+  and never in a slot, so the slots stay append-only (D1) and nothing that
+  reads them sees one. A name the namespace reaches by an alias or a visible
+  scoped definition gets none, and is read by name. A define or an import of
+  the name adopts it as a read-through record is adopted: re-pointed at the
+  fresh cell or the exporter's and its flag cleared, in one funnel
+  (`Heap::adopt_record`), and moved into a fresh slot with its word, so code
+  that linked it reads the binding from then on; its own `UNBOUND` cell is
+  garbage. A scoped definition of the name leaves it in place, and a read by
+  name finds the scoped binding, as today. No alias is minted at a name a
+  placeholder or a weak read-through record holds (`import_alias`,
+  `relink_alias`): an import alias's install would adopt it. A check build
+  asserts that no slot is given a flagged or read-through record, at the
+  slots' one writer (`Environment::append_slot`). The placement, a store per
+  namespace with a list per heap rather than the slots themselves, is the
+  recommendation of #836's question 4, pending the owner's ruling. Until the
+  VM links its units at load, only core's tests make one.
 - **Exports are cells.** `Library.exports` maps each name to the cell its
   binding named when the library was built, resolved one hop to the owning
   cell, so a re-export is the defining library's cell; `import_into` makes
@@ -624,8 +691,10 @@ record (below).
   reports each slot's word and each scoped entry's, pinned, each cell in
   `frame_imports`, and a host namespace's read-through table
   (`RareTables::read_through`): its `unbound` cell and each read-through
-  record, and through the record the parent's; `Library`'s reports each
-  export's cell. The sentinels are
+  record, and through the record the parent's; it skips the placeholder
+  store, whose entries are weak (#836); `Library`'s reports each export's
+  cell, and a `LinkTable`'s each linked entry (`link_table_fields`). The
+  sentinels are
   `gc_edge_tests::environment_edges` (a frame's import),
   `gc_edge_tests::read_through_edges` (a host namespace's read-through
   table),
@@ -635,7 +704,19 @@ record (below).
 - **Liveness.** Until the link tables, a record's holder is its namespace,
   so a namespace's records die with it, a host namespace's read-through
   records and their `unbound` cell included (SD3,
-  `a_read_through_record_dies_with_its_host_namespace`). A cell lives
+  `a_read_through_record_dies_with_its_host_namespace`). Placeholders and
+  weak read-through records are weak (R1, R7, #836): no slot holds them and
+  no derived trace marks them, so one lives while a traced link table names
+  it, and the sweep's pass drops it once none does (§4.5); a weak record
+  that is marked marks its parent placeholder through its cdr. Every entry
+  the trace skips is one the pass may drop (Rule 1): a placeholder leaves
+  its store whenever it is bound, and a check build asserts that every
+  placeholder left after a sweep still holds `UNBOUND`. One departure from
+  SD3, pending the owner's ruling on #836's question 11: a weak read-through
+  record whose parent placeholder was bound since stays weak until its name
+  is linked again, so the pass may drop it while nothing links it. Nothing
+  observes that, since only a link reaches one and `link_record` makes or
+  promotes one when asked. A cell lives
   while a record, an export or a frame's import names it: an importer keeps
   the exporter's cell, and nothing keeps the exporter's namespace for it
   (`an_importer_holds_the_cell_and_not_the_library`), which is what releases
@@ -672,7 +753,10 @@ record (below).
   old-to-young edge stage 7's barrier must see (`gc_census.rs`'s
   `a_record_repoint_is_logged_with_a_heap_holder`). A host namespace's
   adoption of a read-through record logs both of the record's words there:
-  the cell, then the flags fixnum that replaces the parent's record (#835).
+  the cell, then the flags fixnum that replaces the parent's record (#835);
+  an adoption of a placeholder logs the same two, the flags fixnum clearing
+  its flag, and a define's value initialises its fresh cell with no holder,
+  as any by-name definition's first value does (#836).
 - **The identity condition.** `RareTables::import_aliases` keys each
   imported cell by `BindingCell::key`, its word less a check build's
   generation stamp, so a cell made in a swept cell's slot has the swept
@@ -687,7 +771,10 @@ record (below).
 
 What a namespace holds is counted by the `namespaces`, `binding-records` and
 `cells` keys (§6). Records and cells are charged in L as the pair arena's,
-never by `NamespaceCharge`.
+never by `NamespaceCharge`. A namespace's placeholder store counts its
+entries in the same `binding-records` and `cells` sums, a placeholder and its
+cell or a weak read-through record, and charges its own buffer and names,
+apart from `NamespaceCharge`, until each entry is dropped or adopted (#836).
 
 ---
 
@@ -820,6 +907,7 @@ expansion runs in (§7; point C of `PRD/GC_PRD.md` §11.3).
 | `HandleTable.standard_ports` | `heap/handles.rs` | The parameter objects `current-input-port`, `current-output-port` and `current-error-port` are bound to (#608): made once per heap on `(patina internal io)`'s first build (`Heap::standard_port_parameters`), each holding one port object and its converter, and kept for the heap's life, so a second build binds the same three. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason, so its derived trace reaches it when `GcVisitor::new` visits the table; visited, not only marked, since a parameter holds its port and its converter. Pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown. The port each one holds is also cached, by `Rc`, in the interpreter's `Instance` slots, which the store funnel refreshes at every assignment of one (`write_parameter`) |
 | `HandleTable.ports` | `heap/port_table.rs` | Not a root: the heap's `PortTable` (#785), the `Rc<Port>` each port object's slot names by number, which hold Rust state and no value, so the derived trace skips the field. The table also records each entry's owner word, by which the sweep's pass finds a dead entry by its object's mark bit (#818) and which a check build's read compares by its bits; it must stay untraced, or every port object would live for ever. On the `HandleTable`, by its own `Rc`, for `root_set`'s reason and so that exit's registry of tables can hold it weakly (§4.6, #786); the table teardown starts takes it over, so a heap keeps one for its life. The sweep's pass takes a dead plain port's entry out as the sweep starts, and the drain after the collection a file port's (§4.5, §4.6). A read, on every port operation, does not mark the table borrowed (`HeapTable::with_unguarded`, #818): it clones an `Rc` and reaches nothing. An entry need not hold its port's last `Rc`: the `Instance` holds the standard ports and caches the current ones, and a host may keep one |
 | `HandleTable.finals` | `heap/finalize.rs` | Not a root: the heap's `FinalRegistry` (#785, §4.6), whose entries name their objects by slot index so that a collection can find them dead, weak by design, so the derived trace skips the field. On the `HandleTable`, by its own `Rc`, beside the `PortTable` whose entries it names, and carried across teardown with it |
+| `HandleTable.placeholders` | `placeholder_store.rs` | Not a root: the heap's `PlaceholderList` (#836), its namespaces' placeholder stores keyed by `env_id`, which the sweep's pass walks to drop every placeholder and weak read-through record no traced link table marked (§4.5, §4.7). Weak by design, so the derived trace skips the field: traced, it would keep every listed namespace's placeholders. It holds stores, never a namespace, by `Rc` or `Weak`; a namespace's drop takes its store off at once (`PlaceholderHandle`). On the `HandleTable`, by its own `Rc`, for `root_set`'s reason, and carried across teardown, so the teardown sweep's pass empties the store of every namespace that outlives the heap |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
 | A compilation's `LiteralPool` | `crates/patina-core/src/literal_pool.rs` | The heap literals of the form being compiled, from its expansion until its code holds them (§9.7, #705): registered with the heap's root set for the pool's life, its entries reported as slots. Each backend drops the pool once the form is compiled, before it runs, so it never holds more than one form's quoted text |
 | Macro literals and environments | `heap/mod.rs`, `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: the literals the object holds (§9.6), and its body's `definition_env` and each `foreign_expansions` environment (§4.3) |
@@ -1019,6 +1107,10 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   at every expansion: about 97 bytes a cycle in `hidden-define` on either
   backend, 225 in all on the VM with the renamed global's slot, name and
   name-index entry, measured 2026-11-04 on a release build, macOS arm64).
+  A namespace's placeholder store (#836, §4.7) charges the same account
+  apart from `NamespaceCharge`: its allocation, its table's buffer at
+  capacity and the names it holds, settled as entries come and go and given
+  back when it drops.
   Binding records and cells (§4.7) are pairs, in L as the pair arena's and
   never in a namespace's charge: since #834 each such expansion's record and
   cell add two pairs, 32 bytes a cycle, on both backends. An
@@ -1873,7 +1965,10 @@ which teardown drops: a handle kept past its interpreter holds a dead
 reference, which the heap refuses to read, and dropping it does nothing
 (#605). The `PortTable` and the `FinalRegistry` do not: the table teardown
 starts takes them over, empty once the drain has run, so the heap keeps one
-of each for its life (#785). The environments the
+of each for its life (#785). Nor does the `PlaceholderList` (#836): carried
+over, it lets the teardown sweep's pass, which finds nothing marked, empty
+the placeholder store of every namespace that outlives the heap before the
+pair arena's sweep frees what each held. The environments the
 table holds go with it; until #704 each held
 the heap and closed the same cycle (#620), and
 `a_held_environment_does_not_keep_its_heap_alive` now pins that none does.

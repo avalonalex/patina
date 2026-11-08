@@ -1928,11 +1928,14 @@ impl Heap {
         };
         self.gc_freed_closure_code_ids = freed_closures;
         // A check build's part: every dead plain port's entry is gone, and
-        // every dead file port was queued.
+        // every dead file port was queued; and every placeholder and weak
+        // read-through record left in a store names live pairs, which the
+        // pass above ensures by taking out every unmarked one (#836).
         #[cfg(any(debug_assertions, feature = "gc-check"))]
         {
             let finalized = self.handles.ports().check_swept(&dead_ports);
             self.assert_finals_queued(&finalized);
+            self.handles.placeholders().check_swept(self);
         }
         #[cfg(any(debug_assertions, feature = "gc-check"))]
         assert_eq!(

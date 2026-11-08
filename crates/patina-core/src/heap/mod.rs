@@ -1109,6 +1109,18 @@ impl Heap {
         self.pairs[ptr.heap_index() as usize]
     }
 
+    /// Whether `word` names a live pair in the generation it was made in
+    /// (#621): false for a slot the sweep freed, and for one freed and
+    /// reused since, in a check build; true in a plain release build, which
+    /// keeps no generations. For a check build's own checks that a table
+    /// outside the arenas names no freed pair (`PlaceholderList::check_swept`,
+    /// #836), which report with their own message where the accessors would
+    /// panic with the stale-reference check's.
+    pub(crate) fn pair_is_live(&self, word: TaggedValue) -> bool {
+        debug_assert!(word.is_pair());
+        self.pair_checks.stamp(word) == word
+    }
+
     /// Get car of a pair
     #[inline(always)]
     pub fn car(&self, ptr: TaggedValue) -> TaggedValue {

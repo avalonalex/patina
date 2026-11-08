@@ -1339,7 +1339,10 @@ dead plain port's entry the sweep's pass left in the table (#818); and the
 finalization registry's (`heap::finalize::tests::a_check_build_refuses_…`):
 a dead entry whose object's slot was freed under it, and a port object a
 sweep frees whose entry is the registry's but was never queued, as a
-constructor that did not register it would leave. A build without the checks reports them
+constructor that did not register it would leave; and the placeholder list's
+(`placeholder_store::tests::a_check_build_refuses_…`, #836): a namespace's
+store entry over a pair a sweep freed, which only a sweep's pass that left it
+would leave. A build without the checks reports them
 ignored. `crates/patina-repl/tests/gc_zeal.rs` is the control for zeal
 itself, in every build: a loop that allocates nothing collects at every
 iteration under zeal and hardly at all at stress 1. It runs in `ci.yml`'s Test
