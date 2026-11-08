@@ -132,8 +132,8 @@ fn code_units_read_zero_on_the_tree_walker() {
     // has the VM's readings of the same shapes, with fifty forms where this
     // runs ten: the count is 0 however many run, and under zeal, which
     // collects at each of the tree-walker's outermost safe points, the test
-    // made 12,780 collections with fifty and makes 3,100 with ten
-    // (2026-11-07), against 3,358 for the rest of this target. Under zeal
+    // made 12,780 collections with fifty and makes 3,084 with ten
+    // (2026-11-08), against 3,358 for the rest of this target. Under zeal
     // too. Each `(gc)` is written where it runs, once a call, so that the
     // zeal half's check that zeal collected beyond the program's `(gc)`s
     // counts every one of them.

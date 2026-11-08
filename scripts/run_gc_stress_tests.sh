@@ -211,7 +211,14 @@ fi
 # without stress) and 3164 on the tree-walker (3100), whose test runs ten
 # `eval`s where the VM's runs fifty, since fifty made 12908 (12780): the
 # zeal interpreters collect at every outermost safe point whatever the
-# lane's variable says;
+# lane's variable says; and again 2026-11-08 for that PR's review, which
+# gave the VM's tests a reading after a single `(gc)`, fifty more `eval`s
+# on each of the steady test's three interpreters, wrote each test's
+# `(gc)`s where they run, and added a shared test that `(gc-stats)` reports
+# each per-owner count once, in the steady-state lane's order: the other
+# tests made 18321 and 27136, as before, and 1285 and 3358 without stress;
+# the `code-units` tests 2661 on the VM (2391 without stress) and 3148 on
+# the tree-walker (3084), and the shared test 38 on each (0);
 # the minimums at half their counts measured that day)
 TARGETS=(
     "callability 16 31 13"                    # 1543 (0)
@@ -220,8 +227,8 @@ TARGETS=(
     "ephemerons 16 289 30"                    # 578 (204)
     "escape_from_primitive 16 3669 18"        # 7338 (90)
     "finished_forms_release_code 16 1450 11"  # 3677 (13)
-    "gc_tree_walker 16 15150 23"              # 30300 (6458)
-    "gc_vm 16 10167 29"                       # 20334 (3078)
+    "gc_tree_walker 16 15161 24"              # 30322 (6442)
+    "gc_vm 16 10510 30"                       # 21020 (3676)
     "host_environments 16 57985 28"           # 115970 (431)
     "hygiene_matrix 16 11136 17"              # 22273 (6)
     "interpreter_api 16 138 28"               # 2277 (4)
