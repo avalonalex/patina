@@ -11,7 +11,7 @@
 //! thin wrapper that converts all variable names to `String` on construction.
 
 use crate::compiler::compile_with_qq_resolving;
-use crate::error::VmError;
+use crate::error::{VmError, frame_refusal};
 use crate::runtime::vm_state::{
     collect_for_loader, collect_if_pending, define_global, import_export,
 };
@@ -287,9 +287,10 @@ impl VmBackend {
     /// nor binds an import. The global namespace, a host namespace and a
     /// parentless namespace (a library's, a specifier's) run as before. The
     /// tree-walker still evaluates a frame by name. Scheme `eval` and `load`
-    /// do not come here: they compile through `compile_for_eval`, which asks
-    /// no kind, so a specifier a host makes over a frame is not refused yet
-    /// (#853).
+    /// do not come here: they compile through `compile_for_eval`, which
+    /// refuses the same frames with the same message, first too
+    /// ([`frame_refusal`], #853), so a specifier a host makes over a frame
+    /// is refused as well.
     fn eval_datum(
         &self,
         expr: TaggedValue,
@@ -298,10 +299,7 @@ impl VmBackend {
     ) -> Result<TaggedValue, VmBackendError> {
         if let Some(kind) = env.frame_kind() {
             return Err(VmBackendError::Runtime {
-                message: format!(
-                    "the VM evaluates only in a namespace, and was given a {kind}: a host \
-                     evaluates in the environment `Interpreter::new_environment` answers (#835)"
-                ),
+                message: frame_refusal(kind),
                 location: None,
             });
         }

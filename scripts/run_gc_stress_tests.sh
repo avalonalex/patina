@@ -169,7 +169,11 @@ fi
 # its count measured that day; host_environments's test count and minimum
 # re-pinned again that day for #835's test that the VM refuses a raw frame,
 # its 24 other tests making 115088 and the new test 166, the minimum at half
-# its count measured that day)
+# its count measured that day; host_environments's test count and minimum
+# re-pinned 2026-11-07 again for #853's test that the VM's Scheme `eval` and
+# `load` refuse a specifier over a raw frame, its 25 other tests making
+# 115254, as before, and the new test 207, the minimum at half its count
+# measured that day, its count without stress 125, as before)
 TARGETS=(
     "callability 16 31 13"                    # 1543 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -179,7 +183,7 @@ TARGETS=(
     "finished_forms_release_code 16 1450 11"  # 3677 (13)
     "gc_tree_walker 16 11421 20"              # 24151 (658)
     "gc_vm 16 8001 25"                        # 17314 (667)
-    "host_environments 16 57627 25"           # 115254 (125)
+    "host_environments 16 57730 26"           # 115461 (125)
     "hygiene_matrix 16 11136 17"              # 22273 (6)
     "interpreter_api 16 138 28"               # 2277 (4)
     "library_loading 16 46 9"                 # 93 (0): see the header
