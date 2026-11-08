@@ -134,12 +134,13 @@ fn code_units_read_zero_on_the_tree_walker() {
     // collects at each of the tree-walker's outermost safe points, the test
     // made 12,780 collections with fifty and makes 3,100 with ten
     // (2026-11-07), against 3,358 for the rest of this target. Under zeal
-    // too.
+    // too. Each `(gc)` is written where it runs, once a call, so that the
+    // zeal half's check that zeal collected beyond the program's `(gc)`s
+    // counts every one of them.
     assert_gc_and_zeal_eval_to(
         r#"
         (import (scheme base) (scheme eval) (patina debug))
         (define (units) (cdr (assq 'code-units (gc-stats))))
-        (define (settled) (gc) (gc) (units))
         (define env (environment '(scheme base)))
         (define (closing i) `(car (map (lambda (x) (+ x ,i)) (list 1 2 3))))
         (define (run-forms make-form)
@@ -147,10 +148,10 @@ fn code_units_read_zero_on_the_tree_walker() {
             (if (< i 10) (begin (eval (make-form i) env) (loop (+ i 1))))))
         (define keep #f)
         (define u0 #f) (define u1 #f) (define u2 #f) (define u3 #f)
-        (set! u0 (settled))
+        (set! u0 (begin (gc) (gc) (units)))
         (set! u1 (begin (run-forms closing) (units)))
         (set! u2 (begin (set! keep (eval '(lambda (x) (* x 3)) env)) (units)))
-        (set! u3 (settled))
+        (set! u3 (begin (gc) (gc) (units)))
         (list (keep 14) u0 u1 u2 u3)
         "#,
         "(42 0 0 0 0)",

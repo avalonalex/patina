@@ -898,6 +898,36 @@ macro_rules! gc_shared_tests {
         }
 
         #[test]
+        fn per_owner_counts_are_each_reported_once_in_the_lanes_order() {
+            // `(gc-stats)`'s counts per owner, which the steady-state lane
+            // holds flat (its SS5) and reads by `assq`: each once, so that
+            // no reading finds a stale entry ahead of its own, each a count,
+            // and in the order the lane lists them (`driver.scm`'s
+            // `steady-per-owner-keys`, the runner's `PER_OWNER_KEYS`), where
+            // a key joins last in the PR that adds it to `(gc-stats)`:
+            // `code-units` after `binding-records` (#836). Every one answers
+            // a count on both backends, `code-units` 0 on the tree-walker.
+            assert_gc_eval_to(
+                r#"
+                (import (scheme base) (patina debug))
+                (define per-owner '(symbols ports namespaces cells binding-records code-units))
+                (define stats (gc-stats))
+                (define (owned entries)
+                  (cond ((null? entries) '())
+                        ((memq (caar entries) per-owner)
+                         (cons (caar entries) (owned (cdr entries))))
+                        (else (owned (cdr entries)))))
+                (define (counts? keys)
+                  (or (null? keys)
+                      (let ((n (cdr (assq (car keys) stats))))
+                        (and (exact-integer? n) (>= n 0) (counts? (cdr keys))))))
+                (list (owned stats) (counts? per-owner))
+                "#,
+                "((symbols ports namespaces cells binding-records code-units) #t)",
+            );
+        }
+
+        #[test]
         fn live_data_survives_collection() {
             // The list is still bound when the collection runs; every element
             // must survive and stay readable.
