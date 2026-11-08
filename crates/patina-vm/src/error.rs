@@ -102,6 +102,20 @@ pub enum VmError {
     },
 }
 
+/// The message the VM refuses a frame with, naming the kind
+/// [`Environment::frame_kind`](patina_core::environment::Environment::frame_kind)
+/// answers: the VM evaluates only in a namespace (#835). One function for
+/// both sites that refuse, `VmBackend`'s `eval_datum` and the runtime's
+/// `compile_for_eval` (#853), so that the two cannot drift.
+#[cold]
+#[inline(never)]
+pub(crate) fn frame_refusal(kind: &str) -> String {
+    format!(
+        "the VM evaluates only in a namespace, and was given a {kind}: a host evaluates in the \
+         environment `Interpreter::new_environment` answers (#835)"
+    )
+}
+
 impl VmError {
     pub fn with_diagnostic(self, diagnostic: patina_runtime::Diagnostic) -> Self {
         Self::WithDiagnostic {

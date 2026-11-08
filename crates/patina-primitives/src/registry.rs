@@ -130,6 +130,14 @@ pub enum Step<'gc> {
     /// tree-walker a CPS expression on the running trampoline — so a
     /// continuation captured in it carries the rest of the primitive, as one
     /// captured in a [`Step::Call`] does (#477).
+    ///
+    /// On the VM `env` must be a namespace, as for the backend's entries
+    /// (#835): a frame answers an error naming its kind, before the datum is
+    /// expanded, which a program's `guard` can catch, where the tree-walker
+    /// evaluates in the frame by name (#853). `eval` and `load` name the
+    /// environment of the specifier they are given, and `%parameterize-swap!`
+    /// a fresh namespace, so a frame comes only from a host: in a specifier
+    /// it made over one, or in its own primitive's step.
     Eval {
         expr: Value<'gc>,
         env: Rc<Environment>,

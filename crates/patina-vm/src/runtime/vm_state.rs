@@ -15,7 +15,7 @@ use super::control::{
     spread_apply_args, step_wind_jump, tail_call_closure_resolved, tail_call_value,
     tail_call_value_with_probe, tail_invoke_delimited, unpack_values, vm_raise_value, wind_step,
 };
-use crate::error::VmError;
+use crate::error::{VmError, frame_refusal};
 use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, VmContinuation, VmDelimitedContinuation,
@@ -1153,12 +1153,14 @@ pub(crate) fn vm_process_import_set(
 /// Evaluate a datum expression in the given environment using the VM.
 ///
 /// `VmApplyContext::eval_expr`: for a caller with no frame to run the code
-/// in, which runs a resumable primitive's `Step::Eval` synchronously. The
-/// `eval` primitive itself has its datum run as a frame ([`eval_closure`],
-/// #477), since a continuation cannot carry this Rust frame. Executes in the
-/// main VmState using `execute_nested` (which respects the current frame
-/// depth), in a frame whose closure has `env` as its globals; the machine's
-/// own `globals` stay the program's environment (#823).
+/// in, which runs a resumable primitive's `Step::Eval` synchronously, or a
+/// host's primitive that evaluates from Rust. The `eval` primitive itself
+/// has its datum run as a frame ([`eval_closure`], #477), since a
+/// continuation cannot carry this Rust frame. Executes in the main VmState
+/// using `execute_nested` (which respects the current frame depth), in a
+/// frame whose closure has `env` as its globals; the machine's own `globals`
+/// stay the program's environment (#823). `env` is a namespace: a frame is
+/// refused before anything runs ([`compile_for_eval`], #853).
 pub(super) fn vm_eval_expr(
     state: &mut VmState,
     expr: TaggedValue,
@@ -1188,18 +1190,46 @@ pub(super) fn vm_eval_expr(
 /// nothing, so an `import` that `eval` or `load` evaluated imported nothing
 /// (#482).
 ///
+/// `env` must be a namespace, as for the backend's top level (`VmBackend`'s
+/// `eval_datum`, #835). A frame reaches here only from a host: through an
+/// environment specifier it made over one, which Scheme `eval` and `load`
+/// hand on in their `Step::Eval`; in a `Step::Eval` its own resumable
+/// primitive answers ([`eval_closure`]); or through `ApplyContext::eval_expr`
+/// from its primitive ([`vm_eval_expr`]). Every specifier and `Step::Eval`
+/// the workspace makes holds a namespace. The kind is asked first, before
+/// the expander runs or any import binds, and a frame answers the message
+/// `eval_datum` answers ([`frame_refusal`], #853), as a `Runtime` error,
+/// which the dispatch loop hands to the program's handlers as it does this
+/// function's other errors, so a `guard` around the call catches it. The
+/// tree-walker evaluates in such a frame by name.
+///
+/// What runs before this is the caller's, and the check does not cover it.
+/// For an immutable specifier, `eval`'s check for a definition expands the
+/// datum in `env` on either backend before the machine is handed it
+/// (`primitive_eval` in patina-primitives), and refuses a definition with
+/// an error of its own; a `define-syntax` inside a `begin` passes that check
+/// and leaves its transformer bound in `env`, a frame included, before this
+/// refuses the form (#855). A `load` of a file with no forms hands the machine
+/// nothing to compile, and answers without a refusal.
+///
 /// # State contract
 ///
 /// Reads the environment and registry; runs the expander, which may load
 /// libraries, and for an `import` loads its libraries and binds their
 /// exports in `env`. Loading a library runs its body, so this is a re-entry
 /// into the machine: its callers cross it as a boundary (`across_reentry`).
-/// Leaves no code of its own loaded and no frame pushed.
+/// Leaves no code of its own loaded and no frame pushed. A frame refused
+/// reads only its kind.
 fn compile_for_eval(
     state: &mut VmState,
     expr: TaggedValue,
     env: &Rc<Environment>,
 ) -> Result<(CodeObject, Vec<CodeObject>), VmError> {
+    if let Some(kind) = env.frame_kind() {
+        return Err(VmError::Runtime {
+            message: frame_refusal(kind),
+        });
+    }
     let desugarer = Desugarer::with_env(env.clone()).with_fs(state.fs.clone());
     let heap = state.heap.clone();
     // The datum's literals, rooted until the code holds them, and dropped as
@@ -1250,7 +1280,9 @@ fn compile_for_eval(
 /// globals are `env`: what a resumable primitive's `Step::Eval` has its stub
 /// frame call (#477). Its frames read and define `env`'s globals as any
 /// closure's do, so nothing is swapped, and its code lives as long as the
-/// closure or a frame running it, as any unit's does.
+/// closure or a frame running it, as any unit's does. `env` is a namespace:
+/// a frame, which only a host's specifier or `Step::Eval` can name here, is
+/// refused before anything runs ([`compile_for_eval`], #853).
 ///
 /// # State contract
 ///

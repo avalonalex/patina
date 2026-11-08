@@ -1200,6 +1200,41 @@ test fails when the VM evaluates a frame, when it asks the kind only after a
 `define-library` or an `import`, and when either backend's `Backend::define`
 skips a frame or writes the global namespace instead.
 
+Scheme `eval` and `load` through an environment specifier over a frame are
+refused alike (#853): `a_specifier_over_a_raw_frame_is_refused_by_the_vm`.
+The host makes an immutable and a mutable specifier over each of the same
+three kinds of frame, a fresh frame for each specifier, with
+`Cx::alloc_environment_specifier`, and calls `eval` through
+`Interpreter::call` with a `let` and an `import`; through the mutable
+specifier also with a `define`, and `load` with a file that defines. A
+procedure defined at top level evaluates `(+ 1 2)` through each specifier
+under a `guard` that answers `caught`, and another under a `guard` that
+answers the message `error-object-message` reads, which is compared whole,
+as is what `Backend::eval` answers for the frame itself. On the VM each
+`eval` and `load` answers the error naming the frame's kind, which the
+`guard` catches, with the message `Backend::eval` answers, and nothing
+binds, neither in the frame nor in the global namespace; after each the
+next form evaluates. The tree-walker evaluates through each frame by name,
+its `eval` and `load` answers pinned at those both backends gave before #853
+(recorded on #854's head; the tree-walker's code is as at e392fe3d), except
+over the frame of temporaries, where it binds the `define`'s and the loaded
+file's definitions in the global namespace above it (#680) and the VM bound
+them in the frame; the message rows and the host-primitive test were added
+after that recording. A specifier over a host namespace
+and the global namespace's mutable specifier still evaluate and define on
+both backends. A host's primitive reaches the same refusal without a
+specifier: `a_host_primitive_evaluating_in_a_raw_frame_is_refused_by_the_vm`
+registers a resumable primitive whose `Step::Eval` names each of the three
+frames, and one that calls `ApplyContext::eval_expr` in it, and gives each a
+`let`, a `define` and the guarded `(+ 1 2)`, with the same answers on each
+backend. The two tests fail when the VM's `compile_for_eval` asks no kind,
+when it asks only after the expansion (the `import` binds `iota` in the
+frame), when the refusal is an error no `guard` can catch (a `Compile`
+error), when it refuses a host namespace, when only one of its two callers
+asks (`eval_closure`, for `eval`, `load` and `Step::Eval`, or
+`vm_eval_expr`, for `eval_expr`), and when the message at either refusing
+site drifts from the other's.
+
 With either of the table's environment traces removed, the tests of that
 trace fail, and so does its sentinel test. Without the VM's alpha-renaming
 walking the environment's parents for introduced definitions, the global

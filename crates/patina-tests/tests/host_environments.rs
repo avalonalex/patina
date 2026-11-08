@@ -17,14 +17,27 @@
 //! `eval_str_in` and `eval_program_in` evaluate in a handle's namespace on
 //! both backends. The VM evaluates only in a namespace: a raw frame, or a
 //! frame under a host namespace, it refuses with an error naming the kind,
-//! where the tree-walker evaluates one by name (#835).
+//! where the tree-walker evaluates one by name (#835). The VM refuses a frame
+//! that reaches its compile by another route the same way (#853): Scheme
+//! `eval` and `load` through an environment specifier a host made over one,
+//! and a host primitive's `Step::Eval` or `ApplyContext::eval_expr` in one.
+
+#![expect(
+    clippy::disallowed_macros,
+    reason = "HOST_FRAME: the raw frame a host primitive of the test evaluates in, held weakly \
+              (#853)"
+)]
 
 mod common;
 use common::{tree_walker_interpreter, vm_interpreter};
-use patina_interpreter::{Backend, Interpreter, Parser, SourceMap, TaggedValue};
+use patina_core::{Cx, Value};
+use patina_interpreter::{
+    ApplyContext, Arity, Backend, Environment, EvalError, HostPrimitives, Interpreter,
+    InterpreterError, Owned, OwnedEnvironment, Parser, SourceMap, Step, TaggedValue,
+};
 use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 /// Defines `churn`, which allocates enough to collect on its own.
 const PRELUDE: &str = "(import (scheme base) (patina debug))
@@ -394,7 +407,7 @@ fn an_environment_handle_kept_past_its_interpreter_holds_nothing() {
 #[test]
 #[allow(deprecated)]
 fn the_legacy_pipeline_keeps_the_environments_it_is_given() {
-    use patina_interpreter::{Environment, Pipeline, StandardPipeline};
+    use patina_interpreter::{Pipeline, StandardPipeline};
     let pipeline = StandardPipeline::new();
     let global = pipeline.evaluator().global_env.clone();
     let child = Rc::new(Environment::with_parent(global.clone()));
@@ -1030,10 +1043,28 @@ const REFUSED_LIBRARY: &str = "(define-library (host4b refused)
       (import (scheme base))
       (begin (define refused-value 'loaded)))";
 
-/// What each entry answers for three raw frames: one of the global
-/// namespace, one of a host namespace, and one of temporaries over the
-/// global namespace. Each frame is given `Backend::eval`, an `import` by
-/// `eval_with_source_map`, and, held through the deprecated
+/// The three raw frames the refusal tests give each backend: a frame of the
+/// global namespace, a frame of the host namespace `host`, and a frame of
+/// temporaries over the global namespace.
+#[allow(
+    deprecated,
+    reason = "builds the raw frames the refusal is for: `with_parent` goes at stage 5e (#831)"
+)]
+fn three_raw_frames<B: Backend>(
+    interp: &Interpreter<B>,
+    host: &OwnedEnvironment,
+) -> [Rc<Environment>; 3] {
+    [
+        Rc::new(Environment::with_parent(interp.global_env())),
+        Rc::new(Environment::with_parent(interp.raw_environment(host))),
+        Rc::new(Environment::for_temporaries(interp.global_env())),
+    ]
+}
+
+/// What each entry answers for three raw frames ([`three_raw_frames`]): one
+/// of the global namespace, one of a host namespace, and one of temporaries
+/// over the global namespace. Each frame is given `Backend::eval`, an
+/// `import` by `eval_with_source_map`, and, held through the deprecated
 /// `Heap::hold_environment`, `eval_str_in` and `eval_program_in`; after each
 /// entry the interpreter evaluates a global form. Each is then given
 /// `Backend::define`, which answers no `Result`. The frame of the global
@@ -1043,11 +1074,10 @@ const REFUSED_LIBRARY: &str = "(define-library (host4b refused)
 /// (#680), where `Backend::define` writes the frame it is given.
 #[allow(
     deprecated,
-    reason = "builds the raw frames the refusal is for: `with_parent` and \
-              `hold_environment` go at stage 5e (#831)"
+    reason = "holds the raw frames the refusal is for through `hold_environment`, which goes at \
+              stage 5e (#831)"
 )]
 fn raw_frames<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
-    use patina_interpreter::Environment;
     interp.eval_program_owned("(import (scheme base))").unwrap();
     let host = interp.new_environment();
     let heap = interp.backend().heap().clone();
@@ -1060,11 +1090,7 @@ fn raw_frames<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
         Err(e) => format!("error: {e}"),
     };
     let next = || interp.display_tagged(interp.eval_str_owned("(+ 40 2)").unwrap());
-    let frames = [
-        Rc::new(Environment::with_parent(interp.global_env())),
-        Rc::new(Environment::with_parent(interp.raw_environment(&host))),
-        Rc::new(Environment::for_temporaries(interp.global_env())),
-    ];
+    let frames = three_raw_frames(&interp, &host);
     let mut out = Vec::new();
     for frame in &frames {
         out.push(shown(
@@ -1121,8 +1147,8 @@ fn raw_frames<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
     out
 }
 
-/// An answer of [`raw_frames`], with the VM's refusal shortened to the kind
-/// it names.
+/// An answer of [`raw_frames`] or [`specifiers_over_raw_frames`], with the
+/// VM's refusal shortened to the kind it names.
 fn refusal_named(answer: String) -> String {
     const REFUSAL: &str = "the VM evaluates only in a namespace, and was given a ";
     match answer.split_once(REFUSAL) {
@@ -1207,6 +1233,519 @@ fn a_raw_frame_is_refused_by_the_vm() {
     expected.extend(["#<unspecified>", "42", "loaded", "42"]);
     assert_eq!(
         raw_frames(tree_walker_interpreter()),
+        expected,
+        "tree-walker"
+    );
+}
+
+/// The file `load` is given through a specifier: a definition, then an
+/// expression.
+const LOADED_THROUGH_A_SPECIFIER: &str = "(define loaded-here 9)\n(+ 1 2)\n";
+
+/// What the specifier tests call, held: Scheme `eval` and `load`, `guarded`,
+/// which evaluates `(+ 1 2)` through the specifier it is given under a
+/// `guard` that answers `caught`, `message-of`, which evaluates it under a
+/// `guard` that answers the error object's message, and the name of a file
+/// for `load` ([`LOADED_THROUGH_A_SPECIFIER`]), in a directory kept as long
+/// as this is.
+struct SpecifierCalls {
+    eval: Owned,
+    load: Owned,
+    guarded: Owned,
+    message_of: Owned,
+    file: Owned,
+    _dir: tempfile::TempDir,
+}
+
+impl SpecifierCalls {
+    fn new<B: Backend>(interp: &mut Interpreter<B>) -> Self {
+        interp
+            .eval_program_owned(
+                "(import (scheme base) (scheme eval) (scheme load))
+                 (define (guarded spec) (guard (e (#t 'caught)) (eval '(+ 1 2) spec)))
+                 (define (message-of spec)
+                   (guard (e ((error-object? e) (error-object-message e)))
+                     (eval '(+ 1 2) spec)))",
+            )
+            .unwrap();
+        let dir = tempfile::TempDir::new().expect("a scratch directory");
+        let file = common::scratch_path(&dir, "loaded.scm");
+        std::fs::write(&file, LOADED_THROUGH_A_SPECIFIER).expect("the loaded file");
+        let file = interp.with(|cx| {
+            let file = cx.alloc_string(file);
+            cx.hold(file)
+        });
+        SpecifierCalls {
+            eval: interp.lookup("eval").unwrap(),
+            load: interp.lookup("load").unwrap(),
+            guarded: interp.lookup("guarded").unwrap(),
+            message_of: interp.lookup("message-of").unwrap(),
+            file,
+            _dir: dir,
+        }
+    }
+
+    /// What Scheme `eval` answers for `datum` through `spec`.
+    fn eval<B: Backend>(&self, interp: &mut Interpreter<B>, datum: &str, spec: &Owned) -> String {
+        let datum = interp.eval_str_owned(&format!("'{datum}")).unwrap();
+        let answer = interp.call(&self.eval, &[datum, spec.clone()]);
+        answer_of(interp, answer)
+    }
+
+    /// What `guarded` answers through `spec`.
+    fn guarded<B: Backend>(&self, interp: &mut Interpreter<B>, spec: &Owned) -> String {
+        let answer = interp.call(&self.guarded, std::slice::from_ref(spec));
+        answer_of(interp, answer)
+    }
+
+    /// What `load` answers for the file through `spec`.
+    fn load<B: Backend>(&self, interp: &mut Interpreter<B>, spec: &Owned) -> String {
+        let answer = interp.call(&self.load, &[self.file.clone(), spec.clone()]);
+        answer_of(interp, answer)
+    }
+
+    /// What `message-of` answers through `spec`, in `display`'s notation: a
+    /// message without its quotes.
+    fn message_of<B: Backend>(&self, interp: &mut Interpreter<B>, spec: &Owned) -> String {
+        match interp.call(&self.message_of, std::slice::from_ref(spec)) {
+            Ok(value) => interp.display_notation(&value),
+            Err(e) => format!("error: {e}"),
+        }
+    }
+}
+
+/// What `result` answers, as the refusal tests show it.
+fn answer_of<B: Backend>(
+    interp: &Interpreter<B>,
+    result: Result<Owned, InterpreterError<B::Error>>,
+) -> String {
+    match result {
+        Ok(value) => interp.display_tagged(&value),
+        Err(e) => format!("error: {e}"),
+    }
+}
+
+/// A global form, evaluated after an entry to show the interpreter goes on.
+fn next_global<B: Backend>(interp: &Interpreter<B>) -> String {
+    interp.display_tagged(interp.eval_str_owned("(+ 40 2)").unwrap())
+}
+
+/// Whether `env` binds `name` itself, and whether the global namespace
+/// does.
+fn bound_where<B: Backend>(interp: &Interpreter<B>, env: &Environment, name: &str) -> [String; 2] {
+    [
+        format!(
+            "frame binds {name}: {}",
+            env.local_names(interp.backend().heap())
+                .iter()
+                .any(|bound| bound == name)
+        ),
+        format!("global binds {name}: {}", interp.lookup(name).is_some()),
+    ]
+}
+
+/// What Scheme `eval` and `load` answer through an environment specifier a
+/// host makes over each raw frame of [`three_raw_frames`], with the public
+/// `Cx::alloc_environment_specifier`, and holds: first an immutable
+/// specifier over each of three fresh frames, then a mutable one over three
+/// more. Through each, `eval` is given a `let` and an `import`, `guarded`
+/// evaluates `(+ 1 2)`, and `message-of` answers the message of what that
+/// raised, beside what `Backend::eval` answers for it in the frame itself,
+/// unshortened, so that the two refusals' messages are compared whole.
+/// Through the mutable specifier, `eval` is also given a `define`, and
+/// `load` a file that defines. After each entry the interpreter evaluates a
+/// global form.
+fn specifiers_over_raw_frames<B: Backend>(mut interp: Interpreter<B>) -> Vec<String> {
+    let calls = SpecifierCalls::new(&mut interp);
+    let host = interp.new_environment();
+    let heap = interp.backend().heap().clone();
+    let mut out = Vec::new();
+    for mutable in [false, true] {
+        for frame in three_raw_frames(&interp, &host) {
+            let spec = interp.with(|cx| {
+                let spec = cx.alloc_environment_specifier(Rc::clone(&frame), mutable);
+                cx.hold(spec)
+            });
+            out.push(calls.eval(&mut interp, "(let ((x 7)) x)", &spec));
+            out.push(next_global(&interp));
+            out.push(calls.eval(&mut interp, "(import (srfi 1))", &spec));
+            out.push(next_global(&interp));
+            out.extend(bound_where(&interp, &frame, "iota"));
+            out.push(format!("message: {}", calls.message_of(&mut interp, &spec)));
+            let by_backend = interp.backend().eval(read("(+ 1 2)", &heap), &frame);
+            out.push(match by_backend {
+                Ok(value) => format!("backend: {}", interp.display_tagged(value)),
+                Err(e) => format!("backend: {e}"),
+            });
+            if mutable {
+                out.push(calls.eval(&mut interp, "(define via-spec 5)", &spec));
+                out.push(next_global(&interp));
+                out.extend(bound_where(&interp, &frame, "via-spec"));
+            }
+            out.push(calls.guarded(&mut interp, &spec));
+            out.push(next_global(&interp));
+            if mutable {
+                out.push(calls.load(&mut interp, &spec));
+                out.push(next_global(&interp));
+                out.extend(bound_where(&interp, &frame, "loaded-here"));
+            }
+        }
+    }
+    out
+}
+
+/// What Scheme `eval` and `load` answer through a specifier over a
+/// namespace, which the VM evaluates in: a mutable specifier over a host
+/// namespace, then the global namespace's mutable specifier. Through each,
+/// `eval` is given a `let` and a `define`, `guarded` evaluates `(+ 1 2)`,
+/// and `load` loads the file; then whether the host namespace and the
+/// global namespace bind what the two defined, after both specifiers'
+/// definitions so far.
+fn specifiers_over_namespaces<B: Backend>(mut interp: Interpreter<B>) -> Vec<String> {
+    let calls = SpecifierCalls::new(&mut interp);
+    let host = interp.new_environment();
+    let global = interp.global_env();
+    let host_namespace = interp.raw_environment(&host);
+    let specs = interp.with(|cx| {
+        let host_spec = cx.alloc_environment_specifier(Rc::clone(&host_namespace), true);
+        let global_spec = cx.mutable_specifier(&global);
+        [cx.hold(host_spec), cx.hold(global_spec)]
+    });
+    let mut out = Vec::new();
+    for spec in &specs {
+        out.push(calls.eval(&mut interp, "(let ((x 7)) x)", spec));
+        out.push(calls.eval(&mut interp, "(define via-spec 5)", spec));
+        out.push(calls.guarded(&mut interp, spec));
+        out.push(calls.load(&mut interp, spec));
+        for name in ["via-spec", "loaded-here"] {
+            out.push(format!(
+                "host binds {name}: {}, global binds {name}: {}",
+                host_namespace
+                    .local_names(interp.backend().heap())
+                    .iter()
+                    .any(|bound| bound == name),
+                interp.lookup(name).is_some()
+            ));
+        }
+    }
+    out
+}
+
+/// The message the VM refuses a frame of `kind` with, whole: what
+/// `Backend::eval` answers and what a program's `guard` reads with
+/// `error-object-message`.
+fn frame_refusal(kind: &str) -> String {
+    format!(
+        "the VM evaluates only in a namespace, and was given a {kind}: a host evaluates in the \
+         environment `Interpreter::new_environment` answers (#835)"
+    )
+}
+
+/// Scheme `eval` and `load` refuse a specifier over a frame on the VM, as
+/// the backend's entries refuse the frame itself (#853, #835): a specifier
+/// a host makes over each of [`a_raw_frame_is_refused_by_the_vm`]'s three
+/// frames, immutable and mutable, answers the error naming the frame's
+/// kind. The VM asks the kind before its compile expands the datum or binds
+/// an import, so an `import` refused binds nothing, nor a `define` or a
+/// `load`, neither in the frame nor in the global namespace. The error is
+/// one a program catches: `guarded`'s `guard` answers `caught`, and the
+/// message it reads is the one `Backend::eval` answers for the frame, whole.
+/// After each refusal the next form evaluates. A specifier over a
+/// namespace, a host namespace's or the global namespace's, still evaluates
+/// on the VM, as on the tree-walker.
+///
+/// The tree-walker evaluates through each frame's specifier by name. Its
+/// `eval` and `load` answers below are the ones both backends gave before
+/// #853 (recorded on #854's head; the tree-walker's code is as at e392fe3d),
+/// except over the frame of temporaries, where it binds a definition, the
+/// `define`'s and the loaded file's, in the environment above the frame, the
+/// global namespace (#680), and the VM bound it in the frame. The rows that
+/// read the message and `Backend::eval`'s answer for the frame were added
+/// after that recording; `Backend::eval` already refused the frame on the VM
+/// (#835).
+#[test]
+fn a_specifier_over_a_raw_frame_is_refused_by_the_vm() {
+    let by_vm: Vec<String> = specifiers_over_raw_frames(vm_interpreter())
+        .into_iter()
+        .map(refusal_named)
+        .collect();
+    let mut expected = Vec::new();
+    for mutable in [false, true] {
+        for kind in ["frame", "frame", "frame of temporaries"] {
+            let refused = format!("refused: {kind}");
+            expected.extend([&refused, "42", &refused, "42"].map(String::from));
+            expected
+                .extend(["frame binds iota: false", "global binds iota: false"].map(String::from));
+            expected.extend([
+                format!("message: {}", frame_refusal(kind)),
+                format!("backend: {}", frame_refusal(kind)),
+            ]);
+            if mutable {
+                expected.extend(
+                    [
+                        &refused,
+                        "42",
+                        "frame binds via-spec: false",
+                        "global binds via-spec: false",
+                    ]
+                    .map(String::from),
+                );
+            }
+            expected.extend(["caught", "42"].map(String::from));
+            if mutable {
+                expected.extend(
+                    [
+                        &refused,
+                        "42",
+                        "frame binds loaded-here: false",
+                        "global binds loaded-here: false",
+                    ]
+                    .map(String::from),
+                );
+            }
+        }
+    }
+    assert_eq!(by_vm, expected, "VM");
+
+    let mut expected = Vec::new();
+    for mutable in [false, true] {
+        for kind in ["frame", "frame", "frame of temporaries"] {
+            expected.extend(
+                [
+                    "7",
+                    "42",
+                    "#<unspecified>",
+                    "42",
+                    "frame binds iota: true",
+                    "global binds iota: false",
+                    "message: 3",
+                    "backend: 3",
+                ]
+                .map(String::from),
+            );
+            let in_frame = kind == "frame";
+            if mutable {
+                expected.extend([
+                    "#<unspecified>".to_string(),
+                    "42".to_string(),
+                    format!("frame binds via-spec: {in_frame}"),
+                    format!("global binds via-spec: {}", !in_frame),
+                ]);
+            }
+            expected.extend(["3", "42"].map(String::from));
+            if mutable {
+                expected.extend([
+                    "#<unspecified>".to_string(),
+                    "42".to_string(),
+                    format!("frame binds loaded-here: {in_frame}"),
+                    format!("global binds loaded-here: {}", !in_frame),
+                ]);
+            }
+        }
+    }
+    assert_eq!(
+        specifiers_over_raw_frames(tree_walker_interpreter()),
+        expected,
+        "tree-walker"
+    );
+
+    let expected = [
+        "7",
+        "#<unspecified>",
+        "3",
+        "#<unspecified>",
+        "host binds via-spec: true, global binds via-spec: false",
+        "host binds loaded-here: true, global binds loaded-here: false",
+        "7",
+        "#<unspecified>",
+        "3",
+        "#<unspecified>",
+        "host binds via-spec: true, global binds via-spec: true",
+        "host binds loaded-here: true, global binds loaded-here: true",
+    ];
+    assert_eq!(
+        specifiers_over_namespaces(vm_interpreter()),
+        expected,
+        "VM, through a namespace"
+    );
+    assert_eq!(
+        specifiers_over_namespaces(tree_walker_interpreter()),
+        expected,
+        "tree-walker, through a namespace"
+    );
+}
+
+thread_local! {
+    /// The frame the host primitives below evaluate in: the test's, held
+    /// weakly, so that it goes with the test's interpreter.
+    static HOST_FRAME: RefCell<Weak<Environment>> = const { RefCell::new(Weak::new()) };
+}
+
+/// The frame [`HOST_FRAME`] names.
+fn host_frame() -> Result<Rc<Environment>, EvalError> {
+    HOST_FRAME
+        .with(|frame| frame.borrow().upgrade())
+        .ok_or_else(|| EvalError::TypeError("no host frame".to_string()))
+}
+
+/// `(host-step-in-frame datum)`: the datum evaluated in [`HOST_FRAME`] by
+/// the machine, which the primitive's `Step::Eval` hands it, with no
+/// environment specifier anywhere.
+fn host_step_start<'gc>(
+    _: &mut Cx<'gc>,
+    _: &dyn ApplyContext,
+    args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
+    Ok(Step::Eval {
+        expr: args[0],
+        env: host_frame()?,
+        state: Value::UNSPECIFIED,
+    })
+}
+
+fn host_step_resume<'gc>(
+    _: &mut Cx<'gc>,
+    _: &dyn ApplyContext,
+    _: Value<'gc>,
+    value: Value<'gc>,
+) -> Result<Step<'gc>, EvalError> {
+    Ok(Step::Done(value))
+}
+
+/// `(host-eval-in-frame datum)`: the datum evaluated in [`HOST_FRAME`] by
+/// the primitive itself, through `ApplyContext::eval_expr`. It answers a
+/// fixnum or the unspecified value, the only values the test asks for.
+fn host_eval_start<'gc>(
+    _: &mut Cx<'gc>,
+    ctx: &dyn ApplyContext,
+    args: &[Value<'gc>],
+) -> Result<Step<'gc>, EvalError> {
+    let value = ctx.eval_expr(args[0].tagged(), &host_frame()?)?;
+    match value.as_fixnum() {
+        Some(n) => Ok(Step::Done(Value::fixnum(n))),
+        None if value == TaggedValue::UNSPECIFIED => Ok(Step::Done(Value::UNSPECIFIED)),
+        None => Err(EvalError::TypeError(
+            "host-eval-in-frame: a value this test does not carry".to_string(),
+        )),
+    }
+}
+
+/// What a host's primitive answers that evaluates a datum in each raw frame
+/// of [`three_raw_frames`] without an environment specifier: through its
+/// `Step::Eval`, which the VM compiles with `compile_for_eval` as it does
+/// Scheme `eval`'s, and through `ApplyContext::eval_expr`, which reaches the
+/// same compile by the VM's `vm_eval_expr`. Through each, in each frame, a
+/// `let` and a `define`, and a top-level procedure evaluates `(+ 1 2)` under
+/// a `guard` that answers `caught`. After each entry the interpreter
+/// evaluates a global form.
+fn host_primitives_over_raw_frames<B: Backend + HostPrimitives>(
+    mut interp: Interpreter<B>,
+) -> Vec<String> {
+    interp
+        .register_resumable(
+            &["host", "frames"],
+            "host-step-in-frame",
+            Arity::Exact(1),
+            host_step_start,
+            host_step_resume,
+        )
+        .unwrap();
+    interp
+        .register_resumable(
+            &["host", "frames"],
+            "host-eval-in-frame",
+            Arity::Exact(1),
+            host_eval_start,
+            host_step_resume,
+        )
+        .unwrap();
+    interp
+        .eval_program_owned(
+            "(import (scheme base) (host frames))
+             (define (guarded-step) (guard (e (#t 'caught)) (host-step-in-frame '(+ 1 2))))
+             (define (guarded-eval) (guard (e (#t 'caught)) (host-eval-in-frame '(+ 1 2))))",
+        )
+        .unwrap();
+    let host = interp.new_environment();
+    let mut out = Vec::new();
+    for frame in three_raw_frames(&interp, &host) {
+        HOST_FRAME.with(|held| *held.borrow_mut() = Rc::downgrade(&frame));
+        for (primitive, defined, guarded) in [
+            ("host-step-in-frame", "via-step", "(guarded-step)"),
+            ("host-eval-in-frame", "via-eval", "(guarded-eval)"),
+        ] {
+            for form in [
+                format!("({primitive} '(let ((x 7)) x))"),
+                format!("({primitive} '(define {defined} 5))"),
+            ] {
+                let answer = interp.eval_str_owned(&form);
+                out.push(answer_of(&interp, answer));
+                out.push(next_global(&interp));
+            }
+            out.extend(bound_where(&interp, &frame, defined));
+            let answer = interp.eval_str_owned(guarded);
+            out.push(answer_of(&interp, answer));
+            out.push(next_global(&interp));
+        }
+    }
+    HOST_FRAME.with(|held| *held.borrow_mut() = Weak::new());
+    out
+}
+
+/// A frame reaches the VM's compile by a host's primitive as well as by a
+/// specifier, and is refused the same way (#853): a resumable primitive's
+/// `Step::Eval` over each of [`three_raw_frames`], and its
+/// `ApplyContext::eval_expr` in one, answer the error naming the frame's
+/// kind and bind nothing, neither in the frame nor in the global namespace;
+/// a program's `guard` catches the refusal, and the next form evaluates.
+/// The two reach `compile_for_eval` by its two callers, `eval_closure` and
+/// `vm_eval_expr`, so the test fails when either skips the check.
+///
+/// The tree-walker evaluates in each frame by name, as Scheme `eval` does
+/// through a specifier over one: over the frame of temporaries it binds the
+/// definition in the global namespace above it (#680).
+#[test]
+fn a_host_primitive_evaluating_in_a_raw_frame_is_refused_by_the_vm() {
+    let by_vm: Vec<String> = host_primitives_over_raw_frames(vm_interpreter())
+        .into_iter()
+        .map(refusal_named)
+        .collect();
+    let mut expected = Vec::new();
+    for kind in ["frame", "frame", "frame of temporaries"] {
+        let refused = format!("refused: {kind}");
+        for defined in ["via-step", "via-eval"] {
+            expected.extend([
+                refused.clone(),
+                "42".to_string(),
+                refused.clone(),
+                "42".to_string(),
+                format!("frame binds {defined}: false"),
+                format!("global binds {defined}: false"),
+                "caught".to_string(),
+                "42".to_string(),
+            ]);
+        }
+    }
+    assert_eq!(by_vm, expected, "VM");
+
+    let mut expected = Vec::new();
+    for kind in ["frame", "frame", "frame of temporaries"] {
+        let in_frame = kind == "frame";
+        for defined in ["via-step", "via-eval"] {
+            expected.extend([
+                "7".to_string(),
+                "42".to_string(),
+                "#<unspecified>".to_string(),
+                "42".to_string(),
+                format!("frame binds {defined}: {in_frame}"),
+                format!("global binds {defined}: {}", !in_frame),
+                "3".to_string(),
+                "42".to_string(),
+            ]);
+        }
+    }
+    assert_eq!(
+        host_primitives_over_raw_frames(tree_walker_interpreter()),
         expected,
         "tree-walker"
     );

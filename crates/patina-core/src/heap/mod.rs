@@ -1752,7 +1752,18 @@ impl Heap {
         }
     }
 
-    /// Allocate a native EnvironmentSpecifier object
+    /// Allocate a native EnvironmentSpecifier object.
+    ///
+    /// `env` may be any environment of this heap, but the VM's Scheme `eval`
+    /// and `load` evaluate only in a namespace: through a specifier over a
+    /// frame, each form they would compile in it answers an error naming its
+    /// kind
+    /// ([`Environment::frame_kind`](crate::environment::Environment::frame_kind)),
+    /// which a program's `guard` can catch, where the tree-walker evaluates
+    /// in the frame by name (#853). What `eval` refuses before the machine
+    /// compiles, a definition through an immutable specifier, answers its
+    /// own error, and a `load` of a file with no forms compiles nothing.
+    /// Every specifier the workspace makes holds a namespace.
     pub fn alloc_environment_specifier(
         &mut self,
         env: Rc<crate::environment::Environment>,

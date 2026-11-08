@@ -1354,7 +1354,9 @@ impl Environment {
     /// What frame this is, for an error that names it: `None` for a
     /// namespace of either kind, which the VM evaluates in, and
     /// `Some("frame")` or `Some("frame of temporaries")` otherwise, which it
-    /// refuses (`VmBackend`'s `eval_datum`, #835). Hidden, as
+    /// refuses (`VmBackend`'s `eval_datum`, #835, and `compile_for_eval`,
+    /// which compiles Scheme `eval`'s and `load`'s code and a host
+    /// primitive's `Step::Eval`, #853). Hidden, as
     /// [`Environment::child_frame`] and [`Environment::for_temporaries`]
     /// are, and raw, as every `Environment` method is. The predicate the
     /// holder asks, `is_namespace`, stays crate-private (#831's ruling on
