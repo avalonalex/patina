@@ -76,8 +76,10 @@ Beside the five components `ExecutionState` holds the id of the code the
 innermost running dispatch loop runs (`RunningCode`, #836), traced as a
 frame's code is: written where the loop's `cur_code` changes (§3.3), and put
 back by `run_loop_until_outcome` when a nested loop ends, so that a
-collection at a poll after a tail call or a return, while only `cur_code`
-holds the code it left, still traces that code's unit's table.
+collection at the poll a tail call makes before the next dispatch (at the
+callee's entry, or on the return of a tail-called primitive, parameter or
+control primitive), while only `cur_code` holds the code it left, still
+traces that code's unit's table.
 
 The remaining state belongs to `VmState`: code-unit ownership/recycling,
 weak continuation stores, global bindings and their invalidation bits, library

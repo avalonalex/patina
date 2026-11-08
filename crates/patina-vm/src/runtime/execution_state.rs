@@ -39,13 +39,15 @@ pub(super) struct ExecutionState {
 /// by id: written when `cur_code` changes (where a loop starts or an escape
 /// lands, `VmState::current_code`, and where a dispatch refreshes it,
 /// [`ExecutionState::dispatch_frame`]), and put back by
-/// `run_loop_until_outcome` when a nested loop ends. A tail call, a return
-/// or a stub's restart changes the frame and then polls while `cur_code`
-/// still names the code it left, which only `cur_code` then holds besides
-/// the code store; a collection there still traces that code's unit's
-/// table, since this reports the id as a frame's code does. Written once
-/// per change of `cur_code`, never per instruction, and not on a call or
-/// return that keeps the same code. `RETIRED_VM_CLOSURE_CODE`, which
+/// `run_loop_until_outcome` when a nested loop ends. A tail call gives the
+/// frame to its callee (`tail_replace`), or pops it to deliver a tail-called
+/// primitive's, parameter's or control primitive's value, and then polls,
+/// at the callee's entry or on the call's return, before any dispatch
+/// refreshes `cur_code`: the code it left is then held only by `cur_code`
+/// and the code store, and a collection there still traces that code's
+/// unit's table, since this reports the id as a frame's code does. Written
+/// once per change of `cur_code`, never per instruction, and not on a call
+/// or return that keeps the same code. `RETIRED_VM_CLOSURE_CODE`, which
 /// marking passes over, while no loop runs.
 pub(super) struct RunningCode(Cell<u64>);
 
