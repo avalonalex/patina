@@ -26,6 +26,14 @@
 //! cell that names no binding. It is never in a slot. A define or an import
 //! in the host namespace adopts it: the record becomes one of its own, in a
 //! slot, keeping its word.
+//!
+//! A **placeholder** (#836) is a record with [`PLACEHOLDER`] set in its
+//! flags, `(cell . PLACEHOLDER)`, over a cell of its namespace's own holding
+//! `TaggedValue::UNBOUND`: what code compiled in a parentless namespace links
+//! for a name the namespace does not bind yet. It is never in a slot either:
+//! the namespace's `PlaceholderStore` holds it, weakly. A define or an import
+//! of the name adopts it as a read-through record is adopted, into a slot,
+//! keeping its word, flags 0.
 
 use crate::Trace;
 use crate::census::Site;
@@ -33,9 +41,9 @@ use crate::heap::Heap;
 use crate::tagged_value::TaggedValue;
 
 /// What a cell of the namespace numbered `env_id` holds in its second word:
-/// the fixnum `env_id << 4`, the low bits left for 4b.9's cell flags. A free
-/// cell holds the fixnum 0, which no namespace's tag is, since ids start
-/// at 1.
+/// the fixnum `env_id << 4`, the low bits left free: 4b.9's flags are a
+/// record's ([`PLACEHOLDER`]), not a cell's. A free cell holds the fixnum 0,
+/// which no namespace's tag is, since ids start at 1.
 #[inline(always)]
 fn owner_tag(env_id: u64) -> TaggedValue {
     debug_assert!(
@@ -54,12 +62,20 @@ fn stamp_free(word: TaggedValue) -> u64 {
 }
 
 /// A namespace's binding record (#834, 4b.6, home (a′)): the pair
-/// `(cell . flags)`, where flags is the fixnum 0 until 4b.9 uses it.
-/// A namespace slot's word, and a namespace scoped entry's word, is one of
-/// these. Never leaves this crate, and a program never sees one as a value:
-/// every read path of `Environment` dereferences it.
+/// `(cell . flags)`, where flags is a fixnum: 0 for every record in a slot
+/// or a scoped entry, and [`PLACEHOLDER`] for a placeholder, which is in
+/// neither (#836). A namespace slot's word, and a namespace scoped entry's
+/// word, is one of these. Never leaves this crate, and a program never sees
+/// one as a value: every read path of `Environment` dereferences it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Trace)]
 pub(crate) struct Record(TaggedValue);
+
+/// A record's flag (#836): set on a placeholder, a record over a cell of its
+/// namespace's own that holds `TaggedValue::UNBOUND`, made for code that
+/// links a name the namespace does not bind (`Environment::link_record`),
+/// and kept in the namespace's `PlaceholderStore`, never in a slot. Cleared
+/// when a define or an import adopts it into a slot ([`Record::adopt`]).
+pub(crate) const PLACEHOLDER: i64 = 1;
 
 /// A location: the pair `(value . owner)`, where owner is the fixnum
 /// `env_id << 4` for the namespace whose cell it is, or 0 for a free cell
@@ -159,6 +175,21 @@ impl Record {
         Record(heap.alloc_pair(cell.0, TaggedValue::fixnum(0)))
     }
 
+    /// A placeholder over `cell` (#836): the record with [`PLACEHOLDER`]
+    /// set. `cell` is a cell of the namespace's own holding
+    /// `TaggedValue::UNBOUND`.
+    pub(crate) fn placeholder(heap: &mut Heap, cell: BindingCell) -> Self {
+        debug_assert_eq!(cell.value(heap), TaggedValue::UNBOUND);
+        Record(heap.alloc_pair(cell.0, TaggedValue::fixnum(PLACEHOLDER)))
+    }
+
+    /// Whether this record is a placeholder ([`PLACEHOLDER`]), not yet
+    /// adopted (#836).
+    #[inline]
+    pub(crate) fn is_placeholder(self, heap: &Heap) -> bool {
+        heap.cdr(self.0) == TaggedValue::fixnum(PLACEHOLDER)
+    }
+
     /// The record a namespace's slot or scoped entry holds as `word`.
     #[inline(always)]
     pub(crate) fn from_word(word: TaggedValue) -> Self {
@@ -234,14 +265,15 @@ impl Record {
         heap.set_record_cell(self.0, cell.0);
     }
 
-    /// A define or an import in the host namespace (#835): this read-through
-    /// record becomes a record of its own over `cell`, flags 0
+    /// A define or an import of the name in its namespace: this read-through
+    /// record of a host namespace's (#835), or this placeholder (#836),
+    /// becomes a record of its own over `cell`, flags 0
     /// ([`Heap::adopt_record`]). Its word does not change, so code that
     /// linked it reads `cell` from now on.
     pub(crate) fn adopt(self, heap: &mut Heap, cell: BindingCell) {
         debug_assert!(
-            self.parent_record(heap).is_some(),
-            "only a read-through record is adopted"
+            self.parent_record(heap).is_some() || self.is_placeholder(heap),
+            "only a read-through record or a placeholder is adopted"
         );
         heap.adopt_record(self.0, cell.0);
     }

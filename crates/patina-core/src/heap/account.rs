@@ -677,6 +677,14 @@ impl ExternalBytes {
     pub(crate) fn cells_let_go(&self, n: usize) {
         lower(&self.0.cells, n, "cells");
     }
+
+    /// A namespace's placeholder store let go of `n` binding records (#836):
+    /// placeholders and weak read-through records the sweep's pass dropped,
+    /// one a define or an import adopted into a slot, where its namespace
+    /// counts it again, or the store's own as it drops.
+    pub(crate) fn records_let_go(&self, n: usize) {
+        lower(&self.0.binding_records, n, "binding records");
+    }
 }
 
 /// Take `n` off the running sum `count` of `what`. Taking off more than is

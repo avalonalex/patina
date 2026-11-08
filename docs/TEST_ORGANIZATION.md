@@ -1319,7 +1319,7 @@ later as a wrong answer or not at all (#621, #624, #625).
 | Lane | Script | What it runs | Interval | Budget | In CI |
 |---|---|---|---|---|---|
 | Differential | `scripts/run_gc_differential.sh [binary]` | the chibi suite under GC off, the adaptive default and stress, on both backends, with the tally pinned; plus two reclamation proofs per backend, in bytes (below) | `PATINA_GC_STRESS_INTERVAL`, default 16; 1 in the release lane | the release lane's step took 5.9 min on the runner and the debug lane's 1.1 min (2026-10-03) | `ci.yml`, every change: release `gc-check` at 1, and debug at 16 |
-| Zeal | `scripts/run_gc_zeal.sh [binary]` | `tests/scheme/control/*.scm` except `tail-recursion.scm` under GC off and zeal, on both backends; each file must match, exit 0, print its SRFI 64 summary and have collected, and the binary must first pass a probe that it honours zeal (below) | `PATINA_GC_ZEAL=entry`: every outermost safe point, which on the VM is a frame's entry or a generic call's return (#700) | 10 min on the runner (2026-10-03), within the job's 60 | `gc-zeal.yml`, release `gc-check`, when a change touches the VM's runtime, compiler or types, `patina-core`'s heap, `tagged_value.rs`, `environment.rs`, `library.rs` or `link_table.rs`, the library loader or registry, the runtime's `import_set.rs`, either backend's `backend.rs`, the tree-walker's evaluator, the toolchain, or the lane's own files, and weekly on `main`; it also runs `finished_forms_release_code` under zeal |
+| Zeal | `scripts/run_gc_zeal.sh [binary]` | `tests/scheme/control/*.scm` except `tail-recursion.scm` under GC off and zeal, on both backends; each file must match, exit 0, print its SRFI 64 summary and have collected, and the binary must first pass a probe that it honours zeal (below) | `PATINA_GC_ZEAL=entry`: every outermost safe point, which on the VM is a frame's entry or a generic call's return (#700) | 10 min on the runner (2026-10-03), within the job's 60 | `gc-zeal.yml`, release `gc-check`, when a change touches the VM's runtime, compiler or types, `patina-core`'s heap, `tagged_value.rs`, `environment.rs`, `library.rs`, `link_table.rs` or `placeholder_store.rs`, the library loader or registry, the runtime's `import_set.rs`, either backend's `backend.rs`, the tree-walker's evaluator, the toolchain, or the lane's own files, and weekly on `main`; it also runs `finished_forms_release_code` under zeal |
 | Stress, per PR | `scripts/run_gc_stress_tests.sh` | 16 `cargo test` targets that drive the collector, control flow and library loading through the embedding API (`callability`, `control_flow_matrix`, `cps_features`, `ephemerons`, `escape_from_primitive`, `finished_forms_release_code`, `gc_tree_walker`, `gc_vm`, `host_environments`, `hygiene_matrix`, `interpreter_api`, `library_loading`, `macro_definition_env`, `owned_handles`, `rooted_loading`, `vm_callprimitive`), and `scheme_suite.rs`; each must run its pinned number of tests, none filtered out, pass, and report at least its pinned number of collections | `PATINA_GC_STRESS=16`; 4096 for `scheme_suite.rs` | about a minute: 66 s here (2026-11-07) after `cargo test --all --lib --tests`, whose build it reuses, as CI runs it, 49 s of it the 16 targets, 27 s of those `gc_tree_walker`, nearly all one deep-recursion test, and 17 s `scheme_suite.rs`; 105–117 s that day in runs that had cargo build around each target first, their tests taking the same 67–68 s; the step's limit is 15 min | `ci.yml`'s Test Suite, every change, on ubuntu and macOS, in the debug build that job has just tested |
 | Stress, nightly | `scripts/run_larceny_gc_stress.sh [--tree-walker] [--r6rs]` | Larceny's R7RS and `(r6rs ...)` suites at the pinned commit, on both backends; each suite's tally must be its row in `scheme_tests/reports/larceny_gc_stress.tsv`, its exit status the one its tally implies, with no panic, no timeout, at least the row's pinned number of collections, and only the job's backend in its process | 16; 4096 for `char`, `flonum`, `lazy`, `sort` and `stream`; `ephemeron` left out until #609 | a job per backend, each limited to 75 min; on the runner (2026-10-03) the VM's R7RS lane took 434 s and its `(r6rs ...)` lane 24 s, a 9-minute job, and the tree-walker's 1774 s and 51 s, a 31-minute job, about 2.2 times the time on an M-series Mac (307 s, 20–22 s, 757–1008 s, 29–36 s); a suite may take 600 s on the VM and 1500 s on the tree-walker, whose slowest, `stream`, took 783 s | `nightly.yml`, release `gc-check`, daily on `main`, and on a pull request that changes the lane |
 
@@ -1339,8 +1339,15 @@ dead plain port's entry the sweep's pass left in the table (#818); and the
 finalization registry's (`heap::finalize::tests::a_check_build_refuses_…`):
 a dead entry whose object's slot was freed under it, and a port object a
 sweep frees whose entry is the registry's but was never queued, as a
-constructor that did not register it would leave. A build without the checks reports them
-ignored. `crates/patina-repl/tests/gc_zeal.rs` is the control for zeal
+constructor that did not register it would leave; and the placeholder list's
+(`placeholder_store::tests::a_check_build_refuses_…`, #836): a namespace's
+store entry over a pair a sweep freed, which only a sweep's pass that left it
+would leave, and a bound entry left in a store, a placeholder or a weak
+read-through record, which the sweep's own check refuses; beside it, a kept
+entry over a cell or a parent that marks made by hand left unmarked
+(`heap::gc::tests::a_check_build_refuses_…`), and a namespace slot handed a
+placeholder (`environment::placeholder_tests::a_check_build_refuses_…`). A
+build without the checks reports them ignored. `crates/patina-repl/tests/gc_zeal.rs` is the control for zeal
 itself, in every build: a loop that allocates nothing collects at every
 iteration under zeal and hardly at all at stress 1. It runs in `ci.yml`'s Test
 Suite, not against the zeal lane's binary, so the lane runs the same loop on
@@ -1477,8 +1484,9 @@ function to take its struct apart by name. Sentinel tests, in the Test Suite,
 put a fresh value in each traced field of each traced struct, root the struct
 alone, collect, and check each value survived (`heap::sentinels`); each fails
 with its field's trace line deleted. They live beside the code they test:
-`patina-core`'s `heap::trace_sentinels`, `environment::gc_edge_tests` and
-`library::gc_edge_tests`, `patina-vm`'s `trace_sentinel_tests`, the
+`patina-core`'s `heap::trace_sentinels`, `environment::gc_edge_tests`,
+`library::gc_edge_tests` and `link_table::tests::link_table_fields`,
+`patina-vm`'s `trace_sentinel_tests`, the
 tree-walker's `gc_roots::sentinel_tests` and `patina-runtime`'s
 `gc_root_tests`.
 

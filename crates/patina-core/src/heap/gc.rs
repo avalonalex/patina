@@ -1784,7 +1784,9 @@ impl Heap {
     /// load-bearing for objects (`Rc` payloads) and vectors/strings (element
     /// buffers). A dead port's `PortTable` entry is taken out here too,
     /// except a file port's, which the drain after the collection takes
-    /// (`heap/finalize.rs`, #785). Pairs are `Copy` with nothing to drop, so a plain release
+    /// (`heap/finalize.rs`, #785), and so is every namespace's placeholder
+    /// and weak read-through record that nothing marked (`PlaceholderList`,
+    /// #836). Pairs are `Copy` with nothing to drop, so a plain release
     /// build skips the store; a check build writes a poison value, so a
     /// stale reference that marking reaches traces nothing from the dead
     /// pair.
@@ -1819,6 +1821,20 @@ impl Heap {
             .ports()
             .take_dead_plain(|object| marks.objects.get(object as usize));
         drop(dead_ports);
+        // The namespaces' weak entries (§9.9 step 6, as built; #836): every
+        // placeholder, and every host read-through record over one, that no
+        // traced link table marked, taken out of its namespace's store while
+        // the bits are complete and before the pair arena's sweep frees its
+        // pairs, which then frees them as the garbage they are. Their counts
+        // and charges are given back borrow-free through each store's
+        // account, before the account is settled, and their names dropped
+        // after the list's access (`HeapTable`'s rule). One access over an
+        // empty list until something links.
+        let dead_placeholders = self
+            .handles
+            .placeholders()
+            .take_dead(|record| marks.pairs.get(record.heap_index() as usize));
+        drop(dead_placeholders);
         // What the account holds for the tree-walker closures, which a check
         // build compares with the live ones' and the dead ones' once the
         // object arena's sweep has measured those.
@@ -1912,11 +1928,14 @@ impl Heap {
         };
         self.gc_freed_closure_code_ids = freed_closures;
         // A check build's part: every dead plain port's entry is gone, and
-        // every dead file port was queued.
+        // every dead file port was queued; and every placeholder and weak
+        // read-through record left in a store names live pairs, which the
+        // pass above ensures by taking out every unmarked one (#836).
         #[cfg(any(debug_assertions, feature = "gc-check"))]
         {
             let finalized = self.handles.ports().check_swept(&dead_ports);
             self.assert_finals_queued(&finalized);
+            self.handles.placeholders().check_swept(self);
         }
         #[cfg(any(debug_assertions, feature = "gc-check"))]
         assert_eq!(
@@ -1975,8 +1994,11 @@ impl Heap {
     /// hosts' handles go with their table (#605): one kept past it holds a
     /// dead reference, which the heap refuses to read. The heap's
     /// `PortTable` and `FinalRegistry` do not: the new handle table takes
-    /// them over (#785). A second teardown frees nothing. It is not a
-    /// collection, and leaves the count of them as it was.
+    /// them over (#785). Nor does its `PlaceholderList` (#836), so the
+    /// sweep's pass, which marks nothing live here, empties the placeholder
+    /// store of every namespace that outlives the heap before the pair
+    /// arena's sweep frees what each held. A second teardown frees nothing.
+    /// It is not a collection, and leaves the count of them as it was.
     ///
     /// The half of [`super::teardown`] that holds the heap: every entry of
     /// the `FinalRegistry` is queued first, so that none names a slot this
@@ -2318,7 +2340,9 @@ impl SlotVisitor for EnvEdges<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binding_record::{BindingCell, Record};
     use crate::cps_expr::{CpsExpr, CpsExprKind};
+    use crate::placeholder_store::{PlaceholderHandle, PlaceholderStore, StoreKind};
     use std::cell::RefCell;
     use std::mem::size_of;
 
@@ -3258,6 +3282,134 @@ mod tests {
             (1, 0, 0),
             "the dead namespace and its hundred records and cells left the sums"
         );
+    }
+
+    /// A namespace a dead specifier held, holding a placeholder (#836),
+    /// drops inside the sweep that frees the specifier, after the pass has
+    /// taken the unmarked placeholder out of its store, and its handle takes
+    /// the store off the list there, borrow-free and with no access open
+    /// (S11): the store's count and charge leave with the namespace's.
+    #[test]
+    fn a_namespace_dropped_by_a_sweep_takes_its_placeholder_store_off_the_list() {
+        let shared: SharedHeap = Rc::new(RefCell::new(Heap::new()));
+        let kept = Rc::new(Environment::with_heap(&shared));
+        let dead = Rc::new(Environment::with_heap(&shared));
+        for i in 0..100 {
+            dead.define(&shared, format!("binding-{i}"), TaggedValue::fixnum(i));
+        }
+        dead.link_record(&shared, "later").expect("a placeholder");
+        let dead_id = dead.env_id();
+        let kept_charge = kept.charged_bytes().unwrap();
+        let store_charge = dead.weak_entries().unwrap().charged();
+        assert_eq!(
+            shared.borrow().external_bytes(),
+            kept_charge + dead.charged_bytes().unwrap() + store_charge
+        );
+        assert!(shared.borrow().handles.placeholders().holds(dead_id));
+        let mut roots = TestRoots::default();
+        {
+            let mut heap = shared.borrow_mut();
+            roots
+                .values
+                .push(heap.alloc_environment_specifier(Rc::clone(&kept), false));
+            heap.alloc_environment_specifier(dead, false);
+        }
+        drop(kept);
+        let counts = |heap: &Heap| (heap.namespaces(), heap.binding_records(), heap.cells());
+        assert_eq!(counts(&shared.borrow()), (2, 101, 101));
+
+        let mut controller = GcController::new(GcMode::On);
+        controller.collect(&mut shared.borrow_mut(), &[&roots], false);
+        let heap = shared.borrow();
+        assert!(!heap.handles.placeholders().holds(dead_id), "off the list");
+        assert_eq!(heap.external_bytes(), kept_charge);
+        assert_eq!(counts(&heap), (1, 0, 0));
+    }
+
+    /// The heap keeps one `PlaceholderList` for its life (#836): the handle
+    /// table teardown starts takes it over, so teardown's sweep, which marks
+    /// nothing, empties the store of a namespace that outlives the heap, its
+    /// counts given back, before the pair sweep frees what it held (S15). A
+    /// later link in the namespace makes a fresh placeholder.
+    #[test]
+    fn teardown_keeps_the_placeholder_list_and_empties_every_store() {
+        let shared = crate::heap::new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&shared));
+        ns.link_record(&shared, "a").expect("a placeholder");
+        ns.link_record(&shared, "b").expect("a placeholder");
+        let list = Rc::clone(shared.borrow().handles.placeholders());
+        assert_eq!(ns.weak_entries().unwrap().counted(), (2, 2));
+
+        crate::heap::teardown(&shared);
+        assert!(Rc::ptr_eq(shared.borrow().handles.placeholders(), &list));
+        assert!(list.holds(ns.env_id()), "the namespace lives on");
+        let store = ns.weak_entries().unwrap();
+        assert_eq!(store.counted(), (0, 0), "its store emptied");
+        assert_eq!(store.get("a"), None);
+        let heap = shared.borrow();
+        assert_eq!((heap.binding_records(), heap.cells()), (0, 0));
+        drop(heap);
+
+        let again = ns.link_record(&shared, "a").expect("a fresh placeholder");
+        assert_eq!(store.get("a"), Some(again));
+        assert!(again.is_placeholder(&shared.borrow()));
+    }
+
+    /// A store on the heap's own list (#836), counting through its account
+    /// so that its drop as a control's panic unwinds gives back what it
+    /// counted.
+    fn listed_store(heap: &Heap, kind: StoreKind) -> PlaceholderHandle {
+        PlaceholderHandle::new(
+            heap.placeholder_list(),
+            PlaceholderStore::new(7, heap.external_bytes_handle(), kind),
+        )
+    }
+
+    /// `check_swept`'s control for a placeholder kept over a freed cell
+    /// (#836): the trace marks a kept record's car and cdr, so only marks
+    /// made by hand, as a trace that missed the cell would leave them,
+    /// reach this. The pass keeps the marked record, the pair sweep frees
+    /// its cell, and the check refuses the entry before anything reads the
+    /// cell.
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "the sweep's pass left a dead placeholder: \"later\"'s entry")]
+    fn a_check_build_refuses_a_kept_placeholder_over_a_freed_cell() {
+        let mut heap = Heap::new();
+        let handle = listed_store(&heap, StoreKind::Placeholders);
+        let cell = BindingCell::new_own(&mut heap, TaggedValue::UNBOUND, 7);
+        let record = Record::placeholder(&mut heap, cell);
+        handle.store().insert(Rc::from("later"), record);
+        let mut marks = MarkBits::for_heap(&heap);
+        marks.pairs.set(record.word().heap_index() as usize);
+        heap.sweep(&mut marks);
+    }
+
+    /// The same for a weak read-through record kept over a freed parent
+    /// (#836): marks made by hand keep the record and the cell it names,
+    /// and the pair sweep frees the parent placeholder under it, which the
+    /// check refuses.
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "the sweep's pass left a dead placeholder: \"y\"'s entry")]
+    fn a_check_build_refuses_a_kept_read_through_record_over_a_freed_parent() {
+        let mut heap = Heap::new();
+        let handle = listed_store(&heap, StoreKind::Children);
+        let parent_cell = BindingCell::new_own(&mut heap, TaggedValue::UNBOUND, 6);
+        let parent = Record::placeholder(&mut heap, parent_cell);
+        let unbound = BindingCell::free(&mut heap, TaggedValue::UNBOUND);
+        let child = Record::read_through(&mut heap, unbound, parent);
+        handle.store().insert(Rc::from("y"), child);
+        let mut marks = MarkBits::for_heap(&heap);
+        marks.pairs.set(child.word().heap_index() as usize);
+        marks.pairs.set(unbound.word().heap_index() as usize);
+        heap.sweep(&mut marks);
     }
 
     /// An open file port is charged its buffer and its place in descriptor

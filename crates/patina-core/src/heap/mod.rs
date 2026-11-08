@@ -833,6 +833,14 @@ impl Heap {
         self.handles.len()
     }
 
+    /// The heap's list of its namespaces' placeholder stores (#836), which
+    /// a namespace's first weak entry registers its store on
+    /// (`Environment::link_record`).
+    #[inline]
+    pub(crate) fn placeholder_list(&self) -> &Rc<crate::placeholder_store::PlaceholderList> {
+        self.handles.placeholders()
+    }
+
     /// A handle on `env`, an environment of this heap, which roots it and
     /// what is bound in it until the handle is dropped (#620).
     ///
@@ -1101,6 +1109,18 @@ impl Heap {
         self.pairs[ptr.heap_index() as usize]
     }
 
+    /// Whether `word` names a live pair in the generation it was made in
+    /// (#621): false for a slot the sweep freed, and for one freed and
+    /// reused since, in a check build; true in a plain release build, which
+    /// keeps no generations. For a check build's own checks that a table
+    /// outside the arenas names no freed pair (`PlaceholderList::check_swept`,
+    /// #836), which report with their own message where the accessors would
+    /// panic with the stale-reference check's.
+    pub(crate) fn pair_is_live(&self, word: TaggedValue) -> bool {
+        debug_assert!(word.is_pair());
+        self.pair_checks.stamp(word) == word
+    }
+
     /// Get car of a pair
     #[inline(always)]
     pub fn car(&self, ptr: TaggedValue) -> TaggedValue {
@@ -1166,10 +1186,11 @@ impl Heap {
         store_word(&mut self.pairs[record.heap_index() as usize].0, cell);
     }
 
-    /// A read-through record becomes a record of its own over `cell` (#835,
-    /// `Record::adopt`): the cell in its car, logged at `EnvRecordRepoint` as
-    /// any re-point is, then the flags fixnum 0 in its cdr where its parent's
-    /// record was, logged at the same site as an immediate store.
+    /// A read-through record (#835), or a placeholder (#836), becomes a
+    /// record of its own over `cell` (`Record::adopt`): the cell in its car,
+    /// logged at `EnvRecordRepoint` as any re-point is, then the flags fixnum
+    /// 0 in its cdr where its parent's record or its placeholder flag was,
+    /// logged at the same site as an immediate store.
     #[inline]
     pub(crate) fn adopt_record(&mut self, record: TaggedValue, cell: TaggedValue) {
         self.set_record_cell(record, cell);

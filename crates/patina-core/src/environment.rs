@@ -2,6 +2,7 @@ use crate::Trace;
 use crate::binding_record::{BindingCell, Record};
 use crate::census::Site;
 use crate::heap::{ExternalBytes, Heap, SharedHeap};
+use crate::placeholder_store::{PlaceholderHandle, PlaceholderStore, StoreKind};
 use crate::scope::{ScopeId, ScopeSet};
 use crate::scope_index::{FRAME_INDEX_ABOVE, INDEX_ABOVE, ScopeIndex};
 use crate::scope_resolve::AmbiguousReference;
@@ -697,6 +698,17 @@ struct RareTables {
     /// the first time a linker asks for one: never in another kind. One
     /// pointer wide either way.
     read_through: OnceCell<Box<RefCell<ReadThrough>>>,
+    /// A namespace's weak entries (#836, R1, R7): a parentless namespace's
+    /// placeholders, or a host namespace's read-through records over a
+    /// parent placeholder, in a store made the first time a linker asks for
+    /// one and listed on the heap's `PlaceholderList`; never in a frame. The
+    /// handle takes the store off the list when this namespace drops (M2).
+    /// The store counts and charges its own (`placeholder_store.rs`).
+    #[trace(
+        skip,
+        reason = "weak (R1, R7, #836): a link table marks an entry, and the sweep's pass drops each it did not"
+    )]
+    placeholders: OnceCell<PlaceholderHandle>,
 }
 
 /// A host namespace's read-through records (#835): for each name its parent
@@ -707,6 +719,13 @@ struct RareTables {
 /// name here adopts its record and takes it out of this table. Dies with the
 /// host namespace: nothing else holds the table, and the parent's records do
 /// not name their children.
+///
+/// These are the strong children. A child over a parent's placeholder, made
+/// for a name the parent did not bind (R7, #836), is weak, and lives in the
+/// host namespace's placeholder store instead (`RareTables::placeholders`),
+/// though it names this table's `unbound` cell. A link of its name once the
+/// parent binds it promotes it here, out of the store, so a name has one
+/// child across the two.
 #[derive(Debug, Trace)]
 struct ReadThrough {
     /// The free cell every record here names in its car: `(UNBOUND . 0)`.
@@ -714,6 +733,41 @@ struct ReadThrough {
     /// Each name's read-through record, keyed by the parent's slot name,
     /// shared.
     records: FxHashMap<Rc<str>, Record>,
+}
+
+/// Where a record a define or an import adopts was counted until then
+/// (`Environment::take_adoptable`, #835, #836).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Adopted {
+    /// A host namespace's strong read-through record, from [`ReadThrough`]:
+    /// counted on the namespace's charge since it was made.
+    Counted,
+    /// A placeholder, or a host namespace's weak read-through record, from
+    /// the namespace's placeholder store, which has let go of its count: the
+    /// namespace counts it from now on.
+    FromStore,
+}
+
+impl Adopted {
+    /// The records the adopting namespace counts now.
+    #[inline]
+    fn records(self) -> usize {
+        match self {
+            Adopted::Counted => 0,
+            Adopted::FromStore => 1,
+        }
+    }
+}
+
+/// A check build's failure: a namespace slot given a placeholder or a
+/// read-through record (`Environment::append_slot`, Rule 1, #836).
+#[cold]
+#[inline(never)]
+fn flagged_record_in_a_slot(name: &str) -> ! {
+    panic!(
+        "a slot for {name:?} given a placeholder or a read-through record: a record in a slot has \
+         flags 0, or the sweep's pass could drop it (#836)"
+    )
 }
 
 /// The external bytes (`heap/account.rs`, GC_PRD §15) a namespace has charged
@@ -802,7 +856,12 @@ struct ReadThrough {
 /// keywords filed at top level among them) and per import alias, each of
 /// which is a slot, and per read-through record of a host namespace's,
 /// which is in no slot until a define or an import adopts it (#835); and
-/// `cells`, the cells of its own its records name now.
+/// `cells`, the cells of its own its records name now. Its weak entries
+/// (#836) are not among them: its placeholder store counts a placeholder and
+/// its cell, and a host namespace's weak read-through record, in the heap's
+/// sums itself, and charges its own buffer and names, until an entry is
+/// dropped or adopted into a slot, where this charge counts it from then.
+/// The slots stay append-only either way (D1).
 /// Each is a running sum, raised as a record or a cell is made
 /// (`Environment::count`), `cells` lowered as a record is re-pointed away
 /// from an own cell (`Environment::count_cell_let_go`), and both given back
@@ -1563,7 +1622,15 @@ impl Environment {
     /// its own (#834): counted on its charge and in the heap's sums. A
     /// frame counts nothing.
     fn count(&self, records: usize, cells: usize) {
-        let charge = self.rare.get().and_then(|rare| rare.namespace.as_ref());
+        self.count_in(self.rare.get().map(Box::as_ref), records, cells);
+    }
+
+    /// [`count`](Self::count) with this environment's `rare` tables in
+    /// hand: for an insert arm that has loaded them once already, to ask
+    /// whether a placeholder store holds the name (`take_adoptable`).
+    #[inline]
+    fn count_in(&self, rare: Option<&RareTables>, records: usize, cells: usize) {
+        let charge = rare.and_then(|rare| rare.namespace.as_ref());
         debug_assert!(
             charge.is_some() || !self.is_namespace(),
             "a namespace counts its records on its charge"
@@ -1739,6 +1806,9 @@ impl Environment {
                 // This account.
                 namespace: _,
                 read_through,
+                // The weak entries' store charges itself, through the same
+                // account (#836).
+                placeholders: _,
             } = &**rare;
             bytes += size_of::<RareTables>()
                 + hash_table_bytes::<Rc<str>, Introduced>(
@@ -1877,22 +1947,27 @@ impl Environment {
                 // (`docs/GC_DESIGN.md` §6): the cell, held only in this
                 // local until the record holds it, cannot be swept between.
                 let cell = BindingCell::new_own(heap, value, self.env_id);
-                match self.take_read_through(&name) {
-                    // A definition in a host namespace of a name a linker
-                    // asked for (#835): the read-through record becomes this
-                    // namespace's own, in a slot, over the fresh cell. The
-                    // parent's record and cell are left alone, and code that
-                    // linked the record reads the cell from now on. The
-                    // record was counted when it was made.
-                    Some(child) => {
-                        child.adopt(heap, cell);
-                        self.append_slot(name, child.word());
-                        self.count(0, 1);
+                // Loaded once, for the adoption's test and the count.
+                let rare = self.rare.get().map(Box::as_ref);
+                match self.take_adoptable(rare, &name) {
+                    // A definition of a name a linker asked for (#835,
+                    // #836): the read-through record or the placeholder
+                    // becomes this namespace's own, in a slot, over the fresh
+                    // cell, keeping its word, so code that linked it reads
+                    // the cell from now on. A parent's record and cell are
+                    // left alone, and a placeholder's own `UNBOUND` cell is
+                    // garbage. A strong read-through record was counted when
+                    // it was made; a placeholder or a weak one is counted
+                    // here, as its store has let go of it.
+                    Some((record, adopted)) => {
+                        record.adopt(heap, cell);
+                        self.append_slot(heap, name, record.word());
+                        self.count_in(rare, adopted.records(), 1);
                     }
                     None => {
                         let record = Record::new(heap, cell);
-                        self.append_slot(name, record.word());
-                        self.count(1, 1);
+                        self.append_slot(heap, name, record.word());
+                        self.count_in(rare, 1, 1);
                     }
                 }
             }
@@ -1900,8 +1975,19 @@ impl Environment {
     }
 
     /// A slot for `name`, which has none here, holding `word`: a namespace's
-    /// fresh record (#834). Recharges if a table grew.
-    fn append_slot(&self, name: Rc<str>, word: TaggedValue) -> u32 {
+    /// fresh record (#834), or one it adopted (#835, #836). Recharges if a
+    /// table grew.
+    ///
+    /// The one writer of a namespace's slots, so a check build asserts here
+    /// that no slot holds a placeholder or a read-through record: a record
+    /// in a slot has flags 0 (Rule 1, #836), so every entry the trace skips
+    /// is one the sweep's pass may drop, and no slot names a record the pass
+    /// dropped. Nothing writes a slot's record's cdr after this but
+    /// `Heap::adopt_record`, which writes 0.
+    fn append_slot(&self, heap: &Heap, name: Rc<str>, word: TaggedValue) -> u32 {
+        if crate::heap::GC_CHECK && heap.cdr(word) != TaggedValue::fixnum(0) {
+            flagged_record_in_a_slot(&name);
+        }
         let Inserted { slot, grew, .. } = self.bindings.borrow_mut().append(name, word);
         if grew {
             self.recharge();
@@ -1920,42 +2006,41 @@ impl Environment {
         Some(Record::from_word(bindings.read_slot(slot)))
     }
 
-    /// The record code compiled in this namespace links for `name` (#835):
-    /// its own ([`local_record`](Self::local_record)); or, in a host
-    /// namespace that does not bind `name`, its read-through record over its
-    /// parent's, made the first time and the same one after. `None` for a
-    /// frame, for a name no slot of this namespace or its parent holds (a
-    /// name only an alias or a scoped definition reaches is read by name, as
-    /// today), for a name this host namespace reaches by an alias or a
-    /// visible scoped definition of its own, which [`get`](Self::get) finds
-    /// before the parent's binding and which is read by name too, and for a
-    /// parentless namespace that does not bind it (4b.9's placeholders).
+    /// The record code compiled in this namespace links for `name` (#835,
+    /// #836), made the first time and the same one after:
+    /// - its own ([`local_record`](Self::local_record)), in a slot;
+    /// - `None` for a frame, and for a name this namespace reaches by an
+    ///   alias or a visible scoped definition of its own, which
+    ///   [`get`](Self::get) finds first and which is read by name;
+    /// - in a parentless namespace that does not bind `name`, a placeholder
+    ///   (#836): a record of its own with its flag set, over a cell of its
+    ///   own holding `TaggedValue::UNBOUND`, kept weakly in its placeholder
+    ///   store, never in a slot, until a define or an import adopts it;
+    /// - in a host namespace that does not bind `name`, a read-through record
+    ///   over its parent's: over the parent's record in a slot, strong, in
+    ///   [`ReadThrough`] (a weak one made earlier is promoted there); `None`
+    ///   where the parent reaches `name` by an alias or a visible scoped
+    ///   definition; otherwise over the parent's placeholder, weak, in this
+    ///   namespace's placeholder store (R7).
+    ///
     /// Takes the write step. The reads by name (`get`, `get_with_scopes`,
     /// `Interpreter::lookup_in`, the tree-walker's) never call it, so a read
-    /// makes no record.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "4b.9's linker links host units through it (#836); until then only the \
-                      tests do (#835)"
-        )
-    )]
+    /// makes no record. A placeholder and a weak read-through record live
+    /// while code that links them is traced, and the sweep's pass drops them
+    /// once none is (`placeholder_store.rs`).
     pub(crate) fn link_record(&self, heap: &RefCell<Heap>, name: &str) -> Option<Record> {
         let mut step = self.write_step(heap)?;
         if let Some(own) = self.local_record(name) {
             return Some(own);
         }
-        if self.kind != Kind::HostNamespace {
+        // `get`'s order: an alias here, then a visible scoped definition
+        // here, both before the parent and before an unbound name. A record
+        // would read another binding than `get` does.
+        if self.read_by_name(name) {
             return None;
         }
-        // `get`'s order: an alias here, then a visible scoped definition
-        // here, both before the parent. A record over the parent's would
-        // read another binding than `get` does.
-        if (self.has_aliases.get() && self.alias_target(name).is_some())
-            || self.visible_scoped_index(name).is_some()
-        {
-            return None;
+        if self.kind != Kind::HostNamespace {
+            return Some(self.placeholder(&mut step, name).1);
         }
         let parent = self
             .parent
@@ -1963,59 +2048,234 @@ impl Environment {
             .expect("a host namespace has its parent");
         // The parent's slot name, shared: this table counts no name of its
         // own.
-        let (key, parent_record) = {
+        let bound = {
             let bindings = parent.bindings.borrow();
-            let slot = bindings.slot_of(name)?;
-            let (key, word) = &bindings.slots[slot as usize];
-            (Rc::clone(key), Record::from_word(*word))
+            bindings.slot_of(name).map(|slot| {
+                let (key, word) = &bindings.slots[slot as usize];
+                (Rc::clone(key), Record::from_word(*word))
+            })
         };
+        match bound {
+            Some((key, parent_record)) => Some(self.strong_child(&mut step, key, parent_record)),
+            // The parent's own `get` finds an alias or a visible scoped
+            // definition of its own there: read by name, and no placeholder.
+            None if parent.read_by_name(name) => None,
+            None => {
+                let (key, placeholder) = parent.placeholder(&mut step, name);
+                Some(self.weak_child(&mut step, key, placeholder))
+            }
+        }
+    }
+
+    /// Whether `get` finds `name` here by an alias or a visible scoped
+    /// definition, before any slot's binding but this namespace's own:
+    /// [`link_record`](Self::link_record) leaves such a name to be read by
+    /// name.
+    fn read_by_name(&self, name: &str) -> bool {
+        (self.has_aliases.get() && self.alias_target(name).is_some())
+            || self.visible_scoped_index(name).is_some()
+    }
+
+    /// This namespace's weak entries' store, if a linker has made one
+    /// (#836).
+    #[inline]
+    pub(crate) fn weak_entries(&self) -> Option<&PlaceholderStore> {
+        self.rare
+            .get()?
+            .placeholders
+            .get()
+            .map(PlaceholderHandle::store)
+    }
+
+    /// This namespace's weak entries' store, made of `kind` and listed on
+    /// `step`'s placeholder list the first time (#836), counting and
+    /// charging through this namespace's account.
+    fn weak_entries_or_make(&self, step: &Heap, kind: StoreKind) -> &PlaceholderStore {
+        let rare = self
+            .rare
+            .get()
+            .expect("a namespace has its tables from construction");
+        let store = rare
+            .placeholders
+            .get_or_init(|| {
+                let account = rare
+                    .namespace
+                    .as_ref()
+                    .expect("a namespace has its charge (#834)")
+                    .account
+                    .clone();
+                PlaceholderHandle::new(
+                    step.placeholder_list(),
+                    PlaceholderStore::new(self.env_id, account, kind),
+                )
+            })
+            .store();
+        debug_assert_eq!(
+            store.kind(),
+            kind,
+            "a namespace's weak entries are of one kind"
+        );
+        store
+    }
+
+    /// This parentless namespace's placeholder for `name`, which it does not
+    /// bind (#836), with the name its store holds it under: the one in its
+    /// store, or a new one, made and held there, counted a record and a cell
+    /// in the heap's sums by the store and charged there.
+    fn placeholder(&self, step: &mut Heap, name: &str) -> (Rc<str>, Record) {
+        debug_assert_eq!(
+            self.kind,
+            Kind::Namespace,
+            "a host namespace makes no placeholder"
+        );
+        let store = self.weak_entries_or_make(step, StoreKind::Placeholders);
+        if let Some(found) = store.get_key_value(name) {
+            return found;
+        }
+        // Allocation never collects (`docs/GC_DESIGN.md` §6), and both
+        // allocations are under the one step: the cell, held in a local,
+        // cannot be swept before the record holds it, nor the record before
+        // the store does.
+        let cell = BindingCell::new_own(step, TaggedValue::UNBOUND, self.env_id);
+        let record = Record::placeholder(step, cell);
+        let key: Rc<str> = Rc::from(name);
+        store.insert(Rc::clone(&key), record);
+        (key, record)
+    }
+
+    /// This host namespace's read-through records, made the first time, and
+    /// whether this call made them.
+    fn read_through_table<'a>(&'a self, step: &mut Heap) -> (&'a RefCell<ReadThrough>, bool) {
         let rare = self
             .rare
             .get()
             .expect("a host namespace has its tables from construction");
         let made = rare.read_through.get().is_none();
         let table = rare.read_through.get_or_init(|| {
-            let unbound = BindingCell::free(&mut step, TaggedValue::UNBOUND);
+            let unbound = BindingCell::free(step, TaggedValue::UNBOUND);
             Box::new(RefCell::new(ReadThrough {
                 unbound,
                 records: FxHashMap::default(),
             }))
         });
+        (table, made)
+    }
+
+    /// This host namespace's read-through record over `parent_record`, its
+    /// parent's record for the name in the slot `key` names (#835): the one
+    /// in its table, or one made earlier over the parent's placeholder,
+    /// which the parent has since adopted, promoted there out of the
+    /// placeholder store (#836), or a new one.
+    fn strong_child(&self, step: &mut Heap, key: Rc<str>, parent_record: Record) -> Record {
+        let (table, made) = self.read_through_table(step);
         let mut table = table.borrow_mut();
-        if let Some(&child) = table.records.get(name) {
-            return Some(child);
+        if let Some(&child) = table.records.get(&*key) {
+            return child;
         }
-        // Allocation never collects (`docs/GC_DESIGN.md` §6), and both
-        // allocations are under the one step: the cell is held by the table
-        // before the record is made.
-        let child = Record::read_through(&mut step, table.unbound, parent_record);
+        // A weak child (R7) is promoted, so that it is held and dies with
+        // this namespace as any child over a bound parent does (SD3): its
+        // count moves from the store to this namespace's charge, as the
+        // store lets go of it and the count below takes it on. One child a
+        // name across the two tables, or a define here would adopt one and
+        // leave the other reading the parent.
+        let promoted = self.weak_entries().and_then(|store| store.take(&key));
+        let child = match promoted {
+            Some(child) => {
+                debug_assert_eq!(
+                    child.parent_record(step),
+                    Some(parent_record),
+                    "a weak child reads through the placeholder its parent adopted"
+                );
+                child
+            }
+            // Allocation never collects (`docs/GC_DESIGN.md` §6), and both
+            // allocations are under the one step: the cell is held by the
+            // table before the record is made.
+            None => Record::read_through(step, table.unbound, parent_record),
+        };
         let capacity = table.records.capacity();
         table.records.insert(key, child);
         let grew = made || table.records.capacity() != capacity;
         drop(table);
-        drop(step);
         self.count(1, 0);
         if grew {
             self.recharge();
         }
-        Some(child)
+        child
     }
 
-    /// The read-through record this host namespace made for `name`, taken
-    /// out of its table, for a define or an import of `name` here to adopt
-    /// (#835). Any other kind answers `None` for the price of a compare.
-    #[inline]
-    fn take_read_through(&self, name: &str) -> Option<Record> {
-        if self.kind != Kind::HostNamespace {
-            return None;
+    /// This host namespace's weak read-through record over `placeholder`,
+    /// its parent's for the name `key` (R7, #836): the one in its placeholder
+    /// store, or a new one held there, counted a record in the heap's sums by
+    /// the store. It names the host's one `unbound` cell, as a strong child
+    /// does.
+    fn weak_child(&self, step: &mut Heap, key: Rc<str>, placeholder: Record) -> Record {
+        let (table, made) = self.read_through_table(step);
+        let unbound = table.borrow().unbound;
+        if made {
+            self.recharge();
         }
-        self.rare
-            .get()?
+        let store = self.weak_entries_or_make(step, StoreKind::Children);
+        if let Some(child) = store.get(&key) {
+            debug_assert_eq!(
+                child.parent_record(step),
+                Some(placeholder),
+                "a weak child reads through its parent's placeholder"
+            );
+            return child;
+        }
+        let child = Record::read_through(step, unbound, placeholder);
+        store.insert(key, child);
+        child
+    }
+
+    /// The record a define or an import of `name` here adopts, taken out of
+    /// what held it, and where it was counted (#835, #836): a parentless
+    /// namespace's placeholder, from its store; a host namespace's strong
+    /// read-through record, from [`ReadThrough`], or else its weak one, from
+    /// its store. `rare` is this namespace's tables, which its caller loaded.
+    ///
+    /// The kind test first, as before: a parentless namespace with no store,
+    /// as every one is until something links, answers `None` for one load
+    /// of the store's cell, with no hash, borrow or `Rc` clone.
+    #[inline]
+    fn take_adoptable(&self, rare: Option<&RareTables>, name: &str) -> Option<(Record, Adopted)> {
+        if self.kind != Kind::HostNamespace {
+            let store = rare?.placeholders.get()?;
+            return store
+                .store()
+                .take(name)
+                .map(|record| (record, Adopted::FromStore));
+        }
+        self.take_read_through(rare?, name)
+    }
+
+    /// [`take_adoptable`](Self::take_adoptable) in a host namespace: its
+    /// strong read-through record for `name`, or else its weak one. At most
+    /// one of the two exists (`link_record` promotes a weak one).
+    fn take_read_through(&self, rare: &RareTables, name: &str) -> Option<(Record, Adopted)> {
+        let strong = rare
             .read_through
-            .get()?
-            .borrow_mut()
-            .records
-            .remove(name)
+            .get()
+            .and_then(|table| table.borrow_mut().records.remove(name));
+        if let Some(child) = strong {
+            return Some((child, Adopted::Counted));
+        }
+        let store = rare.placeholders.get()?;
+        store
+            .store()
+            .take(name)
+            .map(|child| (child, Adopted::FromStore))
+    }
+
+    /// Whether a placeholder or a weak read-through record holds `name` here
+    /// (#836). An alias is never minted at such a name: an import alias's
+    /// install would adopt the entry, and code that linked an unbound name
+    /// would read the alias's location; a relink alias would leave linked
+    /// code reading the entry where `get` reads the alias.
+    fn holds_placeholder(&self, name: &str) -> bool {
+        self.weak_entries()
+            .is_some_and(|store| store.contains(name))
     }
 
     /// Make `name` here the binding `cell` is: an import (R7RS §5.2, #406).
@@ -2069,20 +2329,29 @@ impl Environment {
                 }
                 record.repoint(heap, cell);
             }
-            None => match self.take_read_through(&name) {
-                // An import in a host namespace of a name a linker asked for
-                // (#835): the read-through record names the exporter's cell
-                // from now on, in a slot. It was counted when it was made.
-                Some(child) => {
-                    child.adopt(heap, cell);
-                    self.append_slot(name, child.word());
+            None => {
+                // Loaded once, for the adoption's test and the count.
+                let rare = self.rare.get().map(Box::as_ref);
+                match self.take_adoptable(rare, &name) {
+                    // An import of a name a linker asked for (#835, #836):
+                    // the read-through record or the placeholder names the
+                    // exporter's cell from now on, in a slot, keeping its
+                    // word; a placeholder's own `UNBOUND` cell is garbage. A
+                    // strong read-through record was counted when it was
+                    // made; a placeholder or a weak one is counted here, as
+                    // its store has let go of it.
+                    Some((record, adopted)) => {
+                        record.adopt(heap, cell);
+                        self.append_slot(heap, name, record.word());
+                        self.count_in(rare, adopted.records(), 0);
+                    }
+                    None => {
+                        let record = Record::new(heap, cell);
+                        self.append_slot(heap, name, record.word());
+                        self.count_in(rare, 1, 0);
+                    }
                 }
-                None => {
-                    let record = Record::new(heap, cell);
-                    self.append_slot(name, record.word());
-                    self.count(1, 0);
-                }
-            },
+            }
         }
     }
 
@@ -2279,9 +2548,11 @@ impl Environment {
             }
             (cell, key)
         };
+        // A name a placeholder holds is taken too (#836): the alias's
+        // install would adopt it.
         let alias = loop {
             let candidate = mint();
-            if self.local_slot(&candidate).is_none() {
+            if self.local_slot(&candidate).is_none() && !self.holds_placeholder(&candidate) {
                 break candidate;
             }
         };
@@ -3017,9 +3288,14 @@ impl Environment {
         if let Some(alias) = root.and_then(|root| root.remembered_relink(&key)) {
             return alias;
         }
+        // A name a placeholder holds is taken too (#836): code that linked
+        // it would read the placeholder where `get` reads the alias.
         let alias = loop {
             let candidate = mint();
-            if self.local_slot(&candidate).is_none() && self.alias_target(&candidate).is_none() {
+            if self.local_slot(&candidate).is_none()
+                && self.alias_target(&candidate).is_none()
+                && !self.holds_placeholder(&candidate)
+            {
                 break candidate;
             }
         };
@@ -3076,6 +3352,14 @@ impl Environment {
                     && target.name == *name
                     && target.scopes == *scopes
             });
+        // No placeholder can sit at a remembered alias's spelling (#836):
+        // the mint skips a name one holds, and a link of an alias's spelling
+        // makes none (`link_record`), so this is asserted, not tested, on a
+        // path every relinking expansion takes.
+        debug_assert!(
+            !still || !self.holds_placeholder(&alias),
+            "a remembered relink alias over a placeholder (#836)"
+        );
         still.then_some(alias)
     }
 
@@ -3236,15 +3520,17 @@ impl Environment {
         crate::scope_trace::bind(&name, &scopes, visible_by_name);
         if visible_by_name {
             // Only the tree-walker makes a visible scoped definition, and it
-            // links nothing, so no read-through record is under one (#835).
+            // links nothing, so no read-through record, strong or weak, is
+            // under one (#835, #836).
             debug_assert!(
                 self.kind != Kind::HostNamespace
-                    || self
+                    || (self
                         .rare
                         .get()
                         .and_then(|rare| rare.read_through.get())
-                        .is_none_or(|table| !table.borrow().records.contains_key(&*name)),
-                "a visible scoped definition over a read-through record (#835)"
+                        .is_none_or(|table| !table.borrow().records.contains_key(&*name))
+                        && !self.holds_placeholder(&name)),
+                "a visible scoped definition over a read-through record (#835, #836)"
             );
             self.has_visible_scoped.set(true);
         }
@@ -5960,6 +6246,59 @@ mod import_alias_tests {
         assert_eq!(program.get(&heap, "count.0"), Some(n(42)));
     }
 
+    /// [`minting_never_forwards_over_a_name_already_bound`]'s twin (#836):
+    /// a name a placeholder holds is taken too, or the alias's install would
+    /// adopt the placeholder, and code that linked the unbound name would
+    /// read the import.
+    #[test]
+    fn minting_never_forwards_over_a_name_a_placeholder_holds() {
+        let heap = new_shared_heap();
+        let (_, program) = library_and_program(&heap);
+        let placeholder = program
+            .link_record(&heap, "count.0")
+            .expect("a placeholder");
+        let mut offered = ["count.0", "count.1"].into_iter();
+        let alias = program
+            .import_alias(&heap, "count", || offered.next().unwrap().into())
+            .unwrap();
+
+        assert_eq!(&*alias, "count.1");
+        assert_eq!(program.get(&heap, "count.0"), None, "still unbound");
+        assert_eq!(
+            program.link_record(&heap, "count.0"),
+            Some(placeholder),
+            "and still the placeholder"
+        );
+        assert!(placeholder.is_placeholder(&heap.borrow()));
+    }
+
+    /// The same in a host namespace (#836): a name its weak read-through
+    /// record holds, over the parent's placeholder, is taken too, or the
+    /// alias's install would adopt the record.
+    #[test]
+    fn minting_never_forwards_over_a_name_a_weak_read_through_record_holds() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "count", n(0));
+        let global = Rc::new(Environment::with_heap(&heap));
+        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
+        share(&heap, &host, "count", &library, "count");
+        let child = host.link_record(&heap, "count.0").expect("a weak child");
+        let mut offered = ["count.0", "count.1"].into_iter();
+        let alias = host
+            .import_alias(&heap, "count", || offered.next().unwrap().into())
+            .unwrap();
+
+        assert_eq!(&*alias, "count.1");
+        assert_eq!(host.get(&heap, "count.0"), None, "still unbound");
+        assert_eq!(
+            host.weak_entries().and_then(|store| store.get("count.0")),
+            Some(child),
+            "and still the weak record, in the store"
+        );
+        assert_eq!(host.link_record(&heap, "count.0"), Some(child));
+    }
+
     #[test]
     fn every_enumeration_of_names_leaves_an_alias_out() {
         let heap = new_shared_heap();
@@ -6983,21 +7322,34 @@ mod read_through_tests {
     }
 
     /// One read-through record per name, however often it is asked for. An
-    /// own name answers its own record; a name neither namespace binds, a
-    /// frame, and a parentless namespace asked for a name it does not bind
-    /// answer `None`; none of those makes a record.
+    /// own name answers its own record and a frame `None`. A name neither
+    /// namespace binds answers a weak read-through record over the global
+    /// namespace's placeholder, and a parentless namespace asked for a name
+    /// it does not bind its placeholder (#836): each the same one when asked
+    /// again, and in no slot.
     #[test]
     fn link_record_answers_one_record_per_name() {
         let heap = new_shared_heap();
         let (global, host) = global_and_host(&heap);
 
-        assert_eq!(host.link_record(&heap, "nowhere"), None);
-        assert!(table(&host).is_none(), "a miss makes no table");
+        let nowhere = host
+            .link_record(&heap, "nowhere")
+            .expect("a weak child over the global's placeholder (#836)");
+        assert_eq!(host.link_record(&heap, "nowhere"), Some(nowhere));
+        assert!(
+            table(&host).is_some_and(|table| table.borrow().records.is_empty()),
+            "the weak child names the table's cell and is not in the table"
+        );
+        assert_eq!(host.local_slot("nowhere"), None);
+        assert_eq!(global.local_slot("nowhere"), None);
 
         host.define(&heap, "own", n(2));
         let own = host.local_record("own").unwrap();
         assert_eq!(host.link_record(&heap, "own"), Some(own));
-        assert!(table(&host).is_none(), "an own name makes no child");
+        assert!(
+            table(&host).is_some_and(|table| table.borrow().records.is_empty()),
+            "an own name makes no child"
+        );
 
         let first = host.link_record(&heap, "x").unwrap();
         let second = host.link_record(&heap, "x").unwrap();
@@ -7013,7 +7365,11 @@ mod read_through_tests {
 
         let frame = Environment::child_frame(Rc::clone(&global));
         assert_eq!(frame.link_record(&heap, "x"), None, "a frame links nothing");
-        assert_eq!(global.link_record(&heap, "missing"), None);
+        let missing = global
+            .link_record(&heap, "missing")
+            .expect("a placeholder (#836)");
+        assert_eq!(global.link_record(&heap, "missing"), Some(missing));
+        assert_eq!(global.local_slot("missing"), None, "in no slot");
         assert_eq!(global.link_record(&heap, "x"), global.local_record("x"));
     }
 
@@ -7110,6 +7466,535 @@ mod read_through_tests {
         let slot = host.local_slot("x").expect("a define binds it here");
         assert_eq!(host.bindings.borrow().read_slot(slot), child.word());
         assert_eq!(host.local_names(&heap), vec!["x".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod placeholder_tests {
+    //! Placeholders and weak read-through records (#836): adopted by every
+    //! bind, kept while linked, dropped by the sweep's pass once nothing
+    //! links them, and counted in the heap's sums by their stores.
+    use super::*;
+    use crate::heap::new_shared_heap;
+    use crate::heap::trace_sentinels::collect_only;
+    use crate::link_table::LinkTable;
+
+    fn n(i: i64) -> TaggedValue {
+        TaggedValue::fixnum(i)
+    }
+
+    /// The heap's sums of binding records and cells.
+    fn sums(heap: &SharedHeap) -> (usize, usize) {
+        let h = heap.borrow();
+        (h.binding_records(), h.cells())
+    }
+
+    /// What `env`'s placeholder store counts, if it has one.
+    fn stored(env: &Environment) -> (usize, usize) {
+        env.weak_entries().map_or((0, 0), PlaceholderStore::counted)
+    }
+
+    /// Whether `env`'s placeholder store holds `name`.
+    fn in_store(env: &Environment, name: &str) -> bool {
+        env.weak_entries()
+            .is_some_and(|store| store.get(name).is_some())
+    }
+
+    /// Whether `host`'s table of strong read-through records holds `name`.
+    fn in_read_through(host: &Environment, name: &str) -> bool {
+        host.rare
+            .get()
+            .and_then(|rare| rare.read_through.get())
+            .is_some_and(|table| table.borrow().records.contains_key(name))
+    }
+
+    /// What `env`'s placeholder store has charged, if it has one.
+    fn store_charged(env: &Environment) -> usize {
+        env.weak_entries().map_or(0, PlaceholderStore::charged)
+    }
+
+    /// What a store charges for holding `name`: an `Rc<str>`'s two counts
+    /// and its bytes. An entry taken out gives back exactly these, at once,
+    /// since the store's table keeps its capacity.
+    fn name_bytes(name: &str) -> usize {
+        RC_COUNTS + name.len()
+    }
+
+    /// Every count agrees: each namespace's running sums with its tables,
+    /// each store's with its entries, the heap's sums with theirs, and the
+    /// heap's external bytes with what the namespaces and their stores have
+    /// charged. `envs` is every namespace alive on `heap`.
+    fn assert_counts_agree(heap: &SharedHeap, envs: &[&Environment]) {
+        let h = heap.borrow();
+        let mut total = (0, 0);
+        let mut charged = 0;
+        for env in envs {
+            assert_eq!(env.recount(&h), env.counted(), "a namespace's sums");
+            if let Some(store) = env.weak_entries() {
+                assert_eq!(store.recount(&h), store.counted(), "a store's sums");
+            }
+            let ((records, cells), (in_store, its_cells)) = (env.counted(), stored(env));
+            total = (total.0 + records + in_store, total.1 + cells + its_cells);
+            charged += env.charged_bytes().expect("a namespace") + store_charged(env);
+        }
+        assert_eq!(
+            (h.binding_records(), h.cells()),
+            total,
+            "the heap's sums are the namespaces' and their stores'"
+        );
+        assert_eq!(
+            h.external_bytes(),
+            charged,
+            "the heap's external bytes are the namespaces' and their stores' charges"
+        );
+    }
+
+    /// Whether the pair `word` named was freed.
+    fn freed(heap: &SharedHeap, word: TaggedValue) -> bool {
+        heap.borrow().free_pair_slots().contains(&word.heap_index())
+    }
+
+    /// The global namespace binding `x` to 1, and a host namespace over it.
+    fn global_and_host(heap: &SharedHeap) -> (Rc<Environment>, Rc<Environment>) {
+        let global = Rc::new(Environment::with_heap(heap));
+        global.define(heap, "x", n(1));
+        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
+        (global, host)
+    }
+
+    /// What `record` resolves to now.
+    fn resolved(heap: &SharedHeap, record: Record) -> TaggedValue {
+        let h = heap.borrow();
+        record.resolved_cell(&h).value(&h)
+    }
+
+    /// A define adopts a placeholder: its word, in a fresh slot, flags 0,
+    /// over a fresh cell of the namespace's own holding the value, so code
+    /// that linked it reads the binding from now on. The store lets go of a
+    /// record and a cell and the namespace counts them, so the heap's sums
+    /// do not move, and gives back its name's bytes at once. Bound, it is
+    /// never dropped: a collection rooted at the namespace alone keeps it,
+    /// and frees the placeholder's own cell.
+    #[test]
+    fn a_define_adopts_a_placeholder_and_keeps_its_word() {
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        let placeholder = ns.link_record(&heap, "later").expect("a placeholder");
+        let unbound = heap.borrow().car(placeholder.word());
+        let before = sums(&heap);
+        let (records, cells) = ns.counted();
+        assert_eq!(stored(&ns), (1, 1));
+        let store_before = store_charged(&ns);
+
+        ns.define(&heap, "later", n(5));
+        assert_eq!(
+            store_before - store_charged(&ns),
+            name_bytes("later"),
+            "the store gives back its name's bytes"
+        );
+        assert_eq!(
+            ns.local_record("later"),
+            Some(placeholder),
+            "its word, in a slot"
+        );
+        {
+            let h = heap.borrow();
+            assert_eq!(h.cdr(placeholder.word()), n(0), "its flag cleared");
+            let cell = placeholder.cell(&h);
+            assert!(cell.owned_by(&h, ns.env_id()));
+            assert_ne!(cell.word(), unbound, "a fresh cell");
+            assert_eq!(cell.value(&h), n(5));
+        }
+        assert_eq!(ns.get(&heap, "later"), Some(n(5)));
+        assert!(!ns.holds_placeholder("later"));
+        assert_eq!(stored(&ns), (0, 0), "the store let go of it");
+        assert_eq!(sums(&heap), before, "moved from the store to the namespace");
+        assert_eq!(ns.counted(), (records + 1, cells + 1));
+        assert_counts_agree(&heap, &[&ns]);
+        assert_eq!(ns.link_record(&heap, "later"), Some(placeholder));
+
+        collect_only(&mut heap.borrow_mut(), |visitor| visitor.env(&ns));
+        assert!(
+            !freed(&heap, placeholder.word()),
+            "a bound placeholder stays"
+        );
+        assert!(freed(&heap, unbound), "its own cell is garbage");
+        assert_eq!(ns.get(&heap, "later"), Some(n(5)));
+        assert_counts_agree(&heap, &[&ns]);
+    }
+
+    /// An import adopts a placeholder: its word, in a fresh slot, re-pointed
+    /// at the exporter's cell, so what the library assigns later the code
+    /// that linked it reads. The namespace counts a record and no cell, so
+    /// the heap's cells fall by the placeholder's own. A cell of the
+    /// namespace's own imported under a placeholder's name is copied, as
+    /// `define` would, and adopts it the same way.
+    #[test]
+    fn an_import_adopts_a_placeholder_over_the_exporters_cell() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "v", n(20));
+        let exported = library.cell_of(&heap, "v").unwrap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        let placeholder = ns.link_record(&heap, "later").expect("a placeholder");
+        let (records, cells) = sums(&heap);
+        let counted = ns.counted();
+        let store_before = store_charged(&ns);
+
+        ns.import_cell(&heap, "later", exported);
+        assert_eq!(ns.local_record("later"), Some(placeholder));
+        assert_eq!(
+            store_before - store_charged(&ns),
+            name_bytes("later"),
+            "the store gives back its name's bytes"
+        );
+        {
+            let h = heap.borrow();
+            assert_eq!(h.cdr(placeholder.word()), n(0), "its flag cleared");
+            assert_eq!(placeholder.cell(&h), exported);
+        }
+        library.define(&heap, "v", n(21));
+        assert_eq!(ns.get(&heap, "later"), Some(n(21)), "the library's store");
+        assert_eq!(stored(&ns), (0, 0));
+        assert_eq!(sums(&heap), (records, cells - 1), "its own cell let go");
+        assert_eq!(ns.counted(), (counted.0 + 1, counted.1));
+        assert_counts_agree(&heap, &[&library, &ns]);
+
+        ns.define(&heap, "own", n(7));
+        let own = ns.cell_of(&heap, "own").unwrap();
+        let copied = ns.link_record(&heap, "copied").expect("a placeholder");
+        let store_before = store_charged(&ns);
+        ns.import_cell(&heap, "copied", own);
+        assert_eq!(ns.local_record("copied"), Some(copied));
+        assert_eq!(store_before - store_charged(&ns), name_bytes("copied"));
+        {
+            let h = heap.borrow();
+            assert_ne!(copied.cell(&h), own, "a copy");
+            assert!(copied.cell(&h).owned_by(&h, ns.env_id()));
+        }
+        assert_eq!(ns.get(&heap, "copied"), Some(n(7)));
+        assert_counts_agree(&heap, &[&library, &ns]);
+    }
+
+    /// A host namespace that links a name its parent does not bind (R7)
+    /// gets a weak read-through record over the parent's placeholder, in its
+    /// store and not its table, counted there, and the same one when asked
+    /// again. Once the parent binds the name, adopting the placeholder, the
+    /// record reads the binding through it, and the next link promotes it
+    /// into the table, counted by the namespace from then. One of the two
+    /// tables holds it at every step, never both (S9). The host namespace
+    /// is charged the read-through table its first weak record makes for
+    /// the cell it names, and each store gives back a name's bytes at once
+    /// as the parent adopts its placeholder and as the record is promoted.
+    /// A name the parent reaches by an alias gets neither a record nor a
+    /// placeholder.
+    #[test]
+    fn a_host_links_a_weak_child_over_the_parents_placeholder_and_promotes_it() {
+        let heap = new_shared_heap();
+        let (global, host) = global_and_host(&heap);
+        let (records, cells) = sums(&heap);
+        let counted = (global.counted(), host.counted());
+        let one_table = |name: &str| {
+            assert!(
+                !(in_read_through(&host, name) && in_store(&host, name)),
+                "{name} in both of the host's tables"
+            );
+        };
+        let unlinked = host.charged_bytes().unwrap();
+
+        let child = host.link_record(&heap, "y").expect("a weak child");
+        assert!(
+            host.charged_bytes().unwrap() >= unlinked + size_of::<RefCell<ReadThrough>>(),
+            "the read-through table is charged"
+        );
+        let placeholder = global
+            .weak_entries()
+            .and_then(|store| store.get("y"))
+            .expect("the global's placeholder");
+        {
+            let h = heap.borrow();
+            assert_eq!(child.parent_record(&h), Some(placeholder));
+            assert!(placeholder.is_placeholder(&h));
+        }
+        assert!(in_store(&host, "y") && !in_read_through(&host, "y"), "weak");
+        one_table("y");
+        assert_eq!(
+            sums(&heap),
+            (records + 2, cells + 1),
+            "the child, and the placeholder and its cell"
+        );
+        assert_eq!(
+            (global.counted(), host.counted()),
+            counted,
+            "the stores count them"
+        );
+        assert_eq!(host.link_record(&heap, "y"), Some(child), "the same one");
+        assert_counts_agree(&heap, &[&global, &host]);
+
+        let global_store = store_charged(&global);
+        global.define(&heap, "y", n(5));
+        assert_eq!(global.local_record("y"), Some(placeholder), "adopted");
+        assert_eq!(global_store - store_charged(&global), name_bytes("y"));
+        assert_eq!(resolved(&heap, child), n(5), "read through it");
+        assert!(in_store(&host, "y"), "still weak until linked again");
+        one_table("y");
+        assert_counts_agree(&heap, &[&global, &host]);
+
+        let (host_records, host_cells) = host.counted();
+        let host_store = store_charged(&host);
+        assert_eq!(
+            host.link_record(&heap, "y"),
+            Some(child),
+            "promoted, not remade"
+        );
+        assert_eq!(
+            host_store - store_charged(&host),
+            name_bytes("y"),
+            "the host's store gives back the promoted record's name"
+        );
+        assert!(in_read_through(&host, "y") && !in_store(&host, "y"));
+        one_table("y");
+        assert_eq!(host.counted(), (host_records + 1, host_cells));
+        assert_eq!(sums(&heap), (records + 2, cells + 1));
+        assert_counts_agree(&heap, &[&global, &host]);
+
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "target", n(100));
+        global.define_alias("aliased", Rc::clone(&library), Rc::from("target"));
+        assert_eq!(host.link_record(&heap, "aliased"), None, "read by name");
+        assert!(!in_store(&global, "aliased") && !in_store(&host, "aliased"));
+        assert_counts_agree(&heap, &[&global, &host, &library]);
+    }
+
+    /// #836's question 11, pending the owner's ruling: a weak read-through
+    /// record whose parent placeholder was bound since stays weak until it
+    /// is linked again, so a collection that no link table marks it in
+    /// drops it, and keeps the parent's record, bound in its slot. The next
+    /// link makes a strong record over that.
+    #[test]
+    fn an_unlinked_weak_child_over_a_parent_bound_since_is_dropped() {
+        let heap = new_shared_heap();
+        let (global, host) = global_and_host(&heap);
+        let child = host.link_record(&heap, "z").expect("a weak child");
+        global.define(&heap, "z", n(3));
+        let parent = global.local_record("z").unwrap();
+
+        collect_only(&mut heap.borrow_mut(), |visitor| {
+            visitor.env(&global);
+            visitor.env(&host);
+        });
+        assert!(
+            freed(&heap, child.word()),
+            "dropped, though its parent is bound"
+        );
+        assert!(!freed(&heap, parent.word()));
+        assert!(!in_store(&host, "z"));
+        assert_eq!(global.get(&heap, "z"), Some(n(3)));
+        assert_counts_agree(&heap, &[&global, &host]);
+
+        let strong = host.link_record(&heap, "z").expect("a strong child");
+        assert!(in_read_through(&host, "z") && !in_store(&host, "z"));
+        assert_eq!(strong.parent_record(&heap.borrow()), Some(parent));
+        assert_eq!(resolved(&heap, strong), n(3));
+        assert_counts_agree(&heap, &[&global, &host]);
+    }
+
+    /// A weak read-through record goes alone: while code linked in the
+    /// parent links its placeholder, a collection that marks the
+    /// placeholder through that link table, and not the record, drops the
+    /// record and keeps the placeholder in the parent's store.
+    #[test]
+    fn a_weak_child_goes_alone_while_its_parents_placeholder_is_linked() {
+        let heap = new_shared_heap();
+        let (global, host) = global_and_host(&heap);
+        let child = host.link_record(&heap, "w").expect("a weak child");
+        let linked = LinkTable::new(vec![Rc::<str>::from("w")].into_boxed_slice());
+        linked.link_in(&heap, &global);
+        let placeholder = Record::from_word(linked.entry(0));
+        assert_eq!(child.parent_record(&heap.borrow()), Some(placeholder));
+
+        collect_only(&mut heap.borrow_mut(), |visitor| {
+            visitor.env(&global);
+            visitor.env(&host);
+            linked.trace(visitor);
+        });
+        assert!(freed(&heap, child.word()), "the record goes");
+        assert!(!freed(&heap, placeholder.word()), "its parent stays");
+        assert!(in_store(&global, "w") && !in_store(&host, "w"));
+        assert_counts_agree(&heap, &[&global, &host]);
+    }
+
+    /// A define in the host namespace adopts its weak read-through record
+    /// as it does a strong one: the record's word, in a slot, flags 0, over
+    /// a fresh cell; the host's store lets go of it, and the namespace counts
+    /// a record and a cell. The parent's placeholder it read through is
+    /// left, and dropped by the next collection nothing links it in. An
+    /// import adopts one the same way, over the exporter's cell, counting a
+    /// record and no cell.
+    #[test]
+    fn a_host_define_or_import_adopts_its_weak_child() {
+        let heap = new_shared_heap();
+        let (global, host) = global_and_host(&heap);
+        let child = host.link_record(&heap, "y").expect("a weak child");
+        let placeholder = global
+            .weak_entries()
+            .and_then(|store| store.get("y"))
+            .unwrap();
+        let (records, cells) = host.counted();
+        let host_store = store_charged(&host);
+
+        host.define(&heap, "y", n(9));
+        assert_eq!(host.local_record("y"), Some(child), "its word, in a slot");
+        assert_eq!(
+            host_store - store_charged(&host),
+            name_bytes("y"),
+            "the host's store gives back its name's bytes"
+        );
+        {
+            let h = heap.borrow();
+            assert_eq!(h.cdr(child.word()), n(0), "an own record now");
+            assert!(child.cell(&h).owned_by(&h, host.env_id()));
+            assert_eq!(child.value(&h), n(9));
+        }
+        assert!(!in_store(&host, "y") && !in_read_through(&host, "y"));
+        assert_eq!(host.counted(), (records + 1, cells + 1));
+        assert_eq!(global.get(&heap, "y"), None);
+        assert_counts_agree(&heap, &[&global, &host]);
+
+        collect_only(&mut heap.borrow_mut(), |visitor| {
+            visitor.env(&global);
+            visitor.env(&host);
+        });
+        assert!(
+            freed(&heap, placeholder.word()),
+            "the placeholder, orphaned"
+        );
+        assert!(!freed(&heap, child.word()));
+        assert!(!in_store(&global, "y"));
+        assert_eq!(host.get(&heap, "y"), Some(n(9)));
+        assert_counts_agree(&heap, &[&global, &host]);
+
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "v", n(20));
+        let exported = library.cell_of(&heap, "v").unwrap();
+        let imported = host.link_record(&heap, "y2").expect("a weak child");
+        let (records, cells) = host.counted();
+        let host_store = store_charged(&host);
+        host.import_cell(&heap, "y2", exported);
+        assert_eq!(host.local_record("y2"), Some(imported));
+        assert_eq!(host_store - store_charged(&host), name_bytes("y2"));
+        {
+            let h = heap.borrow();
+            assert_eq!(h.cdr(imported.word()), n(0), "an own record now");
+            assert_eq!(imported.cell(&h), exported);
+        }
+        assert_eq!(
+            host.counted(),
+            (records + 1, cells),
+            "an import makes no cell"
+        );
+        assert!(!in_store(&host, "y2"));
+        assert_eq!(host.get(&heap, "y2"), Some(n(20)));
+        assert_counts_agree(&heap, &[&global, &host, &library]);
+    }
+
+    /// A scoped definition of a name a placeholder holds leaves it in its
+    /// store (S14): flagged and over `UNBOUND` still, in no slot, while a
+    /// read under the scopes finds the scoped binding, as before. Only a
+    /// define or an import by name adopts one.
+    #[test]
+    fn a_scoped_definition_leaves_the_placeholder_in_its_store() {
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        let placeholder = ns.link_record(&heap, "foo").expect("a placeholder");
+        let mut scopes = ScopeSet::new();
+        scopes.add_scope(ScopeId(7));
+        ns.define_with_scopes(&heap, "foo", scopes.clone(), n(4));
+
+        assert!(in_store(&ns, "foo"));
+        {
+            let h = heap.borrow();
+            assert!(placeholder.is_placeholder(&h));
+            assert_eq!(placeholder.value(&h), TaggedValue::UNBOUND);
+        }
+        assert_eq!(
+            ns.get_with_scopes(&heap, "foo", &scopes).unwrap(),
+            Some(n(4))
+        );
+        assert_eq!(ns.local_slot("foo"), None);
+        assert_eq!(ns.link_record(&heap, "foo"), Some(placeholder));
+        assert_counts_agree(&heap, &[&ns]);
+    }
+
+    /// A host namespace dropped while its store still holds weak
+    /// read-through records, none adopted, promoted or dropped by a pass,
+    /// gives back everything it and its store took: its store's drop lets
+    /// go of a record each and no cell, and its charge. The heap's sums
+    /// and external bytes return to what they were before the host
+    /// namespace, and its parent's placeholders stay in the parent's store.
+    #[test]
+    fn a_host_namespace_s_drop_gives_back_its_weak_children() {
+        let heap = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(&heap));
+        global.define(&heap, "x", n(1));
+        for name in ["y", "z"] {
+            global.link_record(&heap, name).expect("a placeholder");
+        }
+        let held = || {
+            let h = heap.borrow();
+            (
+                h.namespaces(),
+                h.binding_records(),
+                h.cells(),
+                h.external_bytes(),
+            )
+        };
+        let before = held();
+
+        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
+        for name in ["y", "z"] {
+            host.link_record(&heap, name).expect("a weak child");
+        }
+        assert!(in_store(&host, "y") && in_store(&host, "z"));
+        assert_eq!(stored(&host), (2, 0), "a record each, and no cell");
+        assert_counts_agree(&heap, &[&global, &host]);
+
+        drop(host);
+        assert_eq!(held(), before, "everything given back");
+        assert!(in_store(&global, "y") && in_store(&global, "z"));
+        assert_counts_agree(&heap, &[&global]);
+    }
+
+    /// `append_slot`'s check (Rule 1, #836): the one writer of a namespace's
+    /// slots refuses a placeholder, as an adoption that left its flag set
+    /// would hand it, so no slot holds a record the sweep's pass could drop.
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "a slot for \"later\" given a placeholder or a read-through record")]
+    fn a_check_build_refuses_a_placeholder_in_a_slot() {
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        let placeholder = ns.link_record(&heap, "later").expect("a placeholder");
+        ns.append_slot(&heap.borrow(), Rc::from("later"), placeholder.word());
+    }
+
+    /// `insert_scoped_record`'s assertion (#836): a visible scoped
+    /// definition, which only the tree-walker makes, and it links nothing,
+    /// is refused over a host namespace's weak read-through record, as over
+    /// a strong one.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a visible scoped definition over a read-through record")]
+    fn a_visible_scoped_definition_over_a_weak_child_is_refused() {
+        let heap = new_shared_heap();
+        let (_global, host) = global_and_host(&heap);
+        host.link_record(&heap, "w").expect("a weak child");
+        let mut scopes = ScopeSet::new();
+        scopes.add_scope(ScopeId(7));
+        host.define_scoped_definition(&heap, "w", scopes, n(1));
     }
 }
 
@@ -7216,6 +8101,8 @@ mod gc_edge_tests {
                 namespace: None,
                 // A host namespace's: `read_through_edges`.
                 read_through: OnceCell::new(),
+                // Weak, never traced (#836): a namespace's alone.
+                placeholders: OnceCell::new(),
             })),
             parent: Some(parent),
         };
@@ -7593,6 +8480,98 @@ mod relink_alias_tests {
         assert_eq!(minted.get(), 2);
         assert_eq!(program.get(&heap, &as_written), Some(n(1)));
         assert_eq!(program.get(&heap, &as_generated), Some(n(1)));
+    }
+
+    /// The mint skips a name a placeholder holds (#836): an alias there
+    /// would leave code that linked the name reading the placeholder where
+    /// `get` reads the alias.
+    #[test]
+    fn minting_skips_a_name_a_placeholder_holds() {
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
+        let placeholder = program
+            .link_record(&heap, "helper.1")
+            .expect("a placeholder");
+        let minted = Cell::new(0);
+        let mut mint = || {
+            minted.set(minted.get() + 1);
+            Rc::<str>::from(format!("helper.{}", minted.get()))
+        };
+        let alias = program.relink_alias(
+            Rc::clone(&library),
+            "helper".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        assert_eq!(&*alias, "helper.2");
+        assert_eq!(program.get(&heap, &alias), Some(n(1)));
+        assert_eq!(program.get(&heap, "helper.1"), None, "still unbound");
+        assert_eq!(program.link_record(&heap, "helper.1"), Some(placeholder));
+    }
+
+    /// The same in a host namespace (#836): the mint skips a name its weak
+    /// read-through record holds, over the parent's placeholder.
+    #[test]
+    fn minting_skips_a_name_a_weak_read_through_record_holds() {
+        let heap = new_shared_heap();
+        let (library, _) = library_and_program(&heap);
+        let global = Rc::new(Environment::with_heap(&heap));
+        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
+        let child = host.link_record(&heap, "helper.1").expect("a weak child");
+        let minted = Cell::new(0);
+        let mut mint = || {
+            minted.set(minted.get() + 1);
+            Rc::<str>::from(format!("helper.{}", minted.get()))
+        };
+        let alias = host.relink_alias(
+            Rc::clone(&library),
+            "helper".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        assert_eq!(&*alias, "helper.2");
+        assert_eq!(host.get(&heap, &alias), Some(n(1)));
+        assert_eq!(host.get(&heap, "helper.1"), None, "still unbound");
+        assert_eq!(host.link_record(&heap, "helper.1"), Some(child));
+    }
+
+    /// `remembered_relink`'s assertion (#836): no path puts a placeholder at
+    /// a remembered alias's spelling, since the mint skips a name one holds
+    /// and a link of an alias's spelling makes none, so one forged into the
+    /// store there is refused at the next relink to the same target.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a remembered relink alias over a placeholder")]
+    fn a_remembered_relink_alias_over_a_placeholder_is_refused() {
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
+        let mut mint = || Rc::<str>::from("helper.1");
+        let alias = program.relink_alias(
+            Rc::clone(&library),
+            "helper".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        program
+            .link_record(&heap, "elsewhere")
+            .expect("a placeholder, and the store");
+        let forged = {
+            let mut h = heap.borrow_mut();
+            let cell = BindingCell::new_own(&mut h, TaggedValue::UNBOUND, program.env_id());
+            Record::placeholder(&mut h, cell)
+        };
+        let store = program.weak_entries().expect("the store");
+        store.insert(alias, forged);
+        program.relink_alias(
+            Rc::clone(&library),
+            "helper".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
     }
 
     #[test]
