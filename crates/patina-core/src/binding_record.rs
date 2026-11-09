@@ -34,6 +34,14 @@
 //! the namespace's `PlaceholderStore` holds it, weakly. A define or an import
 //! of the name adopts it as a read-through record is adopted, into a slot,
 //! keeping its word, flags 0.
+//!
+//! The heap's **by-name record** (#836) is one more, `(cell . BY_NAME)` over
+//! a free cell holding `TaggedValue::UNBOUND`, one per heap
+//! (`Heap::by_name_record`): what a link table links for a name its
+//! namespace reaches by an alias or a visible scoped definition, which is
+//! read by name. It is in no slot and no store, and nothing adopts it or
+//! stores into its cell, so every read through it finds `UNBOUND` and goes
+//! by name (`LinkTable::read_cold`).
 
 use crate::Trace;
 use crate::census::Site;
@@ -76,6 +84,13 @@ pub(crate) struct Record(TaggedValue);
 /// and kept in the namespace's `PlaceholderStore`, never in a slot. Cleared
 /// when a define or an import adopts it into a slot ([`Record::adopt`]).
 pub(crate) const PLACEHOLDER: i64 = 1;
+
+/// A record's flag (#836): set on the heap's by-name record alone
+/// ([`Record::by_name`]), a record over a free cell that holds
+/// `TaggedValue::UNBOUND` for good, which a link table links for a name its
+/// namespace reaches by an alias or a visible scoped definition. Every read
+/// through it goes by name; never in a slot or a store, never adopted.
+pub(crate) const BY_NAME: i64 = 2;
 
 /// A location: the pair `(value . owner)`, where owner is the fixnum
 /// `env_id << 4` for the namespace whose cell it is, or 0 for a free cell
@@ -183,6 +198,14 @@ impl Record {
         Record(heap.alloc_pair(cell.0, TaggedValue::fixnum(PLACEHOLDER)))
     }
 
+    /// The heap's by-name record (#836): the record with [`BY_NAME`] set,
+    /// over a free cell holding `TaggedValue::UNBOUND`, which nothing stores
+    /// into. Made once a heap, by `Heap::by_name_record`, which roots it.
+    pub(crate) fn by_name(heap: &mut Heap) -> Self {
+        let cell = BindingCell::free(heap, TaggedValue::UNBOUND);
+        Record(heap.alloc_pair(cell.0, TaggedValue::fixnum(BY_NAME)))
+    }
+
     /// Whether this record is a placeholder ([`PLACEHOLDER`]), not yet
     /// adopted (#836).
     #[inline]
@@ -226,14 +249,9 @@ impl Record {
 
     /// The cell this record's binding is now: its own, or for a read-through
     /// record the cell its parent's record names now. A `set!` through it
-    /// stores here, into the parent's cell (#835).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "4b.9's linked reads and stores resolve through it (#836)"
-        )
-    )]
+    /// stores here, into the parent's cell (#835): a linked `StoreGlobal`'s
+    /// through a host namespace's read-through record
+    /// (`LinkTable::assignee`, #836).
     pub(crate) fn resolved_cell(self, heap: &Heap) -> BindingCell {
         match self.parent_record(heap) {
             Some(parent) => parent.cell(heap),
@@ -249,6 +267,18 @@ impl Record {
         if crate::heap::GC_CHECK && self.parent_record(heap).is_some() {
             read_through_as_own();
         }
+        BindingCell(heap.car(self.0))
+    }
+
+    /// The cell in this record's car, unchecked: for a record of its own its
+    /// cell, and for a read-through record, the by-name record or a
+    /// placeholder a cell holding `TaggedValue::UNBOUND`. For the linked
+    /// reads and stores (`LinkTable::get`, `LinkTable::assignee`, #836),
+    /// which test the value for `UNBOUND` and take the cold path on it, so
+    /// they skip [`Record::cell`]'s check-build refusal of a read-through
+    /// record, which is for a read that would take that marker as a value.
+    #[inline(always)]
+    pub(crate) fn car_cell(self, heap: &Heap) -> BindingCell {
         BindingCell(heap.car(self.0))
     }
 

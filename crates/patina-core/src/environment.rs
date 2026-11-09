@@ -2070,8 +2070,10 @@ impl Environment {
     /// Whether `get` finds `name` here by an alias or a visible scoped
     /// definition, before any slot's binding but this namespace's own:
     /// [`link_record`](Self::link_record) leaves such a name to be read by
-    /// name.
-    fn read_by_name(&self, name: &str) -> bool {
+    /// name, and `LinkTable::read_cold` and `LinkTable::assignee` read and
+    /// write a host namespace's read-through record by name when its
+    /// namespace has gained one since (#836). Takes no borrow of the heap.
+    pub(crate) fn read_by_name(&self, name: &str) -> bool {
         (self.has_aliases.get() && self.alias_target(name).is_some())
             || self.visible_scoped_index(name).is_some()
     }

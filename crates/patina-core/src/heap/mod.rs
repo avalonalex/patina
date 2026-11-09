@@ -1655,6 +1655,23 @@ impl Heap {
         self.handles.set_parameterize_each(procedure);
     }
 
+    /// The heap's by-name record (#836): `(cell . BY_NAME)` over a free cell
+    /// holding `UNBOUND`, made on the first call and the same word on every
+    /// later one, rooted by the handle table for the heap's life. What a VM
+    /// link table links for a name its namespace reaches by an alias or a
+    /// visible scoped definition (`LinkTable::link_in`), so that each entry
+    /// is a record and the linked read's two loads need no test of their
+    /// own: every read through it finds `UNBOUND` and goes by name. No
+    /// namespace's, so `binding-records` and `cells` count neither pair.
+    pub(crate) fn by_name_record(&mut self) -> TaggedValue {
+        if let Some(record) = self.handles.by_name() {
+            return record;
+        }
+        let record = crate::binding_record::Record::by_name(self).word();
+        self.handles.set_by_name(record);
+        record
+    }
+
     /// Which of the heap's standard port parameters `value` is, if it is one
     /// ([`Heap::standard_port_parameters`]).
     #[inline]
