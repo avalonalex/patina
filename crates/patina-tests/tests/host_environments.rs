@@ -1974,3 +1974,56 @@ fn a_host_forward_reference_reads_the_global_definition_made_after_a_collection(
         "{collected} collections under zeal on the tree-walker, and the host asks for 2"
     );
 }
+
+/// Host code reads a name nothing binds, and the error is caught; after two
+/// collections the global namespace defines the name, and the same host
+/// closure reads it. On the VM the host's unit links the name to a weak
+/// read-through record over the global namespace's placeholder (#836), and
+/// the global definition adopts the placeholder, not the host's record, so
+/// every read of it in the host goes through the cold read: a miss the
+/// cold read remembered, for the unit, the record or the name, would raise
+/// again, and the collections must keep both records while the host's
+/// closure lives. The global namespace's own forward reference reads its
+/// definition through the record the definition adopted, never the cold
+/// read, so only a host's read shows this (later-notes' PR-6 note). The
+/// tree-walker reads by name each time. Run on each backend's interpreter
+/// and on a zeal one, which must have collected beyond the two collections
+/// the program asks for.
+fn host_read_that_missed<B: Backend>(interp: Interpreter<B>) -> (String, u64) {
+    interp
+        .eval_program_owned("(import (scheme base) (patina debug))")
+        .unwrap();
+    let env = interp.new_environment();
+    interp
+        .eval_program_in(
+            &env,
+            "(define (g) host-later-836m)
+             (define r (guard (e (#t 'caught)) (g)))",
+        )
+        .unwrap();
+    interp
+        .eval_program_owned("(gc) (gc) (define host-later-836m 5)")
+        .unwrap();
+    let value = interp.eval_str_in(&env, "(list r (g))").unwrap();
+    (interp.display_tagged(value), collections(&interp))
+}
+
+#[test]
+fn a_host_read_that_missed_is_not_remembered_across_collections() {
+    let (answer, _) = host_read_that_missed(vm_interpreter());
+    assert_eq!(answer, "(caught 5)");
+    let (answer, collected) = host_read_that_missed(vm_interpreter_zeal());
+    assert_eq!(answer, "(caught 5)", "under zeal");
+    assert!(
+        collected > 2,
+        "{collected} collections under zeal on the VM"
+    );
+    let (answer, _) = host_read_that_missed(tree_walker_interpreter());
+    assert_eq!(answer, "(caught 5)");
+    let (answer, collected) = host_read_that_missed(tree_walker_interpreter_zeal());
+    assert_eq!(answer, "(caught 5)", "under zeal");
+    assert!(
+        collected > 2,
+        "{collected} collections under zeal on the tree-walker"
+    );
+}
