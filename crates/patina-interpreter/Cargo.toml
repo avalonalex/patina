@@ -44,3 +44,7 @@ required-features = ["tree-walker"]
 [[example]]
 name = "many_heaps"
 required-features = ["vm"]
+
+[[example]]
+name = "host_global_read"
+required-features = ["vm"]
