@@ -1665,10 +1665,10 @@ stage is judged by (`PRD/GC_PRD.md` §16). The sets:
 `tak`, Larceny's `tak` at count 500 on 18, 12, 6, is in no set: it is the
 global-path workload of at least 1 s that row 4b's gate names (#836),
 1.24–1.34 s wall on the VM here in single runs (2026-11-07; #836 measured
-1.07–1.09 s), run with `--workload tak`, pending the owner's ruling on
-#836's question 1 (recommended: in no set through stage 4b, with the
+1.07–1.09 s), run with `--workload tak`, by the owner's ruling of
+2026-11-08 on #836's question 1: in no set through stage 4b, with the
 stage-4 exit baseline, decision 25 on #782, still open, deciding whether it
-joins `gbs`). Names
+joins `gbs`. Names
 given with `--workload` replace the sets, silently: `--set gbs --workload
 tak` runs only `tak`. So a gate that names it runs two A/Bs, the sets and
 then `--workload tak`.
