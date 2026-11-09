@@ -109,6 +109,9 @@ pub(in crate::runtime) fn retire_registers(
 /// that reads it folds away.
 #[cfg(not(feature = "test-support"))]
 pub(in crate::runtime) mod switches {
+    use crate::types::CodeObject;
+    use std::rc::Rc;
+
     /// The register a wrong-map control drops from `roots` (#625,
     /// `test_support::DropHighestLive`): `None`, so the comparison in
     /// `retire_registers` folds away.
@@ -117,10 +120,11 @@ pub(in crate::runtime) mod switches {
         None
     }
 
-    /// Whether a collection traces no unit's link table (#836,
+    /// Whether a collection passes over a code id that names `code`, and
+    /// leaves its unit's link table untraced (#836,
     /// `test_support::SkipCodeIds`): never.
     #[inline(always)]
-    pub(in crate::runtime) fn skip_code_ids() -> bool {
+    pub(in crate::runtime) fn skip_code_id(_code: &Rc<CodeObject>) -> bool {
         false
     }
 
@@ -157,18 +161,18 @@ impl RootProvider for VmState {
         // another machine's, finds nothing; the unit's members share one
         // table, traced once this epoch. Its entries are slots, and the
         // namespace it was linked in goes to `visitor.env`.
-        //
-        // A positive control's switch skips every table, before any is
-        // marked traced this epoch, so that `release_dead_code`'s check sees
-        // the kept units' tables untraced (#836).
-        if switches::skip_code_ids() {
-            return;
-        }
         let epoch = self.trace_epoch.get();
         for &id in ids {
             let Some(code) = loaded(&self.code_store, CodeObjectId(id)) else {
                 continue;
             };
+            // A positive control's switch passes over the ids of the code
+            // one kind of keeper keeps, before their table is marked traced
+            // this epoch, so that `release_dead_code`'s check sees those
+            // units' tables untraced (#836).
+            if switches::skip_code_id(code) {
+                continue;
+            }
             if code.links.trace_once(epoch) {
                 continue;
             }

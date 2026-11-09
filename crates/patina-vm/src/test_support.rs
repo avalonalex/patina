@@ -6,10 +6,13 @@
 //! check exists to catch.
 
 use std::cell::Cell;
+use std::rc::Rc;
+
+use crate::types::CodeObject;
 
 thread_local! {
     static DROP_HIGHEST_LIVE: Cell<bool> = const { Cell::new(false) };
-    static SKIP_CODE_IDS: Cell<bool> = const { Cell::new(false) };
+    static SKIP_CODE_IDS: Cell<Option<Keeper>> = const { Cell::new(None) };
     static POLL_IN_WINDOW: Cell<Option<WindowEnd>> = const { Cell::new(None) };
 }
 
@@ -50,32 +53,56 @@ pub(crate) fn dropped(roots: &[u64], num_regs: u16) -> Option<usize> {
         .find(|&reg| roots.get(reg / 64).copied().unwrap_or(0) & (1 << (reg % 64)) != 0)
 }
 
-/// The switch behind the control of `release_dead_code`'s check (#836,
-/// `a_check_build_refuses_a_kept_unit_whose_table_was_not_traced` in
+/// The switch behind the controls of `release_dead_code`'s check (#836,
+/// the `a_check_build_refuses_…` tests in
 /// `crates/patina-tests/tests/gc_vm.rs`). While one is alive, a collection
-/// on this thread traces no unit's link table: `trace_code_ids` returns
-/// before it marks any table traced, which is what a holder that keeps a
-/// unit and reports no code id leaves. A check build then refuses the first
-/// unit the collection keeps. Thread-local, as [`DropHighestLive`] is.
+/// on this thread passes over each reported code id whose code one kind of
+/// keeper keeps, before `trace_code_ids` marks its unit's table traced:
+/// what a keeper of that kind that reported no code id would leave. A check
+/// build then refuses the first unit the collection kept with its table
+/// untraced. One kind for each of `unit_in_use`'s two conditions, so that a
+/// check that covered only the units one of them keeps, or only some kept
+/// units, fails a control. Thread-local, as [`DropHighestLive`] is.
 pub struct SkipCodeIds(());
 
+/// What keeps the code whose ids [`SkipCodeIds`] passes over.
+#[derive(Clone, Copy)]
+enum Keeper {
+    /// A live closure (`CodeObject::live_closures`).
+    Closure,
+    /// Something outside the code store that holds the code (a second
+    /// `Rc`): a frame, a captured continuation's frame, the running code.
+    Holder,
+}
+
 impl SkipCodeIds {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        SKIP_CODE_IDS.set(true);
+    /// Pass over an id whose code a live closure keeps.
+    pub fn kept_by_closures() -> Self {
+        SKIP_CODE_IDS.set(Some(Keeper::Closure));
+        Self(())
+    }
+
+    /// Pass over an id whose code a frame, a captured continuation's frame
+    /// or the running code keeps.
+    pub fn kept_by_frames() -> Self {
+        SKIP_CODE_IDS.set(Some(Keeper::Holder));
         Self(())
     }
 }
 
 impl Drop for SkipCodeIds {
     fn drop(&mut self) {
-        SKIP_CODE_IDS.set(false);
+        SKIP_CODE_IDS.set(None);
     }
 }
 
-/// Whether [`SkipCodeIds`]'s switch is on.
-pub(crate) fn skip_code_ids() -> bool {
-    SKIP_CODE_IDS.get()
+/// Whether [`SkipCodeIds`]'s switch passes over an id that names `code`.
+pub(crate) fn skip_code_id(code: &Rc<CodeObject>) -> bool {
+    match SKIP_CODE_IDS.get() {
+        None => false,
+        Some(Keeper::Closure) => code.live_closures.get() > 0,
+        Some(Keeper::Holder) => Rc::strong_count(code) > 1,
+    }
 }
 
 /// The switch behind the controls of the load windows' extent (#836,

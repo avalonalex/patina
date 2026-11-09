@@ -185,8 +185,9 @@ jobs:
     # entry over a cell or a parent that marks made by hand left unmarked
     # (the last two among heap::gc::tests::), and a namespace slot handed a
     # placeholder (environment::placeholder_tests::); and the VM's link
-    # tables' (#836), a unit a collection kept whose table it did not trace
-    # (gc_vm's a_check_build_refuses_…).
+    # tables' (#836), a unit a collection kept whose table it did not trace,
+    # one kept by a closure and one by a frame (gc_vm's two
+    # a_check_build_refuses_…).
     #
     # The defer balance is the one check every build carries, so its control
     # also runs in the plain release build, without gc-check and without

@@ -852,11 +852,14 @@ So once a collection has released the units nothing can run
 to), a check build asserts that every unit it kept had its link table traced
 in that collection's epoch (`LinkTable::traced_in`); a unit kept with its
 table untraced has a holder that reports nothing, whose code would read
-entries the collection did not keep. The control,
-`gc_vm.rs`'s `a_check_build_refuses_a_kept_unit_whose_table_was_not_traced`,
-skips every table with patina-vm's test-only switch
-(`test_support::SkipCodeIds`, which makes `trace_code_ids` return before it
-marks any traced) and expects the check's panic at the first collection.
+entries the collection did not keep. Its controls, `gc_vm.rs`'s two
+`a_check_build_refuses_…` tests, leave the units one kind of keeper keeps
+untraced with patina-vm's test-only switch (`test_support::SkipCodeIds`,
+which has `trace_code_ids` pass over the ids of the code that kind keeps
+before it marks their table traced): one the units live closures keep, the
+other the units a frame or the running code holds. Each expects the check's
+panic at `(gc)`, so a check that covered only one kind, or only some kept
+units, fails one of them.
 
 **Temporary retirement (#423):** the compiler records possible-root bitsets at
 instruction boundaries (`docs/VM_COMPILER.md` §10.4). Before an outermost

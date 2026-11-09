@@ -294,33 +294,59 @@ fn code_units_count_a_unit_a_live_closure_keeps() {
     );
 }
 
-/// The control of `release_dead_code`'s check (#836): a check build asserts,
-/// after every collection, that each unit the collection kept had its link
-/// table traced, since whatever keeps a unit is something that can run its
-/// code and reports the unit's code id. Here patina-vm's test-only switch
-/// (`test_support::SkipCodeIds`) has the collection trace no table, as a
-/// holder that reports nothing would leave it, and `g`'s closure keeps its
-/// unit (as the closures the bootstrap's libraries made keep theirs): the
-/// first collection with the switch on panics with the check's message,
-/// wherever it lands. Declared after the interpreter, the switch is off
-/// again before the interpreter drops in the unwind.
+/// The controls of `release_dead_code`'s check (#836): a check build
+/// asserts, after every collection, that each unit the collection kept had
+/// its link table traced, since whatever keeps a unit is something that can
+/// run its code and reports the unit's code id. patina-vm's test-only switch
+/// (`test_support::SkipCodeIds`) has the collection pass over the ids of the
+/// code one kind of keeper keeps, as a keeper of that kind that reported
+/// nothing would leave them, so that the units it keeps go untraced and the
+/// rest are traced: the first collection with the switch on panics with the
+/// check's message. There is a control for each of the two ways a unit is
+/// kept (`unit_in_use`), so that a check that covered only one of them, or
+/// only some of the kept units, fails one. The program imports and defines
+/// before the switch goes on, and runs `(gc)`, a form of its own, under it.
+/// Declared after the interpreter, the switch is off again before the
+/// interpreter drops in the unwind.
 ///
 /// Run in every check build: every debug `cargo test`, and a release one
 /// with this crate's `gc-check` feature, which CI's release GC lane runs
-/// with `--include-ignored`. A build without the check reports it ignored.
-/// No other test in this file may start with its name's prefix, which CI's
-/// line filters on.
+/// with `--include-ignored`. A build without the check reports them
+/// ignored. No other test in this file may have `a_check_build_refuses` in
+/// its name, which CI's line filters on.
+fn gc_with_tables_untraced(skip: fn() -> patina_vm::test_support::SkipCodeIds) {
+    let interp = vm_interpreter();
+    interp
+        .eval_program_owned("(import (scheme base) (patina debug)) (define (g) 1)")
+        .expect("import and define");
+    let _skip = skip();
+    let _ = interp.eval_program_owned("(gc)");
+}
+
+/// The units live closures keep go untraced: `g`'s, and the bootstrap's
+/// libraries', whose closures they made. `(gc)`'s own unit, which its frame
+/// and the running code keep, is traced, so a check that covered only the
+/// units something holds passes here.
 #[test]
 #[cfg_attr(
     not(any(debug_assertions, feature = "gc-check")),
     ignore = "needs a check build"
 )]
 #[should_panic(expected = "did not trace its link table")]
-fn a_check_build_refuses_a_kept_unit_whose_table_was_not_traced() {
-    let interp = vm_interpreter();
-    interp
-        .eval_program_owned("(import (scheme base) (patina debug))")
-        .expect("import");
-    let _skip = patina_vm::test_support::SkipCodeIds::new();
-    let _ = interp.eval_program_owned("(define (g) 1) (gc)");
+fn a_check_build_refuses_a_unit_a_closure_keeps_untraced() {
+    gc_with_tables_untraced(patina_vm::test_support::SkipCodeIds::kept_by_closures);
+}
+
+/// `(gc)`'s own unit, which its frame and the running code keep, is the one
+/// kept unit left untraced; the units closures keep are traced, so a check
+/// that covered only the units a live closure keeps passes here, as one that
+/// looked at only the first kept unit would, unless that is `(gc)`'s.
+#[test]
+#[cfg_attr(
+    not(any(debug_assertions, feature = "gc-check")),
+    ignore = "needs a check build"
+)]
+#[should_panic(expected = "did not trace its link table")]
+fn a_check_build_refuses_a_unit_a_frame_keeps_untraced() {
+    gc_with_tables_untraced(patina_vm::test_support::SkipCodeIds::kept_by_frames);
 }

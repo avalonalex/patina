@@ -1334,10 +1334,11 @@ backend; on the VM one inside the instruction that opened the window,
 which only the poll's own check sees, #864; and the check made at the last
 point each of the VM's load windows covers, which patina-vm's test-only
 switch `test_support::PollInWindow` adds, #836) and `retired_registers.rs` in
-`patina-tests`; `gc_vm.rs`'s `a_check_build_refuses_…` (#836): a unit a
-collection kept whose link table it did not trace, which patina-vm's
-test-only switch `test_support::SkipCodeIds` makes by having the collection
-trace no table; and `patina-core`'s `heap::check::`,
+`patina-tests`; `gc_vm.rs`'s two `a_check_build_refuses_…` (#836): a unit a
+collection kept whose link table it did not trace, which patina-vm's test-only
+switch `test_support::SkipCodeIds` makes by having the collection pass over
+the ids of the code one kind of keeper keeps (live closures in one, a frame or
+the running code in the other); and `patina-core`'s `heap::check::`,
 `heap::gc::tests::protocol::` (F4's two among them: a finalizer that
 allocates, and one that reaches a poll, #785), the port table's owner checks
 (`heap::port_table::tests::a_check_build_refuses_…`, #785): an id read
