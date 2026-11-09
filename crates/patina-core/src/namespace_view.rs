@@ -99,8 +99,7 @@ impl<'e> NamespaceView<'e> {
     // Lookups: each reads and none writes.
     // ---------------------------------------------------------------------
 
-    /// The environment's identity, which the VM's per-site cache keys on
-    /// beside the slot ([`Environment::env_id`]).
+    /// The environment's identity ([`Environment::env_id`]), never reused.
     #[inline(always)]
     pub fn env_id(self) -> u64 {
         self.env.env_id()
@@ -119,8 +118,8 @@ impl<'e> NamespaceView<'e> {
 
     /// The slot of `name` in this environment's own plain bindings, its own
     /// or imported, never the parent's ([`Environment::local_slot`]). Stable
-    /// for the environment's life, which the VM's per-site cache keys on
-    /// until 4b.9's link tables.
+    /// for the environment's life, and its record with it, which the VM's
+    /// link tables link (#836).
     #[inline(always)]
     pub fn local_slot(self, name: &str) -> Option<u32> {
         self.env.local_slot(name)

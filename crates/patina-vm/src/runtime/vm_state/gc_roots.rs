@@ -25,9 +25,10 @@
 //! collector queues each id once, and `trace_code_ids` traces the table of
 //! the unit each one names, once a collection (`LinkTable::trace_once`, by
 //! `trace_epoch`), in the same fixpoint as the continuation ids, since a
-//! continuation's frames report theirs only when its payload is traced. The
-//! VM does not link its units at load yet, so a table this traces has every
-//! entry `UNBOUND` and no namespace, and only the tests link one. A check
+//! continuation's frames report theirs only when its payload is traced. A
+//! table this traces marks the records its unit links, and with them the
+//! placeholders and weak read-through records nothing else marks, and the
+//! namespace the unit was linked in at load (`VmState::load_unit`). A check
 //! build asserts after each collection that the table of every unit it kept
 //! was traced (`VmState::release_dead_code`, with `LinkTable::traced_in`):
 //! whatever keeps a unit can run its code, and so reports its id.

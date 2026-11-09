@@ -188,8 +188,11 @@ pub struct CodeObject {
     /// (`LoadGlobal`, `StoreGlobal`, `Define`, `CallPrimitive` and the
     /// inline opcodes carry an index into it), made by pass 5 and shared by
     /// every member of the unit through this one `Rc`, and an entry beside
-    /// each for the record it will link, `UNBOUND` until then. Code with no
-    /// global operand, the runtime's stubs among it, has an empty one.
+    /// each for the record it links, linked by `VmState::load_unit` in the
+    /// namespace the unit was compiled in, before any read goes through it.
+    /// Code with no global operand, the runtime's stubs among it, has an
+    /// empty one; a stub's is never linked, and a table compiled and never
+    /// loaded (`--dump`, the disassembler) serves its names alone.
     #[trace(
         skip,
         reason = "traced by its unit's code id (`VmState::trace_code_ids`), when a frame, a marked closure or the running code names the unit, never from the code store (4b's start decision 3)"

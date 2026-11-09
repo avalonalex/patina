@@ -198,9 +198,10 @@ fn test_an_unimported_keyword_is_merely_unbound() {
 /// because it resolves at the *read*.
 ///
 /// Pinned rather than fixed: closing it means checking on every variable read,
-/// which is `LoadGlobal` on the VM — and the per-site inline cache stores a
-/// slot, so a fill-time check would be unsound and a per-load tag test would
-/// sit on the hottest instruction in the interpreter. Recorded so the
+/// which is `LoadGlobal` on the VM — and its unit's link table names the
+/// binding's record from load on (#836), whose value can change after, so a
+/// link-time check would be unsound and a per-load tag test would sit on the
+/// hottest instruction in the interpreter. Recorded so the
 /// `#<macro>` formatting in `datum_writer.rs` is not mistaken for dead code.
 #[test]
 fn test_a_forward_reference_to_syntax_is_not_caught() {

@@ -6,17 +6,17 @@
 //! through one, carry that index in place of the name. The spellings sit in
 //! the unit's [`LinkTable`], one per unit, shared by every member of the unit
 //! through one `Rc`. Anything that needs an operand's name reads it there:
-//! the global lookups on a cache miss, a definition, a shadowed primitive's
-//! deoptimization, the errors, the disassembler and the tracer.
+//! a definition, the cold read, the errors, the disassembler and the tracer.
 //!
 //! Beside each spelling the table has an entry for the binding record the
-//! operand names once the table is linked in a namespace
+//! operand names, which `VmState::load_unit` links in the namespace the unit
+//! was compiled in, before any read goes through it
 //! ([`LinkTable::link_in`]): the namespace's own record, a host namespace's
 //! read-through record, a placeholder for a name the namespace does not
 //! bind yet (`Environment::link_record`), or the heap's by-name record for a
-//! name it reaches by an alias or a visible scoped definition. The VM does
-//! not link its units yet, so until it does an entry stays `UNBOUND`, an
-//! immediate, and only the tests link a table.
+//! name it reaches by an alias or a visible scoped definition. A table the
+//! VM compiles and never loads (the disassembler's) stays unlinked, its
+//! entries `UNBOUND`, an immediate, and serves its names alone.
 //!
 //! A linked table is read through [`LinkTable::get`], two loads and a test
 //! for `UNBOUND`, which answers every own and imported binding; a
@@ -24,7 +24,14 @@
 //! `UNBOUND` there and are read by [`LinkTable::read_cold`], which reads a
 //! read-through record's parent and otherwise the name, as
 //! `Environment::get` does. A store resolves its cell the same way
-//! ([`LinkTable::assignee`]), and a definition goes by name.
+//! ([`LinkTable::assignee`]), and a definition goes by name in the table's
+//! namespace. So the VM's reads and writes of a global key on the binding a
+//! unit linked, never on the spelling or on the frame that runs it.
+//!
+//! The table is traced only by its unit's code id (`VmState::trace_code_ids`),
+//! never from the code store, and with it the records, placeholders and weak
+//! read-through records it links and the namespace it holds: a placeholder
+//! lives exactly as long as code that links it can run.
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;

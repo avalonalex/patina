@@ -13,7 +13,7 @@ use patina_core::Lit;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
 use patina_core::scope::ScopeSet;
 use patina_core::tagged_value::TaggedValue;
-use patina_vm::runtime::{VmState, execute};
+use patina_vm::runtime::{LoadedUnit, VmState, execute};
 use patina_vm::types::CodeObject;
 use patina_vm::types::CodeObjectId;
 use std::rc::Rc;
@@ -39,10 +39,17 @@ fn fresh_state() -> VmState {
     state
 }
 
+/// Load `top` and `nested` as a unit linked in the machine's globals, where
+/// `execute` runs it, as the backend's top level loads a program's form.
+fn load(state: &mut VmState, top: CodeObject, nested: Vec<CodeObject>) -> LoadedUnit {
+    let globals = Rc::clone(state.global_env());
+    state.load_unit(top, nested, &globals)
+}
+
 fn run(expr: CoreExpr) -> TaggedValue {
     let (top, nested) = compile(&expr).expect("compile error");
     let mut state = fresh_state();
-    let top_id = state.load_unit(top, nested);
+    let top_id = load(&mut state, top, nested);
     execute(&mut state, top_id).expect("execution error")
 }
 
@@ -164,7 +171,7 @@ fn lambda_creates_closure() {
     let expr = lambda(vec![], vec![lit(42)]);
     let (top, nested) = compile(&expr).expect("compile");
     let mut state = fresh_state();
-    let top_id = state.load_unit(top, nested);
+    let top_id = load(&mut state, top, nested);
     let val = execute(&mut state, top_id).expect("execute");
     // Result should be a procedure (VM closure).
     assert!(val.is_object(), "expected closure object, got {:?}", val);
@@ -386,7 +393,7 @@ fn tail_recursive_countdown() {
 /// Load `expr` as a unit and run it, as the backend runs a top-level form.
 fn load_and_run(state: &mut VmState, expr: &CoreExpr) -> (CodeObjectId, TaggedValue) {
     let (top, nested) = compile(expr).expect("compile error");
-    let unit = state.load_unit(top, nested);
+    let unit = load(state, top, nested);
     let id = unit.id();
     let value = execute(state, unit).expect("execution error");
     (id, value)
@@ -433,7 +440,7 @@ fn a_closure_made_by_code_in_reused_slots_runs_its_own_code() {
 fn run_err(expr: CoreExpr) -> patina_vm::error::VmError {
     let (top, nested) = compile(&expr).expect("compile error");
     let mut state = fresh_state();
-    let top_id = state.load_unit(top, nested);
+    let top_id = load(&mut state, top, nested);
     execute(&mut state, top_id).expect_err("ran without an error")
 }
 
@@ -506,7 +513,7 @@ fn a_shadowed_primitives_site_looks_up_its_operands_name() {
             register_roots: None,
             live_closures: std::cell::Cell::new(0),
         };
-        let id = state.load_unit(code, Vec::new());
+        let id = load(&mut state, code, Vec::new());
         match execute(&mut state, id) {
             Err(VmError::UnboundVariable { name }) => {
                 assert_eq!(&*name, "never-bound", "at a site of `{primitive}`")

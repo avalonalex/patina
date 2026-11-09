@@ -18,7 +18,7 @@ use super::control::{
     tail_call_value_with_probe, tail_invoke_delimited, unpack_values, vm_raise_value, wind_step,
 };
 use crate::error::{VmError, frame_refusal};
-use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
+use crate::types::code_object::{Arity, CodeObject};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, VmContinuation, VmDelimitedContinuation,
 };
@@ -30,7 +30,7 @@ use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{
     AssertNoGc, AssertNoGcCount, Carrier, CollectKind, GC_CHECK, GcController, GcDriver, GcMode,
-    LinkTable, NamespaceView, NoGcScope, Trace,
+    LinkIdx, LinkTable, NamespaceView, NoGcScope, Trace,
 };
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::HasDiagnostic;
@@ -216,9 +216,12 @@ pub struct VmState {
     #[trace(skip, reason = "a registry index")]
     parameter_set: Option<usize>,
     /// The program's global environment, which `interaction-environment`
-    /// answers and a frame with no closure reads, during a library's load as
-    /// after it (#823): a library body's forms run in frames whose closures
-    /// have the library's environment as their globals (#824).
+    /// answers, during a library's load as after it (#823), and which a
+    /// closure made in a frame with no closure takes as its environment
+    /// (`frame_globals`): a library body's forms run in frames whose closures
+    /// have the library's environment as their globals (#824). A frame's
+    /// globals are read and defined through its unit's link table, linked
+    /// where the unit was compiled (#836), never through this.
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
     globals: Rc<Environment>,
     /// The heap, shared with `patina-runtime` primitives.
@@ -329,12 +332,14 @@ pub struct VmState {
     assert_no_gc: AssertNoGcCount,
 }
 
-/// A unit [`VmState::load_unit`] loaded, and the window over it (#836):
-/// from the load until its frame is pushed or a closure names it, the unit
-/// is held by the code store alone, so a collection there would let it go,
-/// and an `AssertNoGc` covers that stretch instead of an argument about
-/// where the polls are. [`execute`], [`execute_in`] and [`execute_nested`]
-/// take the unit and close the window once its frame holds its code.
+/// A unit [`VmState::load_unit`] loaded and linked, and the window over it
+/// (#836): from the load until its frame is pushed or a closure names it,
+/// the unit is held by the code store alone, which never traces its link
+/// table, so a collection there would let the unit go, and with it the
+/// placeholders and the namespace its table links; an `AssertNoGc` covers
+/// that stretch instead of an argument about where the polls are.
+/// [`execute`], [`execute_in`] and [`execute_nested`] take the unit and
+/// close the window once its frame holds its code.
 ///
 /// Its window is empty in a plain release build, which keeps no count of
 /// windows.
@@ -632,12 +637,18 @@ impl VmState {
     }
 
     /// Load what one compilation produced — `top`, and the code nested in it —
-    /// as a unit, and answer it with the id to run it from.
+    /// as a unit, link it in `namespace`, and answer it with the id to run
+    /// it from.
     ///
     /// Each code object is given a slot here, and the labels the compiler
     /// named it by, in its own id and in the `MakeClosure`s that make a
     /// closure of it, are replaced by that slot's id (#352). Every member
-    /// holds the unit's one link table, as pass 5 made it (#836).
+    /// holds the unit's one link table, as pass 5 made it, which is linked
+    /// here in `namespace`, the one the unit was compiled in, before any
+    /// read goes through it (`LinkTable::link_in`, #836): `LoadGlobal`,
+    /// `StoreGlobal`, `Define` and a shadowed primitive's deoptimization read
+    /// and write their globals through it, wherever the unit's frames run.
+    /// A table with no names is linked too, and holds `namespace`.
     ///
     /// The unit is answered with its window open ([`LoadedUnit`]): until a
     /// frame holds its code or a closure names it, only the code store
@@ -648,7 +659,12 @@ impl VmState {
     ///
     /// Once it has run, [`VmState::release_unit_if_unused`] lets it go if
     /// nothing it left behind can run it again (#338).
-    pub fn load_unit(&mut self, top: CodeObject, nested: Vec<CodeObject>) -> LoadedUnit {
+    pub fn load_unit(
+        &mut self,
+        top: CodeObject,
+        nested: Vec<CodeObject>,
+        namespace: &Rc<Environment>,
+    ) -> LoadedUnit {
         // Opened first, so that it covers the unit from the moment the store
         // holds it. One shared borrow of the heap, which no caller holds
         // across this call.
@@ -696,6 +712,11 @@ impl VmState {
             let slot = code.id.index();
             self.code_store[slot] = Rc::new(code);
         }
+        // Under the window, which covers what the table links as well as
+        // the unit: the store never traces a table (`CodeObject::links`).
+        // Each name takes the heap's write step, which no caller holds
+        // across this call.
+        links.link_in(&self.heap, namespace);
         self.code_units.insert(top_id, members);
         self.note_code_units();
         LoadedUnit { id: top_id, window }
@@ -1149,12 +1170,13 @@ fn vm_evaluate_parsed_library(
     }
 
     // Step 2: compile and execute each body expression in the main VmState,
-    // as a closure whose globals are lib_env (`execute_nested`): its frames
-    // read and define the library's bindings, even when a continuation
-    // resumes them after the load (#779), and the closures they make capture
-    // lib_env too, so no seeding or merge is needed. `state.globals` stays
-    // the program's environment, which `interaction-environment` answers
-    // during the load as after it (#823).
+    // its unit linked in lib_env: its frames read and define the library's
+    // bindings through the unit's table, even when a continuation resumes
+    // them after the load (#779, #836), and run as a closure whose globals
+    // are lib_env (`execute_nested`), which the closures they make capture,
+    // so no seeding or merge is needed. `state.globals` stays the program's
+    // environment, which `interaction-environment` answers during the load
+    // as after it (#823).
 
     // Collection is already deferred for this whole function: `parsed`
     // carries a `GcDeferGuard` while it holds unevaluated body forms (see
@@ -1216,7 +1238,7 @@ fn vm_evaluate_parsed_library(
             // around the `eval` or `environment` that loads the library)
             // leaves this load. The rest of the body must not run then, and
             // the library must not be registered or its exports bound.
-            let unit = state.load_unit(top, nested);
+            let unit = state.load_unit(top, nested, &lib_env);
             let top_id = unit.id();
             let depth_before = state.execution.frames().len();
             #[expect(
@@ -1291,7 +1313,7 @@ pub(super) fn vm_eval_expr(
     // Execute in the main state, which keeps continuations and code objects
     // valid. This holds nothing of its own across the run, wherever it is
     // reached from.
-    let unit = state.load_unit(top, nested);
+    let unit = state.load_unit(top, nested, env);
     let top_id = unit.id();
     #[expect(
         clippy::disallowed_methods,
@@ -1397,11 +1419,12 @@ fn compile_for_eval(
     )
 }
 
-/// The datum `expr`, compiled in `env`, as a closure of no arguments whose
-/// globals are `env`: what a resumable primitive's `Step::Eval` has its stub
-/// frame call (#477). Its frames read and define `env`'s globals as any
-/// closure's do, so nothing is swapped, and its code lives as long as the
-/// closure or a frame running it, as any unit's does. `env` is a namespace:
+/// The datum `expr`, compiled and linked in `env`, as a closure of no
+/// arguments whose globals are `env`: what a resumable primitive's
+/// `Step::Eval` has its stub frame call (#477). Its frames read and define
+/// `env`'s globals through its unit's table, as any unit's do, so nothing is
+/// swapped, and its code lives as long as the closure or a frame running it,
+/// as any unit's does. `env` is a namespace:
 /// a frame, which only a host's specifier or `Step::Eval` can name here, is
 /// refused before anything runs ([`compile_for_eval`], #853).
 ///
@@ -1418,7 +1441,7 @@ pub(super) fn eval_closure(
     env: &Rc<Environment>,
 ) -> Result<EvalCallee, VmError> {
     let (top, nested) = compile_for_eval(state, expr, env)?;
-    let (top_id, window) = state.load_unit(top, nested).into_parts();
+    let (top_id, window) = state.load_unit(top, nested, env).into_parts();
     let closure = state
         .heap
         .borrow_mut()
@@ -1522,13 +1545,14 @@ pub(super) fn poll_in_window(state: &VmState, on: bool) {
     }
 }
 
-/// [`execute`] for code compiled in `env`, an environment other than the
-/// machine's globals, such as a host namespace (#620, #835) or a library's,
-/// for a body form the backend's loader runs, a top-level `import`'s or a
-/// `define-library`'s in the program (#779): the unit runs in
-/// [`push_frame_in`]'s frame, so its frames read and define `env`'s bindings.
-/// The frame holds its closure, which roots it and `env` while the code
-/// runs, and the run may collect as any top-level run may.
+/// [`execute`] for code compiled and linked in `env`, an environment other
+/// than the machine's globals, such as a host namespace (#620, #835) or a
+/// library's, for a body form the backend's loader runs, a top-level
+/// `import`'s or a `define-library`'s in the program (#779): its frames read
+/// and define `env`'s bindings through the unit's table (#836), and the unit
+/// runs in [`push_frame_in`]'s frame, whose closure gives `env` to the
+/// closures they make. The frame holds its closure, which roots it and `env`
+/// while the code runs, and the run may collect as any top-level run may.
 pub fn execute_in(
     state: &mut VmState,
     unit: LoadedUnit,
@@ -1538,21 +1562,23 @@ pub fn execute_in(
     run_top_frame(state)
 }
 
-/// Push the frame that runs `unit`, compiled in `env`, as a
+/// Push the frame that runs `unit`, compiled and linked in `env`, as a
 /// closure of no arguments whose globals are `env`: [`execute_in`]'s frame,
-/// and [`execute_nested`]'s. Its frames read and define `env`'s bindings, as
-/// [`eval_closure`]'s do, wherever a continuation that captured them resumes
-/// them. A frame with no closure reads the machine's globals as they are
-/// when it runs, so a library's body form re-entered after its load read the
-/// program's (#779).
+/// and [`execute_nested`]'s. Its frames read and define `env`'s bindings
+/// through the unit's table, linked in `env` (#836), as [`eval_closure`]'s
+/// do, wherever a continuation that captured them resumes them. The
+/// closure's environment is now read only by `MakeClosure`, for the
+/// closures the frame makes: a frame with no closure gives them the
+/// machine's globals, so a library's body form re-entered after its load
+/// made closures over the program's (#779).
 ///
 /// The closure is made retired ([`Heap::RETIRED_VM_CLOSURE_CODE`]): it names
 /// no code, so nothing counts it or retires it, and it keeps no unit loaded.
 /// The frame holds its code itself, as a frame with no closure does, so the
 /// unit is let go once nothing needs it, as a program form's is (#338), and a
 /// continuation that captured the frame keeps it. Nothing calls the closure:
-/// the frame's globals are all that is read from it (`frame_globals`), since
-/// top-level code has no free variables.
+/// the environment `MakeClosure` gives a closure is all that is read from it
+/// (`frame_globals`), since top-level code has no free variables.
 ///
 /// [`Heap::RETIRED_VM_CLOSURE_CODE`]: patina_core::heap::Heap::RETIRED_VM_CLOSURE_CODE
 ///
@@ -1633,12 +1659,14 @@ fn run_top_frame(state: &mut VmState) -> Result<TaggedValue, VmError> {
     result
 }
 
-/// Execute a code object compiled in `env` in the **current** `VmState`,
-/// returning to the caller's frame depth. Unlike `execute` (which always runs
-/// until the frame stack is empty), this variant is safe to call when the
-/// state already has in-flight frames (e.g. during library loading from
-/// `eval`). The unit runs in [`push_frame_in`]'s frame, so its frames read
-/// and define `env`'s bindings wherever they are resumed (#779).
+/// Execute a code object compiled and linked in `env` in the **current**
+/// `VmState`, returning to the caller's frame depth. Unlike `execute` (which
+/// always runs until the frame stack is empty), this variant is safe to call
+/// when the state already has in-flight frames (e.g. during library loading
+/// from `eval`). Its frames read and define `env`'s bindings through the
+/// unit's table wherever they are resumed (#779, #836), and the unit runs in
+/// [`push_frame_in`]'s frame, whose closure gives `env` to the closures they
+/// make.
 #[expect(
     clippy::disallowed_methods,
     reason = "the state is in the machine: the frame it pushes is the run's root, and it holds \
@@ -2091,14 +2119,17 @@ fn attach_source_location(state: &VmState, e: VmError) -> VmError {
     e
 }
 
-/// Get the effective globals environment for the current frame.
+/// The environment `MakeClosure` gives the closures the current frame
+/// makes, its one reader since the unit's link table carries every global
+/// read and write (#836).
 ///
 /// If the current frame is executing a closure, returns that closure's
 /// captured globals (the environment it was compiled against): a lambda's,
 /// or the one `push_frame_in` made for top-level code compiled in another
 /// environment, such as a library's body form or a host namespace's form.
 /// Otherwise returns `state.globals`: a program's top-level form, or a stub,
-/// which reads no global.
+/// which makes no closure. Either is the namespace the frame's unit was
+/// linked in, which a debug build asserts where `MakeClosure` reads this.
 pub(super) fn frame_globals(state: &VmState) -> Rc<Environment> {
     if let Some(closure) = state.execution.frames().last().and_then(CallFrame::closure)
         && let Some(globals) = state.heap.borrow().get_vm_closure_globals(closure)
@@ -2106,6 +2137,50 @@ pub(super) fn frame_globals(state: &VmState) -> Rc<Environment> {
         return globals;
     }
     state.globals.clone()
+}
+
+/// `LoadGlobal`'s read of operand `k` where the linked read found `UNBOUND`
+/// (#836): a placeholder, a host namespace's read-through record, or the
+/// by-name record, which [`LinkTable::read_cold`] reads as
+/// `Environment::get` reads the name; and a shadowed primitive's
+/// deoptimization's, for the same entries. Out of line, so the linked read
+/// stays two loads and a test in the dispatch loop.
+#[cold]
+#[inline(never)]
+pub(super) fn load_global_cold(
+    state: &VmState,
+    links: &LinkTable,
+    k: LinkIdx,
+) -> Result<TaggedValue, VmError> {
+    links
+        .read_cold(&state.heap, k)
+        .ok_or_else(|| VmError::UnboundVariable {
+            name: links.name(k).clone(),
+        })
+}
+
+/// `StoreGlobal`'s store to operand `k` where the table resolves no cell
+/// (`LinkTable::assignee`, #836): a placeholder, the by-name record, a host
+/// namespace's read-through record over a parent's placeholder or under an
+/// alias of the host's own. By name in the table's namespace, as `set`
+/// finds it, a macro-expansion alias included, so a template can assign to
+/// a binding private to the library that defined it; marking first by the
+/// binding `get` finds, which may be a parent's or an alias's. An unbound
+/// name is an error, as it was.
+#[cold]
+#[inline(never)]
+fn store_global_cold(
+    state: &mut VmState,
+    links: &LinkTable,
+    k: LinkIdx,
+    val: TaggedValue,
+) -> Result<(), VmError> {
+    let ns = links.namespace().expect("a unit's table is linked at load");
+    let view = NamespaceView::of(ns);
+    let name = links.name(k);
+    mark_if_shadowing_primitive(state, view, name, val);
+    view.set(&state.heap, name, val)
+        .map_err(|_| VmError::UnboundVariable { name: name.clone() })
 }
 
 /// Shared skeleton of every inline primitive opcode arm (Track P P3): run
@@ -2213,65 +2288,49 @@ fn dispatch_one_instruction(
         }
 
         Instruction::LoadGlobal { dst, link } => {
-            // Per-site inline cache (Track P P4): see `GlobalCacheEntry`. A hit
-            // finds the frame's globals and reads the slot under one shared
-            // borrow of the heap, with no `Rc` clone (#834).
-            let hit = {
+            // link[k] → record → cell → value, under one shared borrow of
+            // the heap (#836): the unit's table, linked where it was
+            // compiled, names the record, so the read keys on the binding,
+            // never the spelling. `code` is the loop's running code, not a
+            // borrow of `state`.
+            let val = {
                 let heap = state.heap.borrow();
-                let closure_globals = state
-                    .execution
-                    .frames()
-                    .last()
-                    .and_then(CallFrame::closure)
-                    .and_then(|closure| heap.vm_closure_globals_ref(closure));
-                let view = NamespaceView::of(closure_globals.unwrap_or(&state.globals));
-                GlobalCacheEntry::probe(&code.global_cache[pc], view, &code.links, link)
-                    .map(|slot| view.slot_value_in(&heap, slot))
+                code.links.get(&heap, link)
             };
-            let val = match hit {
+            let val = match val {
                 Some(val) => val,
-                // Not a local slot. Fall back to the full lookup rather than
-                // straight to the parent: `get` also follows macro-expansion
-                // aliases recorded on this environment, which is how a template
-                // reaches a binding private to the library that defined it.
-                None => {
-                    let name = code.links.name(link);
-                    let globals = frame_globals(state);
-                    NamespaceView::of(&globals)
-                        .get(&state.heap, name)
-                        .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?
-                }
+                None => load_global_cold(state, &code.links, link)?,
             };
             state.set_reg_at(base, dst, val);
         }
 
         Instruction::StoreGlobal { link, src } => {
             let val = state.reg_at(base, src);
-            let globals = frame_globals(state);
-            let view = NamespaceView::of(&globals);
-            match GlobalCacheEntry::probe(&code.global_cache[pc], view, &code.links, link) {
-                Some(slot) => {
-                    let old = view.slot_value(&state.heap, slot);
+            // #852's order: the old value from the cell the store writes,
+            // the mark, then the store.
+            let target = {
+                let heap = state.heap.borrow();
+                code.links.assignee(&heap, link)
+            };
+            match target {
+                Some((cell, old)) => {
                     mark_if_shadowing_primitive_value(state, old, val);
-                    view.set_slot_value(&state.heap, slot, val);
+                    LinkTable::assign(&mut state.heap.borrow_mut(), cell, val);
                 }
-                // Not a local slot. Use the full `set` rather than going
-                // straight to the parent: it also follows macro-expansion
-                // aliases, so a template can assign to a binding private to the
-                // library that defined it, matching what `get` already does.
-                None => {
-                    let name = code.links.name(link);
-                    mark_if_shadowing_primitive(state, view, name, val);
-                    view.set(&state.heap, name, val)
-                        .map_err(|_| VmError::UnboundVariable { name: name.clone() })?;
-                }
+                None => store_global_cold(state, &code.links, link, val)?,
             }
         }
 
         Instruction::Define { link, src } => {
             let val = state.reg_at(base, src);
-            let globals = frame_globals(state);
-            define_global(state, &globals, Rc::clone(code.links.name(link)), val);
+            // By name, in the namespace the unit was linked in: `define_record`
+            // stores into the namespace's own cell, re-points a record over an
+            // import, or adopts the placeholder or the read-through record the
+            // unit's table links, keeping its word, and reports the definition
+            // to `PATINA_SCOPE_TRACE` (#836). `ns` borrows the running code,
+            // not `state`.
+            let ns = (code.links.namespace()).expect("a unit's table is linked at load");
+            define_global(state, ns, Rc::clone(code.links.name(link)), val);
         }
 
         // ── Closure Creation ────────────────────────────────────────────
@@ -2283,6 +2342,13 @@ fn dispatch_one_instruction(
             let captured: Vec<TaggedValue> =
                 free_vars.iter().map(|&r| state.reg_at(base, r)).collect();
             let globals = frame_globals(state);
+            // What `MakeClosure` will read instead of `frame_globals` once
+            // closures hold no environment: the unit's namespace (#836).
+            debug_assert!(
+                (code.links.namespace()).is_some_and(|ns| Rc::ptr_eq(ns, &globals)),
+                "{:?} makes a closure over another environment than its unit's namespace (#836)",
+                code.id
+            );
             let closure_val = state
                 .heap
                 .borrow_mut()
@@ -3265,9 +3331,10 @@ fn dispatch_one_instruction(
 /// already-compiled callers would keep calling the old primitive.
 ///
 /// Every Rust-side writer that can overwrite a global binding must mark the
-/// primitive *before* replacing it. An assignment, the `StoreGlobal`
-/// handler's, calls this, since it writes the binding `get` finds, which may
-/// be a parent's. A definition, the `Define` handler's or a host's through
+/// primitive *before* replacing it. An assignment the unit's table resolves
+/// no cell for, the `StoreGlobal` handler's by name (`store_global_cold`),
+/// calls this, since it writes the binding `get` finds, which may be a
+/// parent's or an alias's. A definition, the `Define` handler's or a host's through
 /// `Backend::define`, goes through [`define_global`], which marks by the
 /// environment's own binding. The import machinery in both this file and
 /// `backend.rs` does the same job through `import_export` (PRD P8.1), which
@@ -3316,8 +3383,9 @@ pub(crate) fn define_global(
 }
 
 /// Value-taking core of [`mark_if_shadowing_primitive`], for callers that
-/// already hold the binding's current value (the cached `StoreGlobal` path,
-/// [`define_global`]) and need no name lookup.
+/// already hold the binding's current value (the linked `StoreGlobal`'s
+/// resolved cell, `LinkTable::assignee`; [`define_global`]) and need no name
+/// lookup.
 fn mark_if_shadowing_primitive_value(state: &mut VmState, old: TaggedValue, new_val: TaggedValue) {
     if old == new_val {
         return;
@@ -3387,13 +3455,25 @@ fn mark_if_import_rebound(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::code_object::GlobalCacheEntry;
+
+    /// Load `top` and `nested` as a unit linked in the machine's globals, as
+    /// the backend's top level loads a program's form.
+    pub(super) fn load_in_globals(
+        state: &mut VmState,
+        top: CodeObject,
+        nested: Vec<CodeObject>,
+    ) -> LoadedUnit {
+        let globals = Rc::clone(state.global_env());
+        state.load_unit(top, nested, &globals)
+    }
 
     #[test]
     fn vm_state_basic() {
         let mut state = VmState::on_a_fresh_heap();
         let mut code = code();
         code.num_regs = 4;
-        let id = state.load_unit(code, Vec::new()).id();
+        let id = load_in_globals(&mut state, code, Vec::new()).id();
         let base =
             state
                 .execution
@@ -3429,13 +3509,13 @@ mod tests {
     #[test]
     fn a_slot_whose_generations_have_run_out_is_not_given_out_again() {
         let mut state = VmState::on_a_fresh_heap();
-        let first = state.load_unit(code(), Vec::new()).id();
+        let first = load_in_globals(&mut state, code(), Vec::new()).id();
         state.release_unit_if_unused(first);
         assert_eq!(state.free_code_ids, vec![CodeObjectId::new(0, 1)]);
 
         // As if slot 0 had been given out every generation but its last.
         state.free_code_ids = vec![CodeObjectId::new(0, u32::MAX - 1)];
-        let last = state.load_unit(code(), Vec::new()).id();
+        let last = load_in_globals(&mut state, code(), Vec::new()).id();
         assert_eq!(last, CodeObjectId::new(0, u32::MAX - 1));
         state.release_unit_if_unused(last);
         assert!(
@@ -3444,7 +3524,7 @@ mod tests {
             state.free_code_ids
         );
 
-        let next = state.load_unit(code(), Vec::new()).id();
+        let next = load_in_globals(&mut state, code(), Vec::new()).id();
         assert_eq!(next, CodeObjectId::new(1, 0));
         assert!(state.code_object(last).is_err());
     }
@@ -3464,9 +3544,9 @@ mod tests {
         // The members of a unit share its one link table.
         let (top, mut member) = (code(), code());
         member.links = Rc::clone(&top.links);
-        let nested = state.load_unit(top, vec![member]).id();
+        let nested = load_in_globals(&mut state, top, vec![member]).id();
         assert_eq!(counts(&state), (1, 1), "a unit with nested code loaded");
-        let _ = state.load_unit(code(), Vec::new());
+        let _ = load_in_globals(&mut state, code(), Vec::new());
         assert_eq!(counts(&state), (2, 2), "a second unit loaded");
         state.release_unit_if_unused(nested);
         assert_eq!(
@@ -3493,13 +3573,13 @@ mod tests {
     #[test]
     fn an_id_whose_code_has_gone_finds_nothing() {
         let mut state = VmState::on_a_fresh_heap();
-        let gone = state.load_unit(code(), Vec::new()).id();
+        let gone = load_in_globals(&mut state, code(), Vec::new()).id();
         state.release_unit_if_unused(gone);
         assert!(
             state.code_object(gone).is_err(),
             "{gone:?} found, though its code was let go"
         );
-        let current = state.load_unit(code(), Vec::new()).id();
+        let current = load_in_globals(&mut state, code(), Vec::new()).id();
         assert_eq!(current.index(), gone.index(), "the slot is reused");
         assert!(
             state.code_object(gone).is_err(),
@@ -3536,7 +3616,7 @@ mod tests {
         let env = Rc::clone(state.global_env());
         assert!(!a_window_is_open(&state), "none open before the load");
 
-        let unit = state.load_unit(code(), Vec::new());
+        let unit = load_in_globals(&mut state, code(), Vec::new());
         assert_eq!(a_window_is_open(&state), GC_CHECK, "open while held");
         #[expect(
             clippy::disallowed_methods,
@@ -3547,7 +3627,7 @@ mod tests {
         assert!(ran.is_ok(), "execute: {ran:?}");
         assert!(!a_window_is_open(&state), "closed by execute");
 
-        let unit = state.load_unit(code(), Vec::new());
+        let unit = load_in_globals(&mut state, code(), Vec::new());
         assert_eq!(a_window_is_open(&state), GC_CHECK, "open while held");
         #[expect(
             clippy::disallowed_methods,
@@ -3558,7 +3638,7 @@ mod tests {
         assert!(ran.is_ok(), "execute_in: {ran:?}");
         assert!(!a_window_is_open(&state), "closed by execute_in");
 
-        let unit = state.load_unit(code(), Vec::new());
+        let unit = load_in_globals(&mut state, code(), Vec::new());
         assert_eq!(a_window_is_open(&state), GC_CHECK, "open while held");
         #[expect(
             clippy::disallowed_methods,
@@ -3568,7 +3648,7 @@ mod tests {
         assert!(ran.is_ok(), "execute_nested: {ran:?}");
         assert!(!a_window_is_open(&state), "closed by execute_nested");
 
-        let unit = state.load_unit(code(), Vec::new());
+        let unit = load_in_globals(&mut state, code(), Vec::new());
         assert_eq!(a_window_is_open(&state), GC_CHECK, "open while held");
         drop(unit);
         assert!(!a_window_is_open(&state), "closed when dropped");

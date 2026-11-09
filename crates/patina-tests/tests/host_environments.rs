@@ -1755,10 +1755,11 @@ fn a_host_primitive_evaluating_in_a_raw_frame_is_refused_by_the_vm() {
 
 // ---------------------------------------------------------------------------
 // What host code reads of a name nothing bound when it was compiled, across
-// a collection, pinned before 4b.9 links a unit's names at load (#836). Its
-// three cases hold on the base, where such a read goes by name, and must hold
-// once the name links to a placeholder record that a collection keeps only
-// while live code holds it, and that a later definition adopts.
+// a collection, pinned before 4b.9 linked a unit's names at load (#836). Its
+// three cases held where such a read went by name, and hold now that the
+// name links, at load, to a read-through record over a placeholder, which a
+// collection keeps only while live code holds it, and which a later
+// definition adopts.
 // ---------------------------------------------------------------------------
 
 /// `(host4b forward)` exports `forward-value`, which nothing imports until

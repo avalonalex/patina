@@ -116,8 +116,8 @@
 use super::execution_state::push_abort_stub;
 use super::vm_state::gc_roots::switches;
 use super::vm_state::{
-    EvalCallee, VmState, eval_closure, frame_globals, poll_in_window, run_loop_until, vm_eval_expr,
-    vm_load_library,
+    EvalCallee, VmState, eval_closure, load_global_cold, poll_in_window, run_loop_until,
+    vm_eval_expr, vm_load_library,
 };
 use crate::error::VmError;
 use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
@@ -128,7 +128,7 @@ use patina_core::continuation::{WindStep, next_wind_step};
 use patina_core::heap::{PromiseState, SharedHeap};
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{AssertNoGc, CollectKind, GC_CHECK, LinkIdx, LinkTable, NamespaceView};
+use patina_core::{AssertNoGc, CollectKind, GC_CHECK, LinkIdx, LinkTable};
 use patina_primitives::{TaggedCallArgs, TaggedStep};
 use patina_runtime::HasDiagnostic;
 use std::rc::Rc;
@@ -3818,8 +3818,9 @@ pub(super) fn exec_call_primitive(
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
     if state.is_primitive_shadowed(func_id.0 as usize) {
-        // The site's name is read only here, from the code of the frame
-        // running it, so the unshadowed path passes a `u32` and reads no
+        // The site's operand is read only here, through the table of the
+        // frame running it, the instruction's own unit, linked where it was
+        // compiled (#836), so the unshadowed path passes a `u32` and reads no
         // table.
         let frame = state.execution.frames().last().expect("no active frame");
         debug_assert_eq!(
@@ -3831,11 +3832,15 @@ pub(super) fn exec_call_primitive(
             Some(link),
             "the top frame is not running the primitive site"
         );
-        let name = frame.code.links.name(link);
-        let globals = frame_globals(state);
-        let func_val = NamespaceView::of(&globals)
-            .get(state.heap(), name)
-            .ok_or_else(|| VmError::UnboundVariable { name: name.clone() })?;
+        let links = &frame.code.links;
+        let func_val = {
+            let heap = state.heap().borrow();
+            links.get(&heap, link)
+        };
+        let func_val = match func_val {
+            Some(func_val) => func_val,
+            None => load_global_cold(state, links, link)?,
+        };
         // Tail-shape detection (PRD P8.2): pass 5 lowers a tail-position
         // primitive site to `<prim-op> dst; Return dst`. When the deopt
         // replaces the primitive with a closure call, that shape must stay a
