@@ -1181,7 +1181,20 @@ through `lookup_in`, and a host's `lookup_in` of a name only the global
 environment binds, which makes no read-through record (#835), leave
 `binding-records`, and the names the host namespace and the global
 environment list, as they were (`a_read_makes_no_record`), which fails on
-either backend when its miss path makes one.
+either backend when its miss path makes one. Its second half counts what the
+VM's linking makes (#836): a held procedure that reads a fresh unbound name
+is one record more on the VM, its placeholder, and none on the tree-walker; a
+caught call of it that misses adds none; and once it is let go two
+collections give the count back. `keep` is defined and a `guard` expanded
+before the baseline, since a definition's operand is linked at load and
+`guard`'s first expansion binds import aliases that outlive the collections.
+`a_host_namespace_s_placeholders_are_dropped_with_their_code` does the same
+in a host namespace, on both backends: a held host procedure reading an
+unbound name is two records on the VM, a weak read-through record and the
+global namespace's placeholder under it, and one namespace more on both;
+after a thousand more such procedures, each dropped, the held one and the
+handle are let go, and two collections give `binding-records` and
+`namespaces` back.
 
 The VM's refusal of a frame adds one more (#835), where the backends
 diverge: `a_raw_frame_is_refused_by_the_vm`. A raw frame of the global
@@ -1243,9 +1256,11 @@ namespace defines `h` and imports `(host4b forward)`, and the host namespace
 defines `x`. The reads answer `9`, `imported` and `local`, each name reads
 by name where it was bound, and the global namespace binds no `x`. It runs
 on each backend's interpreter and on a zeal one, which must have collected
-beyond the two collections the host asks for. It holds on the base, where
-such a read goes by name, and guards 4b.9's placeholders and the host's
-read-through records; its mutation check (2026-11-07) failed it when a host
+beyond the two collections the host asks for. It was pinned while such a
+read went by name, and holds now that the VM links each name at load to a
+read-through record over a placeholder, which the collections keep while the
+host's closures live, and which the definitions adopt; its mutation check
+(2026-11-07) failed it when a host
 namespace's `define` bound the global namespace, when a host namespace read
 through its parent only what the parent bound at the last collection (the
 plain runs), when a collection let go of the code of a live closure, when
@@ -1265,7 +1280,10 @@ compiled while `car` or `call-with-values` was the primitive calls the new
 value, as on the tree-walker, and a name the program defined still answers its
 new value; through `define_in`, the same holds in a host environment that
 imports `(scheme base)` itself, and in one that reaches `car` through its
-parent, and the global `car` stays the primitive. Without the VM's
+parent, and the global `car` stays the primitive; and the same through a
+`define` form evaluated in the host environment, a compiled `Define` on the
+VM, which adopts the read-through record the code compiled there links, and
+never writes through it into the global binding (#836, #852). Without the VM's
 `Backend::define` the VM's code calls the primitive, which is what a write to
 the environment itself still does. A definition marks the primitive by the
 environment's own binding only, so a host environment's `car` leaves the
@@ -1320,7 +1338,7 @@ later as a wrong answer or not at all (#621, #624, #625).
 |---|---|---|---|---|---|
 | Differential | `scripts/run_gc_differential.sh [binary]` | the chibi suite under GC off, the adaptive default and stress, on both backends, with the tally pinned; plus two reclamation proofs per backend, in bytes (below) | `PATINA_GC_STRESS_INTERVAL`, default 16; 1 in the release lane | the release lane's step took 5.9 min on the runner and the debug lane's 1.1 min (2026-10-03) | `ci.yml`, every change: release `gc-check` at 1, and debug at 16 |
 | Zeal | `scripts/run_gc_zeal.sh [binary]` | `tests/scheme/control/*.scm` except `tail-recursion.scm` under GC off and zeal, on both backends; each file must match, exit 0, print its SRFI 64 summary and have collected, and the binary must first pass a probe that it honours zeal (below) | `PATINA_GC_ZEAL=entry`: every outermost safe point, which on the VM is a frame's entry or a generic call's return (#700) | 10 min on the runner (2026-10-03), within the job's 60 | `gc-zeal.yml`, release `gc-check`, when a change touches the VM's runtime, compiler or types, `patina-core`'s heap, `tagged_value.rs`, `environment.rs`, `library.rs`, `link_table.rs` or `placeholder_store.rs`, the library loader or registry, the runtime's `import_set.rs`, either backend's `backend.rs`, the tree-walker's evaluator, the toolchain, or the lane's own files, and weekly on `main`; it also runs `finished_forms_release_code` under zeal |
-| Stress, per PR | `scripts/run_gc_stress_tests.sh` | 16 `cargo test` targets that drive the collector, control flow and library loading through the embedding API (`callability`, `control_flow_matrix`, `cps_features`, `ephemerons`, `escape_from_primitive`, `finished_forms_release_code`, `gc_tree_walker`, `gc_vm`, `host_environments`, `hygiene_matrix`, `interpreter_api`, `library_loading`, `macro_definition_env`, `owned_handles`, `rooted_loading`, `vm_callprimitive`), and `scheme_suite.rs`; each must run its pinned number of tests, none filtered out, pass, and report at least its pinned number of collections | `PATINA_GC_STRESS=16`; 4096 for `scheme_suite.rs` | about a minute: 66 s here (2026-11-07) after `cargo test --all --lib --tests`, whose build it reuses, as CI runs it, 49 s of it the 16 targets, 27 s of those `gc_tree_walker`, nearly all one deep-recursion test, and 17 s `scheme_suite.rs`; 105–117 s that day in runs that had cargo build around each target first, their tests taking the same 67–68 s; the step's limit is 15 min | `ci.yml`'s Test Suite, every change, on ubuntu and macOS, in the debug build that job has just tested |
+| Stress, per PR | `scripts/run_gc_stress_tests.sh` | 16 `cargo test` targets that drive the collector, control flow and library loading through the embedding API (`callability`, `control_flow_matrix`, `cps_features`, `ephemerons`, `escape_from_primitive`, `finished_forms_release_code`, `gc_tree_walker`, `gc_vm`, `host_environments`, `hygiene_matrix`, `interpreter_api`, `library_loading`, `macro_definition_env`, `owned_handles`, `rooted_loading`, `vm_callprimitive`), and `scheme_suite.rs`; each must run its pinned number of tests, none filtered out, pass, and report at least its pinned number of collections | `PATINA_GC_STRESS=16`; 4096 for `scheme_suite.rs` | about a minute: 66 s here (2026-11-07, and again 2026-11-09 with #836's placeholder tests) after `cargo test --all --lib --tests`, whose build it reuses, as CI runs it, 49 s of it the 16 targets, 27 s of those `gc_tree_walker`, nearly all one deep-recursion test, and 17 s `scheme_suite.rs`; 105–117 s that day in runs that had cargo build around each target first, their tests taking the same 67–68 s; the step's limit is 15 min | `ci.yml`'s Test Suite, every change, on ubuntu and macOS, in the debug build that job has just tested |
 | Stress, nightly | `scripts/run_larceny_gc_stress.sh [--tree-walker] [--r6rs]` | Larceny's R7RS and `(r6rs ...)` suites at the pinned commit, on both backends; each suite's tally must be its row in `scheme_tests/reports/larceny_gc_stress.tsv`, its exit status the one its tally implies, with no panic, no timeout, at least the row's pinned number of collections, and only the job's backend in its process | 16; 4096 for `char`, `flonum`, `lazy`, `sort` and `stream`; `ephemeron` left out until #609 | a job per backend, each limited to 75 min; on the runner (2026-10-03) the VM's R7RS lane took 434 s and its `(r6rs ...)` lane 24 s, a 9-minute job, and the tree-walker's 1774 s and 51 s, a 31-minute job, about 2.2 times the time on an M-series Mac (307 s, 20–22 s, 757–1008 s, 29–36 s); a suite may take 600 s on the VM and 1500 s on the tree-walker, whose slowest, `stream`, took 783 s | `nightly.yml`, release `gc-check`, daily on `main`, and on a pull request that changes the lane |
 
 Zeal costs about 7× stress 1, so it never runs the whole suite: the chibi suite
@@ -1334,11 +1352,16 @@ backend; on the VM one inside the instruction that opened the window,
 which only the poll's own check sees, #864; and the check made at the last
 point each of the VM's load windows covers, which patina-vm's test-only
 switch `test_support::PollInWindow` adds, #836) and `retired_registers.rs` in
-`patina-tests`; `gc_vm.rs`'s two `a_check_build_refuses_…` (#836): a unit a
-collection kept whose link table it did not trace, which patina-vm's test-only
-switch `test_support::SkipCodeIds` makes by having the collection pass over
-the ids of the code one kind of keeper keeps (live closures in one, a frame or
-the running code in the other); and `patina-core`'s `heap::check::`,
+`patina-tests`; `gc_vm.rs`'s three `a_check_build_refuses_…` (#836): a unit
+a collection kept whose link table it did not trace, which patina-vm's
+test-only switch `test_support::SkipCodeIds` makes by having the collection
+pass over the ids of the code one kind of keeper keeps (live closures in one,
+a frame or the running code in the other), and a read through a placeholder
+a kept unit's table links that the collection dropped and freed, which the
+switch `test_support::SkipLinkEntries` makes by having the collection mark
+each table traced and pass over its entries, so that `release_dead_code`'s
+check stays quiet and the read is refused as a use after free or a stale
+reference; and `patina-core`'s `heap::check::`,
 `heap::gc::tests::protocol::` (F4's two among them: a finalizer that
 allocates, and one that reaches a poll, #785), the port table's owner checks
 (`heap::port_table::tests::a_check_build_refuses_…`, #785): an id read
@@ -1354,8 +1377,11 @@ would leave, and a bound entry left in a store, a placeholder or a weak
 read-through record, which the sweep's own check refuses; beside it, a kept
 entry over a cell or a parent that marks made by hand left unmarked
 (`heap::gc::tests::a_check_build_refuses_…`), and a namespace slot handed a
-placeholder (`environment::placeholder_tests::a_check_build_refuses_…`). A
-build without the checks reports them ignored. `crates/patina-repl/tests/gc_zeal.rs` is the control for zeal
+placeholder (`environment::placeholder_tests::a_check_build_refuses_…`); and
+the link table's (`link_table::tests::a_check_build_refuses_…`, #836): a
+placeholder a table links read cold after it left its namespace's store,
+which only a pass that dropped a placeholder a traced table links would
+leave. A build without the checks reports them ignored. `crates/patina-repl/tests/gc_zeal.rs` is the control for zeal
 itself, in every build: a loop that allocates nothing collects at every
 iteration under zeal and hardly at all at stress 1. It runs in `ci.yml`'s Test
 Suite, not against the zeal lane's binary, so the lane runs the same loop on
@@ -1431,7 +1457,32 @@ the CLI, a library whose procedure refers to itself, redefined and imported
 again, is counted and charged after two `(gc)`s as it was before the
 redefinition, on both backends
 (`a_replaced_library_with_a_procedure_is_released`, the steady-state lane's
-`library-stream` shape).
+`library-stream` shape). The heap's list of placeholder stores holds no
+namespace (#836): 200 procedures `eval`'d in fresh specifiers, each reading
+a name nothing binds, which the VM links to a placeholder in that
+namespace's store, leave `namespaces` and `external-bytes` where they were
+once they are dead and two collections have run
+(`the_placeholder_list_holds_no_namespace`).
+
+The VM's placeholders (#836) are held to their lifetimes in
+`gc_shared_tests!`, on both backends and under zeal: a procedure that reads
+a name nothing binds, made and dropped a thousand times (a hundred under
+zeal), leaves `binding-records` and `cells` where they were after two
+collections, and a second batch of the same names leaves `external-bytes`
+where the first did (`a_placeholder_no_live_code_links_is_dropped`); a read
+that missed, caught, then two collections and a definition, reads the
+definition through the same closure
+(`a_read_that_missed_is_not_remembered_across_collections`); and the
+forward-reference tests above. `gc_vm.rs`'s
+`a_bound_placeholder_is_never_dropped` holds a procedure that links two
+placeholders across a definition and an import that adopt them, and counts
+no record more across them or once the procedure is gone.
+`finished_forms_release_code.rs`'s
+`a_redefined_library_s_recursive_procedures_let_their_units_go` is 4b's
+start decision 3's gate: a library whose procedures call themselves and each
+other, redefined a hundred times, loads as many code objects after the
+hundredth as after the tenth, which a unit's link table traced from the code
+store would not (its procedures' own records hold them).
 
 `crates/patina-repl/tests/file_descriptors.rs`, in the Test Suite, runs
 #607's programs through the CLI in a shell that lowers `RLIMIT_NOFILE`
@@ -1493,7 +1544,9 @@ put a fresh value in each traced field of each traced struct, root the struct
 alone, collect, and check each value survived (`heap::sentinels`); each fails
 with its field's trace line deleted. They live beside the code they test:
 `patina-core`'s `heap::trace_sentinels`, `environment::gc_edge_tests`,
-`library::gc_edge_tests` and `link_table::tests::link_table_fields`,
+`library::gc_edge_tests`, `link_table::tests::link_table_fields` and
+`heap::handles::tests::handle_table_fields` (the handle table's, the heap's
+by-name record among them, #836),
 `patina-vm`'s `trace_sentinel_tests`, the
 tree-walker's `gc_roots::sentinel_tests` and `patina-runtime`'s
 `gc_root_tests`.
@@ -1939,8 +1992,9 @@ every lane: `vm_interpreter_zeal` and `tree_walker_interpreter_zeal`, which
 `gc_shared_tests!`'s `$eval_zeal` and #836's host test run on. A zeal
 interpreter collects whatever the lane's variable says, and its collections
 land in the stress lane's record, so `gc_vm` and `gc_tree_walker` collect
-without stress too (3676 and 6442 times, 2026-11-08, since #836's
-`code-units` tests), which their minimums must stay above.
+without stress too (5047 and 17796 times, 2026-11-09, since #836's
+placeholder tests, whose drop test's zeal half runs 100 `eval`s), which
+their minimums must stay above.
 
 The nightly lane's `time` suite measures wall-clock time: one assertion
 requires a one-second loop to stop within 100 ms of its deadline. It passes

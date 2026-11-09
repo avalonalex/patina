@@ -265,8 +265,9 @@ pub struct ClosedLambda {
 
 ### 7.2 Key Rules
 
-- **Capture list filters out Global vars** — globals are looked up dynamically
-  at runtime, not snapshotted into closures
+- **Capture list filters out Global vars** — globals are read at runtime
+  through the unit's link table, linked when the unit loads (§10.5), not
+  snapshotted into closures
 - A variable needs MutableCell boxing if it is **mutated AND captured by a
   nested lambda** (including self-references for recursive internal defines)
 - Internal defines get `VarLoc::Local`; `Define` inside lambda bodies is
@@ -325,7 +326,7 @@ pub struct RegLambda {
 pub enum CaptureSource {
     ParentReg(u16),           // captured from parent's local register
     ParentClosureSlot(u16),   // captured from parent's closure slot
-    Global(Symbol),           // global (looked up dynamically)
+    Global(Symbol),           // global (read through the unit's link table)
 }
 ```
 
@@ -421,11 +422,23 @@ into the unit's link table, `CodeObject::links` (`patina_core::LinkTable`).
   operand indexes into the table.
 - **Overflow.** A unit naming more globals than a `u32` indexes is a
   `CompileError::Internal`, never a wrapped index.
-- **Names only.** The table holds the unit's spellings and nothing else.
-  Whatever needs an operand's name reads it there: a global lookup the
-  site's cache misses, `Define`, a shadowed primitive's deoptimization, an
-  unbound-variable error, the disassembler and the tracer, which print the
-  spelling as before. A runtime stub names no global and has an empty table.
+- **The namespace it was compiled in.** `compile_pipeline` records on the
+  table the `env_id` of the namespace it compiled the unit in
+  (`LinkTable::set_compiled_in`), since pass 5 resolved the unit's primitive
+  calls and macro-introduced names there; `compile`, for hand-built trees,
+  leaves it 0. An id, so the table holds no namespace before it is linked.
+- **Linked at load.** The compiler leaves the table's entries unlinked.
+  `VmState::load_unit` links the table in the namespace the unit was compiled
+  in before any read goes through it (`LinkTable::link_in`; `VM_ISA.md`
+  §4.1), and a debug build refuses a link in another namespace than the one
+  the compile recorded. The global instructions then read and store through
+  the record each entry links; whatever needs an operand's name reads it in
+  the table: `Define`, the cold read and a store the record cannot resolve,
+  an unbound-variable error, the disassembler and the tracer, which print the
+  spelling as before. A table compiled and never loaded, as the
+  disassembler's and `--dump`'s, stays unlinked and serves its names alone.
+  A runtime stub names no global and has an empty table
+  (`LinkTable::empty`), which is never linked.
 
 ---
 

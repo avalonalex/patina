@@ -87,10 +87,14 @@ services, GC policy, and transfer bookkeeping. Storage and invalidation fields
 are private; only the driver/control pair can see their shared transfer flags,
 stub ids, and scratch argument pool. The machine's `globals` are the
 program's environment, during a library's load as after it. A library's body
-form runs as a closure whose globals are the library's environment
-(`execute_in` at a top-level `import`, `execute_nested` on the nested loads,
-and `eval`'s code the same way), so its frame resolves its globals against
-the library's wherever a continuation restores it (#779; §5.6). Each such
+form is compiled in the library's environment, and its unit's link table is
+linked there when it loads, so its frame reads, stores and defines the
+library's bindings through that table wherever a continuation restores it
+(#779, #836; §5.6); `eval`'s code the same way, in the environment it was
+given. The body form still runs as a closure of no arguments over that
+environment (`execute_in` at a top-level `import`, `execute_nested` on the
+nested loads), which only `MakeClosure` reads now, as the environment of the
+closures the form makes. Each such
 environment is a namespace: the backend's entries refuse a frame with an
 error naming its kind (`eval_datum`, #835), and so does the compile of
 Scheme `eval`'s and `load`'s code and of a primitive's `Step::Eval`
@@ -888,16 +892,19 @@ Notes on the cells that are not a plain yes:
   had already made `tail_call_value` run a primitive before popping the
   frame, as any tail callee runs, and routed a `call-with-values` consumer
   and `apply` as a value through it
-- **A restored frame resolves its globals against its own closure.** A
-  continuation restores frames, not environments, so a frame reads and
-  defines the bindings of the environment its code was compiled in through
-  the closure it holds: a lambda's frame through its closure, and top-level
-  code compiled in another environment — a library's body form, a host
-  namespace's form — through a closure of no arguments over that
-  environment, made retired so that it names no code (`push_frame_in`). Only
-  a program's own top-level forms and the stubs, which resolve no name, run
-  with no closure, and read the machine's globals as they are when the frame
-  runs. A library body form re-entered after its load read the program's
+- **A restored frame resolves its globals through its code's link table.** A
+  continuation restores frames, not environments, so a frame reads, stores
+  and defines the bindings of the namespace its code was compiled in through
+  the table its unit linked there at load (#836), wherever it is restored,
+  closure or none. Top-level code compiled in another environment — a
+  library's body form, a host namespace's form — still runs under a closure
+  of no arguments over that environment, made retired so that it names no
+  code (`push_frame_in`), which only `MakeClosure` reads now, as the
+  environment of the closures the form makes. A program's own top-level
+  forms and the stubs, which resolve no name, run with no closure, and
+  `MakeClosure` in a program form uses the machine's globals, the namespace
+  the form was compiled and linked in. A library body form re-entered after
+  its load read the program's
   until #779's part 1 (`test_reentering_a_library_body_form_after_the_load`
   in `escape_from_primitive.rs`); what the rest of the body does after it is
   part 2's.
