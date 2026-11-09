@@ -220,10 +220,12 @@ costs the collection trigger what it copied (#606).
 ### 3.1 Entry Point
 
 ```rust
-pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue, VmError>
+pub fn execute(state: &mut VmState, unit: LoadedUnit) -> Result<TaggedValue, VmError>
 ```
 
-Allocates an initial frame and calls `run_loop_until(state, 0)`.
+Takes the unit `VmState::load_unit` answered, pushes its initial frame,
+closes the unit's `AssertNoGc` window once the frame holds the code (#836;
+`docs/GC_DESIGN.md` §7), and calls `run_loop_until(state, 0)`.
 
 ### 3.2 Main Loop
 

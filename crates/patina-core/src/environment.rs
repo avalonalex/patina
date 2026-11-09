@@ -7768,11 +7768,12 @@ mod placeholder_tests {
         assert_counts_agree(&heap, &[&global, &host, &library]);
     }
 
-    /// #836's question 11, pending the owner's ruling: a weak read-through
-    /// record whose parent placeholder was bound since stays weak until it
-    /// is linked again, so a collection that no link table marks it in
-    /// drops it, and keeps the parent's record, bound in its slot. The next
-    /// link makes a strong record over that.
+    /// #836's question 11, the departure from SD3 the owner's ruling (a) of
+    /// 2026-11-08 accepts: a weak read-through record whose parent
+    /// placeholder was bound since stays weak until it is linked again, so
+    /// a collection that no link table marks it in drops it, and keeps the
+    /// parent's record, bound in its slot. The next link makes a strong
+    /// record over that.
     #[test]
     fn an_unlinked_weak_child_over_a_parent_bound_since_is_dropped() {
         let heap = new_shared_heap();

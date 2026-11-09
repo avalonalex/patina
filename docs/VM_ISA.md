@@ -87,7 +87,11 @@ all the code ever compiled (#352). A lookup checks the generation: an id naming
 code that has gone finds nothing rather than whatever took its slot. An empty
 slot holds a shared placeholder whose id is a label, so that one comparison
 turns it away too. A slot that has used every generation is not given out
-again, so ids never repeat.
+again, so ids never repeat. It answers the unit as a `LoadedUnit`, the id
+with an `AssertNoGc` window that stays open until the unit's frame is pushed
+(`execute`, `execute_in`, `execute_nested`) or, for `eval`, until its
+closure is in the stub frame's register, since until then only the code
+store holds the unit (#836; `docs/GC_DESIGN.md` §7).
 
 What one compilation produces — a top-level form's code and the code of the
 lambdas in it — is loaded as a unit and released as one, once no frame, captured

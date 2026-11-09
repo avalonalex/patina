@@ -668,9 +668,9 @@ record (below).
   `relink_alias`): an import alias's install would adopt it. A check build
   asserts that no slot is given a flagged or read-through record, at the
   slots' one writer (`Environment::append_slot`). The placement, a store per
-  namespace with a list per heap rather than the slots themselves, is the
-  recommendation of #836's question 4, pending the owner's ruling. Until the
-  VM links its units at load, only core's tests make one.
+  namespace with a list per heap rather than the slots themselves, is P2, the
+  owner's ruling (a) of 2026-11-08 on #836's question 4. Until the VM links
+  its units at load, only core's tests make one.
 - **Exports are cells.** `Library.exports` maps each name to the cell its
   binding named when the library was built, resolved one hop to the owning
   cell, so a re-export is the defining library's cell; `import_into` makes
@@ -729,11 +729,11 @@ record (below).
   the trace skips is one the pass may drop (Rule 1): a placeholder leaves
   its store whenever it is bound, and a check build asserts that every
   placeholder left after a sweep still holds `UNBOUND`. One departure from
-  SD3, pending the owner's ruling on #836's question 11: a weak read-through
-  record whose parent placeholder was bound since stays weak until its name
-  is linked again, so the pass may drop it while nothing links it. Nothing
-  observes that, since only a link reaches one and `link_record` makes or
-  promotes one when asked. A cell lives
+  SD3, which the owner's ruling (a) of 2026-11-08 on #836's question 11
+  accepts: a weak read-through record whose parent placeholder was bound
+  since stays weak until its name is linked again, so the pass may drop it
+  while nothing links it. Nothing observes that, since only a link reaches
+  one and `link_record` makes or promotes one when asked. A cell lives
   while a record, an export or a frame's import names it: an importer keeps
   the exporter's cell, and nothing keeps the exporter's namespace for it
   (`an_importer_holds_the_cell_and_not_the_library`), which is what releases
@@ -843,6 +843,20 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 | `tracer` | yes | Pinned: `StepTracer.pre_regs`/`pre_all_regs`, copies of registers for display (`crates/patina-vm/src/tracer.rs`) |
 | `library_registry` | yes | §5.3 |
 | `primitive_registry`, `shadowed_primitives`, `fs`, `trace_epoch` | no | No TaggedValues; `trace_epoch` counts the collections the state was lent to, bumped first in `trace_roots` (#836) |
+
+**Kept units' tables, asserted (#836).** Whatever keeps a unit loaded can
+run its code (a frame, a captured continuation's frame, the running code, a
+live closure), and is what reports the unit's code id to the collection.
+So once a collection has released the units nothing can run
+(`VmState::release_dead_code`, after each collection the machine was lent
+to), a check build asserts that every unit it kept had its link table traced
+in that collection's epoch (`LinkTable::traced_in`); a unit kept with its
+table untraced has a holder that reports nothing, whose code would read
+entries the collection did not keep. The control,
+`gc_vm.rs`'s `a_check_build_refuses_a_kept_unit_whose_table_was_not_traced`,
+skips every table with patina-vm's test-only switch
+(`test_support::SkipCodeIds`, which makes `trace_code_ids` return before it
+marks any traced) and expects the check's panic at the first collection.
 
 **Temporary retirement (#423):** the compiler records possible-root bitsets at
 instruction boundaries (`docs/VM_COMPILER.md` §10.4). Before an outermost
@@ -1751,9 +1765,16 @@ these checks except the defer balance, which every build checks.
   point, rather than on a root, is covered by an `AssertNoGc` scope: a depth
   counter on the heap. Every dispatch loop and trampoline checks at its poll
   that no scope is open (`AssertNoGcCount::assert_none_open`), before
-  `maybe_collect` and on every iteration, nested or not. Inside `safe_point`
-  the check would almost never run, since it returns at once unless a
-  collection is pending and the loop holds the driver. The VM's windows:
+  `maybe_collect` and on every iteration, nested or not. The VM's `poll`,
+  which every poll inside an instruction goes through (a closure's entry,
+  the tail paths, a generic call's return), checks first, before it asks
+  whether anything is posted, so a window opened and closed inside one
+  instruction with a poll between panics even where nothing would have
+  collected (#864); the loop's check on each iteration runs before the
+  instruction and could not see it. The count is cached on `VmState`, and
+  empty in a plain release build. Inside `safe_point` the check would almost
+  never run, since it returns at once unless a collection is pending and the
+  loop holds the driver. The VM's windows:
   - a continuation's capture to its weak-store entry
     (`alloc_vm_continuation`, `alloc_vm_delimited_continuation`), under the
     weak-table rule in `gc_roots.rs`, and on to the write of its handle
@@ -1775,7 +1796,20 @@ these checks except the defer balance, which every build checks.
     caller, which drops it once it has placed the value;
   - the composable invoke's freed stub window (#172, `ResumeComposableInvoke`);
   - `ResumeWindJump`'s retained target and value, from `finish_wind_step` to
-    the next write (#156).
+    the next write (#156);
+  - a unit from its load to its frame's push (S1, #836): until a frame holds
+    the unit's code, only the code store does, and a collection would let
+    the unit go. `load_unit` opens the window before the store takes the
+    unit and answers it with the unit's id as a `LoadedUnit`; `execute`,
+    `execute_in` and `execute_nested` drop it once `push_frame` has given
+    the frame the unit's code, before the run polls;
+  - an `eval`'s closure from its unit's load to the `CALLEE` write (S2,
+    #836): `eval_closure` answers `EvalCallee { closure, window }`, the
+    unit's window still open over a closure nothing roots, carried across
+    `across_reentry` and in `StubWork::Call`'s `eval`, and `set_suspension`
+    drops it once the closure is in the stub frame's `CALLEE` register. The
+    window opens and closes inside one instruction, so only the poll's own
+    check (#864) would see a poll added inside it.
 - *Collector entry points are crate-private.* `Collector`,
   `MarkSweepCollector`, `run_mark_phase`, `Heap::sweep` and
   `GcController::collect` cannot be named outside `patina-core`, so
@@ -1788,9 +1822,11 @@ these checks except the defer balance, which every build checks.
 The positive controls make each check panic on purpose:
 `patina-core`'s `heap::gc::tests::protocol` (depth, holder, balance and poll)
 and `crates/patina-tests/tests/gc_protocol.rs` (a poll inside a window, on each
-backend). CI's release GC lane runs them on its `gc-check` build, and runs
-the balance control once more in the plain release build, the one build
-where only that check is compiled in. One test
+backend, and on the VM a poll inside the instruction that opened the window:
+a host primitive called with `apply` opens it and posts an interrupt, and
+the call's return polls, #864). CI's release GC lane runs them on its
+`gc-check` build, and runs the balance control once more in the plain
+release build, the one build where only that check is compiled in. One test
 shows the deferral itself is load-bearing, on both backends:
 `gc_shared_tests!`'s
 `collection_inside_a_comparator_the_internal_member_calls`, whose
