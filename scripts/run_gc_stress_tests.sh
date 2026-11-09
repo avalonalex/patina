@@ -219,7 +219,12 @@ fi
 # tests made 18321 and 27136, as before, and 1285 and 3358 without stress;
 # the `code-units` tests 2661 on the VM (2391 without stress) and 3148 on
 # the tree-walker (3084), and the shared test 38 on each (0);
-# the minimums at half their counts measured that day)
+# the minimums at half their counts measured that day; gc_vm's test count
+# re-pinned again that day for #836's control of `release_dead_code`'s
+# check, a unit a collection kept whose link table it did not trace, which
+# panics at its first collection with the switch on: 35 collections at 16
+# and 1 without stress, the other 30 tests making 21020 and 3676, as before,
+# the minimum left)
 TARGETS=(
     "callability 16 31 13"                    # 1543 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -228,7 +233,7 @@ TARGETS=(
     "escape_from_primitive 16 3669 18"        # 7338 (90)
     "finished_forms_release_code 16 1450 11"  # 3677 (13)
     "gc_tree_walker 16 15161 24"              # 30322 (6442)
-    "gc_vm 16 10510 30"                       # 21020 (3676)
+    "gc_vm 16 10510 31"                       # 21055 (3677)
     "host_environments 16 57985 28"           # 115970 (431)
     "hygiene_matrix 16 11136 17"              # 22273 (6)
     "interpreter_api 16 138 28"               # 2277 (4)
