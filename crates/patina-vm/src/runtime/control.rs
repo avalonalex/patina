@@ -120,7 +120,7 @@ use super::vm_state::{
     vm_eval_expr, vm_load_library,
 };
 use crate::error::VmError;
-use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
+use crate::types::code_object::{Arity, CodeObject};
 use crate::types::continuation::{ExceptionHandler, VmContinuation, VmDelimitedContinuation};
 use crate::types::instruction::{ControlForm, Instruction, PrimitiveFnId};
 use crate::types::{CallFrame, CodeObjectId};
@@ -1507,7 +1507,6 @@ fn runtime_stub(
     let id = state.load(CodeObject {
         id: CodeObjectId::label(),
         name: Some(Rc::from(name)),
-        global_cache: GlobalCacheEntry::table(&instructions),
         links: LinkTable::empty(),
         live_closures: std::cell::Cell::new(0),
         instructions,

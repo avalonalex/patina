@@ -2048,23 +2048,10 @@ impl Heap {
         Some(closure.heap_index() as usize)
     }
 
-    /// Get the globals environment from a VM closure, a frame's.
-    ///
-    /// Returns `None` if `closure` is not a `VmClosure`.
-    /// [`get_vm_closure_globals`](Self::get_vm_closure_globals) by reference,
-    /// for a caller that holds this heap borrowed for the read it makes
-    /// with them: the VM's `LoadGlobal`, which then needs no `Rc` clone.
-    #[inline]
-    pub fn vm_closure_globals_ref(
-        &self,
-        closure: TaggedValue,
-    ) -> Option<&Rc<crate::environment::Environment>> {
-        match self.objects.get(self.vm_closure_slot(closure)?)? {
-            HeapObjectData::VmClosure { globals, .. } => Some(globals),
-            _ => None,
-        }
-    }
-
+    /// Get the globals environment from a VM closure, a frame's: the
+    /// environment `MakeClosure` gives the closures that frame makes
+    /// (`frame_globals` in patina-vm). Returns `None` if `closure` is not a
+    /// `VmClosure`.
     pub fn get_vm_closure_globals(
         &self,
         closure: TaggedValue,

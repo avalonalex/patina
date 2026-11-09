@@ -23,7 +23,7 @@
 use super::pass4_registers::{AllocatedExpr, CaptureSource, RegExpr, RegExprKind, RegLambda};
 use super::primitive_calls::{InlineOp, PrimitiveCallMap, ResolvedPrimitive};
 use crate::error::CompileError;
-use crate::types::code_object::{Arity, CodeObject, CodeObjectId, GlobalCacheEntry};
+use crate::types::code_object::{Arity, CodeObject, CodeObjectId};
 use crate::types::instruction::{ControlForm, Instruction, TestOp};
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
@@ -75,7 +75,6 @@ struct UnitLinks {
 struct Member {
     id: CodeObjectId,
     name: Option<Symbol>,
-    global_cache: Vec<Cell<GlobalCacheEntry>>,
     instructions: Vec<Instruction>,
     constants: Vec<TaggedValue>,
     num_regs: u16,
@@ -89,7 +88,6 @@ impl Member {
         CodeObject {
             id: self.id,
             name: self.name,
-            global_cache: self.global_cache,
             links: Rc::clone(links),
             live_closures: Cell::new(0),
             instructions: self.instructions,
@@ -216,13 +214,12 @@ impl Pass5Codegen {
         gen_expr(expr, &mut cg)?;
         // Top-level: emit a Return of the expression's result.
         cg.emit(Instruction::Return { val: expr.dst });
-        let global_cache = finalize_instructions(&mut cg.instructions);
+        thread_returns(&mut cg.instructions);
         let register_roots = register_root_maps(&cg, allocated.num_regs.max(1), 0);
         let links = Rc::new(LinkTable::new(cg.links.names.into_boxed_slice()));
         let code = Member {
             id,
             name: cg.name,
-            global_cache,
             instructions: cg.instructions,
             constants: cg.constants,
             // Use the Pass 4 high-water mark so all temps are covered.
@@ -285,14 +282,6 @@ fn thread_returns(instructions: &mut [Instruction]) {
             break;
         }
     }
-}
-
-/// Finalize a finished instruction stream: run the in-place rewrites, then
-/// build the pc-aligned global cache table. One owner for the ordering so
-/// both CodeObject construction sites (top-level and lambda) stay in step.
-fn finalize_instructions(instructions: &mut [Instruction]) -> Vec<Cell<GlobalCacheEntry>> {
-    thread_returns(instructions);
-    GlobalCacheEntry::table(instructions)
 }
 
 /// Forward may-root analysis over the final bytecode. A write makes its slot
@@ -1260,12 +1249,11 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
         Arity::Fixed(lam.num_params)
     };
 
-    let global_cache = finalize_instructions(&mut child_cg.instructions);
+    thread_returns(&mut child_cg.instructions);
     let register_roots = register_root_maps(&child_cg, lam.num_regs, lam.num_params);
     let child_code = Member {
         id: child_id,
         name: None,
-        global_cache,
         instructions: child_cg.instructions,
         constants: child_cg.constants,
         num_regs: lam.num_regs,

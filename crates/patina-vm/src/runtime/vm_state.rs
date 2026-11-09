@@ -465,7 +465,6 @@ impl VmState {
                 arity: Arity::Fixed(0),
                 source_map: Vec::new(),
                 register_roots: None,
-                global_cache: Vec::new(),
                 links: LinkTable::empty(),
                 live_closures: Cell::new(0),
             }),
@@ -3455,7 +3454,6 @@ fn mark_if_import_rebound(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::code_object::GlobalCacheEntry;
 
     /// Load `top` and `nested` as a unit linked in the machine's globals, as
     /// the backend's top level loads a program's form.
@@ -3492,7 +3490,6 @@ mod tests {
         CodeObject {
             id: CodeObjectId::label(),
             name: None,
-            global_cache: GlobalCacheEntry::table(&instructions),
             links: LinkTable::empty(),
             instructions,
             constants: Vec::new(),

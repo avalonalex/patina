@@ -32,7 +32,7 @@ use super::super::control::resume_step;
 use super::super::execution_state::ExecutionState;
 use super::{LoopExit, VmState, execute, run_loop_until_outcome};
 use crate::tracer::StepTracer;
-use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
+use crate::types::code_object::{Arity, CodeObject};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
@@ -49,7 +49,6 @@ fn code_holding(constants: Vec<TaggedValue>) -> Rc<CodeObject> {
         arity: Arity::Fixed(0),
         source_map: Vec::new(),
         register_roots: None,
-        global_cache: Vec::new(),
         links: LinkTable::empty(),
         live_closures: Cell::new(0),
     })
@@ -666,7 +665,6 @@ fn assembled(instructions: Vec<Instruction>, constants: Vec<TaggedValue>) -> Cod
     CodeObject {
         id: CodeObjectId::label(),
         name: None,
-        global_cache: GlobalCacheEntry::table(&instructions),
         links: LinkTable::empty(),
         instructions,
         constants,

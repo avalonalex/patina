@@ -477,8 +477,8 @@ fn an_unbound_global_is_reported_by_its_operands_name() {
 fn a_shadowed_primitives_site_looks_up_its_operands_name() {
     use patina_core::LinkTable;
     use patina_vm::error::VmError;
+    use patina_vm::types::Arity;
     use patina_vm::types::instruction::{Instruction, PrimitiveFnId, TestOp};
-    use patina_vm::types::{Arity, GlobalCacheEntry};
 
     // Runs `(define <primitive> 1)`, which shadows the primitive, then the
     // site `site` builds for it, whose operand is link 1, then `Return r1`,
@@ -503,7 +503,6 @@ fn a_shadowed_primitives_site_looks_up_its_operands_name() {
         let code = CodeObject {
             id: CodeObjectId::label(),
             name: None,
-            global_cache: GlobalCacheEntry::table(&instructions),
             links: Rc::new(LinkTable::new(names.into_boxed_slice())),
             instructions,
             constants: Vec::new(),
