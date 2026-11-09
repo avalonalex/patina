@@ -294,6 +294,51 @@ fn code_units_count_a_unit_a_live_closure_keeps() {
     );
 }
 
+#[test]
+fn a_bound_placeholder_is_never_dropped() {
+    // The procedure `keep` holds reads `later` and `later2`, which nothing
+    // binds when `eval` compiles it, so its unit links a placeholder for
+    // each when it loads (#836): two binding records. While `keep` holds
+    // the procedure, the program defines `later` and imports `later2`,
+    // which adopt the two placeholders into the global namespace's slots,
+    // keeping their words, so that the count does not move: a definition or
+    // an import that made a record of its own would leave the placeholder
+    // counted beside it, and one that left the entry in the namespace's
+    // store a check build refuses after the sweep. Then `keep` lets the
+    // procedure go: nothing links the two records any more, and a bound
+    // record is the namespace's, so the collections keep both and the count
+    // still does not move. The procedure is held across both bindings,
+    // collections included, so under zeal the adoption is exercised with a
+    // collection at every outermost safe point. Every variable but `later`
+    // is defined before the first reading; `later`'s definition is the
+    // adoption counted.
+    assert_gc_and_zeal_eval_to(
+        r#"
+        (import (scheme base) (scheme eval) (scheme repl) (patina debug))
+        (define-library (p4b9 lib)
+          (export later2)
+          (import (scheme base))
+          (begin (define later2 'imported)))
+        (define env (interaction-environment))
+        (define (records) (cdr (assq 'binding-records (gc-stats))))
+        (define keep #f) (define base #f) (define r0 #f) (define r1 #f) (define r2 #f)
+        (gc) (gc)
+        (set! base (records))
+        (set! keep (eval '(lambda () (list later later2)) env))
+        (set! r0 (records))
+        (define later 1)
+        (import (p4b9 lib))
+        (gc) (gc)
+        (set! r1 (records))
+        (set! keep #f)
+        (gc) (gc)
+        (set! r2 (records))
+        (list (- r0 base) (- r1 r0) (- r2 r1) later later2)
+        "#,
+        "(2 0 0 1 imported)",
+    );
+}
+
 /// The controls of `release_dead_code`'s check (#836): a check build
 /// asserts, after every collection, that each unit the collection kept had
 /// its link table traced, since whatever keeps a unit is something that can

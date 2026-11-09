@@ -434,3 +434,46 @@ fn a_replaced_library_with_a_procedure_is_released() {
         assert_eq!(ext1, ext0, "and gave its charge back: {what}");
     }
 }
+
+/// The heap's list of placeholder stores holds no namespace (#836's M2):
+/// 200 procedures, each `eval`'d in a fresh `(environment '(scheme base))`
+/// whose specifier the program does not keep, read a name nothing binds,
+/// which the VM links, at load, to a placeholder in that namespace's store,
+/// and the store goes on the heap's list. Once the procedures are dead, two
+/// collections let their units go, and with them every namespace, whose
+/// store leaves the list as it drops and gives its charge back: the
+/// namespaces are counted and charged as they were before the loop. A list
+/// that kept a dropped store would leave its charge, and one that held its
+/// namespace the namespace too. The tree-walker makes no placeholder, and
+/// its namespaces go with their closures. Every variable is defined, and
+/// the loop expanded, before the first reading, for `run_loop`'s reason.
+#[test]
+fn the_placeholder_list_holds_no_namespace() {
+    let program = "(define ns0 0)
+(define ext0 0)
+(define ns1 0)
+(define ext1 0)
+(define (make n)
+  (let loop ((i 0))
+    (when (< i n)
+      (eval '(lambda () unbound-k) (environment '(scheme base)))
+      (loop (+ i 1)))))
+(define (settled) (gc) (gc) (stat 'external-bytes))
+(make 1)
+(set! ext0 (settled))
+(set! ns0 (stat 'namespaces))
+(make 200)
+(set! ext1 (settled))
+(set! ns1 (stat 'namespaces))
+(write (list ns0 ns1 ext0 ext1))
+(newline)";
+    for backend in BOTH_BACKENDS {
+        let counts = run(backend, program);
+        let [ns0, ns1, ext0, ext1] = counts[..] else {
+            panic!("{backend:?}: want four counts, got {counts:?}")
+        };
+        let what = format!("{backend:?}: {counts:?}");
+        assert_eq!(ns1, ns0, "the specifiers' namespaces were released: {what}");
+        assert_eq!(ext1, ext0, "and gave their charges back: {what}");
+    }
+}
