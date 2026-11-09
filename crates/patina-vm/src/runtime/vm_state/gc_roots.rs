@@ -102,30 +102,45 @@ pub(in crate::runtime) fn retire_registers(
     }
 }
 
-/// The positive controls' switches, read here, each off unless
+/// The positive controls' switches, read here and at the ends of the load
+/// windows (`execute`, `push_frame_in`, `set_suspension`), each off unless
 /// `test-support` is compiled in and a control turned it on
 /// (`test_support`). Without the feature each is a constant, and the test
 /// that reads it folds away.
 #[cfg(not(feature = "test-support"))]
-mod switches {
+pub(in crate::runtime) mod switches {
     /// The register a wrong-map control drops from `roots` (#625,
     /// `test_support::DropHighestLive`): `None`, so the comparison in
     /// `retire_registers` folds away.
     #[inline(always)]
-    pub(super) fn dropped(_roots: &[u64], _num_regs: u16) -> Option<usize> {
+    pub(in crate::runtime) fn dropped(_roots: &[u64], _num_regs: u16) -> Option<usize> {
         None
     }
 
     /// Whether a collection traces no unit's link table (#836,
     /// `test_support::SkipCodeIds`): never.
     #[inline(always)]
-    pub(super) fn skip_code_ids() -> bool {
+    pub(in crate::runtime) fn skip_code_ids() -> bool {
+        false
+    }
+
+    /// Whether the machine checks for an open window just before a loaded
+    /// unit's frame is pushed (#836, `test_support::PollInWindow`): never.
+    #[inline(always)]
+    pub(in crate::runtime) fn poll_before_frame_push() -> bool {
+        false
+    }
+
+    /// Whether it checks just before an `eval`'s closure is written into
+    /// `CALLEE` (#836, `test_support::PollInWindow`): never.
+    #[inline(always)]
+    pub(in crate::runtime) fn poll_before_callee_write() -> bool {
         false
     }
 }
 
 #[cfg(feature = "test-support")]
-use crate::test_support as switches;
+pub(in crate::runtime) use crate::test_support as switches;
 
 impl RootProvider for VmState {
     /// `VmState`'s derived trace (#686), whose fields say what each holds,

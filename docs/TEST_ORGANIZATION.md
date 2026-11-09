@@ -1330,8 +1330,10 @@ under zeal took 882–920 s on the VM alone (2026-10-01), and
 Each check has a positive control, a test that must panic with the check's
 message, and the release GC lane runs them in its `gc-check` build:
 `stale_references.rs`, `gc_protocol.rs` (a poll inside a window on each
-backend, and on the VM one inside the instruction that opened the window,
-which only the poll's own check sees, #864) and `retired_registers.rs` in
+backend; on the VM one inside the instruction that opened the window,
+which only the poll's own check sees, #864; and the check made at the last
+point each of the VM's load windows covers, which patina-vm's test-only
+switch `test_support::PollInWindow` adds, #836) and `retired_registers.rs` in
 `patina-tests`; `gc_vm.rs`'s `a_check_build_refuses_…` (#836): a unit a
 collection kept whose link table it did not trace, which patina-vm's
 test-only switch `test_support::SkipCodeIds` makes by having the collection

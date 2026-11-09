@@ -114,8 +114,10 @@
 //! control suites (including their existing backend-specific expectations).
 
 use super::execution_state::push_abort_stub;
+use super::vm_state::gc_roots::switches;
 use super::vm_state::{
-    EvalCallee, VmState, eval_closure, frame_globals, run_loop_until, vm_eval_expr, vm_load_library,
+    EvalCallee, VmState, eval_closure, frame_globals, poll_in_window, run_loop_until, vm_eval_expr,
+    vm_load_library,
 };
 use crate::error::VmError;
 use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
@@ -1871,8 +1873,11 @@ fn set_suspension(state: &mut VmState, base: usize, suspension: Suspension) {
     state.set_reg_at(base, resume_step::STATE, kept);
     match work {
         StubWork::Call { callee, args, eval } => {
-            state.set_reg_at(base, resume_step::CALLEE, callee);
             let is_eval = eval.is_some();
+            if is_eval {
+                poll_in_window(state, switches::poll_before_callee_write());
+            }
+            state.set_reg_at(base, resume_step::CALLEE, callee);
             drop(eval);
             state.set_reg_at(base, resume_step::EVAL, TaggedValue::boolean(is_eval));
             if args.len() <= resume_step::INLINE_ARGS {

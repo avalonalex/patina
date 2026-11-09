@@ -1812,6 +1812,12 @@ these checks except the defer balance, which every build checks.
     drops it once the closure is in the stub frame's `CALLEE` register. The
     window opens and closes inside one instruction, so only the poll's own
     check (#864) would see a poll added inside it.
+
+  Neither of the last two has a poll in it, so one closed early would go
+  unseen: `gc_protocol.rs`' extent controls have patina-vm's test-only
+  switch (`test_support::PollInWindow`) make the poll's check at the last
+  point each covers, just before `execute`'s and `push_frame_in`'s push and
+  just before the `CALLEE` write, and expect the panic.
 - *Collector entry points are crate-private.* `Collector`,
   `MarkSweepCollector`, `run_mark_phase`, `Heap::sweep` and
   `GcController::collect` cannot be named outside `patina-core`, so
@@ -1826,7 +1832,8 @@ The positive controls make each check panic on purpose:
 and `crates/patina-tests/tests/gc_protocol.rs` (a poll inside a window, on each
 backend, and on the VM a poll inside the instruction that opened the window:
 a host primitive called with `apply` opens it and posts an interrupt, and
-the call's return polls, #864). CI's release GC lane runs them on its
+the call's return polls, #864; and one at the last point each of the VM's
+load windows covers, #836). CI's release GC lane runs them on its
 `gc-check` build, and runs the balance control once more in the plain
 release build, the one build where only that check is compiled in. One test
 shows the deferral itself is load-bearing, on both backends:

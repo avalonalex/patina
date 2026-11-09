@@ -25,9 +25,10 @@ patina-ir = { path = "../patina-ir" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The switches the check builds' controls drive: the wrong-map switch of the
-# DEAD_SLOT controls (tests/retired_registers.rs, #625) and the one that skips
-# the units' link tables (tests/gc_vm.rs, #836). A dev-dependency, so the
-# feature is never in a build that ships.
+# DEAD_SLOT controls (tests/retired_registers.rs, #625), the one that skips
+# the units' link tables (tests/gc_vm.rs, #836) and the one that polls at the
+# end of each load window (tests/gc_protocol.rs, #836). A dev-dependency, so
+# the feature is never in a build that ships.
 patina-vm = { path = "../patina-vm", features = ["test-support"] }
 # The switch that turns every safe point's collection off, which shows that
 # `(gc)` collects at its call (tests/ephemerons.rs, #639). The same.

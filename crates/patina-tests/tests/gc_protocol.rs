@@ -9,7 +9,12 @@
 //! reaches a poll inside it, and expect that check's panic. In the third a
 //! host primitive opens one inside a VM instruction that polls before it
 //! ends: the loop checked before the instruction began, so only the poll's
-//! own check can see the window (#864).
+//! own check can see the window (#864). The three after it hold the VM's
+//! load windows to their extent (#836): patina-vm's test-only switch has
+//! the machine make a poll's check at the last point a window covers, before
+//! a unit's frame is pushed or an `eval`'s closure is written into its stub
+//! frame, where a window closed early, with no poll in the gap, would let
+//! it pass.
 //!
 //! These are positive controls for the check, which is compiled into check
 //! builds only: every debug `cargo test`, and a release one with this crate's
@@ -36,6 +41,7 @@ use common::{tree_walker_interpreter, vm_interpreter};
 use patina_core::{AssertNoGc, Cx, GcDriver, InterruptHandle, SharedHeap, Value, event};
 use patina_interpreter::{Arity, EvalError, Interpreter, PrimClass, PrimSpec};
 use patina_runtime::Backend;
+use patina_vm::test_support::PollInWindow;
 use std::cell::RefCell;
 
 /// Evaluate a program while a window is open. The heap is the interpreter's
@@ -145,6 +151,66 @@ control!(
     a_poll_inside_an_instruction_inside_a_window_panics_vm,
     "GC poll inside an AssertNoGc scope",
     poll_inside_an_instruction()
+);
+
+/// The load windows' extent (#836; `docs/GC_DESIGN.md` §7, the windows S1
+/// and S2). A window over a unit or a closure that nothing else roots must
+/// stay open up to the write that roots it, and no poll comes between, so a
+/// window closed early is invisible. patina-vm's test-only switch
+/// (`test_support::PollInWindow`) makes the check a poll makes first at the
+/// last point a window covers: a check build panics there while the window
+/// is open, and passes once one closed early. Each program runs once before
+/// the switch, which checks it runs and loads whatever its first run loads,
+/// so that the run with the switch on reaches the one window it is for.
+/// Declared after the interpreter, the switch is off again before the
+/// interpreter drops in the unwind.
+///
+/// Here `execute`'s, over a program form's unit until its frame is pushed.
+fn poll_before_a_forms_frame_is_pushed() {
+    let interp = vm_interpreter();
+    interp.eval_program_owned("(+ 1 2)").expect("evaluate");
+    let _switch = PollInWindow::before_frame_push();
+    let _ = interp.eval_program_owned("(+ 1 2)");
+}
+
+/// `push_frame_in`'s, over a host environment's form's unit, and the retired
+/// closure its frame runs under, until the frame is pushed (see above).
+fn poll_before_a_host_forms_frame_is_pushed() {
+    let interp = vm_interpreter();
+    let env = interp.new_environment();
+    interp.eval_str_in(&env, "(+ 1 2)").expect("evaluate");
+    let _switch = PollInWindow::before_frame_push();
+    let _ = interp.eval_str_in(&env, "(+ 1 2)");
+}
+
+/// `eval`'s, over the closure `eval_closure` makes of its unit, until
+/// `set_suspension` writes it into the stub frame's `CALLEE` register (see
+/// above).
+fn poll_before_an_evals_closure_is_written() {
+    let interp = vm_interpreter();
+    interp
+        .eval_program_owned("(import (scheme base) (scheme eval))")
+        .expect("import");
+    let program = "(eval '(+ 1 2) (environment '(scheme base)))";
+    interp.eval_program_owned(program).expect("evaluate");
+    let _switch = PollInWindow::before_callee_write();
+    let _ = interp.eval_program_owned(program);
+}
+
+control!(
+    a_poll_before_a_forms_frame_is_pushed_panics_vm,
+    "GC poll inside an AssertNoGc scope",
+    poll_before_a_forms_frame_is_pushed()
+);
+control!(
+    a_poll_before_a_host_forms_frame_is_pushed_panics_vm,
+    "GC poll inside an AssertNoGc scope",
+    poll_before_a_host_forms_frame_is_pushed()
+);
+control!(
+    a_poll_before_an_evals_closure_is_written_panics_vm,
+    "GC poll inside an AssertNoGc scope",
+    poll_before_an_evals_closure_is_written()
 );
 
 /// The same evaluation after the window has closed polls freely: what the

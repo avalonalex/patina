@@ -6,6 +6,8 @@
 
 pub(super) mod gc_roots;
 
+use gc_roots::switches;
+
 use super::control::{
     Reentry, abort_to_prompt, across_reentry, call_any, call_closure_from_regs, call_value,
     call_value_with_probe, capture_delimited, captured_handlers, classify_error,
@@ -1500,9 +1502,24 @@ pub fn execute(state: &mut VmState, unit: LoadedUnit) -> Result<TaggedValue, VmE
     let (code_id, window) = unit.into_parts();
     let code = state.code_object(code_id)?;
 
+    poll_in_window(state, switches::poll_before_frame_push());
     state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0);
     drop(window);
     run_top_frame(state)
+}
+
+/// A positive control's poll at the last point a load window covers (#836;
+/// `docs/GC_DESIGN.md` §7, the windows S1 and S2): with `on`, a switch of
+/// `test_support::PollInWindow`, the check every poll makes first (#864).
+/// In a check build it panics while the window is open, which is what the
+/// window is there for; a window closed early lets it pass, and the
+/// control fails. Without `test-support` `on` is a constant `false`, and
+/// this folds away.
+#[inline(always)]
+pub(super) fn poll_in_window(state: &VmState, on: bool) {
+    if on {
+        state.assert_no_gc.assert_none_open();
+    }
 }
 
 /// [`execute`] for code compiled in `env`, an environment other than the
@@ -1557,6 +1574,7 @@ fn push_frame_in(
         Vec::new(),
         env.clone(),
     );
+    poll_in_window(state, switches::poll_before_frame_push());
     state.execution.push_frame(code, closure, 0);
     drop(window);
     Ok(())
@@ -3503,15 +3521,17 @@ mod tests {
         .is_err()
     }
 
-    /// A loaded unit holds its window until its frame is pushed (#836;
+    /// A loaded unit holds its window until it runs (#836;
     /// `docs/GC_DESIGN.md` §7, the window S1): while the `LoadedUnit` lives,
     /// a poll in a check build panics, and each of `execute`, `execute_in`
-    /// and `execute_nested` closes it once the unit's frame holds its code,
-    /// before its run polls, so the run, whose loop polls at its start and
-    /// checks at every instruction, answers. A plain release build has no
-    /// window to see.
+    /// and `execute_nested` has closed it by the time its run polls, so the
+    /// run, whose loop polls at its start and checks at every instruction,
+    /// answers; a unit dropped unrun closes it too. That the window stays
+    /// open up to the push of the unit's frame is for `gc_protocol.rs`'
+    /// controls to show, which poll there (`test_support::PollInWindow`). A
+    /// plain release build has no window to see.
     #[test]
-    fn a_loaded_unit_holds_its_window_until_its_frame_is_pushed() {
+    fn a_loaded_unit_holds_its_window_until_it_runs() {
         let mut state = VmState::on_a_fresh_heap();
         let env = Rc::clone(state.global_env());
         assert!(!a_window_is_open(&state), "none open before the load");
@@ -3557,7 +3577,9 @@ mod tests {
     /// The closure `eval_closure` makes holds the unit's window until its
     /// caller lets go of it (#836; `docs/GC_DESIGN.md` §7, the window S2):
     /// nothing roots the closure until it is written into the stub frame's
-    /// `CALLEE` register, after which `set_suspension` drops the window. A
+    /// `CALLEE` register, after which `set_suspension` drops the window.
+    /// That it stays open up to that write is for `gc_protocol.rs`'
+    /// `a_poll_before_an_evals_closure_is_written_panics_vm` to show. A
     /// plain release build has no window to see.
     #[test]
     fn an_eval_callee_holds_its_window_until_it_is_dropped() {

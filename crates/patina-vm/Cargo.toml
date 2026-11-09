@@ -24,11 +24,13 @@ patina-core = { path = "../patina-core", features = ["test-support"] }
 [features]
 # Compile `test_support`, the switches the check builds' positive controls
 # drive: the wrong-map switch of the `DEAD_SLOT` controls (#625,
-# crates/patina-tests/tests/retired_registers.rs) and the switch that skips
+# crates/patina-tests/tests/retired_registers.rs), the switch that skips
 # the units' link tables, which `release_dead_code`'s check refuses (#836,
-# crates/patina-tests/tests/gc_vm.rs). Only patina-tests' [dev-dependencies]
-# enable it, and resolver 2 keeps a dev-dependency's features out of normal
-# builds, so no build that ships has the switches.
+# crates/patina-tests/tests/gc_vm.rs), and the one that polls at the end of
+# each load window (#836, crates/patina-tests/tests/gc_protocol.rs). Only
+# patina-tests' [dev-dependencies] enable it, and resolver 2 keeps a
+# dev-dependency's features out of normal builds, so no build that ships has
+# the switches.
 test-support = []
 
 [lib]

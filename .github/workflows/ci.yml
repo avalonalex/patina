@@ -166,8 +166,9 @@ jobs:
     # target per call, since the summary check reads one result line: the
     # stale-reference checks (#621); the GC protocol checks (#624) —
     # the defer depth at collection, a holder's extent, the defer balance and
-    # a poll inside an AssertNoGc window, the last on each backend, and on
-    # the VM a poll inside the instruction that opened the window (#864);
+    # a poll inside an AssertNoGc window, the last on each backend, on the
+    # VM a poll inside the instruction that opened the window (#864), and
+    # one at the last point each of the VM's load windows covers (#836);
     # and the retired-register checks (#625), a DEAD_SLOT read by an
     # instruction or a call's argument copy under a deliberately wrong
     # liveness map, and one stored in the heap (the latter among the
