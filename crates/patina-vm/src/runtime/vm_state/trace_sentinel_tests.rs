@@ -702,7 +702,10 @@ fn zeal_with_callee() -> (VmState, TaggedValue) {
     let globals = Rc::clone(state.global_env());
     let closure = (state.heap.borrow_mut()).alloc_vm_closure(a.0, Vec::new(), globals);
     state.note_closure_made(a);
-    // As `eval_closure`: the unit's window closes once the closure counts.
+    // Unlike `eval_closure`, which keeps the unit's window open to the
+    // `CALLEE` write, this closes it here, over a closure nothing roots yet:
+    // nothing polls before each test puts the closure in B's constants,
+    // which the code store traces.
     drop(window);
     (state, closure)
 }

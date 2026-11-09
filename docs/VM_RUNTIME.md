@@ -225,7 +225,9 @@ pub fn execute(state: &mut VmState, unit: LoadedUnit) -> Result<TaggedValue, VmE
 
 Takes the unit `VmState::load_unit` answered, pushes its initial frame,
 closes the unit's `AssertNoGc` window once the frame holds the code (#836;
-`docs/GC_DESIGN.md` §7), and calls `run_loop_until(state, 0)`.
+`docs/GC_DESIGN.md` §7, the window S1), and runs the frame with
+`run_top_frame`, which takes the carrier's driver if no run further out
+holds it and calls `run_loop_until(state, 0, driver)`.
 
 ### 3.2 Main Loop
 

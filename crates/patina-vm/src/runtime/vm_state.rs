@@ -642,7 +642,7 @@ impl VmState {
     /// does, and a collection would let it go. [`execute`],
     /// [`execute_in`] and [`execute_nested`] close it once they have pushed
     /// the unit's frame, and `eval_closure` hands it on to the closure's
-    /// caller (#836, design §5.6 rows 7 and 8).
+    /// caller (#836; `docs/GC_DESIGN.md` §7, the windows S1 and S2).
     ///
     /// Once it has run, [`VmState::release_unit_if_unused`] lets it go if
     /// nothing it left behind can run it again (#338).
@@ -1426,10 +1426,10 @@ pub(super) fn eval_closure(
 }
 
 /// What [`eval_closure`] answers: the closure, and the window over it
-/// (#836, design §5.6 row 8). The closure is a Rust local, which nothing
-/// roots, from its allocation until `set_suspension` writes it into the
-/// stub frame's `CALLEE` register, so the unit's window, opened by
-/// `load_unit`, stays open to that write: carried here across
+/// (#836; `docs/GC_DESIGN.md` §7, the window S2). The closure is a Rust
+/// local, which nothing roots, from its allocation until `set_suspension`
+/// writes it into the stub frame's `CALLEE` register, so the unit's window,
+/// opened by `load_unit`, stays open to that write: carried here across
 /// `across_reentry`, then in `StubWork::Call`'s `eval`, and dropped after
 /// the write.
 pub(super) struct EvalCallee {
@@ -3503,10 +3503,10 @@ mod tests {
         .is_err()
     }
 
-    /// A loaded unit holds its window until its frame is pushed (#836,
-    /// design §5.6 row 7): while the `LoadedUnit` lives, a poll in a check
-    /// build panics, and each of `execute`, `execute_in` and
-    /// `execute_nested` closes it once the unit's frame holds its code,
+    /// A loaded unit holds its window until its frame is pushed (#836;
+    /// `docs/GC_DESIGN.md` §7, the window S1): while the `LoadedUnit` lives,
+    /// a poll in a check build panics, and each of `execute`, `execute_in`
+    /// and `execute_nested` closes it once the unit's frame holds its code,
     /// before its run polls, so the run, whose loop polls at its start and
     /// checks at every instruction, answers. A plain release build has no
     /// window to see.
@@ -3555,10 +3555,10 @@ mod tests {
     }
 
     /// The closure `eval_closure` makes holds the unit's window until its
-    /// caller lets go of it (#836, design §5.6 row 8): nothing roots the
-    /// closure until it is written into the stub frame's `CALLEE`
-    /// register, after which `set_suspension` drops the window. A plain
-    /// release build has no window to see.
+    /// caller lets go of it (#836; `docs/GC_DESIGN.md` §7, the window S2):
+    /// nothing roots the closure until it is written into the stub frame's
+    /// `CALLEE` register, after which `set_suspension` drops the window. A
+    /// plain release build has no window to see.
     #[test]
     fn an_eval_callee_holds_its_window_until_it_is_dropped() {
         let mut state = VmState::on_a_fresh_heap();

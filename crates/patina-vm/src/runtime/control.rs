@@ -1413,22 +1413,22 @@ fn push_wind_step(
     state.set_reg_at(base, wind_step::VALUE, value);
     state.set_reg_at(base, wind_step::ENTERING, entering);
     drop(window);
-    // The caller's clone of the jump's continuation (`step_wind_jump`'s
-    // `cc`, whose record lends `handlers` when the step enters an extent)
-    // outlives the window only across this call (#836, the design's §5.6
-    // row 5: a store clone is never held across a collecting poll). Its ref
-    // is rooted in `TARGET`, so a collection would mark it and trace the
-    // payload `cc` shares; and nothing the call reaches collects. `call_any`
-    // pushes a closure's frame without polling (`call_closure_resolved`); a
-    // primitive runs within the instruction, and a nested loop of its polls
-    // without the driver, so it cannot collect (#702); a control primitive,
-    // a resumable primitive's start (whose collection waits for its stub's
-    // `CollectAtCall`), a parameter, and a continuation it invokes
-    // (`step_wind_jump`, `invoke_delimited`) poll nowhere. The collecting
-    // polls are at dispatch level: a `Call`'s closure entry, the tail paths,
-    // a deoptimized primitive call and the loop's own. The window cannot
-    // stay open over the call, since a nested loop's polls assert that none
-    // is (#624).
+    // The caller's clone of the jump's continuation (`step_wind_jump`'s `cc`,
+    // whose record lends `handlers` when the step enters an extent) outlives
+    // the window only across this call (#836: a store clone is never held
+    // across a collecting poll; `docs/GC_DESIGN.md` §7, the invoke's window).
+    // Its ref is rooted in `TARGET`, so a collection would mark it and trace
+    // the payload `cc` shares; and nothing the call reaches collects.
+    // `call_any` pushes a closure's frame without polling
+    // (`call_closure_resolved`); a primitive runs within the instruction, and
+    // a nested loop of its polls without the driver, so it cannot collect
+    // (#702); a control primitive, a resumable primitive's start (whose
+    // collection waits for its stub's `CollectAtCall`), a parameter, and a
+    // continuation it invokes (`step_wind_jump`, `invoke_delimited`) poll
+    // nowhere. The collecting polls are at dispatch level: a `Call`'s closure
+    // entry, the tail paths, a deoptimized primitive call and the loop's own.
+    // The window cannot stay open over the call, since a nested loop's polls
+    // assert that none is (#624).
     //
     // A primitive thunk returns here and now; its value is discarded either
     // way, and the stub frame is left on top for `ResumeWindJump` to run.
@@ -3084,7 +3084,8 @@ pub(super) fn push_invoke_step(
     // `dc`, from `call_value_with_probe` or `tail_call_value_with_probe`, or
     // `ResumeComposableInvoke`'s) outlives the window only across this call,
     // with its ref rooted in `CONT`, and nothing the call reaches collects,
-    // as `push_wind_step` sets out (#836, the design's §5.6 row 5).
+    // as `push_wind_step` sets out (#836; `docs/GC_DESIGN.md` §7, the
+    // invoke's window).
     //
     // A primitive thunk returns here and now; its value is discarded either
     // way, and the stub frame is left on top for the instruction to run.
