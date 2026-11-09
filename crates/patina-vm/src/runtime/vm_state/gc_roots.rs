@@ -142,6 +142,13 @@ pub(in crate::runtime) mod switches {
     pub(in crate::runtime) fn poll_before_callee_write() -> bool {
         false
     }
+
+    /// Whether a collection passes over the entries of a table it has
+    /// marked traced (#836, `test_support::SkipLinkEntries`): never.
+    #[inline(always)]
+    pub(in crate::runtime) fn skip_link_entries() -> bool {
+        false
+    }
 }
 
 #[cfg(feature = "test-support")]
@@ -175,6 +182,12 @@ impl RootProvider for VmState {
                 continue;
             }
             if code.links.trace_once(epoch) {
+                continue;
+            }
+            // A positive control's switch passes over the entries of a
+            // table marked traced, so that the placeholders it links go
+            // unmarked while `release_dead_code`'s check stays quiet (#836).
+            if switches::skip_link_entries() {
                 continue;
             }
             code.links.trace(visitor);

@@ -312,8 +312,8 @@ fn code_units_count_a_unit_a_live_closure_keeps() {
 /// Run in every check build: every debug `cargo test`, and a release one
 /// with this crate's `gc-check` feature, which CI's release GC lane runs
 /// with `--include-ignored`. A build without the check reports them
-/// ignored. No other test in this file may have `a_check_build_refuses` in
-/// its name, which CI's line filters on.
+/// ignored. No test in this file but the check builds' controls may have
+/// `a_check_build_refuses` in its name, which CI's line filters on.
 fn gc_with_tables_untraced(skip: fn() -> patina_vm::test_support::SkipCodeIds) {
     let interp = vm_interpreter();
     interp
@@ -349,4 +349,56 @@ fn a_check_build_refuses_a_unit_a_closure_keeps_untraced() {
 #[should_panic(expected = "did not trace its link table")]
 fn a_check_build_refuses_a_unit_a_frame_keeps_untraced() {
     gc_with_tables_untraced(patina_vm::test_support::SkipCodeIds::kept_by_frames);
+}
+
+/// The control of the placeholders a unit's link table keeps (#836): a
+/// collection keeps every placeholder a kept unit's table links, since it
+/// traces that table, and the pass at the sweep's start drops only the
+/// placeholders nothing marked. `g`'s unit links `unbound-836-control`, a
+/// name nothing binds, to a placeholder, which only `g`'s table marks.
+/// patina-vm's test-only switch (`test_support::SkipLinkEntries`) has a
+/// collection mark each table traced and pass over its entries, so that
+/// `(gc)` drops the placeholder `g`'s live unit links and the sweep frees
+/// its pairs, while `release_dead_code`'s check, which asks only whether
+/// each kept unit's table was traced, stays quiet. `(g)` then reads through
+/// the freed record, which a check build refuses: as a use after free, or,
+/// once a later allocation has reused the slot, as a stale reference
+/// (`heap::check`). Without the switch `(g)` raises an unbound-variable
+/// error. The program defines `g` before the switch goes on, so that `g`'s
+/// unit is linked first, and runs `(begin (gc) (g))` under it. Run in every
+/// check build, as the controls above are.
+#[test]
+#[cfg_attr(
+    not(any(debug_assertions, feature = "gc-check")),
+    ignore = "needs a check build"
+)]
+fn a_check_build_refuses_a_placeholder_the_pass_dropped_while_linked() {
+    let interp = vm_interpreter();
+    interp
+        .eval_program_owned(
+            "(import (scheme base) (patina debug)) (define (g) unbound-836-control)",
+        )
+        .expect("import and define");
+    let unbound = interp
+        .eval_str_owned("(g)")
+        .expect_err("`unbound-836-control` is unbound");
+    assert!(
+        format!("{unbound}").contains("unbound-836-control"),
+        "{unbound}"
+    );
+    let _skip = patina_vm::test_support::SkipLinkEntries::new();
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = interp.eval_str_owned("(begin (gc) (g))");
+    }));
+    let payload = caught.expect_err("a read through a placeholder the sweep freed");
+    let message = payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|m| m.to_string()))
+        .unwrap_or_default();
+    assert!(
+        message.starts_with("use-after-free: pair slot")
+            || message.starts_with("stale pair reference"),
+        "{message}"
+    );
 }

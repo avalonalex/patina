@@ -186,9 +186,11 @@ jobs:
     # (the last two among heap::gc::tests::), and a namespace slot handed a
     # placeholder (environment::placeholder_tests::); and the VM's link
     # tables' (#836), a unit a collection kept whose table it did not trace,
-    # one kept by a closure and one by a frame (gc_vm's two
-    # a_check_build_refuses_…), and a placeholder a table links read cold
-    # after it left its namespace's store (link_table::tests::).
+    # one kept by a closure and one by a frame, and a placeholder a kept
+    # unit's table links that a collection dropped and freed, read through
+    # the table (gc_vm's three a_check_build_refuses_…), and a placeholder a
+    # table links read cold after it left its namespace's store
+    # (link_table::tests::).
     #
     # The defer balance is the one check every build carries, so its control
     # also runs in the plain release build, without gc-check and without
