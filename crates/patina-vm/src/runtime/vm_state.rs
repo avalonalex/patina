@@ -743,7 +743,9 @@ impl VmState {
     /// has freed.
     ///
     /// The collection's pause includes this work: its time completes the
-    /// collection's record (`Heap::finish_collection`, #648).
+    /// collection's record (`Heap::finish_collection`, #648). Called only
+    /// after a collection the machine was lent to, whose `trace_roots` began
+    /// a new epoch: what `release_dead_code`'s check reads.
     fn after_collection(&mut self) {
         let started = std::time::Instant::now();
         self.release_dead_code();
@@ -752,6 +754,14 @@ impl VmState {
 
     /// [`Self::after_collection`]'s work: count down the freed closures'
     /// code, and release the units nothing can run.
+    ///
+    /// A check build then asserts that the collection traced the link table
+    /// of every unit it kept (#836): a unit is kept because something can
+    /// run its code, and whatever can is what reports the unit's code id to
+    /// the collection (`trace_code_ids`): a frame, the running code, a
+    /// marked closure. A unit kept with its table untraced is kept by a
+    /// holder that reports nothing, whose code would read a table whose
+    /// entries the collection did not keep.
     fn release_dead_code(&mut self) {
         let freed = self.heap.borrow_mut().take_gc_freed_closure_code_ids();
         for id in freed {
@@ -781,6 +791,19 @@ impl VmState {
             }
             in_use
         });
+        if GC_CHECK {
+            // The collection's epoch, which `trace_roots` set as it began.
+            // The unit's members share its one table (`load_unit`), so its
+            // top's is the unit's.
+            let epoch = self.trace_epoch.get();
+            for &top in self.code_units.keys() {
+                assert!(
+                    loaded(&self.code_store, top).is_some_and(|code| code.links.traced_in(epoch)),
+                    "{top:?}'s unit was kept by a collection that did not trace its link table \
+                     (#836)"
+                );
+            }
+        }
         self.note_code_units();
     }
 

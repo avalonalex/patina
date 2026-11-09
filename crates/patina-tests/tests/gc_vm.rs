@@ -293,3 +293,34 @@ fn code_units_count_a_unit_a_live_closure_keeps() {
         "(42 #t 1 1 0)",
     );
 }
+
+/// The control of `release_dead_code`'s check (#836): a check build asserts,
+/// after every collection, that each unit the collection kept had its link
+/// table traced, since whatever keeps a unit is something that can run its
+/// code and reports the unit's code id. Here patina-vm's test-only switch
+/// (`test_support::SkipCodeIds`) has the collection trace no table, as a
+/// holder that reports nothing would leave it, and `g`'s closure keeps its
+/// unit (as the closures the bootstrap's libraries made keep theirs): the
+/// first collection with the switch on panics with the check's message,
+/// wherever it lands. Declared after the interpreter, the switch is off
+/// again before the interpreter drops in the unwind.
+///
+/// Run in every check build: every debug `cargo test`, and a release one
+/// with this crate's `gc-check` feature, which CI's release GC lane runs
+/// with `--include-ignored`. A build without the check reports it ignored.
+/// No other test in this file may start with its name's prefix, which CI's
+/// line filters on.
+#[test]
+#[cfg_attr(
+    not(any(debug_assertions, feature = "gc-check")),
+    ignore = "needs a check build"
+)]
+#[should_panic(expected = "did not trace its link table")]
+fn a_check_build_refuses_a_kept_unit_whose_table_was_not_traced() {
+    let interp = vm_interpreter();
+    interp
+        .eval_program_owned("(import (scheme base) (patina debug))")
+        .expect("import");
+    let _skip = patina_vm::test_support::SkipCodeIds::new();
+    let _ = interp.eval_program_owned("(define (g) 1) (gc)");
+}

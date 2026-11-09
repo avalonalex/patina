@@ -1,12 +1,15 @@
 //! Test-only hooks into the VM, compiled only with the `test-support`
 //! feature, which only `patina-tests`' [dev-dependencies] enable. Resolver 2
 //! keeps a dev-dependency's features out of normal builds, so no build that
-//! ships has any of this.
+//! ships has any of this. Each hook is a switch per test thread, which a
+//! check build's positive control turns on to make the machine do what the
+//! check exists to catch.
 
 use std::cell::Cell;
 
 thread_local! {
     static DROP_HIGHEST_LIVE: Cell<bool> = const { Cell::new(false) };
+    static SKIP_CODE_IDS: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The wrong-map switch behind the `DEAD_SLOT` controls (#625,
@@ -44,4 +47,32 @@ pub(crate) fn dropped(roots: &[u64], num_regs: u16) -> Option<usize> {
     (0..num_regs as usize)
         .rev()
         .find(|&reg| roots.get(reg / 64).copied().unwrap_or(0) & (1 << (reg % 64)) != 0)
+}
+
+/// The switch behind the control of `release_dead_code`'s check (#836,
+/// `a_check_build_refuses_a_kept_unit_whose_table_was_not_traced` in
+/// `crates/patina-tests/tests/gc_vm.rs`). While one is alive, a collection
+/// on this thread traces no unit's link table: `trace_code_ids` returns
+/// before it marks any table traced, which is what a holder that keeps a
+/// unit and reports no code id leaves. A check build then refuses the first
+/// unit the collection keeps. Thread-local, as [`DropHighestLive`] is.
+pub struct SkipCodeIds(());
+
+impl SkipCodeIds {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        SKIP_CODE_IDS.set(true);
+        Self(())
+    }
+}
+
+impl Drop for SkipCodeIds {
+    fn drop(&mut self) {
+        SKIP_CODE_IDS.set(false);
+    }
+}
+
+/// Whether [`SkipCodeIds`]'s switch is on.
+pub(crate) fn skip_code_ids() -> bool {
+    SKIP_CODE_IDS.get()
 }
