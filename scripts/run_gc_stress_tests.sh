@@ -224,7 +224,9 @@ fi
 # check, a unit a collection kept whose link table it did not trace, which
 # panics at its first collection with the switch on: 35 collections at 16
 # and 1 without stress, the other 30 tests making 21020 and 3676, as before,
-# the minimum left)
+# the minimum left; and again 2026-11-09, when that control became two, one
+# for each way a unit is kept, each making 35 collections at 16 and 1
+# without stress, the other 30 tests' counts as before, the minimum left)
 TARGETS=(
     "callability 16 31 13"                    # 1543 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -233,7 +235,7 @@ TARGETS=(
     "escape_from_primitive 16 3669 18"        # 7338 (90)
     "finished_forms_release_code 16 1450 11"  # 3677 (13)
     "gc_tree_walker 16 15161 24"              # 30322 (6442)
-    "gc_vm 16 10510 31"                       # 21055 (3677)
+    "gc_vm 16 10510 32"                       # 21090 (3678)
     "host_environments 16 57985 28"           # 115970 (431)
     "hygiene_matrix 16 11136 17"              # 22273 (6)
     "interpreter_api 16 138 28"               # 2277 (4)
