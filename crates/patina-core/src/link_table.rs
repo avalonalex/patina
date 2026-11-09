@@ -114,20 +114,17 @@ impl LinkTable {
     /// which the table holds from now on. Linking twice links the same
     /// records. Under `heap`'s write step for each name.
     ///
-    /// A table is linked in one namespace: the first link sets it, a debug
-    /// build refuses a later link in another, and a release build relinks
-    /// against the first, so that the table never names one namespace's
-    /// records while it holds another.
+    /// A table is linked in one namespace: the first link sets it, and a
+    /// later link in another relinks against the first, so that the table
+    /// never names one namespace's records while it holds another; a debug
+    /// build then refuses it. Refused after the relink, so that the relink a
+    /// release build relies on runs, and is tested, in every build.
     pub fn link_in(&self, heap: &RefCell<Heap>, namespace: &Rc<Environment>) {
         debug_assert!(
             namespace.is_namespace(),
             "a unit is compiled and linked in a namespace, never a frame (#853, #854)"
         );
         let linked = self.namespace.get_or_init(|| Rc::clone(namespace));
-        debug_assert!(
-            Rc::ptr_eq(linked, namespace),
-            "a unit's table is linked in one namespace (#836)"
-        );
         for (entry, name) in self.entries.iter().zip(self.names.iter()) {
             entry.set(
                 linked
@@ -135,6 +132,10 @@ impl LinkTable {
                     .map_or(TaggedValue::UNBOUND, Record::word),
             );
         }
+        debug_assert!(
+            Rc::ptr_eq(linked, namespace),
+            "a unit's table is linked in one namespace (#836)"
+        );
     }
 
     /// Mark the table traced in collection `epoch`, and answer whether it
@@ -413,12 +414,13 @@ mod tests {
         s.assert_survived(&heap.borrow());
     }
 
-    /// A table is linked in one namespace (#836): a debug build refuses a
-    /// second link in another.
+    /// A table is linked in one namespace (#836): a second link, in another,
+    /// relinks against the first, so that the table never names one
+    /// namespace's records while it holds another, and a debug build then
+    /// refuses it. One test for every build, so that the debug lane tests the
+    /// relink a release build relies on.
     #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "a unit's table is linked in one namespace")]
-    fn a_debug_build_refuses_a_second_namespace() {
+    fn a_second_namespace_relinks_in_the_first() {
         let heap = new_shared_heap();
         let linked = table(&["x"]);
         let first = Rc::new(Environment::with_heap(&heap));
@@ -426,23 +428,26 @@ mod tests {
         first.define(&heap, "x", TaggedValue::fixnum(1));
         second.define(&heap, "x", TaggedValue::fixnum(2));
         linked.link_in(&heap, &first);
-        linked.link_in(&heap, &second);
-    }
-
-    /// A release build relinks a table linked in a second namespace against
-    /// its first, so that it never names one namespace's records while it
-    /// holds another.
-    #[test]
-    #[cfg(not(debug_assertions))]
-    fn a_release_build_relinks_in_the_first_namespace() {
-        let heap = new_shared_heap();
-        let linked = table(&["x"]);
-        let first = Rc::new(Environment::with_heap(&heap));
-        let second = Rc::new(Environment::with_heap(&heap));
-        first.define(&heap, "x", TaggedValue::fixnum(1));
-        second.define(&heap, "x", TaggedValue::fixnum(2));
-        linked.link_in(&heap, &first);
-        linked.link_in(&heap, &second);
-        assert_eq!(linked.entry(0), first.local_record("x").unwrap().word());
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            linked.link_in(&heap, &second);
+        }));
+        assert_eq!(
+            refused.is_err(),
+            cfg!(debug_assertions),
+            "a debug build refuses it; a release build relinks silently"
+        );
+        if let Err(panic) = refused {
+            let message = (panic.downcast_ref::<&str>().copied())
+                .or_else(|| panic.downcast_ref::<String>().map(String::as_str));
+            assert_eq!(
+                message,
+                Some("a unit's table is linked in one namespace (#836)")
+            );
+        }
+        assert_eq!(
+            linked.entry(0),
+            first.local_record("x").unwrap().word(),
+            "linked against the first namespace"
+        );
     }
 }
