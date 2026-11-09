@@ -2490,8 +2490,8 @@ fn dispatch_one_instruction(
             // `cont` and `value`, and the last step holds it until the
             // captured frames are appended. `dc`, the store's clone, lives
             // to the arm's end, past the window only across the next
-            // thunk's call, which polls nowhere, with `cont` in the next
-            // stub (`push_invoke_step`; #836).
+            // thunk's call, which cannot collect, with `cont` rooted in the
+            // next stub (`push_invoke_step`; #836).
 
             let dc =
                 state

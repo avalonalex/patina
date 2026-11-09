@@ -20,14 +20,14 @@
 //! (#682).
 //!
 //! A third is each unit's link table (#836), which the code store never
-//! traces (`CodeObject::links`): a frame's code (`FrameCode`) and a marked
-//! closure report their code's id, the collector queues each id once, and
-//! `trace_code_ids` traces the table of the unit each one names, once a
-//! collection (`LinkTable::trace_once`, by `trace_epoch`), in the same
-//! fixpoint as the continuation ids, since a continuation's frames report
-//! theirs only when its payload is traced. The VM does not link its units at
-//! load yet, so a table this traces has every entry `UNBOUND` and no
-//! namespace, and only the tests link one.
+//! traces (`CodeObject::links`): a frame's code (`FrameCode`), the running
+//! code (`RunningCode`) and a marked closure report their code's id, the
+//! collector queues each id once, and `trace_code_ids` traces the table of
+//! the unit each one names, once a collection (`LinkTable::trace_once`, by
+//! `trace_epoch`), in the same fixpoint as the continuation ids, since a
+//! continuation's frames report theirs only when its payload is traced. The
+//! VM does not link its units at load yet, so a table this traces has every
+//! entry `UNBOUND` and no namespace, and only the tests link one.
 //!
 //! The registers and the frames' closures, live and in captured
 //! continuations, are reported as slots, where they live (#682). Everything
