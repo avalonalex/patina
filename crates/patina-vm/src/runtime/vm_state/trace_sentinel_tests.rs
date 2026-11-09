@@ -440,7 +440,7 @@ fn load_linked(
     code.links = Rc::new(LinkTable::new(
         names.iter().map(|&name| Rc::from(name)).collect(),
     ));
-    let id = state.load_unit(code, Vec::new());
+    let id = state.load_unit(code, Vec::new()).id();
     let ns = Rc::new(Environment::with_heap(&state.heap));
     ns.define(&state.heap, "x", x);
     ns.define(&state.heap, "y", y);
@@ -537,7 +537,7 @@ fn a_frame_keeps_its_units_link_table() {
 #[test]
 fn a_full_continuations_frame_keeps_its_units_link_table() {
     let mut state = VmState::on_a_fresh_heap();
-    let earlier = state.load_unit(super::tests::code(), Vec::new());
+    let earlier = state.load_unit(super::tests::code(), Vec::new()).id();
     let mut s = Sentinels::new(&mut state.heap.borrow_mut());
     let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
     let id = load_linked(&mut state, super::tests::code(), &["x"], x, y);
@@ -561,7 +561,7 @@ fn a_full_continuations_frame_keeps_its_units_link_table() {
 #[test]
 fn a_delimited_continuations_frame_keeps_its_units_link_table() {
     let mut state = VmState::on_a_fresh_heap();
-    let earlier = state.load_unit(super::tests::code(), Vec::new());
+    let earlier = state.load_unit(super::tests::code(), Vec::new()).id();
     let mut s = Sentinels::new(&mut state.heap.borrow_mut());
     let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
     let id = load_linked(&mut state, super::tests::code(), &["x"], x, y);
@@ -684,22 +684,26 @@ fn zeal_with_callee() -> (VmState, TaggedValue) {
     let heap = patina_core::heap::new_shared_heap();
     let globals = Rc::new(Environment::with_heap(&heap));
     let mut state = VmState::with_gc_mode(heap, globals, GcMode::Zeal);
-    let a = state.load_unit(
-        assembled(
-            vec![
-                Instruction::LoadImmediate {
-                    dst: 0,
-                    val: TaggedValue::fixnum(42),
-                },
-                Instruction::Return { val: 0 },
-            ],
+    let (a, window) = state
+        .load_unit(
+            assembled(
+                vec![
+                    Instruction::LoadImmediate {
+                        dst: 0,
+                        val: TaggedValue::fixnum(42),
+                    },
+                    Instruction::Return { val: 0 },
+                ],
+                Vec::new(),
+            ),
             Vec::new(),
-        ),
-        Vec::new(),
-    );
+        )
+        .into_parts();
     let globals = Rc::clone(state.global_env());
     let closure = (state.heap.borrow_mut()).alloc_vm_closure(a.0, Vec::new(), globals);
     state.note_closure_made(a);
+    // As `eval_closure`: the unit's window closes once the closure counts.
+    drop(window);
     (state, closure)
 }
 
@@ -840,7 +844,9 @@ fn a_nested_loop_puts_back_the_running_code_when_it_returns() {
     let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
     let b = load_linked(&mut state, super::tests::code(), &["x"], x, y);
     state.execution.set_running(b.0);
-    let c = state.load_unit(super::tests::code(), Vec::new());
+    // `.id()` here, not at the use: a `LoadedUnit` shadowed below would
+    // keep its window open to the end of the test, through the nested loop.
+    let c = state.load_unit(super::tests::code(), Vec::new()).id();
     let c = state.code_object(c).expect("loaded");
     state.execution.push_frame(c, CallFrame::NO_CLOSURE, 0);
 
@@ -866,7 +872,10 @@ fn a_nested_loop_puts_back_the_running_code_when_it_fails() {
     let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
     let b = load_linked(&mut state, super::tests::code(), &["x"], x, y);
     state.execution.set_running(b.0);
-    let c = state.load_unit(tail_calling(TaggedValue::NULL), Vec::new());
+    // `.id()` at the binding, as in the test above.
+    let c = state
+        .load_unit(tail_calling(TaggedValue::NULL), Vec::new())
+        .id();
     let c = state.code_object(c).expect("loaded");
     state.execution.push_frame(c, CallFrame::NO_CLOSURE, 0);
 
@@ -904,16 +913,20 @@ fn a_tail_call_where_an_escape_lands_keeps_the_landing_units_link_table() {
         let u = state.code_object(u).expect("loaded");
         state.alloc_vm_continuation(full_capture_of(&u))
     };
-    let w = state.load_unit(
-        assembled(
-            vec![Instruction::TailCall {
-                func: 0,
-                args: Vec::new(),
-            }],
+    // `.id()` at the binding: a shadowed `LoadedUnit` would keep its window
+    // open through the run.
+    let w = state
+        .load_unit(
+            assembled(
+                vec![Instruction::TailCall {
+                    func: 0,
+                    args: Vec::new(),
+                }],
+                Vec::new(),
+            ),
             Vec::new(),
-        ),
-        Vec::new(),
-    );
+        )
+        .id();
     let w = state.code_object(w).expect("loaded");
     state.execution.push_frame(w, CallFrame::NO_CLOSURE, 0);
     state.set_reg(0, k);
@@ -941,7 +954,7 @@ fn a_tail_call_where_an_escape_lands_keeps_the_landing_units_link_table() {
 #[test]
 fn a_stale_code_id_finds_nothing() {
     let mut state = VmState::on_a_fresh_heap();
-    let first = state.load_unit(super::tests::code(), Vec::new());
+    let first = state.load_unit(super::tests::code(), Vec::new()).id();
     state.release_unit_if_unused(first);
     let (x, y) = {
         let mut heap = state.heap.borrow_mut();

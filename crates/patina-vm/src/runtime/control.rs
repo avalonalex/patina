@@ -115,7 +115,7 @@
 
 use super::execution_state::push_abort_stub;
 use super::vm_state::{
-    VmState, eval_closure, frame_globals, run_loop_until, vm_eval_expr, vm_load_library,
+    EvalCallee, VmState, eval_closure, frame_globals, run_loop_until, vm_eval_expr, vm_load_library,
 };
 use crate::error::VmError;
 use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
@@ -1863,14 +1863,18 @@ fn stub_for(state: &mut VmState, work: &StubWork) -> Result<Rc<CodeObject>, VmEr
 /// # State contract
 ///
 /// Requires the stub frame on top at `base`. Writes its call registers, and
-/// allocates a list past the inline count; calls no Scheme.
+/// allocates a list past the inline count; calls no Scheme. A `Step::Eval`'s
+/// window (`StubWork::Call`'s `eval`) closes once the closure is in the
+/// `CALLEE` register, which roots it from there on.
 fn set_suspension(state: &mut VmState, base: usize, suspension: Suspension) {
     let Suspension { work, kept } = suspension;
     state.set_reg_at(base, resume_step::STATE, kept);
     match work {
         StubWork::Call { callee, args, eval } => {
             state.set_reg_at(base, resume_step::CALLEE, callee);
-            state.set_reg_at(base, resume_step::EVAL, TaggedValue::boolean(eval));
+            let is_eval = eval.is_some();
+            drop(eval);
+            state.set_reg_at(base, resume_step::EVAL, TaggedValue::boolean(is_eval));
             if args.len() <= resume_step::INLINE_ARGS {
                 for (i, arg) in args.into_iter().enumerate() {
                     state.set_reg_at(base, resume_step::ARGS + i as u16, arg);
@@ -1996,9 +2000,11 @@ enum StubWork {
     Call {
         callee: TaggedValue,
         args: TaggedCallArgs,
-        /// Whether `callee` is a `Step::Eval`'s closure
-        /// ([`resume_step::EVAL`]).
-        eval: bool,
+        /// For a `Step::Eval`'s closure ([`resume_step::EVAL`]), the window
+        /// its unit was loaded under ([`EvalCallee`]), which covers the
+        /// closure, rooted nowhere, until `set_suspension` writes it into
+        /// the `CALLEE` register (#836); `None` for any other callee.
+        eval: Option<AssertNoGc>,
     },
     /// Collect at the call ([`collect_stub`], #639).
     Collect(CollectKind),
@@ -2025,7 +2031,7 @@ fn vm_step(
             work: StubWork::Call {
                 callee,
                 args,
-                eval: false,
+                eval: None,
             },
             kept,
         }),
@@ -2051,11 +2057,12 @@ fn vm_step(
                           expansion runs in a context (`NoGcScope::cross`), beneath which nothing \
                           collects, and each library body under its `ParsedLibrary`'s, and the \
                           compile, `load_unit` and the closure's allocation after it run no \
-                          Scheme. Besides, only a dispatching loop gets here, so any loop the load \
-                          starts is nested (point C, which PRD/GC_PRD.md §11.3 keeps under \
-                          `NoGcScope`)"
+                          Scheme, and the unit's window (`EvalCallee`, then `StubWork::Call`'s \
+                          `eval`) asserts it to the `CALLEE` write. Besides, only a dispatching \
+                          loop gets here, so any loop the load starts is nested (point C, which \
+                          PRD/GC_PRD.md §11.3 keeps under `NoGcScope`)"
             )]
-            let callee = across_reentry(
+            let EvalCallee { closure, window } = across_reentry(
                 state,
                 depth_before,
                 |s| eval_closure(s, expr, &env),
@@ -2064,9 +2071,9 @@ fn vm_step(
             .map_err(Reentry::into_vm_error)?;
             VmStep::Suspend(Suspension {
                 work: StubWork::Call {
-                    callee,
+                    callee: closure,
                     args: TaggedCallArgs::new(),
-                    eval: true,
+                    eval: Some(window),
                 },
                 kept,
             })

@@ -382,7 +382,8 @@ impl VmBackend {
         drop((core_expr, literals));
 
         let mut state = self.state.borrow_mut();
-        let top_id = state.load_unit(top, nested);
+        let unit = state.load_unit(top, nested);
+        let top_id = unit.id();
 
         // Execute, then let go of the form's code unless something it left
         // behind can run it again (#338).
@@ -395,9 +396,9 @@ impl VmBackend {
                       run's frame holds"
         )]
         let result = if Rc::ptr_eq(env, &self.global_env) {
-            execute(&mut state, top_id)
+            execute(&mut state, unit)
         } else {
-            execute_in(&mut state, top_id, env)
+            execute_in(&mut state, unit, env)
         };
         state.release_unit_if_unused(top_id);
         Ok(result?)
@@ -440,7 +441,8 @@ impl VmBackend {
         drop((core_expr, literals));
 
         let mut state = self.state.borrow_mut();
-        let top_id = state.load_unit(top, nested);
+        let unit = state.load_unit(top, nested);
+        let top_id = unit.id();
         #[expect(
             clippy::disallowed_methods,
             reason = "the call's entry, outermost, so the run may collect. Holds nothing it reads \
@@ -448,7 +450,7 @@ impl VmBackend {
                       constants, which the code store roots while it runs, and the host's \
                       handles root them besides"
         )]
-        let result = execute(&mut state, top_id);
+        let result = execute(&mut state, unit);
         state.release_unit_if_unused(top_id);
         Ok(result?)
     }
@@ -886,7 +888,8 @@ impl VmBackend {
                     // The constants hold the literals now (#705).
                     drop((core_expr, literals));
 
-                    let top_id = state.load_unit(top, nested);
+                    let unit = state.load_unit(top, nested);
+                    let top_id = unit.id();
                     #[expect(
                         clippy::disallowed_methods,
                         reason = "outermost when the load is, so the run may collect (point D, \
@@ -896,7 +899,7 @@ impl VmBackend {
                                   loaded unit, which the code store roots, and its frame holds the \
                                   closure that holds `lib_env`"
                     )]
-                    let result = execute_in(state, top_id, &lib_env);
+                    let result = execute_in(state, unit, &lib_env);
                     state.release_unit_if_unused(top_id);
 
                     result.map_err(|e| {

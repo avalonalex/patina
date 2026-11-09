@@ -327,6 +327,34 @@ pub struct VmState {
     assert_no_gc: AssertNoGcCount,
 }
 
+/// A unit [`VmState::load_unit`] loaded, and the window over it (#836):
+/// from the load until its frame is pushed or a closure names it, the unit
+/// is held by the code store alone, so a collection there would let it go,
+/// and an `AssertNoGc` covers that stretch instead of an argument about
+/// where the polls are. [`execute`], [`execute_in`] and [`execute_nested`]
+/// take the unit and close the window once its frame holds its code.
+///
+/// Its window is empty in a plain release build, which keeps no count of
+/// windows.
+#[must_use = "run the unit (`execute`, `execute_in`, `execute_nested`) or take its window"]
+pub struct LoadedUnit {
+    id: CodeObjectId,
+    window: AssertNoGc,
+}
+
+impl LoadedUnit {
+    /// The id the unit runs from: its top code object's.
+    pub fn id(&self) -> CodeObjectId {
+        self.id
+    }
+
+    /// The id, and the window, for a caller that makes the unit's frame or
+    /// closure itself and drops the window once that holds the unit.
+    pub fn into_parts(self) -> (CodeObjectId, AssertNoGc) {
+        (self.id, self.window)
+    }
+}
+
 impl VmState {
     /// Call `handler`, a primitive that takes the context, on `args`: the
     /// context made where the call is, and the argument words handed over
@@ -602,16 +630,27 @@ impl VmState {
     }
 
     /// Load what one compilation produced — `top`, and the code nested in it —
-    /// as a unit, and return the id to run it from.
+    /// as a unit, and answer it with the id to run it from.
     ///
     /// Each code object is given a slot here, and the labels the compiler
     /// named it by, in its own id and in the `MakeClosure`s that make a
     /// closure of it, are replaced by that slot's id (#352). Every member
     /// holds the unit's one link table, as pass 5 made it (#836).
     ///
+    /// The unit is answered with its window open ([`LoadedUnit`]): until a
+    /// frame holds its code or a closure names it, only the code store
+    /// does, and a collection would let it go. [`execute`],
+    /// [`execute_in`] and [`execute_nested`] close it once they have pushed
+    /// the unit's frame, and `eval_closure` hands it on to the closure's
+    /// caller (#836, design §5.6 rows 7 and 8).
+    ///
     /// Once it has run, [`VmState::release_unit_if_unused`] lets it go if
     /// nothing it left behind can run it again (#338).
-    pub fn load_unit(&mut self, top: CodeObject, nested: Vec<CodeObject>) -> CodeObjectId {
+    pub fn load_unit(&mut self, top: CodeObject, nested: Vec<CodeObject>) -> LoadedUnit {
+        // Opened first, so that it covers the unit from the moment the store
+        // holds it. One shared borrow of the heap, which no caller holds
+        // across this call.
+        let window = AssertNoGc::new(&self.heap);
         let ids: FxHashMap<CodeObjectId, CodeObjectId> = std::iter::once(&top)
             .chain(&nested)
             .map(|code| (code.id, self.next_code_id()))
@@ -657,7 +696,7 @@ impl VmState {
         }
         self.code_units.insert(top_id, members);
         self.note_code_units();
-        top_id
+        LoadedUnit { id: top_id, window }
     }
 
     /// Write the number of units loaded to the heap's count, `(gc-stats)`'s
@@ -1175,7 +1214,8 @@ fn vm_evaluate_parsed_library(
             // around the `eval` or `environment` that loads the library)
             // leaves this load. The rest of the body must not run then, and
             // the library must not be registered or its exports bound.
-            let top_id = state.load_unit(top, nested);
+            let unit = state.load_unit(top, nested);
+            let top_id = unit.id();
             let depth_before = state.execution.frames().len();
             #[expect(
                 clippy::disallowed_methods,
@@ -1186,7 +1226,7 @@ fn vm_evaluate_parsed_library(
             let result = across_reentry(
                 state,
                 depth_before,
-                |s| execute_nested(s, top_id, &lib_env),
+                |s| execute_nested(s, unit, &lib_env),
                 |v| *v,
             )
             .map_err(Reentry::into_vm_error);
@@ -1249,13 +1289,14 @@ pub(super) fn vm_eval_expr(
     // Execute in the main state, which keeps continuations and code objects
     // valid. This holds nothing of its own across the run, wherever it is
     // reached from.
-    let top_id = state.load_unit(top, nested);
+    let unit = state.load_unit(top, nested);
+    let top_id = unit.id();
     #[expect(
         clippy::disallowed_methods,
         reason = "holds nothing of its own: the unit's constants are in the code store, which the \
                   machine roots, and its frame's closure holds `env`"
     )]
-    let result = execute_nested(state, top_id, env);
+    let result = execute_nested(state, unit, env);
     state.release_unit_if_unused(top_id);
     result
 }
@@ -1365,20 +1406,35 @@ fn compile_for_eval(
 /// # State contract
 ///
 /// Loads the compiled unit and allocates the closure; pushes no frame and
-/// runs no Scheme code.
+/// runs no Scheme code. Answers the closure with the unit's window still
+/// open ([`EvalCallee`]): nothing roots the closure until the caller writes
+/// it into the stub frame's `CALLEE` register, and the window covers it to
+/// there.
 pub(super) fn eval_closure(
     state: &mut VmState,
     expr: TaggedValue,
     env: &Rc<Environment>,
-) -> Result<TaggedValue, VmError> {
+) -> Result<EvalCallee, VmError> {
     let (top, nested) = compile_for_eval(state, expr, env)?;
-    let top_id = state.load_unit(top, nested);
+    let (top_id, window) = state.load_unit(top, nested).into_parts();
     let closure = state
         .heap
         .borrow_mut()
         .alloc_vm_closure(top_id.0, Vec::new(), env.clone());
     state.note_closure_made(top_id);
-    Ok(closure)
+    Ok(EvalCallee { closure, window })
+}
+
+/// What [`eval_closure`] answers: the closure, and the window over it
+/// (#836, design §5.6 row 8). The closure is a Rust local, which nothing
+/// roots, from its allocation until `set_suspension` writes it into the
+/// stub frame's `CALLEE` register, so the unit's window, opened by
+/// `load_unit`, stays open to that write: carried here across
+/// `across_reentry`, then in `StubWork::Call`'s `eval`, and dropped after
+/// the write.
+pub(super) struct EvalCallee {
+    pub(super) closure: TaggedValue,
+    pub(super) window: AssertNoGc,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1432,15 +1488,20 @@ fn missing_code_object(id: CodeObjectId) -> VmError {
     }
 }
 
-/// Execute the code object identified by `code_id` in `state`, with no
-/// arguments. Returns the value in register 0 of the top frame on completion.
+/// Execute the unit `unit`, which [`VmState::load_unit`] loaded, in
+/// `state`, with no arguments. Returns the value in register 0 of the top
+/// frame on completion.
 ///
 /// This is the primary entry point for running a compiled top-level expression.
-pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue, VmError> {
+/// The unit's window closes once its frame holds its code, before the run
+/// takes the driver and polls.
+pub fn execute(state: &mut VmState, unit: LoadedUnit) -> Result<TaggedValue, VmError> {
     // Set up the initial frame.
+    let (code_id, window) = unit.into_parts();
     let code = state.code_object(code_id)?;
 
     state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0);
+    drop(window);
     run_top_frame(state)
 }
 
@@ -1453,14 +1514,14 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
 /// runs, and the run may collect as any top-level run may.
 pub fn execute_in(
     state: &mut VmState,
-    code_id: CodeObjectId,
+    unit: LoadedUnit,
     env: &Rc<Environment>,
 ) -> Result<TaggedValue, VmError> {
-    push_frame_in(state, code_id, env)?;
+    push_frame_in(state, unit, env)?;
     run_top_frame(state)
 }
 
-/// Push the frame that runs the unit `code_id`, compiled in `env`, as a
+/// Push the frame that runs `unit`, compiled in `env`, as a
 /// closure of no arguments whose globals are `env`: [`execute_in`]'s frame,
 /// and [`execute_nested`]'s. Its frames read and define `env`'s bindings, as
 /// [`eval_closure`]'s do, wherever a continuation that captured them resumes
@@ -1480,21 +1541,24 @@ pub fn execute_in(
 ///
 /// # State contract
 ///
-/// Allocates the closure and pushes one frame; runs no Scheme code.
+/// Allocates the closure and pushes one frame; runs no Scheme code. Closes
+/// the unit's window once the frame holds the unit's code and the closure.
 fn push_frame_in(
     state: &mut VmState,
-    code_id: CodeObjectId,
+    unit: LoadedUnit,
     env: &Rc<Environment>,
 ) -> Result<(), VmError> {
+    // The unit's window covers the unit, held by the code store alone, and
+    // the closure, held only here, until the frame takes both.
+    let (code_id, window) = unit.into_parts();
     let code = state.code_object(code_id)?;
-    // The closure is held only here until the frame takes it.
-    let _no_gc = AssertNoGc::new(&state.heap);
     let closure = state.heap.borrow_mut().alloc_vm_closure(
         patina_core::heap::Heap::RETIRED_VM_CLOSURE_CODE,
         Vec::new(),
         env.clone(),
     );
     state.execution.push_frame(code, closure, 0);
+    drop(window);
     Ok(())
 }
 
@@ -1564,11 +1628,11 @@ fn run_top_frame(state: &mut VmState) -> Result<TaggedValue, VmError> {
 )]
 pub(super) fn execute_nested(
     state: &mut VmState,
-    code_id: CodeObjectId,
+    unit: LoadedUnit,
     env: &Rc<Environment>,
 ) -> Result<TaggedValue, VmError> {
     let depth_before = state.execution.frames().len();
-    push_frame_in(state, code_id, env)?;
+    push_frame_in(state, unit, env)?;
 
     // A nested entry: no driver, so the run never collects (#702).
     run_loop_until(state, depth_before, None)
@@ -3311,7 +3375,7 @@ mod tests {
         let mut state = VmState::on_a_fresh_heap();
         let mut code = code();
         code.num_regs = 4;
-        let id = state.load_unit(code, Vec::new());
+        let id = state.load_unit(code, Vec::new()).id();
         let base =
             state
                 .execution
@@ -3347,13 +3411,13 @@ mod tests {
     #[test]
     fn a_slot_whose_generations_have_run_out_is_not_given_out_again() {
         let mut state = VmState::on_a_fresh_heap();
-        let first = state.load_unit(code(), Vec::new());
+        let first = state.load_unit(code(), Vec::new()).id();
         state.release_unit_if_unused(first);
         assert_eq!(state.free_code_ids, vec![CodeObjectId::new(0, 1)]);
 
         // As if slot 0 had been given out every generation but its last.
         state.free_code_ids = vec![CodeObjectId::new(0, u32::MAX - 1)];
-        let last = state.load_unit(code(), Vec::new());
+        let last = state.load_unit(code(), Vec::new()).id();
         assert_eq!(last, CodeObjectId::new(0, u32::MAX - 1));
         state.release_unit_if_unused(last);
         assert!(
@@ -3362,7 +3426,7 @@ mod tests {
             state.free_code_ids
         );
 
-        let next = state.load_unit(code(), Vec::new());
+        let next = state.load_unit(code(), Vec::new()).id();
         assert_eq!(next, CodeObjectId::new(1, 0));
         assert!(state.code_object(last).is_err());
     }
@@ -3382,9 +3446,9 @@ mod tests {
         // The members of a unit share its one link table.
         let (top, mut member) = (code(), code());
         member.links = Rc::clone(&top.links);
-        let nested = state.load_unit(top, vec![member]);
+        let nested = state.load_unit(top, vec![member]).id();
         assert_eq!(counts(&state), (1, 1), "a unit with nested code loaded");
-        state.load_unit(code(), Vec::new());
+        let _ = state.load_unit(code(), Vec::new());
         assert_eq!(counts(&state), (2, 2), "a second unit loaded");
         state.release_unit_if_unused(nested);
         assert_eq!(
@@ -3401,6 +3465,118 @@ mod tests {
             (0, 0),
             "the second let go after a collection"
         );
+    }
+
+    /// An id outliving its code finds nothing, not the code that took its
+    /// slot (#352): `code_object` answers an error for it before the slot is
+    /// reused and after, and the code loaded into the slot answers its own
+    /// id. Moved here from `tests/integration.rs`, which ran the stale id
+    /// with `execute`, which takes a loaded unit now, not an id (#836).
+    #[test]
+    fn an_id_whose_code_has_gone_finds_nothing() {
+        let mut state = VmState::on_a_fresh_heap();
+        let gone = state.load_unit(code(), Vec::new()).id();
+        state.release_unit_if_unused(gone);
+        assert!(
+            state.code_object(gone).is_err(),
+            "{gone:?} found, though its code was let go"
+        );
+        let current = state.load_unit(code(), Vec::new()).id();
+        assert_eq!(current.index(), gone.index(), "the slot is reused");
+        assert!(
+            state.code_object(gone).is_err(),
+            "{gone:?} found, though its code was let go and {current:?} took its slot"
+        );
+        assert_eq!(
+            state.code_object(current).map(|code| code.id).ok(),
+            Some(current)
+        );
+    }
+
+    /// Whether an `AssertNoGc` window is open on `state`'s heap, as a poll
+    /// would find it: in a check build, the poll's check panics. Always
+    /// `false` in a plain release build, which keeps no count.
+    fn a_window_is_open(state: &VmState) -> bool {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            state.assert_no_gc.assert_none_open()
+        }))
+        .is_err()
+    }
+
+    /// A loaded unit holds its window until its frame is pushed (#836,
+    /// design §5.6 row 7): while the `LoadedUnit` lives, a poll in a check
+    /// build panics, and each of `execute`, `execute_in` and
+    /// `execute_nested` closes it once the unit's frame holds its code,
+    /// before its run polls, so the run, whose loop polls at its start and
+    /// checks at every instruction, answers. A plain release build has no
+    /// window to see.
+    #[test]
+    fn a_loaded_unit_holds_its_window_until_its_frame_is_pushed() {
+        let mut state = VmState::on_a_fresh_heap();
+        let env = Rc::clone(state.global_env());
+        assert!(!a_window_is_open(&state), "none open before the load");
+
+        let unit = state.load_unit(code(), Vec::new());
+        assert_eq!(a_window_is_open(&state), GC_CHECK, "open while held");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a driver entry on a machine the test owns, whose sentinel-free code holds \
+                      nothing the test reads afterwards"
+        )]
+        let ran = execute(&mut state, unit);
+        assert!(ran.is_ok(), "execute: {ran:?}");
+        assert!(!a_window_is_open(&state), "closed by execute");
+
+        let unit = state.load_unit(code(), Vec::new());
+        assert_eq!(a_window_is_open(&state), GC_CHECK, "open while held");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a driver entry on a machine the test owns; the test holds `env`, the \
+                      machine's own globals"
+        )]
+        let ran = execute_in(&mut state, unit, &env);
+        assert!(ran.is_ok(), "execute_in: {ran:?}");
+        assert!(!a_window_is_open(&state), "closed by execute_in");
+
+        let unit = state.load_unit(code(), Vec::new());
+        assert_eq!(a_window_is_open(&state), GC_CHECK, "open while held");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a nested loop, under its `NoGcScope`, which collects nothing"
+        )]
+        let ran = execute_nested(&mut state, unit, &env);
+        assert!(ran.is_ok(), "execute_nested: {ran:?}");
+        assert!(!a_window_is_open(&state), "closed by execute_nested");
+
+        let unit = state.load_unit(code(), Vec::new());
+        assert_eq!(a_window_is_open(&state), GC_CHECK, "open while held");
+        drop(unit);
+        assert!(!a_window_is_open(&state), "closed when dropped");
+    }
+
+    /// The closure `eval_closure` makes holds the unit's window until its
+    /// caller lets go of it (#836, design §5.6 row 8): nothing roots the
+    /// closure until it is written into the stub frame's `CALLEE`
+    /// register, after which `set_suspension` drops the window. A plain
+    /// release build has no window to see.
+    #[test]
+    fn an_eval_callee_holds_its_window_until_it_is_dropped() {
+        let mut state = VmState::on_a_fresh_heap();
+        let env = Rc::clone(state.global_env());
+        let callee = eval_closure(&mut state, TaggedValue::fixnum(42), &env).expect("compiles");
+        assert_eq!(a_window_is_open(&state), GC_CHECK, "open while held");
+        let EvalCallee { closure, window } = callee;
+        assert!(
+            state
+                .heap
+                .borrow()
+                .get_vm_closure_code_id(closure)
+                .is_some(),
+            "a closure of the unit"
+        );
+        assert_eq!(a_window_is_open(&state), GC_CHECK, "open in its parts");
+        drop(window);
+        assert!(!a_window_is_open(&state), "closed when dropped");
     }
 
     /// A definition marks the primitive it rebinds only where the

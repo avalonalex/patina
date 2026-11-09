@@ -31,8 +31,7 @@
 use crate::{Backend, Environment, Evaluator, Interpreter, TaggedValue, VmBackend};
 use patina_primitives::ApplyContext;
 use patina_tree_walker::CpsEvaluator;
-use patina_vm::runtime::VmState;
-use patina_vm::types::CodeObjectId;
+use patina_vm::runtime::{LoadedUnit, VmState};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -50,10 +49,10 @@ fn every_nameable_entry_is_matched() {
 
     // patina-vm
     #[expect(clippy::disallowed_methods, reason = "positive control")]
-    let _ = |s: &mut VmState, id: CodeObjectId| patina_vm::runtime::execute(s, id);
+    let _ = |s: &mut VmState, u: LoadedUnit| patina_vm::runtime::execute(s, u);
     #[expect(clippy::disallowed_methods, reason = "positive control")]
-    let _ = |s: &mut VmState, id: CodeObjectId, env: &Rc<Environment>| {
-        patina_vm::runtime::execute_in(s, id, env)
+    let _ = |s: &mut VmState, u: LoadedUnit, env: &Rc<Environment>| {
+        patina_vm::runtime::execute_in(s, u, env)
     };
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |b: &VmBackend| b.load_library(&[]);
