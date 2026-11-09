@@ -1770,11 +1770,13 @@ these checks except the defer balance, which every build checks.
   the tail paths, a generic call's return), checks first, before it asks
   whether anything is posted, so a window opened and closed inside one
   instruction with a poll between panics even where nothing would have
-  collected (#864); the loop's check on each iteration runs before the
-  instruction and could not see it. The count is cached on `VmState`, and
-  empty in a plain release build. Inside `safe_point` the check would almost
-  never run, since it returns at once unless a collection is pending and the
-  loop holds the driver. The VM's windows:
+  collected (#864; a poll with nothing posted and no driver held panics in
+  a window, `vm_state::tests::a_poll_that_would_do_nothing_panics_in_a_window`);
+  the loop's check on each iteration runs before the instruction and could
+  not see it. The count is cached on `VmState`, and empty in a plain
+  release build. Inside `safe_point` the check would almost never run,
+  since it returns at once unless a collection is pending and the loop
+  holds the driver. The VM's windows:
   - a continuation's capture to its weak-store entry
     (`alloc_vm_continuation`, `alloc_vm_delimited_continuation`), under the
     weak-table rule in `gc_roots.rs`, and on to the write of its handle

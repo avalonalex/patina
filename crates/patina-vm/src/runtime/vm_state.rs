@@ -3579,6 +3579,34 @@ mod tests {
         assert!(!a_window_is_open(&state), "closed when dropped");
     }
 
+    /// The poll checks for an open window first, before it asks whether
+    /// anything is posted or whether the running loop holds the driver
+    /// (#864): here nothing is posted and no loop holds the driver, so the
+    /// poll would do nothing, and in a check build it panics in a window
+    /// all the same. A check placed after either test would almost never
+    /// run, which is why `AssertNoGcCount::assert_none_open` asks for one
+    /// before the safe point; `gc_protocol.rs`' in-instruction control
+    /// posts an interrupt and holds the driver, so it cannot tell. A plain
+    /// release build checks nothing.
+    #[test]
+    fn a_poll_that_would_do_nothing_panics_in_a_window() {
+        let mut state = VmState::on_a_fresh_heap();
+        assert!(!state.mutator.poll_due(), "nothing posted");
+        assert!(state.driver.is_none(), "no loop holds the driver");
+        assert!(poll(&mut state).is_ok(), "no window open");
+
+        let window = AssertNoGc::new(&state.heap);
+        let polled =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| poll(&mut state).is_ok()));
+        assert_eq!(
+            polled.is_err(),
+            GC_CHECK,
+            "a poll in the window: {polled:?}"
+        );
+        drop(window);
+        assert!(poll(&mut state).is_ok(), "the window closed");
+    }
+
     /// A definition marks the primitive it rebinds only where the
     /// environment binds the name itself, the one binding a fast path
     /// compiled there stands on: a child's definition of a name its parent
