@@ -701,6 +701,24 @@ fn zeal_with_callee() -> (VmState, TaggedValue) {
     (state, closure)
 }
 
+/// A retired closure, as `push_frame_in` makes one for a frame, over a
+/// fresh namespace that binds a vector only that namespace reaches; and the
+/// vector. A frame given the closure holds the vector until a tail call
+/// replaces the frame's closure (`tail_replace`), so a collection that frees
+/// it came after the replacement: the witness that a test's collection
+/// lands in the window it names.
+fn doomed_frame_closure(state: &VmState) -> (TaggedValue, TaggedValue) {
+    let doomed = (state.heap.borrow_mut()).alloc_vector(vec![TaggedValue::fixnum(7)]);
+    let namespace = Rc::new(Environment::with_heap(&state.heap));
+    namespace.define(&state.heap, "doomed", doomed);
+    let closure = (state.heap.borrow_mut()).alloc_vm_closure(
+        Heap::RETIRED_VM_CLOSURE_CODE,
+        Vec::new(),
+        namespace,
+    );
+    (closure, doomed)
+}
+
 /// Code that tail-calls the closure in its first constant.
 fn tail_calling(closure: TaggedValue) -> CodeObject {
     assembled(
@@ -723,28 +741,34 @@ fn tail_calling(closure: TaggedValue) -> CodeObject {
 /// code's id keeps B's table, which the loop wrote where it started
 /// (`current_code`). Under zeal the run collects at the loop's start and at
 /// that entry poll, and nowhere else: the callee's `Return` passes none.
+/// B's frame runs under a retired closure, as `execute_in`'s does, whose
+/// namespace alone holds a doomed vector: freed, it shows the second
+/// collection came after `tail_replace`, while B's frame no longer held B.
 #[test]
 fn a_tail_call_from_a_top_level_form_keeps_the_forms_link_table() {
     let (mut state, closure) = zeal_with_callee();
     let mut s = Sentinels::new(&mut state.heap.borrow_mut());
     let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
     let b = load_linked(&mut state, tail_calling(closure), &["x"], x, y);
+    let (retired, doomed) = doomed_frame_closure(&state);
+    let b = state.code_object(b).expect("loaded");
+    state.execution.push_frame(b, retired, 0);
     let collections = state.heap.borrow().gc_collections();
 
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "a driver entry, so its polls collect; the test holds only words a root \
-                  reaches: the closure in B's constants, and the sentinels it reads back from \
-                  the free lists"
-    )]
-    let result = execute(&mut state, b);
+    let result = super::run_top_frame(&mut state);
     assert_eq!(result.ok(), Some(TaggedValue::fixnum(42)));
     assert_eq!(
         state.heap.borrow().gc_collections() - collections,
         2,
         "at the loop's start and at the callee's entry, after the tail call"
     );
-    s.assert_survived(&state.heap.borrow());
+    let heap = state.heap.borrow();
+    s.assert_survived(&heap);
+    assert_freed(
+        &heap,
+        doomed,
+        "doomed: B's frame's closure, replaced by the tail call",
+    );
 }
 
 /// The same after a return (`dispatch_frame`'s write): a frame of unit M is
@@ -753,15 +777,19 @@ fn a_tail_call_from_a_top_level_form_keeps_the_forms_link_table() {
 /// entry poll M is held only by the code store and `cur_code`, so only the
 /// running code's id, written where the dispatch changed `cur_code`, keeps
 /// M's table. The run collects twice, at the loop's start, when M's frame
-/// keeps its table, and at A's entry.
+/// keeps its table, and at A's entry. M's frame runs under a retired
+/// closure whose namespace alone holds a doomed vector, freed only by a
+/// collection after M's tail call replaced the closure (as in the test
+/// above).
 #[test]
 fn a_tail_call_after_a_return_keeps_the_callers_link_table() {
     let (mut state, closure) = zeal_with_callee();
     let mut s = Sentinels::new(&mut state.heap.borrow_mut());
     let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
     let m = load_linked(&mut state, tail_calling(closure), &["x"], x, y);
+    let (retired, doomed) = doomed_frame_closure(&state);
     let m = state.code_object(m).expect("loaded");
-    state.execution.push_frame(m, CallFrame::NO_CLOSURE, 0);
+    state.execution.push_frame(m, retired, 0);
     let b = state.load_unit(
         assembled(
             vec![
@@ -779,9 +807,9 @@ fn a_tail_call_after_a_return_keeps_the_callers_link_table() {
 
     #[expect(
         clippy::disallowed_methods,
-        reason = "a driver entry, so its polls collect; the test holds only words a root \
-                  reaches: the closure in M's constants, and the sentinels it reads back from \
-                  the free lists"
+        reason = "a driver entry, so its polls collect; the test holds the closure in M's \
+                  constants, which a root reaches, and the sentinels and the doomed vector, \
+                  which it checks against the free lists"
     )]
     let result = execute(&mut state, b);
     assert_eq!(result.ok(), Some(TaggedValue::fixnum(42)));
@@ -790,7 +818,13 @@ fn a_tail_call_after_a_return_keeps_the_callers_link_table() {
         2,
         "at the loop's start and at A's entry, after M's tail call"
     );
-    s.assert_survived(&state.heap.borrow());
+    let heap = state.heap.borrow();
+    s.assert_survived(&heap);
+    assert_freed(
+        &heap,
+        doomed,
+        "doomed: M's frame's closure, replaced by the tail call",
+    );
 }
 
 /// A nested loop puts back the running code of the loop it runs in when it
@@ -810,8 +844,8 @@ fn a_nested_loop_puts_back_the_running_code_when_it_returns() {
 
     #[expect(
         clippy::disallowed_methods,
-        reason = "a nested loop, under its `NoGcScope`, which collects nothing; the test holds \
-                  nothing across it"
+        reason = "a nested loop, under its `NoGcScope`, which collects nothing: the sentinels the \
+                  test holds across it and reads back after stay where they are"
     )]
     let exit = run_loop_until_outcome(&mut state, 0, None);
     assert!(matches!(exit, Ok(LoopExit::Returned(_))));
@@ -836,8 +870,8 @@ fn a_nested_loop_puts_back_the_running_code_when_it_fails() {
 
     #[expect(
         clippy::disallowed_methods,
-        reason = "a nested loop, under its `NoGcScope`, which collects nothing; the test holds \
-                  nothing across it"
+        reason = "a nested loop, under its `NoGcScope`, which collects nothing: the sentinels the \
+                  test holds across it and reads back after stay where they are"
     )]
     let exit = run_loop_until_outcome(&mut state, 0, None);
     assert!(exit.is_err(), "a call of the empty list, with no handler");
@@ -845,4 +879,81 @@ fn a_nested_loop_puts_back_the_running_code_when_it_fails() {
 
     collect(&state);
     s.assert_survived(&state.heap.borrow());
+}
+
+/// Where an escape lands (`current_code`'s write there): unit W, the loop's
+/// running code, tail-calls a full continuation whose one frame runs unit
+/// U, and whose ref only W's register holds. The continuation lands in U's
+/// frame, in place of W's frame and registers, and U tail-calls A before
+/// any dispatch refreshes `cur_code`. At A's entry poll U is held only by
+/// the code store and the loop's stale `cur_code` (the continuation's ref
+/// went with W's registers, and its store entry with the landing's
+/// collection), so only the running code's id, written where the escape
+/// landed, keeps U's table: W's id, the loop's start's, would not. Under
+/// zeal the run collects at the loop's start, where the escape lands, and
+/// at A's entry.
+#[test]
+fn a_tail_call_where_an_escape_lands_keeps_the_landing_units_link_table() {
+    let (mut state, closure) = zeal_with_callee();
+    let mut s = Sentinels::new(&mut state.heap.borrow_mut());
+    let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
+    let u = load_linked(&mut state, tail_calling(closure), &["x"], x, y);
+    let k = {
+        let u = state.code_object(u).expect("loaded");
+        state.alloc_vm_continuation(full_capture_of(&u))
+    };
+    let w = state.load_unit(
+        assembled(
+            vec![Instruction::TailCall {
+                func: 0,
+                args: Vec::new(),
+            }],
+            Vec::new(),
+        ),
+        Vec::new(),
+    );
+    let w = state.code_object(w).expect("loaded");
+    state.execution.push_frame(w, CallFrame::NO_CLOSURE, 0);
+    state.set_reg(0, k);
+    let collections = state.heap.borrow().gc_collections();
+
+    let result = super::run_top_frame(&mut state);
+    assert_eq!(result.ok(), Some(TaggedValue::fixnum(42)));
+    assert_eq!(
+        state.heap.borrow().gc_collections() - collections,
+        3,
+        "at the loop's start, where the escape lands, and at A's entry"
+    );
+    assert!(
+        state.continuation_store.borrow().is_empty(),
+        "the continuation went with W's registers"
+    );
+    s.assert_survived(&state.heap.borrow());
+}
+
+/// An id whose unit was let go finds nothing, though its slot was reused
+/// (`trace_code_ids` is generation-checked): the running code reports the
+/// stale id, and the unit loaded into the slot since, which only the code
+/// store holds, keeps nothing its table links. A lookup by slot alone would
+/// trace that table and keep it all, conservatively.
+#[test]
+fn a_stale_code_id_finds_nothing() {
+    let mut state = VmState::on_a_fresh_heap();
+    let first = state.load_unit(super::tests::code(), Vec::new());
+    state.release_unit_if_unused(first);
+    let (x, y) = {
+        let mut heap = state.heap.borrow_mut();
+        let x = heap.alloc_pair(TaggedValue::fixnum(0), TaggedValue::NULL);
+        let y = heap.alloc_vector(vec![TaggedValue::fixnum(1)]);
+        (x, y)
+    };
+    let id = load_linked(&mut state, super::tests::code(), &["x"], x, y);
+    assert_eq!(id.index(), first.index(), "the slot is reused");
+    assert_ne!(id, first, "by a later generation");
+    state.execution.set_running(first.0);
+
+    collect(&state);
+    let heap = state.heap.borrow();
+    assert_freed(&heap, x, "x, which only the reused slot's table links");
+    assert_freed(&heap, y, "y, bound only in the namespace that table holds");
 }

@@ -994,7 +994,7 @@ a traced struct, or a root provider meets two rules:
    `vm_state/trace_sentinel_tests.rs` for the VM's records, on the VM, and
    for each holder that reports a unit's code id (a closure, a frame, a
    frame of either continuation kind, the running code), with the code
-   store alone keeping none (#836);
+   store alone, and a stale id, keeping none (#836);
    `cps_eval/gc_roots/sentinel_tests.rs` for the tree-walker's, on the
    tree-walker; and `library_registry.rs`'s `gc_root_tests`.
 
