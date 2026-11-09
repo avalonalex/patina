@@ -827,8 +827,9 @@ fn a_closure_under_an_ephemeron_broadcasts_in_a_later_round() {
 }
 
 /// A code-id round that marks a continuation ref is followed by a weak-id
-/// round that broadcasts it: the code-id round counts as progress, so the
-/// loop does not stop with the ref marked and its payload untraced.
+/// round that broadcasts it: the code-id round asks for another because it
+/// queued a weak id, so the loop does not stop with the ref marked and its
+/// payload untraced.
 #[test]
 fn a_code_id_round_feeds_the_weak_id_round() {
     let mut heap = Heap::new();
