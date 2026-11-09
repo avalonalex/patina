@@ -11,8 +11,11 @@ A structure that derives `Trace` (`patina_core::Trace`, #686) is not listed:
 the derive takes it apart the same way, and a field it leaves out carries its
 reason in `#[trace(skip, reason = "…")]`. What is listed is still written by
 hand: the heap kinds' traces until `declare_layouts!` (stage 5a), the
-marker's walks, the VM's weak continuation tables until stage 4e, and each
-root provider's `trace_roots`, a call to its derived trace.
+marker's walks, the VM's weak continuation tables until stage 4e, the VM's
+tracing by code id (#836) — its provider's `trace_code_ids`, the frame's
+code, `FrameCode`, and the running code, `RunningCode`, whose traces report
+an id the derive cannot — and each root provider's `trace_roots`, a call to
+its derived trace.
 
 For each function in TRACE_FUNCTIONS this fails on:
 - a rest pattern, `..` closing a struct, tuple or slice pattern
@@ -58,11 +61,17 @@ TRACE_FUNCTIONS = {
         "trace_object_children",
         "run_mark_phase",
     ],
-    # The VM's weak continuation tables, until stage 4e deletes them.
+    # The VM's weak continuation tables, until stage 4e deletes them, and
+    # its units' link tables, traced by code id (#836).
     "crates/patina-vm/src/runtime/vm_state/gc_roots.rs": [
         "trace_roots",
         "trace_weak_ids",
+        "trace_code_ids",
     ],
+    # A frame's code and the running code, reported by id (`FrameCode`,
+    # `RunningCode`, #836).
+    "crates/patina-vm/src/types/mod.rs": ["trace"],
+    "crates/patina-vm/src/runtime/execution_state.rs": ["trace"],
     # The root providers, each a call to its derived trace.
     "crates/patina-runtime/src/library_registry.rs": ["trace_roots"],
     "crates/patina-tree-walker/src/eval/cps_eval/gc_roots.rs": ["trace_roots"],

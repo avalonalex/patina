@@ -17,7 +17,7 @@
 //! yet, so until it does an entry stays `UNBOUND`, an immediate, and only
 //! the tests link a table.
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
 
 use crate::Trace;
@@ -38,8 +38,11 @@ pub type LinkIdx = u32;
 /// Its derived trace marks each linked entry, as a slot is marked, and so
 /// keeps the record, its cell and the value, and a placeholder or a weak
 /// read-through record that nothing else marks (#836): that is what makes
-/// one live. Nothing traces a table yet but the tests; the code store never
-/// will (`CodeObject::links`).
+/// one live. It also shows the collector the namespace the table was linked
+/// in, which the unit's code reads through it. The VM traces a unit's table
+/// by its code id, once a collection (`VmState::trace_code_ids`), when a
+/// marked closure, a frame or the dispatch loop's running code names the
+/// unit; the code store never does (`CodeObject::links`).
 #[derive(Debug, Trace)]
 pub struct LinkTable {
     /// Each operand's record word, home (a′), once linked: one of the
@@ -53,6 +56,19 @@ pub struct LinkTable {
     /// The spellings, each once, in the order pass 5 first emitted an
     /// operand naming it.
     names: Box<[Rc<str>]>,
+    /// The namespace the table was linked in (#836's question 3 (i)), set
+    /// by the first [`LinkTable::link_in`]: the unit's edge to it, reached
+    /// only through a traced table, so the namespace lives while code that
+    /// reads its records can run. Unset, and tracing nothing, until linked.
+    namespace: OnceCell<Rc<Environment>>,
+    /// The VM's collection epoch this table was last traced in, for
+    /// [`LinkTable::trace_once`]: the unit's members share the table, and
+    /// each reports its own code id.
+    #[trace(
+        skip,
+        reason = "a collection count: the epoch the table was last traced in"
+    )]
+    traced: Cell<u64>,
 }
 
 impl LinkTable {
@@ -63,7 +79,12 @@ impl LinkTable {
             .iter()
             .map(|_| Cell::new(TaggedValue::UNBOUND))
             .collect();
-        LinkTable { entries, names }
+        LinkTable {
+            entries,
+            names,
+            namespace: OnceCell::new(),
+            traced: Cell::new(0),
+        }
     }
 
     /// A table with no names, for code with no global operand: the runtime's
@@ -89,27 +110,41 @@ impl LinkTable {
     /// `namespace` links for its name (`Environment::link_record`), made
     /// there the first time and the same one after, or stays `UNBOUND` for a
     /// name read by name. A placeholder or a weak read-through record it
-    /// links lives while this table is traced. Linking twice links the same
+    /// links lives while this table is traced, and so does `namespace`,
+    /// which the table holds from now on. Linking twice links the same
     /// records. Under `heap`'s write step for each name.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the VM links each unit's table at load (#836); until then only the tests do"
-        )
-    )]
-    pub(crate) fn link_in(&self, heap: &RefCell<Heap>, namespace: &Rc<Environment>) {
+    ///
+    /// A table is linked in one namespace: the first link sets it, and a
+    /// later link in another relinks against the first, so that the table
+    /// never names one namespace's records while it holds another; a debug
+    /// build then refuses it. Refused after the relink, so that the relink a
+    /// release build relies on runs, and is tested, in every build.
+    pub fn link_in(&self, heap: &RefCell<Heap>, namespace: &Rc<Environment>) {
         debug_assert!(
             namespace.is_namespace(),
             "a unit is compiled and linked in a namespace, never a frame (#853, #854)"
         );
+        let linked = self.namespace.get_or_init(|| Rc::clone(namespace));
         for (entry, name) in self.entries.iter().zip(self.names.iter()) {
             entry.set(
-                namespace
+                linked
                     .link_record(heap, name)
                     .map_or(TaggedValue::UNBOUND, Record::word),
             );
         }
+        debug_assert!(
+            Rc::ptr_eq(linked, namespace),
+            "a unit's table is linked in one namespace (#836)"
+        );
+    }
+
+    /// Mark the table traced in collection `epoch`, and answer whether it
+    /// already was: the VM traces a unit's table once a collection however
+    /// many of its members' code ids marking reached. A table belongs to one
+    /// machine, whose epoch it records.
+    #[inline]
+    pub fn trace_once(&self, epoch: u64) -> bool {
+        self.traced.replace(epoch) == epoch
     }
 
     /// Operand `k`'s entry: a record's word once linked, else `UNBOUND`.
@@ -129,7 +164,7 @@ mod tests {
     use crate::heap::trace::Trace as _;
     use crate::heap::trace_sentinels::collect_only;
     use crate::tagged_value::TaggedValue;
-    use std::cell::Cell;
+    use std::cell::{Cell, OnceCell};
     use std::rc::Rc;
 
     /// An unlinked table over `names`, as pass 5 makes one.
@@ -307,10 +342,12 @@ mod tests {
 
     /// The table's sentinel test (#623): built by a struct literal, so a
     /// field added to the table stops this compiling until its tracing is
-    /// decided (`docs/GC_DESIGN.md` §5.4, rule 2). Its one traced field,
-    /// `entries`, holds a record that only it reaches once the namespace
-    /// that bound it is dropped, and a collection with the table as the only
-    /// root keeps the record, its cell and the value.
+    /// decided (`docs/GC_DESIGN.md` §5.4, rule 2). Its traced fields each
+    /// hold what only they reach: `entries` a record whose namespace was
+    /// dropped, which keeps the record, its cell and the value; `namespace`
+    /// another namespace, held by nothing else, whose binding of `y` it
+    /// keeps (#836). Two namespaces, so that neither field's sentinel is
+    /// reached through the other.
     #[test]
     fn link_table_fields() {
         let heap = new_shared_heap();
@@ -319,16 +356,98 @@ mod tests {
             &mut heap.borrow_mut(),
             "LinkTable.entries[0]: through x's record and its cell",
         );
+        let bound = s.vector(
+            &mut heap.borrow_mut(),
+            "LinkTable.namespace: y, bound only there",
+        );
         let record = {
             let ns = Rc::new(Environment::with_heap(&heap));
             ns.define(&heap, "x", value);
             ns.local_record("x").expect("x's record").word()
         };
+        let namespace = Rc::new(Environment::with_heap(&heap));
+        namespace.define(&heap, "y", bound);
         let linked = LinkTable {
             entries: Box::new([Cell::new(record)]),
             names: Box::new([Rc::from("x")]),
+            namespace: OnceCell::from(namespace),
+            traced: Cell::new(0),
         };
         collect_only(&mut heap.borrow_mut(), |visitor| linked.trace(visitor));
         s.assert_survived(&heap.borrow());
+    }
+
+    /// A table is traced once an epoch (#836): the first ask in an epoch
+    /// answers that it was not traced yet and records it, every later one
+    /// in that epoch that it was, and a new epoch starts again.
+    #[test]
+    fn a_table_is_traced_once_an_epoch() {
+        let linked = table(&["x"]);
+        assert!(!linked.trace_once(1), "not yet traced in epoch 1");
+        assert!(linked.trace_once(1), "traced in epoch 1 already");
+        assert!(linked.trace_once(1));
+        assert!(!linked.trace_once(2), "a new epoch");
+        assert!(linked.trace_once(2));
+    }
+
+    /// Linking sets the namespace the table holds (#836): once the
+    /// namespace is dropped, a collection with only the table as a root
+    /// keeps `x`, which the table links, and `y`, which it does not and
+    /// which only the namespace binds.
+    #[test]
+    fn a_linked_table_holds_its_namespace() {
+        let heap = new_shared_heap();
+        let mut s = Sentinels::new(&mut heap.borrow_mut());
+        let x = s.pair(&mut heap.borrow_mut(), "x: linked by the table");
+        let y = s.vector(
+            &mut heap.borrow_mut(),
+            "y: bound in the namespace the table was linked in, and not linked",
+        );
+        let linked = table(&["x"]);
+        {
+            let ns = Rc::new(Environment::with_heap(&heap));
+            ns.define(&heap, "x", x);
+            ns.define(&heap, "y", y);
+            linked.link_in(&heap, &ns);
+        }
+        collect_only(&mut heap.borrow_mut(), |visitor| linked.trace(visitor));
+        s.assert_survived(&heap.borrow());
+    }
+
+    /// A table is linked in one namespace (#836): a second link, in another,
+    /// relinks against the first, so that the table never names one
+    /// namespace's records while it holds another, and a debug build then
+    /// refuses it. One test for every build, so that the debug lane tests the
+    /// relink a release build relies on.
+    #[test]
+    fn a_second_namespace_relinks_in_the_first() {
+        let heap = new_shared_heap();
+        let linked = table(&["x"]);
+        let first = Rc::new(Environment::with_heap(&heap));
+        let second = Rc::new(Environment::with_heap(&heap));
+        first.define(&heap, "x", TaggedValue::fixnum(1));
+        second.define(&heap, "x", TaggedValue::fixnum(2));
+        linked.link_in(&heap, &first);
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            linked.link_in(&heap, &second);
+        }));
+        assert_eq!(
+            refused.is_err(),
+            cfg!(debug_assertions),
+            "a debug build refuses it; a release build relinks silently"
+        );
+        if let Err(panic) = refused {
+            let message = (panic.downcast_ref::<&str>().copied())
+                .or_else(|| panic.downcast_ref::<String>().map(String::as_str));
+            assert_eq!(
+                message,
+                Some("a unit's table is linked in one namespace (#836)")
+            );
+        }
+        assert_eq!(
+            linked.entry(0),
+            first.local_record("x").unwrap().word(),
+            "linked against the first namespace"
+        );
     }
 }

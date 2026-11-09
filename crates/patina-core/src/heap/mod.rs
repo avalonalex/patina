@@ -1989,11 +1989,12 @@ impl Heap {
     }
 
     /// The code id a VM closure holds once [`Heap::retire_vm_closure`] has
-    /// retired it, or that the VM made it with: no code object has it, and a
-    /// collection that frees the closure reports it so the VM can pass over
-    /// it. The VM makes one retired for the frame of top-level code compiled
-    /// in an environment other than its globals, which reads only the
-    /// closure's globals (#779).
+    /// retired it, or that the VM made it with: no code object has it,
+    /// marking queues nothing for it (#836), and a collection that frees the
+    /// closure reports it so the VM can pass over it. The VM makes one
+    /// retired for the frame of top-level code compiled in an environment
+    /// other than its globals, which reads only the closure's globals
+    /// (#779).
     pub const RETIRED_VM_CLOSURE_CODE: u64 = u64::MAX;
 
     /// Retire the VM closure `val`: give up its claim on its code, returning

@@ -31,7 +31,7 @@ pub struct CallFrame {
     pub num_regs:      u16,             // register window size
     pub closure:       TaggedValue,     // the VmClosure, or CallFrame::NO_CLOSURE
     pub return_reg:    Reg,             // where to write result in caller
-    pub code:          Rc<CodeObject>,  // the code this frame runs
+    pub code:          FrameCode,       // the code this frame runs: an Rc<CodeObject>
 }
 ```
 
@@ -39,7 +39,10 @@ A frame holds the code it runs, resolved once when the frame is pushed, so the
 dispatch loop reads instructions without a store lookup, and the frame's `Rc`
 keeps that code loaded. A closure names its code by `CodeObjectId` — a slot in
 `VmState::code_store` and the generation of the code in it (VM_ISA.md §2.3) —
-and a call looks it up there.
+and a call looks it up there. The `Rc` sits in a newtype, `FrameCode`, which
+derefs to it and whose trace reports the code's id, which the collector
+resolves to the unit's link table (`VmState::trace_code_ids`, #836); the
+constants are traced from the code store.
 
 ### 2.2 `VmState`
 
@@ -68,6 +71,15 @@ The deliberate exception to paired frame/window removal is
 as roots until arrival replaces the register file. A composable invoke instead
 uses paired removal, since it appends to that file. Keep this distinction when
 adding drivers; see §5.3 and `GC_DESIGN.md` §5.2.
+
+Beside the five components `ExecutionState` holds the id of the code the
+innermost running dispatch loop runs (`RunningCode`, #836), traced as a
+frame's code is: written where the loop's `cur_code` changes (§3.3), and put
+back by `run_loop_until_outcome` when a nested loop ends, so that a
+collection at the poll a tail call makes before the next dispatch (at the
+callee's entry, or on the return of a tail-called primitive, parameter or
+control primitive), while only `cur_code` holds the code it left, still
+traces that code's unit's table.
 
 The remaining state belongs to `VmState`: code-unit ownership/recycling,
 weak continuation stores, global bindings and their invalidation bits, library
@@ -275,7 +287,11 @@ Returns `Ok(Some(val))` to exit the loop, `Ok(None)` to continue.
 dispatch prologue refreshes it (pointer compare) only when the frame's code
 changed, so no `Rc` clone is paid per instruction. The prologue also reads
 `pc` (folding in its advance) and the frame's `register_base` in the same
-frame access.
+frame access. Each change of `cur_code` is mirrored in `ExecutionState`'s
+running code (§2.2): the refresh writes the new code's id, and so does
+`current_code`, which the loop's start and its escape landing take
+`cur_code` from. A self-call or self-return keeps the same code and writes
+nothing.
 
 ### 3.4 Register Access
 
