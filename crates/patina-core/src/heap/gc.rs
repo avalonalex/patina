@@ -1535,6 +1535,15 @@ impl<'h> GcVisitor<'h> {
         if id == Heap::RETIRED_VM_CLOSURE_CODE || id == self.last_code_id {
             return;
         }
+        self.note_new_code_id(id);
+    }
+
+    /// [`Self::note_code_id`] past its two tests: out of line, so that the
+    /// repeat a deep recursion's frames take, through
+    /// [`SlotVisitor::code`], returns before any register is saved for the
+    /// set's insert.
+    #[inline(never)]
+    fn note_new_code_id(&mut self, id: u64) {
         self.last_code_id = id;
         if self.live_code_ids.insert(id) {
             self.new_code_ids.push(id);
@@ -1543,8 +1552,10 @@ impl<'h> GcVisitor<'h> {
 
     /// Did marking reach this VM code id (#836)? For the sentinels, beside
     /// [`Self::weak_continuation_id_is_live`]: a set apart from the
-    /// continuation ids', which the same number can also name.
-    pub fn code_id_is_live(&self, id: u64) -> bool {
+    /// continuation ids', which the same number can also name. Nothing
+    /// outside the tests asks it: the VM resolves the ids it is handed.
+    #[cfg(test)]
+    pub(crate) fn code_id_is_live(&self, id: u64) -> bool {
         self.live_code_ids.contains(&id)
     }
 
@@ -2237,7 +2248,12 @@ pub(crate) fn run_mark_phase(heap: &Heap, roots: &[&dyn RootProvider]) -> (MarkB
                 provider.trace_code_ids(&code_ids, &mut visitor);
             }
             visitor.drain();
-            progressed = true;
+            // Another round only for the ids the round queued, which the
+            // blocks above take: a key or an ephemeron its drain reached is
+            // this round's ephemeron pass's, below. So the VM, whose frames
+            // and running code queue a code id in every collection, does not
+            // repeat the loop for tables that reach nothing new.
+            progressed |= !visitor.new_weak_ids.is_empty() || !visitor.new_code_ids.is_empty();
         }
 
         let mut pending = std::mem::take(&mut visitor.pending_ephemerons);
@@ -2490,6 +2506,23 @@ mod tests {
         let reused = heap.alloc_pair(TaggedValue::fixnum(5), TaggedValue::fixnum(6));
         assert_eq!(reused.heap_index(), dead.heap_index());
         assert!(heap.free_pairs.is_empty());
+    }
+
+    /// An environment's edges hand a code id to the marker, which queues it
+    /// as it queues any other (#836): no environment's trace reports one
+    /// today, so only a direct call reaches `EnvEdges::code`.
+    #[test]
+    fn an_environments_edges_queue_a_code_id() {
+        let heap = Heap::new();
+        let mut visitor = GcVisitor::new(&heap);
+        let mut pending = Vec::new();
+        let mut edges = EnvEdges {
+            marker: &mut visitor,
+            pending: &mut pending,
+        };
+        edges.code(7);
+        assert!(visitor.code_id_is_live(7));
+        assert_eq!(visitor.new_code_ids, [7], "queued for trace_code_ids");
     }
 
     /// A provider registered with the heap is traced by every collection,

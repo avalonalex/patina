@@ -2177,7 +2177,11 @@ The VM's code ids are a third kind in the same loop (#836): a marked closure,
 a frame's code and the running code report the id of the code they run, the
 marker queues each once in a set of its own, and a round of the loop, before
 the ephemeron pass, broadcasts the new ones to
-`RootProvider::trace_code_ids`, after which it drains and counts as progress.
+`RootProvider::trace_code_ids`, after which it drains and asks for another
+round only if the drain queued an id of either kind: a key or an ephemeron
+it reached is the same round's ephemeron pass's. So a VM collection, whose
+frames and running code queue a code id every time, is not made to repeat
+the loop by tables that reach nothing new.
 The VM traces each id's unit's link table, whose records reach closures,
 continuation refs and ephemerons, and a continuation's frames report their
 code only when its payload is traced and an ephemeron's datum can be a

@@ -848,6 +848,59 @@ fn a_code_id_round_feeds_the_weak_id_round() {
     );
 }
 
+/// A code-id round that marks a closure of another unit is followed by a
+/// round that broadcasts that closure's id, as a unit's table reaches a
+/// closure of another unit: the round asks for another because it queued
+/// an id.
+#[test]
+fn a_code_id_round_feeds_the_next_code_id_round() {
+    let mut heap = Heap::new();
+    let mut s = Sentinels::new(&mut heap);
+    let keyed = s.pair(&mut heap, "trace_code_ids(8): what the provider keys by it");
+    let first = vm_closure(&mut heap, 7, Vec::new());
+    let second = vm_closure(&mut heap, 8, Vec::new());
+    let recording = Recording {
+        roots: vec![first],
+        keyed: vec![(7, second), (8, keyed)],
+        ..Recording::default()
+    };
+    MarkSweepCollector::new().collect(&mut heap, &[&recording]);
+    s.assert_survived(&heap);
+    assert_eq!(
+        *recording.code_ids.borrow(),
+        [7, 8],
+        "8 broadcast in a later round"
+    );
+}
+
+/// An ephemeron a code-id round reaches, under a key rooted elsewhere, is
+/// retained by the same round's ephemeron pass, which comes after the
+/// code-id block: the round queued no id, so no later round would see it.
+#[test]
+fn an_ephemeron_a_code_id_round_reaches_is_retained_in_that_round() {
+    let mut heap = Heap::new();
+    let mut s = Sentinels::new(&mut heap);
+    let key = heap.alloc_pair(TaggedValue::fixnum(0), TaggedValue::NULL);
+    let datum = s.vector(
+        &mut heap,
+        "HeapObjectData::Ephemeron datum, the ephemeron reached by trace_code_ids(7)",
+    );
+    let ephemeron = heap.alloc_object(HeapObjectData::Ephemeron(Interior::new(Some((key, datum)))));
+    let closure = vm_closure(&mut heap, 7, Vec::new());
+    let recording = Recording {
+        roots: vec![closure, key],
+        keyed: vec![(7, ephemeron)],
+        ..Recording::default()
+    };
+    MarkSweepCollector::new().collect(&mut heap, &[&recording]);
+    s.assert_survived(&heap);
+    assert_eq!(
+        heap.ephemeron_state(ephemeron),
+        Some(Some((key, datum))),
+        "retained, not broken"
+    );
+}
+
 /// An ephemeron keeps its datum while its key is reachable some other way:
 /// here the key is a root of its own, and the datum is reachable only through
 /// the pair, by the fixpoint in `run_mark_phase`.
