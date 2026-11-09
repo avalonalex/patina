@@ -319,6 +319,12 @@ pub struct VmState {
     /// than each dispatch being handed it (#700).
     #[trace(skip, reason = "the capability to collect: no value")]
     driver: Option<GcDriver>,
+    /// The heap's count of open `AssertNoGc` windows, cached at
+    /// construction as `mutator` is, so that every poll checks that none is
+    /// open with no heap borrow (`poll`, #864). Empty in a plain release
+    /// build, which keeps no count.
+    #[trace(skip, reason = "a count of open windows: no value")]
+    assert_no_gc: AssertNoGcCount,
 }
 
 impl VmState {
@@ -403,6 +409,7 @@ impl VmState {
         heap.borrow_mut().set_gc_threshold(gc.current_threshold());
         let mutator = Rc::clone(heap.borrow().mutator());
         let instance = Rc::clone(heap.borrow().instance());
+        let assert_no_gc = AssertNoGcCount::of(&heap);
         heap.borrow_mut().enable_gc_freed_closure_tracking();
         let parameter_set = registry.resolve_index("scheme.base/%parameter-set!");
         Self {
@@ -454,6 +461,7 @@ impl VmState {
             mutator,
             instance,
             driver: None,
+            assert_no_gc,
         }
     }
 
@@ -1840,8 +1848,14 @@ fn maybe_collect(state: &mut VmState, driver: &mut GcDriver) -> bool {
 /// An interrupt comes back as [`VmError::Interrupt`], which the loop routes
 /// like any error the instruction met: raised non-continuably in the
 /// innermost handler, or returned when there is none (#701).
+///
+/// First, in a check build, it asserts that no `AssertNoGc` window is open,
+/// whether or not anything is posted (#864): a window opened and closed
+/// inside one instruction, with a poll between, is one the dispatch loop's
+/// check on each iteration never sees. Nothing in a plain release build.
 #[inline]
 pub(super) fn poll(state: &mut VmState) -> Result<(), VmError> {
+    state.assert_no_gc.assert_none_open();
     if state.mutator.poll_due() {
         return poll_slow(state);
     }

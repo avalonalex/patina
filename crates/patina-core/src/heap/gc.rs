@@ -637,10 +637,11 @@ fn collected_inside_a_no_gc_scope(depth: u32) -> ! {
 /// a value held only in a Rust local until the next write, or a weak-table
 /// entry and its handle not yet both reachable (#624, design §7). Every poll
 /// site asserts that no scope is open
-/// ([`AssertNoGcCount::assert_none_open`]), so a poll added inside a window,
-/// or a dispatch loop entered from one, panics at once, even while it is
-/// nested and cannot collect, instead of freeing a live value on the day it
-/// can.
+/// ([`AssertNoGcCount::assert_none_open`]), a poll inside one of the VM's
+/// instructions as well as a loop's iteration (#864), so a poll added inside
+/// a window, or a dispatch loop entered from one, panics at once, even while
+/// it is nested or would not collect, instead of freeing a live value on the
+/// day it can.
 ///
 /// The rule it carries: a comment that argues "no safe point here" comes
 /// with an `AssertNoGc` over the same lines (AGENTS.md).
@@ -685,16 +686,25 @@ impl Drop for AssertNoGc {
 }
 
 /// The poll-site half of [`AssertNoGc`]: the heap's count of open scopes,
-/// taken once at loop entry like the carrier, so a poll's check is one
-/// load and one compare in a check build and nothing in a plain release.
+/// taken once at loop entry like the carrier, or once by a machine that
+/// keeps it for its polls (the VM's `VmState`, #864), so a poll's check is
+/// one load and one compare in a check build and nothing in a plain
+/// release.
+///
+/// Empty in a plain release build, which keeps no count: a machine that
+/// holds one keeps its layout, and taking one borrows nothing.
 pub struct AssertNoGcCount {
-    open: Option<Rc<Cell<u32>>>,
+    #[cfg(any(debug_assertions, feature = "gc-check"))]
+    open: Rc<Cell<u32>>,
 }
 
 impl AssertNoGcCount {
     pub fn of(heap: &SharedHeap) -> Self {
+        #[cfg(not(any(debug_assertions, feature = "gc-check")))]
+        let _ = heap;
         Self {
-            open: GC_CHECK.then(|| heap.borrow().open_assert_no_gc.clone()),
+            #[cfg(any(debug_assertions, feature = "gc-check"))]
+            open: heap.borrow().open_assert_no_gc.clone(),
         }
     }
 
@@ -705,8 +715,9 @@ impl AssertNoGcCount {
     /// 0, so a check there would almost never run.
     #[inline(always)]
     pub fn assert_none_open(&self) {
-        if GC_CHECK && let Some(open) = &self.open {
-            let n = open.get();
+        #[cfg(any(debug_assertions, feature = "gc-check"))]
+        {
+            let n = self.open.get();
             if n != 0 {
                 polled_inside_an_assert_no_gc(n);
             }
@@ -714,6 +725,7 @@ impl AssertNoGcCount {
     }
 }
 
+#[cfg(any(debug_assertions, feature = "gc-check"))]
 #[cold]
 #[inline(never)]
 fn polled_inside_an_assert_no_gc(open: u32) -> ! {

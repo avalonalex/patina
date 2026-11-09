@@ -4,9 +4,12 @@
 //! safe point: a weak-table entry and its handle not yet both reachable, a
 //! transfer's operands held in Rust locals until the next write. Every poll
 //! site checks that no scope is open, before its safe point and on every
-//! iteration, whether or not the loop could collect there. Each test here
-//! opens a window and then evaluates, so the backend's own loop reaches a poll
-//! inside it, and expects that check's panic.
+//! iteration, whether or not the loop could collect there. The first two
+//! tests here open a window and then evaluate, so the backend's own loop
+//! reaches a poll inside it, and expect that check's panic. In the third a
+//! host primitive opens one inside a VM instruction that polls before it
+//! ends: the loop checked before the instruction began, so only the poll's
+//! own check can see the window (#864).
 //!
 //! These are positive controls for the check, which is compiled into check
 //! builds only: every debug `cargo test`, and a release one with this crate's
@@ -21,13 +24,19 @@
 
 // The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
 #![allow(deprecated)]
+#![expect(
+    clippy::disallowed_macros,
+    reason = "OPENED: the heap and interrupt handle of the test's interpreter, for a host \
+              primitive of the test, and the window it leaves open (#864)"
+)]
 
 mod common;
 
 use common::{tree_walker_interpreter, vm_interpreter};
-use patina_core::{AssertNoGc, GcDriver};
-use patina_interpreter::Interpreter;
+use patina_core::{AssertNoGc, Cx, GcDriver, InterruptHandle, SharedHeap, Value, event};
+use patina_interpreter::{Arity, EvalError, Interpreter, PrimClass, PrimSpec};
 use patina_runtime::Backend;
+use std::cell::RefCell;
 
 /// Evaluate a program while a window is open. The heap is the interpreter's
 /// own, so the window is on the counter its dispatch loop polls.
@@ -60,6 +69,82 @@ control!(
     a_poll_inside_a_window_panics_tree_walker,
     "GC poll inside an AssertNoGc scope",
     evaluate_inside_a_window(tree_walker_interpreter())
+);
+
+thread_local! {
+    /// What `(open-a-window!)` opens its window on and posts its interrupt
+    /// to: the heap and the interrupt handle of the test's interpreter; and
+    /// the window, open from the primitive's call until the test lets go of
+    /// it all.
+    static OPENED: RefCell<Option<Opened>> = const { RefCell::new(None) };
+}
+
+struct Opened {
+    heap: SharedHeap,
+    interrupt: InterruptHandle,
+    window: Option<AssertNoGc>,
+}
+
+/// Lets go of [`OPENED`], the window with it, however the test ends:
+/// declared after the interpreter, it goes first in the unwind.
+struct LetGo;
+
+impl Drop for LetGo {
+    fn drop(&mut self) {
+        OPENED.take();
+    }
+}
+
+/// `(open-a-window!)`: opens an `AssertNoGc` window on [`OPENED`]'s heap
+/// and leaves it open, and posts an interrupt, so that the next poll has
+/// something to do that is not a collection.
+fn open_a_window<'gc>(_: &mut Cx<'gc>, _: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+    OPENED.with_borrow_mut(|opened| {
+        let opened = opened.as_mut().expect("the test names its interpreter");
+        opened.window = Some(AssertNoGc::new(&opened.heap));
+        assert!(
+            opened.interrupt.post(event::SIGNAL),
+            "the interpreter lives"
+        );
+    });
+    Ok(Value::UNSPECIFIED)
+}
+
+/// Call `(open-a-window!)` with `apply`, a generic call, whose return is a
+/// poll inside the `Apply` instruction (#700): the window opens after the
+/// loop's check on that instruction's iteration, and the poll is the first
+/// to meet it. A check build's poll panics there (#864). Where the poll
+/// checks nothing, the poll raises the interrupt, which no handler takes,
+/// and the run ends with it before the loop could check again: no panic.
+fn poll_inside_an_instruction() {
+    let mut interp = vm_interpreter();
+    interp
+        .register_primitive(
+            &["test", "window"],
+            "open-a-window!",
+            PrimSpec {
+                f: open_a_window,
+                arity: Arity::Exact(0),
+                class: PrimClass::Leaf,
+            },
+        )
+        .expect("register");
+    interp
+        .eval_program_owned("(import (scheme base) (test window))")
+        .expect("import");
+    let _let_go = LetGo;
+    OPENED.set(Some(Opened {
+        heap: interp.backend().heap().clone(),
+        interrupt: interp.interrupt_handle(),
+        window: None,
+    }));
+    let _ = interp.eval_program_owned("(apply open-a-window! '())");
+}
+
+control!(
+    a_poll_inside_an_instruction_inside_a_window_panics_vm,
+    "GC poll inside an AssertNoGc scope",
+    poll_inside_an_instruction()
 );
 
 /// The same evaluation after the window has closed polls freely: what the

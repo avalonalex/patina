@@ -131,6 +131,7 @@ fn every_vm_state_root_is_traced() {
     let mutator = Rc::clone(h.mutator());
     let instance = Rc::clone(h.instance());
     drop(heap);
+    let assert_no_gc = patina_core::AssertNoGcCount::of(&shared);
     globals.define(&shared, "global", global);
 
     let code = code_holding(vec![constant]);
@@ -180,6 +181,7 @@ fn every_vm_state_root_is_traced() {
         mutator,
         instance,
         driver: None,
+        assert_no_gc,
     };
 
     collect(&state);
