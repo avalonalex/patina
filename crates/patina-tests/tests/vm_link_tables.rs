@@ -99,3 +99,27 @@ fn library_and_toplevel_sites_use_their_own_environments() {
         "((1 4 9) (2 3 4) not-a-procedure)"
     );
 }
+
+#[test]
+fn a_store_by_name_marks_the_primitive_it_replaces() {
+    // `car-alias` is an alias in the global namespace, as a macro expansion
+    // installs one, to the namespace's own `car`: the table of the unit that
+    // assigns it links the heap's by-name record, so the store goes by name
+    // (`store_global_cold`), through the alias into `car`'s binding. It must
+    // mark the primitive it replaces before it writes, as a linked store
+    // does, or `f`'s compiled `car` site keeps calling the primitive (#836).
+    use patina_runtime::Backend;
+
+    let interp = common::vm_interpreter();
+    let env = interp.backend().global_env();
+    env.define_alias("car-alias", env.clone(), "car".into());
+    let answer = interp
+        .eval_program_owned(
+            "(define (f x) (car x)) \
+             (define before (f '(1 2))) \
+             (set! car-alias (lambda (x) 'replaced)) \
+             (list before (f '(1 2)) (car '(3)))",
+        )
+        .unwrap();
+    assert_eq!(interp.display_tagged(&answer), "(1 replaced replaced)");
+}
