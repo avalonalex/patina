@@ -1101,15 +1101,20 @@ fn records_and_namespaces<B: Backend>(interp: &Interpreter<B>) -> (i64, i64) {
 /// host namespace's store, over a placeholder in the global namespace's:
 /// two binding records (#782's R7), which live while the procedure does, as
 /// the first reading shows. Then 1,000 more such procedures, each dropped as
-/// it is made, then the first, then the handle: two collections later the
+/// it is made, then the first, then the handle: one collection later the
 /// units, the host namespace with its store, the children and the
 /// placeholders they read through have all gone, and `binding-records` and
-/// `namespaces` read as they did before the namespace was made. A pass that
-/// spared a parent's placeholder while it had a child, a host store whose
-/// drop kept its children counted, or a table that held its host namespace
-/// past its unit's release would leave them above. The tree-walker links
-/// nothing, and its counts return with the namespace. The reading forms are
-/// read once before the baseline.
+/// `namespaces` read as they did before the namespace was made, and after a
+/// second as well. One collection, since the pass drops a child and the
+/// parent's placeholder it read through together, neither being marked: a
+/// pass that spared a parent's placeholder while a host's store still held
+/// a child of its name would leave the records above until the next. A
+/// table that held its host namespace past its unit's release would leave
+/// the namespaces above. The tree-walker links nothing, and its counts
+/// return with the namespace. The reading forms are read once before the
+/// baseline. (That a store's drop gives back the counts of the entries it
+/// still holds is `placeholder_store.rs`' tests': here the pass has emptied
+/// the host's store before it drops.)
 fn host_placeholders_dropped<B: Backend>(interp: Interpreter<B>, backend: &str) {
     interp
         .eval_program_owned("(import (scheme base) (patina debug))")
@@ -1136,7 +1141,13 @@ fn host_placeholders_dropped<B: Backend>(interp: Interpreter<B>, backend: &str) 
     }
     drop(held);
     drop(env);
-    interp.eval_program_owned("(gc) (gc)").unwrap();
+    interp.eval_program_owned("(gc)").unwrap();
+    assert_eq!(
+        records_and_namespaces(&interp),
+        (records, namespaces),
+        "{backend}: what the host namespace's code linked outlived it by a collection"
+    );
+    interp.eval_program_owned("(gc)").unwrap();
     assert_eq!(
         records_and_namespaces(&interp),
         (records, namespaces),

@@ -1193,8 +1193,9 @@ in a host namespace, on both backends: a held host procedure reading an
 unbound name is two records on the VM, a weak read-through record and the
 global namespace's placeholder under it, and one namespace more on both;
 after a thousand more such procedures, each dropped, the held one and the
-handle are let go, and two collections give `binding-records` and
-`namespaces` back.
+handle are let go, and one collection gives `binding-records` and
+`namespaces` back, the pass dropping each child with the placeholder it read
+through; a second leaves them there.
 
 The VM's refusal of a frame adds one more (#835), where the backends
 diverge: `a_raw_frame_is_refused_by_the_vm`. A raw frame of the global
