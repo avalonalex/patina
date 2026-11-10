@@ -737,6 +737,29 @@ struct ReadThrough {
     records: FxHashMap<Rc<str>, Record>,
 }
 
+/// A spelling [`Environment::link_record`] links (#836). The store that
+/// holds a placeholder made for it holds the name in an `Rc`: a caller that
+/// has the spelling in one, as a link table has each of its names, shares
+/// it, and a bare `str`, as the tests pass, is copied into a new one.
+pub(crate) trait Spelling: AsRef<str> {
+    /// The spelling in an `Rc`: the caller's own, shared, or a copy.
+    fn shared(&self) -> Rc<str>;
+}
+
+impl Spelling for str {
+    #[inline]
+    fn shared(&self) -> Rc<str> {
+        Rc::from(self)
+    }
+}
+
+impl Spelling for Rc<str> {
+    #[inline]
+    fn shared(&self) -> Rc<str> {
+        Rc::clone(self)
+    }
+}
+
 /// Where a record a define or an import adopts was counted until then
 /// (`Environment::take_adoptable`, #835, #836).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2030,8 +2053,18 @@ impl Environment {
     /// makes no record. A placeholder and a weak read-through record live
     /// while code that links them is traced, and the sweep's pass drops them
     /// once none is (`placeholder_store.rs`).
-    pub(crate) fn link_record(&self, heap: &RefCell<Heap>, name: &str) -> Option<Record> {
+    ///
+    /// `name` is a [`Spelling`]: a link table hands over each name in the
+    /// `Rc` it holds it in, which the store that holds a new placeholder
+    /// shares instead of copying the spelling.
+    pub(crate) fn link_record<N: Spelling + ?Sized>(
+        &self,
+        heap: &RefCell<Heap>,
+        name: &N,
+    ) -> Option<Record> {
         let mut step = self.write_step(heap)?;
+        let shared = name;
+        let name = shared.as_ref();
         if let Some(own) = self.local_record(name) {
             return Some(own);
         }
@@ -2042,7 +2075,7 @@ impl Environment {
             return None;
         }
         if self.kind != Kind::HostNamespace {
-            return Some(self.placeholder(&mut step, name).1);
+            return Some(self.placeholder(&mut step, shared).1);
         }
         let parent = self
             .parent
@@ -2063,7 +2096,7 @@ impl Environment {
             // definition of its own there: read by name, and no placeholder.
             None if parent.read_by_name(name) => None,
             None => {
-                let (key, placeholder) = parent.placeholder(&mut step, name);
+                let (key, placeholder) = parent.placeholder(&mut step, shared);
                 Some(self.weak_child(&mut step, key, placeholder))
             }
         }
@@ -2131,15 +2164,18 @@ impl Environment {
     /// This parentless namespace's placeholder for `name`, which it does not
     /// bind (#836), with the name its store holds it under: the one in its
     /// store, or a new one, made and held there, counted a record and a cell
-    /// in the heap's sums by the store and charged there.
-    fn placeholder(&self, step: &mut Heap, name: &str) -> (Rc<str>, Record) {
+    /// in the heap's sums by the store and charged there. A new one is held
+    /// under `name`'s own `Rc` where the caller has one ([`Spelling`]): a
+    /// unit's every fresh top-level definition links one at load, and its
+    /// table already holds the spelling.
+    fn placeholder<N: Spelling + ?Sized>(&self, step: &mut Heap, name: &N) -> (Rc<str>, Record) {
         debug_assert_eq!(
             self.kind,
             Kind::Namespace,
             "a host namespace makes no placeholder"
         );
         let store = self.weak_entries_or_make(step, StoreKind::Placeholders);
-        if let Some(found) = store.get_key_value(name) {
+        if let Some(found) = store.get_key_value(name.as_ref()) {
             return found;
         }
         // Allocation never collects (`docs/GC_DESIGN.md` §6), and both
@@ -2148,7 +2184,7 @@ impl Environment {
         // the store does.
         let cell = BindingCell::new_own(step, TaggedValue::UNBOUND, self.env_id);
         let record = Record::placeholder(step, cell);
-        let key: Rc<str> = Rc::from(name);
+        let key = name.shared();
         store.insert(Rc::clone(&key), record);
         (key, record)
     }

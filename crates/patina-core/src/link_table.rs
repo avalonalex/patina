@@ -445,6 +445,48 @@ mod tests {
         assert!(!ns.local_names(&heap).iter().any(|name| name == "later"));
     }
 
+    /// A placeholder is held under the name of the table that first links
+    /// it, in that table's own `Rc`, shared (#836): linking copies no
+    /// spelling, though a unit links a placeholder for each top-level name
+    /// it is about to define. A later table's `Rc` for the same name finds
+    /// the placeholder and is not held. So too in a host namespace: the
+    /// parent's placeholder and the host's weak read-through record over it
+    /// are both held under the linking table's `Rc`.
+    #[test]
+    fn link_in_holds_a_placeholder_under_the_table_s_own_name() {
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        let first = table(&["later"]);
+        first.link_in(&heap, &ns);
+        let held = |ns: &Environment, name: &str| {
+            let store = ns.weak_entries().expect("a store");
+            store.get_key_value(name).expect("held").0
+        };
+        assert!(
+            Rc::ptr_eq(&held(&ns, "later"), first.name(0)),
+            "the linking table's own Rc, not a copy of the spelling"
+        );
+        let second = table(&["later"]);
+        second.link_in(&heap, &ns);
+        assert_eq!(second.entry(0), first.entry(0), "the same placeholder");
+        assert!(
+            Rc::ptr_eq(&held(&ns, "later"), first.name(0)),
+            "still under the first table's"
+        );
+
+        let host = Rc::new(Environment::host_namespace(Rc::clone(&ns)));
+        let hosted = table(&["nowhere"]);
+        hosted.link_in(&heap, &host);
+        assert!(
+            Rc::ptr_eq(&held(&ns, "nowhere"), hosted.name(0)),
+            "the parent's placeholder"
+        );
+        assert!(
+            Rc::ptr_eq(&held(&host, "nowhere"), hosted.name(0)),
+            "the host's weak read-through record over it"
+        );
+    }
+
     /// A name a namespace reaches by an alias of its own is read by name
     /// (#836): its entry is the heap's by-name record, a record flagged
     /// `BY_NAME` over a cell holding `UNBOUND`, made once and the same word
