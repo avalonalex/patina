@@ -15,8 +15,13 @@ It is the single source of truth. All other VM docs should be consistent with it
 Each `CallFrame` owns a register window: a contiguous slice of a shared
 `Vec<TaggedValue>`. Local variables and temporaries are accessed by index (O(1),
 no hash lookup). Global variables are linked once per distinct name when a
-code unit loads, and read by index through the unit's link table (#836); a
-name lookup is left to the cold read of a name not yet bound and to `Define`.
+code unit loads, and read by index through the unit's link table (#836). A
+name lookup is left to `Define`; to the cold read or store of a name not yet
+bound; to every read and store of a name its namespace reaches by an alias
+or a visible scoped definition, which is bound and goes by name each time;
+and, in a host namespace that has such names, to the test that a name it
+reads or writes through its parent is not one of them (`docs/VM_ISA.md`
+§4.1).
 
 **Why:** Register machines are easier to optimize (SSA, inlining, type
 specialization). Lua 5, V8, and Chez Scheme all use register/slot machines.

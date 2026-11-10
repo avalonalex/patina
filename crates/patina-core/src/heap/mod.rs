@@ -388,8 +388,11 @@ pub enum HeapObjectData {
         /// dependency on patina-vm types.
         code_id: u64,
         free_vars: Vec<TaggedValue>,
-        /// The global environment this closure was compiled against.
-        /// `LoadGlobal`/`StoreGlobal` use this instead of `VmState::globals`.
+        /// The global environment this closure was compiled against: the
+        /// namespace its unit's link table was linked in, through which
+        /// the VM reads, writes and defines every global (#836). Read only
+        /// by `MakeClosure`, which gives it to the closures made in this
+        /// one's frames (`frame_globals` in patina-vm).
         globals: Rc<crate::environment::Environment>,
     },
     /// Opaque handle to a full VM continuation (call/cc style).
