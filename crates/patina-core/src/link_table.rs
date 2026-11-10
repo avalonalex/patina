@@ -222,8 +222,12 @@ impl LinkTable {
     /// traced (`VmState::release_dead_code`), so the pass at the sweep's
     /// start keeps the placeholders it links, and only an adoption, which
     /// clears the flag, takes one out of the store.
-    #[cold]
-    #[inline(never)]
+    ///
+    /// Inlined into its caller, which keeps it out of line: the VM's
+    /// `load_global_cold`, `#[cold]` and never inlined, so that a host
+    /// namespace's read of a parent's binding, which comes here every time,
+    /// pays one call's frame and not two.
+    #[inline(always)]
     pub fn read_cold(&self, heap: &RefCell<Heap>, k: LinkIdx) -> Option<TaggedValue> {
         let ns = self.namespace.get()?;
         let name = &self.names[k as usize];

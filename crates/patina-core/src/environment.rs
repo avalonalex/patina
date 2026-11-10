@@ -2075,9 +2075,15 @@ impl Environment {
     /// name, and `LinkTable::read_cold` and `LinkTable::assignee` read and
     /// write a host namespace's read-through record by name when its
     /// namespace has gained one since (#836). Takes no borrow of the heap.
+    ///
+    /// Each latch is tested here, as [`get`](Self::get) tests it, before
+    /// the lookup it guards: a host namespace's every read of a parent's
+    /// binding asks this, and one with no alias and no visible scoped
+    /// definition answers for two loads and no call.
+    #[inline]
     pub(crate) fn read_by_name(&self, name: &str) -> bool {
         (self.has_aliases.get() && self.alias_target(name).is_some())
-            || self.visible_scoped_index(name).is_some()
+            || (self.has_visible_scoped.get() && self.visible_scoped_index(name).is_some())
     }
 
     /// This namespace's weak entries' store, if a linker has made one

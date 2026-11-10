@@ -2143,7 +2143,8 @@ pub(super) fn frame_globals(state: &VmState) -> Rc<Environment> {
 /// by-name record, which [`LinkTable::read_cold`] reads as
 /// `Environment::get` reads the name; and a shadowed primitive's
 /// deoptimization's, for the same entries. Out of line, so the linked read
-/// stays two loads and a test in the dispatch loop.
+/// stays two loads and a test in the dispatch loop, and the one frame of a
+/// cold read: `read_cold` is inlined here.
 #[cold]
 #[inline(never)]
 pub(super) fn load_global_cold(
