@@ -7,10 +7,10 @@
 //! record its table holds. These tests pin what makes that sound: a binding's
 //! record never moves, so redefinition and `set!` write the location it names
 //! (the cell its record names, #834) and a read never observes a stale value;
-//! a name defined after the code that reads it was linked is read through the
-//! placeholder the define adopts; and a library's code reads its own
-//! namespace's bindings, not the program's. They run against `VmBackend`
-//! explicitly: the link tables exist only in the VM.
+//! a name defined after the code that reads it was linked is read once it is
+//! defined; and a library's code reads and writes its own namespace's
+//! bindings, not the program's, by the linked paths and by name alike. They
+//! run against `VmBackend` explicitly: the link tables exist only in the VM.
 
 mod common;
 use common::eval_program_vm as eval;
@@ -64,7 +64,11 @@ fn defines_after_cache_fill_do_not_disturb_slots() {
 #[test]
 fn forward_reference_resolves_after_define() {
     // f is compiled and linked before x exists, so its table links a
-    // placeholder for x, which x's define adopts, keeping its word.
+    // placeholder for x, and f reads x once it is defined. The answer
+    // cannot show that the define adopted the placeholder: a define that
+    // made a record of its own would be read by name, by the cold read, and
+    // answer the same. `gc_vm.rs`' `a_bound_placeholder_is_never_dropped`
+    // holds the adoption.
     assert_eq!(eval("(define (f) x) (define x 7) (f)"), "7");
 }
 
@@ -122,4 +126,80 @@ fn a_store_by_name_marks_the_primitive_it_replaces() {
         )
         .unwrap();
     assert_eq!(interp.display_tagged(&answer), "(1 replaced replaced)");
+}
+
+#[test]
+fn a_store_by_name_writes_the_namespace_its_unit_was_linked_in() {
+    // A store the table resolves no cell for goes by name
+    // (`store_global_cold`) in the namespace the unit was linked in, which
+    // is not the program's for a library's unit or for one compiled in an
+    // environment specifier's namespace (#836).
+    //
+    // `(probe b)`'s `step` expands `(probe a)`'s macro, whose template
+    // assigns `counter`, a binding private to `(probe a)`: the expansion
+    // installs an alias for it in `(probe b)`'s namespace, so `step`'s unit
+    // links the by-name record and its store goes by name, through that
+    // alias. The program's namespace has no such alias, and a store by name
+    // there would find nothing to assign.
+    assert_eq!(
+        eval(
+            "(define-library (probe a)
+               (export bump! get)
+               (import (scheme base))
+               (begin
+                 (define counter 0)
+                 (define-syntax bump!
+                   (syntax-rules () ((_) (set! counter (+ counter 1)))))
+                 (define (get) counter)))
+             (define-library (probe b)
+               (export step)
+               (import (scheme base) (probe a))
+               (begin (define (step) (bump!))))
+             (import (scheme base) (probe a) (probe b))
+             (define r (guard (e (#t 'error)) (step) (step) 'assigned))
+             (list r (get))"
+        ),
+        "(assigned 2)"
+    );
+    // `zzz-836` is bound in the program's namespace alone. The specifier's
+    // namespace does not bind it, so the `set!` compiled there links a
+    // placeholder and stores by name in that namespace: an error, and the
+    // program's binding is left as it was.
+    assert_eq!(
+        eval(
+            "(import (scheme base) (scheme eval))
+             (define zzz-836 1)
+             (define r
+               (guard (e (#t 'unbound))
+                 (eval '(set! zzz-836 2) (environment '(scheme base)))
+                 'assigned))
+             (list r zzz-836)"
+        ),
+        "(unbound 1)"
+    );
+}
+
+#[test]
+fn a_host_form_s_closures_are_over_the_host_namespace() {
+    // A form evaluated in a host namespace runs in a frame whose closures
+    // are made over that namespace, the one its unit was linked in, not the
+    // machine's globals: what `MakeClosure`'s debug check asserts of every
+    // closure, read here from the closures themselves, so in a release
+    // build too. Nothing reads a closure's environment but `MakeClosure`,
+    // for the closures made inside it, until closures hold none (#836).
+    use patina_runtime::Backend;
+    use std::rc::Rc;
+
+    let interp = common::vm_interpreter();
+    interp.eval_program_owned("(import (scheme base))").unwrap();
+    let env = interp.new_environment();
+    let host = interp.raw_environment(&env);
+    assert!(!Rc::ptr_eq(&host, &interp.global_env()));
+    for form in ["(lambda () 1)", "((lambda () (lambda () 2)))"] {
+        let procedure = interp.eval_str_in(&env, form).unwrap();
+        let over = (interp.backend().heap().borrow())
+            .get_vm_closure_globals(interp.raw_value(&procedure))
+            .expect("a VM closure");
+        assert!(Rc::ptr_eq(&over, &host), "{form}");
+    }
 }

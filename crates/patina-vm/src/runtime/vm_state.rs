@@ -3502,6 +3502,71 @@ mod tests {
         }
     }
 
+    /// A unit whose table names no global is linked too (#836): its table
+    /// holds the namespace the unit was loaded in, which is all a unit of
+    /// closures over locals alone has of it once closures hold no
+    /// environment.
+    #[test]
+    fn load_unit_links_a_table_that_names_nothing() {
+        let mut state = VmState::on_a_fresh_heap();
+        let namespace = Rc::new(Environment::with_heap(&state.heap));
+        let id = state.load_unit(code(), Vec::new(), &namespace).id();
+        let loaded = state.code_object(id).expect("loaded");
+        assert!(loaded.links.names().is_empty(), "no global operand");
+        assert!(
+            (loaded.links.namespace()).is_some_and(|linked| Rc::ptr_eq(linked, &namespace)),
+            "linked in the namespace it was loaded in"
+        );
+    }
+
+    /// The compile pipeline records the namespace it compiled a unit in,
+    /// and `load_unit`'s link, in a debug build, refuses any other (#836):
+    /// pass 5 resolved the unit's primitive calls and introduced names
+    /// there. A unit links where it was compiled, in every build; a
+    /// pipeline that recorded nothing would leave the check nothing to
+    /// refuse.
+    #[test]
+    fn a_unit_is_refused_a_link_outside_the_namespace_it_was_compiled_in() {
+        use patina_core::core_expr::{CoreExpr, CoreExprKind};
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let mut state = VmState::on_a_fresh_heap();
+        let compiled_in_globals = |state: &VmState| {
+            let literals = patina_core::LiteralPool::new(&state.heap.borrow());
+            let one = patina_core::Lit::immediate(TaggedValue::fixnum(1));
+            let expr = CoreExpr::new(CoreExprKind::Literal(one));
+            compile_with_qq_resolving(
+                &expr,
+                &literals,
+                &state.heap,
+                state.global_env(),
+                state.primitive_registry(),
+            )
+            .expect("compiles")
+        };
+
+        let (top, nested) = compiled_in_globals(&state);
+        let unit = load_in_globals(&mut state, top, nested);
+        let linked_in = Rc::clone(
+            (state.code_object(unit.id()).expect("loaded").links)
+                .namespace()
+                .expect("linked"),
+        );
+        drop(unit.into_parts());
+        assert!(Rc::ptr_eq(&linked_in, state.global_env()));
+
+        let (top, nested) = compiled_in_globals(&state);
+        let elsewhere = Rc::new(Environment::with_heap(&state.heap));
+        let refused = catch_unwind(AssertUnwindSafe(|| {
+            drop(state.load_unit(top, nested, &elsewhere).into_parts());
+        }));
+        assert_eq!(
+            refused.is_err(),
+            cfg!(debug_assertions),
+            "a debug build refuses the link, and only a debug build checks"
+        );
+    }
+
     /// A slot that has used every generation stays empty, and the next code
     /// loaded takes a new slot, so no id is ever given out twice (#352).
     #[test]

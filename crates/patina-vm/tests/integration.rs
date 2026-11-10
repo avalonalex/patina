@@ -553,3 +553,58 @@ fn a_shadowed_primitives_site_looks_up_its_operands_name() {
         ]
     });
 }
+
+/// A shadowed primitive's site reads its operand as `LoadGlobal` reads a
+/// global (#836): where the linked read finds no binding in the operand's
+/// record, by the cold read, which reads the name in the unit's namespace.
+/// Here the operand is a name the namespace reaches by an alias, whose entry
+/// is the heap's by-name record, so the linked read always misses and the
+/// site must call what the alias names. Built by hand: pass 5 emits a
+/// primitive site only for a name its namespace binds in a slot of its own,
+/// whose record the linked read answers, so no compiled site reads cold.
+#[test]
+fn a_shadowed_primitives_site_reads_an_aliased_operand_by_name() {
+    use patina_core::LinkTable;
+    use patina_vm::types::Arity;
+    use patina_vm::types::instruction::{Instruction, PrimitiveFnId};
+
+    let mut state = fresh_state();
+    let globals = Rc::clone(state.global_env());
+    // `negate` names the namespace's own `-`, by an alias.
+    globals.define_alias("negate", Rc::clone(&globals), "-".into());
+    let car = state
+        .primitive_registry()
+        .resolve_index("scheme.base/car")
+        .expect("`car` is registered");
+    let names: Vec<Rc<str>> = vec![Rc::from("car"), Rc::from("negate")];
+    let code = CodeObject {
+        id: CodeObjectId::label(),
+        name: None,
+        links: Rc::new(LinkTable::new(names.into_boxed_slice())),
+        instructions: vec![
+            Instruction::LoadImmediate {
+                dst: 0,
+                val: TaggedValue::fixnum(1),
+            },
+            // (define car 1): `car`'s sites are shadowed from here on.
+            Instruction::Define { link: 0, src: 0 },
+            // A site of `car` whose operand is `negate`: (negate 1).
+            Instruction::CallPrimitive {
+                func_id: PrimitiveFnId(car as u32),
+                link: 1,
+                args: vec![0],
+                dst: 1,
+            },
+            Instruction::Return { val: 1 },
+        ],
+        constants: Vec::new(),
+        num_regs: 2,
+        arity: Arity::Fixed(0),
+        source_map: Vec::new(),
+        register_roots: None,
+        live_closures: std::cell::Cell::new(0),
+    };
+    let id = load(&mut state, code, Vec::new());
+    let answer = execute(&mut state, id).expect("the site calls what `negate` names");
+    assert_eq!(answer.as_fixnum(), Some(-1));
+}
