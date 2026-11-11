@@ -179,8 +179,23 @@ ROWS = [
     Row('hidden-define', 'REPL', 'hidden-define.scm', {'vm': 2000, 'tree-walker': 2000}, clauses=REPL,
         red={'SS1': 'stage 5c', 'SS5:cells': 'stage 5c', 'SS5:binding-records': 'stage 5c'},
         pin={'vm': 257, 'tree-walker': 129}),
+    # Each cycle compiles a procedure that names a fresh unbound variable and
+    # never calls it. Since #836 the VM links the reference at load to a
+    # placeholder, dropped once no code links it, so `SS5:cells` and
+    # `SS5:binding-records` read flat, unlabelled; SS1 and `SS5:symbols` stay
+    # red for stage 5c. The pins are the row's own readings at this N with
+    # the linking, 2026-11-10, 3 runs a backend: 84.48 B a cycle on the VM
+    # (1,013,760 B over 12,000 cycles) and 84.35 B on the tree-walker
+    # (1,012,248 B), 1.00x the readings before it, 84.5 B and 84.4 B (R9 on
+    # #782: pinned by the 4b PR that first moves the row). On the VM, L is
+    # about 205 KB higher at N and at 4N alike, the placeholder store's
+    # table, charged at its capacity, which stays when the placeholders
+    # drop. N stays 4,000, since that charge steps with N (at N = 8,000 a
+    # step of 409,600 B falls inside the window), and only the owner raises
+    # a pin (K17).
     Row('unbound-ref', 'REPL', 'unbound-ref.scm', {'vm': 4000, 'tree-walker': 4000}, clauses=REPL,
-        red={'SS1': 'stage 5c', 'SS5:symbols': 'stage 5c'}),
+        red={'SS1': 'stage 5c', 'SS5:symbols': 'stage 5c'},
+        pin={'vm': 84.48, 'tree-walker': 84.35}),
     Row('load-repeat', 'REPL', 'load-repeat.scm', {'vm': 1000, 'tree-walker': 1000}, clauses=REPL),
     Row('reimport', 'REPL', 'reimport.scm', {'vm': 1000, 'tree-walker': 1000}, clauses=REPL),
     Row('record-redefine', 'REPL', 'record-redefine.scm', {'vm': 2000, 'tree-walker': 2000}, clauses=REPL),

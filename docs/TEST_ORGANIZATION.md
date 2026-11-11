@@ -1625,7 +1625,10 @@ binding records' 32 bytes a cycle (#834, its question 2);
 `library-stream`'s, whose SS1 passes since #834, at about 90.84 bytes, so
 that its 1.05× is SS1's bound per cycle at its N until 4b.11 promotes the
 clause (question 4); and `unbound-ref`'s from the 4b PR that first moves it
-(R9), so it has none yet. No mark may name a
+(R9), #836's linking at load: 84.48 bytes on the VM and 84.35 on the
+tree-walker, its readings at N = 4,000 with the linking and 1.00× those
+before it (84.5 and 84.4), since the placeholder a compiled reference to an
+unbound name links is dropped once no code links it. No mark may name a
 pin, so a cost past it fails the lane until the owner raises it, and a
 pinned row that reaches the resident-size cap fails too. A pin holds at the
 row's own N only, and is not held under `--scale`: a namespace charges its

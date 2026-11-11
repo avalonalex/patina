@@ -187,11 +187,15 @@ class Clauses(unittest.TestCase):
                 self.assertEqual(hidden.red_reason(f'SS5:{key}', backend), 'stage 5c', (key, backend))
             for key in held:
                 self.assertIsNone(hidden.red_reason(f'SS5:{key}', backend), (key, backend))
-            # A reference to an unbound name makes no record (R22).
+            # A reference to an unbound name makes a placeholder, dropped
+            # once no code links it (#836).
             for key in ('namespaces', 'cells', 'binding-records'):
                 self.assertIsNone(rows['unbound-ref'].red_reason(f'SS5:{key}', backend), (key, backend))
         # The owner's re-pin for the records (question 2 on #834).
         self.assertEqual(hidden.pin, {'vm': 257, 'tree-walker': 129})
+        # `unbound-ref`'s readings at its N with the linking (#836; R9).
+        self.assertEqual(rows['unbound-ref'].pin, {'vm': 84.48, 'tree-walker': 84.35})
+        self.assertIn('pin', rows['unbound-ref'].checks())
 
     def test_library_stream_s_pin_is_ss1_s_bound(self):
         # Its SS1 passes since #834; until 4b.11 promotes it, the pin's 1.05x
