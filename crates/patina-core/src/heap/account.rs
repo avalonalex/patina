@@ -778,7 +778,8 @@ impl Heap {
     /// L: the bytes the last collection found live — the slots of the
     /// objects it marked, their payloads (a live VM continuation's snapshot
     /// among them) and the external bytes held when the backend finished it
-    /// (`Heap::settle_live_bytes`). Zero before the first collection.
+    /// (`Heap::settle_live_bytes`), or when it swept, for a collection no
+    /// backend finished. Zero before the first collection.
     pub fn live_bytes(&self) -> usize {
         self.account.live
     }

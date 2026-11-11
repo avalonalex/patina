@@ -1706,7 +1706,7 @@ file's estimate) and items in named stages (about 2–3 more [I]), listed in §1
 |---|---|
 | REPL-style | redefinition streams; the `guard` stream run from a file, from stdin and in REPL `-i`; `eval-redefine`; `eval-lambda`; `macro-eval` (`case`, `guard`, the standard macros); `hidden-define`; `unbound-ref`; `load-repeat`; `reimport`; library redefinition |
 | Server-style | `steady-alloc` (a 20 K-slot ring); `peak-then-drop` with `pause-after-peak`; `peak-then-sparse` (keeps every 4,096th vector of the peak); `peak-then-idle` (one `(notify-idle)` after a drop); `deep-then-steady`; `port-churn`; `file-port-churn` |
-| Churn | `sym-churn`; `eval-fresh-names` (class D); `env-churn`; `env-lambda`; `form-eval-fresh`; `record-redefine`; `cont-churn` at depths 10, 100 and 1,000; `interp-churn` (Rust) |
+| Churn | `sym-churn`; `eval-fresh-names` (class D); `env-churn`; `env-lambda`; `const-lambda`; `form-eval-fresh`; `record-redefine`; `cont-churn` at depths 10, 100 and 1,000; `interp-churn` (Rust) |
 | Threads (stage 9) | `thread-churn`; `blocked-threads`; a 100 K-thread probe on Linux |
 
 **Protocol.** Each run is one process to 4N cycles. At N and at 4N the probe calls `(gc)` twice, then reads

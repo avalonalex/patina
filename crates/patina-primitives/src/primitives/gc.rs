@@ -15,7 +15,8 @@
 //!
 //! - `live-bytes`: what the last collection found live — the slots of the
 //!   objects it marked, their payloads (a VM continuation's snapshot among
-//!   them) and the external bytes held then. 0 before the first collection.
+//!   them) and the external bytes held once the collection was finished,
+//!   after the VM's code release (#836). 0 before the first collection.
 //!   The adaptive trigger collects again after `max(8 MiB, 2 × live-bytes)`.
 //! - `bytes-allocated`: every byte charged since the heap was made: each
 //!   object's slot and payload, and the external bytes charged, a

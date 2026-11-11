@@ -1134,8 +1134,10 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   payload of each object it reaches (a capture's when the weak-id fixpoint
   proves its handle live), sweep credits each dead slot's, and L, the
   **live bytes** after a collection, is the marked slots, their payloads and
-  the external bytes held then. Payloads cannot grow after allocation:
-  vectors, strings and bytevectors hand out slices, never their `Vec`.
+  the external bytes held when the collection was finished, or when it
+  swept if no backend finished it (§6.2). Payloads cannot grow after
+  allocation: vectors, strings and bytevectors hand out slices, never
+  their `Vec`.
   **A tree-walker closure (#637)** is charged its `Rc<Procedure>`, its
   parameters and `CAPTURED_FRAME_BYTES`, an estimate of the frame it
   captures — a frame binding one parameter, 612 bytes — because on that
