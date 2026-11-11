@@ -1067,7 +1067,9 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   installs it when heap and controller are paired (a bare heap defaults to
   the inert `GcThreshold::NEVER` — policy stays in the controller, mechanism
   in the heap), and `GcController::collect` re-installs it after each
-  collection — the only point the adaptive term changes. `request_gc` posts
+  collection, as `GcController::finish_collection` does once more when the
+  backend's work after the collection moved L (§6.2) — the only points the
+  adaptive term changes. `request_gc` posts
   one from elsewhere, honored in every mode; sweep takes the post. `(gc)`
   does not wait for it: it collects at its call (below, and §7).
 - **The carrier, the `Mutator` (#699; `PRD/GC_PRD.md` §12 and §14).** A post
@@ -1160,7 +1162,10 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   total with the heap and needs no heap borrow: a holder usually dies when
   its last `Rc` drops, often inside a sweep, which holds the heap mutably
   while it drops the dead slots' payloads, and sweep reads the total after
-  the arenas are swept, so those bytes are out of the L it sets. The
+  the arenas are swept, so those bytes are out of the L it sets. A holder
+  the backend drops in its own work after the sweep gives back later than
+  that, and the collection's finish reads the total again, so those bytes
+  are out of L too (§6.2, "The finish settles L"). The
   trigger's count is shared with the handle too, beside the installed byte
   threshold and the carrier, so a holder can also *charge* without the heap
   and post a collection the moment it crosses.
@@ -1356,7 +1361,8 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   is what makes collection testable without process-global environment
   variables. `(gc-stats)` reports the arenas'
   slot counts and five byte keys: `live-bytes` (L, 0 before the first
-  collection), `bytes-allocated` (every byte charged, external bytes
+  collection, and settled when the collection is finished, §6.2),
+  `bytes-allocated` (every byte charged, external bytes
   included), `bytes-reclaimed` (every byte a collection freed, so it grows
   only when one frees something; external bytes given back when their
   holder drops are not in it, so `bytes-allocated` less `bytes-reclaimed`
@@ -1467,9 +1473,9 @@ re-measurement.
 
 Every collection is recorded where it runs, in `GcController::collect`
 (`crates/patina-core/src/heap/telemetry.rs`). The drain of its finalizers
-adds its time to the record's `after` (§4.6), and the backend completes the
-record with `Heap::finish_collection` once its own work after the
-collection is done, which adds to `after` too: the VM's code release,
+adds its time to the record's `after` (§4.6), and the backend finishes the
+collection with `GcController::finish_collection` once its own work after
+it is done, which adds to `after` too: the VM's code release,
 timed; nothing on the tree-walker. A record
 holds the **reason** — `bytes` (the trigger), `stress`, `zeal`,
 `descriptors`, `posted` (a collection asked for where collection was
@@ -1484,6 +1490,42 @@ backend's, whose sum is the pause; the bytes
 allocated since the last collection, found live, freed and held externally;
 slots marked and swept per arena; and the **wait** since the collection was
 posted, in bytes and time.
+
+**The finish settles L (#836).** A collection is complete only when the
+backend's work after it is done, and the account with it. The sweep sets L
+from the external bytes held as it ends, and `GcController::collect` arms
+the threshold from that L. On the VM a unit's link table holds the namespace
+it was linked in (§8), so a namespace whose last holder is a dead unit's
+table drops at code release, after the sweep, and the sweep's L counts it
+live. That is every namespace `environment` made in which a procedure was
+compiled, and a redefined library's. Left there, the threshold followed
+them: a loop that made one such namespace a cycle had L at about 0.88 of
+what it had allocated since the last collection, so each collection came
+about 1.76 times further off than the one before, and the steady-state
+lane's `env-lambda` reached 345 MiB resident in 32,000 cycles where it now
+holds 21. So `finish_collection` settles the account before it completes
+the record (`Heap::settle_live_bytes`): L becomes what marking found live
+in the arenas plus the external bytes held now, the collector's L follows,
+the threshold is armed again through `GcController::current_threshold`, so
+each mode keeps its rule, and the record's `live` and `external` say the
+settled figures. The arenas' part is the record's `live` less its
+`external`, both read under the collection's own borrow, so nothing is
+marked or measured again and the heap gains no field. Where the external
+bytes are as the sweep read them, on the tree-walker and at most of the
+VM's collections, nothing is written. A lower threshold raises the pending
+flag if the bytes charged since the sweep already reach it, as any
+`set_gc_threshold` does; nothing lowers the flag.
+
+`Heap`'s own completion of the record is crate-private, so
+`finish_collection` is the only way a backend completes one, and none can
+without the settle. Every collection either backend runs is finished: on
+the VM by `VmState::after_collection`, which `poll_slow`,
+`collect_if_pending`, `collect_for_loader` and `collect_at_call` each call
+once their collection ran, after `release_dead_code` and with no heap
+borrow held across either; on the tree-walker by `maybe_collect`,
+`collect_if_pending`, `collect_for_loader` and `collect_at_call`. A
+collection a backend never finished keeps the sweep's L and threshold
+until the next one, whose record closes its own.
 
 A collection is posted through one helper, `SharedCounts::raise_pending`,
 which, when none is posted yet, notes the time and the bytes charged: once
@@ -2066,11 +2108,15 @@ makes, its namespace's slot → the procedure → its code id → its unit's tab
 collection marks none of it, the sweep frees the procedure, and
 `release_dead_code`, after the collection, lets the unit go, whose table then
 drops the namespace's last `Rc`. A namespace whose last holder was a unit
-therefore drops at code release, not in the sweep, after the collection has
-settled L's live bytes, so L counts its charge until the next collection;
-`external-bytes` read after `(gc)` is already right. Closures still hold
-their namespace too (`VmClosure.globals`), which the sweep drops, so a
-namespace held by a unit alone is rare. What roots a namespace is, then: the
+therefore drops at code release, not in the sweep, after the sweep has set
+L from the external bytes it read. That is the usual end of a namespace
+`environment` made with a procedure compiled in it, and of a redefined
+library's: its closures hold it too (`VmClosure.globals`), and the sweep
+drops those, but the unit's table outlives them until the release. So the
+collection's finish, which follows the release, settles L from the external
+bytes held then, and arms the threshold from the settled L (§6.2): L, the
+threshold and the collection's record count no namespace the release
+dropped. What roots a namespace is, then: the
 machine's `globals` for the program's; its registry entry for a library's,
 from its load on (#677); its `OwnedEnvironment` for a host namespace; its
 object for a specifier's; and for the namespace of code something can still

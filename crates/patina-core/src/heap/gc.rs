@@ -230,7 +230,8 @@ pub struct GcStats {
     /// sweep, without the work after it.
     pub last_pause_micros: u128,
     /// The phases of the last collection (#648); `after` is the drain's and
-    /// the backend's, which the record adds (`Heap::finish_collection`).
+    /// the backend's, which the record adds
+    /// (`GcController::finish_collection`).
     pub last_phases: PhaseTimes,
 }
 
@@ -882,8 +883,10 @@ impl GcController {
     /// collection-pending flag — the mode made concrete, and the single owner
     /// of that mapping. A backend installs this into its heap when the pair
     /// is wired up (`Heap::set_gc_threshold`); `GcController::collect`
-    /// re-installs it after each collection, the only point the adaptive
-    /// term changes. A heap with no controller attached keeps its inert
+    /// re-installs it after each collection, and
+    /// [`GcController::finish_collection`] again when the backend's work
+    /// after the collection moved L: the only points the adaptive term
+    /// changes. A heap with no controller attached keeps its inert
     /// [`GcThreshold::NEVER`] default, where only `(gc)` raises the flag.
     ///
     /// The adaptive default counts bytes (#606); stress counts allocations,
@@ -914,8 +917,10 @@ impl GcController {
     /// `at_call`: a primitive asked for this collection at its call
     /// (`collect_at_call`); otherwise the pending flag brought it, and the
     /// counts say why. The collection is recorded for the telemetry (#648),
-    /// which the backend completes with [`Heap::finish_collection`] once its
-    /// own work after the collection is done.
+    /// and the backend completes it with
+    /// [`GcController::finish_collection`] once its own work after the
+    /// collection is done. The L and the threshold set here are the
+    /// sweep's, and stand if no backend finishes the collection.
     pub(crate) fn collect(
         &mut self,
         heap: &mut Heap,
@@ -962,6 +967,59 @@ impl GcController {
             wait,
         });
         stats
+    }
+
+    /// Finish the collection just run, once the backend has done its work
+    /// after it, which took `after`: the VM's code release, timed; nothing
+    /// on the tree-walker, which passes zero. A collection is complete only
+    /// here, in two respects.
+    ///
+    /// **The account is settled.** The sweep set L from the external bytes
+    /// held as it ended, and `GcController::collect` armed the threshold
+    /// from that L. The backend's work can give external bytes back after
+    /// that: the VM's code release drops each namespace whose last holder
+    /// was a dead unit's link table (#836), so the sweep's L counted every
+    /// such namespace live, and a loop that makes them saw each collection
+    /// come about 1.76 times further off than the one before. So L becomes
+    /// what marking found live plus the external bytes held now
+    /// (`Heap::settle_live_bytes`), the collector's L follows, and the
+    /// threshold is armed again through [`GcController::current_threshold`],
+    /// so each mode keeps its rule. Where the external bytes are as the
+    /// sweep read them, on the tree-walker and at most of the VM's
+    /// collections, nothing is written. O(1), and nowhere near allocation
+    /// or dispatch.
+    ///
+    /// Installing a lower threshold raises the pending flag if the bytes
+    /// charged since the sweep already reach it
+    /// ([`Heap::set_gc_threshold`]); nothing lowers the flag, so a threshold
+    /// the settle raised leaves a post made under the lower one standing,
+    /// and its collection comes early. Neither arises today: the drain
+    /// allocates nothing (F4), and code release only gives back.
+    ///
+    /// **The record is completed** with the backend's time (#648), and its
+    /// `live` and `external` say the settled figures, so `PATINA_GC_LOG` and
+    /// `(gc-stats)` agree.
+    ///
+    /// It borrows the heap itself, for the settle and the record alone, so a
+    /// backend calls it with no borrow held and after its drops: a holder's
+    /// `Drop` gives back through the shared account with no heap borrow, and
+    /// must have run before the account is read. This is the only way to
+    /// complete a record from outside the crate, so no backend finishes a
+    /// collection without settling it. One a backend never finishes keeps
+    /// the sweep's L and threshold until the next collection, whose record
+    /// closes its own.
+    pub fn finish_collection(gc: &RefCell<Self>, heap: &SharedHeap, after: std::time::Duration) {
+        gc.borrow_mut().finish(&mut heap.borrow_mut(), after);
+    }
+
+    /// [`GcController::finish_collection`], with the controller and the
+    /// heap in hand.
+    fn finish(&mut self, heap: &mut Heap, after: std::time::Duration) {
+        if heap.settle_live_bytes() {
+            self.collector.live_bytes_after_last = heap.live_bytes();
+            heap.set_gc_threshold(self.current_threshold());
+        }
+        heap.finish_record(after);
     }
 
     /// Why the pending flag brought a collection: the count that crossed
@@ -1892,7 +1950,9 @@ impl Heap {
     /// flag — sweep completion is the "collection happened" boundary. Settles
     /// the byte account (`heap/account.rs`): L becomes the bytes marking
     /// found live, plus the external bytes held now, and each freed slot's
-    /// bytes, its payload's included, are added to the bytes reclaimed.
+    /// bytes, its payload's included, are added to the bytes reclaimed. The
+    /// collection's finish settles L once more, from the external bytes
+    /// held after the backend's own work (`Heap::settle_live_bytes`).
     ///
     /// Crate-private with the rest of the collector (#624).
     pub(crate) fn sweep(&mut self, marks: &mut MarkBits) -> ArenaCounts {
@@ -2053,7 +2113,12 @@ impl Heap {
         account.shared.start_cycle();
         // Read after the arenas are swept: external bytes that the dead
         // slots' payloads gave back as they dropped — a dead environment
-        // specifier's namespace, say — are not live.
+        // specifier's namespace, say — are not live. Those a backend gives
+        // back in its own work after the sweep are still in this figure:
+        // on the VM, a namespace whose last holder is a dead unit's link
+        // table, which code release drops (#836). The collection's finish
+        // reads the external bytes again and settles L
+        // (`GcController::finish_collection`).
         account.live = live.saturating_add(account.shared.external.get());
         self.allocs_since_gc = 0;
         self.mutator.collected();
@@ -3192,9 +3257,7 @@ mod tests {
         let wait = shared.borrow().wait_high_water();
         assert!(wait.bytes >= inside, "{wait:?}");
         assert_eq!(wait.site.map(|s| s.line()), Some(line));
-        shared
-            .borrow_mut()
-            .finish_collection(std::time::Duration::ZERO);
+        controller.finish(&mut shared.borrow_mut(), std::time::Duration::ZERO);
         assert!(shared.borrow().pause_total() >= shared.borrow().last_pause());
         // A collection at a call waited for nothing.
         controller.collect(&mut shared.borrow_mut(), &[&roots], true);
@@ -3306,6 +3369,192 @@ mod tests {
         controller.collect(&mut shared.borrow_mut(), &[&roots], false);
         assert_eq!(handle.held(), 1 << 20);
         assert_eq!(shared.borrow().live_bytes(), 1 << 20);
+    }
+
+    /// What a backend's work after a sweep gives back, as the VM's code
+    /// release does when it drops the namespaces whose last holder was a
+    /// dead unit's link table (#836): `DEAD` of the external bytes a
+    /// collection's sweep counted, `KEPT` of them still held.
+    const DEAD: usize = 19 << 20;
+    const KEPT: usize = 1 << 20;
+
+    /// A heap paired with a controller in `mode`, holding a vector the
+    /// arenas keep and `DEAD + KEPT` external bytes, just collected and not
+    /// yet finished: the roots, the handle the bytes are given back through,
+    /// and what marking found live in the arenas.
+    fn collected_and_unfinished(
+        mode: GcMode,
+    ) -> (
+        SharedHeap,
+        RefCell<GcController>,
+        TestRoots,
+        crate::heap::ExternalBytes,
+        usize,
+    ) {
+        let shared = crate::new_shared_heap();
+        let gc = RefCell::new(GcController::new(mode));
+        let threshold = gc.borrow().current_threshold();
+        shared.borrow_mut().set_gc_threshold(threshold);
+        let mut roots = TestRoots::default();
+        let kept = shared
+            .borrow_mut()
+            .alloc_vector_fill(1000, TaggedValue::fixnum(0));
+        roots.values.push(kept);
+        let handle = shared.borrow().external_bytes_handle();
+        handle.charge(DEAD + KEPT);
+        gc.borrow_mut()
+            .collect(&mut shared.borrow_mut(), &[&roots], false);
+        let marked = shared.borrow().live_bytes() - (DEAD + KEPT);
+        assert!(marked >= 1000 * size_of::<TaggedValue>(), "{marked}");
+        (shared, gc, roots, handle, marked)
+    }
+
+    /// The sweep's L counts the external bytes held as it ended, and the
+    /// threshold is armed from it. Bytes the backend's work gives back
+    /// after that are dead: the collection's finish takes them out of L,
+    /// and out of the threshold, which would otherwise put the next
+    /// collection off by twice their size. A count that the lower threshold
+    /// leaves crossed posts the collection there.
+    #[test]
+    fn finishing_a_collection_settles_l_and_the_threshold() {
+        let (shared, gc, _roots, handle, marked) = collected_and_unfinished(GcMode::On);
+        let mutator = Rc::clone(shared.borrow().mutator());
+        let swept = marked + DEAD + KEPT;
+        assert_eq!(shared.borrow().gc_threshold().bytes, 2 * swept);
+
+        // The backend's work gives back the dead's, with no heap borrow.
+        handle.release(DEAD);
+        // And 9.6 MB is charged before the finish: under the threshold
+        // armed from the sweep's L, past the one the settled L arms.
+        shared
+            .borrow_mut()
+            .alloc_vector_fill(1_200_000, TaggedValue::fixnum(0));
+        assert_eq!(shared.borrow().live_bytes(), swept, "the sweep's, so far");
+        assert!(!mutator.gc_posted());
+
+        GcController::finish_collection(&gc, &shared, std::time::Duration::from_millis(5));
+        let heap = shared.borrow();
+        assert_eq!(heap.live_bytes(), marked + KEPT);
+        assert_eq!(gc.borrow().collector.live_bytes_after_last, marked + KEPT);
+        assert_eq!(heap.gc_threshold().bytes, DEFAULT_MIN_BYTES);
+        assert_eq!(heap.gc_threshold(), gc.borrow().current_threshold());
+        assert!(
+            mutator.gc_posted(),
+            "{} bytes since the sweep",
+            heap.bytes_since_gc()
+        );
+        // The record was completed: the pause counts the backend's time.
+        assert!(heap.telemetry.unfinished.is_none());
+        assert!(heap.last_pause() >= std::time::Duration::from_millis(5));
+    }
+
+    /// The settle writes the record too, so the log and `(gc-stats)` read
+    /// one L: its `live` and `external` are the settled figures, and what
+    /// the collection allocated, freed and marked is as the sweep left it.
+    #[test]
+    fn settling_l_writes_the_unfinished_record() {
+        let (shared, _gc, _roots, handle, marked) = collected_and_unfinished(GcMode::On);
+        let mut heap = shared.borrow_mut();
+        let before = heap.telemetry.unfinished.clone().expect("a record");
+        assert_eq!(
+            (before.live, before.external),
+            (marked + DEAD + KEPT, DEAD + KEPT)
+        );
+
+        handle.release(DEAD);
+        assert!(heap.settle_live_bytes(), "L moved");
+        let record = heap.telemetry.unfinished.as_ref().expect("a record");
+        assert_eq!((record.live, record.external), (marked + KEPT, KEPT));
+        assert_eq!(
+            (record.number, record.allocated, record.freed),
+            (before.number, before.allocated, before.freed)
+        );
+        assert_eq!(record.marked.total(), before.marked.total());
+        assert_eq!(heap.live_bytes(), marked + KEPT);
+        // Settled once: nothing has moved since.
+        assert!(!heap.settle_live_bytes());
+    }
+
+    /// Each mode keeps its rule across the finish: the threshold installed
+    /// after it is the mode's own, with stress still counting allocations,
+    /// zeal's still crossed and `PATINA_GC=0`'s never; L is settled in all
+    /// of them, for `(gc-stats)`.
+    #[test]
+    fn finishing_a_collection_keeps_each_mode_s_threshold() {
+        for mode in [GcMode::Off, GcMode::On, GcMode::Stress(3), GcMode::Zeal] {
+            let (shared, gc, _roots, handle, marked) = collected_and_unfinished(mode);
+            let posted = shared.borrow().mutator().gc_posted();
+            handle.release(DEAD);
+            GcController::finish_collection(&gc, &shared, std::time::Duration::ZERO);
+            let heap = shared.borrow();
+            assert_eq!(heap.live_bytes(), marked + KEPT, "{mode}");
+            assert_eq!(
+                heap.gc_threshold(),
+                gc.borrow().current_threshold(),
+                "{mode}"
+            );
+            let bytes = match mode {
+                GcMode::On => DEFAULT_MIN_BYTES,
+                GcMode::Off | GcMode::Stress(_) | GcMode::Zeal => usize::MAX,
+            };
+            assert_eq!(heap.gc_threshold().bytes, bytes, "{mode}");
+            // Zeal's collection is posted again by the collection itself,
+            // and the finish posts none of its own.
+            assert_eq!(posted, matches!(mode, GcMode::Zeal), "{mode}");
+            assert_eq!(heap.mutator().gc_posted(), posted, "{mode}");
+        }
+    }
+
+    /// With the external bytes as the sweep read them, the finish writes
+    /// nothing: the tree-walker's case, which drops nothing after its
+    /// sweep. A threshold installed since the collection stands, which it
+    /// would not had the finish armed one.
+    #[test]
+    fn finishing_a_collection_whose_external_bytes_stand_writes_nothing() {
+        let (shared, gc, _roots, handle, marked) = collected_and_unfinished(GcMode::On);
+        let installed = GcThreshold::bytes(12345);
+        shared.borrow_mut().set_gc_threshold(installed);
+        GcController::finish_collection(&gc, &shared, std::time::Duration::ZERO);
+        let heap = shared.borrow();
+        assert_eq!(heap.live_bytes(), marked + DEAD + KEPT);
+        assert_eq!(heap.gc_threshold(), installed);
+        assert_eq!(
+            gc.borrow().collector.live_bytes_after_last,
+            marked + DEAD + KEPT
+        );
+        assert_eq!(handle.held(), DEAD + KEPT);
+        assert!(heap.telemetry.unfinished.is_none(), "the record is closed");
+    }
+
+    /// A backend that never finishes a collection is as before the finish
+    /// settled anything: L and the threshold are the sweep's until the next
+    /// collection, whose own sweep reads the external bytes afresh and
+    /// whose record closes the one left open. A finish with no collection
+    /// unfinished, a second one, settles nothing.
+    #[test]
+    fn a_collection_never_finished_keeps_the_sweep_s_l() {
+        let (shared, gc, roots, handle, marked) = collected_and_unfinished(GcMode::On);
+        handle.release(DEAD);
+        let swept = marked + DEAD + KEPT;
+        assert_eq!(shared.borrow().live_bytes(), swept);
+        assert_eq!(shared.borrow().gc_threshold().bytes, 2 * swept);
+        assert_eq!(shared.borrow().pause_total(), std::time::Duration::ZERO);
+
+        gc.borrow_mut()
+            .collect(&mut shared.borrow_mut(), &[&roots], false);
+        assert_eq!(shared.borrow().live_bytes(), marked + KEPT);
+        assert_eq!(shared.borrow().gc_threshold().bytes, DEFAULT_MIN_BYTES);
+        // The first collection's pause was counted when the second's record
+        // took its place.
+        assert!(shared.borrow().pause_total() > std::time::Duration::ZERO);
+        let number = |heap: &Heap| heap.telemetry.unfinished.as_ref().map(|r| r.number);
+        assert_eq!(number(&shared.borrow()), Some(2));
+
+        GcController::finish_collection(&gc, &shared, std::time::Duration::ZERO);
+        handle.release(KEPT);
+        GcController::finish_collection(&gc, &shared, std::time::Duration::ZERO);
+        assert_eq!(shared.borrow().live_bytes(), marked + KEPT);
+        assert_eq!(shared.borrow().gc_threshold().bytes, DEFAULT_MIN_BYTES);
     }
 
     /// A charge through the handle needs no heap, and raises the pending
@@ -4237,7 +4486,7 @@ mod tests {
             let (drain, before) = (record.phases.after, record.phases.total());
             assert!(drain > std::time::Duration::ZERO);
             let backend = std::time::Duration::from_millis(5);
-            heap.finish_collection(backend);
+            gc.borrow_mut().finish(&mut heap, backend);
             assert_eq!(heap.last_pause(), before + backend);
         }
 

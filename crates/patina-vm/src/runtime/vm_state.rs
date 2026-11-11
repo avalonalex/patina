@@ -812,13 +812,27 @@ impl VmState {
     /// has freed.
     ///
     /// The collection's pause includes this work: its time completes the
-    /// collection's record (`Heap::finish_collection`, #648). Called only
-    /// after a collection the machine was lent to, whose `trace_roots` began
-    /// a new epoch: what `release_dead_code`'s check reads.
+    /// collection's record (`GcController::finish_collection`, #648). Called
+    /// only after a collection the machine was lent to, whose `trace_roots`
+    /// began a new epoch: what `release_dead_code`'s check reads.
+    ///
+    /// The finish also settles L (#836). A unit's link table holds the
+    /// namespace it was linked in, so a namespace whose last holder is a
+    /// dead unit's table drops here, in the release, and gives its external
+    /// bytes back after the sweep counted them live; the finish reads them
+    /// again and arms the threshold from what is left. Left as the sweep
+    /// set it, L counted every such namespace, and each collection of a
+    /// loop that makes them came about 1.76 times further off than the one
+    /// before. So the finish comes after the release, with no heap borrow
+    /// held across either: the namespaces' drops give back through the
+    /// shared account, and the finish borrows the heap itself. Every
+    /// collection the VM runs comes here: `poll_slow`'s and
+    /// `collect_if_pending`'s, through `maybe_collect`, and
+    /// `collect_for_loader`'s and `collect_at_call`'s.
     fn after_collection(&mut self) {
         let started = std::time::Instant::now();
         self.release_dead_code();
-        self.heap.borrow_mut().finish_collection(started.elapsed());
+        GcController::finish_collection(&self.gc, &self.heap, started.elapsed());
     }
 
     /// [`Self::after_collection`]'s work: count down the freed closures'

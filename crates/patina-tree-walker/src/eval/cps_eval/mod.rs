@@ -123,11 +123,13 @@ impl<'a> CpsEvaluator<'a> {
         });
         if collected {
             // Nothing to do after a collection here: its pause is complete
-            // (#648).
-            evaluator
-                .heap
-                .borrow_mut()
-                .finish_collection(std::time::Duration::ZERO);
+            // (#648), and nothing has given external bytes back since the
+            // sweep, so the finish finds L settled.
+            GcController::finish_collection(
+                &evaluator.gc,
+                &evaluator.heap,
+                std::time::Duration::ZERO,
+            );
         }
     }
 
@@ -208,8 +210,7 @@ impl<'a> CpsEvaluator<'a> {
         let collected =
             GcController::safe_point(&evaluator.gc, &mut driver, |collect| collect(&[evaluator]));
         if collected {
-            heap.borrow_mut()
-                .finish_collection(std::time::Duration::ZERO);
+            GcController::finish_collection(&evaluator.gc, heap, std::time::Duration::ZERO);
         }
     }
 
@@ -235,8 +236,7 @@ impl<'a> CpsEvaluator<'a> {
                 collect(&[evaluator])
             });
         if collected {
-            heap.borrow_mut()
-                .finish_collection(std::time::Duration::ZERO);
+            GcController::finish_collection(&evaluator.gc, heap, std::time::Duration::ZERO);
         }
         collected
     }
@@ -270,10 +270,11 @@ impl<'a> CpsEvaluator<'a> {
             collect(&[evaluator, &step_roots]);
         });
         if collected {
-            evaluator
-                .heap
-                .borrow_mut()
-                .finish_collection(std::time::Duration::ZERO);
+            GcController::finish_collection(
+                &evaluator.gc,
+                &evaluator.heap,
+                std::time::Duration::ZERO,
+            );
         }
         collected
     }

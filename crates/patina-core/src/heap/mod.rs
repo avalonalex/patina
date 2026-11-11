@@ -580,8 +580,9 @@ pub struct Heap {
     /// [`GcThreshold::NEVER`] (the default) is inert: only `request_gc`
     /// raises the flag. A backend installs its policy's threshold via
     /// `GcController::current_threshold` when heap and controller are paired,
-    /// and `GcController::collect` re-installs it after each collection (the
-    /// adaptive `2·L` term changes only there).
+    /// and `GcController::collect` re-installs it after each collection, as
+    /// does `GcController::finish_collection` when the collection's finish
+    /// moved L (the adaptive `2·L` term changes only at those two).
     gc_threshold: GcThreshold,
 
     /// The carrier's words (`heap/mutator.rs`, #699): `note_alloc` and
@@ -996,9 +997,10 @@ impl Heap {
 
     /// Install the threshold at which `note_alloc` raises the pending flag.
     /// Called with `GcController::current_threshold` when heap and
-    /// controller are paired and again after each collection (the adaptive
-    /// term changes only there). Raises the flag immediately if a count
-    /// already exceeds the new threshold.
+    /// controller are paired, again after each collection, and once more
+    /// when the collection's finish moved L (the adaptive term changes only
+    /// at those two). Raises the flag immediately if a count already exceeds
+    /// the new threshold, and never lowers it.
     pub fn set_gc_threshold(&mut self, threshold: GcThreshold) {
         self.gc_threshold = threshold;
         // Mirrored where an external charge, which has no heap, compares.
