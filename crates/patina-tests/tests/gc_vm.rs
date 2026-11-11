@@ -361,10 +361,6 @@ fn a_paced_collection_leaves_the_namespaces_its_code_release_drops_out_of_l() {
         panic!("expected the base L, the floor and the readings: {answer}")
     };
     assert_eq!(*floor, 8 << 20, "the adaptive floor: {answer}");
-    assert!(
-        readings.len() >= 2 * 3,
-        "fewer than three paced collections in 35 MB: {answer}"
-    );
     for reading in readings.chunks(2) {
         let [live, threshold] = reading else {
             panic!("a reading is an L and a threshold: {answer}")
@@ -379,6 +375,10 @@ fn a_paced_collection_leaves_the_namespaces_its_code_release_drops_out_of_l() {
             "the threshold followed the garbage: {answer}"
         );
     }
+    assert!(
+        readings.len() >= 2 * 3,
+        "fewer than three paced collections in 35 MB: {answer}"
+    );
 }
 
 #[test]
