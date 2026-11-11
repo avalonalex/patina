@@ -1677,8 +1677,18 @@ unless the row's pin is held at that N. A
 reading is missing when the driver did not print it, or when a key one of the
 row's clauses reads, a per-owner key among them, reads `none`, which the
 driver prints for a key `(gc-stats)` lacks or one that answers `#f`. The rows marked `pr` run in
-CI's R7RS Compliance job (`--quick`, about 40 s here for both backends); the
-whole lane runs nightly (`nightly.yml`, about 5 minutes here). Peak RSS is
+CI's R7RS Compliance job (`--quick`, 46 s here for both backends,
+2026-11-11); the
+whole lane runs nightly (`nightly.yml`, about 5 minutes here). `env-lambda`
+is among them since #836's linking at load, 0.3 s a backend: a unit's link
+table holds its namespace, and when L counted the namespaces a collection's
+code release drops, each collection of this row came about 1.76 times
+further off than the one before, so its SS2 went vacuous on the VM (one
+paced collection in a segment) while its resident size grew with the run
+(`docs/GC_DESIGN.md` §6.2). At its N of 500 each segment holds two paced
+collections, the fewest SS2 takes, one every 234 cycles, so a change that
+makes a namespace 6% leaner fails the same clause and needs a larger N.
+Peak RSS is
 printed beside each row as a signal, never a gate. The lane does not yet have
 `interp-churn` (an interpreter made and dropped per cycle, #604's shape),
 which stage 2's teardown work adds, nor the thread rows of stage 9.

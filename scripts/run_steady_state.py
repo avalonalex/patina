@@ -239,7 +239,13 @@ ROWS = [
     Row('eval-fresh-names', 'churn', 'eval-fresh-names.scm', {'vm': 4000, 'tree-walker': 4000},
         clauses=('SS4',), per_cycle={'vm': 180, 'tree-walker': 180}),
     Row('env-churn', 'churn', 'env-churn.scm', {'vm': 500, 'tree-walker': 500}),
-    Row('env-lambda', 'churn', 'env-lambda.scm', {'vm': 500, 'tree-walker': 500}),
+    # Per PR since #836's linking at load: a unit's link table holds its
+    # namespace, and a pacer that counts the namespaces a collection's code
+    # release drops puts each collection further off than the last, so SS2
+    # goes vacuous here. At N = 500 a segment holds two paced collections,
+    # the fewest SS2 takes, one every 234 cycles: namespaces 6% leaner need
+    # a larger N.
+    Row('env-lambda', 'churn', 'env-lambda.scm', {'vm': 500, 'tree-walker': 500}, pr=True),
     Row('form-eval-fresh', 'churn', 'form-eval-fresh.scm', {'vm': 4000, 'tree-walker': 4000}, clauses=REPL,
         pr=True),
     Row('cont-churn-10', 'churn', 'cont-churn.scm', {'vm': 20000, 'tree-walker': 10000}, ('10',), pr=True),

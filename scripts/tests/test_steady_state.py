@@ -206,6 +206,16 @@ class Clauses(unittest.TestCase):
             self.assertAlmostEqual(steady.PIN_TOLERANCE * row.pin[backend], steady.leak_floor(row.n[backend]))
         self.assertIn('pin', row.checks())
 
+    def test_the_pacer_s_row_runs_per_pr(self):
+        # `env-lambda` is the row a pacer that follows dead namespaces fails
+        # (#836): its collections come further apart until SS2 is vacuous.
+        # It runs on every change, with SS2 declared and no mark on it.
+        row = next(row for row in steady.ROWS if row.name == 'env-lambda')
+        self.assertTrue(row.pr)
+        self.assertIn('SS2', row.checks())
+        for backend in steady.BACKENDS:
+            self.assertIsNone(row.red_reason('SS2', backend))
+
     def test_ss5_marks_name_one_key(self):
         row = steady.Row('r', 'churn', 'x.scm', {}, red={'SS5:ports/vm': '#1'})
         self.assertEqual(row.red_reason('SS5:ports', 'vm'), '#1')
