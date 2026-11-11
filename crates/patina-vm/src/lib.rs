@@ -23,10 +23,11 @@
     clippy::disallowed_macros,
     reason = "the crate's `thread_local!` statics, none a heap value: `runtime::control`'s \
               `EMPTY_REENTRY` and `EMPTY_HANDLERS`, the shared empty stacks that captures and wind \
-              records point at, and `test_support::DROP_HIGHEST_LIVE`, a switch per test thread \
-              compiled only with `test-support`. Clippy takes this lint only at a crate root, so a \
-              new `thread_local!` in the crate goes on this list, which a test in \
-              `reentry_lint_control.rs` holds to the crate's sources (#622)"
+              records point at, and `test_support::DROP_HIGHEST_LIVE`, \
+              `test_support::SKIP_CODE_IDS` and `test_support::POLL_IN_WINDOW`, switches per \
+              test thread compiled only with `test-support`. Clippy takes this lint only at a \
+              crate root, so a new `thread_local!` in the crate goes on this list, which a test \
+              in `reentry_lint_control.rs` holds to the crate's sources (#622)"
 )]
 
 pub mod backend;

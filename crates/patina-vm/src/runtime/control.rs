@@ -114,8 +114,10 @@
 //! control suites (including their existing backend-specific expectations).
 
 use super::execution_state::push_abort_stub;
+use super::vm_state::gc_roots::switches;
 use super::vm_state::{
-    VmState, eval_closure, frame_globals, run_loop_until, vm_eval_expr, vm_load_library,
+    EvalCallee, VmState, eval_closure, frame_globals, poll_in_window, run_loop_until, vm_eval_expr,
+    vm_load_library,
 };
 use crate::error::VmError;
 use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
@@ -1413,22 +1415,22 @@ fn push_wind_step(
     state.set_reg_at(base, wind_step::VALUE, value);
     state.set_reg_at(base, wind_step::ENTERING, entering);
     drop(window);
-    // The caller's clone of the jump's continuation (`step_wind_jump`'s
-    // `cc`, whose record lends `handlers` when the step enters an extent)
-    // outlives the window only across this call (#836, the design's §5.6
-    // row 5: a store clone is never held across a collecting poll). Its ref
-    // is rooted in `TARGET`, so a collection would mark it and trace the
-    // payload `cc` shares; and nothing the call reaches collects. `call_any`
-    // pushes a closure's frame without polling (`call_closure_resolved`); a
-    // primitive runs within the instruction, and a nested loop of its polls
-    // without the driver, so it cannot collect (#702); a control primitive,
-    // a resumable primitive's start (whose collection waits for its stub's
-    // `CollectAtCall`), a parameter, and a continuation it invokes
-    // (`step_wind_jump`, `invoke_delimited`) poll nowhere. The collecting
-    // polls are at dispatch level: a `Call`'s closure entry, the tail paths,
-    // a deoptimized primitive call and the loop's own. The window cannot
-    // stay open over the call, since a nested loop's polls assert that none
-    // is (#624).
+    // The caller's clone of the jump's continuation (`step_wind_jump`'s `cc`,
+    // whose record lends `handlers` when the step enters an extent) outlives
+    // the window only across this call (#836: a store clone is never held
+    // across a collecting poll; `docs/GC_DESIGN.md` §7, the invoke's window).
+    // Its ref is rooted in `TARGET`, so a collection would mark it and trace
+    // the payload `cc` shares; and nothing the call reaches collects.
+    // `call_any` pushes a closure's frame without polling
+    // (`call_closure_resolved`); a primitive runs within the instruction, and
+    // a nested loop of its polls without the driver, so it cannot collect
+    // (#702); a control primitive, a resumable primitive's start (whose
+    // collection waits for its stub's `CollectAtCall`), a parameter, and a
+    // continuation it invokes (`step_wind_jump`, `invoke_delimited`) poll
+    // nowhere. The collecting polls are at dispatch level: a `Call`'s closure
+    // entry, the tail paths, a deoptimized primitive call and the loop's own.
+    // The window cannot stay open over the call, since a nested loop's polls
+    // assert that none is (#624).
     //
     // A primitive thunk returns here and now; its value is discarded either
     // way, and the stub frame is left on top for `ResumeWindJump` to run.
@@ -1863,14 +1865,21 @@ fn stub_for(state: &mut VmState, work: &StubWork) -> Result<Rc<CodeObject>, VmEr
 /// # State contract
 ///
 /// Requires the stub frame on top at `base`. Writes its call registers, and
-/// allocates a list past the inline count; calls no Scheme.
+/// allocates a list past the inline count; calls no Scheme. A `Step::Eval`'s
+/// window (`StubWork::Call`'s `eval`) closes once the closure is in the
+/// `CALLEE` register, which roots it from there on.
 fn set_suspension(state: &mut VmState, base: usize, suspension: Suspension) {
     let Suspension { work, kept } = suspension;
     state.set_reg_at(base, resume_step::STATE, kept);
     match work {
         StubWork::Call { callee, args, eval } => {
+            let is_eval = eval.is_some();
+            if is_eval {
+                poll_in_window(state, switches::poll_before_callee_write());
+            }
             state.set_reg_at(base, resume_step::CALLEE, callee);
-            state.set_reg_at(base, resume_step::EVAL, TaggedValue::boolean(eval));
+            drop(eval);
+            state.set_reg_at(base, resume_step::EVAL, TaggedValue::boolean(is_eval));
             if args.len() <= resume_step::INLINE_ARGS {
                 for (i, arg) in args.into_iter().enumerate() {
                     state.set_reg_at(base, resume_step::ARGS + i as u16, arg);
@@ -1996,9 +2005,11 @@ enum StubWork {
     Call {
         callee: TaggedValue,
         args: TaggedCallArgs,
-        /// Whether `callee` is a `Step::Eval`'s closure
-        /// ([`resume_step::EVAL`]).
-        eval: bool,
+        /// For a `Step::Eval`'s closure ([`resume_step::EVAL`]), the window
+        /// its unit was loaded under ([`EvalCallee`]), which covers the
+        /// closure, rooted nowhere, until `set_suspension` writes it into
+        /// the `CALLEE` register (#836); `None` for any other callee.
+        eval: Option<AssertNoGc>,
     },
     /// Collect at the call ([`collect_stub`], #639).
     Collect(CollectKind),
@@ -2025,7 +2036,7 @@ fn vm_step(
             work: StubWork::Call {
                 callee,
                 args,
-                eval: false,
+                eval: None,
             },
             kept,
         }),
@@ -2051,11 +2062,12 @@ fn vm_step(
                           expansion runs in a context (`NoGcScope::cross`), beneath which nothing \
                           collects, and each library body under its `ParsedLibrary`'s, and the \
                           compile, `load_unit` and the closure's allocation after it run no \
-                          Scheme. Besides, only a dispatching loop gets here, so any loop the load \
-                          starts is nested (point C, which PRD/GC_PRD.md §11.3 keeps under \
-                          `NoGcScope`)"
+                          Scheme, and the unit's window (`EvalCallee`, then `StubWork::Call`'s \
+                          `eval`) asserts it to the `CALLEE` write. Besides, only a dispatching \
+                          loop gets here, so any loop the load starts is nested (point C, which \
+                          PRD/GC_PRD.md §11.3 keeps under `NoGcScope`)"
             )]
-            let callee = across_reentry(
+            let EvalCallee { closure, window } = across_reentry(
                 state,
                 depth_before,
                 |s| eval_closure(s, expr, &env),
@@ -2064,9 +2076,9 @@ fn vm_step(
             .map_err(Reentry::into_vm_error)?;
             VmStep::Suspend(Suspension {
                 work: StubWork::Call {
-                    callee,
+                    callee: closure,
                     args: TaggedCallArgs::new(),
-                    eval: true,
+                    eval: Some(window),
                 },
                 kept,
             })
@@ -3077,7 +3089,8 @@ pub(super) fn push_invoke_step(
     // `dc`, from `call_value_with_probe` or `tail_call_value_with_probe`, or
     // `ResumeComposableInvoke`'s) outlives the window only across this call,
     // with its ref rooted in `CONT`, and nothing the call reaches collects,
-    // as `push_wind_step` sets out (#836, the design's §5.6 row 5).
+    // as `push_wind_step` sets out (#836; `docs/GC_DESIGN.md` §7, the
+    // invoke's window).
     //
     // A primitive thunk returns here and now; its value is discarded either
     // way, and the stub frame is left on top for the instruction to run.

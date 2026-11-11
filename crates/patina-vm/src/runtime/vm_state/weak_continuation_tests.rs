@@ -25,7 +25,7 @@ use std::cell::Cell;
 // register Vec in the public runtime API.
 fn pin_in_register(state: &mut VmState, value: TaggedValue) {
     if state.execution.frames().is_empty() {
-        let id = state.load_unit(super::tests::code(), Vec::new());
+        let id = state.load_unit(super::tests::code(), Vec::new()).id();
         state
             .execution
             .push_frame(state.code_object(id).unwrap(), CallFrame::NO_CLOSURE, 0);

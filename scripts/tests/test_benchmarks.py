@@ -587,8 +587,8 @@ class GcArithmetic(unittest.TestCase):
         self.assertEqual(gbs, ['nboyer', 'deriv', 'gcbench', 'destruc', 'quicksort', 'gcold', 'mperm', 'queue3',
                                'fibfp', 'mbrot', 'nucleic', 'ctak', 'fibc', 'generator', 'deeprec', 'libload',
                                'hashtable0', 'eqtable', 'dynamic', 'earley'])
-        # #836's question 1, (ii), pending the owner's ruling: tak in no set,
-        # run by --workload tak. Implementing the ruling changes this line.
+        # #836's question 1, (ii), the owner's ruling of 2026-11-08: tak in no
+        # set through stage 4b, run by --workload tak.
         self.assertEqual([w['name'] for w in table if not w['sets']], ['tak'])
         for w in table:
             if w['kind'] == 'patina':

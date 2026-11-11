@@ -1329,8 +1329,16 @@ under zeal took 882–920 s on the VM alone (2026-10-01), and
 
 Each check has a positive control, a test that must panic with the check's
 message, and the release GC lane runs them in its `gc-check` build:
-`stale_references.rs`, `gc_protocol.rs` and `retired_registers.rs` in
-`patina-tests`, and `patina-core`'s `heap::check::`,
+`stale_references.rs`, `gc_protocol.rs` (a poll inside a window on each
+backend; on the VM one inside the instruction that opened the window,
+which only the poll's own check sees, #864; and the check made at the last
+point each of the VM's load windows covers, which patina-vm's test-only
+switch `test_support::PollInWindow` adds, #836) and `retired_registers.rs` in
+`patina-tests`; `gc_vm.rs`'s two `a_check_build_refuses_…` (#836): a unit a
+collection kept whose link table it did not trace, which patina-vm's test-only
+switch `test_support::SkipCodeIds` makes by having the collection pass over
+the ids of the code one kind of keeper keeps (live closures in one, a frame or
+the running code in the other); and `patina-core`'s `heap::check::`,
 `heap::gc::tests::protocol::` (F4's two among them: a finalizer that
 allocates, and one that reaches a poll, #785), the port table's owner checks
 (`heap::port_table::tests::a_check_build_refuses_…`, #785): an id read
@@ -1657,10 +1665,10 @@ stage is judged by (`PRD/GC_PRD.md` §16). The sets:
 `tak`, Larceny's `tak` at count 500 on 18, 12, 6, is in no set: it is the
 global-path workload of at least 1 s that row 4b's gate names (#836),
 1.24–1.34 s wall on the VM here in single runs (2026-11-07; #836 measured
-1.07–1.09 s), run with `--workload tak`, pending the owner's ruling on
-#836's question 1 (recommended: in no set through stage 4b, with the
+1.07–1.09 s), run with `--workload tak`, by the owner's ruling of
+2026-11-08 on #836's question 1: in no set through stage 4b, with the
 stage-4 exit baseline, decision 25 on #782, still open, deciding whether it
-joins `gbs`). Names
+joins `gbs`. Names
 given with `--workload` replace the sets, silently: `--set gbs --workload
 tak` runs only `tak`. So a gate that names it runs two A/Bs, the sets and
 then `--workload tak`.

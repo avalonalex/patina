@@ -14,17 +14,17 @@
 //! pass may drop (Rule 1): a placeholder in a store holds `UNBOUND`, which a
 //! check build asserts after every sweep ([`PlaceholderList::check_swept`]).
 //!
-//! **Placement** (P2, #836's question 4, pending the owner's ruling): a
-//! per-namespace [`PlaceholderStore`], out of the slots, which stay
-//! append-only (D1), as a host namespace's strong read-through records are
-//! kept out of them; and a per-heap [`PlaceholderList`] of the stores, on
-//! the heap's `HandleTable`, for the pass to find them. The list keys each
-//! store by its namespace's `env_id`, which is never reused, and holds no
-//! namespace, by `Rc` or `Weak`: a `Weak<Environment>` is traced while it
-//! upgrades. The namespace holds its store through a [`PlaceholderHandle`],
-//! whose drop takes the store off the list at once (M2), so the list never
-//! keeps a dead namespace's store, and the store then gives back its counts
-//! and its charge as it drops.
+//! **Placement** (P2, the owner's ruling (a) of 2026-11-08 on #836's
+//! question 4): a per-namespace [`PlaceholderStore`], out of the slots,
+//! which stay append-only (D1), as a host namespace's strong read-through
+//! records are kept out of them; and a per-heap [`PlaceholderList`] of the
+//! stores, on the heap's `HandleTable`, for the pass to find them. The list
+//! keys each store by its namespace's `env_id`, which is never reused, and
+//! holds no namespace, by `Rc` or `Weak`: a `Weak<Environment>` is traced
+//! while it upgrades. The namespace holds its store through a
+//! [`PlaceholderHandle`], whose drop takes the store off the list at once
+//! (M2), so the list never keeps a dead namespace's store, and the store
+//! then gives back its counts and its charge as it drops.
 //!
 //! **Counted and charged borrow-free**, as a namespace's own tables are
 //! (`NamespaceCharge` in `environment.rs`): each entry is a binding record in

@@ -147,6 +147,14 @@ impl LinkTable {
         self.traced.replace(epoch) == epoch
     }
 
+    /// Whether the table was traced in collection `epoch`: what a check
+    /// build asserts of every unit a collection kept, once it has released
+    /// the rest (`VmState::release_dead_code`, #836). Read only there.
+    #[inline]
+    pub fn traced_in(&self, epoch: u64) -> bool {
+        self.traced.get() == epoch
+    }
+
     /// Operand `k`'s entry: a record's word once linked, else `UNBOUND`.
     #[cfg(test)]
     pub(crate) fn entry(&self, k: LinkIdx) -> TaggedValue {
@@ -379,15 +387,22 @@ mod tests {
 
     /// A table is traced once an epoch (#836): the first ask in an epoch
     /// answers that it was not traced yet and records it, every later one
-    /// in that epoch that it was, and a new epoch starts again.
+    /// in that epoch that it was, and a new epoch starts again. `traced_in`
+    /// answers for the epoch the table was last traced in, and no other:
+    /// neither one before it, nor one after.
     #[test]
     fn a_table_is_traced_once_an_epoch() {
         let linked = table(&["x"]);
+        assert!(!linked.traced_in(1), "not traced in epoch 1 before it");
         assert!(!linked.trace_once(1), "not yet traced in epoch 1");
+        assert!(linked.traced_in(1), "traced in epoch 1 once asked");
         assert!(linked.trace_once(1), "traced in epoch 1 already");
         assert!(linked.trace_once(1));
+        assert!(!linked.traced_in(2), "not in an epoch it has not reached");
         assert!(!linked.trace_once(2), "a new epoch");
         assert!(linked.trace_once(2));
+        assert!(linked.traced_in(2));
+        assert!(!linked.traced_in(1), "nor in an epoch before its last");
     }
 
     /// Linking sets the namespace the table holds (#836): once the

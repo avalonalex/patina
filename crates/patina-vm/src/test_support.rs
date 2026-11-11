@@ -1,12 +1,19 @@
 //! Test-only hooks into the VM, compiled only with the `test-support`
 //! feature, which only `patina-tests`' [dev-dependencies] enable. Resolver 2
 //! keeps a dev-dependency's features out of normal builds, so no build that
-//! ships has any of this.
+//! ships has any of this. Each hook is a switch per test thread, which a
+//! check build's positive control turns on to make the machine do what the
+//! check exists to catch.
 
 use std::cell::Cell;
+use std::rc::Rc;
+
+use crate::types::CodeObject;
 
 thread_local! {
     static DROP_HIGHEST_LIVE: Cell<bool> = const { Cell::new(false) };
+    static SKIP_CODE_IDS: Cell<Option<Keeper>> = const { Cell::new(None) };
+    static POLL_IN_WINDOW: Cell<Option<WindowEnd>> = const { Cell::new(None) };
 }
 
 /// The wrong-map switch behind the `DEAD_SLOT` controls (#625,
@@ -44,4 +51,106 @@ pub(crate) fn dropped(roots: &[u64], num_regs: u16) -> Option<usize> {
     (0..num_regs as usize)
         .rev()
         .find(|&reg| roots.get(reg / 64).copied().unwrap_or(0) & (1 << (reg % 64)) != 0)
+}
+
+/// The switch behind the controls of `release_dead_code`'s check (#836,
+/// the `a_check_build_refuses_…` tests in
+/// `crates/patina-tests/tests/gc_vm.rs`). While one is alive, a collection
+/// on this thread passes over each reported code id whose code one kind of
+/// keeper keeps, before `trace_code_ids` marks its unit's table traced:
+/// what a keeper of that kind that reported no code id would leave. A check
+/// build then refuses the first unit the collection kept with its table
+/// untraced. One kind for each of `unit_in_use`'s two conditions, so that a
+/// check that covered only the units one of them keeps, or only some kept
+/// units, fails a control. Thread-local, as [`DropHighestLive`] is.
+pub struct SkipCodeIds(());
+
+/// What keeps the code whose ids [`SkipCodeIds`] passes over.
+#[derive(Clone, Copy)]
+enum Keeper {
+    /// A live closure (`CodeObject::live_closures`).
+    Closure,
+    /// Something outside the code store that holds the code (a second
+    /// `Rc`): a frame, a captured continuation's frame, the running code.
+    Holder,
+}
+
+impl SkipCodeIds {
+    /// Pass over an id whose code a live closure keeps.
+    pub fn kept_by_closures() -> Self {
+        SKIP_CODE_IDS.set(Some(Keeper::Closure));
+        Self(())
+    }
+
+    /// Pass over an id whose code a frame, a captured continuation's frame
+    /// or the running code keeps.
+    pub fn kept_by_frames() -> Self {
+        SKIP_CODE_IDS.set(Some(Keeper::Holder));
+        Self(())
+    }
+}
+
+impl Drop for SkipCodeIds {
+    fn drop(&mut self) {
+        SKIP_CODE_IDS.set(None);
+    }
+}
+
+/// Whether [`SkipCodeIds`]'s switch passes over an id that names `code`.
+pub(crate) fn skip_code_id(code: &Rc<CodeObject>) -> bool {
+    match SKIP_CODE_IDS.get() {
+        None => false,
+        Some(Keeper::Closure) => code.live_closures.get() > 0,
+        Some(Keeper::Holder) => Rc::strong_count(code) > 1,
+    }
+}
+
+/// The switch behind the controls of the load windows' extent (#836,
+/// `docs/GC_DESIGN.md` §7, the windows S1 and S2, in
+/// `crates/patina-tests/tests/gc_protocol.rs`). While one is alive, the
+/// machine on this thread makes the check every poll makes first (#864) at
+/// the last point one of the windows covers, as a poll added there would:
+/// just before `execute` or `push_frame_in` pushes a loaded unit's frame
+/// (S1), or just before `set_suspension` writes an `eval`'s closure into the
+/// stub frame's `CALLEE` register (S2). In a check build it panics, since
+/// the window is still open there; a window closed before that point lets
+/// it pass, which is what a window closed early leaves, with no poll in
+/// the gap to see it. Thread-local, as [`DropHighestLive`] is.
+pub struct PollInWindow(());
+
+/// Where [`PollInWindow`] checks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WindowEnd {
+    FramePush,
+    CalleeWrite,
+}
+
+impl PollInWindow {
+    /// Check just before a loaded unit's frame is pushed (S1).
+    pub fn before_frame_push() -> Self {
+        POLL_IN_WINDOW.set(Some(WindowEnd::FramePush));
+        Self(())
+    }
+
+    /// Check just before an `eval`'s closure is written into `CALLEE` (S2).
+    pub fn before_callee_write() -> Self {
+        POLL_IN_WINDOW.set(Some(WindowEnd::CalleeWrite));
+        Self(())
+    }
+}
+
+impl Drop for PollInWindow {
+    fn drop(&mut self) {
+        POLL_IN_WINDOW.set(None);
+    }
+}
+
+/// Whether [`PollInWindow`] checks before a loaded unit's frame is pushed.
+pub(crate) fn poll_before_frame_push() -> bool {
+    POLL_IN_WINDOW.get() == Some(WindowEnd::FramePush)
+}
+
+/// Whether [`PollInWindow`] checks before an `eval`'s closure is written.
+pub(crate) fn poll_before_callee_write() -> bool {
+    POLL_IN_WINDOW.get() == Some(WindowEnd::CalleeWrite)
 }

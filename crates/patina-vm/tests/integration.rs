@@ -386,8 +386,9 @@ fn tail_recursive_countdown() {
 /// Load `expr` as a unit and run it, as the backend runs a top-level form.
 fn load_and_run(state: &mut VmState, expr: &CoreExpr) -> (CodeObjectId, TaggedValue) {
     let (top, nested) = compile(expr).expect("compile error");
-    let id = state.load_unit(top, nested);
-    let value = execute(state, id).expect("execution error");
+    let unit = state.load_unit(top, nested);
+    let id = unit.id();
+    let value = execute(state, unit).expect("execution error");
     (id, value)
 }
 
@@ -400,25 +401,6 @@ fn a_slot_let_go_is_given_to_the_next_code_loaded() {
     assert_eq!(value.as_fixnum(), Some(42));
     assert_eq!(second.index(), first.index());
     assert_eq!(second.generation(), first.generation() + 1);
-}
-
-/// An id outliving its code finds nothing, not the code that took its slot.
-#[test]
-fn an_id_whose_code_has_gone_does_not_run_what_took_its_slot() {
-    let mut state = fresh_state();
-    let (gone, _) = load_and_run(&mut state, &lit(1));
-    state.release_unit_if_unused(gone);
-    assert!(
-        execute(&mut state, gone).is_err(),
-        "{gone:?} ran, though its code was let go"
-    );
-    let (current, _) = load_and_run(&mut state, &lit(2));
-    assert_eq!(current.index(), gone.index());
-    assert!(
-        execute(&mut state, gone).is_err(),
-        "{gone:?} ran, though its code was let go and {current:?} took its slot"
-    );
-    assert_eq!(execute(&mut state, current).unwrap().as_fixnum(), Some(2));
 }
 
 /// Loading gives a unit's code whichever slots are free, and a closure is

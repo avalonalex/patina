@@ -27,7 +27,10 @@
 //! `trace_epoch`), in the same fixpoint as the continuation ids, since a
 //! continuation's frames report theirs only when its payload is traced. The
 //! VM does not link its units at load yet, so a table this traces has every
-//! entry `UNBOUND` and no namespace, and only the tests link one.
+//! entry `UNBOUND` and no namespace, and only the tests link one. A check
+//! build asserts after each collection that the table of every unit it kept
+//! was traced (`VmState::release_dead_code`, with `LinkTable::traced_in`):
+//! whatever keeps a unit can run its code, and so reports its id.
 //!
 //! The registers and the frames' closures, live and in captured
 //! continuations, are reported as slots, where they live (#682). Everything
@@ -86,7 +89,7 @@ pub(in crate::runtime) fn retire_registers(
         let Some(roots) = maps.get(frame.pc) else {
             continue;
         };
-        let dropped = wrong_maps::dropped(roots, frame.num_regs);
+        let dropped = switches::dropped(roots, frame.num_regs);
         let base = frame.register_base - base_at_capture;
         let window = &mut registers[base..base + frame.num_regs as usize];
         for (reg, value) in window.iter_mut().enumerate() {
@@ -99,20 +102,49 @@ pub(in crate::runtime) fn retire_registers(
     }
 }
 
-/// The register a wrong-map control drops from `roots` (#625): `None`
-/// unless `test-support` is compiled in and its switch is on
-/// (`test_support::DropHighestLive`). Without the feature this is a
-/// constant `None`, and the comparison in `retire_registers` folds away.
+/// The positive controls' switches, read here and at the ends of the load
+/// windows (`execute`, `push_frame_in`, `set_suspension`), each off unless
+/// `test-support` is compiled in and a control turned it on
+/// (`test_support`). Without the feature each is a constant, and the test
+/// that reads it folds away.
 #[cfg(not(feature = "test-support"))]
-mod wrong_maps {
+pub(in crate::runtime) mod switches {
+    use crate::types::CodeObject;
+    use std::rc::Rc;
+
+    /// The register a wrong-map control drops from `roots` (#625,
+    /// `test_support::DropHighestLive`): `None`, so the comparison in
+    /// `retire_registers` folds away.
     #[inline(always)]
-    pub(super) fn dropped(_roots: &[u64], _num_regs: u16) -> Option<usize> {
+    pub(in crate::runtime) fn dropped(_roots: &[u64], _num_regs: u16) -> Option<usize> {
         None
+    }
+
+    /// Whether a collection passes over a code id that names `code`, and
+    /// leaves its unit's link table untraced (#836,
+    /// `test_support::SkipCodeIds`): never.
+    #[inline(always)]
+    pub(in crate::runtime) fn skip_code_id(_code: &Rc<CodeObject>) -> bool {
+        false
+    }
+
+    /// Whether the machine checks for an open window just before a loaded
+    /// unit's frame is pushed (#836, `test_support::PollInWindow`): never.
+    #[inline(always)]
+    pub(in crate::runtime) fn poll_before_frame_push() -> bool {
+        false
+    }
+
+    /// Whether it checks just before an `eval`'s closure is written into
+    /// `CALLEE` (#836, `test_support::PollInWindow`): never.
+    #[inline(always)]
+    pub(in crate::runtime) fn poll_before_callee_write() -> bool {
+        false
     }
 }
 
 #[cfg(feature = "test-support")]
-use crate::test_support as wrong_maps;
+pub(in crate::runtime) use crate::test_support as switches;
 
 impl RootProvider for VmState {
     /// `VmState`'s derived trace (#686), whose fields say what each holds,
@@ -134,6 +166,13 @@ impl RootProvider for VmState {
             let Some(code) = loaded(&self.code_store, CodeObjectId(id)) else {
                 continue;
             };
+            // A positive control's switch passes over the ids of the code
+            // one kind of keeper keeps, before their table is marked traced
+            // this epoch, so that `release_dead_code`'s check sees those
+            // units' tables untraced (#836).
+            if switches::skip_code_id(code) {
+                continue;
+            }
             if code.links.trace_once(epoch) {
                 continue;
             }

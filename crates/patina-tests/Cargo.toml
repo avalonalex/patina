@@ -24,17 +24,21 @@ criterion = { workspace = true }
 patina-ir = { path = "../patina-ir" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# The wrong-map switch the DEAD_SLOT controls drive (tests/retired_registers.rs,
-# #625). A dev-dependency, so the feature is never in a build that ships.
+# The switches the check builds' controls drive: the wrong-map switch of the
+# DEAD_SLOT controls (tests/retired_registers.rs, #625), the one that skips
+# the units' link tables (tests/gc_vm.rs, #836) and the one that polls at the
+# end of each load window (tests/gc_protocol.rs, #836). A dev-dependency, so
+# the feature is never in a build that ships.
 patina-vm = { path = "../patina-vm", features = ["test-support"] }
 # The switch that turns every safe point's collection off, which shows that
 # `(gc)` collects at its call (tests/ephemerons.rs, #639). The same.
 patina-core = { path = "../patina-core", features = ["test-support"] }
 
 [features]
-# Run the check-build controls (tests/stale_references.rs, gc_protocol.rs and
-# retired_registers.rs) in a release build: compiles patina-core's checks in
-# (#621, #624, #625). Debug builds have them without it.
+# Run the check-build controls (tests/stale_references.rs, gc_protocol.rs,
+# retired_registers.rs and gc_vm.rs' `a_check_build_refuses_…`) in a release
+# build: compiles patina-core's checks in (#621, #624, #625, #836). Debug
+# builds have them without it.
 gc-check = ["patina-core/gc-check"]
 
 [[bench]]
