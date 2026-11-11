@@ -365,7 +365,25 @@ pub(crate) trait Collector {
     /// Run a full collection. The caller must be at a safe point: every live
     /// value reachable from `roots`, and no outstanding heap borrow other
     /// than the one behind `heap`.
-    fn collect(&mut self, heap: &mut Heap, roots: &[&dyn RootProvider]) -> GcStats;
+    ///
+    /// Answers the collection's stats, and the external bytes its sweep
+    /// read as it set L (`Heap::sweep`), for the collection's record. Read
+    /// there and handed up, not read again by the caller: a collector's own
+    /// locals drop as it returns, after the sweep, and one of them can be a
+    /// holder's last owner.
+    fn collect_accounted(
+        &mut self,
+        heap: &mut Heap,
+        roots: &[&dyn RootProvider],
+    ) -> (GcStats, usize);
+
+    /// [`Self::collect_accounted`]'s stats alone: for the tests that drive
+    /// a collector with no controller, and so with no record to keep the
+    /// sweep's reading.
+    #[cfg(any(test, feature = "test-support"))]
+    fn collect(&mut self, heap: &mut Heap, roots: &[&dyn RootProvider]) -> GcStats {
+        self.collect_accounted(heap, roots).0
+    }
 }
 
 // ============================================================================
@@ -2400,20 +2418,11 @@ pub(crate) fn run_mark_phase(heap: &Heap, roots: &[&dyn RootProvider]) -> (MarkB
 }
 
 impl Collector for MarkSweepCollector {
-    fn collect(&mut self, heap: &mut Heap, roots: &[&dyn RootProvider]) -> GcStats {
-        self.collect_accounted(heap, roots).0
-    }
-}
-
-impl MarkSweepCollector {
-    /// [`Collector::collect`], which also answers the external bytes the
-    /// sweep read as it set L (`Heap::sweep`), for the collection's record.
-    /// Read there and handed up, not read again by the caller: this
-    /// function's own locals drop as it returns, after the sweep, and one of
-    /// them can be a holder's last owner. The copy of the registered
-    /// providers is: a provider whose token dropped while the collection
-    /// ran is dropped with the copy, and what it gives back then is out of
-    /// a second reading and still in L.
+    /// The copy of the registered providers is a local that can be a
+    /// holder's last owner: a provider whose token dropped while the
+    /// collection ran is dropped with the copy, as this returns, and what
+    /// it gives back then would be out of a second reading of the external
+    /// bytes and still in L.
     fn collect_accounted(
         &mut self,
         heap: &mut Heap,
