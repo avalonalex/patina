@@ -946,7 +946,7 @@ impl GcController {
         let allocated = heap.bytes_since_gc() as u64;
         let reclaimed = heap.bytes_reclaimed();
         let (wait_bytes, wait) = heap.take_collection_wait(started);
-        let stats = self.collector.collect(heap, roots);
+        let (stats, external) = self.collector.collect_accounted(heap, roots);
         count_log::note_collection();
         // Sweep lowered the pending flag; re-arm the threshold that raises it.
         // This is what lets `note_alloc` compare against a stored number
@@ -960,7 +960,10 @@ impl GcController {
             allocated,
             live: heap.live_bytes(),
             freed: heap.bytes_reclaimed().saturating_sub(reclaimed),
-            external: heap.external_bytes(),
+            // The sweep's reading, the one L was set from, and not the
+            // bytes held now: the finish's settle takes what marking found
+            // from the two (`Heap::settle_live_bytes`).
+            external,
             marked: stats.last_marked,
             swept: stats.last_swept,
             wait_bytes,
@@ -1954,8 +1957,13 @@ impl Heap {
     /// collection's finish settles L once more, from the external bytes
     /// held after the backend's own work (`Heap::settle_live_bytes`).
     ///
+    /// Answers the slots it freed, and the external bytes it read to set L:
+    /// the collection's record takes that figure, not a second reading, so
+    /// that the record's `live` less its `external` is what marking found
+    /// live whatever gives bytes back once the sweep has read them.
+    ///
     /// Crate-private with the rest of the collector (#624).
-    pub(crate) fn sweep(&mut self, marks: &mut MarkBits) -> ArenaCounts {
+    pub(crate) fn sweep(&mut self, marks: &mut MarkBits) -> (ArenaCounts, usize) {
         // Before the arenas are swept: `sweep_arena` sets the free slots'
         // bits, which are not live.
         let live = marks.live_bytes();
@@ -2119,12 +2127,13 @@ impl Heap {
         // table, which code release drops (#836). The collection's finish
         // reads the external bytes again and settles L
         // (`GcController::finish_collection`).
-        account.live = live.saturating_add(account.shared.external.get());
+        let external = account.shared.external.get();
+        account.live = live.saturating_add(external);
         self.allocs_since_gc = 0;
         self.mutator.collected();
         self.gc_collections += 1;
         self.gc_last_swept = swept.total();
-        swept
+        (swept, external)
     }
 
     /// Free every slot, as a sweep that found nothing live would: what the
@@ -2154,7 +2163,8 @@ impl Heap {
     /// sweep's pass, which marks nothing live here, empties the placeholder
     /// store of every namespace that outlives the heap before the pair
     /// arena's sweep frees what each held. A second teardown frees nothing.
-    /// It is not a collection, and leaves the count of them as it was.
+    /// It is not a collection, and leaves the count of them as it was; the
+    /// record of one no backend had finished is closed first.
     ///
     /// The half of [`super::teardown`] that holds the heap: every entry of
     /// the `FinalRegistry` is queued first, so that none names a slot this
@@ -2168,6 +2178,12 @@ impl Heap {
         self.symbol_table.clear();
         self.core_syntax_table.clear();
         self.handles = self.handles.after_teardown();
+        // A collection no backend finished is counted now, as the next
+        // collection's record would count it: this sweep sets L with no
+        // record of its own and leaves the count as it was, so a finish
+        // after it would otherwise settle L from that record
+        // (`Heap::settle_live_bytes`).
+        self.close_unfinished_record();
         let collections = self.gc_collections;
         let mut marks = MarkBits::for_heap(self);
         self.sweep(&mut marks);
@@ -2378,6 +2394,24 @@ pub(crate) fn run_mark_phase(heap: &Heap, roots: &[&dyn RootProvider]) -> (MarkB
 
 impl Collector for MarkSweepCollector {
     fn collect(&mut self, heap: &mut Heap, roots: &[&dyn RootProvider]) -> GcStats {
+        self.collect_accounted(heap, roots).0
+    }
+}
+
+impl MarkSweepCollector {
+    /// [`Collector::collect`], which also answers the external bytes the
+    /// sweep read as it set L (`Heap::sweep`), for the collection's record.
+    /// Read there and handed up, not read again by the caller: this
+    /// function's own locals drop as it returns, after the sweep, and one of
+    /// them can be a holder's last owner. The copy of the registered
+    /// providers is: a provider whose token dropped while the collection
+    /// ran is dropped with the copy, and what it gives back then is out of
+    /// a second reading and still in L.
+    fn collect_accounted(
+        &mut self,
+        heap: &mut Heap,
+        roots: &[&dyn RootProvider],
+    ) -> (GcStats, usize) {
         // The providers registered with the heap, beside those the machine
         // lends this collection (#682).
         let registered = heap.root_set().snapshot();
@@ -2395,7 +2429,7 @@ impl Collector for MarkSweepCollector {
         // Classification, while the mark bits are complete and before the
         // sweep reuses them (#785): timed as the sweep's.
         heap.queue_dead_finals(&marks);
-        let swept = heap.sweep(&mut marks);
+        let (swept, external) = heap.sweep(&mut marks);
         phases.sweep = sweep.elapsed();
 
         self.live_bytes_after_last = heap.live_bytes();
@@ -2404,7 +2438,7 @@ impl Collector for MarkSweepCollector {
         self.stats.last_swept = swept;
         self.stats.last_pause_micros = phases.total().as_micros();
         self.stats.last_phases = phases;
-        self.stats
+        (self.stats, external)
     }
 }
 
@@ -3555,6 +3589,144 @@ mod tests {
         GcController::finish_collection(&gc, &shared, std::time::Duration::ZERO);
         assert_eq!(shared.borrow().live_bytes(), marked + KEPT);
         assert_eq!(shared.borrow().gc_threshold().bytes, DEFAULT_MIN_BYTES);
+    }
+
+    /// The settle reads the unfinished record for what marking found live,
+    /// so the record must be the last sweep's. A sweep that records nothing
+    /// (`collect_for_tests`' raw collector, which a backend's unit tests
+    /// drive) leaves an earlier collection's record unfinished and sets L
+    /// itself: a finish that came then would add the earlier collection's
+    /// marked bytes to the external bytes held now, 800 KB of a vector this
+    /// sweep freed. The record's number is the count of collections as its
+    /// sweep ended, and the settle writes nothing for any other.
+    #[test]
+    fn a_finish_does_not_settle_l_from_an_earlier_sweep_s_record() {
+        let (shared, gc, _roots, handle, marked) = collected_and_unfinished(GcMode::On);
+        // Nothing rooted, and no record: L is the external bytes alone.
+        MarkSweepCollector::new().collect(&mut shared.borrow_mut(), &[]);
+        assert_eq!(shared.borrow().live_bytes(), DEAD + KEPT);
+        let threshold = shared.borrow().gc_threshold();
+        let number = |heap: &Heap| heap.telemetry.unfinished.as_ref().map(|r| r.number);
+        assert_eq!(number(&shared.borrow()), Some(1), "the first's, unfinished");
+        assert_eq!(shared.borrow().gc_collections(), 2);
+
+        handle.release(DEAD);
+        assert!(!shared.borrow_mut().settle_live_bytes());
+        GcController::finish_collection(&gc, &shared, std::time::Duration::ZERO);
+        let heap = shared.borrow();
+        assert_eq!(
+            heap.live_bytes(),
+            DEAD + KEPT,
+            "the raw sweep's L, not the earlier record's {marked} marked bytes over it"
+        );
+        assert_eq!(heap.gc_threshold(), threshold);
+        assert_eq!(
+            gc.borrow().collector.live_bytes_after_last,
+            marked + DEAD + KEPT,
+            "the controller's own collection's"
+        );
+        assert!(heap.telemetry.unfinished.is_none(), "the record is closed");
+    }
+
+    /// A teardown sweeps without recording, and leaves the count of
+    /// collections as it was, so an unfinished record's number would still
+    /// be the count's. It closes the record instead, counting the
+    /// collection's pause as the next collection's record would: a finish
+    /// after a teardown finds no record, and settles nothing over the L the
+    /// teardown left.
+    #[test]
+    fn a_teardown_closes_the_unfinished_record() {
+        let (shared, gc, _roots, handle, _marked) = collected_and_unfinished(GcMode::On);
+        assert_eq!(shared.borrow().pause_total(), std::time::Duration::ZERO);
+        crate::heap::teardown(&shared);
+        {
+            let heap = shared.borrow();
+            assert!(
+                heap.telemetry.unfinished.is_none(),
+                "closed by the teardown"
+            );
+            assert!(
+                heap.pause_total() > std::time::Duration::ZERO,
+                "and counted"
+            );
+            assert_eq!(heap.gc_collections(), 1, "a teardown is not a collection");
+            assert_eq!(heap.live_bytes(), DEAD + KEPT, "nothing in the arenas");
+        }
+        handle.release(DEAD);
+        assert!(!shared.borrow_mut().settle_live_bytes());
+        GcController::finish_collection(&gc, &shared, std::time::Duration::ZERO);
+        assert_eq!(shared.borrow().live_bytes(), DEAD + KEPT);
+    }
+
+    /// The record's `external` is the sweep's own reading, the one L was set
+    /// from, so that the settle's `live - external` is what marking found
+    /// whatever gave bytes back once the sweep had read them. A registered
+    /// provider whose token drops while the collection runs lives on in the
+    /// collection's copy of the list (`RootSet`'s doc), and is dropped with
+    /// it, after the sweep: what it held outside the arenas comes back
+    /// between the sweep's reading and the collection's return. A record
+    /// that read the external bytes again there took the lower figure for
+    /// the sweep's, so the finish found nothing moved and left L counting
+    /// the provider's bytes until the next collection.
+    #[test]
+    fn the_record_s_external_bytes_are_the_sweep_s_reading() {
+        /// Unregisters itself as the collection traces it, and gives back
+        /// `DEAD` external bytes when it drops.
+        struct Leaving {
+            token: Rc<RefCell<Option<RootToken>>>,
+            held: crate::heap::ExternalBytes,
+        }
+        impl RootProvider for Leaving {
+            fn trace_roots(&self, _visitor: &mut dyn SlotVisitor) {
+                drop(self.token.borrow_mut().take());
+            }
+        }
+        impl Drop for Leaving {
+            fn drop(&mut self) {
+                self.held.release(DEAD);
+            }
+        }
+
+        let shared = crate::new_shared_heap();
+        let gc = RefCell::new(GcController::new(GcMode::On));
+        let threshold = gc.borrow().current_threshold();
+        shared.borrow_mut().set_gc_threshold(threshold);
+        let mut roots = TestRoots::default();
+        let kept = shared
+            .borrow_mut()
+            .alloc_vector_fill(1000, TaggedValue::fixnum(0));
+        roots.values.push(kept);
+        let handle = shared.borrow().external_bytes_handle();
+        handle.charge(DEAD + KEPT);
+        let token = Rc::new(RefCell::new(None));
+        let registered = shared.borrow().root_set().register(Box::new(Leaving {
+            token: Rc::clone(&token),
+            held: handle.clone(),
+        }));
+        *token.borrow_mut() = Some(registered);
+
+        gc.borrow_mut()
+            .collect(&mut shared.borrow_mut(), &[&roots], false);
+        assert_eq!(shared.borrow().root_set().registered(), 0);
+        assert_eq!(handle.held(), KEPT, "given back as the collection returned");
+        let swept = shared.borrow().live_bytes();
+        let marked = swept - (DEAD + KEPT);
+        assert!(marked >= 1000 * size_of::<TaggedValue>(), "{marked}");
+        {
+            let heap = shared.borrow();
+            let record = heap.telemetry.unfinished.as_ref().expect("a record");
+            assert_eq!(
+                (record.live, record.external),
+                (swept, DEAD + KEPT),
+                "the sweep's two figures"
+            );
+        }
+
+        GcController::finish_collection(&gc, &shared, std::time::Duration::ZERO);
+        let heap = shared.borrow();
+        assert_eq!(heap.live_bytes(), marked + KEPT);
+        assert_eq!(gc.borrow().collector.live_bytes_after_last, marked + KEPT);
+        assert_eq!(heap.gc_threshold().bytes, DEFAULT_MIN_BYTES);
     }
 
     /// A charge through the handle needs no heap, and raises the pending

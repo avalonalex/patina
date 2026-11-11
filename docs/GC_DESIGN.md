@@ -1509,12 +1509,19 @@ in the arenas plus the external bytes held now, the collector's L follows,
 the threshold is armed again through `GcController::current_threshold`, so
 each mode keeps its rule, and the record's `live` and `external` say the
 settled figures. The arenas' part is the record's `live` less its
-`external`, both read under the collection's own borrow, so nothing is
-marked or measured again and the heap gains no field. Where the external
-bytes are as the sweep read them, on the tree-walker and at most of the
-VM's collections, nothing is written. A lower threshold raises the pending
-flag if the bytes charged since the sweep already reach it, as any
-`set_gc_threshold` does; nothing lowers the flag.
+`external`, and both are the sweep's own: the L it set, and the external
+bytes it read to set it, which `Heap::sweep` hands up with what it swept
+for the record to keep. So nothing is marked or measured again, the heap
+gains no field, and the difference is exact whatever gave bytes back
+between the sweep's reading and the record: a registered provider whose
+token dropped while the collection ran is dropped with the collection's
+copy of the list, after the sweep, and a record that read the external
+bytes a second time took what was left for the sweep's figure, so the
+finish found nothing moved. Where the external bytes are as the sweep read
+them, on the tree-walker and at most of the VM's collections, nothing is
+written. A lower threshold raises the pending flag if the bytes charged
+since the sweep already reach it, as any `set_gc_threshold` does; nothing
+lowers the flag.
 
 `Heap`'s own completion of the record is crate-private, so
 `finish_collection` is the only way a backend completes one, and none can
@@ -1525,7 +1532,14 @@ once their collection ran, after `release_dead_code` and with no heap
 borrow held across either; on the tree-walker by `maybe_collect`,
 `collect_if_pending`, `collect_for_loader` and `collect_at_call`. A
 collection a backend never finished keeps the sweep's L and threshold
-until the next one, whose record closes its own.
+until the next one, whose record closes its own. The settle is for the
+last sweep's record alone, which it tells by the record's number, the
+count of collections as its sweep ended: a sweep that records nothing sets
+L itself, and a finish after it must not take an earlier collection's
+marked bytes for its own. There are two, neither a backend's collection:
+the raw collector a backend's unit tests drive (`collect_for_tests`), which
+counts itself, and a teardown, which leaves the count as it was and closes
+an unfinished record before it sweeps.
 
 A collection is posted through one helper, `SharedCounts::raise_pending`,
 which, when none is posted yet, notes the time and the bytes charged: once

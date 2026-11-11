@@ -478,10 +478,18 @@ impl super::Heap {
     /// One it never completed is counted now, without its backend's part,
     /// its L as the sweep set it.
     pub(crate) fn record_collection(&mut self, record: CollectionRecord) {
+        self.close_unfinished_record();
+        self.telemetry.unfinished = Some(record);
+    }
+
+    /// Count a collection whose backend never completed its record, without
+    /// the backend's part and with its L as the sweep set it: when the next
+    /// collection's record takes its place, and at a teardown, whose sweep
+    /// records nothing.
+    pub(crate) fn close_unfinished_record(&mut self) {
         if let Some(unfinished) = self.telemetry.unfinished.take() {
             self.telemetry.finish(unfinished);
         }
-        self.telemetry.unfinished = Some(record);
     }
 
     /// The drain after the collection just run took `time` (#785): part of

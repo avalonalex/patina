@@ -799,14 +799,28 @@ impl Heap {
     /// unfinished: then nothing is written.
     ///
     /// The arenas' part is the record's `live` less its `external`. Both
-    /// were read under the collection's own borrow of the heap, as the
-    /// sweep left them, so their difference is the figure the sweep had and
-    /// nothing is marked or measured again. Where an embedder's wrong size
-    /// had saturated the sum, the difference is short by that part.
+    /// are the sweep's own: the L it set, and the external bytes it read to
+    /// set it, handed up with what it swept (`Heap::sweep`) and not read a
+    /// second time, so their difference is the figure the sweep had and
+    /// nothing is marked or measured again, whatever gave bytes back
+    /// between the sweep's reading and the record. Where an embedder's
+    /// wrong size had saturated the sum, the difference is short by that
+    /// part.
+    ///
+    /// Only for the last sweep's record: its number is the count of
+    /// collections as its sweep ended. A sweep that records nothing sets L
+    /// too, with an earlier record still unfinished: a raw collection in a
+    /// backend's unit tests (`collect_for_tests`), which counts itself, and
+    /// a teardown, which does not and closes the record instead
+    /// (`Heap::teardown`). Settled from that record, L would take an earlier
+    /// collection's marked bytes for this sweep's.
     pub(crate) fn settle_live_bytes(&mut self) -> bool {
         let Some(record) = self.telemetry.unfinished.as_mut() else {
             return false;
         };
+        if record.number != self.gc_collections {
+            return false;
+        }
         let external = self.account.shared.external.get();
         if external == record.external {
             return false;
