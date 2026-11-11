@@ -1489,10 +1489,24 @@ loop and the threshold at the 8 MiB floor, where the sweep's L put the
 first 7 MiB above and the threshold at 14 MiB. The other drops fifty held
 procedures and requires the L one `(gc)` leaves to be the L a second
 leaves, to the byte, collecting only at `(gc)`, at the adaptive threshold
-and in the environment's mode; under stress or zeal an earlier collection
-can find the namespaces dead, so there it holds the settled readings
-wherever the collections fall, and the two named modes are what fail
-without the settle.
+and in the environment's mode; all three fail without the settle, under
+the stress lane's variable too, since nothing allocates between the drop
+and the `(gc)`, and only under zeal, which collects before the `(gc)`
+does, the third holds the settled readings either way. Those two cover the
+VM's collections at a poll and at a call. The other two places it collects
+each have a test as well, so that no path can stop finishing its
+collection unseen. `a_collection_where_a_load_ends_…` holds the one where
+a library's load ends at the top level (point B), and the other shape of
+namespace: a library that exports a procedure is redefined fifty times,
+then a run of `define-library` forms with no body, which run no code,
+brings a collection where one of them ends, whose code release must give
+back over 1 MB and whose L must be within a quarter of a megabyte of the L
+a `(gc)` leaves next; it reads the heap from Rust between the forms, on
+the adaptive interpreter. `loader_descriptors.rs`'s
+`the_loader_s_collection_leaves_…` holds the loader's retry (#783): fifty
+held procedures are dropped under `GcMode::Off`, an import's read fails
+once, and the L that one collection leaves must be under the L a `(gc)`
+leaves after the load, on both backends.
 `finished_forms_release_code.rs`'s
 `a_redefined_library_s_recursive_procedures_let_their_units_go` is 4b's
 start decision 3's gate: a library whose procedures call themselves and each
@@ -2023,7 +2037,7 @@ interpreter collects whatever the lane's variable says, and its collections
 land in the stress lane's record, so `gc_vm` and `gc_tree_walker` collect
 without stress too (5047 and 17796 times, 2026-11-09, since #836's
 placeholder tests, whose drop test's zeal half runs 100 `eval`s; `gc_vm`
-5068 times since 2026-11-11, with the tests of the settled L), which
+5072 times since 2026-11-11, with the tests of the settled L), which
 their minimums must stay above. `vm_interpreter_adaptive` names the
 adaptive threshold the same way, for a test of the pacing itself, which
 stress and zeal replace.

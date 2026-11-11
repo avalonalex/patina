@@ -266,7 +266,10 @@ fi
 # paced one runs on an interpreter that collects at the adaptive threshold
 # whatever the lane's variable says, 6 collections either way, and the one
 # at `(gc)`'s call 160 at 16 and 15 without stress, the other 36 tests
-# making 23621 and 5047, as before, the minimum left)
+# making 23621 and 5047, as before, the minimum left; and again that day
+# for the test of the collection where a library's load ends, which runs
+# on the adaptive interpreter too, 4 collections either way, the other 38
+# tests making 23787 and 5068, as before, the minimum left)
 TARGETS=(
     "callability 16 31 13"                    # 2195 (0)
     "control_flow_matrix 16 340 3"            # 4826 (0)
@@ -275,7 +278,7 @@ TARGETS=(
     "escape_from_primitive 16 3669 18"        # 9951 (92)
     "finished_forms_release_code 16 2040 12"  # 4081 (15)
     "gc_tree_walker 16 21259 26"              # 42518 (17796)
-    "gc_vm 16 11810 38"                       # 23787 (5068)
+    "gc_vm 16 11810 39"                       # 23791 (5072)
     "host_environments 16 58646 30"           # 117297 (754)
     "hygiene_matrix 16 11136 17"              # 22293 (6)
     "interpreter_api 16 138 28"               # 3128 (4)

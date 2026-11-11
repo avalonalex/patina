@@ -319,6 +319,10 @@ fn a_paced_collection_leaves_the_namespaces_its_code_release_drops_out_of_l() {
     // and there are at least three such collections, where the growing
     // interval allowed two.
     //
+    // Sized on a cycle of about 39 KB, nearly all of it the namespace: four
+    // collections in the thousand cycles, at cycles 214, 428, 642 and 856.
+    // A cycle under 25 KB makes fewer than three, and wants more cycles.
+    //
     // The interpreter collects at the adaptive threshold whatever the
     // lane's variable says, so the stress lane asserts the same as a plain
     // run: stress and zeal collect every few allocations, each collection
@@ -348,8 +352,8 @@ fn a_paced_collection_leaves_the_namespaces_its_code_release_drops_out_of_l() {
         (gc)
         (gc)
         (define base (stat 'live-bytes))
-        (define floor (stat 'bytes-trigger))
-        (list base floor (run 1000))
+        (define floor-bytes (stat 'bytes-trigger))
+        (list base floor-bytes (run 1000))
         "#;
     let answer = eval_program_vm_adaptive(code);
     let numbers: Vec<u64> = answer
@@ -396,9 +400,16 @@ fn a_collection_at_a_call_leaves_the_namespaces_its_code_release_drops_out_of_l(
     //
     // Collecting only where `(gc)` asks, that `(gc)` is the collection
     // that finds them dead, as it is at the adaptive threshold, which 1.6
-    // MB does not reach. In the environment's mode too: under the stress
-    // lane's variable an earlier collection may find some of them dead, and
-    // the readings hold wherever the collections fall.
+    // MB does not reach. In the environment's mode too, and under the
+    // stress lane's variable as well: nothing allocates between the
+    // `vector-fill!` and the `(gc)`, so no interval puts a collection
+    // there, and all three runs fail without the settle. Only zeal, which
+    // collects at every outermost safe point, finds the procedures dead
+    // before the `(gc)` does, and there the readings hold with or without
+    // it.
+    //
+    // Sized on a namespace of about 32 KB: the first answer is `#f` once
+    // fifty of them weigh under 1 MB, and wants more procedures.
     let code = r#"
         (import (scheme base) (scheme eval) (patina debug))
         (define (stat key) (cdr (assq key (gc-stats))))
@@ -424,6 +435,90 @@ fn a_collection_at_a_call_leaves_the_namespaces_its_code_release_drops_out_of_l(
     assert_eq!(eval_program_vm_gc_off(code), "(#t #t 0)");
     assert_eq!(eval_program_vm_adaptive(code), "(#t #t 0)");
     assert_eq!(eval_program_vm(code), "(#t #t 0)");
+}
+
+#[test]
+fn a_collection_where_a_load_ends_leaves_a_replaced_library_s_namespace_out_of_l() {
+    // The same settle for the other shape, a redefined library's namespace,
+    // and at the third place the VM collects: where a library's load ends
+    // at the top level (`collect_if_pending`, point B), neither a poll nor
+    // a call.
+    //
+    // A library that exports a procedure is redefined and imported again
+    // fifty times. Each redefinition leaves the last one's procedure dead,
+    // its unit loaded until a collection frees it, and that unit's link
+    // table the last holder of the replaced library's namespace: 1.6 MB of
+    // external bytes by the end, with no collection yet (2 MB allocated
+    // since the two `(gc)`s, under the 8 MiB floor). Then a run of
+    // `define-library` forms with no body, which run no code, so no poll:
+    // each charges a namespace and lets the one it replaces go at once, and
+    // the first collection they bring runs where one of them ends. That
+    // collection frees the fifty procedures and its code release drops
+    // their namespaces: `external-bytes` is down by over 1 MB across it,
+    // and the L it left is the L a `(gc)` leaves next, within a quarter of
+    // a megabyte (the two differ by the forms' own data), where the
+    // sweep's L was the fifty namespaces above it.
+    //
+    // Read from Rust between the forms, since a `(gc-stats)` form would
+    // poll. The interpreter collects at the adaptive threshold whatever the
+    // lane's variable says, as the paced test's does.
+    //
+    // Sized on a `(scheme base)` namespace of about 32 KB: one under 20 KB
+    // fails the first assertion, and wants more redefinitions.
+    let interp = vm_interpreter_adaptive();
+    let eval = |code: &str| {
+        if let Err(e) = interp.eval_program_owned(code) {
+            panic!("{code}: {e}");
+        }
+    };
+    let live = || {
+        use patina_interpreter::Backend;
+        interp.backend().heap().borrow().live_bytes()
+    };
+    let stats = || interp.gc_stats();
+    let redefine = "(define-library (settled steady) (export f) (import (scheme base))
+                      (begin (define (f x) (+ x 1))))
+                    (import (settled steady))
+                    (f 1)";
+    eval("(import (scheme base) (patina debug))");
+    eval(redefine);
+    eval("(gc) (gc)");
+    let before = stats();
+    for _ in 0..50 {
+        eval(redefine);
+    }
+    assert_eq!(
+        stats().collections,
+        before.collections,
+        "no collection while the fifty were made"
+    );
+    let held = stats().external_bytes;
+
+    let mut forms = 0;
+    while stats().collections == before.collections {
+        assert!(
+            forms < 2000,
+            "no collection in {forms} define-library forms"
+        );
+        eval("(define-library (settled idle) (import (scheme base)))");
+        forms += 1;
+    }
+    let (at_load_end, after) = (live(), stats());
+    assert_eq!(after.collections, before.collections + 1);
+    let given_back = held.saturating_sub(after.external_bytes);
+    assert!(
+        given_back > 1_000_000,
+        "the collection's code release gave back {given_back} external bytes: the fifty \
+         replaced namespaces were not what it dropped"
+    );
+    eval("(gc)");
+    let at_call = live();
+    assert!(
+        at_load_end < at_call + (1 << 18),
+        "the L a collection at a load's end left, {at_load_end}, counts the namespaces its \
+         code release dropped: a (gc) next left {at_call}, and the release gave back \
+         {given_back}"
+    );
 }
 
 #[test]
