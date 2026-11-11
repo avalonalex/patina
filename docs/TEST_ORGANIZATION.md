@@ -1477,7 +1477,22 @@ definition through the same closure
 forward-reference tests above. `gc_vm.rs`'s
 `a_bound_placeholder_is_never_dropped` holds a procedure that links two
 placeholders across a definition and an import that adopt them, and counts
-no record more across them or once the procedure is gone.
+no record more across them or once the procedure is gone. Its two
+`…_leaves_the_namespaces_its_code_release_drops_out_of_l` tests hold the
+settle a collection's finish makes (`docs/GC_DESIGN.md` §6.2): a namespace
+`environment` made, with a procedure compiled in it, drops at the code
+release after the sweep, and the sweep's L counted it. One runs a thousand
+such cycles in one form on an interpreter that collects at the adaptive
+threshold in every lane (`vm_interpreter_adaptive`), and requires at least
+three paced collections, each leaving L within 1 MiB of the L before the
+loop and the threshold at the 8 MiB floor, where the sweep's L put the
+first 7 MiB above and the threshold at 14 MiB. The other drops fifty held
+procedures and requires the L one `(gc)` leaves to be the L a second
+leaves, to the byte, collecting only at `(gc)`, at the adaptive threshold
+and in the environment's mode; under stress or zeal an earlier collection
+can find the namespaces dead, so there it holds the settled readings
+wherever the collections fall, and the two named modes are what fail
+without the settle.
 `finished_forms_release_code.rs`'s
 `a_redefined_library_s_recursive_procedures_let_their_units_go` is 4b's
 start decision 3's gate: a library whose procedures call themselves and each
@@ -1997,8 +2012,11 @@ every lane: `vm_interpreter_zeal` and `tree_walker_interpreter_zeal`, which
 interpreter collects whatever the lane's variable says, and its collections
 land in the stress lane's record, so `gc_vm` and `gc_tree_walker` collect
 without stress too (5047 and 17796 times, 2026-11-09, since #836's
-placeholder tests, whose drop test's zeal half runs 100 `eval`s), which
-their minimums must stay above.
+placeholder tests, whose drop test's zeal half runs 100 `eval`s; `gc_vm`
+5068 times since 2026-11-11, with the tests of the settled L), which
+their minimums must stay above. `vm_interpreter_adaptive` names the
+adaptive threshold the same way, for a test of the pacing itself, which
+stress and zeal replace.
 
 The nightly lane's `time` suite measures wall-clock time: one assertion
 requires a one-second loop to stop within 100 ms of its deadline. It passes

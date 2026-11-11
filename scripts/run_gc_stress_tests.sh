@@ -260,7 +260,13 @@ fi
 # and scheme_suite's (10230, 3068); host_environments's count re-measured
 # 2026-11-10, when its test of a host namespace's placeholders took a
 # reading after a single `(gc)`, 929 collections at 16 where it made 925
-# and 12 without stress, as before, its test count and minimum left)
+# and 12 without stress, as before, its test count and minimum left;
+# gc_vm's test count re-pinned 2026-11-11 for #836's two tests that a
+# collection's L leaves out the namespaces its code release drops: the
+# paced one runs on an interpreter that collects at the adaptive threshold
+# whatever the lane's variable says, 6 collections either way, and the one
+# at `(gc)`'s call 160 at 16 and 15 without stress, the other 36 tests
+# making 23621 and 5047, as before, the minimum left)
 TARGETS=(
     "callability 16 31 13"                    # 2195 (0)
     "control_flow_matrix 16 340 3"            # 4826 (0)
@@ -269,7 +275,7 @@ TARGETS=(
     "escape_from_primitive 16 3669 18"        # 9951 (92)
     "finished_forms_release_code 16 2040 12"  # 4081 (15)
     "gc_tree_walker 16 21259 26"              # 42518 (17796)
-    "gc_vm 16 11810 36"                       # 23621 (5047)
+    "gc_vm 16 11810 38"                       # 23787 (5068)
     "host_environments 16 58646 30"           # 117297 (754)
     "hygiene_matrix 16 11136 17"              # 22293 (6)
     "interpreter_api 16 138 28"               # 3128 (4)

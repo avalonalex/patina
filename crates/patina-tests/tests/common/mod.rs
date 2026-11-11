@@ -176,6 +176,16 @@ pub fn vm_interpreter_gc_off() -> Interpreter<VmBackend> {
     vm_interpreter_with(VmBackend::with_gc_mode(GcMode::Off))
 }
 
+/// [`vm_interpreter`], collecting where the adaptive byte threshold says,
+/// as a program run with no GC variable set does (`GcMode::On`), whatever
+/// `PATINA_GC_STRESS` or `PATINA_GC_ZEAL` say: for a test of the pacing
+/// itself, which stress and zeal replace with a count of allocations and
+/// with every safe point. Its collections count in the stress lane's record
+/// whatever the lane's variable says.
+pub fn vm_interpreter_adaptive() -> Interpreter<VmBackend> {
+    vm_interpreter_with(VmBackend::with_gc_mode(GcMode::On))
+}
+
 /// The tree-walker half of [`vm_interpreter_gc_off`].
 pub fn tree_walker_interpreter_gc_off() -> TreeWalkInterpreter {
     tree_walker_interpreter_with(Interpreter::new(TreeWalker::with_gc_mode(GcMode::Off)))
@@ -685,6 +695,15 @@ pub fn eval_program_vm(code: &str) -> String {
 /// [`eval_program_vm`] on [`vm_interpreter_gc_off`]: only `(gc)` collects.
 pub fn eval_program_vm_gc_off(code: &str) -> String {
     match run_on(vm_interpreter_gc_off(), code, Mode::Program) {
+        Ok(v) => v,
+        Err(e) => panic!("Failed to evaluate program: {}\n{code}", e.message),
+    }
+}
+
+/// [`eval_program_vm`] on [`vm_interpreter_adaptive`]: collections come
+/// where the adaptive byte threshold puts them, in every lane.
+pub fn eval_program_vm_adaptive(code: &str) -> String {
+    match run_on(vm_interpreter_adaptive(), code, Mode::Program) {
         Ok(v) => v,
         Err(e) => panic!("Failed to evaluate program: {}\n{code}", e.message),
     }

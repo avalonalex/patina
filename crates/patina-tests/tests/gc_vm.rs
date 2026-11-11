@@ -295,6 +295,138 @@ fn code_units_count_a_unit_a_live_closure_keeps() {
 }
 
 #[test]
+fn a_paced_collection_leaves_the_namespaces_its_code_release_drops_out_of_l() {
+    // A unit's link table holds the namespace it was linked in (#836), so a
+    // namespace `environment` made, with a procedure compiled in it, lives
+    // until the collection that frees the procedure releases its unit, and
+    // that is after the sweep has read the external bytes. The sweep's L
+    // counted every such namespace made since the last collection, about
+    // 32 KB each, and the threshold, max(8 MiB, 2·L), followed them: each
+    // collection of this loop came about 1.76 times further off than the
+    // one before, and its garbage grew without bound (345 MiB resident at
+    // 32,000 cycles, where the settled L holds 21). The collection's finish
+    // settles L once the units are released
+    // (`GcController::finish_collection`).
+    //
+    // One form runs a thousand cycles, each a fresh namespace, a procedure
+    // compiled in it, called and dropped: about 35 MB, four collections 8
+    // MiB apart. After each cycle the loop reads `(gc-stats)`, and where the
+    // count of collections has moved, the L and the threshold the collection
+    // left. Each L is within 1 MiB of the L two `(gc)`s left before the
+    // loop (about 40 KB above it: the cycle's own namespace and the
+    // readings), where the sweep's L was 7 MiB above it at the first; each
+    // threshold is the 8 MiB floor, where it was 14 MiB after the first;
+    // and there are at least three such collections, where the growing
+    // interval allowed two.
+    //
+    // The interpreter collects at the adaptive threshold whatever the
+    // lane's variable says, so the stress lane asserts the same as a plain
+    // run: stress and zeal collect every few allocations, each collection
+    // finding at most the last cycle's namespace dead, and replace the
+    // threshold this reads.
+    let code = r#"
+        (import (scheme base) (scheme eval) (patina debug))
+        (define (stat key) (cdr (assq key (gc-stats))))
+        (define (cycle)
+          ((eval '(lambda (x) (* x 2)) (environment '(scheme base))) 21))
+        (define (run n)
+          (let loop ((i 0) (seen (stat 'collections)) (readings '()))
+            (if (= i n)
+                (reverse readings)
+                (begin
+                  (cycle)
+                  (let* ((stats (gc-stats))
+                         (now (cdr (assq 'collections stats))))
+                    (loop (+ i 1)
+                          now
+                          (if (= now seen)
+                              readings
+                              (cons (list (cdr (assq 'live-bytes stats))
+                                          (cdr (assq 'bytes-trigger stats)))
+                                    readings))))))))
+        (cycle)
+        (gc)
+        (gc)
+        (define base (stat 'live-bytes))
+        (define floor (stat 'bytes-trigger))
+        (list base floor (run 1000))
+        "#;
+    let answer = eval_program_vm_adaptive(code);
+    let numbers: Vec<u64> = answer
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|field| !field.is_empty())
+        .map(|field| field.parse().expect("a number"))
+        .collect();
+    let [base, floor, readings @ ..] = &numbers[..] else {
+        panic!("expected the base L, the floor and the readings: {answer}")
+    };
+    assert_eq!(*floor, 8 << 20, "the adaptive floor: {answer}");
+    assert!(
+        readings.len() >= 2 * 3,
+        "fewer than three paced collections in 35 MB: {answer}"
+    );
+    for reading in readings.chunks(2) {
+        let [live, threshold] = reading else {
+            panic!("a reading is an L and a threshold: {answer}")
+        };
+        assert!(
+            *live < base + (1 << 20),
+            "a paced collection's L, {live}, counts the namespaces its code release dropped \
+             (the L before the loop was {base}): {answer}"
+        );
+        assert_eq!(
+            threshold, floor,
+            "the threshold followed the garbage: {answer}"
+        );
+    }
+}
+
+#[test]
+fn a_collection_at_a_call_leaves_the_namespaces_its_code_release_drops_out_of_l() {
+    // The same settle at `(gc)`'s collection, which runs at its call
+    // (`collect_at_call`) and not at a poll. Fifty procedures, each compiled
+    // in a namespace of its own, are held in a vector: the L a `(gc)` leaves
+    // counts their namespaces, 1.6 MB of external bytes. Once the vector
+    // lets them go, one `(gc)` frees the procedures and releases their
+    // units, whose tables were the namespaces' last holders, before it
+    // returns: `external-bytes` is down by the fifty namespaces, and the L
+    // that `(gc)` left is what a second `(gc)` leaves, to the byte. The
+    // sweep's L, read before the release, was the fifty namespaces above
+    // it.
+    //
+    // Collecting only where `(gc)` asks, that `(gc)` is the collection
+    // that finds them dead, as it is at the adaptive threshold, which 1.6
+    // MB does not reach. In the environment's mode too: under the stress
+    // lane's variable an earlier collection may find some of them dead, and
+    // the readings hold wherever the collections fall.
+    let code = r#"
+        (import (scheme base) (scheme eval) (patina debug))
+        (define (stat key) (cdr (assq key (gc-stats))))
+        (define held (make-vector 50 #f))
+        (define (fill!)
+          (let loop ((i 0))
+            (when (< i 50)
+              (vector-set! held i
+                           (eval '(lambda (x) (* x 2)) (environment '(scheme base))))
+              (loop (+ i 1)))))
+        (define l0 #f) (define e0 #f) (define l1 #f) (define e1 #f) (define l2 #f)
+        (fill!)
+        (vector-fill! held #f)
+        (gc)
+        (gc)
+        (set! l0 (begin (fill!) (gc) (stat 'live-bytes)))
+        (set! e0 (stat 'external-bytes))
+        (set! l1 (begin (vector-fill! held #f) (gc) (stat 'live-bytes)))
+        (set! e1 (stat 'external-bytes))
+        (set! l2 (begin (gc) (stat 'live-bytes)))
+        (list (> (- e0 e1) 1000000) (>= (- l0 l2) (- e0 e1)) (- l1 l2))
+        "#;
+    assert_eq!(eval_program_vm_gc_off(code), "(#t #t 0)");
+    assert_eq!(eval_program_vm_adaptive(code), "(#t #t 0)");
+    assert_eq!(eval_program_vm(code), "(#t #t 0)");
+}
+
+#[test]
 fn a_bound_placeholder_is_never_dropped() {
     // The procedure `keep` holds reads `later` and `later2`, which nothing
     // binds when `eval` compiles it, so its unit links a placeholder for
