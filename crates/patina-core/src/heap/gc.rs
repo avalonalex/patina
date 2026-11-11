@@ -999,6 +999,13 @@ impl GcController {
     /// and its collection comes early. Neither arises today: the drain
     /// allocates nothing (F4), and code release only gives back.
     ///
+    /// The settle reaches the external bytes alone. What marking found
+    /// live in the arenas stands, and that includes whatever only the
+    /// constants of a unit this collection's code release lets go reach: a
+    /// loaded unit's constants are roots until it is released, so L counts
+    /// them until the next collection, and the threshold with it, until
+    /// stage 4e traces them by code id (`docs/GC_DESIGN.md` §6.2).
+    ///
     /// **The record is completed** with the backend's time (#648), and its
     /// `live` and `external` say the settled figures, so `PATINA_GC_LOG` and
     /// `(gc-stats)` agree.

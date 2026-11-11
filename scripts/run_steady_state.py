@@ -242,10 +242,28 @@ ROWS = [
     # Per PR since #836's linking at load: a unit's link table holds its
     # namespace, and a pacer that counts the namespaces a collection's code
     # release drops puts each collection further off than the last, so SS2
-    # goes vacuous here. At N = 500 a segment holds two paced collections,
-    # the fewest SS2 takes, one every 234 cycles: namespaces 6% leaner need
-    # a larger N.
-    Row('env-lambda', 'churn', 'env-lambda.scm', {'vm': 500, 'tree-walker': 500}, pr=True),
+    # goes vacuous here: growing 1.76 times a collection, the interval
+    # leaves at most one in [3N, 4N) at any N. N is 1,000 for the margin on
+    # a build that paces right: four paced collections in each segment on
+    # each backend, where SS2 takes two, so a cycle must allocate under
+    # half of today's before the clause goes vacuous for that. At 500 a
+    # segment held two, and a cycle 7% to 10% leaner failed the clause
+    # with this defect's message (N = 465 passed and N = 450 failed,
+    # measured 2026-11-11).
+    Row('env-lambda', 'churn', 'env-lambda.scm', {'vm': 1000, 'tree-walker': 1000}, pr=True),
+    # The lag the settled L does not reach (docs/GC_DESIGN.md §6.2): a
+    # loaded unit's constants are roots until the unit is released, after
+    # the collection that frees its last closure, so that collection marks
+    # what they hold and L counts it. Here that is 8 KB of a cycle's 10, so
+    # 2L passes what was allocated and each collection comes nearly twice
+    # as far off as the last on the VM: 8.0, 15.8 and 30.6 MiB apart after
+    # the reading at N, with L at 7.9, 15.3 and 29.6 MiB, and none in
+    # [3N, 4N), where the tree-walker's come every 8.0 MiB with L at 0.2,
+    # four or five in a segment (2026-11-11). So SS2 is vacuous on the VM,
+    # red until stage 4e traces a unit's constants as it does its link
+    # table, by code id; the tree-walker holds it.
+    Row('const-lambda', 'churn', 'const-lambda.scm', {'vm': 4000, 'tree-walker': 4000},
+        red={'SS2/vm': 'stage 4e'}),
     Row('form-eval-fresh', 'churn', 'form-eval-fresh.scm', {'vm': 4000, 'tree-walker': 4000}, clauses=REPL,
         pr=True),
     Row('cont-churn-10', 'churn', 'cont-churn.scm', {'vm': 20000, 'tree-walker': 10000}, ('10',), pr=True),

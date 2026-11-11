@@ -1541,6 +1541,28 @@ the raw collector a backend's unit tests drive (`collect_for_tests`), which
 counts itself, and a teardown, which leaves the count as it was and closes
 an unfinished record before it sweeps.
 
+**What the settle does not reach: a dead unit's constants.** The settle
+corrects the external bytes alone; what marking found live in the arenas
+stands. A loaded unit's constants are roots until the unit is released
+(§5.2's `code_store` row), and that is after the collection that frees its
+last closure, so what only the constants of a unit this collection lets go
+reach is marked by it, counted in its L and freed by the next: a datum
+`eval` compiled into a procedure's code, or a procedure held as a
+constant, which keeps its own unit, and that unit's namespace, one
+collection more (§6's `code-units`). Where such constants outweigh the
+rest of what a cycle allocates, 2·L passes what was allocated and the
+threshold follows the garbage as it did the namespaces: code `eval`
+compiles from a datum quoting a fresh 1,000-element vector, called and
+dropped, has its paced collections 8.0, 15.8 and 30.6 MiB apart on the
+VM, with L at 7.9, 15.3 and 29.6 MiB, where the tree-walker's come every
+8.0 MiB with L at 0.2 (the steady-state lane's `const-lambda`, measured
+2026-11-11). The lag is older than the linking at load, which reads the
+same on its base, and is not the settle's to end: stage 4e does, when a
+unit's constants are traced as its link table is, by code id, so that a
+unit nothing reported roots nothing. Until then `const-lambda` holds SS2
+red on the VM, and `live-bytes` after one `(gc)` can read above
+`live-bytes` after a second.
+
 A collection is posted through one helper, `SharedCounts::raise_pending`,
 which, when none is posted yet, notes the time and the bytes charged: once
 per collection cycle, so a post that stands while a deferred region

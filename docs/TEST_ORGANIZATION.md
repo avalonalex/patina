@@ -1666,8 +1666,8 @@ The REPL rows declare SS1, SS4 and SS5,
 since their growth shows in L and the counts and their footprints are the
 deferred library loads' high-water (#616); the server and churn rows declare
 SS2 as well. A clause a row fails today is marked red in the runner's table
-with the issue or stage that fixes it — #614, #616, #656, stage 5c —
-and is reported, not failed; a red clause that passes is called out for
+with the issue or stage that fixes it — #614, #616, #656, stage 4e, stage
+5c — and is reported, not failed; a red clause that passes is called out for
 promotion. A mark names one clause, or one clause on one backend
 (`SS1/vm`), and SS5's by its key (`SS5:symbols`), so that it silences no
 other key: the runner refuses a bare `SS5`, or a mark naming no clause the
@@ -1694,14 +1694,22 @@ driver prints for a key `(gc-stats)` lacks or one that answers `#f`. The rows ma
 CI's R7RS Compliance job (`--quick`, 46 s here for both backends,
 2026-11-11); the
 whole lane runs nightly (`nightly.yml`, about 5 minutes here). `env-lambda`
-is among them since #836's linking at load, 0.3 s a backend: a unit's link
+is among them since #836's linking at load, 0.7 s a backend: a unit's link
 table holds its namespace, and when L counted the namespaces a collection's
 code release drops, each collection of this row came about 1.76 times
 further off than the one before, so its SS2 went vacuous on the VM (one
 paced collection in a segment) while its resident size grew with the run
-(`docs/GC_DESIGN.md` §6.2). At its N of 500 each segment holds two paced
-collections, the fewest SS2 takes, one every 234 cycles, so a change that
-makes a namespace 6% leaner fails the same clause and needs a larger N.
+(`docs/GC_DESIGN.md` §6.2). An interval that grows so leaves at most one
+collection in [3N, 4N) at any N, so the row's N is chosen for its margin
+on a build that paces right: at 1,000 each segment holds four paced
+collections on each backend, where SS2 takes two, and a cycle must
+allocate under half of today's before the clause goes vacuous for that
+reason. At 500 a segment held two, and N = 450 failed with the defect's own
+message on the fixed build. `const-lambda`, nightly, holds the lag that
+settle does not reach: a dead unit's constants are roots for one more
+collection, so L counts a vector its cycle's code quotes, and the VM's
+collections come nearly twice as far apart each time; its SS2 is vacuous
+there and red for stage 4e, and holds on the tree-walker.
 Peak RSS is
 printed beside each row as a signal, never a gate. The lane does not yet have
 `interp-churn` (an interpreter made and dropped per cycle, #604's shape),

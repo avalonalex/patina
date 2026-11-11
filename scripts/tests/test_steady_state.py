@@ -215,6 +215,20 @@ class Clauses(unittest.TestCase):
         self.assertIn('SS2', row.checks())
         for backend in steady.BACKENDS:
             self.assertIsNone(row.red_reason('SS2', backend))
+            # Four paced collections a segment, where SS2 takes two: at 500
+            # it held two, and a leaner namespace failed it for no defect.
+            self.assertEqual(row.n[backend], 1000)
+
+    def test_the_constants_row_is_red_on_the_vm_alone(self):
+        # `const-lambda` is the lag the settled L does not reach: a dead
+        # unit's constants are roots for one more collection, and L counts
+        # what they hold. Red until stage 4e on the VM; the tree-walker,
+        # which loads no code, holds SS2 unmarked.
+        row = next(row for row in steady.ROWS if row.name == 'const-lambda')
+        self.assertFalse(row.pr)
+        self.assertEqual(row.red_reason('SS2', 'vm'), 'stage 4e')
+        self.assertIsNone(row.red_reason('SS2', 'tree-walker'))
+        self.assertEqual(steady.mark_errors(row), [])
 
     def test_ss5_marks_name_one_key(self):
         row = steady.Row('r', 'churn', 'x.scm', {}, red={'SS5:ports/vm': '#1'})
