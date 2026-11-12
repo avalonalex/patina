@@ -91,10 +91,10 @@ form is compiled in the library's environment, and its unit's link table is
 linked there when it loads, so its frame reads, stores and defines the
 library's bindings through that table wherever a continuation restores it
 (#779, #836; §5.6); `eval`'s code the same way, in the environment it was
-given. The body form still runs as a closure of no arguments over that
-environment (`execute_in` at a top-level `import`, `execute_nested` on the
-nested loads), which only `MakeClosure` reads now, as the environment of the
-closures the form makes. Each such
+given. The body form runs with no closure (`execute` at a top-level
+`import`, `execute_nested` on the nested loads), and the closures it makes
+are of members of the same unit, which share its table: no closure holds an
+environment (#836). Each such
 environment is a namespace: the backend's entries refuse a frame with an
 error naming its kind (`eval_datum`, #835), and so does the compile of
 Scheme `eval`'s and `load`'s code and of a primitive's `Step::Eval`
@@ -108,8 +108,9 @@ transformer bound there (#855); a `load` of a file with no forms compiles
 nothing, and answers without a refusal. Nothing
 swaps `globals` any more (#823): `with_globals`, which pointed them at the
 library for the body's run and kept what it set aside on the traced
-`saved_globals` (#677), is gone. So a frame with no closure, a program form
-that a continuation resumes during a load, reads the program's bindings, and
+`saved_globals` (#677), is gone. So a program form that a continuation
+resumes during a load reads the program's bindings through its own unit's
+table, and
 so do `interaction-environment` and a one-argument `load`, which takes its
 environment from it, as on the tree-walker, chibi and Gauche.
 `import_export` still installs shared bindings and invalidates primitive fast
@@ -246,8 +247,8 @@ fn run_loop_until(
 Runs `dispatch_one_instruction()` in a loop until `frames.len() == exit_depth`.
 Catchable errors are routed through exception handlers via `vm_raise_value()`.
 
-`driver` is the carrier's capability to collect (#702). `execute` and
-`execute_in` pass it when no other run holds it, and the loop lends it to its
+`driver` is the carrier's capability to collect (#702). `execute` passes it
+when no other run holds it, and the loop lends it to its
 polls on `VmState::driver`. A nested entry passes `None`: its loop runs under
 a `NoGcScope`, with the outer loop's driver hidden, and never collects
 (`docs/GC_DESIGN.md` §7).
@@ -896,15 +897,14 @@ Notes on the cells that are not a plain yes:
   continuation restores frames, not environments, so a frame reads, stores
   and defines the bindings of the namespace its code was compiled in through
   the table its unit linked there at load (#836), wherever it is restored,
-  closure or none. Top-level code compiled in another environment — a
-  library's body form, a host namespace's form — still runs under a closure
-  of no arguments over that environment, made retired so that it names no
-  code (`push_frame_in`), which only `MakeClosure` reads now, as the
-  environment of the closures the form makes. A program's own top-level
-  forms and the stubs, which resolve no name, run with no closure, and
-  `MakeClosure` in a program form uses the machine's globals, the namespace
-  the form was compiled and linked in. A library body form re-entered after
-  its load read the program's
+  closure or none. Top-level code runs with no closure wherever it was
+  compiled — a program's form, a library's body form, a host namespace's
+  form (`push_top_frame`) — and so do the stubs, and `MakeClosure` reads
+  nothing but its registers: a closure holds no environment, and its code
+  reads through its unit's table, which a unit's members share. Until #836
+  a body form or a host form ran under a retired closure over its
+  environment (`push_frame_in`), which `MakeClosure` read. A library body
+  form re-entered after its load read the program's
   until #779's part 1 (`test_reentering_a_library_body_form_after_the_load`
   in `escape_from_primitive.rs`); what the rest of the body does after it is
   part 2's.

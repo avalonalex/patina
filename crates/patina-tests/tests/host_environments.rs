@@ -698,7 +698,12 @@ fn procedure_freed_with_its_environment<B: Backend>(interp: Interpreter<B>) {
 
 /// On the VM, the code a dropped host environment's procedure ran is let go
 /// with it: as many code objects are loaded after 100 such environments, each
-/// dropped and followed by a collection, as after 10.
+/// dropped and followed by a collection, as after 10. The unit holds the
+/// namespace, through its link table, and the namespace's `f` holds a
+/// closure of the unit, whose table links `f`'s record: a cycle that a
+/// collection frees only because the code store never traces a table, which
+/// is traced only by the code id of a frame, a marked closure or the running
+/// code (#836).
 fn code_let_go_with_its_environments(
     interp: &Interpreter<patina_vm::VmBackend>,
     n: usize,

@@ -1109,7 +1109,8 @@ namespace since #835, to rooting what is bound in it, on both backends
 - a definition the program makes in the environment through `Backend::eval`;
 - #620's table through `Backend::eval` and `eval_with_source_map`: a read, a
   closure and a definition in the environment, which the VM ran in the global
-  environment until it ran the code as a closure over the one it was given;
+  environment until it ran the code as a closure over the one it was given,
+  and now runs as a top-level frame whose unit is linked in it (#836);
 - `eval_str_in` and `eval_program_in`: a definition kept across a collection
   while the environment's code runs, an import bound in it alone, an error,
   and a continuation's escape;
@@ -1445,7 +1446,9 @@ allocate no more than 1,000,000 of `(cons 1 2)`, which collect; 2,200 kept
 environments, about 80 MB, collect three times, not nine; and the global
 environment's growth under `eval` is charged, while frames charge nothing,
 read while they are alive. 200 closures, each `eval`'d in a fresh specifier
-the program drops, keep their namespaces charged and counted (`namespaces`),
+the program drops, keep their namespaces charged and counted (`namespaces`)
+— on the VM through their units' link tables, since a closure holds no
+environment (#836) —
 each at least 95% of one specifier's charge, about 32 KB, calibrated in the
 test from one environment made and dropped first, while they live, and give
 every charge and count back once they are collected (decision 26 on #782,
