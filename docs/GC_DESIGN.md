@@ -1943,8 +1943,10 @@ these checks except the defer balance, which every build checks.
   unseen: `gc_protocol.rs`' extent controls have patina-vm's test-only
   switch (`test_support::PollInWindow`) make the poll's check at the last
   point each covers, just before `push_top_frame`'s push, which a program
-  form and a host namespace's form each reach, and just before the `CALLEE`
-  write, and expect the panic.
+  form and a host namespace's form reach through `execute` and a library
+  body form a running form loads reaches through `execute_nested`, each
+  with a control of its own, and just before the `CALLEE` write, and
+  expect the panic.
 - *Collector entry points are crate-private.* `Collector`,
   `MarkSweepCollector`, `run_mark_phase`, `Heap::sweep` and
   `GcController::collect` cannot be named outside `patina-core`, so
