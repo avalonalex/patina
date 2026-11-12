@@ -13,7 +13,7 @@ use patina_core::Lit;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
 use patina_core::scope::ScopeSet;
 use patina_core::tagged_value::TaggedValue;
-use patina_vm::runtime::{VmState, execute};
+use patina_vm::runtime::{LoadedUnit, VmState, execute};
 use patina_vm::types::CodeObject;
 use patina_vm::types::CodeObjectId;
 use std::rc::Rc;
@@ -39,10 +39,17 @@ fn fresh_state() -> VmState {
     state
 }
 
+/// Load `top` and `nested` as a unit linked in the machine's globals, where
+/// `execute` runs it, as the backend's top level loads a program's form.
+fn load(state: &mut VmState, top: CodeObject, nested: Vec<CodeObject>) -> LoadedUnit {
+    let globals = Rc::clone(state.global_env());
+    state.load_unit(top, nested, &globals)
+}
+
 fn run(expr: CoreExpr) -> TaggedValue {
     let (top, nested) = compile(&expr).expect("compile error");
     let mut state = fresh_state();
-    let top_id = state.load_unit(top, nested);
+    let top_id = load(&mut state, top, nested);
     execute(&mut state, top_id).expect("execution error")
 }
 
@@ -164,7 +171,7 @@ fn lambda_creates_closure() {
     let expr = lambda(vec![], vec![lit(42)]);
     let (top, nested) = compile(&expr).expect("compile");
     let mut state = fresh_state();
-    let top_id = state.load_unit(top, nested);
+    let top_id = load(&mut state, top, nested);
     let val = execute(&mut state, top_id).expect("execute");
     // Result should be a procedure (VM closure).
     assert!(val.is_object(), "expected closure object, got {:?}", val);
@@ -386,7 +393,7 @@ fn tail_recursive_countdown() {
 /// Load `expr` as a unit and run it, as the backend runs a top-level form.
 fn load_and_run(state: &mut VmState, expr: &CoreExpr) -> (CodeObjectId, TaggedValue) {
     let (top, nested) = compile(expr).expect("compile error");
-    let unit = state.load_unit(top, nested);
+    let unit = load(state, top, nested);
     let id = unit.id();
     let value = execute(state, unit).expect("execution error");
     (id, value)
@@ -433,7 +440,7 @@ fn a_closure_made_by_code_in_reused_slots_runs_its_own_code() {
 fn run_err(expr: CoreExpr) -> patina_vm::error::VmError {
     let (top, nested) = compile(&expr).expect("compile error");
     let mut state = fresh_state();
-    let top_id = state.load_unit(top, nested);
+    let top_id = load(&mut state, top, nested);
     execute(&mut state, top_id).expect_err("ran without an error")
 }
 
@@ -470,8 +477,8 @@ fn an_unbound_global_is_reported_by_its_operands_name() {
 fn a_shadowed_primitives_site_looks_up_its_operands_name() {
     use patina_core::LinkTable;
     use patina_vm::error::VmError;
+    use patina_vm::types::Arity;
     use patina_vm::types::instruction::{Instruction, PrimitiveFnId, TestOp};
-    use patina_vm::types::{Arity, GlobalCacheEntry};
 
     // Runs `(define <primitive> 1)`, which shadows the primitive, then the
     // site `site` builds for it, whose operand is link 1, then `Return r1`,
@@ -496,7 +503,6 @@ fn a_shadowed_primitives_site_looks_up_its_operands_name() {
         let code = CodeObject {
             id: CodeObjectId::label(),
             name: None,
-            global_cache: GlobalCacheEntry::table(&instructions),
             links: Rc::new(LinkTable::new(names.into_boxed_slice())),
             instructions,
             constants: Vec::new(),
@@ -506,7 +512,7 @@ fn a_shadowed_primitives_site_looks_up_its_operands_name() {
             register_roots: None,
             live_closures: std::cell::Cell::new(0),
         };
-        let id = state.load_unit(code, Vec::new());
+        let id = load(&mut state, code, Vec::new());
         match execute(&mut state, id) {
             Err(VmError::UnboundVariable { name }) => {
                 assert_eq!(&*name, "never-bound", "at a site of `{primitive}`")
@@ -546,4 +552,59 @@ fn a_shadowed_primitives_site_looks_up_its_operands_name() {
             Instruction::JumpUnless { cond: 1, target: 4 },
         ]
     });
+}
+
+/// A shadowed primitive's site reads its operand as `LoadGlobal` reads a
+/// global (#836): where the linked read finds no binding in the operand's
+/// record, by the cold read, which reads the name in the unit's namespace.
+/// Here the operand is a name the namespace reaches by an alias, whose entry
+/// is the heap's by-name record, so the linked read always misses and the
+/// site must call what the alias names. Built by hand: pass 5 emits a
+/// primitive site only for a name its namespace binds in a slot of its own,
+/// whose record the linked read answers, so no compiled site reads cold.
+#[test]
+fn a_shadowed_primitives_site_reads_an_aliased_operand_by_name() {
+    use patina_core::LinkTable;
+    use patina_vm::types::Arity;
+    use patina_vm::types::instruction::{Instruction, PrimitiveFnId};
+
+    let mut state = fresh_state();
+    let globals = Rc::clone(state.global_env());
+    // `negate` names the namespace's own `-`, by an alias.
+    globals.define_alias("negate", Rc::clone(&globals), "-".into());
+    let car = state
+        .primitive_registry()
+        .resolve_index("scheme.base/car")
+        .expect("`car` is registered");
+    let names: Vec<Rc<str>> = vec![Rc::from("car"), Rc::from("negate")];
+    let code = CodeObject {
+        id: CodeObjectId::label(),
+        name: None,
+        links: Rc::new(LinkTable::new(names.into_boxed_slice())),
+        instructions: vec![
+            Instruction::LoadImmediate {
+                dst: 0,
+                val: TaggedValue::fixnum(1),
+            },
+            // (define car 1): `car`'s sites are shadowed from here on.
+            Instruction::Define { link: 0, src: 0 },
+            // A site of `car` whose operand is `negate`: (negate 1).
+            Instruction::CallPrimitive {
+                func_id: PrimitiveFnId(car as u32),
+                link: 1,
+                args: vec![0],
+                dst: 1,
+            },
+            Instruction::Return { val: 1 },
+        ],
+        constants: Vec::new(),
+        num_regs: 2,
+        arity: Arity::Fixed(0),
+        source_map: Vec::new(),
+        register_roots: None,
+        live_closures: std::cell::Cell::new(0),
+    };
+    let id = load(&mut state, code, Vec::new());
+    let answer = execute(&mut state, id).expect("the site calls what `negate` names");
+    assert_eq!(answer.as_fixnum(), Some(-1));
 }

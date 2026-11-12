@@ -92,6 +92,14 @@ pub struct HandleTable {
     /// expansion of `parameterize` about 5% dearer; and not on `Heap`, for
     /// `root_set`'s reason. `None` until the first use.
     parameterize_each: HeapTable<Option<TaggedValue>>,
+    /// The heap's by-name record (#836, `Heap::by_name_record`): the record
+    /// a VM link table links for a name its namespace reaches by an alias
+    /// or a visible scoped definition, which is read by name. Made on the
+    /// first such link and kept here for the heap's life, so every table
+    /// links the one word, and a table's entry is a record in every case.
+    /// `None` until then, as on every heap the tree-walker runs. Here and
+    /// not on `Heap`, for `root_set`'s reason.
+    by_name: HeapTable<Option<TaggedValue>>,
     /// The ports the heap's port objects stand for (#785), one table for the
     /// heap's life: teardown's new handle table takes it over
     /// ([`HandleTable::after_teardown`]). By its own `Rc`, so that the
@@ -186,6 +194,7 @@ impl HandleTable {
             root_set: Rc::default(),
             standard_ports: HeapTable::new(None),
             parameterize_each: HeapTable::new(None),
+            by_name: HeapTable::new(None),
             ports,
             finals,
             placeholders,
@@ -238,6 +247,19 @@ impl HandleTable {
     pub(crate) fn set_parameterize_each(&self, procedure: TaggedValue) {
         self.parameterize_each
             .with_mut(|each| *each = Some(procedure));
+    }
+
+    /// The heap's by-name record, once made.
+    pub(crate) fn by_name(&self) -> Option<TaggedValue> {
+        self.by_name.with(|record| *record)
+    }
+
+    /// Record the heap's by-name record, made once.
+    pub(crate) fn set_by_name(&self, record: TaggedValue) {
+        self.by_name.with_mut(|by_name| {
+            debug_assert!(by_name.is_none(), "the by-name record made twice");
+            *by_name = Some(record);
+        });
     }
 
     /// Which standard port parameter `word` is, if it is one. Compared by
@@ -524,6 +546,7 @@ mod tests {
             h.alloc_parameter(value, None)
         });
         let each = s.pair(h, "HandleTable.parameterize_each");
+        let by_name = s.pair(h, "HandleTable.by_name");
         heap.handles = Rc::new(HandleTable {
             heap_id: 0,
             entries: HeapTable::new(Entries {
@@ -534,6 +557,7 @@ mod tests {
             root_set: Rc::default(),
             standard_ports: HeapTable::new(Some(standard)),
             parameterize_each: HeapTable::new(Some(each)),
+            by_name: HeapTable::new(Some(by_name)),
             ports: PortTable::new(),
             finals: FinalRegistry::new(),
             // Weak, never traced (#836): it holds no value to keep.

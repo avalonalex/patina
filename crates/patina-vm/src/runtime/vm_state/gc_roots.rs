@@ -25,9 +25,10 @@
 //! collector queues each id once, and `trace_code_ids` traces the table of
 //! the unit each one names, once a collection (`LinkTable::trace_once`, by
 //! `trace_epoch`), in the same fixpoint as the continuation ids, since a
-//! continuation's frames report theirs only when its payload is traced. The
-//! VM does not link its units at load yet, so a table this traces has every
-//! entry `UNBOUND` and no namespace, and only the tests link one. A check
+//! continuation's frames report theirs only when its payload is traced. A
+//! table this traces marks the records its unit links, and with them the
+//! placeholders and weak read-through records nothing else marks, and the
+//! namespace the unit was linked in at load (`VmState::load_unit`). A check
 //! build asserts after each collection that the table of every unit it kept
 //! was traced (`VmState::release_dead_code`, with `LinkTable::traced_in`):
 //! whatever keeps a unit can run its code, and so reports its id.
@@ -141,6 +142,13 @@ pub(in crate::runtime) mod switches {
     pub(in crate::runtime) fn poll_before_callee_write() -> bool {
         false
     }
+
+    /// Whether a collection passes over the entries of a table it has
+    /// marked traced (#836, `test_support::SkipLinkEntries`): never.
+    #[inline(always)]
+    pub(in crate::runtime) fn skip_link_entries() -> bool {
+        false
+    }
 }
 
 #[cfg(feature = "test-support")]
@@ -174,6 +182,12 @@ impl RootProvider for VmState {
                 continue;
             }
             if code.links.trace_once(epoch) {
+                continue;
+            }
+            // A positive control's switch passes over the entries of a
+            // table marked traced, so that the placeholders it links go
+            // unmarked while `release_dead_code`'s check stays quiet (#836).
+            if switches::skip_link_entries() {
                 continue;
             }
             code.links.trace(visitor);

@@ -176,6 +176,16 @@ pub fn vm_interpreter_gc_off() -> Interpreter<VmBackend> {
     vm_interpreter_with(VmBackend::with_gc_mode(GcMode::Off))
 }
 
+/// [`vm_interpreter`], collecting where the adaptive byte threshold says,
+/// as a program run with no GC variable set does (`GcMode::On`), whatever
+/// `PATINA_GC_STRESS` or `PATINA_GC_ZEAL` say: for a test of the pacing
+/// itself, which stress and zeal replace with a count of allocations and
+/// with every safe point. Its collections count in the stress lane's record
+/// whatever the lane's variable says.
+pub fn vm_interpreter_adaptive() -> Interpreter<VmBackend> {
+    vm_interpreter_with(VmBackend::with_gc_mode(GcMode::On))
+}
+
 /// The tree-walker half of [`vm_interpreter_gc_off`].
 pub fn tree_walker_interpreter_gc_off() -> TreeWalkInterpreter {
     tree_walker_interpreter_with(Interpreter::new(TreeWalker::with_gc_mode(GcMode::Off)))
@@ -685,6 +695,15 @@ pub fn eval_program_vm(code: &str) -> String {
 /// [`eval_program_vm`] on [`vm_interpreter_gc_off`]: only `(gc)` collects.
 pub fn eval_program_vm_gc_off(code: &str) -> String {
     match run_on(vm_interpreter_gc_off(), code, Mode::Program) {
+        Ok(v) => v,
+        Err(e) => panic!("Failed to evaluate program: {}\n{code}", e.message),
+    }
+}
+
+/// [`eval_program_vm`] on [`vm_interpreter_adaptive`]: collections come
+/// where the adaptive byte threshold puts them, in every lane.
+pub fn eval_program_vm_adaptive(code: &str) -> String {
+    match run_on(vm_interpreter_adaptive(), code, Mode::Program) {
         Ok(v) => v,
         Err(e) => panic!("Failed to evaluate program: {}\n{code}", e.message),
     }
@@ -1302,24 +1321,25 @@ macro_rules! gc_shared_tests {
         #[test]
         fn a_forward_reference_links_the_definition_made_after_a_collection() {
             // `g`'s code reads `h` before anything binds it, and `h` is
-            // defined only after two collections. The read goes by name
-            // today, and finds the definition whenever it is made. Once
-            // 4b.9 links a unit's names when it loads (#836), `g`'s unit
-            // links `h` to a placeholder: a record nothing binds, which a
-            // collection keeps only while live code's link table holds it.
-            // `g`'s closure is live, so the collections must keep it: `(g)`
-            // reads through the link, and a read of a record they freed is
-            // what a check build's stale-reference check refuses (#621),
-            // where a release build may find the slot reused and answer 9.
+            // defined only after two collections. The tree-walker reads it
+            // by name, and finds the definition whenever it is made. The
+            // VM links a unit's names when it loads it (#836), so `g`'s
+            // unit links `h` to a placeholder: a record nothing binds,
+            // which a collection keeps only while live code's link table
+            // holds it. `g`'s closure is live, so the collections must keep
+            // it: `(g)` reads through the link, and a read of a record they
+            // freed is what a check build's stale-reference check refuses
+            // (#621), where a release build may find the slot reused and
+            // answer 9.
             //
             // The answer cannot show that the definition adopts the
             // placeholder: where a linked record reads unbound, the VM's
             // cold read goes by name, and finds a record the definition
             // made beside it. `binding-records` shows it. Between its
             // readings the program defines `g` and `h`, two records on both
-            // backends, today and once the definitions adopt what the load
-            // linked; a definition that made a record of its own would
-            // leave its placeholder counted beside it, one more. `(h)` in
+            // backends, the VM's definitions adopting what the load linked;
+            // a definition that made a record of its own would leave its
+            // placeholder counted beside it, one more. `(h)` in
             // the last form is linked when that form loads, after the
             // definition, so finds `h` by name: a definition that took the
             // placeholder out of the namespace's store without giving the
@@ -1354,11 +1374,11 @@ macro_rules! gc_shared_tests {
             // so `seen` is set only on the re-entry. On both backends a
             // continuation a top-level form captured ends with that form,
             // and the program goes on after the form that invoked it, so
-            // the forms between do not run again. Once 4b.9 links names at
-            // load (#836), the placeholder for `later` is held only through
-            // `k`, whose code a collection must trace; a read of a record
-            // freed under it is what a check build's stale-reference check
-            // refuses (#621).
+            // the forms between do not run again. The VM links names at
+            // load (#836), so its placeholder for `later` is held only
+            // through `k`, whose code a collection must trace; a read of a
+            // record freed under it is what a check build's stale-reference
+            // check refuses (#621).
             //
             // Two programs, since `k` holds code two ways. In the first the
             // read is in an anonymous procedure's code, and `k`'s frames
@@ -1368,8 +1388,8 @@ macro_rules! gc_shared_tests {
             // that links `later`: `(if #t ...)` keeps the form one
             // expression, where a top-level `begin` would be spliced into
             // forms of their own. Each counts `binding-records` across the
-            // definition, one record, today and once the definition adopts
-            // the placeholder the load linked, as in
+            // definition, one record on both backends, the VM's definition
+            // adopting the placeholder the load linked, as in
             // `a_forward_reference_links_the_definition_made_after_a_collection`.
             // Under zeal too.
             assert_gc_and_zeal_eval_to(
@@ -1411,6 +1431,100 @@ macro_rules! gc_shared_tests {
                 (list seen n (- r1 r0))
                 "#,
                 "(7 2 1)",
+            );
+        }
+
+        /// The program of
+        /// `a_placeholder_no_live_code_links_is_dropped`, with batches of
+        /// `batch` `eval`s.
+        fn placeholders_dropped(batch: usize) -> String {
+            format!(
+                r#"
+                (import (scheme base) (scheme eval) (scheme repl) (patina debug))
+                (define env (interaction-environment))
+                (define (count key) (cdr (assq key (gc-stats))))
+                (define r0 #f) (define c0 #f) (define x0 #f)
+                (define r1 #f) (define c1 #f) (define x1 #f) (define x2 #f)
+                (define (batch)
+                  (do ((i 0 (+ i 1))) ((= i {batch}))
+                    (eval (list 'lambda '()
+                                (string->symbol
+                                  (string-append "unbound-" (number->string i))))
+                          env)))
+                (gc) (gc)
+                (set! r0 (count 'binding-records))
+                (set! c0 (count 'cells))
+                (set! x0 (count 'external-bytes))
+                (batch) (gc) (gc)
+                (set! r1 (count 'binding-records))
+                (set! c1 (count 'cells))
+                (set! x1 (count 'external-bytes))
+                (batch) (gc) (gc)
+                (set! x2 (count 'external-bytes))
+                (define unbound-0 1)
+                (list (<= (abs (- r1 r0)) 16) (<= (abs (- c1 c0)) 16)
+                      (< (- x1 x0) 65536) (= x2 x1) unbound-0)
+                "#
+            )
+        }
+
+        #[test]
+        fn a_placeholder_no_live_code_links_is_dropped() {
+            // Each `eval` compiles a procedure that reads a name nothing
+            // binds, `unbound-0` to `unbound-999`, in the global namespace,
+            // and drops it. The VM links each name to a placeholder in the
+            // namespace's store when it loads the unit (#836): a binding
+            // record and a cell, counted. Once the procedure is dead nothing
+            // traces its unit's table, so the pass at the sweep's start drops
+            // every one of them, and two collections later `binding-records`
+            // and `cells` read as they did before the batch. A pass that did
+            // not run, or a store traced as a root, would leave them a batch
+            // above. The store's table keeps the capacity its first batch
+            // grew it to, under 64 KiB, and the second batch, of the same
+            // names, leaves `external-bytes` where the first did: a store
+            // that kept something for every name it ever held would not.
+            // The last form shows that a name whose placeholder was dropped
+            // can still be defined and read. The tree-walker links nothing,
+            // and nothing moves. Every variable is defined before the first
+            // reading and then `set!`, since a definition's operand is
+            // linked at load. 1,000 a batch, and under zeal 100, which
+            // collects at every outermost safe point and must have collected
+            // beyond the program's `(gc)`s; still past SS5's floor of 16.
+            let expected = "(#t #t #t #t 1)";
+            assert_gc_eval_to(&placeholders_dropped(1000), expected);
+            let zeal = placeholders_dropped(100);
+            let result = $eval_zeal(&zeal);
+            assert_eq!(result, expected, "\nUnder zeal\nProgram:\n{zeal}");
+            let asked = zeal.matches("(gc)").count() as i64;
+            let collections = stat_on($eval_zeal, &zeal, "collections");
+            assert!(
+                collections > asked,
+                "{collections} collections under zeal, and the program asks for {asked}"
+            );
+        }
+
+        #[test]
+        fn a_read_that_missed_is_not_remembered_across_collections() {
+            // `g` reads `later-836m` before anything binds it: the call
+            // raises an unbound-variable error, which the program catches.
+            // Two collections later the name is defined, and the same
+            // closure reads it. A miss the read remembered, in the unit's
+            // link table or anywhere else, would raise again; an error path
+            // that dropped or replaced the placeholder `g`'s unit links
+            // would leave it reading a record the collections freed, which a
+            // check build refuses (#621). On the VM the read goes through
+            // the placeholder the load linked (#836); on the tree-walker by
+            // name. Under zeal too.
+            assert_gc_and_zeal_eval_to(
+                r#"
+                (import (scheme base) (patina debug))
+                (define (g) later-836m)
+                (define r (guard (e (#t 'caught)) (g)))
+                (gc) (gc)
+                (define later-836m 5)
+                (list r (g))
+                "#,
+                "(caught 5)",
             );
         }
     };

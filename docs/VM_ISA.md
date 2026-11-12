@@ -62,7 +62,7 @@ pub struct CodeObject {
     pub arity:        Arity,                // fixed / variadic
     pub source_map:   Vec<(usize, SourceLocation)>, // pc → source loc
     pub register_roots: Option<Vec<Vec<u64>>>, // pc → possible-root bitset
-    pub links:        Rc<LinkTable>,        // the unit's global spellings (§3)
+    pub links:        Rc<LinkTable>,        // the unit's globals, linked at load (§3)
 }
 
 pub enum Arity {
@@ -87,10 +87,13 @@ all the code ever compiled (#352). A lookup checks the generation: an id naming
 code that has gone finds nothing rather than whatever took its slot. An empty
 slot holds a shared placeholder whose id is a label, so that one comparison
 turns it away too. A slot that has used every generation is not given out
-again, so ids never repeat. It answers the unit as a `LoadedUnit`, the id
-with an `AssertNoGc` window open over it, since until a frame holds its code
-only the code store holds the unit; `execute`, `execute_in` and
-`execute_nested` close the window once they have pushed the unit's frame.
+again, so ids never repeat. Before it answers, it links the unit's table in
+the namespace the unit was compiled in (§4.1, #836), so no read goes through
+an unlinked entry. It answers the unit as a `LoadedUnit`, the id with an
+`AssertNoGc` window open over it, since until a frame holds its code only
+the code store holds the unit, and only the unit's table the placeholders
+it linked; `execute`, `execute_in` and `execute_nested` close the window
+once they have pushed the unit's frame.
 For `eval` the window stays open until the closure made of the unit is in
 the stub frame's `CALLEE` register, since nothing roots the closure before
 then (#836; `docs/GC_DESIGN.md` §7, the windows S1 and S2).
@@ -102,7 +105,11 @@ continuation hold the code itself, so its `Rc` count says whether they need it; 
 closure names its code by id, so the VM counts the closures naming each code
 object, up where `MakeClosure` makes one and down when the collector frees one.
 A unit is kept whole because code that has finished running can still make a
-closure of a lambda nested in it.
+closure of a lambda nested in it. A unit's link table is traced only through
+the unit's code id, which whatever keeps the unit reports, never from the
+code store, and a check build asserts after each collection that every unit
+it kept had its table traced (`VmState::release_dead_code`; `docs/GC_DESIGN.md`
+§5.2).
 
 ### 2.4 Flat Closures
 
@@ -136,9 +143,11 @@ An instruction that names a global — `LoadGlobal`, `StoreGlobal`, `Define`,
 `CallPrimitive` and the inline opcodes of §4.5 — carries a `LinkIdx`, not
 the name: an index into its code unit's link table (`CodeObject::links`),
 one table per unit, made by the compiler and shared by every member of the
-unit. The table holds the unit's global spellings, each once; whatever needs
-an operand's name (a lookup the site's cache misses, a definition, a
-shadowed primitive's deoptimization, an unbound-variable error, the
+unit. The table holds the unit's global spellings, each once, and, once
+`VmState::load_unit` has linked it, the binding record each one names in the
+namespace the unit was compiled in, which the global instructions read
+(§4.1). Whatever needs an operand's name (a definition, the cold read and a
+store the record cannot resolve, an unbound-variable error, the
 disassembler, the tracer) reads it there (#836).
 
 ---
@@ -153,26 +162,40 @@ disassembler, the tracer) reads it there (#836).
 | `LoadImmediate` | `dst: Reg, val: TaggedValue` | `dst ← val` (fixnum/bool/char/null inline) |
 | `Move` | `dst: Reg, src: Reg` | `dst ← src` (register copy, covers local loads) |
 | `LoadClosure` | `dst: Reg, slot: u16` | `dst ← current_closure.free_vars[slot]` |
-| `LoadGlobal` | `dst: Reg, link: LinkIdx` | `dst ← globals[name]`, `name` the unit's link table's entry `link` (error if unbound) |
-| `StoreGlobal` | `link: LinkIdx, src: Reg` | `globals[name] ← src`, `name` as for `LoadGlobal` |
+| `LoadGlobal` | `dst: Reg, link: LinkIdx` | `dst ←` the binding the unit's link table's entry `link` links (error if unbound) |
+| `StoreGlobal` | `link: LinkIdx, src: Reg` | that binding's cell `← src` (error if unbound) |
 
-Both global instructions consult a per-site inline cache (Track P P4): each
-`CodeObject` carries a pc-indexed table of `(environment id, slot)` entries.
-After the first execution against a given globals environment, the name
-lookup collapses to an id compare plus a slot read into the environment's
-append-only slot table. In a namespace the slot holds the binding's record,
-so a hit takes one hop more, record → cell → value, until the link tables
-of `PRD/GC_PRD.md` §11.6 replace the cache (#834): redefinition stores into
-the cell, and a definition over an import or an import over a definition
-re-points the record, never the slot, so hits always see the current value.
-An imported name's record names the exporting library's cell, so its read
-costs the same hop. A host's environment is a namespace too, a host
-namespace (#835). In a frame the slot holds the value, overwritten in place
-by a redefinition, or the import marker beside the imported cell. Names that
-resolve through a parent environment are never cached, a host namespace's
-read-through records among them (#835). The cache is invisible to the ISA:
-operands, semantics, and error behavior are unchanged. A hit reads nothing of
-the link table; only a miss reads the operand's name from it (§3).
+Both global instructions read through the unit's link table (#836, which
+replaced Track P P4's per-site inline cache). `VmState::load_unit` links
+each entry, before any read goes through it, to the binding record its name
+has in the namespace the unit was compiled in (`LinkTable::link_in`,
+`Environment::link_record`): the namespace's own record, or an import's,
+which names the exporting library's cell; in a host namespace (#835) a
+read-through record over the parent's record; for a name the namespace does
+not bind yet, a placeholder, which a later `define` or import of the name
+adopts, keeping its word; and for a name the namespace reaches by an alias or
+a visible scoped definition, the heap's by-name record. A debug build
+refuses a link in any other namespace than the one the unit was compiled in.
+
+`LoadGlobal` follows `link[k] → record → cell → value` under one shared
+borrow of the heap, with one compare against `UNBOUND` (`LinkTable::get`):
+every own and imported binding answers there. A placeholder, a read-through
+record and the by-name record hold `UNBOUND` in their own cell and take the
+cold read (`LinkTable::read_cold`), which answers a read-through record's
+parent unless the host namespace now reaches the name by an alias or a
+visible scoped definition, and otherwise reads the name in the table's
+namespace, as `Environment::get` does; nothing binding it is the
+unbound-variable error, and a miss is not remembered. `StoreGlobal` resolves
+the cell the same way (`LinkTable::assignee`: the record's own cell when it
+holds a binding, or a read-through record's parent's), marks the primitive
+the store replaces (§4.5) and then stores (#852's order); anything else, a
+placeholder among them, is stored by name in the table's namespace, where an
+unbound name is the error. Redefinition stores into the cell, and a
+definition over an import or an import over a definition re-points the
+record, never the entry, so a linked read always sees the current binding.
+The table is invisible to the ISA: operands, semantics and error behavior are
+as they were. The hot paths read nothing of the table but the entry; the cold
+paths read the operand's name (§3).
 
 ### 4.2 MutableCell Operations
 
@@ -285,9 +308,10 @@ definition through `Backend::define` (#673) set a per-primitive bit in
 every fast path tests its bit (one load+mask) before firing. A definition
 marks by the environment's own binding, the only one a fast path compiled
 there stands on (`define_global`). A set bit routes
-the call through `globals[name]` + full call dispatch, which is exactly the
-pre-P2 behavior; `name` is the link table's entry for the site's `link`, read
-only on this path, so the unshadowed one reads no table. See
+the call through the binding the site's `link` links in the frame's unit's
+table, read as `LoadGlobal` reads it, and full call dispatch, which is exactly
+the pre-P2 behavior; the table is read only on this path, so the unshadowed
+one reads no table. See
 `PRD/TRACK_P_PERFORMANCE_PRD.md` §P3 for the design space if this ever needs
 revisiting (immutable library bindings, optimize levels, n-ary
 canonicalization).
@@ -332,7 +356,7 @@ same way.
 
 | Instruction | Operands | Semantics |
 |---|---|---|
-| `Define` | `link: LinkIdx, src: Reg` | `globals[name] ← reg[src]` (top-level `define`), `name` the unit's link table's entry `link` |
+| `Define` | `link: LinkIdx, src: Reg` | define `name` as `reg[src]` (top-level `define`) by name in the namespace the unit's link table was linked in, `name` the table's entry `link`; a placeholder or read-through record the load linked for it is adopted, keeping its word |
 
 ### 4.8 Miscellaneous
 
@@ -492,19 +516,13 @@ variants, avoiding circular dependencies between `patina-core` and
 
 ## 8. GC Interaction
 
-All `TaggedValue` values reachable by the GC must be in one of:
-- `vm.registers` (the shared register array)
-- Closure `free_vars` for each live closure on heap
-- `vm.code_store` constant pools
-- `vm.globals` (global environment)
-- `vm.prompt_stack` (handler closures, tags)
-- `vm.dynamic_winds` (before/after thunks)
-- `vm.exception_handlers` (handler closures)
-- `vm.value_buffer` (multiple-value buffer)
-- `vm.continuation_store` / `vm.delimited_continuation_store`
-
-Phase 2A uses `Rc`-based reference counting (cycles from `set-car!`/`set-cdr!`
-may leak).
+The VM's roots, and how the collector reaches what is not a root, are in
+`docs/GC_DESIGN.md` §5.2: the registers and each frame's closure as slots;
+each unit's link table traced by the unit's code id, which a frame, the
+running code or a marked closure reports, never from the code store; the
+code store's constant pools; the machine's `globals`; the dynamic stacks,
+pinned; and the continuation stores, weak. Where the machine may collect,
+and the windows in which it must not, are in §7 of the same document.
 
 ---
 

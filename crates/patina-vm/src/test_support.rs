@@ -14,6 +14,7 @@ thread_local! {
     static DROP_HIGHEST_LIVE: Cell<bool> = const { Cell::new(false) };
     static SKIP_CODE_IDS: Cell<Option<Keeper>> = const { Cell::new(None) };
     static POLL_IN_WINDOW: Cell<Option<WindowEnd>> = const { Cell::new(None) };
+    static SKIP_LINK_ENTRIES: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The wrong-map switch behind the `DEAD_SLOT` controls (#625,
@@ -153,4 +154,40 @@ pub(crate) fn poll_before_frame_push() -> bool {
 /// Whether [`PollInWindow`] checks before an `eval`'s closure is written.
 pub(crate) fn poll_before_callee_write() -> bool {
     POLL_IN_WINDOW.get() == Some(WindowEnd::CalleeWrite)
+}
+
+/// The switch behind the control of the placeholders a link table keeps
+/// (#836, `a_check_build_refuses_a_placeholder_the_pass_dropped_while_linked`
+/// in `crates/patina-tests/tests/gc_vm.rs`). While one is alive, a
+/// collection on this thread marks each unit's table traced this epoch, as
+/// it does, and then passes over what the table would mark: its entries,
+/// and with them the placeholders and weak read-through records nothing
+/// else marks, which the pass at the sweep's start then drops and the sweep
+/// frees, although the unit is kept and its code can read them. A check
+/// build refuses the next read through such an entry as a read of a freed
+/// or reused pair. `release_dead_code`'s check stays quiet, since each kept
+/// unit's table was marked traced. The whole trace is passed over, so the
+/// table's namespace goes unmarked from it too, which the control does not
+/// notice: its namespace is the global one, which the machine roots.
+/// Thread-local, as [`DropHighestLive`] is.
+pub struct SkipLinkEntries(());
+
+impl SkipLinkEntries {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        SKIP_LINK_ENTRIES.set(true);
+        Self(())
+    }
+}
+
+impl Drop for SkipLinkEntries {
+    fn drop(&mut self) {
+        SKIP_LINK_ENTRIES.set(false);
+    }
+}
+
+/// Whether [`SkipLinkEntries`]'s switch passes over the entries of a table
+/// a collection has marked traced.
+pub(crate) fn skip_link_entries() -> bool {
+    SKIP_LINK_ENTRIES.get()
 }

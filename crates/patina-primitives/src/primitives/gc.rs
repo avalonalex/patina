@@ -15,7 +15,8 @@
 //!
 //! - `live-bytes`: what the last collection found live — the slots of the
 //!   objects it marked, their payloads (a VM continuation's snapshot among
-//!   them) and the external bytes held then. 0 before the first collection.
+//!   them) and the external bytes held once the collection was finished,
+//!   after the VM's code release (#836). 0 before the first collection.
 //!   The adaptive trigger collects again after `max(8 MiB, 2 × live-bytes)`.
 //! - `bytes-allocated`: every byte charged since the heap was made: each
 //!   object's slot and payload, and the external bytes charged, a
@@ -102,13 +103,19 @@
 //! - `binding-records` (#834): the binding records the live namespaces hold,
 //!   one for each slot, each scoped entry (the splicing `let-syntax`
 //!   keywords filed at top level among them), each import alias, and each
-//!   of a host namespace's read-through records (#835).
+//!   of a host namespace's read-through records (#835); and on the VM each
+//!   placeholder a loaded unit's link table linked for a name its namespace
+//!   does not bind yet, and each weak read-through record a host namespace's
+//!   unit linked over one, until the collection after no code links it or a
+//!   definition or an import adopts it (#836). Not the heap's one by-name
+//!   record.
 //! - `cells` (#834): the cells of their own the live namespaces' records name
-//!   now. Not counted: a frame's imports, a free cell (an export with no
-//!   binding behind it, a declaration's location, the one a host
-//!   namespace's read-through records name), and a cell only an importer's
-//!   record or an export keeps once its namespace dropped or re-pointed away
-//!   from it.
+//!   now, a placeholder's own `UNBOUND` cell among them (#836). Not counted:
+//!   a frame's imports, a free cell (an export with no binding behind it, a
+//!   declaration's location, the one a host namespace's read-through
+//!   records name, weak or not, the by-name record's), and a cell only an
+//!   importer's record or an export keeps once its namespace dropped or
+//!   re-pointed away from it.
 //! - `code-units` (#836): the code units the VM has loaded and not released.
 //!   A unit is what one compilation loaded, kept and let go whole: a form's
 //!   top code object (a program's form, a library body form, a datum `eval`
@@ -121,9 +128,11 @@
 //!
 //! `binding-records` and `cells` are running sums: raised as a namespace
 //! makes a record or a cell, `cells` lowered as a record is re-pointed away
-//! from its namespace's own cell, and both lowered by what a namespace holds
-//! when it drops. So they are exact once the dead namespaces have dropped,
-//! which a collection's sweep does for the specifiers it frees: the
+//! from its namespace's own cell, both lowered by the sweep's pass for each
+//! placeholder and weak read-through record it drops, and both lowered by
+//! what a namespace holds when it drops. So they are exact once the dead
+//! namespaces have dropped and the pass has run, which a collection does
+//! for the specifiers it frees and the code it lets go: the
 //! steady-state driver reads them after `(gc) (gc)`. A record and a cell are
 //! each a pair, so both are counted in `pairs` as well. `code-units` is the
 //! size of the VM's table of units, written whenever the table changes. A

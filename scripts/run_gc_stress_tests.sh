@@ -226,25 +226,68 @@ fi
 # and 1 without stress, the other 30 tests making 21020 and 3676, as before,
 # the minimum left; and again 2026-11-09, when that control became two, one
 # for each way a unit is kept, each making 35 collections at 16 and 1
-# without stress, the other 30 tests' counts as before, the minimum left)
+# without stress, the other 30 tests' counts as before, the minimum left;
+# and 2026-11-09 for #836's tests once the VM links each unit at load:
+# gc_vm's test count re-pinned for the control of a placeholder a kept
+# unit's table links that a collection drops (36 collections at 16, 1
+# without stress), the shared tests that a placeholder no live code links is
+# dropped (2069 and 1020 on the VM, whose zeal half runs 100 `eval`s) and
+# that a read that missed is not remembered (185 and 150), and the test that
+# a bound placeholder is never dropped (242 and 198), the other 32 tests
+# making 21089 and 3678, the linking having moved them by one at 16;
+# gc_tree_walker's for the two shared tests, 11692 and 10884 for the drop
+# test, whose zeal half's 100 `eval`s collect at every outermost safe
+# point, and 504 and 470, the other 24 tests' counts as before;
+# host_environments's for the tests that a host namespace's placeholders
+# go with their code (925 and 12) and that a host's read that missed is not
+# remembered (378 and 307), `a_read_makes_no_record`'s second half adding
+# 20 and 4, the other 27 tests' counts as before; and
+# finished_forms_release_code's for 4b's start decision 3's gate (236 and
+# 2), the other 11 tests making 3845 and 13; the four minimums at half
+# their counts measured that day. vm_callprimitive's count re-measured that
+# day for its host definitions' compiled `define`, 280 collections at 16
+# where that test made 138, its test count and minimum left; the linking
+# itself moved the other targets' counts by at most 20 (hygiene_matrix's),
+# their minimums left; and every target's count re-measured that day,
+# twelve of which had moved since their pins with no re-pin recording it,
+# as the lane reads at the linking's base, cf7228ea (each count there, and
+# the count its comment gave): callability's (2195, 1543),
+# control_flow_matrix's (4826, 680), cps_features's (1014, 1060),
+# ephemerons's (5894, 578), escape_from_primitive's (9950, 7338),
+# finished_forms_release_code's (3844, 3677), interpreter_api's (3128,
+# 2277), library_loading's (131, 93), macro_definition_env's (33675,
+# 33253), owned_handles's (125668, 125485), rooted_loading's (1283, 742)
+# and scheme_suite's (10230, 3068); host_environments's count re-measured
+# 2026-11-10, when its test of a host namespace's placeholders took a
+# reading after a single `(gc)`, 929 collections at 16 where it made 925
+# and 12 without stress, as before, its test count and minimum left;
+# gc_vm's test count re-pinned 2026-11-11 for #836's two tests that a
+# collection's L leaves out the namespaces its code release drops: the
+# paced one runs on an interpreter that collects at the adaptive threshold
+# whatever the lane's variable says, 6 collections either way, and the one
+# at `(gc)`'s call 160 at 16 and 15 without stress, the other 36 tests
+# making 23621 and 5047, as before, the minimum left; and again that day
+# for the test of the collection where a library's load ends, which runs
+# on the adaptive interpreter too, 4 collections either way, the other 38
+# tests making 23787 and 5068, as before, the minimum left)
 TARGETS=(
-    "callability 16 31 13"                    # 1543 (0)
-    "control_flow_matrix 16 340 3"            # 680 (0)
-    "cps_features 16 530 3"                   # 1060 (2)
-    "ephemerons 16 289 30"                    # 578 (204)
-    "escape_from_primitive 16 3669 18"        # 7338 (90)
-    "finished_forms_release_code 16 1450 11"  # 3677 (13)
-    "gc_tree_walker 16 15161 24"              # 30322 (6442)
-    "gc_vm 16 10510 32"                       # 21090 (3678)
-    "host_environments 16 57985 28"           # 115970 (431)
-    "hygiene_matrix 16 11136 17"              # 22273 (6)
-    "interpreter_api 16 138 28"               # 2277 (4)
-    "library_loading 16 46 9"                 # 93 (0): see the header
-    "macro_definition_env 16 16626 19"        # 33253 (67): see the header
-    "owned_handles 16 62714 9"                # 125485 (14)
-    "rooted_loading 16 371 6"                 # 742 (12)
-    "vm_callprimitive 16 545 18"              # 1091 (0)
-    "scheme_suite 4096 1534 11"               # 3068 (111): see the header
+    "callability 16 31 13"                    # 2195 (0)
+    "control_flow_matrix 16 340 3"            # 4826 (0)
+    "cps_features 16 530 3"                   # 1015 (2)
+    "ephemerons 16 289 30"                    # 5898 (204)
+    "escape_from_primitive 16 3669 18"        # 9951 (92)
+    "finished_forms_release_code 16 2040 12"  # 4081 (15)
+    "gc_tree_walker 16 21259 26"              # 42518 (17796)
+    "gc_vm 16 11810 39"                       # 23791 (5072)
+    "host_environments 16 58646 30"           # 117297 (754)
+    "hygiene_matrix 16 11136 17"              # 22293 (6)
+    "interpreter_api 16 138 28"               # 3128 (4)
+    "library_loading 16 46 9"                 # 131 (0): see the header
+    "macro_definition_env 16 16626 19"        # 33675 (67): see the header
+    "owned_handles 16 62714 9"                # 125668 (14)
+    "rooted_loading 16 371 6"                 # 1284 (10)
+    "vm_callprimitive 16 545 18"              # 1233 (0)
+    "scheme_suite 4096 1534 11"               # 10231 (363): see the header
 )
 
 OUT=$(mktemp -d)

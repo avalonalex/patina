@@ -164,18 +164,45 @@ fn a_host_definition_deoptimizes() {
     );
 }
 
-/// The same in a host environment (#620), through `define_in`. One that
-/// imports `(scheme base)` binds `car` itself, so the code compiled there
-/// takes the fast path until the definition marks it; one that reaches
-/// `car` through its parent compiles an ordinary call. Either way the global
-/// `car` stays the primitive.
-fn host_environment_definitions<B: Backend>(interp: Interpreter<B>, import: &str) -> Vec<String> {
+/// How [`host_environment_definitions`] defines `car` in the host
+/// environment.
+#[derive(Clone, Copy, Debug)]
+enum Definer {
+    /// `Interpreter::define_in`, through `Backend::define`.
+    Host,
+    /// A `define` form evaluated there: on the VM a compiled `Define`.
+    Compiled,
+}
+
+/// The same in a host environment (#620), through `define_in` or a
+/// compiled `define`. One that imports `(scheme base)` binds `car` itself,
+/// so the code compiled there takes the fast path until the definition
+/// marks it; one that reaches `car` through its parent compiles an ordinary
+/// call, which the VM links to a read-through record over the global `car`
+/// (#836), and the definition adopts that record, so the call reads the new
+/// value. Either way the global `car` stays the primitive: a definition in
+/// a host namespace never writes through its read-through record into the
+/// global cell (#852).
+fn host_environment_definitions<B: Backend>(
+    interp: Interpreter<B>,
+    import: &str,
+    definer: Definer,
+) -> Vec<String> {
     let env = interp.new_environment();
     interp
         .eval_program_in(&env, &format!("{import} (define (f x) (car x))"))
         .unwrap();
-    let replaced = interp.eval_str_owned("(lambda (x) 'replaced)").unwrap();
-    interp.define_in(&env, "car", &replaced);
+    match definer {
+        Definer::Host => {
+            let replaced = interp.eval_str_owned("(lambda (x) 'replaced)").unwrap();
+            interp.define_in(&env, "car", &replaced);
+        }
+        Definer::Compiled => {
+            interp
+                .eval_str_in(&env, "(define car (lambda (x) 'replaced))")
+                .unwrap();
+        }
+    }
     vec![
         interp.display_tagged(interp.eval_str_in(&env, "(f '(1 2))").unwrap()),
         interp.display_tagged(interp.eval_str_in(&env, "(car '(1 2))").unwrap()),
@@ -186,17 +213,19 @@ fn host_environment_definitions<B: Backend>(interp: Interpreter<B>, import: &str
 #[test]
 fn a_host_definition_in_a_host_environment_deoptimizes() {
     let expected = ["replaced", "replaced", "1"];
-    for import in ["(import (scheme base))", ""] {
-        assert_eq!(
-            host_environment_definitions(common::vm_interpreter(), import),
-            expected,
-            "VM, {import:?}"
-        );
-        assert_eq!(
-            host_environment_definitions(common::tree_walker_interpreter(), import),
-            expected,
-            "tree-walker, {import:?}"
-        );
+    for definer in [Definer::Host, Definer::Compiled] {
+        for import in ["(import (scheme base))", ""] {
+            assert_eq!(
+                host_environment_definitions(common::vm_interpreter(), import, definer),
+                expected,
+                "VM, {import:?}, {definer:?}"
+            );
+            assert_eq!(
+                host_environment_definitions(common::tree_walker_interpreter(), import, definer),
+                expected,
+                "tree-walker, {import:?}, {definer:?}"
+            );
+        }
     }
 }
 

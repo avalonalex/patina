@@ -48,7 +48,13 @@
 //! a sweep, which holds the heap's `RefCell` mutably while it drops the
 //! tombstoned slots' payloads, and a namespace's tables grow wherever a
 //! definition lands. The sweep settles L after the arenas are swept, so what
-//! those drops give back is out of the L it sets.
+//! those drops give back is out of the L it sets. A holder that a backend
+//! drops after the sweep, in its own work after the collection, gives back
+//! later than that: on the VM a namespace whose last holder is a dead unit's
+//! link table drops at code release (#836). So the collection's finish
+//! settles L again from the external bytes held then
+//! ([`Heap::settle_live_bytes`]), and what the backend's work gave back is
+//! out of L too.
 //!
 //! **An open file port** (#607, GC_PRD §9.6 F3) is charged
 //! [`FILE_PORT_BYTES`] of external bytes for its buffer, and counted toward
@@ -103,9 +109,15 @@
 //! The policy that reads the account lives in the collector
 //! (`MarkSweepCollector::auto_threshold` in `gc.rs`): the next collection
 //! after `max(8 MiB, 2·L)` bytes, L being the bytes the last collection
-//! found live. `PATINA_GC_STRESS` still counts allocations, not bytes
-//! ([`GcThreshold`]). Descriptor pressure applies in every mode that
-//! collects on its own, and not under `PATINA_GC=0`.
+//! found live. L is the sweep's until the backend finishes the collection
+//! (`GcController::finish_collection`), which settles it once the backend's
+//! own work has given back what it holds for the dead, and arms the
+//! threshold again from the settled L: an L that counted a dead namespace
+//! put each collection further off than the one before, by about 1.76 times
+//! in a loop that made nothing else, so its garbage grew without bound.
+//! `PATINA_GC_STRESS` still counts allocations, not bytes ([`GcThreshold`]).
+//! Descriptor pressure applies in every mode that collects on its own, and
+//! not under `PATINA_GC=0`.
 
 use std::cell::Cell;
 use std::mem::size_of;
@@ -394,7 +406,9 @@ pub(super) struct ByteAccount {
     /// payload, measured at its death.
     pub(super) reclaimed: u64,
     /// L: the bytes the last collection found live, the external bytes held
-    /// at that time included. Zero before the first collection.
+    /// when it was finished included, or when it swept if no backend has
+    /// finished it ([`Heap::settle_live_bytes`]). Zero before the first
+    /// collection.
     pub(super) live: usize,
     /// The payloads of the tree-walker closures in the object arena, live or
     /// not yet swept ([`cps_lambda_payload`]): `alloc_procedure` adds each
@@ -602,7 +616,9 @@ impl Drop for FilePortCharge {
 /// heap mutably, so a `Drop` that borrowed the heap would panic. The handle
 /// shares the total with the heap instead, and the sweep reads it after the
 /// arenas are swept, so bytes given back by the drops a sweep causes are out
-/// of the L that collection sets. A file port's buffer shares the total
+/// of the L that collection sets, as are those the backend's work after the
+/// sweep gives back, since the collection's finish reads the total again
+/// (`Heap::settle_live_bytes`). A file port's buffer shares the total
 /// through its [`FilePortCharge`], which a collection that finds the port
 /// dead takes out at classification, under the same borrow and before the
 /// sweep settles L (#785). A namespace charges its
@@ -761,10 +777,61 @@ impl Heap {
 
     /// L: the bytes the last collection found live — the slots of the
     /// objects it marked, their payloads (a live VM continuation's snapshot
-    /// among them) and the external bytes held then. Zero before the first
-    /// collection.
+    /// among them) and the external bytes held when the backend finished it
+    /// (`Heap::settle_live_bytes`), or when it swept, for a collection no
+    /// backend finished. Zero before the first collection.
     pub fn live_bytes(&self) -> usize {
         self.account.live
+    }
+
+    /// Settle L for the collection whose record is unfinished, once the
+    /// backend's work after it is done: what marking found live in the
+    /// arenas, plus the external bytes held now. The record's `live` and
+    /// `external` follow, so the log and `(gc-stats)` read the same L. The
+    /// sweep read the external bytes as it ended, and a holder the backend
+    /// drops after it gives back later: the VM's code release drops each
+    /// namespace whose last holder was a dead unit's link table (#836),
+    /// which the sweep's L therefore counted live.
+    ///
+    /// Returns whether L moved, for the controller to arm its threshold
+    /// again (`GcController::finish_collection`, the only caller). It did
+    /// not when the external bytes are what the sweep read, as on the
+    /// tree-walker, which drops nothing after its sweep, nor with no record
+    /// unfinished: then nothing is written.
+    ///
+    /// The arenas' part is the record's `live` less its `external`. Both
+    /// are the sweep's own: the L it set, and the external bytes it read to
+    /// set it, handed up with what it swept (`Heap::sweep`) and not read a
+    /// second time, so their difference is the figure the sweep had and
+    /// nothing is marked or measured again, whatever gave bytes back
+    /// between the sweep's reading and the record. Where an embedder's
+    /// wrong size had saturated the sum, the difference is short by that
+    /// part.
+    ///
+    /// Only for the last sweep's record: its number is the count of
+    /// collections as its sweep ended. A sweep that records nothing sets L
+    /// too, with an earlier record still unfinished: a raw collection in a
+    /// backend's unit tests (`collect_for_tests`), which counts itself, and
+    /// a teardown, which does not and closes the record instead
+    /// (`Heap::teardown`). Settled from that record, L would take an earlier
+    /// collection's marked bytes for this sweep's.
+    pub(crate) fn settle_live_bytes(&mut self) -> bool {
+        let Some(record) = self.telemetry.unfinished.as_mut() else {
+            return false;
+        };
+        if record.number != self.gc_collections {
+            return false;
+        }
+        let external = self.account.shared.external.get();
+        if external == record.external {
+            return false;
+        }
+        let marked = record.live.saturating_sub(record.external);
+        let live = marked.saturating_add(external);
+        record.live = live;
+        record.external = external;
+        self.account.live = live;
+        true
     }
 
     /// Every byte charged since the heap was made: each allocation's slot and

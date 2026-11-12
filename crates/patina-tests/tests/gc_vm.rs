@@ -294,6 +294,278 @@ fn code_units_count_a_unit_a_live_closure_keeps() {
     );
 }
 
+#[test]
+fn a_paced_collection_leaves_the_namespaces_its_code_release_drops_out_of_l() {
+    // A unit's link table holds the namespace it was linked in (#836), so a
+    // namespace `environment` made, with a procedure compiled in it, lives
+    // until the collection that frees the procedure releases its unit, and
+    // that is after the sweep has read the external bytes. The sweep's L
+    // counted every such namespace made since the last collection, about
+    // 32 KB each, and the threshold, max(8 MiB, 2·L), followed them: each
+    // collection of this loop came about 1.76 times further off than the
+    // one before, and its garbage grew without bound (345 MiB resident at
+    // 32,000 cycles, where the settled L holds 21). The collection's finish
+    // settles L once the units are released
+    // (`GcController::finish_collection`).
+    //
+    // One form runs a thousand cycles, each a fresh namespace, a procedure
+    // compiled in it, called and dropped: about 35 MB, four collections 8
+    // MiB apart. After each cycle the loop reads `(gc-stats)`, and where the
+    // count of collections has moved, the L and the threshold the collection
+    // left. Each L is within 1 MiB of the L two `(gc)`s left before the
+    // loop (about 40 KB above it: the cycle's own namespace and the
+    // readings), where the sweep's L was 7 MiB above it at the first; each
+    // threshold is the 8 MiB floor, where it was 14 MiB after the first;
+    // and there are at least three such collections, where the growing
+    // interval allowed two.
+    //
+    // Sized on a cycle of about 39 KB, nearly all of it the namespace: four
+    // collections in the thousand cycles, at cycles 214, 428, 642 and 856.
+    // A cycle under 25 KB makes fewer than three, and wants more cycles.
+    //
+    // The interpreter collects at the adaptive threshold whatever the
+    // lane's variable says, so the stress lane asserts the same as a plain
+    // run: stress and zeal collect every few allocations, each collection
+    // finding at most the last cycle's namespace dead, and replace the
+    // threshold this reads.
+    let code = r#"
+        (import (scheme base) (scheme eval) (patina debug))
+        (define (stat key) (cdr (assq key (gc-stats))))
+        (define (cycle)
+          ((eval '(lambda (x) (* x 2)) (environment '(scheme base))) 21))
+        (define (run n)
+          (let loop ((i 0) (seen (stat 'collections)) (readings '()))
+            (if (= i n)
+                (reverse readings)
+                (begin
+                  (cycle)
+                  (let* ((stats (gc-stats))
+                         (now (cdr (assq 'collections stats))))
+                    (loop (+ i 1)
+                          now
+                          (if (= now seen)
+                              readings
+                              (cons (list (cdr (assq 'live-bytes stats))
+                                          (cdr (assq 'bytes-trigger stats)))
+                                    readings))))))))
+        (cycle)
+        (gc)
+        (gc)
+        (define base (stat 'live-bytes))
+        (define floor-bytes (stat 'bytes-trigger))
+        (list base floor-bytes (run 1000))
+        "#;
+    let answer = eval_program_vm_adaptive(code);
+    let numbers: Vec<u64> = answer
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|field| !field.is_empty())
+        .map(|field| field.parse().expect("a number"))
+        .collect();
+    let [base, floor, readings @ ..] = &numbers[..] else {
+        panic!("expected the base L, the floor and the readings: {answer}")
+    };
+    assert_eq!(*floor, 8 << 20, "the adaptive floor: {answer}");
+    for reading in readings.chunks(2) {
+        let [live, threshold] = reading else {
+            panic!("a reading is an L and a threshold: {answer}")
+        };
+        assert!(
+            *live < base + (1 << 20),
+            "a paced collection's L, {live}, counts the namespaces its code release dropped \
+             (the L before the loop was {base}): {answer}"
+        );
+        assert_eq!(
+            threshold, floor,
+            "the threshold followed the garbage: {answer}"
+        );
+    }
+    assert!(
+        readings.len() >= 2 * 3,
+        "fewer than three paced collections in 35 MB: {answer}"
+    );
+}
+
+#[test]
+fn a_collection_at_a_call_leaves_the_namespaces_its_code_release_drops_out_of_l() {
+    // The same settle at `(gc)`'s collection, which runs at its call
+    // (`collect_at_call`) and not at a poll. Fifty procedures, each compiled
+    // in a namespace of its own, are held in a vector: the L a `(gc)` leaves
+    // counts their namespaces, 1.6 MB of external bytes. Once the vector
+    // lets them go, one `(gc)` frees the procedures and releases their
+    // units, whose tables were the namespaces' last holders, before it
+    // returns: `external-bytes` is down by the fifty namespaces, and the L
+    // that `(gc)` left is what a second `(gc)` leaves, to the byte. The
+    // sweep's L, read before the release, was the fifty namespaces above
+    // it.
+    //
+    // Collecting only where `(gc)` asks, that `(gc)` is the collection
+    // that finds them dead, as it is at the adaptive threshold, which 1.6
+    // MB does not reach. In the environment's mode too, and under the
+    // stress lane's variable as well: nothing allocates between the
+    // `vector-fill!` and the `(gc)`, so no interval puts a collection
+    // there, and all three runs fail without the settle. Only zeal, which
+    // collects at every outermost safe point, finds the procedures dead
+    // before the `(gc)` does, and there the readings hold with or without
+    // it.
+    //
+    // Sized on a namespace of about 32 KB: the first answer is `#f` once
+    // fifty of them weigh under 1 MB, and wants more procedures.
+    let code = r#"
+        (import (scheme base) (scheme eval) (patina debug))
+        (define (stat key) (cdr (assq key (gc-stats))))
+        (define held (make-vector 50 #f))
+        (define (fill!)
+          (let loop ((i 0))
+            (when (< i 50)
+              (vector-set! held i
+                           (eval '(lambda (x) (* x 2)) (environment '(scheme base))))
+              (loop (+ i 1)))))
+        (define l0 #f) (define e0 #f) (define l1 #f) (define e1 #f) (define l2 #f)
+        (fill!)
+        (vector-fill! held #f)
+        (gc)
+        (gc)
+        (set! l0 (begin (fill!) (gc) (stat 'live-bytes)))
+        (set! e0 (stat 'external-bytes))
+        (set! l1 (begin (vector-fill! held #f) (gc) (stat 'live-bytes)))
+        (set! e1 (stat 'external-bytes))
+        (set! l2 (begin (gc) (stat 'live-bytes)))
+        (list (> (- e0 e1) 1000000) (>= (- l0 l2) (- e0 e1)) (- l1 l2))
+        "#;
+    assert_eq!(eval_program_vm_gc_off(code), "(#t #t 0)");
+    assert_eq!(eval_program_vm_adaptive(code), "(#t #t 0)");
+    assert_eq!(eval_program_vm(code), "(#t #t 0)");
+}
+
+#[test]
+fn a_collection_where_a_load_ends_leaves_a_replaced_library_s_namespace_out_of_l() {
+    // The same settle for the other shape, a redefined library's namespace,
+    // and at the third place the VM collects: where a library's load ends
+    // at the top level (`collect_if_pending`, point B), neither a poll nor
+    // a call.
+    //
+    // A library that exports a procedure is redefined and imported again
+    // fifty times. Each redefinition leaves the last one's procedure dead,
+    // its unit loaded until a collection frees it, and that unit's link
+    // table the last holder of the replaced library's namespace: 1.6 MB of
+    // external bytes by the end, with no collection yet (2 MB allocated
+    // since the two `(gc)`s, under the 8 MiB floor). Then a run of
+    // `define-library` forms with no body, which run no code, so no poll:
+    // each charges a namespace and lets the one it replaces go at once, and
+    // the first collection they bring runs where one of them ends. That
+    // collection frees the fifty procedures and its code release drops
+    // their namespaces: `external-bytes` is down by over 1 MB across it,
+    // and the L it left is the L a `(gc)` leaves next, within a quarter of
+    // a megabyte (the two differ by the forms' own data), where the
+    // sweep's L was the fifty namespaces above it.
+    //
+    // Read from Rust between the forms, since a `(gc-stats)` form would
+    // poll. The interpreter collects at the adaptive threshold whatever the
+    // lane's variable says, as the paced test's does.
+    //
+    // Sized on a `(scheme base)` namespace of about 32 KB: one under 20 KB
+    // fails the first assertion, and wants more redefinitions.
+    let interp = vm_interpreter_adaptive();
+    let eval = |code: &str| {
+        if let Err(e) = interp.eval_program_owned(code) {
+            panic!("{code}: {e}");
+        }
+    };
+    let live = || {
+        use patina_interpreter::Backend;
+        interp.backend().heap().borrow().live_bytes()
+    };
+    let stats = || interp.gc_stats();
+    let redefine = "(define-library (settled steady) (export f) (import (scheme base))
+                      (begin (define (f x) (+ x 1))))
+                    (import (settled steady))
+                    (f 1)";
+    eval("(import (scheme base) (patina debug))");
+    eval(redefine);
+    eval("(gc) (gc)");
+    let before = stats();
+    for _ in 0..50 {
+        eval(redefine);
+    }
+    assert_eq!(
+        stats().collections,
+        before.collections,
+        "no collection while the fifty were made"
+    );
+    let held = stats().external_bytes;
+
+    let mut forms = 0;
+    while stats().collections == before.collections {
+        assert!(
+            forms < 2000,
+            "no collection in {forms} define-library forms"
+        );
+        eval("(define-library (settled idle) (import (scheme base)))");
+        forms += 1;
+    }
+    let (at_load_end, after) = (live(), stats());
+    assert_eq!(after.collections, before.collections + 1);
+    let given_back = held.saturating_sub(after.external_bytes);
+    assert!(
+        given_back > 1_000_000,
+        "the collection's code release gave back {given_back} external bytes: the fifty \
+         replaced namespaces were not what it dropped"
+    );
+    eval("(gc)");
+    let at_call = live();
+    assert!(
+        at_load_end < at_call + (1 << 18),
+        "the L a collection at a load's end left, {at_load_end}, counts the namespaces its \
+         code release dropped: a (gc) next left {at_call}, and the release gave back \
+         {given_back}"
+    );
+}
+
+#[test]
+fn a_bound_placeholder_is_never_dropped() {
+    // The procedure `keep` holds reads `later` and `later2`, which nothing
+    // binds when `eval` compiles it, so its unit links a placeholder for
+    // each when it loads (#836): two binding records. While `keep` holds
+    // the procedure, the program defines `later` and imports `later2`,
+    // which adopt the two placeholders into the global namespace's slots,
+    // keeping their words, so that the count does not move: a definition or
+    // an import that made a record of its own would leave the placeholder
+    // counted beside it, and one that left the entry in the namespace's
+    // store a check build refuses after the sweep. Then `keep` lets the
+    // procedure go: nothing links the two records any more, and a bound
+    // record is the namespace's, so the collections keep both and the count
+    // still does not move. The procedure is held across both bindings,
+    // collections included, so under zeal the adoption is exercised with a
+    // collection at every outermost safe point. Every variable but `later`
+    // is defined before the first reading; `later`'s definition is the
+    // adoption counted.
+    assert_gc_and_zeal_eval_to(
+        r#"
+        (import (scheme base) (scheme eval) (scheme repl) (patina debug))
+        (define-library (p4b9 lib)
+          (export later2)
+          (import (scheme base))
+          (begin (define later2 'imported)))
+        (define env (interaction-environment))
+        (define (records) (cdr (assq 'binding-records (gc-stats))))
+        (define keep #f) (define base #f) (define r0 #f) (define r1 #f) (define r2 #f)
+        (gc) (gc)
+        (set! base (records))
+        (set! keep (eval '(lambda () (list later later2)) env))
+        (set! r0 (records))
+        (define later 1)
+        (import (p4b9 lib))
+        (gc) (gc)
+        (set! r1 (records))
+        (set! keep #f)
+        (gc) (gc)
+        (set! r2 (records))
+        (list (- r0 base) (- r1 r0) (- r2 r1) later later2)
+        "#,
+        "(2 0 0 1 imported)",
+    );
+}
+
 /// The controls of `release_dead_code`'s check (#836): a check build
 /// asserts, after every collection, that each unit the collection kept had
 /// its link table traced, since whatever keeps a unit is something that can
@@ -312,8 +584,8 @@ fn code_units_count_a_unit_a_live_closure_keeps() {
 /// Run in every check build: every debug `cargo test`, and a release one
 /// with this crate's `gc-check` feature, which CI's release GC lane runs
 /// with `--include-ignored`. A build without the check reports them
-/// ignored. No other test in this file may have `a_check_build_refuses` in
-/// its name, which CI's line filters on.
+/// ignored. No test in this file but the check builds' controls may have
+/// `a_check_build_refuses` in its name, which CI's line filters on.
 fn gc_with_tables_untraced(skip: fn() -> patina_vm::test_support::SkipCodeIds) {
     let interp = vm_interpreter();
     interp
@@ -349,4 +621,56 @@ fn a_check_build_refuses_a_unit_a_closure_keeps_untraced() {
 #[should_panic(expected = "did not trace its link table")]
 fn a_check_build_refuses_a_unit_a_frame_keeps_untraced() {
     gc_with_tables_untraced(patina_vm::test_support::SkipCodeIds::kept_by_frames);
+}
+
+/// The control of the placeholders a unit's link table keeps (#836): a
+/// collection keeps every placeholder a kept unit's table links, since it
+/// traces that table, and the pass at the sweep's start drops only the
+/// placeholders nothing marked. `g`'s unit links `unbound-836-control`, a
+/// name nothing binds, to a placeholder, which only `g`'s table marks.
+/// patina-vm's test-only switch (`test_support::SkipLinkEntries`) has a
+/// collection mark each table traced and pass over its entries, so that
+/// `(gc)` drops the placeholder `g`'s live unit links and the sweep frees
+/// its pairs, while `release_dead_code`'s check, which asks only whether
+/// each kept unit's table was traced, stays quiet. `(g)` then reads through
+/// the freed record, which a check build refuses: as a use after free, or,
+/// once a later allocation has reused the slot, as a stale reference
+/// (`heap::check`). Without the switch `(g)` raises an unbound-variable
+/// error. The program defines `g` before the switch goes on, so that `g`'s
+/// unit is linked first, and runs `(begin (gc) (g))` under it. Run in every
+/// check build, as the controls above are.
+#[test]
+#[cfg_attr(
+    not(any(debug_assertions, feature = "gc-check")),
+    ignore = "needs a check build"
+)]
+fn a_check_build_refuses_a_placeholder_the_pass_dropped_while_linked() {
+    let interp = vm_interpreter();
+    interp
+        .eval_program_owned(
+            "(import (scheme base) (patina debug)) (define (g) unbound-836-control)",
+        )
+        .expect("import and define");
+    let unbound = interp
+        .eval_str_owned("(g)")
+        .expect_err("`unbound-836-control` is unbound");
+    assert!(
+        format!("{unbound}").contains("unbound-836-control"),
+        "{unbound}"
+    );
+    let _skip = patina_vm::test_support::SkipLinkEntries::new();
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = interp.eval_str_owned("(begin (gc) (g))");
+    }));
+    let payload = caught.expect_err("a read through a placeholder the sweep freed");
+    let message = payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|m| m.to_string()))
+        .unwrap_or_default();
+    assert!(
+        message.starts_with("use-after-free: pair slot")
+            || message.starts_with("stale pair reference"),
+        "{message}"
+    );
 }

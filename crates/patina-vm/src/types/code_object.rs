@@ -3,10 +3,10 @@
 //! See VM_ISA.md §2.3.
 
 use super::instruction::Instruction;
+use patina_core::LinkTable;
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{LinkIdx, LinkTable, NamespaceView};
 use patina_core::{Trace, TraceThroughRc};
 use std::cell::Cell;
 use std::fmt;
@@ -176,20 +176,15 @@ pub struct CodeObject {
     #[trace(skip, reason = "liveness bitsets")]
     pub register_roots: Option<Vec<Vec<u64>>>,
 
-    /// Per-site inline caches for `LoadGlobal`/`StoreGlobal`, indexed by pc
-    /// (Track P P4). Built by [`GlobalCacheEntry::table`]: the same length
-    /// as `instructions` (entries for non-global instructions stay empty),
-    /// or empty when the code has no global-access instructions at all.
-    /// See [`GlobalCacheEntry`] for the soundness argument.
-    #[trace(skip, reason = "environment ids and slot numbers")]
-    pub global_cache: Vec<Cell<GlobalCacheEntry>>,
-
     /// The unit's link table (#836): the spelling of each global operand
     /// (`LoadGlobal`, `StoreGlobal`, `Define`, `CallPrimitive` and the
     /// inline opcodes carry an index into it), made by pass 5 and shared by
     /// every member of the unit through this one `Rc`, and an entry beside
-    /// each for the record it will link, `UNBOUND` until then. Code with no
-    /// global operand, the runtime's stubs among it, has an empty one.
+    /// each for the record it links, linked by `VmState::load_unit` in the
+    /// namespace the unit was compiled in, before any read goes through it.
+    /// Code with no global operand, the runtime's stubs among it, has an
+    /// empty one; a stub's is never linked, and a table compiled and never
+    /// loaded (`--dump`, the disassembler) serves its names alone.
     #[trace(
         skip,
         reason = "traced by its unit's code id (`VmState::trace_code_ids`), when a frame, a marked closure or the running code names the unit, never from the code store (4b's start decision 3)"
@@ -200,92 +195,13 @@ pub struct CodeObject {
     /// itself, so the `Rc` count says whether a frame needs it; a closure names
     /// its code by id, so this is what says a closure does. Counted up where
     /// `MakeClosure` makes one and down when the collector frees one. It
-    /// changes through a shared code object, as `global_cache` does, and like
-    /// that it has no bearing on what the code does.
+    /// changes through a shared code object, and has no bearing on what the
+    /// code does.
     #[trace(skip, reason = "a count")]
     pub live_closures: Cell<u32>,
 }
 
 impl TraceThroughRc for CodeObject {}
-
-/// One `LoadGlobal`/`StoreGlobal` site's resolved binding, and the canonical
-/// statement of why hits are sound:
-///
-/// - Entries key on `Environment::env_id`, which is process-unique and
-///   **never reused** — unlike an address — so an entry left over from a
-///   dead environment can only miss, never falsely hit.
-/// - A binding's slot in an environment's local table is **stable for the
-///   environment's life**: slots are append-only (see `Bindings` in
-///   patina-core), so a hit always reads the current value of the same name.
-///   In a namespace the slot holds the binding's record, which names its
-///   cell (`binding_record.rs`, #834): a redefinition stores into the cell,
-///   and a definition over an import or an import over a definition
-///   re-points the record at another cell, never the slot, so the slot a
-///   site cached names one record for the namespace's life. In a frame a
-///   redefinition overwrites the slot in place.
-/// - Only names that resolve in the queried environment's **own** table are
-///   cached; parent-resolved names always take the full lookup, so a later
-///   local (re)definition that would change resolution can never be masked.
-///   A host namespace's read-through records are in no slot of its table, so
-///   they are never cached either (#835).
-/// - An *imported* name is in that table too: in a namespace its record
-///   names the exporter's cell (#406), and in a frame its slot holds the
-///   import marker beside the cell. The cache needs to know nothing about
-///   that: `slot_value` and `set_slot_value` read and write the cell on every
-///   access, so the slot a site cached stays the right one to ask.
-#[derive(Debug, Clone, Copy)]
-pub struct GlobalCacheEntry {
-    /// `Environment::env_id` of the resolved environment; 0 = empty entry.
-    pub env_id: u64,
-    /// Slot index in that environment's local binding table.
-    pub slot: u32,
-}
-
-impl GlobalCacheEntry {
-    pub const EMPTY: GlobalCacheEntry = GlobalCacheEntry { env_id: 0, slot: 0 };
-
-    /// The cache table for a freshly compiled instruction stream: pc-indexed,
-    /// or empty (never touched at runtime) when no instruction accesses a
-    /// global. Sizing from the stream itself keeps the length invariant in
-    /// one place.
-    pub fn table(instructions: &[Instruction]) -> Vec<Cell<GlobalCacheEntry>> {
-        let has_global_ops = instructions.iter().any(|i| {
-            matches!(
-                i,
-                Instruction::LoadGlobal { .. } | Instruction::StoreGlobal { .. }
-            )
-        });
-        if has_global_ops {
-            vec![Cell::new(Self::EMPTY); instructions.len()]
-        } else {
-            Vec::new()
-        }
-    }
-
-    /// Probe — and on a local resolution, fill — a per-site cache entry.
-    /// Returns the binding's slot when the global `links` names at `link`
-    /// lives in `globals`' own table (a hit costs one id compare); `None`
-    /// for parent-resolved or unbound names, which are never cached.
-    ///
-    /// Only a miss reads the name: `links` comes by its `Rc`'s address, so a
-    /// hit loads nothing of the table (#836's risk P9).
-    #[inline(always)]
-    pub fn probe(
-        cell: &Cell<GlobalCacheEntry>,
-        globals: NamespaceView<'_>,
-        links: &Rc<LinkTable>,
-        link: LinkIdx,
-    ) -> Option<u32> {
-        let entry = cell.get();
-        let env_id = globals.env_id();
-        if entry.env_id == env_id {
-            return Some(entry.slot);
-        }
-        let slot = globals.local_slot(links.name(link))?;
-        cell.set(GlobalCacheEntry { env_id, slot });
-        Some(slot)
-    }
-}
 
 impl CodeObject {
     /// Look up the source location for a given program counter.

@@ -388,8 +388,11 @@ pub enum HeapObjectData {
         /// dependency on patina-vm types.
         code_id: u64,
         free_vars: Vec<TaggedValue>,
-        /// The global environment this closure was compiled against.
-        /// `LoadGlobal`/`StoreGlobal` use this instead of `VmState::globals`.
+        /// The global environment this closure was compiled against: the
+        /// namespace its unit's link table was linked in, through which
+        /// the VM reads, writes and defines every global (#836). Read only
+        /// by `MakeClosure`, which gives it to the closures made in this
+        /// one's frames (`frame_globals` in patina-vm).
         globals: Rc<crate::environment::Environment>,
     },
     /// Opaque handle to a full VM continuation (call/cc style).
@@ -577,8 +580,9 @@ pub struct Heap {
     /// [`GcThreshold::NEVER`] (the default) is inert: only `request_gc`
     /// raises the flag. A backend installs its policy's threshold via
     /// `GcController::current_threshold` when heap and controller are paired,
-    /// and `GcController::collect` re-installs it after each collection (the
-    /// adaptive `2·L` term changes only there).
+    /// and `GcController::collect` re-installs it after each collection, as
+    /// does `GcController::finish_collection` when the collection's finish
+    /// moved L (the adaptive `2·L` term changes only at those two).
     gc_threshold: GcThreshold,
 
     /// The carrier's words (`heap/mutator.rs`, #699): `note_alloc` and
@@ -993,9 +997,10 @@ impl Heap {
 
     /// Install the threshold at which `note_alloc` raises the pending flag.
     /// Called with `GcController::current_threshold` when heap and
-    /// controller are paired and again after each collection (the adaptive
-    /// term changes only there). Raises the flag immediately if a count
-    /// already exceeds the new threshold.
+    /// controller are paired, again after each collection, and once more
+    /// when the collection's finish moved L (the adaptive term changes only
+    /// at those two). Raises the flag immediately if a count already exceeds
+    /// the new threshold, and never lowers it.
     pub fn set_gc_threshold(&mut self, threshold: GcThreshold) {
         self.gc_threshold = threshold;
         // Mirrored where an external charge, which has no heap, compares.
@@ -1655,6 +1660,23 @@ impl Heap {
         self.handles.set_parameterize_each(procedure);
     }
 
+    /// The heap's by-name record (#836): `(cell . BY_NAME)` over a free cell
+    /// holding `UNBOUND`, made on the first call and the same word on every
+    /// later one, rooted by the handle table for the heap's life. What a VM
+    /// link table links for a name its namespace reaches by an alias or a
+    /// visible scoped definition (`LinkTable::link_in`), so that each entry
+    /// is a record and the linked read's two loads need no test of their
+    /// own: every read through it finds `UNBOUND` and goes by name. No
+    /// namespace's, so `binding-records` and `cells` count neither pair.
+    pub(crate) fn by_name_record(&mut self) -> TaggedValue {
+        if let Some(record) = self.handles.by_name() {
+            return record;
+        }
+        let record = crate::binding_record::Record::by_name(self).word();
+        self.handles.set_by_name(record);
+        record
+    }
+
     /// Which of the heap's standard port parameters `value` is, if it is one
     /// ([`Heap::standard_port_parameters`]).
     #[inline]
@@ -2031,23 +2053,10 @@ impl Heap {
         Some(closure.heap_index() as usize)
     }
 
-    /// Get the globals environment from a VM closure, a frame's.
-    ///
-    /// Returns `None` if `closure` is not a `VmClosure`.
-    /// [`get_vm_closure_globals`](Self::get_vm_closure_globals) by reference,
-    /// for a caller that holds this heap borrowed for the read it makes
-    /// with them: the VM's `LoadGlobal`, which then needs no `Rc` clone.
-    #[inline]
-    pub fn vm_closure_globals_ref(
-        &self,
-        closure: TaggedValue,
-    ) -> Option<&Rc<crate::environment::Environment>> {
-        match self.objects.get(self.vm_closure_slot(closure)?)? {
-            HeapObjectData::VmClosure { globals, .. } => Some(globals),
-            _ => None,
-        }
-    }
-
+    /// Get the globals environment from a VM closure, a frame's: the
+    /// environment `MakeClosure` gives the closures that frame makes
+    /// (`frame_globals` in patina-vm). Returns `None` if `closure` is not a
+    /// `VmClosure`.
     pub fn get_vm_closure_globals(
         &self,
         closure: TaggedValue,

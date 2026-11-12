@@ -104,7 +104,7 @@ pub use heap::cx::{
 };
 pub use instance::{CurrentPort, Instance};
 pub use library::Library;
-pub use link_table::{LinkIdx, LinkTable};
+pub use link_table::{Assignee, LinkIdx, LinkTable};
 pub use literal_pool::{Lit, LiteralPool};
 pub use namespace_view::NamespaceView;
 pub use port::{Port, PortData, PortDirection, PortKind, StdioKind, StringPortData};

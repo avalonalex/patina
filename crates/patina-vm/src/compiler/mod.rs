@@ -110,6 +110,11 @@ fn compile_pipeline(
             for (name, renamed) in introduced_globals {
                 view.define_introduced_global(name, renamed.scopes, renamed.name);
             }
+            // The unit's primitive calls and introduced names were resolved
+            // in `env`, so it is linked there, which a debug build checks at
+            // `load_unit`'s link (#836). An id: the table holds no namespace
+            // until it is linked.
+            code.0.links.set_compiled_in(env.env_id());
         }
         None => debug_assert!(
             introduced_globals.is_empty(),

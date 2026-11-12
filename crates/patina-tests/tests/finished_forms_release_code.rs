@@ -293,3 +293,46 @@ fn a_closure_eval_returned_keeps_its_code() {
     run_forms_and_collect(&interp);
     assert_eq!(fixnum(&interp, "(triple 14)"), 42);
 }
+
+/// A library whose procedures call themselves and each other, defined again
+/// and imported again a hundred times: each replaced library's namespace,
+/// its procedures and their code all go, so as many code objects are loaded
+/// after a hundred redefinitions and a collection as after ten (4b's start
+/// decision 3's gate, #836). A procedure's unit links the procedure's own
+/// binding record, whose cell holds the procedure, so a unit's link table
+/// traced from the code store would keep every replaced library's
+/// procedures, their units and their namespace for good, and the count
+/// would grow with the redefinitions: the VM traces a unit's table only
+/// through its code id, which only something that can run the code reports.
+/// The last answers come from the last library's procedures, which its
+/// redefinitions' units, linked against the namespace each was compiled in,
+/// do not reach. Under zeal in CI's zeal lane, which runs this file.
+#[test]
+fn a_redefined_library_s_recursive_procedures_let_their_units_go() {
+    const LIBRARY: &str = "(define-library (gate4b9 lib)
+          (export f even2? odd2?)
+          (import (scheme base))
+          (begin
+            (define (f n) (if (= n 0) 0 (f (- n 1))))
+            (define (even2? n) (if (= n 0) #t (odd2? (- n 1))))
+            (define (odd2? n) (if (= n 0) #f (even2? (- n 1))))))
+        (import (gate4b9 lib))";
+    let interp = interpreter();
+    let redefine = |times: usize| {
+        for _ in 0..times {
+            interp.eval_program(LIBRARY).unwrap();
+        }
+        collect(&interp);
+        loaded(&interp)
+    };
+    let after_ten = redefine(10);
+    let after_hundred = redefine(90);
+    assert_eq!(
+        after_hundred, after_ten,
+        "code objects loaded after 10 redefinitions of a library, and after 100"
+    );
+    let answers = interp
+        .eval_program("(list (f 10) (even2? 10) (odd2? 7))")
+        .unwrap();
+    assert_eq!(interp.display_tagged(answers), "(0 #t #t)");
+}

@@ -179,8 +179,28 @@ ROWS = [
     Row('hidden-define', 'REPL', 'hidden-define.scm', {'vm': 2000, 'tree-walker': 2000}, clauses=REPL,
         red={'SS1': 'stage 5c', 'SS5:cells': 'stage 5c', 'SS5:binding-records': 'stage 5c'},
         pin={'vm': 257, 'tree-walker': 129}),
+    # Each cycle compiles a procedure that names a fresh unbound variable and
+    # never calls it. Since #836 the VM links the reference at load to a
+    # placeholder, dropped once no code links it, so `SS5:cells` and
+    # `SS5:binding-records` read flat, unlabelled; SS1 and `SS5:symbols` stay
+    # red for stage 5c. The pins are the row's readings at this N with the
+    # linking (R9 on #782: pinned by the 4b PR that first moves the row):
+    # 84.35 B a cycle on the tree-walker (1,012,248 B over 12,000 cycles),
+    # 1.00x its reading before; on the VM, 101.55 B (1,218,560 B), the
+    # reading on CI's ubuntu runner (2026-11-12), where an Apple M4 Pro reads
+    # 84.48 B (1,013,760 B) in every run, as both read 84.5 B before. The
+    # difference is the placeholder store's table, charged at its capacity,
+    # which stays when the placeholders drop: L is about 205 KB higher at N
+    # on both machines, and on the runner the table steps once more before
+    # 4N (L 700 -> 1,890 KiB, against 700 -> 1,690 KiB on the Mac), as the
+    # hash table's group width and so its deleted slots differ between x86
+    # and ARM. The pin is the runner's, which the lane gates on. N stays
+    # 4,000, since that charge steps with N (at N = 8,000 a step of 409,600 B
+    # falls inside the window on the Mac), and only the owner raises a pin
+    # (K17).
     Row('unbound-ref', 'REPL', 'unbound-ref.scm', {'vm': 4000, 'tree-walker': 4000}, clauses=REPL,
-        red={'SS1': 'stage 5c', 'SS5:symbols': 'stage 5c'}),
+        red={'SS1': 'stage 5c', 'SS5:symbols': 'stage 5c'},
+        pin={'vm': 101.55, 'tree-walker': 84.35}),
     Row('load-repeat', 'REPL', 'load-repeat.scm', {'vm': 1000, 'tree-walker': 1000}, clauses=REPL),
     Row('reimport', 'REPL', 'reimport.scm', {'vm': 1000, 'tree-walker': 1000}, clauses=REPL),
     Row('record-redefine', 'REPL', 'record-redefine.scm', {'vm': 2000, 'tree-walker': 2000}, clauses=REPL),
@@ -224,7 +244,31 @@ ROWS = [
     Row('eval-fresh-names', 'churn', 'eval-fresh-names.scm', {'vm': 4000, 'tree-walker': 4000},
         clauses=('SS4',), per_cycle={'vm': 180, 'tree-walker': 180}),
     Row('env-churn', 'churn', 'env-churn.scm', {'vm': 500, 'tree-walker': 500}),
-    Row('env-lambda', 'churn', 'env-lambda.scm', {'vm': 500, 'tree-walker': 500}),
+    # Per PR since #836's linking at load: a unit's link table holds its
+    # namespace, and a pacer that counts the namespaces a collection's code
+    # release drops puts each collection further off than the last, so SS2
+    # goes vacuous here: growing 1.76 times a collection, the interval
+    # leaves at most one in [3N, 4N) at any N. N is 1,000 for the margin on
+    # a build that paces right: four paced collections in each segment on
+    # each backend, where SS2 takes two, so a cycle must allocate under
+    # half of today's before the clause goes vacuous for that. At 500 a
+    # segment held two, and a cycle 7% to 10% leaner failed the clause
+    # with this defect's message (N = 465 passed and N = 450 failed,
+    # measured 2026-11-11).
+    Row('env-lambda', 'churn', 'env-lambda.scm', {'vm': 1000, 'tree-walker': 1000}, pr=True),
+    # The lag the settled L does not reach (docs/GC_DESIGN.md §6.2): a
+    # loaded unit's constants are roots until the unit is released, after
+    # the collection that frees its last closure, so that collection marks
+    # what they hold and L counts it. Here that is 8 KB of a cycle's 10, so
+    # 2L passes what was allocated and each collection comes nearly twice
+    # as far off as the last on the VM: 8.0, 15.8 and 30.6 MiB apart after
+    # the reading at N, with L at 7.9, 15.3 and 29.6 MiB, and none in
+    # [3N, 4N), where the tree-walker's come every 8.0 MiB with L at 0.2,
+    # four or five in a segment (2026-11-11). So SS2 is vacuous on the VM,
+    # red until a unit's constants are traced as its link table is, by
+    # code id (#866, stage 4e's direction); the tree-walker holds it.
+    Row('const-lambda', 'churn', 'const-lambda.scm', {'vm': 4000, 'tree-walker': 4000},
+        red={'SS2/vm': '#866'}),
     Row('form-eval-fresh', 'churn', 'form-eval-fresh.scm', {'vm': 4000, 'tree-walker': 4000}, clauses=REPL,
         pr=True),
     Row('cont-churn-10', 'churn', 'cont-churn.scm', {'vm': 20000, 'tree-walker': 10000}, ('10',), pr=True),

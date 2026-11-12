@@ -247,7 +247,7 @@ pub(crate) struct Telemetry {
     /// and the guard that opened it.
     pub window: Option<(u64, &'static Location<'static>)>,
     /// A collection whose backend has not yet reported its work after it
-    /// (`GcController::finish`).
+    /// (`GcController::finish_collection`).
     pub unfinished: Option<CollectionRecord>,
     /// This heap's number in the log.
     pub heap_id: u64,
@@ -474,17 +474,26 @@ impl super::Heap {
     }
 
     /// A collection's record, which the backend completes with
-    /// [`Heap::finish_collection`]. One it never completed is counted
-    /// now, without its backend's part.
+    /// [`GcController::finish_collection`](crate::GcController::finish_collection).
+    /// One it never completed is counted now, without its backend's part,
+    /// its L as the sweep set it.
     pub(crate) fn record_collection(&mut self, record: CollectionRecord) {
-        if let Some(unfinished) = self.telemetry.unfinished.take() {
-            self.telemetry.finish(unfinished);
-        }
+        self.close_unfinished_record();
         self.telemetry.unfinished = Some(record);
     }
 
+    /// Count a collection whose backend never completed its record, without
+    /// the backend's part and with its L as the sweep set it: when the next
+    /// collection's record takes its place, and at a teardown, whose sweep
+    /// records nothing.
+    pub(crate) fn close_unfinished_record(&mut self) {
+        if let Some(unfinished) = self.telemetry.unfinished.take() {
+            self.telemetry.finish(unfinished);
+        }
+    }
+
     /// The drain after the collection just run took `time` (#785): part of
-    /// its `after`, to which [`Heap::finish_collection`] adds the backend's.
+    /// its `after`, to which [`Heap::finish_record`] adds the backend's.
     pub(crate) fn note_finalized(&mut self, time: Duration) {
         if let Some(record) = self.telemetry.unfinished.as_mut() {
             record.phases.after += time;
@@ -494,8 +503,11 @@ impl super::Heap {
     /// The backend has done its work after the collection just run, which
     /// took `after` (the VM's code release; zero on the tree-walker): count
     /// the collection's pause, its finalizers' time included (#785), and log
-    /// it (#648).
-    pub fn finish_collection(&mut self, after: Duration) {
+    /// it (#648). Crate-private: a backend finishes a collection through
+    /// [`GcController::finish_collection`](crate::GcController::finish_collection),
+    /// which settles the account first ([`Heap::settle_live_bytes`]), so
+    /// that none completes a record whose L its own work has made stale.
+    pub(crate) fn finish_record(&mut self, after: Duration) {
         if let Some(mut record) = self.telemetry.unfinished.take() {
             record.phases.after += after;
             self.telemetry.finish(record);

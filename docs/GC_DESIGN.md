@@ -433,8 +433,8 @@ sweep frees the pairs, gives back their counts and charges borrow-free
 through each store's account before the account is settled, and drops their
 names after the accesses (`PlaceholderList::take_dead`). It costs one access
 over the list and one per store, a step an entry: the stores' lengths, and
-over an empty list, as on every heap until the VM links its units at load,
-one access and no allocation. A check build then asserts, after the arenas
+over an empty list, as on every tree-walker heap and on a VM heap no unit
+has linked a placeholder on, one access and no allocation. A check build then asserts, after the arenas
 and beside the ports' check, that every entry left names a live pair in its
 generation, and so does what it reaches, a placeholder's cell and a weak
 read-through record's cell and parent, and that a placeholder is still one,
@@ -603,7 +603,8 @@ is a binding's location, the pair `(value . owner)`, where owner is the
 fixnum `env_id << 4` of the namespace whose cell it is, or 0 for a free
 cell. A record is a namespace's hold on a location, the pair
 `(cell . flags)`, whose flags are the fixnum 0 on every record in a slot or a
-scoped entry, and `PLACEHOLDER` on a placeholder, which is in neither (#836,
+scoped entry, `PLACEHOLDER` on a placeholder, which is in neither, and
+`BY_NAME` on the heap's one by-name record, which is in no namespace (#836,
 below). A pair where the flags would be marks a host namespace's read-through
 record (below).
 
@@ -617,8 +618,9 @@ record (below).
   name's record at it. A cell of the namespace's own imported under another
   name is copied by `define`'s rules, so no two names of one namespace
   share a cell the namespace owns, and each own cell has exactly one record.
-  So the VM's cached `(env_id, slot)` names one record for the namespace's
-  life. Two names may share an imported cell: an import alias
+  So the record a VM unit's link table links for a name stays the name's
+  record for the namespace's life, whatever is defined or imported later
+  (#836). Two names may share an imported cell: an import alias
   (`Environment::import_alias`, #438), or one export imported under two
   names, is a second record over the same cell. A frame holds no record: its own
   bindings are values, and an import is the frame-only marker
@@ -626,9 +628,10 @@ record (below).
   `RareTables::frame_imports` (D5/D6), so installing one allocates nothing
   and takes no borrow of the heap.
 - **Read-through records (#835).** A host namespace's parent is the global
-  namespace, and every name it does not bind resolves there. For code a
-  linker compiles in it (4b.9), `Environment::link_record` gives such a
-  name a record of the host's, `(unbound . parent)`: the global namespace's
+  namespace, and every name it does not bind resolves there. For code the
+  VM compiles in it, `Environment::link_record`, which the unit's link table
+  calls when the unit loads (#836), gives such a name a record of the
+  host's, `(unbound . parent)`: the global namespace's
   record for the name in the cdr, and in the car the host namespace's one
   cell holding `TaggedValue::UNBOUND`, so a read that forgot to read
   through answers that marker, never a stale value. A read resolves through
@@ -648,8 +651,8 @@ record (below).
   `unbound` cell. A link of the name once the global namespace binds it
   promotes it into `read_through`, and a define or an import in the host
   namespace adopts it from either, so a name has one read-through record
-  across the two. Only `link_record` makes one, and until 4b.9's linker calls
-  it only the tests do.
+  across the two. Only `link_record` makes one, as a unit compiled in the
+  host namespace is linked at load; the tree-walker makes none.
 - **Placeholders (#836).** For a name a parentless namespace does not bind,
   `link_record` makes a placeholder: a record `(cell . PLACEHOLDER)` over a
   cell of the namespace's own holding `TaggedValue::UNBOUND`, the same one
@@ -669,8 +672,19 @@ record (below).
   asserts that no slot is given a flagged or read-through record, at the
   slots' one writer (`Environment::append_slot`). The placement, a store per
   namespace with a list per heap rather than the slots themselves, is P2, the
-  owner's ruling (a) of 2026-11-08 on #836's question 4. Until the VM links
-  its units at load, only core's tests make one.
+  owner's ruling (a) of 2026-11-08 on #836's question 4. The VM makes one
+  when it links a unit, at load, that reads, stores or defines a name its
+  namespace does not bind (`VmState::load_unit`), a top-level `define` of a
+  name not yet bound among them, whose placeholder the definition then
+  adopts. The tree-walker makes none.
+- **The by-name record (#836).** A name the namespace reaches by an alias or
+  a visible scoped definition is read by name, and a link table links the
+  heap's by-name record for it (`Heap::by_name_record`): `(cell . BY_NAME)`
+  over a free cell that holds `UNBOUND` for good, made once a heap, the
+  first time a link needs it, and rooted in `HandleTable.by_name` (§5.3).
+  So every linked entry is a record, and the hot read's `UNBOUND` test sends
+  it to the cold read, which reads the name. It is in no slot or store, is
+  never adopted, and no count includes it.
 - **Exports are cells.** `Library.exports` maps each name to the cell its
   binding named when the library was built, resolved one hop to the owning
   cell, so a re-export is the defining library's cell; `import_into` makes
@@ -693,10 +707,13 @@ record (below).
   `Cx::import_cell_in_frame`). Every read path of `Environment` dereferences
   a record, so a program never sees one as a value
   (`record_read_tests::no_namespace_read_answers_a_record`, with an
-  `Interpreter` half in `host_environments.rs`), and a read makes no record
-  on either backend (`a_read_makes_no_record`): in a host namespace a read
-  of a name only the global namespace binds walks to it by name and makes
-  no read-through record (`a_read_makes_no_read_through_record`). A
+  `Interpreter` half in `host_environments.rs`), and a read by name makes no
+  record on either backend (`a_read_makes_no_record`): in a host namespace a
+  read of a name only the global namespace binds walks to it by name and
+  makes no read-through record (`a_read_makes_no_read_through_record`). A
+  compiled reference is linked at load instead: on the VM a unit that reads
+  a name nothing binds links one placeholder for it, which goes with the
+  code (the same test), and a miss makes nothing more. A
   namespace's read takes the heap's shared borrow at its step and follows
   record → cell → value; a frame's own read is one compare with the marker.
   A record or cell is made under one `&mut Heap`, which a collection needs,
@@ -718,10 +735,13 @@ record (below).
   `a_namespace_record_keeps_its_cell_and_value` (a slot's and a scoped
   entry's), `a_cell_only_an_importer_holds_outlives_its_exporter` and
   `library.rs`'s `library_exports_and_environment`.
-- **Liveness.** Until the link tables, a record's holder is its namespace,
-  so a namespace's records die with it, a host namespace's read-through
-  records and their `unbound` cell included (SD3,
-  `a_read_through_record_dies_with_its_host_namespace`). Placeholders and
+- **Liveness.** A record in a slot or a scoped entry, and a host
+  namespace's strong read-through record, is held by its namespace, so a
+  namespace's records die with it, a host namespace's read-through records
+  and their `unbound` cell included (SD3,
+  `a_read_through_record_dies_with_its_host_namespace`); a VM unit's link
+  table, traced, marks the records it links as well, and keeps its
+  namespace (§5.2, §8). Placeholders and
   weak read-through records are weak (R1, R7, #836): no slot holds them and
   no derived trace marks them, so one lives while a traced link table names
   it, and the sweep's pass drops it once none does (§4.5); a weak record
@@ -833,11 +853,11 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 |-------|-------|-------|
 | `registers` | **yes** | Slots (`Cell`s, #682), the whole vector, after completed expression temporaries are cleared using per-PC compiler maps (#423); local bindings remain conservative |
 | `frames[*].closure` | **yes** | A slot, reported as the registers are: the frame's `VmClosure`, or the immediate `CallFrame::NO_CLOSURE` (`types/mod.rs`). A bare `Option<ObjectIndex>` with a visitor method of its own until #683 |
-| `frames[*].code`, `running` | by id | Each frame's code (`FrameCode`, `types/mod.rs`) and the code the dispatch loop's `cur_code` holds (`RunningCode`, `execution_state.rs`, written where `cur_code` changes and put back when a nested loop ends) report their code id through `SlotVisitor::code`; the code-id round of the fixpoint (§9.5) hands each id once to `trace_code_ids`, which traces that unit's link table once a collection (`LinkTable::trace_once`, by `trace_epoch`), generation-checked. The constants stay traced from `code_store`, which never traces a table (#836). The VM does not link its units at load yet, so a table it traces has only `UNBOUND` entries and no namespace; the sentinels link theirs by hand |
+| `frames[*].code`, `running` | by id | Each frame's code (`FrameCode`, `types/mod.rs`) and the code the dispatch loop's `cur_code` holds (`RunningCode`, `execution_state.rs`, written where `cur_code` changes and put back when a nested loop ends) report their code id through `SlotVisitor::code`; the code-id round of the fixpoint (§9.5) hands each id once to `trace_code_ids`, which traces that unit's link table once a collection (`LinkTable::trace_once`, by `trace_epoch`), generation-checked. The constants stay traced from `code_store`, which never traces a table (#836). `load_unit` links each unit's table in the namespace the unit was compiled in, before any read goes through it, so a table traced marks the records its unit links, and with them the placeholders and weak read-through records nothing else marks, the heap's by-name record, and the namespace it was linked in (`LinkTable.namespace`, §8). A table's entries are dereferenced only by the code of a unit something holds: a frame, a marked closure or the running code, each of which reports the unit's id |
 | `pending_escape` | **yes** | Pinned. Value parked while crossing a Rust re-entry boundary; multiple values otherwise travel in ordinary registers as heap values |
 | `scratch_args` | yes | Pinned. Empty at every safe point: `mem::take`n while a primitive call holds it, and emptied when the call is done (since #639: the last call's arguments had stayed in it, and a dead key passed to `make-ephemeron` survived a `(gc)`). Rooting it is free and future-proof |
 | `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | Pinned until stage 4e makes them heap data. `tag`/`handler`/`before`/`after` values, and a wind record's `handlers` — the stack of its own `dynamic-wind` call, which its thunks run under and which nothing else holds once the live stack has moved on (`types/continuation.rs`). An `ExceptionHandler` is one procedure now — it used to also carry the wind depth `raise` unwound to, which no raise path needs since Track L families 22/28 |
-| `code_store[*].constants` | **yes** | Pinned until stage 4e makes them a descriptor's. Kept while a frame, a captured continuation or a live closure can run the code; a finished form's code is released with its constants (#338). `(gc-stats)`'s `code-units` counts the units loaded (§6, #836) |
+| `code_store[*].constants` | **yes** | Pinned until stage 4e makes them a descriptor's. The constants only: the store never traces a unit's link table (`CodeObject::links`), which would keep every record a live unit links, and through a procedure's own record the unit itself, for good (4b's start decision 3's gate, `finished_forms_release_code.rs`' `a_redefined_library_s_recursive_procedures_let_their_units_go`). Kept while a frame, a captured continuation or a live closure can run the code; a finished form's code is released with its constants (#338). `(gc-stats)`'s `code-units` counts the units loaded (§6, #836) |
 | `globals` | **yes** | `env`: the program's environment, during a library's load as after it (#823). `saved_globals`, which held the environments a load's swap set aside so that a library body under it could collect (#677), went with the swap |
 | `continuation_store` / `delimited_continuation_store` | **weak** (since #19) | `VmContinuation` snapshots hold full `registers` copies and frames, each with its closure, all slots as the live ones are, and its code, reported by id as a live frame's is (#836), and wind/prompt/handler stacks, pinned as theirs are (`types/continuation.rs:83,:185`). Heap-side `VmContinuationRef { id, bytes }` is opaque (its `bytes` charges the snapshot to the trigger, §6); only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_ids` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
 | `tracer` | yes | Pinned: `StepTracer.pre_regs`/`pre_all_regs`, copies of registers for display (`crates/patina-vm/src/tracer.rs`) |
@@ -859,7 +879,17 @@ which has `trace_code_ids` pass over the ids of the code that kind keeps
 before it marks their table traced): one the units live closures keep, the
 other the units a frame or the running code holds. Each expects the check's
 panic at `(gc)`, so a check that covered only one kind, or only some kept
-units, fails one of them.
+units, fails one of them. The check asks only whether a kept unit's table was
+marked traced, so a third control covers what the trace of a marked table
+must reach: with `test_support::SkipLinkEntries`, a collection marks each
+table traced and passes over its entries, so `(gc)` drops and frees the
+placeholder a live closure's unit links while the check stays quiet, and the
+closure's next read through it is refused as a read of a freed pair
+(`a_check_build_refuses_a_placeholder_the_pass_dropped_while_linked`). And
+a check build's cold read asserts that a placeholder it reads is still its
+namespace's store's entry (`LinkTable::read_cold`), which only a pass that
+dropped a placeholder a traced table links would leave
+(`link_table::tests::a_check_build_refuses_a_linked_placeholder_out_of_its_store`).
 
 **Temporary retirement (#423):** the compiler records possible-root bitsets at
 instruction boundaries (`docs/VM_COMPILER.md` §10.4). Before an outermost
@@ -943,6 +973,7 @@ expansion runs in (§7; point C of `PRD/GC_PRD.md` §11.3).
 | `HandleTable.ports` | `heap/port_table.rs` | Not a root: the heap's `PortTable` (#785), the `Rc<Port>` each port object's slot names by number, which hold Rust state and no value, so the derived trace skips the field. The table also records each entry's owner word, by which the sweep's pass finds a dead entry by its object's mark bit (#818) and which a check build's read compares by its bits; it must stay untraced, or every port object would live for ever. On the `HandleTable`, by its own `Rc`, for `root_set`'s reason and so that exit's registry of tables can hold it weakly (§4.6, #786); the table teardown starts takes it over, so a heap keeps one for its life. The sweep's pass takes a dead plain port's entry out as the sweep starts, and the drain after the collection a file port's (§4.5, §4.6). A read, on every port operation, does not mark the table borrowed (`HeapTable::with_unguarded`, #818): it clones an `Rc` and reaches nothing. An entry need not hold its port's last `Rc`: the `Instance` holds the standard ports and caches the current ones, and a host may keep one |
 | `HandleTable.finals` | `heap/finalize.rs` | Not a root: the heap's `FinalRegistry` (#785, §4.6), whose entries name their objects by slot index so that a collection can find them dead, weak by design, so the derived trace skips the field. On the `HandleTable`, by its own `Rc`, beside the `PortTable` whose entries it names, and carried across teardown with it |
 | `HandleTable.placeholders` | `placeholder_store.rs` | Not a root: the heap's `PlaceholderList` (#836), its namespaces' placeholder stores keyed by `env_id`, which the sweep's pass walks to drop every placeholder and weak read-through record no traced link table marked (§4.5, §4.7). Weak by design, so the derived trace skips the field: traced, it would keep every listed namespace's placeholders. It holds stores, never a namespace, by `Rc` or `Weak`; a namespace's drop takes its store off at once (`PlaceholderHandle`). On the `HandleTable`, by its own `Rc`, for `root_set`'s reason, and carried across teardown, so the teardown sweep's pass empties the store of every namespace that outlives the heap |
+| `HandleTable.by_name` | `heap/handles.rs` | The heap's by-name record (#836, `Heap::by_name_record`): the record a VM unit's link table links for a name its namespace reaches by an alias or a visible scoped definition, read by name (§4.7). Made once, the first time a link needs it, and rooted here for the heap's life, so that an entry naming it never names a freed pair whatever the tables traced; `None` on a heap no such link was made on, as on every tree-walker heap. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason. Uncounted. Pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
 | A compilation's `LiteralPool` | `crates/patina-core/src/literal_pool.rs` | The heap literals of the form being compiled, from its expansion until its code holds them (§9.7, #705): registered with the heap's root set for the pool's life, its entries reported as slots. Each backend drops the pool once the form is compiled, before it runs, so it never holds more than one form's quoted text |
 | Macro literals and environments | `heap/mod.rs`, `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: the literals the object holds (§9.6), and its body's `definition_env` and each `foreign_expansions` environment (§4.3) |
@@ -1036,7 +1067,9 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   installs it when heap and controller are paired (a bare heap defaults to
   the inert `GcThreshold::NEVER` — policy stays in the controller, mechanism
   in the heap), and `GcController::collect` re-installs it after each
-  collection — the only point the adaptive term changes. `request_gc` posts
+  collection, as `GcController::finish_collection` does once more when the
+  backend's work after the collection moved L (§6.2) — the only points the
+  adaptive term changes. `request_gc` posts
   one from elsewhere, honored in every mode; sweep takes the post. `(gc)`
   does not wait for it: it collects at its call (below, and §7).
 - **The carrier, the `Mutator` (#699; `PRD/GC_PRD.md` §12 and §14).** A post
@@ -1101,8 +1134,10 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   payload of each object it reaches (a capture's when the weak-id fixpoint
   proves its handle live), sweep credits each dead slot's, and L, the
   **live bytes** after a collection, is the marked slots, their payloads and
-  the external bytes held then. Payloads cannot grow after allocation:
-  vectors, strings and bytevectors hand out slices, never their `Vec`.
+  the external bytes held when the collection was finished, or when it
+  swept if no backend finished it (§6.2). Payloads cannot grow after
+  allocation: vectors, strings and bytevectors hand out slices, never
+  their `Vec`.
   **A tree-walker closure (#637)** is charged its `Rc<Procedure>`, its
   parameters and `CAPTURED_FRAME_BYTES`, an estimate of the frame it
   captures — a frame binding one parameter, 612 bytes — because on that
@@ -1129,7 +1164,10 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   total with the heap and needs no heap borrow: a holder usually dies when
   its last `Rc` drops, often inside a sweep, which holds the heap mutably
   while it drops the dead slots' payloads, and sweep reads the total after
-  the arenas are swept, so those bytes are out of the L it sets. The
+  the arenas are swept, so those bytes are out of the L it sets. A holder
+  the backend drops in its own work after the sweep gives back later than
+  that, and the collection's finish reads the total again, so those bytes
+  are out of L too (§6.2, "The finish settles L"). The
   trigger's count is shared with the handle too, beside the installed byte
   threshold and the carrier, so a holder can also *charge* without the heap
   and post a collection the moment it crosses.
@@ -1325,7 +1363,8 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   is what makes collection testable without process-global environment
   variables. `(gc-stats)` reports the arenas'
   slot counts and five byte keys: `live-bytes` (L, 0 before the first
-  collection), `bytes-allocated` (every byte charged, external bytes
+  collection, and settled when the collection is finished, §6.2),
+  `bytes-allocated` (every byte charged, external bytes
   included), `bytes-reclaimed` (every byte a collection freed, so it grows
   only when one frees something; external bytes given back when their
   holder drops are not in it, so `bytes-allocated` less `bytes-reclaimed`
@@ -1353,12 +1392,18 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   `%parameterize-swap!`'s compile namespace and each live host namespace,
   #835; a frame is not counted); the binding records they hold, one per
   slot, per scoped entry, per import alias and per read-through record of
-  a host namespace's; and the cells of their own their records name now,
-  leaving out a frame's imports, a free cell, and a cell only an
-  importer's record or an export keeps. Each is a running sum,
-  raised as a namespace makes one, `cells` lowered as a record is
-  re-pointed away from an own cell, and both given back when a namespace
-  drops, so they are exact once the dead namespaces have dropped, which a
+  a host namespace's, and, on the VM, one per placeholder and per weak
+  read-through record a unit's link table linked (#836), until the sweep's
+  pass drops it or a define or an import adopts it; and the cells of their
+  own their records name now, a placeholder's own `UNBOUND` cell among them
+  (a weak read-through record's is the host namespace's one `unbound`
+  cell, uncounted as before), leaving out a frame's imports, a free cell,
+  and a cell only an importer's record or an export keeps. The heap's
+  by-name record is in neither. Each is a running sum, raised as a
+  namespace or a store makes one, `cells` lowered as a record is
+  re-pointed away from an own cell, both lowered by the pass for what it
+  drops, and both given back when a namespace drops, so they are exact once
+  the dead namespaces have dropped and the pass has run, which a
   collection's sweep does for the specifiers it frees; a test-only
   `Environment::recount` checks them against the tables. Records and cells
   are pairs, so `pairs` counts them too. `code-units` (#836) counts the
@@ -1430,9 +1475,9 @@ re-measurement.
 
 Every collection is recorded where it runs, in `GcController::collect`
 (`crates/patina-core/src/heap/telemetry.rs`). The drain of its finalizers
-adds its time to the record's `after` (§4.6), and the backend completes the
-record with `Heap::finish_collection` once its own work after the
-collection is done, which adds to `after` too: the VM's code release,
+adds its time to the record's `after` (§4.6), and the backend finishes the
+collection with `GcController::finish_collection` once its own work after
+it is done, which adds to `after` too: the VM's code release,
 timed; nothing on the tree-walker. A record
 holds the **reason** — `bytes` (the trigger), `stress`, `zeal`,
 `descriptors`, `posted` (a collection asked for where collection was
@@ -1447,6 +1492,78 @@ backend's, whose sum is the pause; the bytes
 allocated since the last collection, found live, freed and held externally;
 slots marked and swept per arena; and the **wait** since the collection was
 posted, in bytes and time.
+
+**The finish settles L (#836).** A collection is complete only when the
+backend's work after it is done, and the account with it. The sweep sets L
+from the external bytes held as it ends, and `GcController::collect` arms
+the threshold from that L. On the VM a unit's link table holds the namespace
+it was linked in (§8), so a namespace whose last holder is a dead unit's
+table drops at code release, after the sweep, and the sweep's L counts it
+live. That is every namespace `environment` made in which a procedure was
+compiled, and a redefined library's. Left there, the threshold followed
+them: a loop that made one such namespace a cycle had L at about 0.88 of
+what it had allocated since the last collection, so each collection came
+about 1.76 times further off than the one before, and the steady-state
+lane's `env-lambda` reached 345 MiB resident in 32,000 cycles where it now
+holds 21. So `finish_collection` settles the account before it completes
+the record (`Heap::settle_live_bytes`): L becomes what marking found live
+in the arenas plus the external bytes held now, the collector's L follows,
+the threshold is armed again through `GcController::current_threshold`, so
+each mode keeps its rule, and the record's `live` and `external` say the
+settled figures. The arenas' part is the record's `live` less its
+`external`, and both are the sweep's own: the L it set, and the external
+bytes it read to set it, which `Heap::sweep` hands up with what it swept
+for the record to keep. So nothing is marked or measured again, the heap
+gains no field, and the difference is exact whatever gave bytes back
+between the sweep's reading and the record: a registered provider whose
+token dropped while the collection ran is dropped with the collection's
+copy of the list, after the sweep, and a record that read the external
+bytes a second time took what was left for the sweep's figure, so the
+finish found nothing moved. Where the external bytes are as the sweep read
+them, on the tree-walker and at most of the VM's collections, nothing is
+written. A lower threshold raises the pending flag if the bytes charged
+since the sweep already reach it, as any `set_gc_threshold` does; nothing
+lowers the flag.
+
+`Heap`'s own completion of the record is crate-private, so
+`finish_collection` is the only way a backend completes one, and none can
+without the settle. Every collection either backend runs is finished: on
+the VM by `VmState::after_collection`, which `poll_slow`,
+`collect_if_pending`, `collect_for_loader` and `collect_at_call` each call
+once their collection ran, after `release_dead_code` and with no heap
+borrow held across either; on the tree-walker by `maybe_collect`,
+`collect_if_pending`, `collect_for_loader` and `collect_at_call`. A
+collection a backend never finished keeps the sweep's L and threshold
+until the next one, whose record closes its own. The settle is for the
+last sweep's record alone, which it tells by the record's number, the
+count of collections as its sweep ended: a sweep that records nothing sets
+L itself, and a finish after it must not take an earlier collection's
+marked bytes for its own. There are two, neither a backend's collection:
+the raw collector a backend's unit tests drive (`collect_for_tests`), which
+counts itself, and a teardown, which leaves the count as it was and closes
+an unfinished record before it sweeps.
+
+**What the settle does not reach: a dead unit's constants.** The settle
+corrects the external bytes alone; what marking found live in the arenas
+stands. A loaded unit's constants are roots until the unit is released
+(§5.2's `code_store` row), and that is after the collection that frees its
+last closure, so what only the constants of a unit this collection lets go
+reach is marked by it, counted in its L and freed by the next: a datum
+`eval` compiled into a procedure's code, or a procedure held as a
+constant, which keeps its own unit, and that unit's namespace, one
+collection more (§6's `code-units`). Where such constants outweigh the
+rest of what a cycle allocates, 2·L passes what was allocated and the
+threshold follows the garbage as it did the namespaces: code `eval`
+compiles from a datum quoting a fresh 1,000-element vector, called and
+dropped, has its paced collections 8.0, 15.8 and 30.6 MiB apart on the
+VM, with L at 7.9, 15.3 and 29.6 MiB, where the tree-walker's come every
+8.0 MiB with L at 0.2 (the steady-state lane's `const-lambda`, measured
+2026-11-11). The lag is older than the linking at load, which reads the
+same on its base, and is not the settle's to end (#866): stage 4e's
+direction ends it, when a unit's constants are traced as its link table
+is, by code id, so that a unit nothing reported roots nothing. Until
+then `const-lambda` holds SS2 red on the VM, and `live-bytes` after one
+`(gc)` can read above `live-bytes` after a second.
 
 A collection is posted through one helper, `SharedCounts::raise_pending`,
 which, when none is posted yet, notes the time and the bytes charged: once
@@ -1804,8 +1921,10 @@ these checks except the defer balance, which every build checks.
     the next write (#156);
   - a unit from its load to its frame's push (S1, #836): until a frame holds
     the unit's code, only the code store does, and a collection would let
-    the unit go. `load_unit` opens the window before the store takes the
-    unit and answers it with the unit's id as a `LoadedUnit`; `execute`,
+    the unit go, and with it the placeholders its table linked at load,
+    which only the table holds. `load_unit` opens the window before the
+    store takes the unit, links the table inside it, and answers the unit's
+    id as a `LoadedUnit`; `execute`,
     `execute_in` and `execute_nested` drop it once `push_frame` has given
     the frame the unit's code, before the run polls;
   - an `eval`'s closure from its unit's load to the `CALLEE` write (S2,
@@ -2015,6 +2134,35 @@ holder means they were correctly marked).
 **Consequence:** tombstoning at sweep (§4.5) is load-bearing, not cosmetic.
 Deferring payload drop to slot reuse would keep env cycles alive indefinitely
 on quiet arenas.
+
+**One edge outside the heap: a VM unit's namespace (#836).** A unit's link
+table holds the namespace it was linked in by `Rc` (`LinkTable.namespace`),
+and the code store holds the table, through each member's
+`CodeObject.links`. The store never traces it: the table, and the namespace
+with it, is traced only through the unit's code id, which a frame, the
+running code or a marked closure reports (§5.2). So the cycle a procedure
+makes, its namespace's slot → the procedure → its code id → its unit's table
+→ the namespace, has no root in it once nothing reaches the procedure: the
+collection marks none of it, the sweep frees the procedure, and
+`release_dead_code`, after the collection, lets the unit go, whose table then
+drops the namespace's last `Rc`. A namespace whose last holder was a unit
+therefore drops at code release, not in the sweep, after the sweep has set
+L from the external bytes it read. That is the usual end of a namespace
+`environment` made with a procedure compiled in it, and of a redefined
+library's: its closures hold it too (`VmClosure.globals`), and the sweep
+drops those, but the unit's table outlives them until the release. So the
+collection's finish, which follows the release, settles L from the external
+bytes held then, and arms the threshold from the settled L (§6.2): L, the
+threshold and the collection's record count no namespace the release
+dropped. What roots a namespace is, then: the
+machine's `globals` for the program's; its registry entry for a library's,
+from its load on (#677); its `OwnedEnvironment` for a host namespace; its
+object for a specifier's; and for the namespace of code something can still
+run, that code's unit. Only the code of a unit a frame, a marked closure or
+the running code holds reads through its table, which is what lets a
+collection keep a placeholder only while such a holder lives: a check build
+asserts that every unit a collection kept had its table traced
+(`VmState::release_dead_code`).
 
 **At the end of a heap's life.** Until #704 an environment held the heap it
 allocates in (`Environment.heap`, a `SharedHeap`), so every heap → env edge

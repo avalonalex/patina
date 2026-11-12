@@ -187,11 +187,17 @@ class Clauses(unittest.TestCase):
                 self.assertEqual(hidden.red_reason(f'SS5:{key}', backend), 'stage 5c', (key, backend))
             for key in held:
                 self.assertIsNone(hidden.red_reason(f'SS5:{key}', backend), (key, backend))
-            # A reference to an unbound name makes no record (R22).
+            # A reference to an unbound name makes a placeholder, dropped
+            # once no code links it (#836).
             for key in ('namespaces', 'cells', 'binding-records'):
                 self.assertIsNone(rows['unbound-ref'].red_reason(f'SS5:{key}', backend), (key, backend))
         # The owner's re-pin for the records (question 2 on #834).
         self.assertEqual(hidden.pin, {'vm': 257, 'tree-walker': 129})
+        # `unbound-ref`'s readings at its N with the linking (#836; R9), the
+        # VM's from CI's runner, where the placeholder store's table steps
+        # once more inside the window than on an Apple M4 Pro (84.48 B).
+        self.assertEqual(rows['unbound-ref'].pin, {'vm': 101.55, 'tree-walker': 84.35})
+        self.assertIn('pin', rows['unbound-ref'].checks())
 
     def test_library_stream_s_pin_is_ss1_s_bound(self):
         # Its SS1 passes since #834; until 4b.11 promotes it, the pin's 1.05x
@@ -201,6 +207,30 @@ class Clauses(unittest.TestCase):
         for backend in steady.BACKENDS:
             self.assertAlmostEqual(steady.PIN_TOLERANCE * row.pin[backend], steady.leak_floor(row.n[backend]))
         self.assertIn('pin', row.checks())
+
+    def test_the_pacer_s_row_runs_per_pr(self):
+        # `env-lambda` is the row a pacer that follows dead namespaces fails
+        # (#836): its collections come further apart until SS2 is vacuous.
+        # It runs on every change, with SS2 declared and no mark on it.
+        row = next(row for row in steady.ROWS if row.name == 'env-lambda')
+        self.assertTrue(row.pr)
+        self.assertIn('SS2', row.checks())
+        for backend in steady.BACKENDS:
+            self.assertIsNone(row.red_reason('SS2', backend))
+            # Four paced collections a segment, where SS2 takes two: at 500
+            # it held two, and a leaner namespace failed it for no defect.
+            self.assertEqual(row.n[backend], 1000)
+
+    def test_the_constants_row_is_red_on_the_vm_alone(self):
+        # `const-lambda` is the lag the settled L does not reach: a dead
+        # unit's constants are roots for one more collection, and L counts
+        # what they hold. Red for #866 on the VM; the tree-walker,
+        # which loads no code, holds SS2 unmarked.
+        row = next(row for row in steady.ROWS if row.name == 'const-lambda')
+        self.assertFalse(row.pr)
+        self.assertEqual(row.red_reason('SS2', 'vm'), '#866')
+        self.assertIsNone(row.red_reason('SS2', 'tree-walker'))
+        self.assertEqual(steady.mark_errors(row), [])
 
     def test_ss5_marks_name_one_key(self):
         row = steady.Row('r', 'churn', 'x.scm', {}, red={'SS5:ports/vm': '#1'})

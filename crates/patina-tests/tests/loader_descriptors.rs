@@ -310,3 +310,81 @@ fn a_second_failure_after_the_collection_raises() {
         }
     }
 }
+
+/// The retry's collection is finished as every other is (#836): on the VM
+/// it runs outside any loop (`vm_state::collect_for_loader`), and the code
+/// release after it drops each namespace whose last holder was a dead
+/// unit's link table, after the sweep has read the external bytes. The
+/// collection's finish settles L from what is held then
+/// (`GcController::finish_collection`), here as at a poll.
+///
+/// Fifty procedures, each compiled in a namespace of its own, are held in a
+/// vector and then let go, with nothing collecting (`GcMode::Off`). The
+/// import's read fails once, so the loader's collection is the one that
+/// finds them dead: the L it leaves is under the L a `(gc)` leaves after the
+/// load, which counts the library too, where the sweep's L was the fifty
+/// namespaces, 1.6 MB, above it. The tree-walker's closures hold their
+/// namespaces in the heap, so its sweep drops them and both readings hold
+/// there with or without the settle. Read from Rust, between the forms.
+#[test]
+fn the_loader_s_collection_leaves_the_namespaces_its_code_release_drops_out_of_l() {
+    fn readings<B: Backend + SearchPath>(interp: Interpreter<B>, dir: &Path) -> [usize; 3] {
+        interp.backend().add_search_path(dir.to_path_buf());
+        let eval = |code: &str| {
+            if let Err(e) = interp.eval_program_owned(code) {
+                panic!("{code}: {e}");
+            }
+        };
+        let live = || interp.backend().heap().borrow().live_bytes();
+        eval(
+            "(import (scheme base) (scheme eval) (patina debug))
+             (define held (make-vector 50 #f))
+             (let loop ((i 0))
+               (when (< i 50)
+                 (vector-set! held i
+                              (eval '(lambda (x) (* x 2)) (environment '(scheme base))))
+                 (loop (+ i 1))))
+             (gc)",
+        );
+        let held = live();
+        eval("(vector-fill! held #f)");
+        let before = interp.gc_stats().collections;
+        eval("(import (foo inc))");
+        assert_eq!(
+            interp.gc_stats().collections - before,
+            1,
+            "the retry's collection, and no other"
+        );
+        let at_retry = live();
+        eval("(gc)");
+        [held, at_retry, live()]
+    }
+
+    let dir = tempfile::TempDir::new().unwrap();
+    for (path, text) in LIBRARIES {
+        let path = dir.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    let fs = || FailFirst::new("inc.sld", Call::Read, Failure::OutOfDescriptors, 1);
+    let vm = Interpreter::new(patina_vm::VmBackend::with_fs_and_gc_mode(fs(), GcMode::Off));
+    let tw = Interpreter::new(patina_interpreter::TreeWalker::with_fs_and_gc_mode(
+        fs(),
+        GcMode::Off,
+    ));
+    for (backend, [held, at_retry, at_call]) in [
+        ("VM", readings(vm, dir.path())),
+        ("tree-walker", readings(tw, dir.path())),
+    ] {
+        assert!(
+            held > at_call + 1_000_000,
+            "{backend}: the fifty namespaces weigh under 1 MB: L {held} with them held, \
+             {at_call} without"
+        );
+        assert!(
+            at_retry < at_call,
+            "{backend}: the L the loader's collection left, {at_retry}, counts the namespaces \
+             its code release dropped: a (gc) after the load left {at_call}"
+        );
+    }
+}

@@ -9,10 +9,11 @@
 //!
 //! Beside them, the test that the provider reports its slots where they live,
 //! by a visitor that writes into each and puts it back (#682); and the
-//! tests of tracing by code id (#836), each of which loads a unit, links its
-//! table by hand in a namespace it then drops, and puts the unit in one
-//! place only, to show that a holder there keeps the table, its records and
-//! its namespace, and that the code store alone keeps none of them.
+//! tests of tracing by code id (#836), each of which loads a unit, which
+//! `load_unit` links in a namespace the test then drops, and puts the unit
+//! in one place only, to show that a holder there keeps the table, its
+//! records and its namespace, and that the code store alone keeps none of
+//! them.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -31,7 +32,7 @@ use super::super::control::resume_step;
 use super::super::execution_state::ExecutionState;
 use super::{LoopExit, VmState, execute, run_loop_until_outcome};
 use crate::tracer::StepTracer;
-use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
+use crate::types::code_object::{Arity, CodeObject};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
@@ -48,7 +49,6 @@ fn code_holding(constants: Vec<TaggedValue>) -> Rc<CodeObject> {
         arity: Arity::Fixed(0),
         source_map: Vec::new(),
         register_roots: None,
-        global_cache: Vec::new(),
         links: LinkTable::empty(),
         live_closures: Cell::new(0),
     })
@@ -424,8 +424,8 @@ fn linked_values(heap: &mut Heap, s: &mut Sentinels) -> (TaggedValue, TaggedValu
     )
 }
 
-/// Load `code` as a unit of its own, through `load_unit` so that its id
-/// resolves, with a link table over `names`, linked in a fresh namespace
+/// Load `code` as a unit of its own, through `load_unit`, which gives it an
+/// id that resolves and links its table, over `names`, in a fresh namespace
 /// that binds `x`, and `y`, which the table does not name. The namespace's
 /// `Rc` is dropped here, so only the table holds it, and only the code
 /// store holds the unit: each test puts the unit where the edge it tests
@@ -440,11 +440,11 @@ fn load_linked(
     code.links = Rc::new(LinkTable::new(
         names.iter().map(|&name| Rc::from(name)).collect(),
     ));
-    let id = state.load_unit(code, Vec::new()).id();
     let ns = Rc::new(Environment::with_heap(&state.heap));
     ns.define(&state.heap, "x", x);
     ns.define(&state.heap, "y", y);
-    (state.code_object(id).expect("just loaded").links).link_in(&state.heap, &ns);
+    let id = state.load_unit(code, Vec::new(), &ns).id();
+    drop(ns);
     id
 }
 
@@ -537,7 +537,7 @@ fn a_frame_keeps_its_units_link_table() {
 #[test]
 fn a_full_continuations_frame_keeps_its_units_link_table() {
     let mut state = VmState::on_a_fresh_heap();
-    let earlier = state.load_unit(super::tests::code(), Vec::new()).id();
+    let earlier = super::tests::load_in_globals(&mut state, super::tests::code(), Vec::new()).id();
     let mut s = Sentinels::new(&mut state.heap.borrow_mut());
     let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
     let id = load_linked(&mut state, super::tests::code(), &["x"], x, y);
@@ -561,7 +561,7 @@ fn a_full_continuations_frame_keeps_its_units_link_table() {
 #[test]
 fn a_delimited_continuations_frame_keeps_its_units_link_table() {
     let mut state = VmState::on_a_fresh_heap();
-    let earlier = state.load_unit(super::tests::code(), Vec::new()).id();
+    let earlier = super::tests::load_in_globals(&mut state, super::tests::code(), Vec::new()).id();
     let mut s = Sentinels::new(&mut state.heap.borrow_mut());
     let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
     let id = load_linked(&mut state, super::tests::code(), &["x"], x, y);
@@ -665,7 +665,6 @@ fn assembled(instructions: Vec<Instruction>, constants: Vec<TaggedValue>) -> Cod
     CodeObject {
         id: CodeObjectId::label(),
         name: None,
-        global_cache: GlobalCacheEntry::table(&instructions),
         links: LinkTable::empty(),
         instructions,
         constants,
@@ -684,6 +683,7 @@ fn zeal_with_callee() -> (VmState, TaggedValue) {
     let heap = patina_core::heap::new_shared_heap();
     let globals = Rc::new(Environment::with_heap(&heap));
     let mut state = VmState::with_gc_mode(heap, globals, GcMode::Zeal);
+    let globals = Rc::clone(state.global_env());
     let (a, window) = state
         .load_unit(
             assembled(
@@ -697,9 +697,9 @@ fn zeal_with_callee() -> (VmState, TaggedValue) {
                 Vec::new(),
             ),
             Vec::new(),
+            &globals,
         )
         .into_parts();
-    let globals = Rc::clone(state.global_env());
     let closure = (state.heap.borrow_mut()).alloc_vm_closure(a.0, Vec::new(), globals);
     state.note_closure_made(a);
     // Unlike `eval_closure`, which keeps the unit's window open to the
@@ -799,7 +799,8 @@ fn a_tail_call_after_a_return_keeps_the_callers_link_table() {
     let (retired, doomed) = doomed_frame_closure(&state);
     let m = state.code_object(m).expect("loaded");
     state.execution.push_frame(m, retired, 0);
-    let b = state.load_unit(
+    let b = super::tests::load_in_globals(
+        &mut state,
         assembled(
             vec![
                 Instruction::LoadImmediate {
@@ -849,7 +850,7 @@ fn a_nested_loop_puts_back_the_running_code_when_it_returns() {
     state.execution.set_running(b.0);
     // `.id()` here, not at the use: a `LoadedUnit` shadowed below would
     // keep its window open to the end of the test, through the nested loop.
-    let c = state.load_unit(super::tests::code(), Vec::new()).id();
+    let c = super::tests::load_in_globals(&mut state, super::tests::code(), Vec::new()).id();
     let c = state.code_object(c).expect("loaded");
     state.execution.push_frame(c, CallFrame::NO_CLOSURE, 0);
 
@@ -876,9 +877,8 @@ fn a_nested_loop_puts_back_the_running_code_when_it_fails() {
     let b = load_linked(&mut state, super::tests::code(), &["x"], x, y);
     state.execution.set_running(b.0);
     // `.id()` at the binding, as in the test above.
-    let c = state
-        .load_unit(tail_calling(TaggedValue::NULL), Vec::new())
-        .id();
+    let c =
+        super::tests::load_in_globals(&mut state, tail_calling(TaggedValue::NULL), Vec::new()).id();
     let c = state.code_object(c).expect("loaded");
     state.execution.push_frame(c, CallFrame::NO_CLOSURE, 0);
 
@@ -918,18 +918,18 @@ fn a_tail_call_where_an_escape_lands_keeps_the_landing_units_link_table() {
     };
     // `.id()` at the binding: a shadowed `LoadedUnit` would keep its window
     // open through the run.
-    let w = state
-        .load_unit(
-            assembled(
-                vec![Instruction::TailCall {
-                    func: 0,
-                    args: Vec::new(),
-                }],
-                Vec::new(),
-            ),
+    let w = super::tests::load_in_globals(
+        &mut state,
+        assembled(
+            vec![Instruction::TailCall {
+                func: 0,
+                args: Vec::new(),
+            }],
             Vec::new(),
-        )
-        .id();
+        ),
+        Vec::new(),
+    )
+    .id();
     let w = state.code_object(w).expect("loaded");
     state.execution.push_frame(w, CallFrame::NO_CLOSURE, 0);
     state.set_reg(0, k);
@@ -957,7 +957,7 @@ fn a_tail_call_where_an_escape_lands_keeps_the_landing_units_link_table() {
 #[test]
 fn a_stale_code_id_finds_nothing() {
     let mut state = VmState::on_a_fresh_heap();
-    let first = state.load_unit(super::tests::code(), Vec::new()).id();
+    let first = super::tests::load_in_globals(&mut state, super::tests::code(), Vec::new()).id();
     state.release_unit_if_unused(first);
     let (x, y) = {
         let mut heap = state.heap.borrow_mut();

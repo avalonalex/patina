@@ -986,9 +986,26 @@ const RECORDS: &str = "(cdr (assq 'binding-records (gc-stats)))";
 /// in the count. The host namespace's records are counted with the rest
 /// (the owner's ruling (a) of 2026-11-07 on #835's question 2); the names
 /// each environment lists are checked as well.
+///
+/// What the VM's linking makes is counted too (#836): a unit links each
+/// name it reads, and one nothing binds to a placeholder, a record, which
+/// lives while code that links it can. The erroring forms above link theirs
+/// and let them go once their units are released, at the collection before
+/// the reading. Then `keep` holds a procedure that reads a fresh unbound
+/// name: one record more on the VM, while it is held, and none on the
+/// tree-walker, which links nothing; a call that misses, caught, makes no
+/// other; and once `keep` lets it go, two collections give the count back.
+/// `keep` is defined, and a `guard` of the same shape expanded, before the
+/// baseline, since a definition's operand is linked at load and the first
+/// expansion of `guard` binds import aliases for its template's
+/// procedures, which outlive the collections.
 fn read_makes_no_record<B: Backend>(interp: Interpreter<B>, backend: &str) {
     interp
-        .eval_program_owned("(import (scheme base) (patina debug))")
+        .eval_program_owned(
+            "(import (scheme base) (patina debug))
+             (define keep #f)
+             (guard (e (#t 'raised)) (keep))",
+        )
         .unwrap();
     let env = interp.new_environment();
     let heap = interp.backend().heap();
@@ -1030,12 +1047,118 @@ fn read_makes_no_record<B: Backend>(interp: Interpreter<B>, backend: &str) {
     interp.eval_str_owned("(gc)").unwrap();
     assert_eq!(records(), before, "{backend}: a read made a binding record");
     assert_eq!(names(), listed, "{backend}: a miss bound a name");
+
+    let count = |records: String| -> i64 { records.parse().expect("a count") };
+    let base = count(records());
+    interp
+        .eval_str_owned("(set! keep (lambda () never-bound-name-836d))")
+        .unwrap();
+    let linked = i64::from(backend == "vm");
+    assert_eq!(
+        count(records()) - base,
+        linked,
+        "{backend}: a held procedure's unbound name"
+    );
+    let raised = interp
+        .eval_str_owned("(guard (e (#t 'raised)) (keep))")
+        .unwrap();
+    assert_eq!(interp.display_tagged(raised), "raised", "{backend}");
+    assert_eq!(
+        count(records()) - base,
+        linked,
+        "{backend}: a call that missed made a record"
+    );
+    interp.eval_str_owned("(set! keep #f)").unwrap();
+    interp.eval_program_owned("(gc) (gc)").unwrap();
+    assert_eq!(
+        count(records()),
+        base,
+        "{backend}: a placeholder outlived the code that linked it"
+    );
+    assert_eq!(names(), listed, "{backend}: a placeholder bound a name");
 }
 
 #[test]
 fn a_read_makes_no_record() {
     read_makes_no_record(vm_interpreter(), "vm");
     read_makes_no_record(tree_walker_interpreter(), "tree-walker");
+}
+
+/// The heap's `binding-records` and `namespaces`.
+fn records_and_namespaces<B: Backend>(interp: &Interpreter<B>) -> (i64, i64) {
+    let read = |key: &str| -> i64 {
+        let value = interp
+            .eval_str_owned(&format!("(cdr (assq '{key} (gc-stats)))"))
+            .unwrap();
+        interp.display_tagged(value).parse().expect("a count")
+    };
+    (read("binding-records"), read("namespaces"))
+}
+
+/// A host namespace's code links what it reads where it was compiled
+/// (#836): on the VM, a procedure compiled in a host namespace that reads a
+/// name nothing binds has its unit link a weak read-through record in the
+/// host namespace's store, over a placeholder in the global namespace's:
+/// two binding records (#782's R7), which live while the procedure does, as
+/// the first reading shows. Then 1,000 more such procedures, each dropped as
+/// it is made, then the first, then the handle: one collection later the
+/// units, the host namespace with its store, the children and the
+/// placeholders they read through have all gone, and `binding-records` and
+/// `namespaces` read as they did before the namespace was made, and after a
+/// second as well. One collection, since the pass drops a child and the
+/// parent's placeholder it read through together, neither being marked: a
+/// pass that spared a parent's placeholder while a host's store still held
+/// a child of its name would leave the records above until the next. A
+/// table that held its host namespace past its unit's release would leave
+/// the namespaces above. The tree-walker links nothing, and its counts
+/// return with the namespace. The reading forms are read once before the
+/// baseline. (That a store's drop gives back the counts of the entries it
+/// still holds is `placeholder_store.rs`' tests': here the pass has emptied
+/// the host's store before it drops.)
+fn host_placeholders_dropped<B: Backend>(interp: Interpreter<B>, backend: &str) {
+    interp
+        .eval_program_owned("(import (scheme base) (patina debug))")
+        .unwrap();
+    records_and_namespaces(&interp);
+    interp.eval_program_owned("(gc) (gc)").unwrap();
+    let (records, namespaces) = records_and_namespaces(&interp);
+    let env = interp.new_environment();
+    let held = interp
+        .eval_str_in(&env, "(lambda () host-unbound-836-held)")
+        .unwrap();
+    interp.eval_program_owned("(gc) (gc)").unwrap();
+    let linked = if backend == "vm" { 2 } else { 0 };
+    assert_eq!(
+        records_and_namespaces(&interp),
+        (records + linked, namespaces + 1),
+        "{backend}: a held procedure's unbound name, and its host namespace"
+    );
+    for i in 0..1000 {
+        let procedure = interp
+            .eval_str_in(&env, &format!("(lambda () host-unbound-836-{i})"))
+            .unwrap();
+        drop(procedure);
+    }
+    drop(held);
+    drop(env);
+    interp.eval_program_owned("(gc)").unwrap();
+    assert_eq!(
+        records_and_namespaces(&interp),
+        (records, namespaces),
+        "{backend}: what the host namespace's code linked outlived it by a collection"
+    );
+    interp.eval_program_owned("(gc)").unwrap();
+    assert_eq!(
+        records_and_namespaces(&interp),
+        (records, namespaces),
+        "{backend}: what the host namespace's code linked outlived it"
+    );
+}
+
+#[test]
+fn a_host_namespace_s_placeholders_are_dropped_with_their_code() {
+    host_placeholders_dropped(vm_interpreter(), "vm");
+    host_placeholders_dropped(tree_walker_interpreter(), "tree-walker");
 }
 
 /// The library a raw frame of the global namespace is given to define:
@@ -1755,10 +1878,11 @@ fn a_host_primitive_evaluating_in_a_raw_frame_is_refused_by_the_vm() {
 
 // ---------------------------------------------------------------------------
 // What host code reads of a name nothing bound when it was compiled, across
-// a collection, pinned before 4b.9 links a unit's names at load (#836). Its
-// three cases hold on the base, where such a read goes by name, and must hold
-// once the name links to a placeholder record that a collection keeps only
-// while live code holds it, and that a later definition adopts.
+// a collection, pinned before 4b.9 linked a unit's names at load (#836). Its
+// three cases held where such a read went by name, and hold now that the
+// name links, at load, to a read-through record over a placeholder, which a
+// collection keeps only while live code holds it, and which a later
+// definition adopts.
 // ---------------------------------------------------------------------------
 
 /// `(host4b forward)` exports `forward-value`, which nothing imports until
@@ -1825,9 +1949,9 @@ fn forward_references_across_a_collection<B: Backend>(
 
 /// Host code reads the global definition, the global import and the host
 /// namespace's own definition of a name nothing bound when the code was
-/// compiled, each made after two collections. On the VM, once 4b.9 links
-/// names at load (#836), the host's unit links each name to a child record
-/// that reads through the global namespace's placeholder (#782's R7), and the
+/// compiled, each made after two collections. The VM links names at load
+/// (#836), so the host's unit links each name to a child record that reads
+/// through the global namespace's placeholder (#782's R7), and the
 /// collections must keep both, since the host's closures are live; a read of
 /// a record they freed is what a check build's stale-reference check refuses
 /// (#621). The global definition and the import must reach the record the
@@ -1859,5 +1983,58 @@ fn a_host_forward_reference_reads_the_global_definition_made_after_a_collection(
     assert!(
         collected > 2,
         "{collected} collections under zeal on the tree-walker, and the host asks for 2"
+    );
+}
+
+/// Host code reads a name nothing binds, and the error is caught; after two
+/// collections the global namespace defines the name, and the same host
+/// closure reads it. On the VM the host's unit links the name to a weak
+/// read-through record over the global namespace's placeholder (#836), and
+/// the global definition adopts the placeholder, not the host's record, so
+/// every read of it in the host goes through the cold read: a miss the
+/// cold read remembered, for the unit, the record or the name, would raise
+/// again, and the collections must keep both records while the host's
+/// closure lives. The global namespace's own forward reference reads its
+/// definition through the record the definition adopted, never the cold
+/// read, so only a host's read shows this (later-notes' PR-6 note). The
+/// tree-walker reads by name each time. Run on each backend's interpreter
+/// and on a zeal one, which must have collected beyond the two collections
+/// the program asks for.
+fn host_read_that_missed<B: Backend>(interp: Interpreter<B>) -> (String, u64) {
+    interp
+        .eval_program_owned("(import (scheme base) (patina debug))")
+        .unwrap();
+    let env = interp.new_environment();
+    interp
+        .eval_program_in(
+            &env,
+            "(define (g) host-later-836m)
+             (define r (guard (e (#t 'caught)) (g)))",
+        )
+        .unwrap();
+    interp
+        .eval_program_owned("(gc) (gc) (define host-later-836m 5)")
+        .unwrap();
+    let value = interp.eval_str_in(&env, "(list r (g))").unwrap();
+    (interp.display_tagged(value), collections(&interp))
+}
+
+#[test]
+fn a_host_read_that_missed_is_not_remembered_across_collections() {
+    let (answer, _) = host_read_that_missed(vm_interpreter());
+    assert_eq!(answer, "(caught 5)");
+    let (answer, collected) = host_read_that_missed(vm_interpreter_zeal());
+    assert_eq!(answer, "(caught 5)", "under zeal");
+    assert!(
+        collected > 2,
+        "{collected} collections under zeal on the VM"
+    );
+    let (answer, _) = host_read_that_missed(tree_walker_interpreter());
+    assert_eq!(answer, "(caught 5)");
+    let (answer, collected) = host_read_that_missed(tree_walker_interpreter_zeal());
+    assert_eq!(answer, "(caught 5)", "under zeal");
+    assert!(
+        collected > 2,
+        "{collected} collections under zeal on the tree-walker"
     );
 }

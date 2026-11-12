@@ -374,9 +374,11 @@ fn visit_candidates<T>(
 /// holding its own name, with a hash index built only for large environments.
 ///
 /// Slots are append-only: a binding's slot never moves or disappears once
-/// created, and redefining a name keeps its slot (below). The VM's
-/// per-site global caches rest on this invariant (see `GlobalCacheEntry`
-/// in patina-vm), so every mutation must go through these methods.
+/// created, and redefining a name keeps its slot (below). The VM's link
+/// tables rest on this invariant: a unit links each binding's record once,
+/// at load, and reads and writes through that word for the unit's life
+/// (`LinkTable::link_in`, #836), so every mutation must go through these
+/// methods.
 ///
 /// Nearly every environment the tree-walker builds is a frame of one or two
 /// bindings — a CPS `LetVal` temporary, a lambda's parameters — and it builds
@@ -390,7 +392,7 @@ fn visit_candidates<T>(
 /// In a namespace a slot's word is the binding's record (`binding_record.rs`,
 /// #834), and a definition or an import changes what the record names,
 /// never the slot's word: `define_record` and `bind_cell` re-point, so the
-/// VM's cached `(env_id, slot)` names one record for the namespace's life.
+/// record a VM link table links names the binding for the namespace's life.
 /// In a frame a slot's word is the value, or `TaggedValue::IMPORTED`.
 #[derive(Debug, Default, Trace)]
 struct Bindings {
@@ -494,8 +496,8 @@ impl Bindings {
     /// Append a slot for `name`, which has none: [`insert`](Self::insert)'s
     /// append half, and a namespace's fresh name, which is hashed once
     /// (#834). A namespace never overwrites a slot's word, so its records
-    /// stay in their slots for its life, which the VM's per-site global
-    /// caches rest on.
+    /// stay in their slots for its life, which the VM's link tables rest on
+    /// (#836).
     fn append(&mut self, name: Rc<str>, value: TaggedValue) -> Inserted {
         debug_assert!(
             self.slot_of(&name).is_none(),
@@ -733,6 +735,29 @@ struct ReadThrough {
     /// Each name's read-through record, keyed by the parent's slot name,
     /// shared.
     records: FxHashMap<Rc<str>, Record>,
+}
+
+/// A spelling [`Environment::link_record`] links (#836). The store that
+/// holds a placeholder made for it holds the name in an `Rc`: a caller that
+/// has the spelling in one, as a link table has each of its names, shares
+/// it, and a bare `str`, as the tests pass, is copied into a new one.
+pub(crate) trait Spelling: AsRef<str> {
+    /// The spelling in an `Rc`: the caller's own, shared, or a copy.
+    fn shared(&self) -> Rc<str>;
+}
+
+impl Spelling for str {
+    #[inline]
+    fn shared(&self) -> Rc<str> {
+        Rc::from(self)
+    }
+}
+
+impl Spelling for Rc<str> {
+    #[inline]
+    fn shared(&self) -> Rc<str> {
+        Rc::clone(self)
+    }
 }
 
 /// Where a record a define or an import adopts was counted until then
@@ -1016,8 +1041,9 @@ type ImportAliases = SmallVec<[(Rc<str>, Rc<str>); 1]>;
 /// identity of the macro's mention it renames.
 type RelinkKey = (u64, Rc<str>, Option<ScopeSet>, ScopeSet);
 
-/// Mint a process-unique, never-reused environment id (0 is reserved as the
-/// "empty" sentinel in the VM's global caches).
+/// Mint a process-unique, never-reused environment id (0 is reserved: a free
+/// cell's owner tag is the fixnum 0, `binding_record.rs`, and a VM link
+/// table's `compiled_in` is 0 for code compiled in no namespace, #836).
 fn fresh_env_id() -> u64 {
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -1084,13 +1110,13 @@ fn fresh_env_id() -> u64 {
 /// ## Deliberately not `Clone`
 ///
 /// The binding tables are owned inline, so a derived `Clone` would *fork*
-/// them while copying `env_id` — and `env_id` is what patina-vm's per-site
-/// global cache keys a resolved slot on (`GlobalCacheEntry` in
-/// `patina-vm/src/types/code_object.rs`). Two environments sharing an id and
-/// disagreeing about a name would hand that cache a hit against the wrong
-/// table and return the wrong value silently. An environment is shared by its
-/// `Rc` and by nothing else; `gc_identity` rests on the same rule. Do not add
-/// the derive.
+/// them while copying `env_id` — and `env_id` is what a cell's owner tag
+/// names (`binding_record.rs`) and what the heap's placeholder list keys a
+/// namespace's store on (#836). Two environments sharing an id would each
+/// take the other's cells for its own, and a define in one would copy where
+/// it should share, or share where it should copy, silently. An environment
+/// is shared by its `Rc` and by nothing else; `gc_identity` rests on the same
+/// rule. Do not add the derive.
 ///
 /// ## Its trace
 ///
@@ -1120,9 +1146,10 @@ pub struct Environment {
     /// Stores TaggedValue internally for memory efficiency
     bindings: RefCell<Bindings>,
     /// Process-unique id for this environment, minted at construction and
-    /// shared by every holder of its `Rc`. Never reused, unlike an address —
-    /// see `GlobalCacheEntry` in patina-vm for the cache soundness argument,
-    /// and `gc_identity` for the address-based identity the GC uses to dedup
+    /// shared by every holder of its `Rc`. Never reused, unlike an address,
+    /// so a cell's owner tag, the placeholder list's key and a VM link
+    /// table's `compiled_in` each name one environment for good (#836); see
+    /// `gc_identity` for the address-based identity the GC uses to dedup
     /// *live* environments.
     #[trace(skip, reason = "a number minted at construction")]
     env_id: u64,
@@ -1463,9 +1490,8 @@ impl Environment {
         self.frame_slot_value(heap, slot)
     }
 
-    /// [`slot_value`](Self::slot_value) for a frame, out of line: the VM's
-    /// `LoadGlobal` inlines `slot_value`, and nearly every global it reads
-    /// is a namespace's.
+    /// [`slot_value`](Self::slot_value) for a frame, out of line: nearly
+    /// every slot a caller reads is a namespace's.
     #[inline(never)]
     fn frame_slot_value(&self, heap: &RefCell<Heap>, slot: u32) -> TaggedValue {
         let tv = self.bindings.borrow().read_slot(slot);
@@ -1476,10 +1502,9 @@ impl Environment {
     }
 
     /// [`slot_value`](Self::slot_value) with the heap already borrowed: the
-    /// namespace step's own body, and the VM's `LoadGlobal`, which reads a
-    /// cached slot under the borrow it took to find the frame's globals
-    /// (#834). Any environment's slot, a frame's included. Raw, as every
-    /// `Environment` method is.
+    /// namespace step's own body (#834). Any environment's slot, a frame's
+    /// included. Raw, as every `Environment` method is. The VM reads its
+    /// globals through its units' link tables (#836), not by slot.
     #[inline]
     pub fn slot_value_in(&self, heap: &Heap, slot: u32) -> TaggedValue {
         self.check_heap(heap);
@@ -1571,9 +1596,9 @@ impl Environment {
     }
 
     /// A frame's import, read with the heap borrowed. Kept out of line:
-    /// `slot_value_in` is inlined into the VM's `LoadGlobal`, and a frame's
-    /// import is rare there, where the environment is a namespace, a host's
-    /// included since #835.
+    /// `slot_value_in` is inlined into its callers, and a frame's import is
+    /// rare there, where the environment is nearly always a namespace, a
+    /// host's included since #835.
     #[inline(never)]
     fn frame_import_value_in(&self, heap: &Heap, slot: u32) -> TaggedValue {
         self.frame_import_cell(slot).value(heap)
@@ -2028,8 +2053,18 @@ impl Environment {
     /// makes no record. A placeholder and a weak read-through record live
     /// while code that links them is traced, and the sweep's pass drops them
     /// once none is (`placeholder_store.rs`).
-    pub(crate) fn link_record(&self, heap: &RefCell<Heap>, name: &str) -> Option<Record> {
+    ///
+    /// `name` is a [`Spelling`]: a link table hands over each name in the
+    /// `Rc` it holds it in, which the store that holds a new placeholder
+    /// shares instead of copying the spelling.
+    pub(crate) fn link_record<N: Spelling + ?Sized>(
+        &self,
+        heap: &RefCell<Heap>,
+        name: &N,
+    ) -> Option<Record> {
         let mut step = self.write_step(heap)?;
+        let shared = name;
+        let name = shared.as_ref();
         if let Some(own) = self.local_record(name) {
             return Some(own);
         }
@@ -2040,7 +2075,7 @@ impl Environment {
             return None;
         }
         if self.kind != Kind::HostNamespace {
-            return Some(self.placeholder(&mut step, name).1);
+            return Some(self.placeholder(&mut step, shared).1);
         }
         let parent = self
             .parent
@@ -2061,7 +2096,7 @@ impl Environment {
             // definition of its own there: read by name, and no placeholder.
             None if parent.read_by_name(name) => None,
             None => {
-                let (key, placeholder) = parent.placeholder(&mut step, name);
+                let (key, placeholder) = parent.placeholder(&mut step, shared);
                 Some(self.weak_child(&mut step, key, placeholder))
             }
         }
@@ -2070,10 +2105,18 @@ impl Environment {
     /// Whether `get` finds `name` here by an alias or a visible scoped
     /// definition, before any slot's binding but this namespace's own:
     /// [`link_record`](Self::link_record) leaves such a name to be read by
-    /// name.
-    fn read_by_name(&self, name: &str) -> bool {
+    /// name, and `LinkTable::read_cold` and `LinkTable::assignee` read and
+    /// write a host namespace's read-through record by name when its
+    /// namespace has gained one since (#836). Takes no borrow of the heap.
+    ///
+    /// Each latch is tested here, as [`get`](Self::get) tests it, before
+    /// the lookup it guards: a host namespace's every read of a parent's
+    /// binding asks this, and one with no alias and no visible scoped
+    /// definition answers for two loads and no call.
+    #[inline]
+    pub(crate) fn read_by_name(&self, name: &str) -> bool {
         (self.has_aliases.get() && self.alias_target(name).is_some())
-            || self.visible_scoped_index(name).is_some()
+            || (self.has_visible_scoped.get() && self.visible_scoped_index(name).is_some())
     }
 
     /// This namespace's weak entries' store, if a linker has made one
@@ -2121,15 +2164,18 @@ impl Environment {
     /// This parentless namespace's placeholder for `name`, which it does not
     /// bind (#836), with the name its store holds it under: the one in its
     /// store, or a new one, made and held there, counted a record and a cell
-    /// in the heap's sums by the store and charged there.
-    fn placeholder(&self, step: &mut Heap, name: &str) -> (Rc<str>, Record) {
+    /// in the heap's sums by the store and charged there. A new one is held
+    /// under `name`'s own `Rc` where the caller has one ([`Spelling`]): a
+    /// unit's every fresh top-level definition links one at load, and its
+    /// table already holds the spelling.
+    fn placeholder<N: Spelling + ?Sized>(&self, step: &mut Heap, name: &N) -> (Rc<str>, Record) {
         debug_assert_eq!(
             self.kind,
             Kind::Namespace,
             "a host namespace makes no placeholder"
         );
         let store = self.weak_entries_or_make(step, StoreKind::Placeholders);
-        if let Some(found) = store.get_key_value(name) {
+        if let Some(found) = store.get_key_value(name.as_ref()) {
             return found;
         }
         // Allocation never collects (`docs/GC_DESIGN.md` §6), and both
@@ -2138,7 +2184,7 @@ impl Environment {
         // the store does.
         let cell = BindingCell::new_own(step, TaggedValue::UNBOUND, self.env_id);
         let record = Record::placeholder(step, cell);
-        let key: Rc<str> = Rc::from(name);
+        let key = name.shared();
         store.insert(Rc::clone(&key), record);
         (key, record)
     }
@@ -2488,7 +2534,7 @@ impl Environment {
     /// the location.
     ///
     /// The alias is a second record over the same cell (#834), so it reads,
-    /// writes and caches like the import it stands beside; it is minted once
+    /// writes and links like the import it stands beside; it is minted once
     /// per name for a location (`mint` runs only then) and shared by every
     /// expansion after. It stays a name until 4b.10.
     ///
@@ -5531,8 +5577,9 @@ mod shared_binding_tests {
         library.set(&heap, "count", n(2)).unwrap();
 
         assert_eq!(importer.get(&heap, "count"), Some(n(2)));
-        // Every read, not only `get`: the VM reads by slot, a scoped reference
-        // falls back by name, and an import set enumerates.
+        // Every read, not only `get`: by slot, whose record is what a VM link
+        // table links (#836), a scoped reference falls back by name, and an
+        // import set enumerates.
         let slot = importer.local_slot("count").unwrap();
         assert_eq!(importer.slot_value(&heap, slot), n(2));
         assert_eq!(
@@ -5569,7 +5616,7 @@ mod shared_binding_tests {
         importer.define(&heap, "count", n(99));
         assert_eq!(importer.get(&heap, "count"), Some(n(99)));
         assert_eq!(library.get(&heap, "count"), Some(n(0)));
-        // In place, which is what the VM's per-site global caches rest on.
+        // In place, which is what the VM's link tables rest on (#836).
         assert_eq!(importer.local_slot("count"), Some(slot));
 
         // And it stays the importer's: a later write goes no further.
@@ -5788,7 +5835,7 @@ mod shared_binding_tests {
 
     /// A definition over an import re-points the importer's record at a cell
     /// of its own (#834): the slot keeps its word, the same record, which is
-    /// what the VM's per-site global caches rest on, and the library's cell
+    /// what the VM's link tables rest on (#836), and the library's cell
     /// keeps the library's value.
     #[test]
     fn a_define_over_an_import_repoints_its_record() {
@@ -6587,7 +6634,7 @@ mod record_read_tests {
         assert_eq!(target("plain-alias"), Some(n(6)));
         assert_eq!(target("scoped-alias"), Some(n(7)));
 
-        // By slot, as the VM reads.
+        // By slot, whose record is what a VM link table links (#836).
         for (name, value) in [
             ("own", 1),
             ("imported", 2),
@@ -7135,8 +7182,9 @@ mod namespace_charge_tests {
 /// A host namespace's read-through records (#835): made only by
 /// [`Environment::link_record`], never in a slot, reading through the
 /// parent's record to whatever it names now, and adopted by a define or an
-/// import in the host namespace. Until 4b.9's linker calls `link_record`,
-/// these tests are its only callers.
+/// import in the host namespace. `LinkTable::link_in` calls `link_record`
+/// for each name a unit the VM loads in a host namespace links (#836); these
+/// tests call it directly, to pin each shape on its own.
 #[cfg(test)]
 mod read_through_tests {
     use super::*;

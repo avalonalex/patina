@@ -4,7 +4,7 @@
 //! types are accessible. Real VM execution tests are added in milestones A2+.
 
 use patina_core::LinkTable;
-use patina_vm::types::{Arity, CallFrame, CodeObject, CodeObjectId, FrameCode, GlobalCacheEntry};
+use patina_vm::types::{Arity, CallFrame, CodeObject, CodeObjectId, FrameCode};
 
 #[test]
 fn code_object_constructs() {
@@ -17,7 +17,6 @@ fn code_object_constructs() {
         arity: Arity::Fixed(2),
         source_map: vec![],
         register_roots: None,
-        global_cache: GlobalCacheEntry::table(&[]),
         links: LinkTable::empty(),
         live_closures: std::cell::Cell::new(0),
     };
@@ -47,7 +46,6 @@ fn call_frame_is_clone() {
         arity: Arity::Fixed(0),
         source_map: vec![],
         register_roots: None,
-        global_cache: GlobalCacheEntry::table(&[]),
         links: LinkTable::empty(),
         live_closures: std::cell::Cell::new(0),
     });

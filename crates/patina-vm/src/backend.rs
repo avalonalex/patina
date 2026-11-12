@@ -273,10 +273,10 @@ impl VmBackend {
     /// differ only in desugarer construction.
     ///
     /// Evaluates in `env`, a namespace, as the tree-walker does: the datum is
-    /// expanded and compiled there, its imports bind there, and its code
-    /// reads and defines there. The global environment's code runs as a
-    /// top-level frame, any other's as a closure whose globals are `env`
-    /// (`execute_in`, #620).
+    /// expanded and compiled there, its imports bind there, and its code is
+    /// linked there, and reads and defines there through its unit's table
+    /// (#836). The global environment's code runs as a top-level frame, any
+    /// other's as a closure whose globals are `env` (`execute_in`, #620).
     ///
     /// A frame is refused with an error naming its kind
     /// ([`Environment::frame_kind`], #835): a raw frame, or a frame under a
@@ -382,7 +382,7 @@ impl VmBackend {
         drop((core_expr, literals));
 
         let mut state = self.state.borrow_mut();
-        let unit = state.load_unit(top, nested);
+        let unit = state.load_unit(top, nested, env);
         let top_id = unit.id();
 
         // Execute, then let go of the form's code unless something it left
@@ -441,7 +441,7 @@ impl VmBackend {
         drop((core_expr, literals));
 
         let mut state = self.state.borrow_mut();
-        let unit = state.load_unit(top, nested);
+        let unit = state.load_unit(top, nested, &self.global_env);
         let top_id = unit.id();
         #[expect(
             clippy::disallowed_methods,
@@ -822,11 +822,12 @@ impl VmBackend {
         }
 
         // Step 2: compile and execute each body expression in the main
-        // VmState, as a closure whose globals are lib_env (`execute_in`): its
-        // frames read and define the library's bindings, even when a
-        // continuation resumes them after the load (#779), and the closures
-        // they make capture lib_env too, so no seeding or merge is needed.
-        // The main state's globals stay the program's environment, which
+        // VmState, its unit linked in lib_env: its frames read and define
+        // the library's bindings through the unit's table, even when a
+        // continuation resumes them after the load (#779, #836), and run as
+        // a closure whose globals are lib_env (`execute_in`), which the
+        // closures they make capture, so no seeding or merge is needed. The
+        // main state's globals stay the program's environment, which
         // `interaction-environment` answers during the load as after it
         // (#823).
 
@@ -888,7 +889,7 @@ impl VmBackend {
                     // The constants hold the literals now (#705).
                     drop((core_expr, literals));
 
-                    let unit = state.load_unit(top, nested);
+                    let unit = state.load_unit(top, nested, &lib_env);
                     let top_id = unit.id();
                     #[expect(
                         clippy::disallowed_methods,
