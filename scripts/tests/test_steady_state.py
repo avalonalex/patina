@@ -193,8 +193,10 @@ class Clauses(unittest.TestCase):
                 self.assertIsNone(rows['unbound-ref'].red_reason(f'SS5:{key}', backend), (key, backend))
         # The owner's re-pin for the records (question 2 on #834).
         self.assertEqual(hidden.pin, {'vm': 257, 'tree-walker': 129})
-        # `unbound-ref`'s readings at its N with the linking (#836; R9).
-        self.assertEqual(rows['unbound-ref'].pin, {'vm': 84.48, 'tree-walker': 84.35})
+        # `unbound-ref`'s readings at its N with the linking (#836; R9), the
+        # VM's from CI's runner, where the placeholder store's table steps
+        # once more inside the window than on an Apple M4 Pro (84.48 B).
+        self.assertEqual(rows['unbound-ref'].pin, {'vm': 101.55, 'tree-walker': 84.35})
         self.assertIn('pin', rows['unbound-ref'].checks())
 
     def test_library_stream_s_pin_is_ss1_s_bound(self):
