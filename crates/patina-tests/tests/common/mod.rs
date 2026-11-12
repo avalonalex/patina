@@ -1442,13 +1442,15 @@ macro_rules! gc_shared_tests {
         // walk the namespace whole. The code then reads a binding of that
         // namespace through its link: `map`'s import record, a binding
         // `LoadGlobal` reads through its entry, or a library's private
-        // binding. On the VM the namespace and the records it reads are held
-        // by the code's unit, whose link table a marked closure, a frame or
-        // the running code reports by its code id, and nothing else: a
-        // closure holds no environment. A collection that kept the unit but
-        // not what its table links would free the record, and the read is
-        // what a check build's stale-reference check refuses (#621). On the
-        // tree-walker a procedure holds its environment. Under zeal too.
+        // binding, or by name, through an alias of the namespace. On the VM
+        // the namespace and the records it reads are held by the code's
+        // unit, whose link table a marked closure, a frame or the running
+        // code reports by its code id, and nothing else: a closure holds no
+        // environment. A collection that kept the unit but not what its
+        // table links, or not the namespace it holds, would free the record,
+        // and the read is what a check build's stale-reference check refuses
+        // (#621). On the tree-walker a procedure holds its environment.
+        // Under zeal too.
 
         #[test]
         fn code_eval_compiled_runs_after_its_specifier_is_garbage() {
@@ -1551,6 +1553,75 @@ macro_rules! gc_shared_tests {
                 (eq? (car (force d)) map)
                 "#,
                 "#t",
+            );
+        }
+
+        #[test]
+        fn a_closure_only_an_ephemeron_holds_reads_its_namespace_after_a_collection() {
+            // The closure, compiled in the specifier's namespace, is held
+            // only as the datum of an ephemeron whose key the program's
+            // `key` holds. The collector marks it in the ephemeron pass,
+            // after the roots, so on the VM its code id reaches
+            // `trace_code_ids` only in a later round of the mark phase's
+            // fixpoint, which must take it there.
+            assert_gc_and_zeal_eval_to(
+                r#"
+                (import (scheme base) (scheme eval) (srfi 124) (patina debug))
+                (define key (list 'key))
+                (define eph
+                  (make-ephemeron key
+                                  (eval '(lambda () (list map)) (environment '(scheme base)))))
+                (gc) (gc)
+                (list (eq? (car ((ephemeron-datum eph))) map) (ephemeron-broken? eph))
+                "#,
+                "(#t #f)",
+            );
+        }
+
+        #[test]
+        fn a_replaced_library_s_procedure_reads_by_name_through_its_namespace_after_a_collection(
+        ) {
+            // `old-step` is the first `(r836 stepper)`'s `step`, whose body
+            // the first `(r836 counter)`'s macro expands into a read and an
+            // assignment of that library's private `counter`: a name
+            // `(r836 stepper)`'s namespace reaches by an alias, which the
+            // code reads by name, through the namespace its unit's table
+            // was linked in, not through an entry the table links. Both
+            // libraries are then replaced, so the first `(r836 stepper)`'s
+            // namespace is held only by the units of the code compiled in
+            // it, and the first `(r836 counter)`'s only through that
+            // namespace's alias. On the VM it is the table's namespace that
+            // keeps `counter`'s record and its value.
+            assert_gc_and_zeal_eval_to(
+                r#"
+                (import (scheme base) (patina debug))
+                (define-library (r836 counter)
+                  (export bump!)
+                  (import (scheme base))
+                  (begin
+                    (define counter (list 0))
+                    (define-syntax bump!
+                      (syntax-rules ()
+                        ((_) (begin (set! counter (list (+ (car counter) 1))) counter))))))
+                (define-library (r836 stepper)
+                  (export step)
+                  (import (scheme base) (r836 counter))
+                  (begin (define (step) (bump!))))
+                (import (r836 stepper))
+                (define old-step step)
+                (define-library (r836 counter)
+                  (export bump!)
+                  (import (scheme base))
+                  (begin (define-syntax bump! (syntax-rules () ((_) 'new-counter)))))
+                (define-library (r836 stepper)
+                  (export step)
+                  (import (scheme base))
+                  (begin (define (step) 'new-stepper)))
+                (import (r836 stepper))
+                (gc) (gc)
+                (list (old-step) (old-step) (step))
+                "#,
+                "((1) (2) new-stepper)",
             );
         }
 

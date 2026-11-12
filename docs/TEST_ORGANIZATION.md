@@ -2052,10 +2052,10 @@ without stress too (5047 and 17796 times, 2026-11-09, since #836's
 placeholder tests, whose drop test's zeal half runs 100 `eval`s; `gc_vm`
 5072 times since 2026-11-11, with the tests of the settled L; 5844 and
 20510 times since later that day, with #836's tests of code that runs
-after its namespace's other holders have died), which their minimums must
-stay above. `vm_interpreter_adaptive` names the
-adaptive threshold the same way, for a test of the pacing itself, which
-stress and zeal replace.
+after its namespace's other holders have died; 6142 and 21510 times since
+that PR's review added two more), which their minimums must stay above.
+`vm_interpreter_adaptive` names the adaptive threshold the same way, for a
+test of the pacing itself, which stress and zeal replace.
 
 The nightly lane's `time` suite measures wall-clock time: one assertion
 requires a one-second loop to stop within 100 ms of its deadline. It passes

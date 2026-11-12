@@ -280,16 +280,26 @@ fi
 # form, host namespace's form and nested evaluation (the retired frame
 # closure), so each target that loads a library collects a little less
 # often, by up to 5% (vm_callprimitive), its tests, its count without
-# stress and its minimum left)
+# stress and its minimum left; gc_vm's, gc_tree_walker's and
+# escape_from_primitive's test counts re-pinned again that day for that
+# PR's review: two shared tests, of a closure only an ephemeron's datum
+# holds and of a replaced library's procedure that reads by name through
+# its namespace, which raised the counts by 373 collections at 16 on the
+# VM and 298 without stress, and by 1076 and 1000 on the tree-walker,
+# nearly all their zeal halves; and a test of a closure a re-entered
+# library body form makes, which raised escape_from_primitive's by 76 and
+# 2. gc_tree_walker's minimum re-pinned at half its count measured that
+# day, since its count without stress, 21510, had passed the minimum of
+# 21259; the others left)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
     "cps_features 16 530 3"                   # 1009 (2)
     "ephemerons 16 289 30"                    # 5738 (204)
-    "escape_from_primitive 16 3669 18"        # 9713 (92)
+    "escape_from_primitive 16 3669 19"        # 9789 (94)
     "finished_forms_release_code 16 2040 12"  # 4057 (15)
-    "gc_tree_walker 16 21259 31"              # 45416 (20510)
-    "gc_vm 16 11810 44"                       # 24671 (5844)
+    "gc_tree_walker 16 23246 33"              # 46492 (21510)
+    "gc_vm 16 11810 46"                       # 25044 (6142)
     "host_environments 16 58646 30"           # 117226 (754)
     "hygiene_matrix 16 11136 17"              # 21652 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
