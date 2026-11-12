@@ -2519,9 +2519,10 @@ impl patina_primitives::ApplyContext for VmApplyContext {
         reason = "holds nothing: `expr` moves into the compile, and `vm_eval_expr` runs it on a \
                   nested loop, in its unit linked in `env`, which the caller holds, with the \
                   machine's `globals` left as they are; the records the code uses are held by its \
-                  unit, which its frame, a marked closure or the running code reports. Its one caller in the workspace, `run_synchronously`, is one this machine \
-                  never reaches; a host's primitive that calls it holds values of its context, \
-                  beneath which the nested loop the run takes does not collect"
+                  unit, which its frame, a marked closure or the running code reports. Its one \
+                  caller in the workspace, `run_synchronously`, is one this machine never reaches; \
+                  a host's primitive that calls it holds values of its context, beneath which the \
+                  nested loop the run takes does not collect"
     )]
     fn eval_expr(
         &self,

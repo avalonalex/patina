@@ -406,9 +406,10 @@ fn a_specifier_namespace_lives_while_code_compiled_in_it_does() {
 /// it: on the VM its unit's link table holds the namespace and links `f`'s
 /// record, whose cell holds the procedure, a cycle no root reaches once the
 /// registry lets the library go, since a link table is traced only by the
-/// code id of a frame, a marked closure or the running code (#836). The steady-state lane's `library-stream` shape, in file mode: after
-/// the redefinition and two collections the namespaces are counted and
-/// charged as they were before it.
+/// code id of a frame, a marked closure or the running code (#836). The
+/// steady-state lane's `library-stream` shape, in file mode: after the
+/// redefinition and two collections the namespaces are counted and charged
+/// as they were before it.
 #[test]
 fn a_replaced_library_with_a_procedure_is_released() {
     let program = "(define ns0 0)

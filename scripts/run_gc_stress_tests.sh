@@ -275,25 +275,30 @@ fi
 # other holder, 964 collections at 16 on the VM and 772 without stress,
 # nearly all their zeal halves, and 2898 and 2714 on the tree-walker, the
 # other tests making 23791 and 5072, and 42518 and 17796, as before, the
-# minimums left)
+# minimums left; and every target's count at 16 re-measured that day for
+# #836's deletions, which make one allocation fewer for each library body
+# form, host namespace's form and nested evaluation (the retired frame
+# closure), so each target that loads a library collects a little less
+# often, by up to 5% (vm_callprimitive), its tests, its count without
+# stress and its minimum left)
 TARGETS=(
-    "callability 16 31 13"                    # 2195 (0)
-    "control_flow_matrix 16 340 3"            # 4826 (0)
-    "cps_features 16 530 3"                   # 1015 (2)
-    "ephemerons 16 289 30"                    # 5898 (204)
-    "escape_from_primitive 16 3669 18"        # 9951 (92)
-    "finished_forms_release_code 16 2040 12"  # 4081 (15)
+    "callability 16 31 13"                    # 2131 (0)
+    "control_flow_matrix 16 340 3"            # 4698 (0)
+    "cps_features 16 530 3"                   # 1009 (2)
+    "ephemerons 16 289 30"                    # 5738 (204)
+    "escape_from_primitive 16 3669 18"        # 9713 (92)
+    "finished_forms_release_code 16 2040 12"  # 4057 (15)
     "gc_tree_walker 16 21259 31"              # 45416 (20510)
-    "gc_vm 16 11810 44"                       # 24755 (5844)
-    "host_environments 16 58646 30"           # 117297 (754)
-    "hygiene_matrix 16 11136 17"              # 22293 (6)
-    "interpreter_api 16 138 28"               # 3128 (4)
-    "library_loading 16 46 9"                 # 131 (0): see the header
-    "macro_definition_env 16 16626 19"        # 33675 (67): see the header
-    "owned_handles 16 62714 9"                # 125668 (14)
-    "rooted_loading 16 371 6"                 # 1284 (10)
-    "vm_callprimitive 16 545 18"              # 1233 (0)
-    "scheme_suite 4096 1534 11"               # 10231 (363): see the header
+    "gc_vm 16 11810 44"                       # 24671 (5844)
+    "host_environments 16 58646 30"           # 117226 (754)
+    "hygiene_matrix 16 11136 17"              # 21652 (6)
+    "interpreter_api 16 138 28"               # 3050 (4)
+    "library_loading 16 46 9"                 # 129 (0): see the header
+    "macro_definition_env 16 16626 19"        # 33641 (67): see the header
+    "owned_handles 16 62714 9"                # 125648 (14)
+    "rooted_loading 16 371 6"                 # 1269 (10)
+    "vm_callprimitive 16 545 18"              # 1174 (0)
+    "scheme_suite 4096 1534 11"               # 10230 (363): see the header
 )
 
 OUT=$(mktemp -d)

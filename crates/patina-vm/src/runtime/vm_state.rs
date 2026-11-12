@@ -315,8 +315,8 @@ pub struct VmState {
     #[trace(skip, reason = "the interpreter's metadata: no value")]
     instance: Rc<patina_core::Instance>,
     /// The carrier's driver, the capability to collect (#702), lent by the
-    /// driver entry (`execute`) to the loop it runs, for that
-    /// loop's polls: `None` in a nested loop, which hides the driver for its
+    /// driver entry (`execute`) to the loop it runs, for that loop's polls:
+    /// `None` in a nested loop, which hides the driver for its
     /// extent and runs under a `NoGcScope` (`run_loop_until_outcome`). A
     /// field, so the polls reach it only when something is posted, rather
     /// than each dispatch being handed it (#700).
@@ -1161,8 +1161,8 @@ pub(super) fn vm_load_library(
 /// Instead of creating a temporary VmState, we execute body expressions
 /// directly in the main state, each linked in the library's environment and
 /// run with no closure (`execute_nested`), `state.globals` left the
-/// program's (#823). This ensures continuations, code objects, and closures all live
-/// in the single real execution context.
+/// program's (#823). This ensures continuations, code objects, and closures
+/// all live in the single real execution context.
 fn vm_evaluate_parsed_library(
     state: &mut VmState,
     parsed: patina_runtime::library_loader::ParsedLibrary,
@@ -1185,9 +1185,9 @@ fn vm_evaluate_parsed_library(
     // bindings through the unit's table, even when a continuation resumes
     // them after the load (#779, #836), and run with no closure
     // (`execute_nested`); the closures they make read it through the same
-    // unit's table, so no seeding or merge is needed. `state.globals` stays the program's
-    // environment, which `interaction-environment` answers during the load
-    // as after it (#823).
+    // unit's table, so no seeding or merge is needed. `state.globals` stays
+    // the program's environment, which `interaction-environment` answers
+    // during the load as after it (#823).
 
     // Collection is already deferred for this whole function: `parsed`
     // carries a `GcDeferGuard` while it holds unevaluated body forms (see
@@ -1309,8 +1309,8 @@ pub(crate) fn vm_process_import_set(
 /// continuation cannot carry this Rust frame. Executes in the main VmState
 /// using `execute_nested` (which respects the current frame depth), in a
 /// frame with no closure, its unit linked in `env`; the machine's own
-/// `globals` stay the program's environment (#823). `env` is a namespace: a frame is
-/// refused before anything runs ([`compile_for_eval`], #853).
+/// `globals` stay the program's environment (#823). `env` is a namespace: a
+/// frame is refused before anything runs ([`compile_for_eval`], #853).
 pub(super) fn vm_eval_expr(
     state: &mut VmState,
     expr: TaggedValue,

@@ -394,10 +394,10 @@ impl VmBackend {
                       unit, which the code store roots while it runs. `env` is the global \
                       environment, which the machine's `globals` hold, or a host namespace, which \
                       its `OwnedEnvironment` holds, and the records the code uses are held by its \
-                      unit, which its frame, a marked closure or the running code reports, and which \
-                      holds and traces the namespace it was linked in. A raw namespace that nothing \
-                      roots between calls (`Environment::with_heap`) is none of these: #857's \
-                      hole, outside #601's promise, which this run does not widen"
+                      unit, which its frame, a marked closure or the running code reports, and \
+                      which holds and traces the namespace it was linked in. A raw namespace that \
+                      nothing roots between calls (`Environment::with_heap`) is none of these: \
+                      #857's hole, outside #601's promise, which this run does not widen"
         )]
         let result = execute(&mut state, unit);
         state.release_unit_if_unused(top_id);
@@ -898,9 +898,9 @@ impl VmBackend {
                                   #677). Holds `lib_env` and the body's later forms, which this \
                                   load's registry entry roots, and the program's environment, which \
                                   the machine's `globals` hold. The form's constants are in the \
-                                  loaded unit, which the code store roots, and the records the code \
-                                  uses are held by its unit, which its frame, a marked closure or \
-                                  the running code reports"
+                                  loaded unit, which the code store roots, and the records the \
+                                  code uses are held by its unit, which its frame, a marked \
+                                  closure or the running code reports"
                     )]
                     let result = execute(state, unit);
                     state.release_unit_if_unused(top_id);
