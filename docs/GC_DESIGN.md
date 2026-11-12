@@ -1559,11 +1559,11 @@ dropped, has its paced collections 8.0, 15.8 and 30.6 MiB apart on the
 VM, with L at 7.9, 15.3 and 29.6 MiB, where the tree-walker's come every
 8.0 MiB with L at 0.2 (the steady-state lane's `const-lambda`, measured
 2026-11-11). The lag is older than the linking at load, which reads the
-same on its base, and is not the settle's to end: stage 4e does, when a
-unit's constants are traced as its link table is, by code id, so that a
-unit nothing reported roots nothing. Until then `const-lambda` holds SS2
-red on the VM, and `live-bytes` after one `(gc)` can read above
-`live-bytes` after a second.
+same on its base, and is not the settle's to end (#866): stage 4e's
+direction ends it, when a unit's constants are traced as its link table
+is, by code id, so that a unit nothing reported roots nothing. Until
+then `const-lambda` holds SS2 red on the VM, and `live-bytes` after one
+`(gc)` can read above `live-bytes` after a second.
 
 A collection is posted through one helper, `SharedCounts::raise_pending`,
 which, when none is posted yet, notes the time and the bytes charged: once

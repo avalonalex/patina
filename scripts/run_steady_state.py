@@ -260,10 +260,10 @@ ROWS = [
     # the reading at N, with L at 7.9, 15.3 and 29.6 MiB, and none in
     # [3N, 4N), where the tree-walker's come every 8.0 MiB with L at 0.2,
     # four or five in a segment (2026-11-11). So SS2 is vacuous on the VM,
-    # red until stage 4e traces a unit's constants as it does its link
-    # table, by code id; the tree-walker holds it.
+    # red until a unit's constants are traced as its link table is, by
+    # code id (#866, stage 4e's direction); the tree-walker holds it.
     Row('const-lambda', 'churn', 'const-lambda.scm', {'vm': 4000, 'tree-walker': 4000},
-        red={'SS2/vm': 'stage 4e'}),
+        red={'SS2/vm': '#866'}),
     Row('form-eval-fresh', 'churn', 'form-eval-fresh.scm', {'vm': 4000, 'tree-walker': 4000}, clauses=REPL,
         pr=True),
     Row('cont-churn-10', 'churn', 'cont-churn.scm', {'vm': 20000, 'tree-walker': 10000}, ('10',), pr=True),

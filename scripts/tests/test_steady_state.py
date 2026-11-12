@@ -222,11 +222,11 @@ class Clauses(unittest.TestCase):
     def test_the_constants_row_is_red_on_the_vm_alone(self):
         # `const-lambda` is the lag the settled L does not reach: a dead
         # unit's constants are roots for one more collection, and L counts
-        # what they hold. Red until stage 4e on the VM; the tree-walker,
+        # what they hold. Red for #866 on the VM; the tree-walker,
         # which loads no code, holds SS2 unmarked.
         row = next(row for row in steady.ROWS if row.name == 'const-lambda')
         self.assertFalse(row.pr)
-        self.assertEqual(row.red_reason('SS2', 'vm'), 'stage 4e')
+        self.assertEqual(row.red_reason('SS2', 'vm'), '#866')
         self.assertIsNone(row.red_reason('SS2', 'tree-walker'))
         self.assertEqual(steady.mark_errors(row), [])
 

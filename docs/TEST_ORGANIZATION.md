@@ -1709,7 +1709,7 @@ message on the fixed build. `const-lambda`, nightly, holds the lag that
 settle does not reach: a dead unit's constants are roots for one more
 collection, so L counts a vector its cycle's code quotes, and the VM's
 collections come nearly twice as far apart each time; its SS2 is vacuous
-there and red for stage 4e, and holds on the tree-walker.
+there and red for #866, and holds on the tree-walker.
 Peak RSS is
 printed beside each row as a signal, never a gate. The lane does not yet have
 `interp-churn` (an interpreter made and dropped per cycle, #604's shape),
