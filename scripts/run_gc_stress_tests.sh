@@ -290,7 +290,10 @@ fi
 # library body form makes, which raised escape_from_primitive's by 76 and
 # 2. gc_tree_walker's minimum re-pinned at half its count measured that
 # day, since its count without stress, 21510, had passed the minimum of
-# 21259; the others left)
+# 21259; the others left; host_environments's test count re-pinned
+# 2026-11-12 for #836's test of a host primitive that evaluates in a host
+# namespace, which raised its count at 16 by 72 and left the count without
+# stress at 754, the minimum left)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -300,7 +303,7 @@ TARGETS=(
     "finished_forms_release_code 16 2040 12"  # 4057 (15)
     "gc_tree_walker 16 23246 33"              # 46492 (21510)
     "gc_vm 16 11810 46"                       # 25044 (6142)
-    "host_environments 16 58646 30"           # 117226 (754)
+    "host_environments 16 58646 31"           # 117298 (754)
     "hygiene_matrix 16 11136 17"              # 21652 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header

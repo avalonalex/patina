@@ -1142,7 +1142,13 @@ namespace since #835, to rooting what is bound in it, on both backends
 - the same macro used in a host namespace that imports nothing, after the
   global environment imports it and the binding its template names, which
   keeps the global environment's import: the desugarer asks the global
-  environment once the host namespace holds no import of the binding.
+  environment once the host namespace holds no import of the binding;
+- a host's primitive that evaluates in a host namespace, by its `Step::Eval`
+  and by `ApplyContext::eval_expr`, which reads and defines there and leaves
+  the program's binding of the same name alone: on the VM each route's
+  frame says nothing of where its code reads, and the unit's link table,
+  linked in the namespace by `eval_closure` or `vm_eval_expr`, is what does
+  (#836).
 
 #835's tests pin what host code reads and writes, what its closures keep and
 what its macros introduce, from before 4b.6's binding records (#834) changed
