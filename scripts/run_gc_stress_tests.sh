@@ -269,7 +269,13 @@ fi
 # making 23621 and 5047, as before, the minimum left; and again that day
 # for the test of the collection where a library's load ends, which runs
 # on the adaptive interpreter too, 4 collections either way, the other 38
-# tests making 23787 and 5068, as before, the minimum left)
+# tests making 23787 and 5068, as before, the minimum left; gc_vm's and
+# gc_tree_walker's test counts re-pinned 2026-11-11 for #836's five shared
+# tests of code that runs after the namespace it was compiled in has no
+# other holder, 964 collections at 16 on the VM and 772 without stress,
+# nearly all their zeal halves, and 2898 and 2714 on the tree-walker, the
+# other tests making 23791 and 5072, and 42518 and 17796, as before, the
+# minimums left)
 TARGETS=(
     "callability 16 31 13"                    # 2195 (0)
     "control_flow_matrix 16 340 3"            # 4826 (0)
@@ -277,8 +283,8 @@ TARGETS=(
     "ephemerons 16 289 30"                    # 5898 (204)
     "escape_from_primitive 16 3669 18"        # 9951 (92)
     "finished_forms_release_code 16 2040 12"  # 4081 (15)
-    "gc_tree_walker 16 21259 26"              # 42518 (17796)
-    "gc_vm 16 11810 39"                       # 23791 (5072)
+    "gc_tree_walker 16 21259 31"              # 45416 (20510)
+    "gc_vm 16 11810 44"                       # 24755 (5844)
     "host_environments 16 58646 30"           # 117297 (754)
     "hygiene_matrix 16 11136 17"              # 22293 (6)
     "interpreter_api 16 138 28"               # 3128 (4)

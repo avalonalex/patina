@@ -1434,6 +1434,126 @@ macro_rules! gc_shared_tests {
             );
         }
 
+        // The routes by which code compiled in a namespace that nothing
+        // else roots keeps running after a collection (#836). Each program
+        // compiles a procedure in a namespace that, at the collections, the
+        // machine's globals do not hold, nor a library's registry entry, a
+        // host's handle or a live environment specifier, whose trace would
+        // walk the namespace whole. The code then reads a binding of that
+        // namespace through its link: `map`'s import record, a binding
+        // `LoadGlobal` reads through its entry, or a library's private
+        // binding. On the VM the namespace and the records it reads are held
+        // by the code's unit, whose link table a marked closure, a frame or
+        // the running code reports by its code id, and nothing else: a
+        // closure holds no environment. A collection that kept the unit but
+        // not what its table links would free the record, and the read is
+        // what a check build's stale-reference check refuses (#621). On the
+        // tree-walker a procedure holds its environment. Under zeal too.
+
+        #[test]
+        fn code_eval_compiled_runs_after_its_specifier_is_garbage() {
+            // `k` is a closure of a unit linked in the specifier's
+            // namespace, and the specifier is garbage once the `define`
+            // has returned: `k`'s code id is all that reports the unit.
+            assert_gc_and_zeal_eval_to(
+                r#"
+                (import (scheme base) (scheme eval) (patina debug))
+                (define k (eval '(lambda () map) (environment '(scheme base))))
+                (gc) (gc)
+                (eq? (k) map)
+                "#,
+                "#t",
+            );
+        }
+
+        #[test]
+        fn a_replaced_library_s_procedure_reads_its_own_namespace_after_a_collection() {
+            // `old-get` is the first `(r836 lib)`'s `get`. The second
+            // replaces the library, and its registry entry with it, so the
+            // first's namespace, where `secret` is bound to `(old)`, is
+            // held only by the units of the code compiled in it, which
+            // `old-get` reports.
+            assert_gc_and_zeal_eval_to(
+                r#"
+                (import (scheme base) (patina debug))
+                (define-library (r836 lib)
+                  (export get)
+                  (import (scheme base))
+                  (begin (define secret (list 'old)) (define (get) secret)))
+                (import (r836 lib))
+                (define old-get get)
+                (define-library (r836 lib)
+                  (export get)
+                  (import (scheme base))
+                  (begin (define secret (list 'new)) (define (get) secret)))
+                (import (r836 lib))
+                (gc) (gc)
+                (list (old-get) (get))
+                "#,
+                "((old) (new))",
+            );
+        }
+
+        #[test]
+        fn a_parameter_s_converter_reads_its_namespace_after_a_collection() {
+            // The converter is a closure compiled in the specifier's
+            // namespace, held by the parameter object only, and called
+            // again by `parameterize` after the collections.
+            assert_gc_and_zeal_eval_to(
+                r#"
+                (import (scheme base) (scheme eval) (patina debug))
+                (define p
+                  (eval '(make-parameter 1 (lambda (x) (cons x map)))
+                        (environment '(scheme base))))
+                (gc) (gc)
+                (list (car (p)) (parameterize ((p 2)) (eq? (cdr (p)) map)))
+                "#,
+                "(1 #t)",
+            );
+        }
+
+        #[test]
+        fn a_continuation_s_frame_reads_its_namespace_after_a_collection() {
+            // `r` is a continuation captured in `f`'s frame, and `f` is
+            // then dropped: at the collections only the continuation's
+            // frames hold `f`'s code, and no `eval` is among them. Its
+            // re-entry runs the rest of `f`, which reads `map`, and the
+            // `define` it returns into, after which the program goes on
+            // after `(r 5)` on both backends.
+            assert_gc_and_zeal_eval_to(
+                r#"
+                (import (scheme base) (scheme eval) (patina debug))
+                (define f
+                  (eval '(lambda ()
+                           (let ((v (call/cc (lambda (c) c))))
+                             (if (procedure? v) v (list v map))))
+                        (environment '(scheme base))))
+                (define r (f))
+                (set! f #f)
+                (gc) (gc)
+                (if (procedure? r) (r 5))
+                (list (car r) (eq? (cadr r) map))
+                "#,
+                "(5 #t)",
+            );
+        }
+
+        #[test]
+        fn a_promise_s_thunk_reads_its_namespace_after_a_collection() {
+            // The promise's thunk is a closure compiled in the specifier's
+            // namespace, held by the promise only until `force` runs it.
+            assert_gc_and_zeal_eval_to(
+                r#"
+                (import (scheme base) (scheme eval) (scheme lazy) (patina debug))
+                (define d
+                  (eval '(delay (list map)) (environment '(scheme base) '(scheme lazy))))
+                (gc) (gc)
+                (eq? (car (force d)) map)
+                "#,
+                "#t",
+            );
+        }
+
         /// The program of
         /// `a_placeholder_no_live_code_links_is_dropped`, with batches of
         /// `batch` `eval`s.
