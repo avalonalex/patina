@@ -39,10 +39,9 @@ fn every_slot_kind_stores_through_the_funnel() {
     let heap: SharedHeap = new_shared_heap();
     let instance = Instance::default();
     let cell = heap.borrow_mut().alloc_mutable_cell(TaggedValue::FALSE);
-    let env = Rc::new(crate::environment::Environment::with_heap(&heap));
     let closure = heap
         .borrow_mut()
-        .alloc_vm_closure(0, vec![TaggedValue::FALSE], env);
+        .alloc_vm_closure(0, vec![TaggedValue::FALSE]);
     let mut driver = GcDriver::acquire(&heap).unwrap();
     driver.mutate(&instance, |cx| {
         let pair = cx.alloc_pair(Value::NULL, Value::NULL);

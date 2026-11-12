@@ -262,7 +262,6 @@ const SHARED_PAYLOADS: &[&str] = &[
     "Record.record_type",
     "RecordType.0",
     "Symbol.0",
-    "VmClosure.globals",
 ];
 
 /// The payloads of `HeapObjectData` holding an `Rc`, a `RefCell`, a `Cell`

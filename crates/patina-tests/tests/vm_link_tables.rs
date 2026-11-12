@@ -180,26 +180,30 @@ fn a_store_by_name_writes_the_namespace_its_unit_was_linked_in() {
 }
 
 #[test]
-fn a_host_form_s_closures_are_over_the_host_namespace() {
-    // A form evaluated in a host namespace runs in a frame whose closures
-    // are made over that namespace, the one its unit was linked in, not the
-    // machine's globals: what `MakeClosure`'s debug check asserts of every
-    // closure, read here from the closures themselves, so in a release
-    // build too. Nothing reads a closure's environment but `MakeClosure`,
-    // for the closures made inside it, until closures hold none (#836).
-    use patina_runtime::Backend;
-    use std::rc::Rc;
-
-    let interp = common::vm_interpreter();
-    interp.eval_program_owned("(import (scheme base))").unwrap();
+fn a_host_form_s_closures_read_the_host_namespace() {
+    // A form evaluated in a host namespace is linked in that namespace, and
+    // so are the closures it makes, one made inside a closure too (#779):
+    // called after a collection, each reads the host's `who`, not the
+    // program's. A closure holds no environment (#836): the namespace its
+    // code reads is its unit's link table's, linked where the form was
+    // compiled, and a closure made inside a closure is of a member of the
+    // same unit, which shares the table. Read through the closures' calls,
+    // so in a release build too.
+    let mut interp = common::vm_interpreter();
+    interp
+        .eval_program_owned("(import (scheme base) (patina debug)) (define who 'global)")
+        .unwrap();
     let env = interp.new_environment();
-    let host = interp.raw_environment(&env);
-    assert!(!Rc::ptr_eq(&host, &interp.global_env()));
-    for form in ["(lambda () 1)", "((lambda () (lambda () 2)))"] {
-        let procedure = interp.eval_str_in(&env, form).unwrap();
-        let over = (interp.backend().heap().borrow())
-            .get_vm_closure_globals(interp.raw_value(&procedure))
-            .expect("a VM closure");
-        assert!(Rc::ptr_eq(&over, &host), "{form}");
+    interp.eval_str_in(&env, "(define who 'host)").unwrap();
+    let procedures: Vec<_> = ["(lambda () who)", "((lambda () (lambda () who)))"]
+        .into_iter()
+        .map(|form| (form, interp.eval_str_in(&env, form).unwrap()))
+        .collect();
+    interp.eval_str_owned("(gc)").unwrap();
+    for (form, procedure) in &procedures {
+        let who = interp.call(procedure, &[]).unwrap();
+        assert_eq!(interp.display_tagged(&who), "host", "{form}");
     }
+    let who = interp.eval_str_owned("who").unwrap();
+    assert_eq!(interp.display_tagged(&who), "global");
 }

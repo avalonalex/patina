@@ -216,12 +216,10 @@ pub struct VmState {
     #[trace(skip, reason = "a registry index")]
     parameter_set: Option<usize>,
     /// The program's global environment, which `interaction-environment`
-    /// answers, during a library's load as after it (#823), and which a
-    /// closure made in a frame with no closure takes as its environment
-    /// (`frame_globals`): a library body's forms run in frames whose closures
-    /// have the library's environment as their globals (#824). A frame's
-    /// globals are read and defined through its unit's link table, linked
-    /// where the unit was compiled (#836), never through this.
+    /// answers, during a library's load as after it (#823), and the root of
+    /// the program's namespace. A frame's globals are read and defined
+    /// through its unit's link table, linked where the unit was compiled
+    /// (#836), never through this, and no closure holds an environment.
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
     globals: Rc<Environment>,
     /// The heap, shared with `patina-runtime` primitives.
@@ -1433,7 +1431,7 @@ fn compile_for_eval(
 }
 
 /// The datum `expr`, compiled and linked in `env`, as a closure of no
-/// arguments whose globals are `env`: what a resumable primitive's
+/// arguments of the unit linked in `env`: what a resumable primitive's
 /// `Step::Eval` has its stub frame call (#477). Its frames read and define
 /// `env`'s globals through its unit's table, as any unit's do, so nothing is
 /// swapped, and its code lives as long as the closure or a frame running it,
@@ -1458,7 +1456,7 @@ pub(super) fn eval_closure(
     let closure = state
         .heap
         .borrow_mut()
-        .alloc_vm_closure(top_id.0, Vec::new(), env.clone());
+        .alloc_vm_closure(top_id.0, Vec::new());
     state.note_closure_made(top_id);
     Ok(EvalCallee { closure, window })
 }
@@ -1579,19 +1577,16 @@ pub fn execute_in(
 /// closure of no arguments whose globals are `env`: [`execute_in`]'s frame,
 /// and [`execute_nested`]'s. Its frames read and define `env`'s bindings
 /// through the unit's table, linked in `env` (#836), as [`eval_closure`]'s
-/// do, wherever a continuation that captured them resumes them. The
-/// closure's environment is now read only by `MakeClosure`, for the
-/// closures the frame makes: a frame with no closure gives them the
-/// machine's globals, so a library's body form re-entered after its load
-/// made closures over the program's (#779).
+/// do, wherever a continuation that captured them resumes them, and so do
+/// the closures they make, whose units share that table: no closure holds
+/// an environment.
 ///
 /// The closure is made retired ([`Heap::RETIRED_VM_CLOSURE_CODE`]): it names
 /// no code, so nothing counts it or retires it, and it keeps no unit loaded.
 /// The frame holds its code itself, as a frame with no closure does, so the
 /// unit is let go once nothing needs it, as a program form's is (#338), and a
-/// continuation that captured the frame keeps it. Nothing calls the closure:
-/// the environment `MakeClosure` gives a closure is all that is read from it
-/// (`frame_globals`), since top-level code has no free variables.
+/// continuation that captured the frame keeps it. Nothing calls the closure
+/// or reads it, since top-level code has no free variables.
 ///
 /// [`Heap::RETIRED_VM_CLOSURE_CODE`]: patina_core::heap::Heap::RETIRED_VM_CLOSURE_CODE
 ///
@@ -1608,11 +1603,14 @@ fn push_frame_in(
     // the closure, held only here, until the frame takes both.
     let (code_id, window) = unit.into_parts();
     let code = state.code_object(code_id)?;
-    let closure = state.heap.borrow_mut().alloc_vm_closure(
-        patina_core::heap::Heap::RETIRED_VM_CLOSURE_CODE,
-        Vec::new(),
-        env.clone(),
+    debug_assert!(
+        (code.links.namespace()).is_some_and(|ns| Rc::ptr_eq(ns, env)),
+        "{code_id:?} runs in another environment than the one its unit was linked in (#836)"
     );
+    let closure = state
+        .heap
+        .borrow_mut()
+        .alloc_vm_closure(patina_core::heap::Heap::RETIRED_VM_CLOSURE_CODE, Vec::new());
     poll_in_window(state, switches::poll_before_frame_push());
     state.execution.push_frame(code, closure, 0);
     drop(window);
@@ -2132,26 +2130,6 @@ fn attach_source_location(state: &VmState, e: VmError) -> VmError {
     e
 }
 
-/// The environment `MakeClosure` gives the closures the current frame
-/// makes, its one reader since the unit's link table carries every global
-/// read and write (#836).
-///
-/// If the current frame is executing a closure, returns that closure's
-/// captured globals (the environment it was compiled against): a lambda's,
-/// or the one `push_frame_in` made for top-level code compiled in another
-/// environment, such as a library's body form or a host namespace's form.
-/// Otherwise returns `state.globals`: a program's top-level form, or a stub,
-/// which makes no closure. Either is the namespace the frame's unit was
-/// linked in, which a debug build asserts where `MakeClosure` reads this.
-pub(super) fn frame_globals(state: &VmState) -> Rc<Environment> {
-    if let Some(closure) = state.execution.frames().last().and_then(CallFrame::closure)
-        && let Some(globals) = state.heap.borrow().get_vm_closure_globals(closure)
-    {
-        return globals;
-    }
-    state.globals.clone()
-}
-
 /// `LoadGlobal`'s read of operand `k` where the linked read found `UNBOUND`
 /// (#836): a placeholder, a host namespace's read-through record, or the
 /// by-name record, which [`LinkTable::read_cold`] reads as
@@ -2355,18 +2333,18 @@ fn dispatch_one_instruction(
         } => {
             let captured: Vec<TaggedValue> =
                 free_vars.iter().map(|&r| state.reg_at(base, r)).collect();
-            let globals = frame_globals(state);
-            // What `MakeClosure` will read instead of `frame_globals` once
-            // closures hold no environment: the unit's namespace (#836).
+            // The closure holds no environment: its code reads the
+            // namespace its unit's link table was linked in, which is the
+            // maker's, since a unit's members share one table (`load_unit`).
             debug_assert!(
-                (code.links.namespace()).is_some_and(|ns| Rc::ptr_eq(ns, &globals)),
-                "{:?} makes a closure over another environment than its unit's namespace (#836)",
+                (state.loaded_code(child_id)).is_some_and(|c| Rc::ptr_eq(&c.links, &code.links)),
+                "{:?} makes a closure of {child_id:?}, which does not share its link table (#836)",
                 code.id
             );
             let closure_val = state
                 .heap
                 .borrow_mut()
-                .alloc_vm_closure(child_id.0, captured, globals);
+                .alloc_vm_closure(child_id.0, captured);
             state.note_closure_made(child_id);
             state.set_reg_at(base, dst, closure_val);
         }
@@ -3518,7 +3496,7 @@ mod tests {
 
     /// A unit whose table names no global is linked too (#836): its table
     /// holds the namespace the unit was loaded in, which is all a unit of
-    /// closures over locals alone has of it once closures hold no
+    /// closures over locals alone has of it, now that closures hold no
     /// environment.
     #[test]
     fn load_unit_links_a_table_that_names_nothing() {

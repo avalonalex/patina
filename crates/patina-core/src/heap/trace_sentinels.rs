@@ -641,21 +641,19 @@ fn mutable_cell_contents() {
     });
 }
 
-/// A VM closure, every field: its free variables and its globals are
-/// visited, and its code id is queued for `RootProvider::trace_code_ids`
-/// (#836), which `Recording` records. Until #836's PR-7 deletes `globals`.
+/// A VM closure, every field: its free variables are visited, and its code
+/// id is queued for `RootProvider::trace_code_ids` (#836), which
+/// `Recording` records. It holds no environment: the namespace its code
+/// reads is its unit's link table's, which the VM traces by that id.
 #[test]
-fn vm_closure_free_variables_and_globals() {
+fn vm_closure_free_variables() {
     let shared = new_shared_heap();
     let mut heap = shared.borrow_mut();
     let mut s = Sentinels::new(&mut heap);
     let free_var = s.pair(&mut heap, "HeapObjectData::VmClosure.free_vars");
-    let global = s.vector(&mut heap, "HeapObjectData::VmClosure.globals");
-    let globals = env_holding_on(&mut heap, global);
     let closure = heap.alloc_object(HeapObjectData::VmClosure {
         code_id: 7,
         free_vars: vec![free_var],
-        globals,
     });
     let recording = Recording {
         roots: vec![closure],
@@ -722,11 +720,9 @@ impl RootProvider for Recording {
     }
 }
 
-/// A VM closure with code id `code_id` over `free_vars`, in an empty
-/// namespace.
+/// A VM closure with code id `code_id` over `free_vars`.
 fn vm_closure(heap: &mut Heap, code_id: u64, free_vars: Vec<TaggedValue>) -> TaggedValue {
-    let globals = Rc::new(Environment::namespace(heap));
-    heap.alloc_vm_closure(code_id, free_vars, globals)
+    heap.alloc_vm_closure(code_id, free_vars)
 }
 
 /// A closure reachable only from a root broadcasts its code id to

@@ -234,9 +234,8 @@ mod tests {
     use crate::heap::gc::{Collector, MarkSweepCollector};
     use crate::heap::{Heap, PromiseState};
     use crate::tagged_value::TaggedValue;
-    use crate::{Environment, RootProvider, SlotVisitor};
+    use crate::{RootProvider, SlotVisitor};
     use std::cell::Cell;
-    use std::rc::Rc;
 
     /// A control: a test that must panic with `$expected` in a check build.
     macro_rules! control {
@@ -311,8 +310,7 @@ mod tests {
     }
 
     fn vm_closure(heap: &mut Heap) -> TaggedValue {
-        let env = Rc::new(Environment::namespace(heap));
-        heap.alloc_vm_closure(0, vec![TaggedValue::fixnum(1)], env)
+        heap.alloc_vm_closure(0, vec![TaggedValue::fixnum(1)])
     }
 
     // ------------------------------------------------------------------------
@@ -497,17 +495,6 @@ mod tests {
         {
             let (mut heap, dead) = freed(vm_closure);
             heap.retire_vm_closure(dead);
-        }
-    );
-
-    control!(
-        /// Behind `frame_globals`, which falls back to the global environment
-        /// when this answers `None` — the way it answered a freed slot.
-        get_vm_closure_globals_of_a_freed_closure,
-        "use-after-free: object slot 0 was reclaimed by the GC",
-        {
-            let (heap, dead) = freed(vm_closure);
-            heap.get_vm_closure_globals(dead);
         }
     );
 
@@ -700,7 +687,6 @@ mod tests {
         let mut heap = Heap::new();
         let _ = vm_closure(&mut heap);
         let past = TaggedValue::object(5);
-        assert!(heap.get_vm_closure_globals(past).is_none());
         assert_eq!(heap.get_vm_closure_free_var(past, 0), None);
         assert!(!heap.set_vm_closure_free_var(past, 0, TaggedValue::NULL));
     }
@@ -820,12 +806,7 @@ mod tests {
         "store of a retired register into a closure's free variable",
         {
             let mut heap = Heap::new();
-            let env = Rc::new(Environment::namespace(&heap));
-            heap.alloc_vm_closure(
-                0,
-                vec![TaggedValue::fixnum(1), TaggedValue::DEAD_SLOT],
-                env,
-            );
+            heap.alloc_vm_closure(0, vec![TaggedValue::fixnum(1), TaggedValue::DEAD_SLOT]);
         }
     );
 }

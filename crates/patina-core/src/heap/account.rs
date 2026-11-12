@@ -309,7 +309,6 @@ impl HeapObjectData {
             HeapObjectData::VmClosure {
                 code_id: _,
                 free_vars,
-                globals: _,
             } => free_vars.capacity() * VALUE_BYTES,
             // The literals are the object's own; the body is a shared `Rc`.
             HeapObjectData::Macro { body: _, literals } => literals.len() * VALUE_BYTES,
