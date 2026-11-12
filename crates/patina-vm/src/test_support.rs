@@ -111,8 +111,8 @@ pub(crate) fn skip_code_id(code: &Rc<CodeObject>) -> bool {
 /// `crates/patina-tests/tests/gc_protocol.rs`). While one is alive, the
 /// machine on this thread makes the check every poll makes first (#864) at
 /// the last point one of the windows covers, as a poll added there would:
-/// just before `execute` or `push_frame_in` pushes a loaded unit's frame
-/// (S1), or just before `set_suspension` writes an `eval`'s closure into the
+/// just before `execute` or `execute_nested` pushes a loaded unit's frame
+/// (S1, `push_top_frame`), or just before `set_suspension` writes an `eval`'s closure into the
 /// stub frame's `CALLEE` register (S2). In a check build it panics, since
 /// the window is still open there; a window closed before that point lets
 /// it pass, which is what a window closed early leaves, with no poll in

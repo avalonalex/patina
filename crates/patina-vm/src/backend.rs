@@ -15,7 +15,7 @@ use crate::error::{VmError, frame_refusal};
 use crate::runtime::vm_state::{
     collect_for_loader, collect_if_pending, define_global, import_export,
 };
-use crate::runtime::{VmState, execute, execute_in};
+use crate::runtime::{VmState, execute};
 use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
 use patina_core::heap::SharedHeap;
@@ -275,8 +275,8 @@ impl VmBackend {
     /// Evaluates in `env`, a namespace, as the tree-walker does: the datum is
     /// expanded and compiled there, its imports bind there, and its code is
     /// linked there, and reads and defines there through its unit's table
-    /// (#836). The global environment's code runs as a top-level frame, any
-    /// other's as a closure whose globals are `env` (`execute_in`, #620).
+    /// (#836). Its code runs as a top-level frame with no closure, wherever
+    /// it was compiled (`execute`, #620, #836).
     ///
     /// A frame is refused with an error naming its kind
     /// ([`Environment::frame_kind`], #835): a raw frame, or a frame under a
@@ -391,15 +391,15 @@ impl VmBackend {
             clippy::disallowed_methods,
             reason = "the backend's top level, outermost, so the run may collect. Holds the form's \
                       datum, not read after the call; the form's constants are in the loaded \
-                      unit, which the code store roots while it runs, and `env` is the global \
-                      environment, which the machine roots, or the globals of the closure the \
-                      run's frame holds"
+                      unit, which the code store roots while it runs. `env` is the global \
+                      environment, which the machine's `globals` hold, or a host namespace, which \
+                      its `OwnedEnvironment` holds, and the records the code uses are held by its \
+                      unit, which its frame, a marked closure or the running code reports, and which \
+                      holds and traces the namespace it was linked in. A raw namespace that nothing \
+                      roots between calls (`Environment::with_heap`) is none of these: #857's \
+                      hole, outside #601's promise, which this run does not widen"
         )]
-        let result = if Rc::ptr_eq(env, &self.global_env) {
-            execute(&mut state, unit)
-        } else {
-            execute_in(&mut state, unit, env)
-        };
+        let result = execute(&mut state, unit);
         state.release_unit_if_unused(top_id);
         Ok(result?)
     }
@@ -791,8 +791,9 @@ impl VmBackend {
     /// Evaluate a parsed library (from a .sld file) using the VM.
     ///
     /// Instead of creating a temporary VmState, we execute body expressions
-    /// directly in the main state, each as a closure over `lib_env`
-    /// (`execute_in`), the main state's globals left the program's (#823).
+    /// directly in the main state, each linked in `lib_env` and run with no
+    /// closure (`execute`), the main state's globals left the program's
+    /// (#823).
     /// This ensures continuations, code objects, and closures all live in the
     /// single real execution context.
     ///
@@ -824,9 +825,9 @@ impl VmBackend {
         // Step 2: compile and execute each body expression in the main
         // VmState, its unit linked in lib_env: its frames read and define
         // the library's bindings through the unit's table, even when a
-        // continuation resumes them after the load (#779, #836), and run as
-        // a closure whose globals are lib_env (`execute_in`), which the
-        // closures they make capture, so no seeding or merge is needed. The
+        // continuation resumes them after the load (#779, #836), and run with
+        // no closure (`execute`); the closures they make read it through the
+        // same unit's table, so no seeding or merge is needed. The
         // main state's globals stay the program's environment, which
         // `interaction-environment` answers during the load as after it
         // (#823).
@@ -897,10 +898,11 @@ impl VmBackend {
                                   #677). Holds `lib_env` and the body's later forms, which this \
                                   load's registry entry roots, and the program's environment, which \
                                   the machine's `globals` hold. The form's constants are in the \
-                                  loaded unit, which the code store roots, and its frame holds the \
-                                  closure that holds `lib_env`"
+                                  loaded unit, which the code store roots, and the records the code \
+                                  uses are held by its unit, which its frame, a marked closure or \
+                                  the running code reports"
                     )]
-                    let result = execute_in(state, unit, &lib_env);
+                    let result = execute(state, unit);
                     state.release_unit_if_unused(top_id);
 
                     result.map_err(|e| {

@@ -173,8 +173,10 @@ fn poll_before_a_forms_frame_is_pushed() {
     let _ = interp.eval_program_owned("(+ 1 2)");
 }
 
-/// `push_frame_in`'s, over a host environment's form's unit, and the retired
-/// closure its frame runs under, until the frame is pushed (see above).
+/// `execute`'s, over a host namespace's form's unit until its frame is
+/// pushed (see above). `execute_nested` pushes its frame through the same
+/// code (`push_top_frame`), so the two controls cover every frame a loaded
+/// unit's window ends at.
 fn poll_before_a_host_forms_frame_is_pushed() {
     let interp = vm_interpreter();
     let env = interp.new_environment();

@@ -675,9 +675,10 @@ fn test_reentering_a_loaded_form_after_load_returned() {
 /// (through `environment` the program's again, since the continuation leaves
 /// that load before the frame runs). So a library binding the program does
 /// not import was unbound, a name the program also binds read and wrote the
-/// program's binding, and the `define` defined in the program. A body form
-/// runs as a closure whose globals are the library's environment now, as
-/// `eval`'s code does.
+/// program's binding, and the `define` defined in the program. A body form's
+/// unit is linked in the library's environment now, and its frame reads,
+/// assigns and defines through the unit's table wherever it resumes, as
+/// `eval`'s code does (#836).
 ///
 /// The form re-entered, `v`'s definition, is the body's last, so that what
 /// the rest of the body does after it (#779's part 2) cannot move these
@@ -825,8 +826,9 @@ fn test_reentering_a_library_body_form_after_the_load() {
 /// the library, and `interaction-environment` answered them. So a body that
 /// `eval`ed `hidden` there read the library's binding, never the program's,
 /// and the environment it kept was not the one the program later asked for.
-/// A library body's forms run in frames whose closures hold the library's
-/// environment (#824), so the load no longer swaps the globals.
+/// A library body's forms read and define through their units' link tables,
+/// linked in the library's environment (#824, #836), so the load no longer
+/// swaps the globals.
 ///
 /// The routes: a top-level `import`, with and without a program definition
 /// of `hidden` after it, which loads before that definition, so `unbound`;

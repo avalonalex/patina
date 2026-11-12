@@ -103,9 +103,10 @@ fn forms_run_one_after_another_reuse_the_store_s_slots() {
 
 /// A library's body form lets its code go once it has run, as a program's
 /// form does, on either loader: a top-level `import`'s, and the nested one
-/// `environment` runs. Each body form runs as a closure over the library's
-/// environment (#779), which is made retired, so it names no code and holds
-/// none: counted, it would keep every body form's code until a collection.
+/// `environment` runs. Each body form ran as a retired closure over the
+/// library's environment (#779), which named no code and held none: counted,
+/// it would have kept every body form's code until a collection. It runs
+/// with no closure now, its unit linked in the library's environment (#836).
 #[test]
 fn a_library_body_form_lets_its_code_go_when_it_has_run() {
     const FORMS: usize = 300;
@@ -143,9 +144,10 @@ fn a_library_body_form_lets_its_code_go_when_it_has_run() {
 }
 
 /// A host environment's form lets its code go once it has run, as a form of
-/// the global environment does. It runs as a closure over the environment,
-/// made retired (#779); the closure used to be counted, which kept the code
-/// of every form until a collection freed the closure.
+/// the global environment does. It ran as a retired closure over the
+/// environment (#779), and before that a counted one, which kept the code of
+/// every form until a collection freed the closure; it runs with no closure
+/// now, its unit linked in the environment (#836).
 #[test]
 fn a_host_environment_s_form_lets_its_code_go() {
     let interp = interpreter();

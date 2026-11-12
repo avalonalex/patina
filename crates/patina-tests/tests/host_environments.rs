@@ -13,7 +13,7 @@
 //!
 //! The VM evaluated in the global environment whatever environment
 //! `Backend::eval` was given; it now evaluates where the tree-walker does,
-//! running the code as a closure whose globals are the environment, and
+//! linking the code's unit in the environment (#836), and
 //! `eval_str_in` and `eval_program_in` evaluate in a handle's namespace on
 //! both backends. The VM evaluates only in a namespace: a raw frame, or a
 //! frame under a host namespace, it refuses with an error naming the kind,

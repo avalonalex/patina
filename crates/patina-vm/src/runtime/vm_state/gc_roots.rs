@@ -104,7 +104,7 @@ pub(in crate::runtime) fn retire_registers(
 }
 
 /// The positive controls' switches, read here and at the ends of the load
-/// windows (`execute`, `push_frame_in`, `set_suspension`), each off unless
+/// windows (`push_top_frame`, `set_suspension`), each off unless
 /// `test-support` is compiled in and a control turned it on
 /// (`test_support`). Without the feature each is a constant, and the test
 /// that reads it folds away.

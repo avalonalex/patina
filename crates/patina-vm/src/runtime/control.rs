@@ -1983,8 +1983,8 @@ fn eval_to_vm_error(e: patina_primitives::EvalError) -> VmError {
 
 /// A resumable primitive's step as this machine takes it: a value, or work
 /// for `resume_stub`'s frame to do before the primitive resumes — a call
-/// (`Step::Eval`'s datum compiled into a closure over its environment,
-/// [`eval_closure`], called like any other), or a collection.
+/// (`Step::Eval`'s datum compiled into a closure, its unit linked in the
+/// environment, [`eval_closure`], called like any other), or a collection.
 enum VmStep {
     Done(TaggedValue),
     Suspend(Suspension),
@@ -2516,9 +2516,10 @@ impl patina_primitives::ApplyContext for VmApplyContext {
 
     #[expect(
         clippy::disallowed_methods,
-        reason = "holds nothing: `expr` moves into the compile, and `vm_eval_expr` runs it in a \
-                  frame whose closure holds `env`, with the machine's `globals` left as they \
-                  are. Its one caller in the workspace, `run_synchronously`, is one this machine \
+        reason = "holds nothing: `expr` moves into the compile, and `vm_eval_expr` runs it on a \
+                  nested loop, in its unit linked in `env`, which the caller holds, with the \
+                  machine's `globals` left as they are; the records the code uses are held by its \
+                  unit, which its frame, a marked closure or the running code reports. Its one caller in the workspace, `run_synchronously`, is one this machine \
                   never reaches; a host's primitive that calls it holds values of its context, \
                   beneath which the nested loop the run takes does not collect"
     )]

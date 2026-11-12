@@ -51,10 +51,6 @@ fn every_nameable_entry_is_matched() {
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |s: &mut VmState, u: LoadedUnit| patina_vm::runtime::execute(s, u);
     #[expect(clippy::disallowed_methods, reason = "positive control")]
-    let _ = |s: &mut VmState, u: LoadedUnit, env: &Rc<Environment>| {
-        patina_vm::runtime::execute_in(s, u, env)
-    };
-    #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |b: &VmBackend| b.load_library(&[]);
 
     // patina-tree-walker

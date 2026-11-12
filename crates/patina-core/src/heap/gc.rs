@@ -398,7 +398,7 @@ pub(crate) trait Collector {
 /// [`Mutator`](super::mutator::Mutator) marks it held, and
 /// [`GcDriver::acquire`] answers `None` while it is. The outermost drivers
 /// take it for their extent:
-/// - the VM's `execute` and `execute_in`, which lend it to the loop they run;
+/// - the VM's `execute`, which lends it to the loop it runs;
 /// - the tree-walker's run of a form, from outside any run;
 /// - the loaders where a library's load ends at the top level (point B);
 /// - the loaders where a library read ran out of descriptors, for one
