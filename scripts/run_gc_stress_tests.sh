@@ -293,7 +293,12 @@ fi
 # 21259; the others left; host_environments's test count re-pinned
 # 2026-11-12 for #836's test of a host primitive that evaluates in a host
 # namespace, which raised its count at 16 by 72 and left the count without
-# stress at 754, the minimum left)
+# stress at 754, the minimum left; and gc_vm's and gc_tree_walker's test
+# counts that day for #836's shared test of a procedure that drops itself
+# and tail-calls, whose unit only the running code reports at the callee's
+# entry, which raised the counts by 155 collections at 16 on the VM and 122
+# without stress, and by 421 and 388 on the tree-walker, nearly all its
+# zeal halves, the minimums left)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -301,8 +306,8 @@ TARGETS=(
     "ephemerons 16 289 30"                    # 5738 (204)
     "escape_from_primitive 16 3669 19"        # 9789 (94)
     "finished_forms_release_code 16 2040 12"  # 4057 (15)
-    "gc_tree_walker 16 23246 33"              # 46492 (21510)
-    "gc_vm 16 11810 46"                       # 25044 (6142)
+    "gc_tree_walker 16 23246 34"              # 46913 (21898)
+    "gc_vm 16 11810 47"                       # 25199 (6264)
     "host_environments 16 58646 31"           # 117298 (754)
     "hygiene_matrix 16 11136 17"              # 21652 (6)
     "interpreter_api 16 138 28"               # 3050 (4)

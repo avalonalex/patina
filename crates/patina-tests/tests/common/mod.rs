@@ -1625,6 +1625,31 @@ macro_rules! gc_shared_tests {
             );
         }
 
+        #[test]
+        fn a_procedure_that_drops_itself_and_tail_calls_has_its_unit_traced_at_the_callee_s_entry(
+        ) {
+            // `h` sets the only binding of itself to `#f` and tail-calls
+            // `g`, which takes `h`'s frame. From `g`'s entry, where zeal
+            // collects, until the next dispatch, `h`'s unit is held only by
+            // the code store and the dispatch loop's `cur_code`, which no
+            // frame, closure or continuation names: on the VM the running
+            // code's id (`RunningCode`) is all that has the collection trace
+            // the unit's table, and a check build asserts that every unit a
+            // collection keeps had its table traced (#836). The code does
+            // not run again, so nothing reads what the table would have
+            // kept; the assertion is what fails. On the tree-walker it is
+            // an ordinary tail call.
+            assert_gc_and_zeal_eval_to(
+                r#"
+                (import (scheme base) (patina debug))
+                (define (g) (vector 2))
+                (define (h) (set! h #f) (g))
+                (list (h) h)
+                "#,
+                "(#(2) #f)",
+            );
+        }
+
         /// The program of
         /// `a_placeholder_no_live_code_links_is_dropped`, with batches of
         /// `batch` `eval`s.

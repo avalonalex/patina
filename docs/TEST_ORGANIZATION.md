@@ -2059,7 +2059,9 @@ placeholder tests, whose drop test's zeal half runs 100 `eval`s; `gc_vm`
 5072 times since 2026-11-11, with the tests of the settled L; 5844 and
 20510 times since later that day, with #836's tests of code that runs
 after its namespace's other holders have died; 6142 and 21510 times since
-that PR's review added two more), which their minimums must stay above.
+that PR's review added two more; 6264 and 21898 times since 2026-11-12,
+with its test of a procedure that drops itself and tail-calls), which their
+minimums must stay above.
 `vm_interpreter_adaptive` names the adaptive threshold the same way, for a
 test of the pacing itself, which stress and zeal replace.
 
