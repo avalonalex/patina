@@ -1,5 +1,5 @@
 use crate::Trace;
-use crate::binding_record::{BindingCell, Record};
+use crate::binding_record::{BindingCell, BindingLink, Record};
 use crate::census::Site;
 use crate::heap::{ExternalBytes, Heap, SharedHeap};
 use crate::placeholder_store::{PlaceholderHandle, PlaceholderStore, StoreKind};
@@ -2854,6 +2854,61 @@ impl Environment {
             }
             env = env.parent.as_deref()?;
         }
+    }
+
+    /// The record an early-bound reference to `name` links when this is
+    /// its macro's environment (#837, the owner's ruling E1), and the
+    /// location of the record's cell: the record where
+    /// [`binding_hit`](Self::binding_hit) finds the name, a namespace's
+    /// slot's or scoped entry's, here or in a namespace up the chain, an
+    /// alias's target's included. Where the walk ends at a frame's import,
+    /// which has no record, a fresh one over the import's cell, in no slot
+    /// and counted nowhere, as the by-name record is not. `None` where the
+    /// walk finds nothing, or a frame's own binding, which no early link
+    /// may name: a frame's place outlives no form.
+    ///
+    /// For `Cx::early_link`, which brands the answer: the record is live
+    /// only while a root reaches it, and the context's caller pools it
+    /// before anything can collect. Borrows `heap` shared to locate the
+    /// record's cell, and mutably for the fallback's record.
+    pub(crate) fn early_link(
+        &self,
+        heap: &RefCell<Heap>,
+        name: &str,
+    ) -> Option<(BindingLocation, BindingLink)> {
+        match self.binding_hit(name)? {
+            BindingHit::Record(record) => {
+                let location = record.cell(&self.borrow_read(heap)).location();
+                Some((location, BindingLink::new(record)))
+            }
+            BindingHit::FrameImport(cell) => {
+                let record = Record::new(&mut self.borrow_write(heap), cell);
+                Some((cell.location(), BindingLink::new(record)))
+            }
+            BindingHit::Frame(_) => None,
+        }
+    }
+
+    /// Whether `name` is this namespace's import of `location` (#837): a
+    /// slot of its own for `name` whose record names a cell this namespace
+    /// does not own, at `location`. What `Desugarer::import_of` asks of
+    /// each namespace from the use site's up, so that a template's
+    /// reference is bound early only where the use site imported the
+    /// binding the macro means. `false` for a frame, whose imports hold no
+    /// record, for a name with no slot here, for an own binding, and for a
+    /// name defined over since its import. Borrows `heap` shared.
+    pub(crate) fn imports_location(
+        &self,
+        heap: &RefCell<Heap>,
+        name: &str,
+        location: &BindingLocation,
+    ) -> bool {
+        let Some(record) = self.local_record(name) else {
+            return false;
+        };
+        let step = self.borrow_read(heap);
+        let cell = record.cell(&step);
+        !cell.owned_by(&step, self.env_id) && cell.location() == *location
     }
 
     /// Where this environment's `slot` lives, as `binding_hit` finds it: a
@@ -6110,6 +6165,200 @@ mod binding_location_tests {
             located(&child, "imported"),
             Some(BindingHit::Record(import))
         );
+    }
+}
+
+/// An early-bound reference's link (#837): the record its macro
+/// environment's walk finds (the owner's ruling E1 of 2026-11-12), and the
+/// query that decides whether the use site imported it.
+#[cfg(test)]
+mod early_link_tests {
+    use super::*;
+    use crate::heap::new_shared_heap;
+
+    fn n(i: i64) -> TaggedValue {
+        TaggedValue::fixnum(i)
+    }
+
+    /// A library binding `count`, and a program importing it.
+    fn library_and_program(heap: &SharedHeap) -> (Rc<Environment>, Rc<Environment>) {
+        let library = Rc::new(Environment::with_heap(heap));
+        library.define(heap, "count", n(0));
+        let program = Rc::new(Environment::with_heap(heap));
+        share(heap, &program, "count", &library, "count");
+        (library, program)
+    }
+
+    /// Only a namespace's import of the location answers: not its own
+    /// binding, not a name it lacks, not an import it has defined over
+    /// since, not a frame's import, and not an import of another location.
+    #[test]
+    fn only_an_import_is_linked_early() {
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
+        let (location, _) = library.early_link(&heap, "count").unwrap();
+        assert_eq!(
+            Some(location.clone()),
+            library.binding_location(&heap, "count")
+        );
+        assert!(program.imports_location(&heap, "count", &location));
+
+        assert!(
+            !library.imports_location(&heap, "count", &location),
+            "the library's own binding"
+        );
+        assert!(!program.imports_location(&heap, "missing", &location));
+        library.define(&heap, "other", n(1));
+        share(&heap, &program, "other", &library, "other");
+        assert!(
+            !program.imports_location(&heap, "other", &location),
+            "an import of another location"
+        );
+        let frame = Rc::new(Environment::child_frame(Rc::clone(&program)));
+        frame.import_cell(&heap, "count", library.cell_of(&heap, "count").unwrap());
+        assert!(
+            !frame.imports_location(&heap, "count", &location),
+            "a frame's import holds no record"
+        );
+        program.define(&heap, "count", n(100));
+        assert!(
+            !program.imports_location(&heap, "count", &location),
+            "defined over since"
+        );
+    }
+
+    /// A location imported under two names links one location under E1,
+    /// through two records: each name's own (§16's amendment 3). The use
+    /// site answers for each name.
+    #[test]
+    fn a_location_under_two_names_links_one_location() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "count", n(0));
+        let relay = Rc::new(Environment::with_heap(&heap));
+        share(&heap, &relay, "count", &library, "count");
+        share(&heap, &relay, "c:count", &library, "count");
+        let (plain_at, plain) = relay.early_link(&heap, "count").unwrap();
+        let (prefixed_at, prefixed) = relay.early_link(&heap, "c:count").unwrap();
+        assert_eq!(plain_at, prefixed_at, "one location");
+        assert_ne!(plain, prefixed, "two records");
+        assert_eq!(plain.record(), relay.local_record("count").unwrap());
+        assert_eq!(prefixed.record(), relay.local_record("c:count").unwrap());
+
+        let program = Rc::new(Environment::with_heap(&heap));
+        share(&heap, &program, "count", &relay, "count");
+        share(&heap, &program, "c:count", &relay, "c:count");
+        assert!(program.imports_location(&heap, "count", &plain_at));
+        assert!(program.imports_location(&heap, "c:count", &prefixed_at));
+        library.set(&heap, "count", n(9)).unwrap();
+        let h = heap.borrow();
+        assert_eq!(
+            (plain.value(&h), prefixed.value(&h)),
+            (Some(n(9)), Some(n(9)))
+        );
+    }
+
+    /// One name links one record across calls, which are across forms: its
+    /// slot's, which nothing replaces.
+    #[test]
+    fn one_name_links_one_record_however_often_it_is_asked_for() {
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
+        let first = library.early_link(&heap, "count").unwrap();
+        assert_eq!(library.early_link(&heap, "count").unwrap(), first);
+        assert_eq!(first.1.record(), library.local_record("count").unwrap());
+        // Through the program's import, its own record over the same cell.
+        let imported = program.early_link(&heap, "count").unwrap();
+        assert_eq!(imported.0, first.0);
+        assert_eq!(imported.1.record(), program.local_record("count").unwrap());
+    }
+
+    /// The link names the macro environment's record, not the use site's:
+    /// a definition over the import at the use site leaves it reading,
+    /// writing and locating the library's cell. A link to the use site's
+    /// record would follow the definition.
+    #[test]
+    fn an_early_link_outlives_a_definition_over_the_import() {
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
+        let (location, link) = library.early_link(&heap, "count").unwrap();
+        program.define(&heap, "count", n(100));
+        library.set(&heap, "count", n(1)).unwrap();
+        assert_eq!(link.value(&heap.borrow()), Some(n(1)));
+        assert_eq!(program.get(&heap, "count"), Some(n(100)));
+        assert_eq!(
+            Some(link.record().cell(&heap.borrow()).location()),
+            library.binding_location(&heap, "count")
+        );
+        assert_eq!(Some(location), library.binding_location(&heap, "count"));
+    }
+
+    /// E1's one deviation from the alias it replaces, deliberate (§2.3):
+    /// the link is the macro environment's record, so a later re-point of
+    /// that record — a definition there over its import, or an import over
+    /// its definition — is followed. No program reaches it: a library's
+    /// namespace binds nothing after its load.
+    #[test]
+    fn an_early_link_follows_a_repoint_of_the_definition_namespaces_record() {
+        let heap = new_shared_heap();
+        let (library, relay) = library_and_program(&heap);
+        let (_, link) = relay.early_link(&heap, "count").unwrap();
+        assert_eq!(link.value(&heap.borrow()), Some(n(0)));
+        relay.define(&heap, "count", n(5));
+        assert_eq!(
+            link.value(&heap.borrow()),
+            Some(n(5)),
+            "a definition re-points the record the link names"
+        );
+        let other = Rc::new(Environment::with_heap(&heap));
+        other.define(&heap, "count", n(7));
+        share(&heap, &relay, "count", &other, "count");
+        assert_eq!(
+            link.value(&heap.borrow()),
+            Some(n(7)),
+            "and so does an import"
+        );
+        assert_eq!(
+            library.get(&heap, "count"),
+            Some(n(0)),
+            "the old cell is left"
+        );
+    }
+
+    /// Where the walk ends at a frame's import, which has no record, the
+    /// link is a fresh record over the import's cell: in no slot, counted
+    /// nowhere, reading the exporter's binding. A frame's own binding, and a
+    /// name bound nowhere, link nothing.
+    #[test]
+    fn an_early_link_through_a_frames_import_is_a_fresh_record_over_its_cell() {
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
+        let frame = Rc::new(Environment::child_frame(Rc::clone(&program)));
+        let cell = library.cell_of(&heap, "count").unwrap();
+        frame.import_cell(&heap, "imported", cell);
+        frame.define(&heap, "local", n(3));
+        let counts = |heap: &Heap| (heap.binding_records(), heap.cells());
+        let before = counts(&heap.borrow());
+
+        let (location, link) = frame.early_link(&heap, "imported").unwrap();
+        assert_eq!(location, cell.location());
+        assert_eq!(Some(location), library.binding_location(&heap, "count"));
+        assert_eq!(
+            link.record().cell(&heap.borrow()),
+            cell,
+            "over the import's cell"
+        );
+        assert_ne!(Some(link.record()), library.local_record("count"));
+        assert_ne!(Some(link.record()), program.local_record("count"));
+        assert_eq!(counts(&heap.borrow()), before, "counted nowhere");
+        library.set(&heap, "count", n(4)).unwrap();
+        assert_eq!(link.value(&heap.borrow()), Some(n(4)));
+
+        assert_eq!(frame.early_link(&heap, "local"), None, "a frame's own");
+        assert_eq!(frame.early_link(&heap, "missing"), None);
+        // The walk goes on to the namespace, whose slot's record it links.
+        let (_, through) = frame.early_link(&heap, "count").unwrap();
+        assert_eq!(Some(through.record()), program.local_record("count"));
     }
 }
 

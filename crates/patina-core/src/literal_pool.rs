@@ -25,12 +25,23 @@
 //! Rust value nothing traces, and the pool is the only root of the words it
 //! copied. So a pool never holds more than one form's text quotes, and
 //! nothing it held stays live through it once its form is done (M2).
+//!
+//! **Links** (#837). A pool's entry may also be a binding record a node
+//! links, a [`Link`]: what an early-bound reference is bound to. It is a
+//! slot of the same table, so the pool roots the record, its cell and the
+//! value as it roots a literal, but it is made only by
+//! [`LiteralPool::add_link`], from a [`Linkable`] a context found, and read
+//! only by [`LiteralPool::link`], which answers a [`BindingLink`] for a
+//! backend to copy into its code. [`LiteralPool::value`] takes a [`Lit`],
+//! which no link is, so a record never reaches a program as a value.
 
 use std::cell::Cell;
 use std::fmt;
+use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use crate::binding_record::{BindingLink, Linkable, Record};
 use crate::heap::Heap;
 use crate::heap::gc::{RootProvider, RootToken, SlotVisitor};
 use crate::heap::table::HeapTable;
@@ -99,11 +110,31 @@ impl fmt::Display for Lit {
     }
 }
 
+/// A binding record a `CoreExpr` links (#837): an entry of its
+/// compilation's [`LiteralPool`], kept apart from [`Lit`] so that
+/// [`LiteralPool::value`] can never hand a record to a program as a value.
+/// Its representation is private, and only [`LiteralPool::add_link`] makes
+/// one. The pool's number is never 0, so an `Option<Link>` is the size of a
+/// `Link`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Link {
+    pool: NonZeroU32,
+    index: u32,
+}
+
+/// An entry writes as its place in its pool, as a pooled [`Lit`] does: a
+/// `CoreExpr`'s `Display` cannot reach the heap.
+impl fmt::Display for Link {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "#<link {}>", self.index)
+    }
+}
+
 /// The literals of one compilation. See the [module docs](self).
 pub struct LiteralPool {
     /// This pool's number, which each of its entries carries, so that a
-    /// literal read through another pool is caught.
-    id: u32,
+    /// literal or a link read through another pool is caught. Never 0.
+    id: NonZeroU32,
     entries: Rc<Entries>,
     /// The registration that has every collection trace the entries.
     _root: RootToken,
@@ -117,12 +148,18 @@ impl LiteralPool {
     /// dropped.
     pub fn new(heap: &Heap) -> Self {
         static NEXT_ID: AtomicU32 = AtomicU32::new(1);
+        // Never 0, the niche `Option<Link>` uses, even once the count wraps.
+        let id = loop {
+            if let Some(id) = NonZeroU32::new(NEXT_ID.fetch_add(1, Ordering::Relaxed)) {
+                break id;
+            }
+        };
         let entries = Rc::new(Entries(HeapTable::new(Vec::new())));
         let root = heap
             .root_set()
             .register(Box::new(EntriesRoot(Rc::clone(&entries))));
         Self {
-            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            id,
             entries,
             _root: root,
         }
@@ -147,14 +184,46 @@ impl LiteralPool {
         if word.is_immediate() {
             return Lit(Repr::Immediate(word));
         }
+        Lit(Repr::Pooled {
+            pool: self.id.get(),
+            index: self.push(word),
+        })
+    }
+
+    /// A new slot holding `word`, and its index.
+    fn push(&self, word: TaggedValue) -> u32 {
         let index = self.entries.0.with_mut(|slots| {
             slots.push(Cell::new(word));
             slots.len() - 1
         });
-        Lit(Repr::Pooled {
+        u32::try_from(index).expect("a form quotes and links fewer than 2^32 entries")
+    }
+
+    /// `link` as an entry of this compilation, rooted from here on (#837).
+    /// Safe: the brand ties the handle to a live context, as
+    /// [`LiteralPool::add`]'s `Value` is.
+    pub fn add_link(&self, link: Linkable<'_>) -> Link {
+        Link {
             pool: self.id,
-            index: u32::try_from(index).expect("a form quotes fewer than 2^32 literals"),
-        })
+            index: self.push(link.link().record().word()),
+        }
+    }
+
+    /// The record `link` stands for: what a backend copies into code it
+    /// traces. Asserts in every build that `link` is an entry of this pool,
+    /// as [`LiteralPool::word`] does, so a link one form's desugaring
+    /// remembered is never read through another's pool.
+    #[track_caller]
+    pub fn link(&self, link: Link) -> BindingLink {
+        assert_eq!(
+            link.pool, self.id,
+            "a link read through another compilation's pool"
+        );
+        let word = self
+            .entries
+            .0
+            .with(|slots| slots[link.index as usize].get());
+        BindingLink::new(Record::from_word(word))
     }
 
     /// The word `lit` stands for: what a backend copies into the code it
@@ -166,7 +235,8 @@ impl LiteralPool {
             Repr::Immediate(word) => word,
             Repr::Pooled { pool, index } => {
                 assert_eq!(
-                    pool, self.id,
+                    pool,
+                    self.id.get(),
                     "a literal read through another compilation's pool"
                 );
                 self.entries.0.with(|slots| slots[index as usize].get())
@@ -186,7 +256,7 @@ impl LiteralPool {
         unsafe { Value::from_tagged(word) }
     }
 
-    /// The pool's entries: the heap literals added to it.
+    /// The pool's entries: the heap literals and the links added to it.
     pub fn len(&self) -> usize {
         self.entries.0.with(Vec::len)
     }
@@ -199,7 +269,7 @@ impl LiteralPool {
 
 impl fmt::Debug for LiteralPool {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "LiteralPool(#{}, {} entries)", self.id, self.len())
+        write!(f, "LiteralPool(#{}, {} entries)", self.id.get(), self.len())
     }
 }
 
@@ -215,7 +285,9 @@ impl RootProvider for EntriesRoot {
 
 #[cfg(test)]
 mod tests {
-    use super::{Lit, LiteralPool};
+    use super::{Link, Lit, LiteralPool};
+    use crate::binding_record::{BindingLink, Linkable};
+    use crate::environment::Environment;
     use crate::heap::gc::{Collector, MarkSweepCollector};
     use crate::heap::new_shared_heap;
     use crate::heap::sentinels::Sentinels;
@@ -244,6 +316,52 @@ mod tests {
         assert_eq!(pool.word(lits[0]), pair);
         assert_eq!(pool.word(lits[1]), string);
         assert_eq!(pool.len(), 2);
+    }
+
+    /// #837's sentinel: with a pool alive, a collection keeps a binding
+    /// record a `Link` names, reachable only through the pool (its
+    /// namespace dropped), with its cell and the value the cell holds; and
+    /// the pool answers the record back.
+    #[test]
+    fn a_collection_keeps_a_pooled_links_record() {
+        let heap = new_shared_heap();
+        let pool = LiteralPool::new(&heap.borrow());
+        let mut sentinels = Sentinels::new(&mut heap.borrow_mut());
+        let value = sentinels.pair(&mut heap.borrow_mut(), "a linked record's cell's value");
+        let record = {
+            let ns = std::rc::Rc::new(Environment::with_heap(&heap));
+            ns.define(&heap, "x", value);
+            ns.local_record("x").expect("x's record")
+        };
+        let link = pool.add_link(Linkable::new(BindingLink::new(record)));
+        assert_eq!(pool.len(), 1);
+        collect(&mut heap.borrow_mut());
+        sentinels.assert_survived(&heap.borrow());
+        let linked = pool.link(link);
+        assert_eq!(linked.record(), record);
+        assert_eq!(linked.value(&heap.borrow()), Some(value));
+        assert_eq!(link.to_string(), "#<link 0>");
+        assert_eq!(
+            std::mem::size_of::<Option<Link>>(),
+            std::mem::size_of::<Link>(),
+            "the pool's number leaves a niche"
+        );
+    }
+
+    /// A link is read through the pool that made it, in every build.
+    #[test]
+    #[should_panic(expected = "a link read through another compilation's pool")]
+    fn a_link_read_through_another_pool_panics() {
+        let heap = new_shared_heap();
+        let (one, two) = (
+            LiteralPool::new(&heap.borrow()),
+            LiteralPool::new(&heap.borrow()),
+        );
+        let ns = std::rc::Rc::new(Environment::with_heap(&heap));
+        ns.define(&heap, "x", TaggedValue::fixnum(1));
+        let record = ns.local_record("x").unwrap();
+        let link = one.add_link(Linkable::new(BindingLink::new(record)));
+        two.link(link);
     }
 
     /// Dropping the pool unregisters it: what it held is no longer live

@@ -316,6 +316,122 @@ impl Record {
     }
 }
 
+/// A reference to a binding record (#837): what an early-bound reference
+/// links, the record the macro environment's own walk finds for the name
+/// (`Environment::binding_hit`; the owner's ruling E1 of 2026-11-12), and
+/// what the second PR's relinked references will link.
+///
+/// Opaque outside this crate, as [`BindingCell`] is: no public constructor,
+/// and its reads take a borrow of the heap a trusted crate holds. Not
+/// branded: a backend holds one only while something the collector traces
+/// does — the literal pool of the compilation that found it
+/// ([`LiteralPool::link`](crate::LiteralPool::link) is the only way to get
+/// one), and from there a VM unit's link table — and a safe crate never
+/// holds one at all: the desugarer holds a [`Linkable`], which a context
+/// brands, and pools it as a [`Link`](crate::Link).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Trace)]
+pub struct BindingLink(Record);
+
+impl BindingLink {
+    /// The link to `record`.
+    #[inline]
+    pub(crate) fn new(record: Record) -> Self {
+        BindingLink(record)
+    }
+
+    /// The record linked.
+    #[inline(always)]
+    pub(crate) fn record(self) -> Record {
+        self.0
+    }
+
+    /// The record's identity, less a check build's stamp
+    /// ([`Record::key`]): a key for one compilation's maps, sound while
+    /// the compilation's pool roots the record, which it does for the
+    /// maps' whole life.
+    #[inline]
+    pub fn key(self) -> u64 {
+        self.0.key()
+    }
+
+    /// What the binding holds now: record → cell → value, two loads, as
+    /// `LinkTable::get` reads it; `None` where the cell holds `UNBOUND`,
+    /// which only a record of a kind no early link names (a placeholder, a
+    /// read-through record, the by-name record) does.
+    #[inline(always)]
+    pub fn value(self, heap: &Heap) -> Option<TaggedValue> {
+        let value = self.0.car_cell(heap).value(heap);
+        (value != TaggedValue::UNBOUND).then_some(value)
+    }
+}
+
+/// A binding record a context found (#837), branded by that context as a
+/// [`Value`](crate::Value) is: what `Cx::early_link` answers and
+/// [`LiteralPool::add_link`](crate::LiteralPool::add_link) takes. A safe
+/// crate can hold one only while its context lives, beneath which nothing
+/// collects (#702), so it cannot pool a record a collection has freed:
+/// a handle kept from one form and pooled in another after a collection
+/// does not compile.
+///
+/// ```compile_fail
+/// use patina_core::{GcDriver, Instance, NamespaceView, environment::Environment, new_shared_heap};
+/// use std::rc::Rc;
+///
+/// let heap = new_shared_heap();
+/// let instance = Instance::default();
+/// let mut driver = GcDriver::acquire(&heap).unwrap();
+/// let ns = Rc::new(Environment::with_heap(&heap));
+/// let found = driver.mutate(&instance, |cx| {
+///     cx.early_link(NamespaceView::of(&ns), "count").map(|(_, linkable)| linkable)
+/// });
+/// ```
+///
+/// Its twin, which pools the handle in the context that found it:
+///
+/// ```
+/// use patina_core::{GcDriver, Instance, LiteralPool, NamespaceView, environment::Environment, new_shared_heap};
+/// use std::rc::Rc;
+///
+/// let heap = new_shared_heap();
+/// let instance = Instance::default();
+/// let mut driver = GcDriver::acquire(&heap).unwrap();
+/// let pool = LiteralPool::new(&heap.borrow());
+/// let ns = Rc::new(Environment::with_heap(&heap));
+/// let linked = driver.mutate(&instance, |cx| {
+///     cx.early_link(NamespaceView::of(&ns), "count").map(|(_, linkable)| pool.add_link(linkable))
+/// });
+/// assert_eq!(linked, None, "nothing binds `count`");
+/// ```
+#[derive(Clone, Copy)]
+pub struct Linkable<'gc> {
+    link: BindingLink,
+    _brand: crate::value::Brand<'gc>,
+}
+
+impl<'gc> Linkable<'gc> {
+    /// `link`, branded `'gc`. The caller holds a context of that brand, and
+    /// the record is live in it.
+    #[inline]
+    pub(crate) fn new(link: BindingLink) -> Self {
+        Linkable {
+            link,
+            _brand: std::marker::PhantomData,
+        }
+    }
+
+    /// The handle, for the pool that roots it from here on.
+    #[inline]
+    pub(crate) fn link(self) -> BindingLink {
+        self.link
+    }
+}
+
+impl std::fmt::Debug for Linkable<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Linkable({:?})", self.link)
+    }
+}
+
 /// A check build's failure: a read-through record read as a record of its
 /// own (`Record::cell`).
 #[cold]
