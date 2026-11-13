@@ -30,7 +30,7 @@ use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{
     AssertNoGc, AssertNoGcCount, Carrier, CollectKind, GC_CHECK, GcController, GcDriver, GcMode,
-    LinkIdx, LinkTable, NamespaceView, NoGcScope, Trace,
+    LinkIdx, LinkTable, LiteralPool, NamespaceView, NoGcScope, Trace,
 };
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::HasDiagnostic;
@@ -656,11 +656,20 @@ impl VmState {
     ///
     /// Once it has run, [`VmState::release_unit_if_unused`] lets it go if
     /// nothing it left behind can run it again (#338).
+    ///
+    /// `literals` is the compilation's literal pool, the only root of the
+    /// heap words the code's constants copied until the code store holds
+    /// them, which a collection traces (#869). It is taken here, and
+    /// dropped once the store holds the unit, so that no caller can let it
+    /// go before its code is rooted, and none keeps it while the form runs
+    /// (M2). Code whose constants hold no word a collection could free
+    /// first comes with an empty pool.
     pub fn load_unit(
         &mut self,
         top: CodeObject,
         nested: Vec<CodeObject>,
         namespace: &Rc<Environment>,
+        literals: LiteralPool,
     ) -> LoadedUnit {
         // Opened first, so that it covers the unit from the moment the store
         // holds it. One shared borrow of the heap, which no caller holds
@@ -716,6 +725,10 @@ impl VmState {
         links.link_in(&self.heap, namespace);
         self.code_units.insert(top_id, members);
         self.note_code_units();
+        // The store holds the unit's constants now, and the window covers
+        // it until a frame or a closure does: the pool's words are rooted
+        // without it (#869).
+        drop(literals);
         LoadedUnit { id: top_id, window }
     }
 
@@ -1249,10 +1262,9 @@ fn vm_evaluate_parsed_library(
             // around the `eval` or `environment` that loads the library)
             // leaves this load. The rest of the body must not run then, and
             // the library must not be registered or its exports bound.
-            let unit = state.load_unit(top, nested, &lib_env);
-            // The pool goes once the loaded unit holds the literals' words,
-            // before the form runs (#869, M2).
-            drop(literals);
+            // The pool goes with the load, once the store holds the
+            // literals' words, before the form runs (#869, M2).
+            let unit = state.load_unit(top, nested, &lib_env, literals);
             let top_id = unit.id();
             let depth_before = state.execution.frames().len();
             #[expect(
@@ -1323,10 +1335,8 @@ pub(super) fn vm_eval_expr(
 
     // Execute in the main state, which keeps continuations and code objects
     // valid. This holds nothing of its own across the run, wherever it is
-    // reached from: the pool goes once the loaded unit holds the literals'
-    // words (#869).
-    let unit = state.load_unit(top, nested, env);
-    drop(literals);
+    // reached from: the pool goes with the load (#869).
+    let unit = state.load_unit(top, nested, env, literals);
     let top_id = unit.id();
     #[expect(
         clippy::disallowed_methods,
@@ -1380,8 +1390,9 @@ pub(super) fn vm_eval_expr(
 /// reads only its kind.
 ///
 /// Answers the code with the datum's literal pool, which roots the words of
-/// the code's constants until the caller has loaded it: the caller drops
-/// the pool after `load_unit` returns (#869).
+/// the code's constants until the caller has loaded it: the caller hands
+/// the pool to `load_unit`, which drops it once the store holds the code
+/// (#869).
 fn compile_for_eval(
     state: &mut VmState,
     expr: TaggedValue,
@@ -1395,7 +1406,7 @@ fn compile_for_eval(
     let desugarer = Desugarer::with_env(env.clone()).with_fs(state.fs.clone());
     let heap = state.heap.clone();
     // The datum's literals, rooted until the code holding them is loaded:
-    // answered with the code, for the caller to drop after its load (#705,
+    // answered with the code, for the caller to hand to its load (#705,
     // #869).
     let literals = patina_core::LiteralPool::new(&heap.borrow());
 
@@ -1462,9 +1473,8 @@ pub(super) fn eval_closure(
     env: &Rc<Environment>,
 ) -> Result<EvalCallee, VmError> {
     let (top, nested, literals) = compile_for_eval(state, expr, env)?;
-    let (top_id, window) = state.load_unit(top, nested, env).into_parts();
-    // The pool goes once the loaded unit holds the literals' words (#869).
-    drop(literals);
+    // The pool goes with the load (#869).
+    let (top_id, window) = state.load_unit(top, nested, env, literals).into_parts();
     let closure = state
         .heap
         .borrow_mut()
@@ -3420,14 +3430,17 @@ mod tests {
     use super::*;
 
     /// Load `top` and `nested` as a unit linked in the machine's globals, as
-    /// the backend's top level loads a program's form.
+    /// the backend's top level loads a program's form, with an empty literal
+    /// pool: the tests' code holds no heap word a collection before the load
+    /// could free.
     pub(super) fn load_in_globals(
         state: &mut VmState,
         top: CodeObject,
         nested: Vec<CodeObject>,
     ) -> LoadedUnit {
         let globals = Rc::clone(state.global_env());
-        state.load_unit(top, nested, &globals)
+        let literals = LiteralPool::new(&state.heap.borrow());
+        state.load_unit(top, nested, &globals, literals)
     }
 
     #[test]
@@ -3473,7 +3486,10 @@ mod tests {
     fn load_unit_links_a_table_that_names_nothing() {
         let mut state = VmState::on_a_fresh_heap();
         let namespace = Rc::new(Environment::with_heap(&state.heap));
-        let id = state.load_unit(code(), Vec::new(), &namespace).id();
+        let literals = LiteralPool::new(&state.heap.borrow());
+        let id = state
+            .load_unit(code(), Vec::new(), &namespace, literals)
+            .id();
         let loaded = state.code_object(id).expect("loaded");
         assert!(loaded.links.names().is_empty(), "no global operand");
         assert!(
@@ -3520,8 +3536,13 @@ mod tests {
 
         let (top, nested) = compiled_in_globals(&state);
         let elsewhere = Rc::new(Environment::with_heap(&state.heap));
+        let literals = LiteralPool::new(&state.heap.borrow());
         let refused = catch_unwind(AssertUnwindSafe(|| {
-            drop(state.load_unit(top, nested, &elsewhere).into_parts());
+            drop(
+                state
+                    .load_unit(top, nested, &elsewhere, literals)
+                    .into_parts(),
+            );
         }));
         assert_eq!(
             refused.is_err(),
@@ -3537,10 +3558,11 @@ mod tests {
     /// collection between the compile and the load, with the machine's own
     /// roots and the heap's registered ones, keeps a pair that only the
     /// form's code names, and the form answers it. Every site that compiles
-    /// and loads a form drops its pool in the same place, after the load.
-    /// With the pool dropped before the collection, as every site dropped it
-    /// until #869, the pair is swept, and a debug or `gc-check` build panics
-    /// on the stale word (#621).
+    /// and loads a form hands its pool to `load_unit`, which drops it once
+    /// the store holds the code, so none can drop it in the window. With the
+    /// pool dropped before the collection, as every site dropped it until
+    /// #869, the pair is swept, and a debug or `gc-check` build panics on the
+    /// stale word (#621).
     #[test]
     fn a_forms_pool_keeps_its_literals_until_its_code_is_loaded() {
         use patina_core::core_expr::{CoreExpr, CoreExprKind};
@@ -3566,8 +3588,8 @@ mod tests {
         // The window: compiled, not yet loaded.
         collect_for_tests(&mut state.heap.borrow_mut(), &[&state]);
 
-        let unit = load_in_globals(&mut state, top, nested);
-        drop(literals);
+        let globals = Rc::clone(state.global_env());
+        let unit = state.load_unit(top, nested, &globals, literals);
         #[expect(
             clippy::disallowed_methods,
             reason = "a driver entry on a machine the test owns: the form's constant is in the \

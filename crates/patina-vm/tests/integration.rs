@@ -40,10 +40,12 @@ fn fresh_state() -> VmState {
 }
 
 /// Load `top` and `nested` as a unit linked in the machine's globals, where
-/// `execute` runs it, as the backend's top level loads a program's form.
+/// `execute` runs it, as the backend's top level loads a program's form,
+/// with an empty literal pool: this file's code quotes only immediates.
 fn load(state: &mut VmState, top: CodeObject, nested: Vec<CodeObject>) -> LoadedUnit {
     let globals = Rc::clone(state.global_env());
-    state.load_unit(top, nested, &globals)
+    let literals = patina_core::LiteralPool::new(&state.heap().borrow());
+    state.load_unit(top, nested, &globals, literals)
 }
 
 fn run(expr: CoreExpr) -> TaggedValue {

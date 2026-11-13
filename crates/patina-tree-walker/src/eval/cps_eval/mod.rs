@@ -317,6 +317,10 @@ impl<'a> CpsEvaluator<'a> {
     /// refcount bump rather than a deep clone of the subtree. It is also the
     /// node the trampoline's safe point roots, so the collector traces the
     /// tree the loop is actually walking rather than a copy of it.
+    ///
+    /// For a tree built by hand, whose literals are immediates or rooted by
+    /// the caller: it runs with an empty literal pool. A form's tree runs
+    /// through [`eval_cps`], with its own.
     #[expect(
         clippy::disallowed_methods,
         reason = "a wrapper over `eval_in_env_with` with empty stacks: holds nothing"
@@ -326,20 +330,31 @@ impl<'a> CpsEvaluator<'a> {
         expr: Rc<CpsExpr>,
         env: Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
-        self.eval_in_env_with(expr, env, Vec::new(), Vec::new(), Vec::new())
+        let literals = patina_core::LiteralPool::new(&self.evaluator.heap.borrow());
+        self.eval_in_env_with(expr, literals, env, Vec::new(), Vec::new(), Vec::new())
     }
 
-    /// Evaluate `expr` on a trampoline that starts under the given dynamic
-    /// environment — empty for a top-level form, the calling step's for the
-    /// `eval` primitive (`callback.rs`).
+    /// Evaluate `expr`, whose literals are `literals`' entries, on a
+    /// trampoline that starts under the given dynamic environment — empty
+    /// for a top-level form, the calling step's for the `eval` primitive
+    /// (`callback.rs`).
+    ///
+    /// The pool is taken here and dropped once the run has returned (#869):
+    /// from the transform to the run's first safe point the tree, which
+    /// holds the literals' words, is a value nothing traces, and the pool
+    /// roots them there. So no caller can let it go before the run roots
+    /// the tree. It keeps nothing the run does not: its entries are the
+    /// tree's own words, which the run roots throughout.
     #[expect(
         clippy::disallowed_methods,
-        reason = "holds nothing: the first step carries `expr`, `env` and the stacks, and the run \
-                  roots `expr` for its literals at every safe point"
+        reason = "holds the pool, which roots itself, and nothing else: the first step carries \
+                  `expr`, `env` and the stacks, and the run roots `expr` for its literals at \
+                  every safe point"
     )]
     pub(super) fn eval_in_env_with(
         &self,
         expr: Rc<CpsExpr>,
+        literals: patina_core::LiteralPool,
         env: Rc<Environment>,
         prompt_stack: Vec<types::PromptFrame>,
         dynamic_winds: Vec<patina_core::DynamicWindRecord>,
@@ -356,7 +371,9 @@ impl<'a> CpsEvaluator<'a> {
             dynamic_winds,
             exception_handlers,
         };
-        self.run_trampoline(initial, Some(&expr), types::TrampolineKind::Form)
+        let value = self.run_trampoline(initial, Some(&expr), types::TrampolineKind::Form);
+        drop(literals);
+        value
     }
 
     /// The step loop: run `initial` and every step after it until one
@@ -701,11 +718,8 @@ fn contains_quasiquote(expr: &patina_core::CoreExpr) -> bool {
 }
 
 /// Run `expr`, a form's tree whose literals are `literals`' entries, in
-/// `env`. The pool goes with the form's run, once it has returned: from the
-/// transform to the run's first safe point the CPS tree, which holds the
-/// literals' words, is a Rust local nothing traces, and the pool roots them
-/// there (#705, #869). It holds nothing the run does not: its entries are
-/// the tree's own words, which the run roots throughout.
+/// `env`. The pool goes with the form's run, once it has returned
+/// ([`CpsEvaluator::eval_in_env_with`], which takes it; #705, #869).
 pub fn eval_cps(
     expr: &patina_core::CoreExpr,
     literals: patina_core::LiteralPool,
@@ -757,11 +771,17 @@ pub fn eval_cps(
     let cps_evaluator = CpsEvaluator::new(evaluator);
     #[expect(
         clippy::disallowed_methods,
-        reason = "holds `expr`, the caller's tree, not read after the call, and the pool, which \
-                  roots itself: the run roots the CPS tree it is entered with"
+        reason = "holds `expr`, the caller's tree, not read after the call: the run roots the CPS \
+                  tree it is entered with, and the pool moves into it"
     )]
-    let value = cps_evaluator.eval_in_env(Rc::new(cps_expr), env);
-    drop(literals);
+    let value = cps_evaluator.eval_in_env_with(
+        Rc::new(cps_expr),
+        literals,
+        env,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
     value
 }
 
@@ -770,8 +790,8 @@ pub fn eval_cps(
 /// pool goes with the run, as [`eval_cps`]'s does (#869).
 #[expect(
     clippy::disallowed_methods,
-    reason = "holds `expr`, not read after the call, and the pool, which roots itself: the CPS \
-              tree moves into the run, which roots it, and the stacks move into its first step"
+    reason = "holds `expr`, not read after the call: the CPS tree and the pool move into the run, \
+              which roots the tree, and the stacks move into its first step"
 )]
 pub(super) fn eval_cps_with(
     expr: &patina_core::CoreExpr,
@@ -801,16 +821,16 @@ pub(super) fn eval_cps_with(
     );
     let cps_expr = CpsTransformer::new(&literals).transform_toplevel(expr);
     // The CPS tree holds the literals' words now, a Rust local until the
-    // run's first safe point: the pool goes once the run returns (#869).
-    let value = CpsEvaluator::new(evaluator).eval_in_env_with(
+    // run's first safe point: the pool goes into the run, which drops it
+    // once it returns (#869).
+    CpsEvaluator::new(evaluator).eval_in_env_with(
         Rc::new(cps_expr),
+        literals,
         env,
         prompt_stack,
         dynamic_winds,
         exception_handlers,
-    );
-    drop(literals);
-    value
+    )
 }
 
 #[cfg(test)]
@@ -904,9 +924,11 @@ mod tests {
     /// traces, and the pool alone keeps its words. So a collection between
     /// `transform_toplevel` and the run, with the evaluator's roots and the
     /// heap's registered ones, keeps a pair that only the tree names, and
-    /// the form answers it. `eval_cps` and `eval_cps_with` keep their pool
-    /// to the end of the run in the same way. With the pool dropped before
-    /// the collection, as both dropped it until #869, the pair is swept.
+    /// the form answers it. `eval_cps` and `eval_cps_with` hand their pool
+    /// to `eval_in_env_with` with the tree, as this does, which drops it
+    /// once the run returns, so neither can drop it in the window. With the
+    /// pool dropped before the collection, as both dropped it until #869,
+    /// the pair is swept.
     #[test]
     fn a_forms_pool_keeps_its_literals_until_its_run_returns() {
         use patina_core::heap::gc::collect_for_tests;
@@ -924,9 +946,15 @@ mod tests {
         collect_for_tests(&mut evaluator.heap.borrow_mut(), &[&evaluator]);
 
         let answer = CpsEvaluator::new(&evaluator)
-            .eval_in_env(Rc::new(cps), evaluator.global_env.clone())
+            .eval_in_env_with(
+                Rc::new(cps),
+                literals,
+                evaluator.global_env.clone(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
             .expect("runs");
-        drop(literals);
         assert_eq!(answer, pair, "the form answers the pair it quoted");
         assert_still_the_pair(&evaluator, answer);
     }

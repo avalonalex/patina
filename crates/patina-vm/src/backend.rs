@@ -380,12 +380,11 @@ impl VmBackend {
         drop(core_expr);
 
         let mut state = self.state.borrow_mut();
-        let unit = state.load_unit(top, nested, env);
         // The pool roots the literals' words until the code holding them is
         // in the store, which the unit's window and then the code store
-        // cover from here (#869): it goes after the load, and before the
-        // form runs (M2).
-        drop(literals);
+        // cover from there: it goes with the load, before the form runs
+        // (#869, M2).
+        let unit = state.load_unit(top, nested, env, literals);
         let top_id = unit.id();
 
         // Execute, then let go of the form's code unless something it left
@@ -443,10 +442,8 @@ impl VmBackend {
         drop(core_expr);
 
         let mut state = self.state.borrow_mut();
-        let unit = state.load_unit(top, nested, &self.global_env);
-        // The pool goes once the loaded unit holds the words, before the
-        // call runs (#869, M2).
-        drop(literals);
+        // The pool goes with the load, before the call runs (#869, M2).
+        let unit = state.load_unit(top, nested, &self.global_env, literals);
         let top_id = unit.id();
         #[expect(
             clippy::disallowed_methods,
@@ -894,10 +891,9 @@ impl VmBackend {
                     })?;
                     drop(core_expr);
 
-                    let unit = state.load_unit(top, nested, &lib_env);
-                    // The pool goes once the loaded unit holds the
-                    // literals' words, before the form runs (#869, M2).
-                    drop(literals);
+                    // The pool goes with the load, before the form runs
+                    // (#869, M2).
+                    let unit = state.load_unit(top, nested, &lib_env, literals);
                     let top_id = unit.id();
                     #[expect(
                         clippy::disallowed_methods,
