@@ -148,9 +148,9 @@ pub fn compile(
 /// quasiquotes lowered over `registry`'s constructors and its primitive calls
 /// resolved in `env`. The words of the literals reach the code's constants,
 /// which nothing traces until the code is loaded: the caller keeps the pool
-/// until `load_unit` has returned, and drops it there, before the code runs
-/// (#869). Code compiled and never loaded keeps its pool as long as anything
-/// reads its constants.
+/// and hands it to `load_unit` with the code, which drops it once the code
+/// store holds it, before the code runs (#869). Code compiled and never
+/// loaded keeps its pool as long as anything reads its constants.
 pub fn compile_with_qq_resolving(
     expr: &CoreExpr,
     literals: &LiteralPool,

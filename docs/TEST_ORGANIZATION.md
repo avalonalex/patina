@@ -1600,9 +1600,14 @@ which a debug or release `gc-check` build panics on once swept:
 `a_forms_pool_keeps_its_literals_until_its_run_returns` (transform to run)
 and `a_step_evals_pool_outlives_the_step_it_makes` (a `Step::Eval`'s tree
 before its trampoline holds it), with `step_evals_retire_at_most_one_pool`
-holding a run of `eval`s that never collects to one retired pool.
-`literal_pools.rs` holds every path to
-releasing its pool by the time the evaluation returns.
+holding a run of `eval`s that never collects to one retired pool. The
+first two hand their pools to `load_unit` and `eval_in_env_with`, which
+every site that compiles and runs a form goes through, and which take the
+pool by value, so that no site can drop it in the window; a test of each
+site would see nothing, since no poll site lies there. `literal_pools.rs`
+holds every path to releasing its pool by the time the evaluation returns,
+and, in `an_evald_datum_is_let_go_of_by_the_next_collection`, an `eval`'d
+datum's pair to being let go of by the next `(gc)` within its run.
 
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):

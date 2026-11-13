@@ -16,11 +16,12 @@
 //!
 //! **Scoped to one compilation.** A backend makes a pool for each form it
 //! compiles, and drops it once the code holding the form's literals is
-//! traced in its own right (#869): the VM once `load_unit` has put the unit
-//! in the code store, before the form runs; the tree-walker once the run
-//! that roots the form's `CpsExpr` has returned, and for a `Step::Eval`'s
-//! tree, which becomes a step of the running trampoline, after the driver's
-//! next collection, the next retirement or a run's return. Until then the code is a
+//! traced in its own right (#869): the VM's `load_unit`, which takes it,
+//! once it has put the unit in the code store, before the form runs; the
+//! tree-walker's run, which takes it with the form's `CpsExpr`, once it has
+//! returned; and for a `Step::Eval`'s tree, which becomes a step of the
+//! running trampoline, the next retirement, the start of the driver's next
+//! collection, before it marks, or a run's return. Until then the code is a
 //! Rust value nothing traces, and the pool is the only root of the words it
 //! copied. So a pool never holds more than one form's text quotes, and
 //! nothing it held stays live through it once its form is done (M2).
