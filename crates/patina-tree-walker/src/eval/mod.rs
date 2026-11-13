@@ -90,9 +90,9 @@ pub struct Evaluator {
     /// traces them. A thread-local until #682.
     pub(crate) pending_escape: RefCell<Option<(TaggedValue, Rc<CpsContinuation>)>>,
     /// The literal pool of the last `Step::Eval`'s datum, retired here when
-    /// its tree became a step (`retire_pool`, #869), and released once a
-    /// collection or the next retirement can no longer find that step
-    /// unrooted. At most one pool.
+    /// its tree became a step (`retire_pool`, #869), and released by the
+    /// next retirement, the driver's next collection or a run's return,
+    /// each after the step was taken. At most one pool.
     #[trace(
         skip,
         reason = "a literal pool, which roots its entries through its own registration with the \
@@ -518,18 +518,20 @@ impl Evaluator {
     /// (`StepRoots`). Nothing runs in between but that hand-over: no other
     /// step, and so no other `eval_step`. So the pool retired before this
     /// one has done its work, and goes now; at most one is ever retired.
-    /// The last is released after the driver's next collection, or when a
-    /// run returns ([`Self::release_retired_pool`]).
+    /// The last is released as the driver's next collection begins, before
+    /// it marks, or when a run returns ([`Self::release_retired_pool`]).
     pub(crate) fn retire_pool(&self, pool: patina_core::LiteralPool) {
         let previous = self.retiring.replace(Some(pool));
         drop(previous);
     }
 
-    /// Release the pool [`Self::retire_pool`] kept, if any: after a
-    /// collection the driver ran, which rooted the step at its safe point,
-    /// and when a run returns, which is after the step was taken. Off the
-    /// step loop's fast path: neither is reached on a step that does not
-    /// collect.
+    /// Release the pool [`Self::retire_pool`] kept, if any, once its step
+    /// has been taken by its trampoline: as a collection the driver runs
+    /// begins, before it marks, so that the pool keeps nothing through it,
+    /// since the collection roots the loop's step (`StepRoots`); and when a
+    /// run returns, `Ok` or `Err`. Off the step loop's fast path: the first
+    /// only on a step that collects, the second once per run, after its
+    /// loop.
     pub(crate) fn release_retired_pool(&self) {
         let retired = self.retiring.take();
         drop(retired);

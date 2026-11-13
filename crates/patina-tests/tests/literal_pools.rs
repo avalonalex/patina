@@ -8,9 +8,7 @@
 //! evaluation that compiled it, and nothing it held stays live through it.
 
 mod common;
-use common::{
-    eval_program_tree_walker, eval_program_vm, tree_walker_interpreter, vm_interpreter,
-};
+use common::{eval_program_tree_walker, eval_program_vm, tree_walker_interpreter, vm_interpreter};
 use patina_interpreter::{Backend, Interpreter};
 
 /// The forms, each compiled by a different path or with a different kind

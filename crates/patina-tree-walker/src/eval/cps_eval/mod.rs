@@ -115,6 +115,12 @@ impl<'a> CpsEvaluator<'a> {
     fn maybe_collect(&self, driver: &mut GcDriver, step: &StepResult, expr: Option<&CpsExpr>) {
         let evaluator = self.evaluator;
         let collected = GcController::safe_point(&evaluator.gc, driver, |collect| {
+            // A `Step::Eval`'s retired pool has done its work: its step was
+            // taken by its trampoline before anything else ran, this loop,
+            // whose state this collection roots through `step`, or a nested
+            // one, which has returned (#869). Released before the collection
+            // marks, so that it keeps nothing the run has done with.
+            evaluator.release_retired_pool();
             // The machine's own state, lent to the collection; the library
             // registry is registered with the heap, which waits while a
             // load holds it (#682).
@@ -130,9 +136,6 @@ impl<'a> CpsEvaluator<'a> {
                 &evaluator.heap,
                 std::time::Duration::ZERO,
             );
-            // The collection rooted the step, so a `Step::Eval`'s retired
-            // pool has done its work (#869).
-            evaluator.release_retired_pool();
         }
     }
 
@@ -267,8 +270,10 @@ impl<'a> CpsEvaluator<'a> {
             return false;
         };
         let collected = GcController::collect_at_call(&evaluator.gc, driver, kind, |collect| {
-            // As at a safe point: the registered registry posts the
+            // As at a safe point: the retired pool goes before the
+            // collection marks (#869), and the registered registry posts the
             // collection while a load holds it (#682).
+            evaluator.release_retired_pool();
             let step_roots = gc_roots::StepRoots { step, expr };
             collect(&[evaluator, &step_roots]);
         });
@@ -278,8 +283,6 @@ impl<'a> CpsEvaluator<'a> {
                 &evaluator.heap,
                 std::time::Duration::ZERO,
             );
-            // As at a safe point (#869).
-            evaluator.release_retired_pool();
         }
         collected
     }
@@ -379,12 +382,14 @@ impl<'a> CpsEvaluator<'a> {
     /// under a `NoGcScope`, because its caller holds live values in Rust
     /// locals that no root provider can see (`docs/GC_DESIGN.md` §7).
     ///
-    /// Where any run returns, nested or not, by any way out, a `Step::Eval`'s
+    /// Where any run returns, nested or not, `Ok` or `Err`, a `Step::Eval`'s
     /// retired pool has done its work, and goes
     /// (`Evaluator::release_retired_pool`, #869): its step was taken by its
     /// trampoline before anything after `eval_step` ran, this return
     /// included. Released here, outside the loop, rather than by a guard
-    /// over it, which measured more cycles on the tree-walker's workloads.
+    /// over it, which measured more cycles on the tree-walker's workloads;
+    /// so a panic unwinding through the loop skips it, and the pool goes at
+    /// the next retirement, collection or run's return instead.
     fn run_trampoline(
         &self,
         initial: StepResult,
