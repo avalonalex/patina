@@ -849,4 +849,104 @@ mod tests {
         let result = cps_eval.eval(&halt_cont).unwrap();
         assert_eq!(result.as_fixnum(), Some(3));
     }
+
+    /// A fresh pair `(7)`, which nothing reaches until the caller puts it
+    /// somewhere, and a reader that checks it is still that pair: in a debug
+    /// or `gc-check` build, a swept pair panics on the read (#621).
+    fn fresh_pair(evaluator: &super::super::Evaluator) -> TaggedValue {
+        (evaluator.heap.borrow_mut()).alloc_pair(TaggedValue::fixnum(7), TaggedValue::NULL)
+    }
+
+    fn assert_still_the_pair(evaluator: &super::super::Evaluator, answer: TaggedValue) {
+        let heap = evaluator.heap.borrow();
+        assert_eq!(heap.car(answer), TaggedValue::fixnum(7));
+        assert_eq!(heap.cdr(answer), TaggedValue::NULL);
+    }
+
+    /// A form's literal pool roots the literals' words until the run that
+    /// holds the form's CPS tree has returned (#869): from the transform to
+    /// the run's first safe point the tree is a Rust local that nothing
+    /// traces, and the pool alone keeps its words. So a collection between
+    /// `transform_toplevel` and the run, with the evaluator's roots and the
+    /// heap's registered ones, keeps a pair that only the tree names, and
+    /// the form answers it. `eval_cps` and `eval_cps_with` keep their pool
+    /// to the end of the run in the same way. With the pool dropped before
+    /// the collection, as both dropped it until #869, the pair is swept.
+    #[test]
+    fn a_forms_pool_keeps_its_literals_until_its_run_returns() {
+        use patina_core::heap::gc::collect_for_tests;
+        use patina_core::{CoreExpr, CoreExprKind, LiteralPool};
+
+        let evaluator = make_test_evaluator();
+        let literals = LiteralPool::new(&evaluator.heap.borrow());
+        let pair = fresh_pair(&evaluator);
+        // SAFETY: allocated just now, and nothing has collected since.
+        let quoted = unsafe { literals.add_word(pair) };
+        let expr = CoreExpr::new(CoreExprKind::Quote(quoted));
+        let cps = patina_ir::CpsTransformer::new(&literals).transform_toplevel(&expr);
+
+        // The window: transformed, not yet run.
+        collect_for_tests(&mut evaluator.heap.borrow_mut(), &[&evaluator]);
+
+        let answer = CpsEvaluator::new(&evaluator)
+            .eval_in_env(Rc::new(cps), evaluator.global_env.clone())
+            .expect("runs");
+        drop(literals);
+        assert_eq!(answer, pair, "the form answers the pair it quoted");
+        assert_still_the_pair(&evaluator, answer);
+    }
+
+    /// A `Step::Eval`'s pool outlives the step it makes (#869): the eval'd
+    /// tree becomes the trampoline's next step, a Rust local from
+    /// `eval_step`'s return until the trampoline holds it, where its next
+    /// safe point roots it (`StepRoots`). So a collection in that window,
+    /// with the evaluator's roots and the heap's registered ones, keeps a
+    /// pair that only the eval'd tree names, and the step answers it. Here
+    /// the window is opened by hand: `resumable_step` makes the step from
+    /// the `eval` primitive's `Step::Eval`, and the step runs after the
+    /// collection. With the pool dropped as `eval_step` returns, as it was
+    /// until #869, the pair is swept.
+    #[test]
+    fn a_step_evals_pool_outlives_the_step_it_makes() {
+        use patina_core::heap::gc::collect_for_tests;
+
+        let evaluator = make_test_evaluator();
+        let cps = CpsEvaluator::new(&evaluator);
+        let index = (evaluator.primitive_registry)
+            .resolve_index("scheme.eval/eval")
+            .expect("`eval` is registered");
+        let pair = fresh_pair(&evaluator);
+        // `(quote (7))`: its outer pairs are swept once the expansion has
+        // read them, which is as it should be.
+        let datum = {
+            let mut heap = evaluator.heap.borrow_mut();
+            let quote = heap.intern_symbol("quote");
+            let rest = heap.alloc_pair(pair, TaggedValue::NULL);
+            heap.alloc_pair(quote, rest)
+        };
+        let step = cps
+            .resumable_step(
+                index,
+                Ok(patina_primitives::TaggedStep::Eval {
+                    expr: datum,
+                    env: evaluator.global_env.clone(),
+                    state: TaggedValue::UNSPECIFIED,
+                }),
+                types::ContValue::Halt,
+                ContEnv::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("expands");
+
+        // The window: the step made, not yet the trampoline's.
+        collect_for_tests(&mut evaluator.heap.borrow_mut(), &[&evaluator]);
+
+        let answer = cps
+            .run_trampoline(step, None, types::TrampolineKind::Form)
+            .expect("runs");
+        assert_eq!(answer, pair, "the step answers the pair it quoted");
+        assert_still_the_pair(&evaluator, answer);
+    }
 }

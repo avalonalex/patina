@@ -3517,6 +3517,56 @@ mod tests {
         );
     }
 
+    /// A form's literal pool roots the literals' words from the form's
+    /// compilation until `load_unit` has put its code in the store, where a
+    /// collection traces the constants (#869): until then the words sit in a
+    /// `CodeObject` that nothing traces, and the pool alone keeps them. So a
+    /// collection between the compile and the load, with the machine's own
+    /// roots and the heap's registered ones, keeps a pair that only the
+    /// form's code names, and the form answers it. Every site that compiles
+    /// and loads a form drops its pool in the same place, after the load.
+    /// With the pool dropped before the collection, as every site dropped it
+    /// until #869, the pair is swept, and a debug or `gc-check` build panics
+    /// on the stale word (#621).
+    #[test]
+    fn a_forms_pool_keeps_its_literals_until_its_code_is_loaded() {
+        use patina_core::core_expr::{CoreExpr, CoreExprKind};
+        use patina_core::heap::gc::collect_for_tests;
+
+        let mut state = VmState::on_a_fresh_heap();
+        let literals = patina_core::LiteralPool::new(&state.heap.borrow());
+        // Fresh, so that nothing but the pool and then the code reaches it.
+        let pair = (state.heap.borrow_mut()).alloc_pair(TaggedValue::fixnum(7), TaggedValue::NULL);
+        // SAFETY: allocated just now, and nothing has collected since.
+        let quoted = unsafe { literals.add_word(pair) };
+        let expr = CoreExpr::new(CoreExprKind::Quote(quoted));
+        let (top, nested) = compile_with_qq_resolving(
+            &expr,
+            &literals,
+            &state.heap,
+            state.global_env(),
+            state.primitive_registry(),
+        )
+        .expect("compiles");
+        drop(expr);
+
+        // The window: compiled, not yet loaded.
+        collect_for_tests(&mut state.heap.borrow_mut(), &[&state]);
+
+        let unit = load_in_globals(&mut state, top, nested);
+        drop(literals);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a driver entry on a machine the test owns: the form's constant is in the \
+                      loaded unit, and the test reads only the answer"
+        )]
+        let answer = execute(&mut state, unit).expect("runs");
+        assert_eq!(answer, pair, "the form answers the pair it quoted");
+        let heap = state.heap.borrow();
+        assert_eq!(heap.car(answer), TaggedValue::fixnum(7));
+        assert_eq!(heap.cdr(answer), TaggedValue::NULL);
+    }
+
     /// A slot that has used every generation stays empty, and the next code
     /// loaded takes a new slot, so no id is ever given out twice (#352).
     #[test]
