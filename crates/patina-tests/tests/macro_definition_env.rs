@@ -648,3 +648,136 @@ fn nested_expansions_sharing_an_alias_do_not_capture_each_other() {
         "tree-walker"
     );
 }
+
+// ─── Early and relinked references across forms (#837) ──────────────────────
+//
+// 4b.10 replaces the spelling an early-bound template reference is renamed
+// to (`f.0`, `Environment::import_alias`) with a link to the binding's
+// record, and later does the same for relinked references. These pin what
+// programs answer through both, on the base and after each step.
+
+/// Run `program` on each backend: `[VM, tree-walker]`.
+fn on_both_backends(program: &str) -> [String; 2] {
+    [
+        common::eval_program_vm(program),
+        common::eval_program_tree_walker(program),
+    ]
+}
+
+/// #837's `def-getter-maker`: a library macro defines a macro in the
+/// program whose template names the library's private `secret`. The
+/// generated macro is expanded two collections and a program definition of
+/// `secret` later, in another form, and still reads the library's binding,
+/// which `bump!` has assigned since. Run under the stress lane and in a
+/// release `gc-check` build too, where a freed record or cell panics.
+#[test]
+fn a_generated_macros_private_reference_survives_a_collection_and_a_program_definition() {
+    let program = "(define-library (t getter)
+  (export def-getter-maker bump!)
+  (import (scheme base))
+  (begin
+    (define secret 42)
+    (define (bump!) (set! secret (+ secret 1)))
+    (define-syntax def-getter-maker
+      (syntax-rules ()
+        ((_ name) (define-syntax name (syntax-rules () ((_) secret))))))))
+(import (scheme base) (patina debug) (t getter))
+(def-getter-maker get)
+(gc) (gc)
+(define secret 'program)
+(bump!)
+(list (get) secret)";
+    let expected = "(43 program)".to_string();
+    assert_eq!(
+        on_both_backends(program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// The library `call-f` comes from: an exported `f` its template calls.
+const CALL_F: &str = "(define-library (t lib-f)
+  (export call-f f)
+  (import (scheme base))
+  (begin
+    (define (f) 'lib-f)
+    (define-syntax call-f (syntax-rules () ((_) (f))))))
+";
+
+/// A use-site binding of the template reference's spelling never captures
+/// it (Larceny triage family 36): inside `(let ((f …)) (call-f))` the
+/// expansion's `f` is the library's, at top level and inside a procedure.
+#[test]
+fn a_template_reference_reads_the_library_inside_a_frame_binding_of_its_spelling() {
+    let program = format!(
+        "{CALL_F}(import (scheme base) (t lib-f))
+(define (h) (let ((f (lambda () 'local))) (call-f)))
+(list (let ((f 'local)) (call-f)) (h))"
+    );
+    let expected = "(lib-f lib-f)".to_string();
+    assert_eq!(
+        on_both_backends(&program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// An unquoted expression of a template is ordinary code, early-bound like
+/// the rest (#445): `h`, compiled before the program defines `f`, still
+/// calls the library's. A rebuild of the quasiquote's unquoted parts that
+/// dropped what the reference was bound to (`QuasiTemplate::map_unquoted`)
+/// would bring back #438's capture there.
+#[test]
+fn an_unquoted_template_reference_stays_linked() {
+    let program = "(define-library (t lib-q)
+  (export quasi-f f)
+  (import (scheme base))
+  (begin
+    (define (f) 'lib-f)
+    (define-syntax quasi-f (syntax-rules () ((_) `(,(f)))))))
+(import (scheme base) (t lib-q))
+(define (h) (quasi-f))
+(define (f) 'mine)
+(list (h) (f))";
+    let expected = "((lib-f) mine)".to_string();
+    assert_eq!(
+        on_both_backends(program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// A procedure that expanded a library macro keeps the binding it was
+/// expanded against when the library is redefined and imported again and
+/// two collections run (4b's start decision 12): `h` answers the old `f`,
+/// a fresh expansion the new one. Run under the stress lane and in a
+/// release `gc-check` build too, where a freed record or cell panics.
+#[test]
+fn an_early_link_keeps_the_old_library_binding_across_a_redefinition() {
+    let library = |answer: &str| {
+        format!(
+            "(define-library (t redef)
+  (export m f)
+  (import (scheme base))
+  (begin
+    (define (f) '{answer})
+    (define-syntax m (syntax-rules () ((_ x) (list (f) x))))))
+"
+        )
+    };
+    let program = format!(
+        "{}(import (scheme base) (patina debug) (t redef))
+(define (h) (m 1))
+{}(import (t redef))
+(gc) (gc)
+(list (h) (m 2) (f))",
+        library("old-f"),
+        library("new-f")
+    );
+    let expected = "((old-f 1) (new-f 2) new-f)".to_string();
+    assert_eq!(
+        on_both_backends(&program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
