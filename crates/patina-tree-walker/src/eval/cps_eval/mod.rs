@@ -393,7 +393,9 @@ impl<'a> CpsEvaluator<'a> {
         let _nested = driver.is_none().then(|| NoGcScope::enter(heap));
         // Where the outermost run returns, by any way out, no step of it is
         // left for a `Step::Eval`'s retired pool to cover (#869).
-        let _release = outermost.then_some(ReleaseRetiredPool(self.evaluator));
+        // `then`, not `then_some`: a guard built for a nested run and
+        // discarded at once would run its drop there.
+        let _release = outermost.then(|| ReleaseRetiredPool(self.evaluator));
         // The open `AssertNoGc` windows, checked at every poll (#624).
         let assert_no_gc = AssertNoGcCount::of(heap);
         let trampoline = types::TrampolineGuard::enter(kind);
