@@ -186,11 +186,12 @@ impl AliasTarget {
         }
     }
 
-    fn location(&self, holder: &Environment, heap: &RefCell<Heap>) -> Option<BindingLocation> {
+    /// Where the target is, as [`Environment::binding_hit`] answers it.
+    fn hit(&self, holder: &Environment) -> Option<BindingHit> {
         let env = self.env(holder);
         match &self.scopes {
-            None => env.binding_location(heap, &self.name),
-            Some(scopes) => env.scoped_definition_location(heap, &self.name, scopes),
+            None => env.binding_hit(&self.name),
+            Some(scopes) => env.scoped_definition_hit(&self.name, scopes),
         }
     }
 }
@@ -570,6 +571,36 @@ pub enum BindingLocation {
     /// collection: the word of a cell made in a swept cell's slot may be the
     /// same (the rulings of 2026-11-03).
     Cell(u64),
+}
+
+/// Where [`Environment::get`]'s walk finds a name, in the form a caller
+/// needs (#837): [`Environment::binding_location`] takes the location from
+/// it, and an early-bound reference the record (`Cx::early_link`). One walk,
+/// so the two cannot disagree on which binding a name reaches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BindingHit {
+    /// A namespace slot's or scoped entry's record: its own binding or an
+    /// import, never a placeholder or a read-through record, neither of
+    /// which is in a slot or an entry.
+    Record(Record),
+    /// A frame's import: the exporter's cell, with no record over it here.
+    FrameImport(BindingCell),
+    /// A frame's own slot, or the name-only view of a definition a macro
+    /// introduced in a frame.
+    Frame(BindingLocation),
+}
+
+impl BindingHit {
+    /// The location this hit is, as `binding_location` names it: a
+    /// record's cell, read under a shared borrow of `heap`; a frame's
+    /// import's cell; a frame's own place.
+    fn location(self, heap: &RefCell<Heap>) -> BindingLocation {
+        match self {
+            BindingHit::Record(record) => record.cell(&heap.borrow()).location(),
+            BindingHit::FrameImport(cell) => cell.location(),
+            BindingHit::Frame(location) => location,
+        }
+    }
 }
 
 /// One macro-introduced top-level definition's record, as
@@ -2770,59 +2801,72 @@ impl Environment {
         }
     }
 
-    /// The location `get(name)` reads, or `None` where `get` finds nothing.
+    /// The location `get(name)` reads, or `None` where `get` finds nothing:
+    /// [`binding_hit`](Self::binding_hit)'s answer as a place. A hit in a
+    /// namespace is located under a shared borrow of `heap`: the cell its
+    /// record names, own or imported (#834). A frame's hit takes none: a
+    /// frame's import names its cell, and a frame's own binding is its
+    /// slot, and neither reads the heap.
+    pub fn binding_location(&self, heap: &RefCell<Heap>, name: &str) -> Option<BindingLocation> {
+        Some(self.binding_hit(name)?.location(heap))
+    }
+
+    /// Where `get(name)` finds its binding, or `None` where `get` finds
+    /// nothing (#837).
     ///
     /// The same walk as [`get`], step for step — a plain binding, then a
     /// macro-expansion alias, then the name-only view of a scoped definition,
     /// then the parent — because the two must agree on *which* binding the
     /// name reaches, or this would name one and `get` read another. One
-    /// shared walk is Track Q's Q7.3; until then they mirror by hand.
+    /// shared walk is Track Q's Q7.3; until then they mirror by hand, and
+    /// [`binding_location`](Self::binding_location) and `Cx::early_link`
+    /// both go through this one.
     ///
-    /// A hit in a namespace is located at its step, under a shared borrow of
-    /// `heap`: the cell its record names, own or imported (#834). A frame's
-    /// hit takes none: a frame's import names its cell, and a frame's own
-    /// binding is its slot, and neither reads the heap.
+    /// Takes no borrow of the heap: a slot's or a scoped entry's word is
+    /// its record in a namespace, and a frame's hit is its import's cell or
+    /// its own place.
     ///
     /// [`get`]: Self::get
-    pub fn binding_location(&self, heap: &RefCell<Heap>, name: &str) -> Option<BindingLocation> {
+    pub(crate) fn binding_hit(&self, name: &str) -> Option<BindingHit> {
         let mut env = self;
         loop {
             if let Some(slot) = env.local_slot(name) {
-                return Some(env.slot_location(heap, slot));
+                return Some(env.slot_hit(slot));
             }
             if env.has_aliases.get()
                 && let Some(target) = env.alias_target(name)
             {
-                return target.location(env, heap);
+                return target.hit(env);
             }
             if let Some(i) = env.visible_scoped_index(name) {
-                let step = env.read_step(heap);
                 let table = env.scoped_bindings.borrow();
                 let (spelling, bindings) = table.get_key_value(name)?;
-                return Some(match step {
-                    Some(step) => Record::from_word(bindings.get(i)?.tagged_value)
-                        .cell(&step)
-                        .location(),
-                    None => BindingLocation::Scoped(env.env_id(), Rc::clone(spelling), i),
+                let word = bindings.get(i)?.tagged_value;
+                return Some(if env.is_namespace() {
+                    BindingHit::Record(Record::from_word(word))
+                } else {
+                    BindingHit::Frame(BindingLocation::Scoped(
+                        env.env_id(),
+                        Rc::clone(spelling),
+                        i,
+                    ))
                 });
             }
             env = env.parent.as_deref()?;
         }
     }
 
-    /// Where this environment's `slot` lives, as `binding_location` names
-    /// it: a namespace's record's cell, read at its step; a frame's
-    /// import's cell; or a frame's own slot.
-    fn slot_location(&self, heap: &RefCell<Heap>, slot: u32) -> BindingLocation {
-        let step = self.read_step(heap);
+    /// Where this environment's `slot` lives, as `binding_hit` finds it: a
+    /// namespace's record; a frame's import's cell; or a frame's own slot.
+    fn slot_hit(&self, slot: u32) -> BindingHit {
         let word = self.bindings.borrow().read_slot(slot);
-        if let Some(step) = step {
-            return Record::from_word(word).cell(&step).location();
+        if self.is_namespace() {
+            return BindingHit::Record(Record::from_word(word));
         }
         if word == TaggedValue::IMPORTED {
-            return self.frame_import_cell(slot).location();
+            return BindingHit::FrameImport(self.frame_import_cell(slot));
         }
-        BindingLocation::Slot(self.env_id(), slot)
+        BindingHit::Frame(BindingLocation::Slot(self.env_id(), slot))
     }
 
     /// Whether this environment indexes a spelling's scoped bindings when it
@@ -2910,16 +2954,25 @@ impl Environment {
         name: &str,
         scopes: &ScopeSet,
     ) -> Option<BindingLocation> {
-        let step = self.read_step(heap);
+        let hit = self.scoped_definition_hit(name, scopes)?;
+        Some(hit.location(heap))
+    }
+
+    /// That definition as [`binding_hit`](Self::binding_hit) answers a
+    /// hit: a namespace's entry is a record (#834), a frame's its place.
+    /// Takes no borrow of the heap.
+    fn scoped_definition_hit(&self, name: &str, scopes: &ScopeSet) -> Option<BindingHit> {
         let table = self.scoped_bindings.borrow();
         let (spelling, bindings) = table.get_key_value(name)?;
         let index = self.scoped_position(name, bindings, scopes)?;
-        Some(match step {
-            // A namespace's entry is a record: its cell (#834).
-            Some(step) => Record::from_word(bindings[index].tagged_value)
-                .cell(&step)
-                .location(),
-            None => BindingLocation::Scoped(self.env_id(), Rc::clone(spelling), index),
+        Some(if self.is_namespace() {
+            BindingHit::Record(Record::from_word(bindings[index].tagged_value))
+        } else {
+            BindingHit::Frame(BindingLocation::Scoped(
+                self.env_id(),
+                Rc::clone(spelling),
+                index,
+            ))
         })
     }
 
@@ -5985,6 +6038,78 @@ mod binding_location_tests {
         let plain = env.binding_location(&heap, "X");
         assert!(matches!(plain, Some(BindingLocation::Cell(..))));
         assert_ne!(plain, here);
+    }
+
+    /// `binding_hit` is `binding_location`'s walk (#837): on each shape the
+    /// tests above locate, its hit is the kind the step found, and its
+    /// location is `binding_location`'s answer.
+    #[test]
+    fn binding_hit_finds_what_binding_location_locates() {
+        let heap = new_shared_heap();
+        let located = |env: &Environment, name: &str| {
+            let hit = env.binding_hit(name);
+            let location = hit.clone().map(|hit| hit.location(&heap));
+            assert_eq!(location, env.binding_location(&heap, name), "{name}");
+            hit
+        };
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "X", zero());
+        let scopes = ScopeSet::from_iter([crate::scope::ScopeId(1)]);
+        library.define_scoped_definition(&heap, "S", scopes.clone(), zero());
+        let program = Rc::new(Environment::with_heap(&heap));
+        share(&heap, &program, "imported", &library, "X");
+        program.define_alias("aliased", Rc::clone(&library), "X".into());
+        program.define_scoped_alias("scoped", Rc::clone(&library), "S".into(), scopes.clone());
+
+        // A namespace's own binding, and its import: the record in its slot.
+        let own = library.local_record("X").unwrap();
+        assert_eq!(located(&library, "X"), Some(BindingHit::Record(own)));
+        let import = program.local_record("imported").unwrap();
+        assert_eq!(
+            located(&program, "imported"),
+            Some(BindingHit::Record(import))
+        );
+        assert_ne!(import, own, "two records over one cell");
+        // Through an alias, the target's own record, plain or scoped.
+        assert_eq!(located(&program, "aliased"), Some(BindingHit::Record(own)));
+        assert!(matches!(
+            located(&program, "scoped"),
+            Some(BindingHit::Record(_))
+        ));
+        // The name-only view of a namespace's scoped entry: its record.
+        assert!(matches!(
+            located(&library, "S"),
+            Some(BindingHit::Record(_))
+        ));
+        // A miss.
+        assert_eq!(located(&program, "missing"), None);
+
+        // A frame's own binding, its scoped definition, and its import,
+        // through a child frame.
+        let frame = Rc::new(Environment::child_frame(Rc::clone(&program)));
+        frame.define(&heap, "local", zero());
+        frame.define_scoped_definition(&heap, "T", scopes, zero());
+        frame.import_cell(&heap, "f-imported", library.cell_of(&heap, "X").unwrap());
+        let child = Rc::new(Environment::child_frame(Rc::clone(&frame)));
+        assert!(matches!(
+            located(&child, "local"),
+            Some(BindingHit::Frame(BindingLocation::Slot(..)))
+        ));
+        assert!(matches!(
+            located(&child, "T"),
+            Some(BindingHit::Frame(BindingLocation::Scoped(..)))
+        ));
+        assert_eq!(
+            located(&child, "f-imported"),
+            Some(BindingHit::FrameImport(
+                library.cell_of(&heap, "X").unwrap()
+            ))
+        );
+        // And the walk goes on up to the namespace.
+        assert_eq!(
+            located(&child, "imported"),
+            Some(BindingHit::Record(import))
+        );
     }
 }
 
