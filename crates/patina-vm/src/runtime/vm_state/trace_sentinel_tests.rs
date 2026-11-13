@@ -493,16 +493,15 @@ fn running(registers: Vec<TaggedValue>, frames: Vec<CallFrame>) -> ExecutionStat
 
 /// (a) A unit whose only holder is a closure of it in a register: marking
 /// the closure queues its code id, and the code-id round traces the unit's
-/// table. The closure's globals are the machine's, never the namespace the
-/// table was linked in, so only the table reaches `x` and `y`.
+/// table. The closure holds no environment, so only the table reaches `x`
+/// and `y`.
 #[test]
 fn a_closure_keeps_its_units_link_table() {
     let mut state = VmState::on_a_fresh_heap();
     let mut s = Sentinels::new(&mut state.heap.borrow_mut());
     let (x, y) = linked_values(&mut state.heap.borrow_mut(), &mut s);
     let id = load_linked(&mut state, super::tests::code(), &["x"], x, y);
-    let globals = Rc::clone(state.global_env());
-    let closure = (state.heap.borrow_mut()).alloc_vm_closure(id.0, Vec::new(), globals);
+    let closure = (state.heap.borrow_mut()).alloc_vm_closure(id.0, Vec::new());
     state.execution = running(vec![closure], Vec::new());
 
     collect(&state);
@@ -700,7 +699,7 @@ fn zeal_with_callee() -> (VmState, TaggedValue) {
             &globals,
         )
         .into_parts();
-    let closure = (state.heap.borrow_mut()).alloc_vm_closure(a.0, Vec::new(), globals);
+    let closure = (state.heap.borrow_mut()).alloc_vm_closure(a.0, Vec::new());
     state.note_closure_made(a);
     // Unlike `eval_closure`, which keeps the unit's window open to the
     // `CALLEE` write, this closes it here, over a closure nothing roots yet:
@@ -710,21 +709,18 @@ fn zeal_with_callee() -> (VmState, TaggedValue) {
     (state, closure)
 }
 
-/// A retired closure, as `push_frame_in` makes one for a frame, over a
-/// fresh namespace that binds a vector only that namespace reaches; and the
-/// vector. A frame given the closure holds the vector until a tail call
-/// replaces the frame's closure (`tail_replace`), so a collection that frees
-/// it came after the replacement: the witness that a test's collection
-/// lands in the window it names.
+/// A retired closure, which names no code, over a free variable that only
+/// it reaches, a vector; and the vector. A frame given the closure holds
+/// the vector until a tail call replaces the frame's closure
+/// (`tail_replace`), so a collection that frees it came after the
+/// replacement: the witness that a test's collection lands in the window it
+/// names. A retired closure's free variables are traced as any closure's,
+/// and its code id reports nothing, so the frame's own code is all that
+/// reports the frame's unit.
 fn doomed_frame_closure(state: &VmState) -> (TaggedValue, TaggedValue) {
     let doomed = (state.heap.borrow_mut()).alloc_vector(vec![TaggedValue::fixnum(7)]);
-    let namespace = Rc::new(Environment::with_heap(&state.heap));
-    namespace.define(&state.heap, "doomed", doomed);
-    let closure = (state.heap.borrow_mut()).alloc_vm_closure(
-        Heap::RETIRED_VM_CLOSURE_CODE,
-        Vec::new(),
-        namespace,
-    );
+    let closure =
+        (state.heap.borrow_mut()).alloc_vm_closure(Heap::RETIRED_VM_CLOSURE_CODE, vec![doomed]);
     (closure, doomed)
 }
 
@@ -750,9 +746,9 @@ fn tail_calling(closure: TaggedValue) -> CodeObject {
 /// code's id keeps B's table, which the loop wrote where it started
 /// (`current_code`). Under zeal the run collects at the loop's start and at
 /// that entry poll, and nowhere else: the callee's `Return` passes none.
-/// B's frame runs under a retired closure, as `execute_in`'s does, whose
-/// namespace alone holds a doomed vector: freed, it shows the second
-/// collection came after `tail_replace`, while B's frame no longer held B.
+/// B's frame runs under a retired closure whose free variable alone holds a
+/// doomed vector: freed, it shows the second collection came after
+/// `tail_replace`, while B's frame no longer held B.
 #[test]
 fn a_tail_call_from_a_top_level_form_keeps_the_forms_link_table() {
     let (mut state, closure) = zeal_with_callee();
@@ -787,7 +783,7 @@ fn a_tail_call_from_a_top_level_form_keeps_the_forms_link_table() {
 /// running code's id, written where the dispatch changed `cur_code`, keeps
 /// M's table. The run collects twice, at the loop's start, when M's frame
 /// keeps its table, and at A's entry. M's frame runs under a retired
-/// closure whose namespace alone holds a doomed vector, freed only by a
+/// closure whose free variable alone holds a doomed vector, freed only by a
 /// collection after M's tail call replaced the closure (as in the test
 /// above).
 #[test]

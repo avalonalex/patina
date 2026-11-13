@@ -10,4 +10,4 @@ pub(crate) mod control;
 mod execution_state;
 pub mod vm_state;
 
-pub use vm_state::{LoadedUnit, VmState, execute, execute_in};
+pub use vm_state::{LoadedUnit, VmState, execute};

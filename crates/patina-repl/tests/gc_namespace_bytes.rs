@@ -326,10 +326,13 @@ fn macro_introduced_definitions_are_charged() {
 /// one specifier's charge, about 32 KB once its import links and owners
 /// went with #834, calibrated here from one environment made and dropped
 /// first; once they are dropped and collected, every charge is given back
-/// and every namespace uncounted. On the VM a closure's globals hold its
-/// namespace, on the tree-walker its captured environment. The binding
-/// records keep both: the namespace's records die with it, and nothing else
-/// holds it.
+/// and every namespace uncounted. On the VM the unit holds it: each
+/// closure's code id reports its unit, whose link table holds the namespace
+/// it was linked in, and a closure holds no environment (#836); the lambda
+/// names no global, so its table links no record, and only the table's
+/// namespace edge holds the namespace. On the tree-walker a closure's
+/// captured environment holds it. The binding records keep both: the
+/// namespace's records die with it, and nothing else holds it.
 #[test]
 fn a_specifier_namespace_lives_while_code_compiled_in_it_does() {
     let program = "(define closures '())
@@ -400,9 +403,13 @@ fn a_specifier_namespace_lives_while_code_compiled_in_it_does() {
 /// holds the old namespace once the registry replaces it, where an import
 /// owner held every replaced one before. The library's procedure refers to
 /// itself, so its code holds the library's namespace too, and that goes with
-/// it. The steady-state lane's `library-stream` shape, in file mode: after
-/// the redefinition and two collections the namespaces are counted and
-/// charged as they were before it.
+/// it: on the VM its unit's link table holds the namespace and links `f`'s
+/// record, whose cell holds the procedure, a cycle no root reaches once the
+/// registry lets the library go, since a link table is traced only by the
+/// code id of a frame, a marked closure or the running code (#836). The
+/// steady-state lane's `library-stream` shape, in file mode: after the
+/// redefinition and two collections the namespaces are counted and charged
+/// as they were before it.
 #[test]
 fn a_replaced_library_with_a_procedure_is_released() {
     let program = "(define ns0 0)

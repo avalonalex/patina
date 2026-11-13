@@ -675,9 +675,10 @@ fn test_reentering_a_loaded_form_after_load_returned() {
 /// (through `environment` the program's again, since the continuation leaves
 /// that load before the frame runs). So a library binding the program does
 /// not import was unbound, a name the program also binds read and wrote the
-/// program's binding, and the `define` defined in the program. A body form
-/// runs as a closure whose globals are the library's environment now, as
-/// `eval`'s code does.
+/// program's binding, and the `define` defined in the program. A body form's
+/// unit is linked in the library's environment now, and its frame reads,
+/// assigns and defines through the unit's table wherever it resumes, as
+/// `eval`'s code does (#836).
 ///
 /// The form re-entered, `v`'s definition, is the body's last, so that what
 /// the rest of the body does after it (#779's part 2) cannot move these
@@ -819,14 +820,56 @@ fn test_reentering_a_library_body_form_after_the_load() {
     }
 }
 
+/// A closure that a library's body form makes after a continuation captured
+/// earlier in the form has re-entered it, once the load has returned, reads
+/// the library's bindings, not the program's (#779, #836). The form's frame
+/// runs no closure, and the closure's code reads through the link table its
+/// unit shares with the form's code, linked in the library's environment;
+/// until #836 the closure took that environment from the frame's closure
+/// (`frame_globals`). `test_reentering_a_library_body_form_after_the_load`
+/// makes its one closure before the capture, so it never makes one after the
+/// re-entry. The re-entry redefines `g` with the fresh closure, and the
+/// program, which binds `hidden` itself, goes on after the form that
+/// re-entered it, so `n` stays 1; a collection comes between. Rust because
+/// it needs a library on disk.
+#[test]
+fn a_closure_a_reentered_library_body_form_makes_reads_the_library_s_bindings() {
+    let root = TempDir::new().expect("temp dir");
+    let dir = root.path().join("reenter836");
+    std::fs::create_dir_all(&dir).expect("library dir");
+    std::fs::write(
+        dir.join("body.sld"),
+        "(define-library (reenter836 body) (import (scheme base)) (export k get-g)
+           (begin
+             (define hidden 'library)
+             (define k #f)
+             (define g (begin (call/cc (lambda (c) (set! k c))) (lambda () hidden)))
+             (define (get-g) g)))",
+    )
+    .expect("library file");
+    assert_library_program(
+        root.path(),
+        "(import (scheme base) (patina debug) (reenter836 body))
+         (define hidden 'program)
+         (define first (get-g))
+         (define n 0)
+         (set! n (+ n 1))
+         (if (< n 2) (k #f))
+         (gc)
+         (list n (first) ((get-g)) (eq? first (get-g)) hidden)",
+        "(1 library library #f program)",
+    );
+}
+
 /// `(interaction-environment)` in a library's body, while the library loads,
 /// is the program's environment, on every load path (#823). The VM answered
 /// the library's own environment: its load pointed the machine's globals at
 /// the library, and `interaction-environment` answered them. So a body that
 /// `eval`ed `hidden` there read the library's binding, never the program's,
 /// and the environment it kept was not the one the program later asked for.
-/// A library body's forms run in frames whose closures hold the library's
-/// environment (#824), so the load no longer swaps the globals.
+/// A library body's forms read and define through their units' link tables,
+/// linked in the library's environment (#824, #836), so the load no longer
+/// swaps the globals.
 ///
 /// The routes: a top-level `import`, with and without a program definition
 /// of `hidden` after it, which loads before that definition, so `unbound`;

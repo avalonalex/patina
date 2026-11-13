@@ -1109,7 +1109,8 @@ namespace since #835, to rooting what is bound in it, on both backends
 - a definition the program makes in the environment through `Backend::eval`;
 - #620's table through `Backend::eval` and `eval_with_source_map`: a read, a
   closure and a definition in the environment, which the VM ran in the global
-  environment until it ran the code as a closure over the one it was given;
+  environment until it ran the code as a closure over the one it was given,
+  and now runs as a top-level frame whose unit is linked in it (#836);
 - `eval_str_in` and `eval_program_in`: a definition kept across a collection
   while the environment's code runs, an import bound in it alone, an error,
   and a continuation's escape;
@@ -1141,7 +1142,13 @@ namespace since #835, to rooting what is bound in it, on both backends
 - the same macro used in a host namespace that imports nothing, after the
   global environment imports it and the binding its template names, which
   keeps the global environment's import: the desugarer asks the global
-  environment once the host namespace holds no import of the binding.
+  environment once the host namespace holds no import of the binding;
+- a host's primitive that evaluates in a host namespace, by its `Step::Eval`
+  and by `ApplyContext::eval_expr`, which reads and defines there and leaves
+  the program's binding of the same name alone: on the VM each route's
+  frame says nothing of where its code reads, and the unit's link table,
+  linked in the namespace by `eval_closure` or `vm_eval_expr`, is what does
+  (#836).
 
 #835's tests pin what host code reads and writes, what its closures keep and
 what its macros introduce, from before 4b.6's binding records (#834) changed
@@ -1445,7 +1452,9 @@ allocate no more than 1,000,000 of `(cons 1 2)`, which collect; 2,200 kept
 environments, about 80 MB, collect three times, not nine; and the global
 environment's growth under `eval` is charged, while frames charge nothing,
 read while they are alive. 200 closures, each `eval`'d in a fresh specifier
-the program drops, keep their namespaces charged and counted (`namespaces`),
+the program drops, keep their namespaces charged and counted (`namespaces`)
+— on the VM through their units' link tables, since a closure holds no
+environment (#836) —
 each at least 95% of one specifier's charge, about 32 KB, calibrated in the
 test from one environment made and dropped first, while they live, and give
 every charge and count back once they are collected (decision 26 on #782,
@@ -2047,10 +2056,14 @@ interpreter collects whatever the lane's variable says, and its collections
 land in the stress lane's record, so `gc_vm` and `gc_tree_walker` collect
 without stress too (5047 and 17796 times, 2026-11-09, since #836's
 placeholder tests, whose drop test's zeal half runs 100 `eval`s; `gc_vm`
-5072 times since 2026-11-11, with the tests of the settled L), which
-their minimums must stay above. `vm_interpreter_adaptive` names the
-adaptive threshold the same way, for a test of the pacing itself, which
-stress and zeal replace.
+5072 times since 2026-11-11, with the tests of the settled L; 5844 and
+20510 times since later that day, with #836's tests of code that runs
+after its namespace's other holders have died; 6142 and 21510 times since
+that PR's review added two more; 6264 and 21898 times since 2026-11-12,
+with its test of a procedure that drops itself and tail-calls), which their
+minimums must stay above.
+`vm_interpreter_adaptive` names the adaptive threshold the same way, for a
+test of the pacing itself, which stress and zeal replace.
 
 The nightly lane's `time` suite measures wall-clock time: one assertion
 requires a one-second loop to stop within 100 ms of its deadline. It passes

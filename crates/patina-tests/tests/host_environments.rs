@@ -13,7 +13,7 @@
 //!
 //! The VM evaluated in the global environment whatever environment
 //! `Backend::eval` was given; it now evaluates where the tree-walker does,
-//! running the code as a closure whose globals are the environment, and
+//! linking the code's unit in the environment (#836), and
 //! `eval_str_in` and `eval_program_in` evaluate in a handle's namespace on
 //! both backends. The VM evaluates only in a namespace: a raw frame, or a
 //! frame under a host namespace, it refuses with an error naming the kind,
@@ -24,8 +24,8 @@
 
 #![expect(
     clippy::disallowed_macros,
-    reason = "HOST_FRAME: the raw frame a host primitive of the test evaluates in, held weakly \
-              (#853)"
+    reason = "HOST_FRAME: the raw frame or host namespace a host primitive of the test evaluates \
+              in, held weakly (#853, #836)"
 )]
 
 mod common;
@@ -698,7 +698,12 @@ fn procedure_freed_with_its_environment<B: Backend>(interp: Interpreter<B>) {
 
 /// On the VM, the code a dropped host environment's procedure ran is let go
 /// with it: as many code objects are loaded after 100 such environments, each
-/// dropped and followed by a collection, as after 10.
+/// dropped and followed by a collection, as after 10. The unit holds the
+/// namespace, through its link table, and the namespace's `f` holds a
+/// closure of the unit, whose table links `f`'s record: a cycle that a
+/// collection frees only because the code store never traces a table, which
+/// is traced only by the code id of a frame, a marked closure or the running
+/// code (#836).
 fn code_let_go_with_its_environments(
     interp: &Interpreter<patina_vm::VmBackend>,
     n: usize,
@@ -1701,8 +1706,9 @@ fn a_specifier_over_a_raw_frame_is_refused_by_the_vm() {
 }
 
 thread_local! {
-    /// The frame the host primitives below evaluate in: the test's, held
-    /// weakly, so that it goes with the test's interpreter.
+    /// The environment the host primitives below evaluate in: the test's,
+    /// a raw frame or a host namespace, held weakly, so that it goes with
+    /// the test's interpreter.
     static HOST_FRAME: RefCell<Weak<Environment>> = const { RefCell::new(Weak::new()) };
 }
 
@@ -1871,6 +1877,96 @@ fn a_host_primitive_evaluating_in_a_raw_frame_is_refused_by_the_vm() {
     }
     assert_eq!(
         host_primitives_over_raw_frames(tree_walker_interpreter()),
+        expected,
+        "tree-walker"
+    );
+}
+
+/// What a host's primitive answers that evaluates in a host namespace, the
+/// one an `OwnedEnvironment` holds, through its `Step::Eval` and through
+/// `ApplyContext::eval_expr`: the namespace's `where`, a definition of a
+/// procedure that reads `where`, and a call of it, each by the primitive;
+/// then whether the namespace or the global one binds the procedure, and
+/// the global `where`, which the program bound apart from the namespace's.
+fn host_primitives_in_a_host_namespace<B: Backend + HostPrimitives>(
+    mut interp: Interpreter<B>,
+) -> Vec<String> {
+    interp
+        .register_resumable(
+            &["host", "frames"],
+            "host-step-in-frame",
+            Arity::Exact(1),
+            host_step_start,
+            host_step_resume,
+        )
+        .unwrap();
+    interp
+        .register_resumable(
+            &["host", "frames"],
+            "host-eval-in-frame",
+            Arity::Exact(1),
+            host_eval_start,
+            host_step_resume,
+        )
+        .unwrap();
+    interp
+        .eval_program_owned("(import (scheme base) (host frames)) (define where 1)")
+        .unwrap();
+    let host = interp.new_environment();
+    interp.eval_str_in(&host, "(define where 2)").unwrap();
+    let namespace = interp.raw_environment(&host);
+    HOST_FRAME.with(|held| *held.borrow_mut() = Rc::downgrade(&namespace));
+    let mut out = Vec::new();
+    for (primitive, defined) in [
+        ("host-step-in-frame", "via-step"),
+        ("host-eval-in-frame", "via-eval"),
+    ] {
+        for form in [
+            format!("({primitive} 'where)"),
+            format!("({primitive} '(define ({defined}) where))"),
+            format!("({primitive} '({defined}))"),
+        ] {
+            let answer = interp.eval_str_owned(&form);
+            out.push(answer_of(&interp, answer));
+        }
+        out.extend(bound_where(&interp, &namespace, defined));
+        let global = interp.eval_str_owned("where");
+        out.push(answer_of(&interp, global));
+    }
+    HOST_FRAME.with(|held| *held.borrow_mut() = Weak::new());
+    out
+}
+
+/// A host's primitive that evaluates in a host namespace reads and defines
+/// there, on both backends, by either route to the VM's compile: its
+/// `Step::Eval`, which `eval_closure` compiles into a closure of a unit
+/// linked in the namespace, and `ApplyContext::eval_expr`, which
+/// `vm_eval_expr` runs in a frame with no closure, its unit linked in the
+/// namespace (#836). Neither frame says where its code reads: the unit's
+/// link table does, so the test fails when either route links its unit in
+/// the machine's globals, where the definition would land and `where` would
+/// answer the program's 1. The raw-frame test above covers the refusals;
+/// this one the namespace each route evaluates in.
+#[test]
+fn a_host_primitive_evaluating_in_a_host_namespace_reads_and_defines_there() {
+    let mut expected = Vec::new();
+    for defined in ["via-step", "via-eval"] {
+        expected.extend([
+            "2".to_string(),
+            "#<unspecified>".to_string(),
+            "2".to_string(),
+            format!("frame binds {defined}: true"),
+            format!("global binds {defined}: false"),
+            "1".to_string(),
+        ]);
+    }
+    assert_eq!(
+        host_primitives_in_a_host_namespace(vm_interpreter()),
+        expected,
+        "VM"
+    );
+    assert_eq!(
+        host_primitives_in_a_host_namespace(tree_walker_interpreter()),
         expected,
         "tree-walker"
     );

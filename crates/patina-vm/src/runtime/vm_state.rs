@@ -216,12 +216,10 @@ pub struct VmState {
     #[trace(skip, reason = "a registry index")]
     parameter_set: Option<usize>,
     /// The program's global environment, which `interaction-environment`
-    /// answers, during a library's load as after it (#823), and which a
-    /// closure made in a frame with no closure takes as its environment
-    /// (`frame_globals`): a library body's forms run in frames whose closures
-    /// have the library's environment as their globals (#824). A frame's
-    /// globals are read and defined through its unit's link table, linked
-    /// where the unit was compiled (#836), never through this.
+    /// answers, during a library's load as after it (#823), and the root of
+    /// the program's namespace. A frame's globals are read and defined
+    /// through its unit's link table, linked where the unit was compiled
+    /// (#836), never through this, and no closure holds an environment.
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
     globals: Rc<Environment>,
     /// The heap, shared with `patina-runtime` primitives.
@@ -317,8 +315,8 @@ pub struct VmState {
     #[trace(skip, reason = "the interpreter's metadata: no value")]
     instance: Rc<patina_core::Instance>,
     /// The carrier's driver, the capability to collect (#702), lent by the
-    /// driver entry (`execute`, `execute_in`) to the loop it runs, for that
-    /// loop's polls: `None` in a nested loop, which hides the driver for its
+    /// driver entry (`execute`) to the loop it runs, for that loop's polls:
+    /// `None` in a nested loop, which hides the driver for its
     /// extent and runs under a `NoGcScope` (`run_loop_until_outcome`). A
     /// field, so the polls reach it only when something is posted, rather
     /// than each dispatch being handed it (#700).
@@ -338,12 +336,12 @@ pub struct VmState {
 /// table, so a collection there would let the unit go, and with it the
 /// placeholders and the namespace its table links; an `AssertNoGc` covers
 /// that stretch instead of an argument about where the polls are.
-/// [`execute`], [`execute_in`] and [`execute_nested`] take the unit and
+/// [`execute`] and [`execute_nested`] take the unit and
 /// close the window once its frame holds its code.
 ///
 /// Its window is empty in a plain release build, which keeps no count of
 /// windows.
-#[must_use = "run the unit (`execute`, `execute_in`, `execute_nested`) or take its window"]
+#[must_use = "run the unit (`execute`, `execute_nested`) or take its window"]
 pub struct LoadedUnit {
     id: CodeObjectId,
     window: AssertNoGc,
@@ -651,8 +649,8 @@ impl VmState {
     ///
     /// The unit is answered with its window open ([`LoadedUnit`]): until a
     /// frame holds its code or a closure names it, only the code store
-    /// does, and a collection would let it go. [`execute`],
-    /// [`execute_in`] and [`execute_nested`] close it once they have pushed
+    /// does, and a collection would let it go. [`execute`] and
+    /// [`execute_nested`] close it once they have pushed
     /// the unit's frame, and `eval_closure` hands it on to the closure's
     /// caller (#836; `docs/GC_DESIGN.md` §7, the windows S1 and S2).
     ///
@@ -1161,10 +1159,10 @@ pub(super) fn vm_load_library(
 /// load rather than hand its body to the registry entry (#677).
 ///
 /// Instead of creating a temporary VmState, we execute body expressions
-/// directly in the main state, each as a closure over the library's
-/// environment (`execute_nested`), `state.globals` left the program's
-/// (#823). This ensures continuations, code objects, and closures all live
-/// in the single real execution context.
+/// directly in the main state, each linked in the library's environment and
+/// run with no closure (`execute_nested`), `state.globals` left the
+/// program's (#823). This ensures continuations, code objects, and closures
+/// all live in the single real execution context.
 fn vm_evaluate_parsed_library(
     state: &mut VmState,
     parsed: patina_runtime::library_loader::ParsedLibrary,
@@ -1185,11 +1183,11 @@ fn vm_evaluate_parsed_library(
     // Step 2: compile and execute each body expression in the main VmState,
     // its unit linked in lib_env: its frames read and define the library's
     // bindings through the unit's table, even when a continuation resumes
-    // them after the load (#779, #836), and run as a closure whose globals
-    // are lib_env (`execute_nested`), which the closures they make capture,
-    // so no seeding or merge is needed. `state.globals` stays the program's
-    // environment, which `interaction-environment` answers during the load
-    // as after it (#823).
+    // them after the load (#779, #836), and run with no closure
+    // (`execute_nested`); the closures they make read it through the same
+    // unit's table, so no seeding or merge is needed. `state.globals` stays
+    // the program's environment, which `interaction-environment` answers
+    // during the load as after it (#823).
 
     // Collection is already deferred for this whole function: `parsed`
     // carries a `GcDeferGuard` while it holds unevaluated body forms (see
@@ -1258,15 +1256,12 @@ fn vm_evaluate_parsed_library(
                 clippy::disallowed_methods,
                 reason = "holds `parsed` (the body's later forms) and `lib_env` across the form's \
                           run: `parsed` holds `GcDeferGuard::holding`, so no collection runs. The \
-                          program's environment is the machine's `globals`, which it traces"
+                          program's environment is the machine's `globals`, which it traces, and \
+                          the records the code uses are held by its unit, which its frame, a \
+                          marked closure or the running code reports"
             )]
-            let result = across_reentry(
-                state,
-                depth_before,
-                |s| execute_nested(s, unit, &lib_env),
-                |v| *v,
-            )
-            .map_err(Reentry::into_vm_error);
+            let result = across_reentry(state, depth_before, |s| execute_nested(s, unit), |v| *v)
+                .map_err(Reentry::into_vm_error);
             state.release_unit_if_unused(top_id);
 
             result.map_err(|e| {
@@ -1313,9 +1308,9 @@ pub(crate) fn vm_process_import_set(
 /// has its datum run as a frame ([`eval_closure`], #477), since a
 /// continuation cannot carry this Rust frame. Executes in the main VmState
 /// using `execute_nested` (which respects the current frame depth), in a
-/// frame whose closure has `env` as its globals; the machine's own `globals`
-/// stay the program's environment (#823). `env` is a namespace: a frame is
-/// refused before anything runs ([`compile_for_eval`], #853).
+/// frame with no closure, its unit linked in `env`; the machine's own
+/// `globals` stay the program's environment (#823). `env` is a namespace: a
+/// frame is refused before anything runs ([`compile_for_eval`], #853).
 pub(super) fn vm_eval_expr(
     state: &mut VmState,
     expr: TaggedValue,
@@ -1331,9 +1326,11 @@ pub(super) fn vm_eval_expr(
     #[expect(
         clippy::disallowed_methods,
         reason = "holds nothing of its own: the unit's constants are in the code store, which the \
-                  machine roots, and its frame's closure holds `env`"
+                  machine roots; `env` is the caller's, and the records the code uses are held by \
+                  its unit, which its frame, a marked closure or the running code reports. The run \
+                  is nested and never collects"
     )]
-    let result = execute_nested(state, unit, env);
+    let result = execute_nested(state, unit);
     state.release_unit_if_unused(top_id);
     result
 }
@@ -1433,7 +1430,7 @@ fn compile_for_eval(
 }
 
 /// The datum `expr`, compiled and linked in `env`, as a closure of no
-/// arguments whose globals are `env`: what a resumable primitive's
+/// arguments of the unit linked in `env`: what a resumable primitive's
 /// `Step::Eval` has its stub frame call (#477). Its frames read and define
 /// `env`'s globals through its unit's table, as any unit's do, so nothing is
 /// swapped, and its code lives as long as the closure or a frame running it,
@@ -1458,7 +1455,7 @@ pub(super) fn eval_closure(
     let closure = state
         .heap
         .borrow_mut()
-        .alloc_vm_closure(top_id.0, Vec::new(), env.clone());
+        .alloc_vm_closure(top_id.0, Vec::new());
     state.note_closure_made(top_id);
     Ok(EvalCallee { closure, window })
 }
@@ -1530,18 +1527,40 @@ fn missing_code_object(id: CodeObjectId) -> VmError {
 /// `state`, with no arguments. Returns the value in register 0 of the top
 /// frame on completion.
 ///
-/// This is the primary entry point for running a compiled top-level expression.
-/// The unit's window closes once its frame holds its code, before the run
-/// takes the driver and polls.
+/// This is the primary entry point for running a compiled top-level
+/// expression, the one driver entry for code compiled and linked in any
+/// namespace: the program's, a host namespace (#620, #835), or a library's,
+/// for a body form the backend's loader runs (#779). Its frames read and
+/// define their namespace's bindings through the unit's table, and so do
+/// the closures they make, whose units share it (#836); the frame runs no
+/// closure ([`push_top_frame`]). The unit's window closes once its frame
+/// holds its code, before the run takes the driver and polls.
 pub fn execute(state: &mut VmState, unit: LoadedUnit) -> Result<TaggedValue, VmError> {
-    // Set up the initial frame.
+    push_top_frame(state, unit)?;
+    run_top_frame(state)
+}
+
+/// Push the frame that runs `unit`, with no arguments and no closure
+/// (`CallFrame::NO_CLOSURE`): [`execute`]'s frame, and
+/// [`execute_nested`]'s. Top-level code has no free variables, and reads
+/// and defines through its unit's link table, linked in the namespace it was
+/// compiled in, wherever a continuation that captured the frame resumes it
+/// (#779, #836). The frame holds the unit's code, so the unit is let go
+/// once nothing needs it (#338), and a continuation that captured the frame
+/// keeps it, its table with it.
+///
+/// # State contract
+///
+/// Pushes one frame; allocates nothing and runs no Scheme code. Closes the
+/// unit's window (the window S1, `docs/GC_DESIGN.md` §7) once the frame
+/// holds the unit's code, which the frame then reports by its id.
+fn push_top_frame(state: &mut VmState, unit: LoadedUnit) -> Result<(), VmError> {
     let (code_id, window) = unit.into_parts();
     let code = state.code_object(code_id)?;
-
     poll_in_window(state, switches::poll_before_frame_push());
     state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0);
     drop(window);
-    run_top_frame(state)
+    Ok(())
 }
 
 /// A positive control's poll at the last point a load window covers (#836;
@@ -1558,68 +1577,7 @@ pub(super) fn poll_in_window(state: &VmState, on: bool) {
     }
 }
 
-/// [`execute`] for code compiled and linked in `env`, an environment other
-/// than the machine's globals, such as a host namespace (#620, #835) or a
-/// library's, for a body form the backend's loader runs, a top-level
-/// `import`'s or a `define-library`'s in the program (#779): its frames read
-/// and define `env`'s bindings through the unit's table (#836), and the unit
-/// runs in [`push_frame_in`]'s frame, whose closure gives `env` to the
-/// closures they make. The frame holds its closure, which roots it and `env`
-/// while the code runs, and the run may collect as any top-level run may.
-pub fn execute_in(
-    state: &mut VmState,
-    unit: LoadedUnit,
-    env: &Rc<Environment>,
-) -> Result<TaggedValue, VmError> {
-    push_frame_in(state, unit, env)?;
-    run_top_frame(state)
-}
-
-/// Push the frame that runs `unit`, compiled and linked in `env`, as a
-/// closure of no arguments whose globals are `env`: [`execute_in`]'s frame,
-/// and [`execute_nested`]'s. Its frames read and define `env`'s bindings
-/// through the unit's table, linked in `env` (#836), as [`eval_closure`]'s
-/// do, wherever a continuation that captured them resumes them. The
-/// closure's environment is now read only by `MakeClosure`, for the
-/// closures the frame makes: a frame with no closure gives them the
-/// machine's globals, so a library's body form re-entered after its load
-/// made closures over the program's (#779).
-///
-/// The closure is made retired ([`Heap::RETIRED_VM_CLOSURE_CODE`]): it names
-/// no code, so nothing counts it or retires it, and it keeps no unit loaded.
-/// The frame holds its code itself, as a frame with no closure does, so the
-/// unit is let go once nothing needs it, as a program form's is (#338), and a
-/// continuation that captured the frame keeps it. Nothing calls the closure:
-/// the environment `MakeClosure` gives a closure is all that is read from it
-/// (`frame_globals`), since top-level code has no free variables.
-///
-/// [`Heap::RETIRED_VM_CLOSURE_CODE`]: patina_core::heap::Heap::RETIRED_VM_CLOSURE_CODE
-///
-/// # State contract
-///
-/// Allocates the closure and pushes one frame; runs no Scheme code. Closes
-/// the unit's window once the frame holds the unit's code and the closure.
-fn push_frame_in(
-    state: &mut VmState,
-    unit: LoadedUnit,
-    env: &Rc<Environment>,
-) -> Result<(), VmError> {
-    // The unit's window covers the unit, held by the code store alone, and
-    // the closure, held only here, until the frame takes both.
-    let (code_id, window) = unit.into_parts();
-    let code = state.code_object(code_id)?;
-    let closure = state.heap.borrow_mut().alloc_vm_closure(
-        patina_core::heap::Heap::RETIRED_VM_CLOSURE_CODE,
-        Vec::new(),
-        env.clone(),
-    );
-    poll_in_window(state, switches::poll_before_frame_push());
-    state.execution.push_frame(code, closure, 0);
-    drop(window);
-    Ok(())
-}
-
-/// Run the frame [`execute`] or [`execute_in`] pushed until the stack is
+/// Run the frame [`execute`] pushed until the stack is
 /// empty, and clear what the run leaves behind.
 fn run_top_frame(state: &mut VmState) -> Result<TaggedValue, VmError> {
     // The driver entry (#702): the run takes the carrier's driver and may
@@ -1672,14 +1630,13 @@ fn run_top_frame(state: &mut VmState) -> Result<TaggedValue, VmError> {
     result
 }
 
-/// Execute a code object compiled and linked in `env` in the **current**
-/// `VmState`, returning to the caller's frame depth. Unlike `execute` (which
-/// always runs until the frame stack is empty), this variant is safe to call
-/// when the state already has in-flight frames (e.g. during library loading
-/// from `eval`). Its frames read and define `env`'s bindings through the
-/// unit's table wherever they are resumed (#779, #836), and the unit runs in
-/// [`push_frame_in`]'s frame, whose closure gives `env` to the closures they
-/// make.
+/// Execute a loaded unit in the **current** `VmState`, returning to the
+/// caller's frame depth. Unlike `execute` (which always runs until the
+/// frame stack is empty), this variant is safe to call when the state
+/// already has in-flight frames (e.g. during library loading from `eval`).
+/// Its frames read and define the bindings of the namespace the unit was
+/// linked in through the unit's table wherever they are resumed (#779,
+/// #836), in a frame with no closure ([`push_top_frame`]), as `execute`'s.
 #[expect(
     clippy::disallowed_methods,
     reason = "the state is in the machine: the frame it pushes is the run's root, and it holds \
@@ -1688,10 +1645,9 @@ fn run_top_frame(state: &mut VmState) -> Result<TaggedValue, VmError> {
 pub(super) fn execute_nested(
     state: &mut VmState,
     unit: LoadedUnit,
-    env: &Rc<Environment>,
 ) -> Result<TaggedValue, VmError> {
     let depth_before = state.execution.frames().len();
-    push_frame_in(state, unit, env)?;
+    push_top_frame(state, unit)?;
 
     // A nested entry: no driver, so the run never collects (#702).
     run_loop_until(state, depth_before, None)
@@ -1749,7 +1705,7 @@ pub(super) fn run_loop_until(
 /// [`VmError::ContinuationEscape`] and lets the decision happen here once.
 ///
 /// `driver` is the carrier's driver, the capability to collect (#702), which
-/// only a driver entry has (`execute`, `execute_in`). Every other entry is
+/// only a driver entry has (`execute`). Every other entry is
 /// nested and passes `None`: its loop never collects.
 pub(super) fn run_loop_until_outcome(
     state: &mut VmState,
@@ -2132,26 +2088,6 @@ fn attach_source_location(state: &VmState, e: VmError) -> VmError {
     e
 }
 
-/// The environment `MakeClosure` gives the closures the current frame
-/// makes, its one reader since the unit's link table carries every global
-/// read and write (#836).
-///
-/// If the current frame is executing a closure, returns that closure's
-/// captured globals (the environment it was compiled against): a lambda's,
-/// or the one `push_frame_in` made for top-level code compiled in another
-/// environment, such as a library's body form or a host namespace's form.
-/// Otherwise returns `state.globals`: a program's top-level form, or a stub,
-/// which makes no closure. Either is the namespace the frame's unit was
-/// linked in, which a debug build asserts where `MakeClosure` reads this.
-pub(super) fn frame_globals(state: &VmState) -> Rc<Environment> {
-    if let Some(closure) = state.execution.frames().last().and_then(CallFrame::closure)
-        && let Some(globals) = state.heap.borrow().get_vm_closure_globals(closure)
-    {
-        return globals;
-    }
-    state.globals.clone()
-}
-
 /// `LoadGlobal`'s read of operand `k` where the linked read found `UNBOUND`
 /// (#836): a placeholder, a host namespace's read-through record, or the
 /// by-name record, which [`LinkTable::read_cold`] reads as
@@ -2355,18 +2291,18 @@ fn dispatch_one_instruction(
         } => {
             let captured: Vec<TaggedValue> =
                 free_vars.iter().map(|&r| state.reg_at(base, r)).collect();
-            let globals = frame_globals(state);
-            // What `MakeClosure` will read instead of `frame_globals` once
-            // closures hold no environment: the unit's namespace (#836).
+            // The closure holds no environment: its code reads the
+            // namespace its unit's link table was linked in, which is the
+            // maker's, since a unit's members share one table (`load_unit`).
             debug_assert!(
-                (code.links.namespace()).is_some_and(|ns| Rc::ptr_eq(ns, &globals)),
-                "{:?} makes a closure over another environment than its unit's namespace (#836)",
+                (state.loaded_code(child_id)).is_some_and(|c| Rc::ptr_eq(&c.links, &code.links)),
+                "{:?} makes a closure of {child_id:?}, which does not share its link table (#836)",
                 code.id
             );
             let closure_val = state
                 .heap
                 .borrow_mut()
-                .alloc_vm_closure(child_id.0, captured, globals);
+                .alloc_vm_closure(child_id.0, captured);
             state.note_closure_made(child_id);
             state.set_reg_at(base, dst, closure_val);
         }
@@ -3518,7 +3454,7 @@ mod tests {
 
     /// A unit whose table names no global is linked too (#836): its table
     /// holds the namespace the unit was loaded in, which is all a unit of
-    /// closures over locals alone has of it once closures hold no
+    /// closures over locals alone has of it, now that closures hold no
     /// environment.
     #[test]
     fn load_unit_links_a_table_that_names_nothing() {
@@ -3680,8 +3616,8 @@ mod tests {
 
     /// A loaded unit holds its window until it runs (#836;
     /// `docs/GC_DESIGN.md` §7, the window S1): while the `LoadedUnit` lives,
-    /// a poll in a check build panics, and each of `execute`, `execute_in`
-    /// and `execute_nested` has closed it by the time its run polls, so the
+    /// a poll in a check build panics, and each of `execute` and
+    /// `execute_nested` has closed it by the time its run polls, so the
     /// run, whose loop polls at its start and checks at every instruction,
     /// answers; a unit dropped unrun closes it too. That the window stays
     /// open up to the push of the unit's frame is for `gc_protocol.rs`'
@@ -3690,7 +3626,6 @@ mod tests {
     #[test]
     fn a_loaded_unit_holds_its_window_until_it_runs() {
         let mut state = VmState::on_a_fresh_heap();
-        let env = Rc::clone(state.global_env());
         assert!(!a_window_is_open(&state), "none open before the load");
 
         let unit = load_in_globals(&mut state, code(), Vec::new());
@@ -3708,20 +3643,9 @@ mod tests {
         assert_eq!(a_window_is_open(&state), GC_CHECK, "open while held");
         #[expect(
             clippy::disallowed_methods,
-            reason = "a driver entry on a machine the test owns; the test holds `env`, the \
-                      machine's own globals"
-        )]
-        let ran = execute_in(&mut state, unit, &env);
-        assert!(ran.is_ok(), "execute_in: {ran:?}");
-        assert!(!a_window_is_open(&state), "closed by execute_in");
-
-        let unit = load_in_globals(&mut state, code(), Vec::new());
-        assert_eq!(a_window_is_open(&state), GC_CHECK, "open while held");
-        #[expect(
-            clippy::disallowed_methods,
             reason = "a nested loop, under its `NoGcScope`, which collects nothing"
         )]
-        let ran = execute_nested(&mut state, unit, &env);
+        let ran = execute_nested(&mut state, unit);
         assert!(ran.is_ok(), "execute_nested: {ran:?}");
         assert!(!a_window_is_open(&state), "closed by execute_nested");
 

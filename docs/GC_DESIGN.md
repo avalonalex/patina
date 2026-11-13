@@ -116,9 +116,11 @@ the heap:
 
 - **env → heap:** bindings hold `TaggedValue`s (bare arena indices, no ownership).
 - **heap → env:** `HeapObjectData::EnvironmentSpecifier{env}`,
-  `VmClosure{globals}`, `Procedure` (CPS lambda env), `CpsContinuation.env`
-  and `Macro` (`CompiledMacro.definition_env` and each `foreign_expansions`
-  environment) all hold owning `Rc<Environment>`.
+  `Procedure` (CPS lambda env), `CpsContinuation.env` and `Macro`
+  (`CompiledMacro.definition_env` and each `foreign_expansions` environment)
+  all hold owning `Rc<Environment>`. A VM closure holds none since #836: its
+  code's namespace is held by its unit's link table (`LinkTable.namespace`),
+  outside the heap, which the closure reaches by its code id (§8).
 
 There is no traversal API today; the tracer needs a new
 `Environment::for_each_value(&self, f: &mut dyn FnMut(TaggedValue))` that walks
@@ -281,8 +283,9 @@ pub struct GcStats {
 Notes:
 
 - `SlotVisitor::env` exists because environments are not heap objects; the
-  dedup set (keyed by `Rc::as_ptr`) is essential — every closure points at the
-  globals env, and without dedup marking would be quadratic.
+  dedup set (keyed by `Rc::as_ptr`) is essential — every tree-walker closure
+  points at its environment, and every VM unit's link table at its
+  namespace, and without dedup marking would be quadratic.
 - A provider reports a value as a slot where it lives in a `Cell`: the VM's
   registers and its frames' closures, live and in captured continuations.
   Everything else is pinned until the stage that makes it heap data — the
@@ -356,7 +359,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs`):
 | `Promise` | delayed thunk / forced value (through `Rc<Interior<PromiseState>>`) |
 | `Values` | each element |
 | `MutableCell` | inner value |
-| `VmClosure` | each of `free_vars` + **`visit_env(globals)`** + queues `code_id` for `trace_code_ids`, unless retired (#836) |
+| `VmClosure` | each of `free_vars` + queues `code_id` for `trace_code_ids`, unless retired (#836); no environment: its unit's link table holds the namespace, traced by that id |
 | `Procedure` | captured env (`visit_env`) + **body-expression literals** (§4.4) |
 | `Macro` | each of its `literals`, which its patterns and templates name by index (#718, §9.6); and its body, `CompiledMacro`: `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623; the registry also roots each while its library is registered, and since #834 nothing else need once a redefinition replaces it, since an importer holds the library's cells and not its environment (`CompiledMacro`'s derived trace, #686) |
 | `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` — each record's before/after thunks and the handler stack it captured at its `dynamic-wind` call (`WindRecord`'s derived trace, the one tracing point for a record wherever it sits: a stack, a continuation, a prompt frame, or a `DynamicWindSetup`/`Jump` cont value), `exception_handlers`, `prompt_stack` — each frame's handler and the continuation below it (derived; the tag is a plain `Rc` struct), `captured_cont_env` (deduplicated worklist), `resume` (`ContValue`'s derived trace), body literals (§4.4) |
@@ -916,7 +919,8 @@ reached via `execute_nested`, a re-entrant primitive, or `eval` — is deferred
 by construction. `with_globals`, which pointed the machine's globals at a
 library while its body ran, deferred across each substitution until #677
 traced the environments it set aside; #823 removed it, since a body form
-runs in a frame whose closure holds the library's environment (#824).
+reads and defines through its unit's link table, linked in the library's
+environment (#824, #836).
 
 Library loading is the case that needed more. The predicate is **"does this
 Rust frame hold heap values that must survive across an evaluation call?"** —
@@ -1661,8 +1665,8 @@ placement + deferral:
      `GcDriver`, so a loop without one cannot reach a collection. There is
      one per carrier (C2): the `Mutator` marks it held, and
      `GcDriver::acquire` answers `None` while it is. The driver entries take
-     it: the VM's `execute` and `execute_in`, which lend it to the loop they
-     run (`VmState::driver`); the tree-walker's run of a form, which keeps it
+     it: the VM's `execute`, which lends it to the loop it runs
+     (`VmState::driver`); the tree-walker's run of a form, which keeps it
      in a local; both loaders' point B (`collect_if_pending`); and both
      loaders' collection before a library is parsed again after a read ran
      out of descriptors (`collect_for_loader`, #783, §6). An entry that finds
@@ -1924,9 +1928,9 @@ these checks except the defer balance, which every build checks.
     the unit go, and with it the placeholders its table linked at load,
     which only the table holds. `load_unit` opens the window before the
     store takes the unit, links the table inside it, and answers the unit's
-    id as a `LoadedUnit`; `execute`,
-    `execute_in` and `execute_nested` drop it once `push_frame` has given
-    the frame the unit's code, before the run polls;
+    id as a `LoadedUnit`; `execute` and `execute_nested` drop it once
+    `push_frame` has given the frame the unit's code, before the run polls
+    (`push_top_frame`, which both call, and which allocates nothing);
   - an `eval`'s closure from its unit's load to the `CALLEE` write (S2,
     #836): `eval_closure` answers `EvalCallee { closure, window }`, the
     unit's window still open over a closure nothing roots, carried across
@@ -1938,8 +1942,11 @@ these checks except the defer balance, which every build checks.
   Neither of the last two has a poll in it, so one closed early would go
   unseen: `gc_protocol.rs`' extent controls have patina-vm's test-only
   switch (`test_support::PollInWindow`) make the poll's check at the last
-  point each covers, just before `execute`'s and `push_frame_in`'s push and
-  just before the `CALLEE` write, and expect the panic.
+  point each covers, just before `push_top_frame`'s push, which a program
+  form and a host namespace's form reach through `execute` and a library
+  body form a running form loads reaches through `execute_nested`, each
+  with a control of its own, and just before the `CALLEE` write, and
+  expect the panic.
 - *Collector entry points are crate-private.* `Collector`,
   `MarkSweepCollector`, `run_mark_phase`, `Heap::sweep` and
   `GcController::collect` cannot be named outside `patina-core`, so
@@ -2012,8 +2019,12 @@ that is safe:
 - it holds nothing it reads after the call: a wrapper, or a call whose
   arguments move into the run, which roots them;
 - a root reaches what it holds: a library being loaded is rooted by its
-  registry entry (#677), and the program's environment by the machine's
-  `globals`, which a load no longer swaps (#823);
+  registry entry (#677), the program's environment by the machine's
+  `globals`, which a load no longer swaps (#823), a host namespace by its
+  `OwnedEnvironment`, and a specifier's namespace by its object; and the
+  records the code uses by its unit, which its frame, a marked closure or
+  the running code reports (#836). No reason rests on a frame's closure
+  holding an environment: no closure holds one;
 - a guard on the data defers collection: `ParsedLibrary` holds
   `GcDeferGuard::holding`, and an expansion's data are values of the context
   it runs in (`NoGcScope::cross`);
@@ -2097,7 +2108,7 @@ deletes the weak continuation tables, and with them the first two VM windows
 ## 8. Why Cycles Are Fully Reclaimed Without GC-Managing Environments
 
 The worry: closures create heap ↔ environment cycles
-(`env binding → TaggedValue → VmClosure slot → Rc<Environment> → …`), `Rc`
+(`env binding → TaggedValue → Procedure slot → Rc<Environment> → …`), `Rc`
 can't collect cycles, and the collector doesn't manage environments — so do
 env cycles leak?
 
@@ -2106,16 +2117,16 @@ No, because the two edge directions have asymmetric ownership:
 - **env → heap** edges are bare indices (`TaggedValue` in binding maps) — no
   ownership, invisible to `Rc`.
 - **heap → env** edges are owning `Rc<Environment>` held **inside heap slots**
-  (`VmClosure.globals`, `Procedure`'s captured env, `CpsContinuation.env`,
+  (`Procedure`'s captured env, `CpsContinuation.env`,
   `EnvironmentSpecifier.env`, and a `Macro`'s `CompiledMacro.definition_env`
-  and `foreign_expansions` environments).
+  and `foreign_expansions` environments). A VM closure's cycle runs through
+  its unit's link table, outside the heap (below).
 
 Every environment cycle must route through a heap slot, because binding maps
 hold `TaggedValue`s, never `Rc<Environment>` directly, and parent chains are
 acyclic trees. When a closure cluster becomes unreachable from roots:
 
-1. the tracer never marks the `VmClosure`/`Procedure`/`Continuation`/`Macro`
-   slot;
+1. the tracer never marks the `Procedure`/`Continuation`/`Macro` slot;
 2. sweep tombstones the slot, dropping its `HeapObjectData` — including the
    `Rc<Environment>`;
 3. the environment's refcount falls; if that was the last strong ref, the env
@@ -2147,10 +2158,13 @@ collection marks none of it, the sweep frees the procedure, and
 `release_dead_code`, after the collection, lets the unit go, whose table then
 drops the namespace's last `Rc`. A namespace whose last holder was a unit
 therefore drops at code release, not in the sweep, after the sweep has set
-L from the external bytes it read. That is the usual end of a namespace
+L from the external bytes it read: in `release_dead_code` after a
+collection, or in `release_unit_if_unused` when the form or `eval` that ran
+the unit returns, which lets a specifier's namespace whose `eval` made no
+closure go there, between collections. That is the usual end of a namespace
 `environment` made with a procedure compiled in it, and of a redefined
-library's: its closures hold it too (`VmClosure.globals`), and the sweep
-drops those, but the unit's table outlives them until the release. So the
+library's: no closure holds it since #836, and the sweep that frees the
+closures leaves the unit's table to hold it until the release. So the
 collection's finish, which follows the release, settles L from the external
 bytes held then, and arms the threshold from the settled L (§6.2): L, the
 threshold and the collection's record count no namespace the release

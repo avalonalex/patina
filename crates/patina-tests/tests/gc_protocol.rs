@@ -9,12 +9,12 @@
 //! reaches a poll inside it, and expect that check's panic. In the third a
 //! host primitive opens one inside a VM instruction that polls before it
 //! ends: the loop checked before the instruction began, so only the poll's
-//! own check can see the window (#864). The three after it hold the VM's
+//! own check can see the window (#864). The four after it hold the VM's
 //! load windows to their extent (#836): patina-vm's test-only switch has
 //! the machine make a poll's check at the last point a window covers, before
-//! a unit's frame is pushed or an `eval`'s closure is written into its stub
-//! frame, where a window closed early, with no poll in the gap, would let
-//! it pass.
+//! a unit's frame is pushed, by `execute` or on a nested loop, or an
+//! `eval`'s closure is written into its stub frame, where a window closed
+//! early, with no poll in the gap, would let it pass.
 //!
 //! These are positive controls for the check, which is compiled into check
 //! builds only: every debug `cargo test`, and a release one with this crate's
@@ -32,7 +32,8 @@
 #![expect(
     clippy::disallowed_macros,
     reason = "OPENED: the heap and interrupt handle of the test's interpreter, for a host \
-              primitive of the test, and the window it leaves open (#864)"
+              primitive of the test, and the window it leaves open (#864); SWITCH: the \
+              load-window switch a host primitive of the test turns on (#836)"
 )]
 
 mod common;
@@ -43,6 +44,7 @@ use patina_interpreter::{Arity, EvalError, Interpreter, PrimClass, PrimSpec};
 use patina_runtime::Backend;
 use patina_vm::test_support::PollInWindow;
 use std::cell::RefCell;
+use tempfile::TempDir;
 
 /// Evaluate a program while a window is open. The heap is the interpreter's
 /// own, so the window is on the counter its dispatch loop polls.
@@ -173,14 +175,80 @@ fn poll_before_a_forms_frame_is_pushed() {
     let _ = interp.eval_program_owned("(+ 1 2)");
 }
 
-/// `push_frame_in`'s, over a host environment's form's unit, and the retired
-/// closure its frame runs under, until the frame is pushed (see above).
+/// `execute`'s, over a host namespace's form's unit until its frame is
+/// pushed (see above): the route `push_frame_in` took until #836 merged it
+/// into `execute`, which the program form's control above takes too.
 fn poll_before_a_host_forms_frame_is_pushed() {
     let interp = vm_interpreter();
     let env = interp.new_environment();
     interp.eval_str_in(&env, "(+ 1 2)").expect("evaluate");
     let _switch = PollInWindow::before_frame_push();
     let _ = interp.eval_str_in(&env, "(+ 1 2)");
+}
+
+thread_local! {
+    /// The switch `(poll-in-window!)` turns on, for
+    /// [`poll_before_a_nested_forms_frame_is_pushed`]: on from the
+    /// primitive's call until the test lets go of it.
+    static SWITCH: RefCell<Option<PollInWindow>> = const { RefCell::new(None) };
+}
+
+/// Lets go of [`SWITCH`], however the test ends: declared after the
+/// interpreter, it goes first in the unwind.
+struct SwitchOff;
+
+impl Drop for SwitchOff {
+    fn drop(&mut self) {
+        SWITCH.take();
+    }
+}
+
+/// `(poll-in-window!)`: turns on [`PollInWindow::before_frame_push`] from
+/// inside a running form, whose own frame has been pushed already.
+fn poll_in_window_on<'gc>(_: &mut Cx<'gc>, _: &[Value<'gc>]) -> Result<Value<'gc>, EvalError> {
+    SWITCH.set(Some(PollInWindow::before_frame_push()));
+    Ok(Value::UNSPECIFIED)
+}
+
+/// `execute_nested`'s, over the unit of a body form of a library that a
+/// running form loads, through `environment`, on a nested loop, until its
+/// frame is pushed (see above). `execute_nested` shares `push_top_frame`
+/// with `execute` today; this control holds its window's end on its own, so
+/// that a push of its own that closed the window early would be seen. The
+/// form's frame is pushed before `(poll-in-window!)` turns the switch on, so
+/// the first frame pushed with it on is the library's first body form's. No
+/// run before the switch: that would load the library, and the run the
+/// control is for would load nothing.
+fn poll_before_a_nested_forms_frame_is_pushed() {
+    let root = TempDir::new().expect("temp dir");
+    let dir = root.path().join("s1nested");
+    std::fs::create_dir_all(&dir).expect("library dir");
+    std::fs::write(
+        dir.join("lib.sld"),
+        "(define-library (s1nested lib) (import (scheme base)) (export x)
+           (begin (define x (list 1))))",
+    )
+    .expect("library file");
+    let mut interp = vm_interpreter();
+    interp
+        .register_primitive(
+            &["test", "switch"],
+            "poll-in-window!",
+            PrimSpec {
+                f: poll_in_window_on,
+                arity: Arity::Exact(0),
+                class: PrimClass::Leaf,
+            },
+        )
+        .expect("register");
+    interp
+        .backend()
+        .add_library_search_path(root.path().to_path_buf());
+    interp
+        .eval_program_owned("(import (scheme base) (scheme eval) (test switch))")
+        .expect("import");
+    let _off = SwitchOff;
+    let _ = interp.eval_program_owned("(begin (poll-in-window!) (environment '(s1nested lib)))");
 }
 
 /// `eval`'s, over the closure `eval_closure` makes of its unit, until
@@ -206,6 +274,11 @@ control!(
     a_poll_before_a_host_forms_frame_is_pushed_panics_vm,
     "GC poll inside an AssertNoGc scope",
     poll_before_a_host_forms_frame_is_pushed()
+);
+control!(
+    a_poll_before_a_nested_forms_frame_is_pushed_panics_vm,
+    "GC poll inside an AssertNoGc scope",
+    poll_before_a_nested_forms_frame_is_pushed()
 );
 control!(
     a_poll_before_an_evals_closure_is_written_panics_vm,

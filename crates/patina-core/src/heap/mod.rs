@@ -382,18 +382,15 @@ pub enum HeapObjectData {
     /// Behind a `RefCell` because breaking happens during a collection, when
     /// the heap is otherwise immutable to the mutator.
     Ephemeron(Interior<Option<(TaggedValue, TaggedValue)>>),
-    /// A VM bytecode closure: code id + captured free variables + globals env.
+    /// A VM bytecode closure: code id + captured free variables. It holds
+    /// no environment: the namespace its code reads, writes and defines in
+    /// is its unit's link table's, set when the VM loaded the unit, and the
+    /// closure's code id is what reports that unit to a collection (#836).
     VmClosure {
         /// The VM's `CodeObjectId`, as its raw `u64`, to avoid a direct
         /// dependency on patina-vm types.
         code_id: u64,
         free_vars: Vec<TaggedValue>,
-        /// The global environment this closure was compiled against: the
-        /// namespace its unit's link table was linked in, through which
-        /// the VM reads, writes and defines every global (#836). Read only
-        /// by `MakeClosure`, which gives it to the closures made in this
-        /// one's frames (`frame_globals` in patina-vm).
-        globals: Rc<crate::environment::Environment>,
     },
     /// Opaque handle to a full VM continuation (call/cc style).
     /// The actual `VmContinuation` data lives in `VmState::continuation_store`.
@@ -1963,22 +1960,13 @@ impl Heap {
     ///
     /// `code_id` is a `u64` (the raw `CodeObjectId(u64)` value) to avoid
     /// a direct crate dependency on `patina-vm`.
-    pub fn alloc_vm_closure(
-        &mut self,
-        code_id: u64,
-        free_vars: Vec<TaggedValue>,
-        globals: Rc<crate::environment::Environment>,
-    ) -> TaggedValue {
+    pub fn alloc_vm_closure(&mut self, code_id: u64, free_vars: Vec<TaggedValue>) -> TaggedValue {
         if GC_CHECK {
             free_vars
                 .iter()
                 .for_each(|&v| check_storable(v, "closure's free variable"));
         }
-        self.alloc_object(HeapObjectData::VmClosure {
-            code_id,
-            free_vars,
-            globals,
-        })
+        self.alloc_object(HeapObjectData::VmClosure { code_id, free_vars })
     }
 
     /// Retrieve the `(code_id, free_vars)` pair from a VM closure pointer.
@@ -2013,10 +2001,7 @@ impl Heap {
     /// The code id a VM closure holds once [`Heap::retire_vm_closure`] has
     /// retired it, or that the VM made it with: no code object has it,
     /// marking queues nothing for it (#836), and a collection that frees the
-    /// closure reports it so the VM can pass over it. The VM makes one
-    /// retired for the frame of top-level code compiled in an environment
-    /// other than its globals, which reads only the closure's globals
-    /// (#779).
+    /// closure reports it so the VM can pass over it.
     pub const RETIRED_VM_CLOSURE_CODE: u64 = u64::MAX;
 
     /// Retire the VM closure `val`: give up its claim on its code, returning
@@ -2051,20 +2036,6 @@ impl Heap {
         }
         self.object_checks.check_if_present("object", closure);
         Some(closure.heap_index() as usize)
-    }
-
-    /// Get the globals environment from a VM closure, a frame's: the
-    /// environment `MakeClosure` gives the closures that frame makes
-    /// (`frame_globals` in patina-vm). Returns `None` if `closure` is not a
-    /// `VmClosure`.
-    pub fn get_vm_closure_globals(
-        &self,
-        closure: TaggedValue,
-    ) -> Option<Rc<crate::environment::Environment>> {
-        match self.objects.get(self.vm_closure_slot(closure)?)? {
-            HeapObjectData::VmClosure { globals, .. } => Some(globals.clone()),
-            _ => None,
-        }
     }
 
     /// Read one free-variable slot from a VM closure.

@@ -398,7 +398,7 @@ pub(crate) trait Collector {
 /// [`Mutator`](super::mutator::Mutator) marks it held, and
 /// [`GcDriver::acquire`] answers `None` while it is. The outermost drivers
 /// take it for their extent:
-/// - the VM's `execute` and `execute_in`, which lend it to the loop they run;
+/// - the VM's `execute`, which lends it to the loop it runs;
 /// - the tree-walker's run of a form, from outside any run;
 /// - the loaders where a library's load ends at the top level (point B);
 /// - the loaders where a library read ran out of descriptors, for one
@@ -1878,17 +1878,16 @@ impl<'h> GcVisitor<'h> {
                 // closure's names no code and queues nothing. The code's
                 // constants stay rooted by the VM's `code_store`, which keeps
                 // the code while a live closure can run it (#338), until 4e.
+                // The namespace the code reads is its unit's link table's,
+                // which the closure reaches only through this id: it holds
+                // no environment of its own (#836).
                 code_id,
                 free_vars,
-                // Still visited: #836 deletes the field once every unit
-                // links in its namespace at load.
-                globals,
             } => {
                 for &free_var in free_vars {
                     self.visit(free_var);
                 }
                 self.note_code_id(*code_id);
-                self.visit_env(globals);
             }
             HeapObjectData::Continuation(k) => {
                 self.visit_continuation(k);
@@ -3002,7 +3001,7 @@ mod tests {
         });
         assert_eq!(values, OBJECT_SLOT_BYTES + 3 * value);
         let closure = charged(heap, |h| {
-            h.alloc_vm_closure(1, vec![TaggedValue::NULL; 7], env.clone());
+            h.alloc_vm_closure(1, vec![TaggedValue::NULL; 7]);
         });
         assert_eq!(closure, OBJECT_SLOT_BYTES + 7 * value);
         let continuation = charged(heap, |h| {
@@ -3165,7 +3164,7 @@ mod tests {
                 ),
                 heap.alloc_identifier(Rc::from("x"), scopes),
                 heap.alloc_values(vec![TaggedValue::NULL; 5]),
-                heap.alloc_vm_closure(1, vec![TaggedValue::NULL; 6], env.clone()),
+                heap.alloc_vm_closure(1, vec![TaggedValue::NULL; 6]),
                 heap.alloc_vm_continuation_ref(4096).0,
                 heap.alloc_vm_delimited_continuation_ref(2048).0,
                 heap.alloc_procedure(tree_walker_closure(&env, &["p", "q", "r"], Some("s"))),
@@ -3181,8 +3180,9 @@ mod tests {
             }
         }
         heap.intern_symbol("a-symbol-the-table-roots");
-        // The closures' namespace, charged once however many name it: in the
-        // bytes allocated and in L, and never reclaimed while it lives.
+        // The tree-walker closures' namespace, charged once however many
+        // name it: in the bytes allocated and in L, and never reclaimed
+        // while it lives.
         let external = heap.external_bytes() as u64;
         assert_eq!(Some(external as usize), env.charged_bytes());
         assert_eq!(heap.bytes_allocated(), occupied(&heap) + external);
