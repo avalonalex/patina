@@ -1599,7 +1599,9 @@ which a debug or release `gc-check` build panics on once swept:
 (compile to load), and the tree-walker's
 `a_forms_pool_keeps_its_literals_until_its_run_returns` (transform to run)
 and `a_step_evals_pool_outlives_the_step_it_makes` (a `Step::Eval`'s tree
-before its trampoline holds it). `literal_pools.rs` holds every path to
+before its trampoline holds it), with `step_evals_retire_at_most_one_pool`
+holding a run of `eval`s that never collects to one retired pool.
+`literal_pools.rs` holds every path to
 releasing its pool by the time the evaluation returns.
 
 **Every stress run must have collected (#626).** A lane that passes

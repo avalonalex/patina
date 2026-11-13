@@ -2002,7 +2002,7 @@ entries name, the same words the code copied:
   `eval_step`'s return and the trampoline's `current_step = step` but that
   hand-over, so a later retirement finds the earlier step already taken, and
   replaces the earlier pool: at most one pool is retired, however long a loop
-  of `eval`s runs without collecting. The retired pool is also released after
+  of `eval`s runs without collecting (`step_evals_retire_at_most_one_pool`). The retired pool is also released after
   each collection the driver runs, at a safe point or at a call (which rooted
   the step), and when the outermost run returns, by any way out
   (`ReleaseRetiredPool`), so the loop's fast path does nothing new. A nested
