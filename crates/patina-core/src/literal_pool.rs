@@ -15,10 +15,15 @@
 //! collector that moves can update it in place.
 //!
 //! **Scoped to one compilation.** A backend makes a pool for each form it
-//! compiles, and drops it once the form's literals are in the code it runs:
-//! the VM's constants, the tree-walker's `CpsExpr` literals, both traced in
-//! their own right. So the pool never holds more than one form's text quotes,
-//! and nothing it held stays live through it (M2).
+//! compiles, and drops it once the code holding the form's literals is
+//! traced in its own right (#869): the VM once `load_unit` has put the unit
+//! in the code store, before the form runs; the tree-walker once the run
+//! that roots the form's `CpsExpr` has returned, and for a `Step::Eval`'s
+//! tree, which becomes a step of the running trampoline, after the driver's
+//! next collection or the outermost run's return. Until then the code is a
+//! Rust value nothing traces, and the pool is the only root of the words it
+//! copied. So a pool never holds more than one form's text quotes, and
+//! nothing it held stays live through it once its form is done (M2).
 
 use std::cell::Cell;
 use std::fmt;

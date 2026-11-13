@@ -1,9 +1,11 @@
 //! A form's literals live in its compilation's literal pool, which roots
-//! them from the form's expansion until its code holds them, and is gone
-//! before the form runs (#705; M2 in `PRD/GC_PRD.md` §17). So after every
-//! evaluation, on every path a form is compiled by, the heap's root set is
-//! as it was: no pool outlives its compilation, and nothing it held stays
-//! live through it.
+//! them from the form's expansion until the code that holds them is rooted
+//! (#705, #869; M2 in `PRD/GC_PRD.md` §17): on the VM until its unit is
+//! loaded, before it runs; on the tree-walker until its run returns, and for
+//! an `eval`'d datum's tree until the driver's next collection or the
+//! outermost run's return. So after every evaluation, on every path a form
+//! is compiled by, the heap's root set is as it was: no pool outlives the
+//! evaluation that compiled it, and nothing it held stays live through it.
 
 mod common;
 use common::{tree_walker_interpreter, vm_interpreter};

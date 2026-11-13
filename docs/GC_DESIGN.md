@@ -979,7 +979,7 @@ expansion runs in (§7; point C of `PRD/GC_PRD.md` §11.3).
 | `HandleTable.placeholders` | `placeholder_store.rs` | Not a root: the heap's `PlaceholderList` (#836), its namespaces' placeholder stores keyed by `env_id`, which the sweep's pass walks to drop every placeholder and weak read-through record no traced link table marked (§4.5, §4.7). Weak by design, so the derived trace skips the field: traced, it would keep every listed namespace's placeholders. It holds stores, never a namespace, by `Rc` or `Weak`; a namespace's drop takes its store off at once (`PlaceholderHandle`). On the `HandleTable`, by its own `Rc`, for `root_set`'s reason, and carried across teardown, so the teardown sweep's pass empties the store of every namespace that outlives the heap |
 | `HandleTable.by_name` | `heap/handles.rs` | The heap's by-name record (#836, `Heap::by_name_record`): the record a VM unit's link table links for a name its namespace reaches by an alias or a visible scoped definition, read by name (§4.7). Made once, the first time a link needs it, and rooted here for the heap's life, so that an entry naming it never names a freed pair whatever the tables traced; `None` on a heap no such link was made on, as on every tree-walker heap. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason. Uncounted. Pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
-| A compilation's `LiteralPool` | `crates/patina-core/src/literal_pool.rs` | The heap literals of the form being compiled, from its expansion until its code holds them (§9.7, #705): registered with the heap's root set for the pool's life, its entries reported as slots. Each backend drops the pool once the form is compiled, before it runs, so it never holds more than one form's quoted text |
+| A compilation's `LiteralPool` | `crates/patina-core/src/literal_pool.rs` | The heap literals of the form being compiled, from its expansion until the code that holds them is traced in its own right (§9.7, #705, #869): registered with the heap's root set for the pool's life, its entries reported as slots. The VM drops the pool once `load_unit` has returned, before the form runs; the tree-walker once the form's run returns, and a `Step::Eval`'s, retired to the evaluator (`Evaluator.retiring`, at most one), after the driver's next collection, the next retirement or the outermost run's return (§7). So it never holds more than one form's quoted text |
 | Macro literals and environments | `heap/mod.rs`, `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: the literals the object holds (§9.6), and its body's `definition_env` and each `foreign_expansions` environment (§4.3) |
 | In-flight `ExceptionObject.irritants` | `crates/patina-core/src/error.rs:44` | Lives in a propagating `Err` on the Rust stack; covered by deferral (GC never runs during unwinding — safe points are at loop tops, not in error paths) |
 
@@ -1976,6 +1976,50 @@ old value; that loop is Scheme now, which the swap has the machine call
 (#817), and whose setter's `(gc)` collects at its call
 (`a_collection_in_a_parameter_like_setter_runs_at_its_call`).
 
+**Rooted, not argued: a form's code before anything traces it (#869).**
+Between a form's compilation and the point where a root reaches its code,
+the code is a Rust value that holds heap words and that nothing traces. No
+safe point falls in these stretches, but rather than assert that, each is
+rooted by the form's literal pool, whose registration keeps the words its
+entries name, the same words the code copied:
+
+- *VM, compile to load.* Every site that compiles a form and runs it (the
+  backend's `eval_datum` and `call_procedure`, both library loaders' body
+  forms, and `compile_for_eval`'s two callers, `vm_eval_expr` and
+  `eval_closure`, to which it answers the pool with the code) drops the pool
+  after `load_unit` returns, where the unit's window (S1 above) and then the
+  code store take over, and before the form runs. Code compiled and never
+  loaded (`disasm_source`, the compiler's tests) keeps its pool while
+  anything reads its constants.
+- *Tree-walker, transform to run.* `eval_cps` and `eval_cps_with` keep the
+  pool until the run returns: the CPS tree is a Rust local until the run's
+  first safe point roots it as `StepRoots`' `expr` and step. The pool's
+  entries are the tree's own words, so it keeps nothing the run does not.
+- *Tree-walker, a `Step::Eval`.* `eval_step` answers the eval'd tree, which
+  becomes the running trampoline's next step and is rooted at its next safe
+  point; there is no point where this tree's run returns. So the pool is
+  retired to the evaluator (`Evaluator::retire_pool`). Nothing runs between
+  `eval_step`'s return and the trampoline's `current_step = step` but that
+  hand-over, so a later retirement finds the earlier step already taken, and
+  replaces the earlier pool: at most one pool is retired, however long a loop
+  of `eval`s runs without collecting. The retired pool is also released after
+  each collection the driver runs, at a safe point or at a call (which rooted
+  the step), and when the outermost run returns, by any way out
+  (`ReleaseRetiredPool`), so the loop's fast path does nothing new. A nested
+  trampoline has no driver (#702), so a pool retired under one waits for the
+  next retirement, the outer driver's next collection or the outermost
+  return, by which time the nested run's tree is gone or held by closures
+  and continuations, which trace it.
+
+Each window has a test that collects inside it with the machine's own roots
+and the heap's registered ones, and fails in debug and release `gc-check`
+builds when the pool goes where it went before #869
+(`a_forms_pool_keeps_its_literals_until_its_code_is_loaded`,
+`a_forms_pool_keeps_its_literals_until_its_run_returns`,
+`a_step_evals_pool_outlives_the_step_it_makes`). `PATINA_GC_STRESS` and zeal
+collect only at poll sites, and none of these stretches has one, so no lane
+would see a window reopen.
+
 **Review rule.** A comment that argues "no safe point here" comes with an
 `AssertNoGc` at the same lines (AGENTS.md). An argued window with no scope is a
 missing assertion.
@@ -2453,10 +2497,13 @@ Each literal is a `Lit` (`crates/patina-core/src/literal_pool.rs`):
   transform.
 - **Scoped to one compilation.** Each backend makes a pool for each form it
   compiles, in `eval`'s expansion and a library's body forms as well as at
-  the top level. It drops the pool once the code holds the literals, before
-  the form runs: the VM's constants and the tree-walker's `CpsExpr` are traced
-  in their own right. So a pool never holds more than one form's quoted text,
-  and nothing it held stays live through it.
+  the top level. It keeps the pool until the code that holds the literals is
+  traced in its own right (#869): the VM's constants once `load_unit` has put
+  the unit in the code store, so the pool goes before the form runs; the
+  tree-walker's `CpsExpr` once the run that roots it has returned, and a
+  `Step::Eval`'s tree once its trampoline has taken it as a step (§7's
+  rooted windows). So a pool never holds more than one form's quoted text,
+  and nothing it held stays live through it once its form is done.
 - **Tests.** `a_collection_keeps_a_pooled_literal` is the sentinel, and
   `literal_pools.rs` holds every compilation path to dropping its pool.
 - **Why indices, not a root beside the words.** Until the pool, the literals
