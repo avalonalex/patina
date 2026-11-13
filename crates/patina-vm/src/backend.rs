@@ -354,8 +354,8 @@ impl VmBackend {
                 .with_fs(self.state.borrow().fs().clone()),
             None => Desugarer::with_env(Rc::clone(env)).with_fs(self.state.borrow().fs().clone()),
         };
-        // The form's literals, rooted from its expansion until its code holds
-        // them (#705).
+        // The form's literals, rooted from its expansion until its code is
+        // loaded (#705, #869).
         let literals = patina_core::LiteralPool::new(&heap.borrow());
         #[expect(
             clippy::disallowed_methods,
@@ -377,12 +377,15 @@ impl VmBackend {
         let registry = Rc::clone(self.state.borrow().primitive_registry());
         let (top, nested) =
             compile_with_qq_resolving(&core_expr, &literals, &heap, env, &registry)?;
-        // The code's constants hold the literals' words now, traced from
-        // there on: the pool goes before the form runs (M2).
-        drop((core_expr, literals));
+        drop(core_expr);
 
         let mut state = self.state.borrow_mut();
         let unit = state.load_unit(top, nested, env);
+        // The pool roots the literals' words until the code holding them is
+        // in the store, which the unit's window and then the code store
+        // cover from here (#869): it goes after the load, and before the
+        // form runs (M2).
+        drop(literals);
         let top_id = unit.id();
 
         // Execute, then let go of the form's code unless something it left
@@ -416,8 +419,8 @@ impl VmBackend {
         use patina_core::{CoreExpr, CoreExprKind};
 
         let heap = self.heap.clone();
-        // The application's literals, rooted until its code holds them, as
-        // a form's are (#705).
+        // The application's literals, rooted until its code is loaded, as a
+        // form's are (#705, #869).
         let literals = patina_core::LiteralPool::new(&heap.borrow());
         // SAFETY: the words are a host's handles' (`Interpreter::call`),
         // which root them, on this backend's heap.
@@ -437,11 +440,13 @@ impl VmBackend {
         let registry = Rc::clone(self.state.borrow().primitive_registry());
         let (top, nested) =
             compile_with_qq_resolving(&core_expr, &literals, &heap, &self.global_env, &registry)?;
-        // The code's constants hold the words now (M2).
-        drop((core_expr, literals));
+        drop(core_expr);
 
         let mut state = self.state.borrow_mut();
         let unit = state.load_unit(top, nested, &self.global_env);
+        // The pool goes once the loaded unit holds the words, before the
+        // call runs (#869, M2).
+        drop(literals);
         let top_id = unit.id();
         #[expect(
             clippy::disallowed_methods,
@@ -843,8 +848,8 @@ impl VmBackend {
             let mut state = self.state.borrow_mut();
             let run = |state: &mut VmState| -> Result<(), LibraryError> {
                 while let Some(form) = loading.next_form() {
-                    // The form's literals, rooted until its code holds them
-                    // (#705).
+                    // The form's literals, rooted until its code is loaded
+                    // (#705, #869).
                     let literals = patina_core::LiteralPool::new(&shared_heap.borrow());
                     #[expect(
                         clippy::disallowed_methods,
@@ -887,10 +892,12 @@ impl VmBackend {
                             e.diagnostic(),
                         )
                     })?;
-                    // The constants hold the literals now (#705).
-                    drop((core_expr, literals));
+                    drop(core_expr);
 
                     let unit = state.load_unit(top, nested, &lib_env);
+                    // The pool goes once the loaded unit holds the
+                    // literals' words, before the form runs (#869, M2).
+                    drop(literals);
                     let top_id = unit.id();
                     #[expect(
                         clippy::disallowed_methods,

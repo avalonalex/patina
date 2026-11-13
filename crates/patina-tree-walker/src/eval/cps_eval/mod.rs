@@ -130,6 +130,9 @@ impl<'a> CpsEvaluator<'a> {
                 &evaluator.heap,
                 std::time::Duration::ZERO,
             );
+            // The collection rooted the step, so a `Step::Eval`'s retired
+            // pool has done its work (#869).
+            evaluator.release_retired_pool();
         }
     }
 
@@ -275,6 +278,8 @@ impl<'a> CpsEvaluator<'a> {
                 &evaluator.heap,
                 std::time::Duration::ZERO,
             );
+            // As at a safe point (#869).
+            evaluator.release_retired_pool();
         }
         collected
     }
@@ -386,6 +391,9 @@ impl<'a> CpsEvaluator<'a> {
         };
         let outermost = driver.is_some();
         let _nested = driver.is_none().then(|| NoGcScope::enter(heap));
+        // Where the outermost run returns, by any way out, no step of it is
+        // left for a `Step::Eval`'s retired pool to cover (#869).
+        let _release = outermost.then_some(ReleaseRetiredPool(self.evaluator));
         // The open `AssertNoGc` windows, checked at every poll (#624).
         let assert_no_gc = AssertNoGcCount::of(heap);
         let trampoline = types::TrampolineGuard::enter(kind);
@@ -579,6 +587,16 @@ impl<'a> CpsEvaluator<'a> {
     }
 }
 
+/// Releases a `Step::Eval`'s retired pool when the outermost run that holds
+/// it returns (`Evaluator::release_retired_pool`, #869).
+struct ReleaseRetiredPool<'e>(&'e super::Evaluator);
+
+impl Drop for ReleaseRetiredPool<'_> {
+    fn drop(&mut self) {
+        self.0.release_retired_pool();
+    }
+}
+
 /// Whether an error is a parked escape, however many source locations were
 /// stamped on it on the way out of a step.
 fn is_continuation_escape(e: &EvalError) -> bool {
@@ -672,8 +690,11 @@ fn contains_quasiquote(expr: &patina_core::CoreExpr) -> bool {
 }
 
 /// Run `expr`, a form's tree whose literals are `literals`' entries, in
-/// `env`. The pool goes once the CPS tree holds the literals' words, before
-/// the run (#705).
+/// `env`. The pool goes with the form's run, once it has returned: from the
+/// transform to the run's first safe point the CPS tree, which holds the
+/// literals' words, is a Rust local nothing traces, and the pool roots them
+/// there (#705, #869). It holds nothing the run does not: its entries are
+/// the tree's own words, which the run roots throughout.
 pub fn eval_cps(
     expr: &patina_core::CoreExpr,
     literals: patina_core::LiteralPool,
@@ -718,27 +739,28 @@ pub fn eval_cps(
     let expr = &lower_quasiquotes_for(expr, evaluator, &literals)?;
 
     // Transform CoreExpr to CpsExpr, whose literals are words the run
-    // traces: the pool goes before the run (M2).
+    // traces from its first safe point on: the pool goes with the run (M2).
     let cps_expr = CpsTransformer::new(&literals).transform_toplevel(expr);
-    drop(literals);
 
     // Create CPS evaluator and evaluate in the specified environment
     let cps_evaluator = CpsEvaluator::new(evaluator);
     #[expect(
         clippy::disallowed_methods,
-        reason = "holds `expr`, the caller's tree, not read after the call: the run roots the CPS \
-                  tree it is entered with"
+        reason = "holds `expr`, the caller's tree, not read after the call, and the pool, which \
+                  roots itself: the run roots the CPS tree it is entered with"
     )]
     let value = cps_evaluator.eval_in_env(Rc::new(cps_expr), env);
+    drop(literals);
     value
 }
 
 /// [`eval_cps`], on a trampoline that starts under the given dynamic
-/// environment, for library initialization or an embedding callback.
+/// environment, for library initialization or an embedding callback. The
+/// pool goes with the run, as [`eval_cps`]'s does (#869).
 #[expect(
     clippy::disallowed_methods,
-    reason = "holds `expr`, not read after the call: the CPS tree moves into the run, which roots \
-              it, and the stacks move into its first step"
+    reason = "holds `expr`, not read after the call, and the pool, which roots itself: the CPS \
+              tree moves into the run, which roots it, and the stacks move into its first step"
 )]
 pub(super) fn eval_cps_with(
     expr: &patina_core::CoreExpr,
@@ -767,15 +789,17 @@ pub(super) fn eval_cps_with(
         "eval_cps_with needs a tree its caller has already lowered"
     );
     let cps_expr = CpsTransformer::new(&literals).transform_toplevel(expr);
-    // The CPS tree holds the literals' words now (#705).
-    drop(literals);
-    CpsEvaluator::new(evaluator).eval_in_env_with(
+    // The CPS tree holds the literals' words now, a Rust local until the
+    // run's first safe point: the pool goes once the run returns (#869).
+    let value = CpsEvaluator::new(evaluator).eval_in_env_with(
         Rc::new(cps_expr),
         env,
         prompt_stack,
         dynamic_winds,
         exception_handlers,
-    )
+    );
+    drop(literals);
+    value
 }
 
 #[cfg(test)]

@@ -89,6 +89,16 @@ pub struct Evaluator {
     /// reaches them while parked, so the evaluator's own root provider
     /// traces them. A thread-local until #682.
     pub(crate) pending_escape: RefCell<Option<(TaggedValue, Rc<CpsContinuation>)>>,
+    /// The literal pool of the last `Step::Eval`'s datum, retired here when
+    /// its tree became a step (`retire_pool`, #869), and released once a
+    /// collection or the next retirement can no longer find that step
+    /// unrooted. At most one pool.
+    #[trace(
+        skip,
+        reason = "a literal pool, which roots its entries through its own registration with the \
+                  heap's root set for as long as it lives"
+    )]
+    retiring: RefCell<Option<patina_core::LiteralPool>>,
     /// Registry of library loaders (Rust, Scheme, etc.)
     #[trace(skip, reason = "loaders, which hold no values")]
     pub(crate) loader_registry: Rc<RefCell<LibraryLoaderRegistry>>,
@@ -183,6 +193,7 @@ impl Evaluator {
             library_registry,
             library_roots,
             pending_escape: RefCell::new(None),
+            retiring: RefCell::new(None),
             loader_registry,
             primitive_registry,
             fs,
@@ -499,6 +510,30 @@ impl Evaluator {
     pub(crate) fn take_pending_escape(&self) -> Option<(TaggedValue, Rc<CpsContinuation>)> {
         self.pending_escape.borrow_mut().take()
     }
+
+    /// Keep `pool`, a `Step::Eval`'s, past the step it made (#869). The
+    /// step's tree holds the pool's words, and it is a Rust local from
+    /// `eval_step`'s return until the trampoline running the step takes it
+    /// as its current step, where the next safe point roots it
+    /// (`StepRoots`). Nothing runs in between but that hand-over: no other
+    /// step, and so no other `eval_step`. So the pool retired before this
+    /// one has done its work, and goes now; at most one is ever retired.
+    /// The last is released after the driver's next collection, or when
+    /// the outermost run returns ([`Self::release_retired_pool`]).
+    pub(crate) fn retire_pool(&self, pool: patina_core::LiteralPool) {
+        let previous = self.retiring.replace(Some(pool));
+        drop(previous);
+    }
+
+    /// Release the pool [`Self::retire_pool`] kept, if any: after a
+    /// collection the driver ran, which rooted the step at its safe point,
+    /// and when the outermost run returns, where no step of it is left.
+    /// Off the step loop's fast path: neither is reached on a step that
+    /// does not collect.
+    pub(crate) fn release_retired_pool(&self) {
+        let retired = self.retiring.take();
+        drop(retired);
+    }
 }
 
 // Library loading methods
@@ -794,7 +829,7 @@ impl Evaluator {
         let shared_heap = self.heap.clone();
         while let Some(form) = loading.next_form() {
             // Desugar TaggedValue to CoreExpr, its literals in a pool of its
-            // own until its CPS tree holds them (#705).
+            // own until its run returns (#705, #869).
             let literals = patina_core::LiteralPool::new(&shared_heap.borrow());
             #[expect(
                 clippy::disallowed_methods,

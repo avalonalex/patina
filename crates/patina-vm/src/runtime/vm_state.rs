@@ -1203,7 +1203,8 @@ fn vm_evaluate_parsed_library(
 
     let run = |state: &mut VmState| -> Result<(), LibraryError> {
         for tv in &parsed.body {
-            // The form's literals, rooted until its code holds them (#705).
+            // The form's literals, rooted until its code is loaded (#705,
+            // #869).
             let literals = patina_core::LiteralPool::new(&shared_heap.borrow());
             #[expect(
                 clippy::disallowed_methods,
@@ -1241,8 +1242,7 @@ fn vm_evaluate_parsed_library(
                     e.diagnostic(),
                 )
             })?;
-            // The constants hold the literals now (#705).
-            drop((core_expr, literals));
+            drop(core_expr);
 
             // Each body form is a re-entry boundary: a raise in it can reach
             // a handler of the program's, and one that escapes (a `guard`
@@ -1250,6 +1250,9 @@ fn vm_evaluate_parsed_library(
             // leaves this load. The rest of the body must not run then, and
             // the library must not be registered or its exports bound.
             let unit = state.load_unit(top, nested, &lib_env);
+            // The pool goes once the loaded unit holds the literals' words,
+            // before the form runs (#869, M2).
+            drop(literals);
             let top_id = unit.id();
             let depth_before = state.execution.frames().len();
             #[expect(
@@ -1316,12 +1319,14 @@ pub(super) fn vm_eval_expr(
     expr: TaggedValue,
     env: &Rc<Environment>,
 ) -> Result<TaggedValue, VmError> {
-    let (top, nested) = compile_for_eval(state, expr, env)?;
+    let (top, nested, literals) = compile_for_eval(state, expr, env)?;
 
     // Execute in the main state, which keeps continuations and code objects
     // valid. This holds nothing of its own across the run, wherever it is
-    // reached from.
+    // reached from: the pool goes once the loaded unit holds the literals'
+    // words (#869).
     let unit = state.load_unit(top, nested, env);
+    drop(literals);
     let top_id = unit.id();
     #[expect(
         clippy::disallowed_methods,
@@ -1373,11 +1378,15 @@ pub(super) fn vm_eval_expr(
 /// into the machine: its callers cross it as a boundary (`across_reentry`).
 /// Leaves no code of its own loaded and no frame pushed. A frame refused
 /// reads only its kind.
+///
+/// Answers the code with the datum's literal pool, which roots the words of
+/// the code's constants until the caller has loaded it: the caller drops
+/// the pool after `load_unit` returns (#869).
 fn compile_for_eval(
     state: &mut VmState,
     expr: TaggedValue,
     env: &Rc<Environment>,
-) -> Result<(CodeObject, Vec<CodeObject>), VmError> {
+) -> Result<(CodeObject, Vec<CodeObject>, patina_core::LiteralPool), VmError> {
     if let Some(kind) = env.frame_kind() {
         return Err(VmError::Runtime {
             message: frame_refusal(kind),
@@ -1385,8 +1394,9 @@ fn compile_for_eval(
     }
     let desugarer = Desugarer::with_env(env.clone()).with_fs(state.fs.clone());
     let heap = state.heap.clone();
-    // The datum's literals, rooted until the code holds them, and dropped as
-    // this returns it (#705).
+    // The datum's literals, rooted until the code holding them is loaded:
+    // answered with the code, for the caller to drop after its load (#705,
+    // #869).
     let literals = patina_core::LiteralPool::new(&heap.borrow());
 
     #[expect(
@@ -1419,14 +1429,15 @@ fn compile_for_eval(
         )
     })?;
 
-    compile_with_qq_resolving(&core_expr, &literals, &heap, env, &state.primitive_registry).map_err(
-        |e| {
-            VmError::Runtime {
-                message: format!("eval: compile error: {}", e),
-            }
-            .with_diagnostic(e.diagnostic())
-        },
-    )
+    let (top, nested) =
+        compile_with_qq_resolving(&core_expr, &literals, &heap, env, &state.primitive_registry)
+            .map_err(|e| {
+                VmError::Runtime {
+                    message: format!("eval: compile error: {}", e),
+                }
+                .with_diagnostic(e.diagnostic())
+            })?;
+    Ok((top, nested, literals))
 }
 
 /// The datum `expr`, compiled and linked in `env`, as a closure of no
@@ -1450,8 +1461,10 @@ pub(super) fn eval_closure(
     expr: TaggedValue,
     env: &Rc<Environment>,
 ) -> Result<EvalCallee, VmError> {
-    let (top, nested) = compile_for_eval(state, expr, env)?;
+    let (top, nested, literals) = compile_for_eval(state, expr, env)?;
     let (top_id, window) = state.load_unit(top, nested, env).into_parts();
+    // The pool goes once the loaded unit holds the literals' words (#869).
+    drop(literals);
     let closure = state
         .heap
         .borrow_mut()

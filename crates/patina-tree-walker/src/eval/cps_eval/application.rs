@@ -1213,6 +1213,12 @@ impl<'a> CpsEvaluator<'a> {
 
     /// A `Step::Eval`'s datum made ready for this trampoline: imports installed
     /// during expansion, then transformed to deliver its value to [`EVAL_K`].
+    ///
+    /// The tree it answers holds the datum's literals' words, and is a Rust
+    /// local until the trampoline takes it as its next step, whose next safe
+    /// point roots it. So the pool that roots those words outlives this
+    /// call: it is retired to the evaluator (`Evaluator::retire_pool`,
+    /// #869), which releases it once nothing can find the step unrooted.
     fn eval_step(
         &self,
         expr: TaggedValue,
@@ -1227,6 +1233,7 @@ impl<'a> CpsEvaluator<'a> {
         let (core, literals) =
             super::callback::expand_for_eval(self.evaluator, expr, env, context)?;
         let cps = patina_ir::CpsTransformer::new(&literals).transform(&core, &EVAL_K.into());
+        self.evaluator.retire_pool(literals);
         Ok(Rc::new(cps))
     }
 

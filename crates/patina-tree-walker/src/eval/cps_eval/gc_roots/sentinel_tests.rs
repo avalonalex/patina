@@ -185,22 +185,27 @@ fn every_step_result_field_is_traced() {
     s.assert_survived(&heap);
 }
 
-/// `Evaluator`, every field: its global environment, and the value and
+/// `Evaluator`, every field: its global environment, the value and
 /// continuation parked between `set_pending_escape` and
-/// `take_pending_escape`.
+/// `take_pending_escape`, and a retired `Step::Eval` pool's entry, which the
+/// pool's own registration roots rather than the evaluator's trace (#869).
 #[test]
 fn every_evaluator_root_is_traced() {
     let shared = patina_core::new_shared_heap();
     let global_env = Rc::new(Environment::with_heap(&shared));
+    let retired = patina_core::LiteralPool::new(&shared.borrow());
     let mut heap = shared.borrow_mut();
     let mut s = Sentinels::new(&mut heap);
     let global = s.pair(&mut heap, "Evaluator.global_env");
     let escaping = s.vector(&mut heap, "Evaluator.pending_escape: the value");
     let held = s.string(&mut heap, "Evaluator.pending_escape: the continuation");
+    let pooled = s.pair(&mut heap, "Evaluator.retiring: the pool's entry");
     let mutator = Rc::clone(heap.mutator());
     let instance = Rc::clone(heap.instance());
     drop(heap);
     global_env.define(&shared, "global", global);
+    // SAFETY: allocated just now, and nothing has collected since.
+    let _ = unsafe { retired.add_word(pooled) };
 
     let library_registry = Rc::new(RefCell::new(LibraryRegistry::new()));
     let library_roots = LibraryRegistry::register_roots(&library_registry, &shared.borrow());
@@ -211,6 +216,7 @@ fn every_evaluator_root_is_traced() {
         library_registry,
         library_roots,
         pending_escape: RefCell::new(None),
+        retiring: RefCell::new(Some(retired)),
         loader_registry: Rc::new(RefCell::new(LibraryLoaderRegistry::new())),
         primitive_registry: patina_primitives::PrimitiveRegistry::new(),
         fs: Arc::new(patina_core::NativeFs),
