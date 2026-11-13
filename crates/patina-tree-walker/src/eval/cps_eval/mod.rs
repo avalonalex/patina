@@ -115,6 +115,12 @@ impl<'a> CpsEvaluator<'a> {
     fn maybe_collect(&self, driver: &mut GcDriver, step: &StepResult, expr: Option<&CpsExpr>) {
         let evaluator = self.evaluator;
         let collected = GcController::safe_point(&evaluator.gc, driver, |collect| {
+            // A `Step::Eval`'s retired pool has done its work: its step was
+            // taken by its trampoline before anything else ran, this loop,
+            // whose state this collection roots through `step`, or a nested
+            // one, which has returned (#869). Released before the collection
+            // marks, so that it keeps nothing the run has done with.
+            evaluator.release_retired_pool();
             // The machine's own state, lent to the collection; the library
             // registry is registered with the heap, which waits while a
             // load holds it (#682).
@@ -264,8 +270,10 @@ impl<'a> CpsEvaluator<'a> {
             return false;
         };
         let collected = GcController::collect_at_call(&evaluator.gc, driver, kind, |collect| {
-            // As at a safe point: the registered registry posts the
+            // As at a safe point: the retired pool goes before the
+            // collection marks (#869), and the registered registry posts the
             // collection while a load holds it (#682).
+            evaluator.release_retired_pool();
             let step_roots = gc_roots::StepRoots { step, expr };
             collect(&[evaluator, &step_roots]);
         });
@@ -309,6 +317,10 @@ impl<'a> CpsEvaluator<'a> {
     /// refcount bump rather than a deep clone of the subtree. It is also the
     /// node the trampoline's safe point roots, so the collector traces the
     /// tree the loop is actually walking rather than a copy of it.
+    ///
+    /// For a tree built by hand, whose literals are immediates or rooted by
+    /// the caller: it runs with an empty literal pool. A form's tree runs
+    /// through [`eval_cps`], with its own.
     #[expect(
         clippy::disallowed_methods,
         reason = "a wrapper over `eval_in_env_with` with empty stacks: holds nothing"
@@ -318,20 +330,31 @@ impl<'a> CpsEvaluator<'a> {
         expr: Rc<CpsExpr>,
         env: Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
-        self.eval_in_env_with(expr, env, Vec::new(), Vec::new(), Vec::new())
+        let literals = patina_core::LiteralPool::new(&self.evaluator.heap.borrow());
+        self.eval_in_env_with(expr, literals, env, Vec::new(), Vec::new(), Vec::new())
     }
 
-    /// Evaluate `expr` on a trampoline that starts under the given dynamic
-    /// environment — empty for a top-level form, the calling step's for the
-    /// `eval` primitive (`callback.rs`).
+    /// Evaluate `expr`, whose literals are `literals`' entries, on a
+    /// trampoline that starts under the given dynamic environment — empty
+    /// for a top-level form, the calling step's for the `eval` primitive
+    /// (`callback.rs`).
+    ///
+    /// The pool is taken here and dropped once the run has returned (#869):
+    /// from the transform to the run's first safe point the tree, which
+    /// holds the literals' words, is a value nothing traces, and the pool
+    /// roots them there. So no caller can let it go before the run roots
+    /// the tree. It keeps nothing the run does not: its entries are the
+    /// tree's own words, which the run roots throughout.
     #[expect(
         clippy::disallowed_methods,
-        reason = "holds nothing: the first step carries `expr`, `env` and the stacks, and the run \
-                  roots `expr` for its literals at every safe point"
+        reason = "holds the pool, which roots itself, and nothing else: the first step carries \
+                  `expr`, `env` and the stacks, and the run roots `expr` for its literals at \
+                  every safe point"
     )]
     pub(super) fn eval_in_env_with(
         &self,
         expr: Rc<CpsExpr>,
+        literals: patina_core::LiteralPool,
         env: Rc<Environment>,
         prompt_stack: Vec<types::PromptFrame>,
         dynamic_winds: Vec<patina_core::DynamicWindRecord>,
@@ -348,7 +371,9 @@ impl<'a> CpsEvaluator<'a> {
             dynamic_winds,
             exception_handlers,
         };
-        self.run_trampoline(initial, Some(&expr), types::TrampolineKind::Form)
+        let value = self.run_trampoline(initial, Some(&expr), types::TrampolineKind::Form);
+        drop(literals);
+        value
     }
 
     /// The step loop: run `initial` and every step after it until one
@@ -373,7 +398,28 @@ impl<'a> CpsEvaluator<'a> {
     /// nested — a callback's always, a form's beneath another run — and runs
     /// under a `NoGcScope`, because its caller holds live values in Rust
     /// locals that no root provider can see (`docs/GC_DESIGN.md` §7).
+    ///
+    /// Where any run returns, nested or not, `Ok` or `Err`, a `Step::Eval`'s
+    /// retired pool has done its work, and goes
+    /// (`Evaluator::release_retired_pool`, #869): its step was taken by its
+    /// trampoline before anything after `eval_step` ran, this return
+    /// included. Released here, outside the loop, rather than by a guard
+    /// over it, which measured more cycles on the tree-walker's workloads;
+    /// so a panic unwinding through the loop skips it, and the pool goes at
+    /// the next retirement, collection or run's return instead.
     fn run_trampoline(
+        &self,
+        initial: StepResult,
+        expr: Option<&CpsExpr>,
+        kind: types::TrampolineKind,
+    ) -> Result<TaggedValue, EvalError> {
+        let result = self.run_steps(initial, expr, kind);
+        self.evaluator.release_retired_pool();
+        result
+    }
+
+    /// [`Self::run_trampoline`]'s loop.
+    fn run_steps(
         &self,
         initial: StepResult,
         expr: Option<&CpsExpr>,
@@ -672,8 +718,8 @@ fn contains_quasiquote(expr: &patina_core::CoreExpr) -> bool {
 }
 
 /// Run `expr`, a form's tree whose literals are `literals`' entries, in
-/// `env`. The pool goes once the CPS tree holds the literals' words, before
-/// the run (#705).
+/// `env`. The pool goes with the form's run, once it has returned
+/// ([`CpsEvaluator::eval_in_env_with`], which takes it; #705, #869).
 pub fn eval_cps(
     expr: &patina_core::CoreExpr,
     literals: patina_core::LiteralPool,
@@ -718,27 +764,34 @@ pub fn eval_cps(
     let expr = &lower_quasiquotes_for(expr, evaluator, &literals)?;
 
     // Transform CoreExpr to CpsExpr, whose literals are words the run
-    // traces: the pool goes before the run (M2).
+    // traces from its first safe point on: the pool goes with the run (M2).
     let cps_expr = CpsTransformer::new(&literals).transform_toplevel(expr);
-    drop(literals);
 
     // Create CPS evaluator and evaluate in the specified environment
     let cps_evaluator = CpsEvaluator::new(evaluator);
     #[expect(
         clippy::disallowed_methods,
         reason = "holds `expr`, the caller's tree, not read after the call: the run roots the CPS \
-                  tree it is entered with"
+                  tree it is entered with, and the pool moves into it"
     )]
-    let value = cps_evaluator.eval_in_env(Rc::new(cps_expr), env);
+    let value = cps_evaluator.eval_in_env_with(
+        Rc::new(cps_expr),
+        literals,
+        env,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
     value
 }
 
 /// [`eval_cps`], on a trampoline that starts under the given dynamic
-/// environment, for library initialization or an embedding callback.
+/// environment, for library initialization or an embedding callback. The
+/// pool goes with the run, as [`eval_cps`]'s does (#869).
 #[expect(
     clippy::disallowed_methods,
-    reason = "holds `expr`, not read after the call: the CPS tree moves into the run, which roots \
-              it, and the stacks move into its first step"
+    reason = "holds `expr`, not read after the call: the CPS tree and the pool move into the run, \
+              which roots the tree, and the stacks move into its first step"
 )]
 pub(super) fn eval_cps_with(
     expr: &patina_core::CoreExpr,
@@ -767,10 +820,12 @@ pub(super) fn eval_cps_with(
         "eval_cps_with needs a tree its caller has already lowered"
     );
     let cps_expr = CpsTransformer::new(&literals).transform_toplevel(expr);
-    // The CPS tree holds the literals' words now (#705).
-    drop(literals);
+    // The CPS tree holds the literals' words now, a Rust local until the
+    // run's first safe point: the pool goes into the run, which drops it
+    // once it returns (#869).
     CpsEvaluator::new(evaluator).eval_in_env_with(
         Rc::new(cps_expr),
+        literals,
         env,
         prompt_stack,
         dynamic_winds,
@@ -848,5 +903,159 @@ mod tests {
 
         let result = cps_eval.eval(&halt_cont).unwrap();
         assert_eq!(result.as_fixnum(), Some(3));
+    }
+
+    /// A fresh pair `(7)`, which nothing reaches until the caller puts it
+    /// somewhere, and a reader that checks it is still that pair: in a debug
+    /// or `gc-check` build, a swept pair panics on the read (#621).
+    fn fresh_pair(evaluator: &super::super::Evaluator) -> TaggedValue {
+        (evaluator.heap.borrow_mut()).alloc_pair(TaggedValue::fixnum(7), TaggedValue::NULL)
+    }
+
+    fn assert_still_the_pair(evaluator: &super::super::Evaluator, answer: TaggedValue) {
+        let heap = evaluator.heap.borrow();
+        assert_eq!(heap.car(answer), TaggedValue::fixnum(7));
+        assert_eq!(heap.cdr(answer), TaggedValue::NULL);
+    }
+
+    /// A form's literal pool roots the literals' words until the run that
+    /// holds the form's CPS tree has returned (#869): from the transform to
+    /// the run's first safe point the tree is a Rust local that nothing
+    /// traces, and the pool alone keeps its words. So a collection between
+    /// `transform_toplevel` and the run, with the evaluator's roots and the
+    /// heap's registered ones, keeps a pair that only the tree names, and
+    /// the form answers it. `eval_cps` and `eval_cps_with` hand their pool
+    /// to `eval_in_env_with` with the tree, as this does, which drops it
+    /// once the run returns, so neither can drop it in the window. With the
+    /// pool dropped before the collection, as both dropped it until #869,
+    /// the pair is swept.
+    #[test]
+    fn a_forms_pool_keeps_its_literals_until_its_run_returns() {
+        use patina_core::heap::gc::collect_for_tests;
+        use patina_core::{CoreExpr, CoreExprKind, LiteralPool};
+
+        let evaluator = make_test_evaluator();
+        let literals = LiteralPool::new(&evaluator.heap.borrow());
+        let pair = fresh_pair(&evaluator);
+        // SAFETY: allocated just now, and nothing has collected since.
+        let quoted = unsafe { literals.add_word(pair) };
+        let expr = CoreExpr::new(CoreExprKind::Quote(quoted));
+        let cps = patina_ir::CpsTransformer::new(&literals).transform_toplevel(&expr);
+
+        // The window: transformed, not yet run.
+        collect_for_tests(&mut evaluator.heap.borrow_mut(), &[&evaluator]);
+
+        let answer = CpsEvaluator::new(&evaluator)
+            .eval_in_env_with(
+                Rc::new(cps),
+                literals,
+                evaluator.global_env.clone(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("runs");
+        assert_eq!(answer, pair, "the form answers the pair it quoted");
+        assert_still_the_pair(&evaluator, answer);
+    }
+
+    /// A `Step::Eval`'s pool outlives the step it makes (#869): the eval'd
+    /// tree becomes the trampoline's next step, a Rust local from
+    /// `eval_step`'s return until the trampoline holds it, where its next
+    /// safe point roots it (`StepRoots`). So a collection in that window,
+    /// with the evaluator's roots and the heap's registered ones, keeps a
+    /// pair that only the eval'd tree names, and the step answers it. Here
+    /// the window is opened by hand: `resumable_step` makes the step from
+    /// the `eval` primitive's `Step::Eval`, and the step runs after the
+    /// collection. With the pool dropped as `eval_step` returns, as it was
+    /// until #869, the pair is swept.
+    #[test]
+    fn a_step_evals_pool_outlives_the_step_it_makes() {
+        use patina_core::heap::gc::collect_for_tests;
+
+        let evaluator = make_test_evaluator();
+        let cps = CpsEvaluator::new(&evaluator);
+        let index = (evaluator.primitive_registry)
+            .resolve_index("scheme.eval/eval")
+            .expect("`eval` is registered");
+        let pair = fresh_pair(&evaluator);
+        // `(quote (7))`: its outer pairs are swept once the expansion has
+        // read them, which is as it should be.
+        let datum = {
+            let mut heap = evaluator.heap.borrow_mut();
+            let quote = heap.intern_symbol("quote");
+            let rest = heap.alloc_pair(pair, TaggedValue::NULL);
+            heap.alloc_pair(quote, rest)
+        };
+        let step = cps
+            .resumable_step(
+                index,
+                Ok(patina_primitives::TaggedStep::Eval {
+                    expr: datum,
+                    env: evaluator.global_env.clone(),
+                    state: TaggedValue::UNSPECIFIED,
+                }),
+                types::ContValue::Halt,
+                ContEnv::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+            .expect("expands");
+
+        // The window: the step made, not yet the trampoline's.
+        collect_for_tests(&mut evaluator.heap.borrow_mut(), &[&evaluator]);
+
+        let answer = cps
+            .run_trampoline(step, None, types::TrampolineKind::Form)
+            .expect("runs");
+        assert_eq!(answer, pair, "the step answers the pair it quoted");
+        assert_still_the_pair(&evaluator, answer);
+    }
+
+    /// However many `Step::Eval`s run without a collection, at most one
+    /// pool is retired (#869): each retirement releases the one before,
+    /// whose step its trampoline has taken by then. Counted by the heap's
+    /// registered roots, a pool's registration among them; the run's
+    /// return releases the last.
+    #[test]
+    fn step_evals_retire_at_most_one_pool() {
+        let evaluator = make_test_evaluator();
+        let cps = CpsEvaluator::new(&evaluator);
+        let index = (evaluator.primitive_registry)
+            .resolve_index("scheme.eval/eval")
+            .expect("`eval` is registered");
+        let registered = || evaluator.heap.borrow().root_set().registered();
+        let before = registered();
+        let mut last = None;
+        for _ in 0..100 {
+            let datum = {
+                let pair = fresh_pair(&evaluator);
+                let mut heap = evaluator.heap.borrow_mut();
+                let quote = heap.intern_symbol("quote");
+                let rest = heap.alloc_pair(pair, TaggedValue::NULL);
+                heap.alloc_pair(quote, rest)
+            };
+            let step = cps
+                .resumable_step(
+                    index,
+                    Ok(patina_primitives::TaggedStep::Eval {
+                        expr: datum,
+                        env: evaluator.global_env.clone(),
+                        state: TaggedValue::UNSPECIFIED,
+                    }),
+                    types::ContValue::Halt,
+                    ContEnv::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .expect("expands");
+            assert_eq!(registered(), before + 1, "one pool retired");
+            last = Some(step);
+        }
+        cps.run_trampoline(last.expect("made"), None, types::TrampolineKind::Form)
+            .expect("runs");
+        assert_eq!(registered(), before, "released as the run returns");
     }
 }

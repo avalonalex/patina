@@ -183,7 +183,7 @@ impl TreeWalker {
             None => Desugarer::with_env(env.clone()).with_fs(self.evaluator.fs.clone()),
         };
 
-        // The form's literals, rooted until its CPS tree holds them (#705).
+        // The form's literals, rooted until its run returns (#705, #869).
         let literals = patina_core::LiteralPool::new(&internal_heap.borrow());
         #[expect(
             clippy::disallowed_methods,
@@ -228,8 +228,8 @@ impl TreeWalker {
 
         // A form starts with no interrupted `exit` noted.
         patina_runtime::exit_status::forget_interrupted_exit();
-        // The application's literals, rooted until its CPS tree holds them,
-        // as a form's are (#705).
+        // The application's literals, rooted until its run returns, as a
+        // form's are (#705, #869).
         let literals = patina_core::LiteralPool::new(&self.evaluator.heap.borrow());
         // SAFETY: the words are a host's handles' (`Interpreter::call`),
         // which root them, on this backend's heap.

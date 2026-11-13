@@ -249,7 +249,10 @@ pub(super) fn expand_for_eval(
     context: &CallbackContext<'_, '_, '_>,
 ) -> Result<(patina_core::CoreExpr, patina_core::LiteralPool), EvalError> {
     let desugarer = patina_frontend::Desugarer::with_env(env.clone()).with_fs(evaluator.fs.clone());
-    // The datum's literals, rooted until the CPS tree holds them (#705).
+    // The datum's literals, answered with the tree for the caller to keep
+    // until the run holding its CPS tree roots it: to the run's end on a run
+    // of its own (`eval_cps_with`), and retired to the evaluator for a
+    // `Step::Eval` (`eval_step`; #705, #869).
     let literals = patina_core::LiteralPool::new(&evaluator.heap.borrow());
     #[expect(
         clippy::disallowed_methods,

@@ -27,12 +27,23 @@
 //! themselves and their file system at construction, the hosts set the
 //! command line, the runtime installs its library query, and the store
 //! funnel keeps the current ports.
+//!
+//! **One slot is the collector's business**, though it needs no trace: the
+//! tree-walker's retired literal pool (#869), the pool of the last datum
+//! `eval` handed its trampoline as a step (`Step::Eval`), kept until that
+//! step is surely rooted. A pool roots its entries through its own
+//! registration with the heap's root set, so the instance traces nothing.
+//! It sits here, behind the `Rc` the evaluator already holds, rather than in
+//! the evaluator: a field of the evaluator's own, even one never used, cost
+//! the tree-walker's workloads 1–2% in cycles at the same instructions
+//! (measured on aligned builds), as a field of `Heap`'s did (#685).
 
 use std::cell::{Cell, Ref, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::features::{FeatureRegistry, LibraryAvailability};
+use crate::literal_pool::LiteralPool;
 use crate::port::Port;
 use crate::vfs::{FileSystem, NativeFs};
 
@@ -76,6 +87,10 @@ pub struct Instance {
     /// (`crate::port::Port::stdin`), which a teardown during the thread's
     /// exit would find destroyed.
     standard_ports: [Rc<Port>; 3],
+    /// The tree-walker's retired literal pool, at most one
+    /// ([`Instance::retire_literal_pool`], #869). See the
+    /// [module docs](self).
+    retired_literal_pool: RefCell<Option<LiteralPool>>,
 }
 
 impl Instance {
@@ -92,6 +107,7 @@ impl Instance {
             library_availability: RefCell::new(None),
             current_ports: RefCell::new(standard_ports.clone()),
             standard_ports,
+            retired_literal_pool: RefCell::new(None),
         }
     }
 
@@ -184,6 +200,26 @@ impl Instance {
     pub fn library_availability(&self) -> Option<Rc<dyn LibraryAvailability>> {
         self.library_availability.borrow().clone()
     }
+
+    /// Keep `pool` until [`Instance::release_retired_literal_pool`], in
+    /// place of the pool kept before it, which is dropped: the tree-walker's
+    /// `Evaluator::retire_pool` (#869), which says when that is sound. Not
+    /// an interface: a backend's.
+    #[doc(hidden)]
+    pub fn retire_literal_pool(&self, pool: LiteralPool) {
+        let previous = self.retired_literal_pool.replace(Some(pool));
+        // Dropped with the slot's borrow released.
+        drop(previous);
+    }
+
+    /// Drop the pool [`Instance::retire_literal_pool`] kept, if any: the
+    /// tree-walker's `Evaluator::release_retired_pool` (#869). Not an
+    /// interface: a backend's.
+    #[doc(hidden)]
+    pub fn release_retired_literal_pool(&self) {
+        let retired = self.retired_literal_pool.take();
+        drop(retired);
+    }
 }
 
 /// An instance over the native file system.
@@ -245,6 +281,25 @@ mod tests {
             &instance.current_port(CurrentPort::Output),
             &output
         ));
+    }
+
+    /// The retired literal pool slot holds one pool: a retirement drops the
+    /// pool before it, and a release the last, each taking its registration
+    /// off the heap's root set (#869).
+    #[test]
+    fn the_instance_retires_one_literal_pool() {
+        let heap = crate::Heap::new();
+        let instance = Instance::default();
+        let registered = || heap.root_set().registered();
+        let before = registered();
+        instance.retire_literal_pool(LiteralPool::new(&heap));
+        assert_eq!(registered(), before + 1);
+        instance.retire_literal_pool(LiteralPool::new(&heap));
+        assert_eq!(registered(), before + 1, "the earlier pool went");
+        instance.release_retired_literal_pool();
+        assert_eq!(registered(), before, "the last went");
+        instance.release_retired_literal_pool();
+        assert_eq!(registered(), before);
     }
 
     #[test]

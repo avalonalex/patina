@@ -112,7 +112,11 @@ pub struct Evaluator {
     /// so a call of a primitive that takes the context lends it to the
     /// context with no heap borrow and no count (#706). A heap keeps one
     /// instance for its life; what changes is inside it.
-    #[trace(skip, reason = "the interpreter's metadata: no value")]
+    #[trace(
+        skip,
+        reason = "the interpreter's metadata, and a retired literal pool, which roots its entries \
+                  through its own registration with the heap's root set (#869)"
+    )]
     pub(crate) instance: Rc<patina_core::Instance>,
     /// Why `(scheme base)` could not be loaded at construction, if it could
     /// not: see [`Evaluator::bootstrap_error`].
@@ -499,6 +503,34 @@ impl Evaluator {
     pub(crate) fn take_pending_escape(&self) -> Option<(TaggedValue, Rc<CpsContinuation>)> {
         self.pending_escape.borrow_mut().take()
     }
+
+    /// Keep `pool`, a `Step::Eval`'s, past the step it made (#869). The
+    /// step's tree holds the pool's words, and it is a Rust local from
+    /// `eval_step`'s return until the trampoline running the step takes it
+    /// as its current step, where the next safe point roots it
+    /// (`StepRoots`). Nothing runs in between but that hand-over: no other
+    /// step, and so no other `eval_step`. So the pool retired before this
+    /// one has done its work, and goes now; at most one is ever retired.
+    /// The last is released as the driver's next collection begins, before
+    /// it marks, or when a run returns ([`Self::release_retired_pool`]).
+    ///
+    /// Kept on the heap's instance, not here: a field of the evaluator's
+    /// own cost the tree-walker's workloads 1–2% in cycles at the same
+    /// instructions (`patina_core::Instance`'s module docs).
+    pub(crate) fn retire_pool(&self, pool: patina_core::LiteralPool) {
+        self.instance.retire_literal_pool(pool);
+    }
+
+    /// Release the pool [`Self::retire_pool`] kept, if any, once its step
+    /// has been taken by its trampoline: as a collection the driver runs
+    /// begins, before it marks, so that the pool keeps nothing through it,
+    /// since the collection roots the loop's step (`StepRoots`); and when a
+    /// run returns, `Ok` or `Err`. Off the step loop's fast path: the first
+    /// only on a step that collects, the second once per run, after its
+    /// loop.
+    pub(crate) fn release_retired_pool(&self) {
+        self.instance.release_retired_literal_pool();
+    }
 }
 
 // Library loading methods
@@ -794,7 +826,7 @@ impl Evaluator {
         let shared_heap = self.heap.clone();
         while let Some(form) = loading.next_form() {
             // Desugar TaggedValue to CoreExpr, its literals in a pool of its
-            // own until its CPS tree holds them (#705).
+            // own until its run returns (#705, #869).
             let literals = patina_core::LiteralPool::new(&shared_heap.borrow());
             #[expect(
                 clippy::disallowed_methods,

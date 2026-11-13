@@ -443,7 +443,8 @@ fn load_linked(
     let ns = Rc::new(Environment::with_heap(&state.heap));
     ns.define(&state.heap, "x", x);
     ns.define(&state.heap, "y", y);
-    let id = state.load_unit(code, Vec::new(), &ns).id();
+    let literals = patina_core::LiteralPool::new(&state.heap.borrow());
+    let id = state.load_unit(code, Vec::new(), &ns, literals).id();
     drop(ns);
     id
 }
@@ -683,6 +684,7 @@ fn zeal_with_callee() -> (VmState, TaggedValue) {
     let globals = Rc::new(Environment::with_heap(&heap));
     let mut state = VmState::with_gc_mode(heap, globals, GcMode::Zeal);
     let globals = Rc::clone(state.global_env());
+    let literals = patina_core::LiteralPool::new(&state.heap.borrow());
     let (a, window) = state
         .load_unit(
             assembled(
@@ -697,6 +699,7 @@ fn zeal_with_callee() -> (VmState, TaggedValue) {
             ),
             Vec::new(),
             &globals,
+            literals,
         )
         .into_parts();
     let closure = (state.heap.borrow_mut()).alloc_vm_closure(a.0, Vec::new());
