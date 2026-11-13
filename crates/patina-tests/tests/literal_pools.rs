@@ -8,7 +8,9 @@
 //! evaluation that compiled it, and nothing it held stays live through it.
 
 mod common;
-use common::{tree_walker_interpreter, vm_interpreter};
+use common::{
+    eval_program_tree_walker, eval_program_vm, tree_walker_interpreter, vm_interpreter,
+};
 use patina_interpreter::{Backend, Interpreter};
 
 /// The forms, each compiled by a different path or with a different kind
@@ -50,4 +52,28 @@ fn check<B: Backend>(backend: &str, interp: Interpreter<B>) {
 fn no_literal_pool_outlives_its_compilation() {
     check("vm", vm_interpreter());
     check("tree-walker", tree_walker_interpreter());
+}
+
+/// An `eval`'d datum's quoted pair, once its form is done and only an
+/// ephemeron's key names it, is let go of by the next collection, inside
+/// the run that evaluated it as well as after: nothing the datum's pool held
+/// stays live through it once its form is done (M2, #869). On the
+/// tree-walker the pool of a `Step::Eval` is retired until the driver's
+/// next collection, which must release it before it marks: released after,
+/// it kept the pair through that collection, a liveness the VM and the
+/// parent of #869 never had. The control is the same pair made with no
+/// `eval`.
+#[test]
+fn an_evald_datum_is_let_go_of_by_the_next_collection() {
+    const PROGRAM: &str = "
+        (import (scheme base) (scheme eval) (scheme ephemeron) (patina debug))
+        (define env (environment '(scheme base)))
+        (define (broken-after-one-gc make)
+          (let ((e (make-ephemeron (make) 'v)))
+            (gc)
+            (ephemeron-broken? e)))
+        (list (broken-after-one-gc (lambda () (eval (list 'quote (list 1 2)) env)))
+              (broken-after-one-gc (lambda () (list 1 2))))";
+    assert_eq!(eval_program_vm(PROGRAM), "(#t #t)", "vm");
+    assert_eq!(eval_program_tree_walker(PROGRAM), "(#t #t)", "tree-walker");
 }
