@@ -979,7 +979,7 @@ expansion runs in (§7; point C of `PRD/GC_PRD.md` §11.3).
 | `HandleTable.placeholders` | `placeholder_store.rs` | Not a root: the heap's `PlaceholderList` (#836), its namespaces' placeholder stores keyed by `env_id`, which the sweep's pass walks to drop every placeholder and weak read-through record no traced link table marked (§4.5, §4.7). Weak by design, so the derived trace skips the field: traced, it would keep every listed namespace's placeholders. It holds stores, never a namespace, by `Rc` or `Weak`; a namespace's drop takes its store off at once (`PlaceholderHandle`). On the `HandleTable`, by its own `Rc`, for `root_set`'s reason, and carried across teardown, so the teardown sweep's pass empties the store of every namespace that outlives the heap |
 | `HandleTable.by_name` | `heap/handles.rs` | The heap's by-name record (#836, `Heap::by_name_record`): the record a VM unit's link table links for a name its namespace reaches by an alias or a visible scoped definition, read by name (§4.7). Made once, the first time a link needs it, and rooted here for the heap's life, so that an entry naming it never names a freed pair whatever the tables traced; `None` on a heap no such link was made on, as on every tree-walker heap. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason. Uncounted. Pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
-| A compilation's `LiteralPool` | `crates/patina-core/src/literal_pool.rs` | The heap literals of the form being compiled, from its expansion until the code that holds them is traced in its own right (§9.7, #705, #869): registered with the heap's root set for the pool's life, its entries reported as slots. The VM drops the pool once `load_unit` has returned, before the form runs; the tree-walker once the form's run returns, and a `Step::Eval`'s, retired to the evaluator (`Evaluator.retiring`, at most one), after the driver's next collection, the next retirement or the outermost run's return (§7). So it never holds more than one form's quoted text |
+| A compilation's `LiteralPool` | `crates/patina-core/src/literal_pool.rs` | The heap literals of the form being compiled, from its expansion until the code that holds them is traced in its own right (§9.7, #705, #869): registered with the heap's root set for the pool's life, its entries reported as slots. The VM drops the pool once `load_unit` has returned, before the form runs; the tree-walker once the form's run returns, and a `Step::Eval`'s, retired to the evaluator (`Evaluator.retiring`, at most one), after the driver's next collection, the next retirement or a run's return (§7). So it never holds more than one form's quoted text |
 | Macro literals and environments | `heap/mod.rs`, `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: the literals the object holds (§9.6), and its body's `definition_env` and each `foreign_expansions` environment (§4.3) |
 | In-flight `ExceptionObject.irritants` | `crates/patina-core/src/error.rs:44` | Lives in a propagating `Err` on the Rust stack; covered by deferral (GC never runs during unwinding — safe points are at loop tops, not in error paths) |
 
@@ -2002,14 +2002,16 @@ entries name, the same words the code copied:
   `eval_step`'s return and the trampoline's `current_step = step` but that
   hand-over, so a later retirement finds the earlier step already taken, and
   replaces the earlier pool: at most one pool is retired, however long a loop
-  of `eval`s runs without collecting (`step_evals_retire_at_most_one_pool`). The retired pool is also released after
-  each collection the driver runs, at a safe point or at a call (which rooted
-  the step), and when the outermost run returns, by any way out
-  (`ReleaseRetiredPool`), so the loop's fast path does nothing new. A nested
-  trampoline has no driver (#702), so a pool retired under one waits for the
-  next retirement, the outer driver's next collection or the outermost
-  return, by which time the nested run's tree is gone or held by closures
-  and continuations, which trace it.
+  of `eval`s runs without collecting (`step_evals_retire_at_most_one_pool`).
+  The retired pool is also released after each collection the driver runs,
+  at a safe point or at a call (which rooted the step), and when any run
+  returns, nested or not, by any way out (`run_trampoline`, around the
+  loop), which comes after the step was taken; so the loop's fast path does
+  nothing new. A nested trampoline has no driver (#702) and collects
+  nothing, so a pool retired under one is never released by a collection
+  before its step is taken, and no collection runs until the outer driver's
+  next safe point, by which time the nested run's tree is gone or held by
+  closures and continuations, which trace it.
 
 Each window has a test that collects inside it with the machine's own roots
 and the heap's registered ones, and fails in debug and release `gc-check`

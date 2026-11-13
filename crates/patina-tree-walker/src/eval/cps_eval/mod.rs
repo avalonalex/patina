@@ -378,7 +378,26 @@ impl<'a> CpsEvaluator<'a> {
     /// nested — a callback's always, a form's beneath another run — and runs
     /// under a `NoGcScope`, because its caller holds live values in Rust
     /// locals that no root provider can see (`docs/GC_DESIGN.md` §7).
+    ///
+    /// Where any run returns, nested or not, by any way out, a `Step::Eval`'s
+    /// retired pool has done its work, and goes
+    /// (`Evaluator::release_retired_pool`, #869): its step was taken by its
+    /// trampoline before anything after `eval_step` ran, this return
+    /// included. Released here, outside the loop, rather than by a guard
+    /// over it, which measured more cycles on the tree-walker's workloads.
     fn run_trampoline(
+        &self,
+        initial: StepResult,
+        expr: Option<&CpsExpr>,
+        kind: types::TrampolineKind,
+    ) -> Result<TaggedValue, EvalError> {
+        let result = self.run_steps(initial, expr, kind);
+        self.evaluator.release_retired_pool();
+        result
+    }
+
+    /// [`Self::run_trampoline`]'s loop.
+    fn run_steps(
         &self,
         initial: StepResult,
         expr: Option<&CpsExpr>,
@@ -391,11 +410,6 @@ impl<'a> CpsEvaluator<'a> {
         };
         let outermost = driver.is_some();
         let _nested = driver.is_none().then(|| NoGcScope::enter(heap));
-        // Where the outermost run returns, by any way out, no step of it is
-        // left for a `Step::Eval`'s retired pool to cover (#869).
-        // `then`, not `then_some`: a guard built for a nested run and
-        // discarded at once would run its drop there.
-        let _release = outermost.then(|| ReleaseRetiredPool(self.evaluator));
         // The open `AssertNoGc` windows, checked at every poll (#624).
         let assert_no_gc = AssertNoGcCount::of(heap);
         let trampoline = types::TrampolineGuard::enter(kind);
@@ -586,16 +600,6 @@ impl<'a> CpsEvaluator<'a> {
                 Err(e) => return Err(e),
             }
         }
-    }
-}
-
-/// Releases a `Step::Eval`'s retired pool when the outermost run that holds
-/// it returns (`Evaluator::release_retired_pool`, #869).
-struct ReleaseRetiredPool<'e>(&'e super::Evaluator);
-
-impl Drop for ReleaseRetiredPool<'_> {
-    fn drop(&mut self) {
-        self.0.release_retired_pool();
     }
 }
 
@@ -979,8 +983,8 @@ mod tests {
     /// However many `Step::Eval`s run without a collection, at most one
     /// pool is retired (#869): each retirement releases the one before,
     /// whose step its trampoline has taken by then. Counted by the heap's
-    /// registered roots, a pool's registration among them; the outermost
-    /// run's return releases the last.
+    /// registered roots, a pool's registration among them; the run's
+    /// return releases the last.
     #[test]
     fn step_evals_retire_at_most_one_pool() {
         let evaluator = make_test_evaluator();
@@ -1019,10 +1023,6 @@ mod tests {
         }
         cps.run_trampoline(last.expect("made"), None, types::TrampolineKind::Form)
             .expect("runs");
-        assert_eq!(
-            registered(),
-            before,
-            "released as the outermost run returns"
-        );
+        assert_eq!(registered(), before, "released as the run returns");
     }
 }

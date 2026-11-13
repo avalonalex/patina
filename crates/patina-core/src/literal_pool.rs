@@ -20,7 +20,7 @@
 //! in the code store, before the form runs; the tree-walker once the run
 //! that roots the form's `CpsExpr` has returned, and for a `Step::Eval`'s
 //! tree, which becomes a step of the running trampoline, after the driver's
-//! next collection or the outermost run's return. Until then the code is a
+//! next collection, the next retirement or a run's return. Until then the code is a
 //! Rust value nothing traces, and the pool is the only root of the words it
 //! copied. So a pool never holds more than one form's text quotes, and
 //! nothing it held stays live through it once its form is done (M2).

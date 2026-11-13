@@ -518,8 +518,8 @@ impl Evaluator {
     /// (`StepRoots`). Nothing runs in between but that hand-over: no other
     /// step, and so no other `eval_step`. So the pool retired before this
     /// one has done its work, and goes now; at most one is ever retired.
-    /// The last is released after the driver's next collection, or when
-    /// the outermost run returns ([`Self::release_retired_pool`]).
+    /// The last is released after the driver's next collection, or when a
+    /// run returns ([`Self::release_retired_pool`]).
     pub(crate) fn retire_pool(&self, pool: patina_core::LiteralPool) {
         let previous = self.retiring.replace(Some(pool));
         drop(previous);
@@ -527,9 +527,9 @@ impl Evaluator {
 
     /// Release the pool [`Self::retire_pool`] kept, if any: after a
     /// collection the driver ran, which rooted the step at its safe point,
-    /// and when the outermost run returns, where no step of it is left.
-    /// Off the step loop's fast path: neither is reached on a step that
-    /// does not collect.
+    /// and when a run returns, which is after the step was taken. Off the
+    /// step loop's fast path: neither is reached on a step that does not
+    /// collect.
     pub(crate) fn release_retired_pool(&self) {
         let retired = self.retiring.take();
         drop(retired);

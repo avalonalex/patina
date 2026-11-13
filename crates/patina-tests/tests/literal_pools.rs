@@ -2,8 +2,8 @@
 //! them from the form's expansion until the code that holds them is rooted
 //! (#705, #869; M2 in `PRD/GC_PRD.md` §17): on the VM until its unit is
 //! loaded, before it runs; on the tree-walker until its run returns, and for
-//! an `eval`'d datum's tree until the driver's next collection or the
-//! outermost run's return. So after every evaluation, on every path a form
+//! an `eval`'d datum's tree until the driver's next collection, the next
+//! `eval` or a run's return. So after every evaluation, on every path a form
 //! is compiled by, the heap's root set is as it was: no pool outlives the
 //! evaluation that compiled it, and nothing it held stays live through it.
 
