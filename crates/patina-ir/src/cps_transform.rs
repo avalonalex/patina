@@ -47,8 +47,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// CPS Transformer state
 pub struct CpsTransformer<'a> {
     /// The literal pool of the compilation being transformed, through which
-    /// each literal's word is copied into the `CpsExpr`, traced from there
-    /// on (#705).
+    /// each literal's word is copied into the `CpsExpr` (#705). The
+    /// `CpsExpr` is traced only once a run holds it, so the pool roots those
+    /// words until the run that evaluates it returns, or, for a `Step::Eval`,
+    /// until its retirement ends (#869).
     literals: &'a LiteralPool,
     /// Counter for generating unique names
     gensym_counter: AtomicU64,

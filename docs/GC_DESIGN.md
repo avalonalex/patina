@@ -2019,7 +2019,11 @@ entries name, the same words the code copied:
   nothing, so a pool retired under one is never released by a collection
   before its step is taken, and no collection runs until the outer driver's
   next safe point, by which time the nested run's tree is gone or held by
-  closures and continuations, which trace it.
+  closures and continuations, which trace it. The driver's two collections
+  outside a run, `collect_if_pending` at a library load's end and
+  `collect_for_loader`, do not release it: each takes the driver only where
+  no trampoline holds it, after every run has released the slot as it
+  returned.
 
 Each window has a test that collects inside it with the machine's own roots
 and the heap's registered ones, and fails in debug and release `gc-check`
@@ -2028,7 +2032,8 @@ builds when the pool goes before the collection, where it went before #869
 `a_forms_pool_keeps_its_literals_until_its_run_returns`,
 `a_step_evals_pool_outlives_the_step_it_makes`). The first two hand their
 pools to `load_unit` and `eval_in_env_with`, the functions every site goes
-through, and the third drives the `eval` primitive's own `Step::Eval`; what
+through, and the third hands `resumable_step` a `Step::Eval` as the `eval`
+primitive answers one, and collects before the trampoline takes the step; what
 holds each site to the order is that the function takes the pool, not a
 test of the site. `PATINA_GC_STRESS` and zeal collect only at poll sites,
 and none of these stretches has one, so no lane would see a window
