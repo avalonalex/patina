@@ -2010,9 +2010,11 @@ entries name, the same words the code copied:
   The retired pool is also released as each collection the driver runs
   begins, at a safe point or at a call, before it marks, since that
   collection roots the loop's step, so the pool keeps nothing through it
-  (`an_evald_datum_is_let_go_of_by_the_next_collection`); and when any run
-  returns, nested or not, `Ok` or `Err` (`run_trampoline`, after the loop),
-  which comes after the step was taken. So the loop's fast path does
+  (`an_evald_datum_is_let_go_of_by_the_next_collection` at a call,
+  `an_evald_datum_is_let_go_of_by_the_next_safe_point_collection` at a safe
+  point); and when any run returns, nested or not, `Ok` or `Err`
+  (`run_trampoline`, after the loop), which comes after the step was
+  taken. So the loop's fast path does
   nothing new. A nested trampoline has no driver (#702) and collects
   nothing, so a pool retired under one is never released by a collection
   before its step is taken, and no collection runs until the outer driver's
@@ -2518,8 +2520,9 @@ Each literal is a `Lit` (`crates/patina-core/src/literal_pool.rs`):
   marks, or a run's return, each after its trampoline has taken it as a step
   (§7's rooted windows). So a pool never holds more than one form's quoted
   text, and nothing it held stays live through it once its form is done:
-  `an_evald_datum_is_let_go_of_by_the_next_collection` holds an `eval`'d
-  datum to that within its run.
+  `an_evald_datum_is_let_go_of_by_the_next_collection` and
+  `an_evald_datum_is_let_go_of_by_the_next_safe_point_collection` hold an
+  `eval`'d datum to that within its run.
 - **Tests.** `a_collection_keeps_a_pooled_literal` is the sentinel, and
   `literal_pools.rs` holds every compilation path to dropping its pool.
 - **Why indices, not a root beside the words.** Until the pool, the literals

@@ -1607,7 +1607,10 @@ pool by value, so that no site can drop it in the window; a test of each
 site would see nothing, since no poll site lies there. `literal_pools.rs`
 holds every path to releasing its pool by the time the evaluation returns,
 and, in `an_evald_datum_is_let_go_of_by_the_next_collection`, an `eval`'d
-datum's pair to being let go of by the next `(gc)` within its run.
+datum's pair to being let go of by the next `(gc)` within its run, and in
+`an_evald_datum_is_let_go_of_by_the_next_safe_point_collection` by the next
+collection the driver runs at a safe point, which the run reaches by
+allocating.
 
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):

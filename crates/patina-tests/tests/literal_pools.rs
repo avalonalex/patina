@@ -75,3 +75,34 @@ fn an_evald_datum_is_let_go_of_by_the_next_collection() {
     assert_eq!(eval_program_vm(PROGRAM), "(#t #t)", "vm");
     assert_eq!(eval_program_tree_walker(PROGRAM), "(#t #t)", "tree-walker");
 }
+
+/// `an_evald_datum_is_let_go_of_by_the_next_collection`, with the
+/// collection the driver's own at a safe point, which the run reaches by
+/// allocating, rather than `(gc)`'s at its call: the tree-walker releases a
+/// `Step::Eval`'s retired pool before either marks, at separate sites
+/// (`maybe_collect` and `collect_at_call`, #869). Each element says first
+/// that a collection ran, so a run that never collected cannot pass, then
+/// that the ephemeron's key went.
+#[test]
+fn an_evald_datum_is_let_go_of_by_the_next_safe_point_collection() {
+    const PROGRAM: &str = "
+        (import (scheme base) (scheme eval) (scheme ephemeron) (patina debug))
+        (define env (environment '(scheme base)))
+        (define (collections) (cdr (assq 'collections (gc-stats))))
+        (define (broken-after-a-safe-point-collection make)
+          (let ((e (make-ephemeron (make) 'v)) (n (collections)))
+            (let loop ((i 0))
+              (when (and (= (collections) n) (< i 1000000))
+                (make-vector 64 i)
+                (loop (+ i 1))))
+            (list (> (collections) n) (ephemeron-broken? e))))
+        (list (broken-after-a-safe-point-collection
+               (lambda () (eval (list 'quote (list 1 2)) env)))
+              (broken-after-a-safe-point-collection (lambda () (list 1 2))))";
+    assert_eq!(eval_program_vm(PROGRAM), "((#t #t) (#t #t))", "vm");
+    assert_eq!(
+        eval_program_tree_walker(PROGRAM),
+        "((#t #t) (#t #t))",
+        "tree-walker"
+    );
+}
