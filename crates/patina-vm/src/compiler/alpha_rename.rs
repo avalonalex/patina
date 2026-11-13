@@ -421,35 +421,57 @@ fn rename_expr_inner(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
         CoreExprKind::Quote(v) => CoreExprKind::Quote(*v),
         CoreExprKind::Quasiquote(template) => CoreExprKind::Quasiquote(template.clone()),
 
-        CoreExprKind::Var { name, scopes } => {
-            if let Some(unique_name) = env.resolve(name, scopes, scope_trace::Op::Get) {
-                CoreExprKind::Var {
-                    name: unique_name,
-                    scopes: ScopeSet::new(),
-                }
-            } else {
-                CoreExprKind::Var {
-                    name: name.clone(),
-                    scopes: ScopeSet::new(),
-                }
-            }
-        }
+        // A linked reference is passed through unresolved (#837): it keeps
+        // its spelling and its link, and loses its scopes as every node
+        // does. The desugarer bound it to the record its macro means;
+        // resolving it again here could pick a frame candidate of the same
+        // form or an introduced global of an earlier one.
+        CoreExprKind::Var {
+            name,
+            scopes: _,
+            link: Some(link),
+        } => CoreExprKind::Var {
+            name: name.clone(),
+            scopes: ScopeSet::new(),
+            link: Some(*link),
+        },
 
-        CoreExprKind::Set { var, scopes, value } => {
+        CoreExprKind::Var {
+            name,
+            scopes,
+            link: None,
+        } => CoreExprKind::var(
+            env.resolve(name, scopes, scope_trace::Op::Get)
+                .unwrap_or_else(|| name.clone()),
+            ScopeSet::new(),
+        ),
+
+        // As a linked reference, above.
+        CoreExprKind::Set {
+            var,
+            scopes: _,
+            value,
+            link: Some(link),
+        } => CoreExprKind::Set {
+            var: var.clone(),
+            scopes: ScopeSet::new(),
+            value: Rc::new(rename_expr(value, env)),
+            link: Some(*link),
+        },
+
+        CoreExprKind::Set {
+            var,
+            scopes,
+            value,
+            link: None,
+        } => {
             let renamed_value = rename_expr(value, env);
-            if let Some(unique_name) = env.resolve(var, scopes, scope_trace::Op::Set) {
-                CoreExprKind::Set {
-                    var: unique_name,
-                    scopes: ScopeSet::new(),
-                    value: Rc::new(renamed_value),
-                }
-            } else {
-                CoreExprKind::Set {
-                    var: var.clone(),
-                    scopes: ScopeSet::new(),
-                    value: Rc::new(renamed_value),
-                }
-            }
+            CoreExprKind::set(
+                env.resolve(var, scopes, scope_trace::Op::Set)
+                    .unwrap_or_else(|| var.clone()),
+                ScopeSet::new(),
+                Rc::new(renamed_value),
+            )
         }
 
         CoreExprKind::Lambda {
@@ -624,17 +646,11 @@ mod tests {
     use patina_core::tagged_value::TaggedValue;
 
     fn var(name: &str) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Var {
-            name: Rc::from(name),
-            scopes: ScopeSet::new(),
-        })
+        CoreExpr::new(CoreExprKind::var(Rc::from(name), ScopeSet::new()))
     }
 
     fn var_scoped(name: &str, scopes: ScopeSet) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Var {
-            name: Rc::from(name),
-            scopes,
-        })
+        CoreExpr::new(CoreExprKind::var(Rc::from(name), scopes))
     }
 
     fn lambda_with_scope(

@@ -561,10 +561,7 @@ mod tests {
     use std::rc::Rc;
 
     fn var(name: &str) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Var {
-            name: Rc::from(name),
-            scopes: Default::default(),
-        })
+        CoreExpr::new(CoreExprKind::var(Rc::from(name), Default::default()))
     }
 
     fn app(func: CoreExpr, args: Vec<CoreExpr>) -> CoreExpr {

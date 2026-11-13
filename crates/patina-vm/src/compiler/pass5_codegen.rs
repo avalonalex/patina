@@ -1312,10 +1312,7 @@ mod tests {
     use patina_core::{Lit, LiteralPool};
 
     fn var(name: &str) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Var {
-            name: Rc::from(name),
-            scopes: Default::default(),
-        })
+        CoreExpr::new(CoreExprKind::var(Rc::from(name), Default::default()))
     }
 
     fn lit(n: i64) -> CoreExpr {
@@ -1361,11 +1358,11 @@ mod tests {
     }
 
     fn set(name: &str, value: CoreExpr) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Set {
-            var: Rc::from(name),
-            scopes: Default::default(),
-            value: Rc::new(value),
-        })
+        CoreExpr::new(CoreExprKind::set(
+            Rc::from(name),
+            Default::default(),
+            Rc::new(value),
+        ))
     }
 
     fn if_(test: CoreExpr, then: CoreExpr, else_: CoreExpr) -> CoreExpr {

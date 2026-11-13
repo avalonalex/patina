@@ -451,10 +451,7 @@ mod tests {
     use std::rc::Rc;
 
     fn var(name: &str) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Var {
-            name: Rc::from(name),
-            scopes: Default::default(),
-        })
+        CoreExpr::new(CoreExprKind::var(Rc::from(name), Default::default()))
     }
 
     fn lit(n: i64) -> CoreExpr {
@@ -540,11 +537,11 @@ mod tests {
 
     #[test]
     fn mutated_captured_param_is_boxed() {
-        let set_x = CoreExpr::new(CoreExprKind::Set {
-            var: Rc::from("x"),
-            scopes: Default::default(),
-            value: Rc::new(lit(1)),
-        });
+        let set_x = CoreExpr::new(CoreExprKind::set(
+            Rc::from("x"),
+            Default::default(),
+            Rc::new(lit(1)),
+        ));
         let inner = lambda(vec![], vec![var("x")]);
         let outer = lambda(vec!["x"], vec![set_x, inner]);
         let info = Pass1Analysis::run(&outer);
@@ -561,11 +558,11 @@ mod tests {
 
     #[test]
     fn triple_nested_capture_through_middle() {
-        let set_x = CoreExpr::new(CoreExprKind::Set {
-            var: Rc::from("x"),
-            scopes: Default::default(),
-            value: Rc::new(lit(1)),
-        });
+        let set_x = CoreExpr::new(CoreExprKind::set(
+            Rc::from("x"),
+            Default::default(),
+            Rc::new(lit(1)),
+        ));
         let inner = lambda(vec![], vec![set_x]);
         let mid = lambda(vec![], vec![inner]);
         let outer = lambda(vec!["x"], vec![mid]);
@@ -597,11 +594,11 @@ mod tests {
 
     #[test]
     fn body_thunk_with_app_captures_indirect_free_var() {
-        let set_x = CoreExpr::new(CoreExprKind::Set {
-            var: Rc::from("x"),
-            scopes: Default::default(),
-            value: Rc::new(lit(1)),
-        });
+        let set_x = CoreExpr::new(CoreExprKind::set(
+            Rc::from("x"),
+            Default::default(),
+            Rc::new(lit(1)),
+        ));
         let lam1 = lambda(vec![], vec![lit(0)]);
         let lam2 = lambda(vec![], vec![set_x]);
         let lam3 = lambda(vec![], vec![var("x")]);

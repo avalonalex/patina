@@ -1,5 +1,5 @@
 use crate::error::SourceLocation;
-use crate::literal_pool::Lit;
+use crate::literal_pool::{Link, Lit};
 use crate::scope::ScopeSet;
 #[cfg(test)]
 use crate::tagged_value::TaggedValue;
@@ -174,7 +174,19 @@ pub enum CoreExprKind {
     /// The evaluator uses scope-based lookup when scopes is non-empty:
     /// finds binding where binding.scopes ⊆ reference.scopes.
     /// Empty scopes means simple name lookup (non-macro code).
-    Var { name: Symbol, scopes: ScopeSet },
+    ///
+    /// `link`, where set, is the binding the reference means, which no
+    /// backend resolves again (#837): a binding record, an entry of the
+    /// compilation's literal pool, which an early-bound template reference
+    /// links. A linked reference keeps its spelling, for messages and for
+    /// the desugarer's settling, and always has scopes
+    /// ([`CoreExprKind::linked_var`]). Nothing links one yet: every
+    /// reference the desugarer makes has `link: None` until 4b.10's switch.
+    Var {
+        name: Symbol,
+        scopes: ScopeSet,
+        link: Option<Link>,
+    },
 
     /// Quote: literal data
     /// Example: 'x, '(1 2 3)
@@ -227,10 +239,14 @@ pub enum CoreExprKind {
     /// The evaluator uses scope-based lookup when scopes is non-empty to find
     /// and update the correct binding.
     /// Empty scopes means simple name lookup (non-macro code).
+    ///
+    /// `link` is the binding assigned, where set, as [`CoreExprKind::Var`]'s
+    /// (#837).
     Set {
         var: Symbol,
         scopes: ScopeSet,
         value: Rc<CoreExpr>,
+        link: Option<Link>,
     },
 
     /// Sequencing
@@ -393,6 +409,60 @@ impl std::fmt::Display for QuasiTemplate {
 }
 
 impl CoreExprKind {
+    /// A reference to `name` at `scopes`, resolved by the backend.
+    pub fn var(name: Symbol, scopes: ScopeSet) -> Self {
+        CoreExprKind::Var {
+            name,
+            scopes,
+            link: None,
+        }
+    }
+
+    /// A reference to `name` at `scopes` bound to `link` where it is set
+    /// (#837). A link is made only for a macro-introduced reference, which
+    /// carries its expansion's scope, and a backend relies on it: asserted
+    /// in every build.
+    #[track_caller]
+    pub fn linked_var(name: Symbol, scopes: ScopeSet, link: Option<Link>) -> Self {
+        assert!(
+            link.is_none() || !scopes.is_empty(),
+            "a linked reference has its expansion's scopes (#837)"
+        );
+        CoreExprKind::Var { name, scopes, link }
+    }
+
+    /// An assignment of `value` to `var` at `scopes`, resolved by the
+    /// backend.
+    pub fn set(var: Symbol, scopes: ScopeSet, value: Rc<CoreExpr>) -> Self {
+        CoreExprKind::Set {
+            var,
+            scopes,
+            value,
+            link: None,
+        }
+    }
+
+    /// An assignment bound to `link` where it is set, as
+    /// [`linked_var`](Self::linked_var) (#837).
+    #[track_caller]
+    pub fn linked_set(
+        var: Symbol,
+        scopes: ScopeSet,
+        value: Rc<CoreExpr>,
+        link: Option<Link>,
+    ) -> Self {
+        assert!(
+            link.is_none() || !scopes.is_empty(),
+            "a linked assignment has its expansion's scopes (#837)"
+        );
+        CoreExprKind::Set {
+            var,
+            scopes,
+            value,
+            link,
+        }
+    }
+
     /// Check if this expression is in tail position
     pub fn is_tail_position(&self) -> bool {
         matches!(
@@ -450,10 +520,18 @@ impl CoreExprKind {
                 else_: Rc::new(f(else_)),
             },
 
-            CoreExprKind::Set { var, scopes, value } => CoreExprKind::Set {
+            // The link is carried: a rebuild that dropped it would resolve
+            // the assignment by name again (#837).
+            CoreExprKind::Set {
+                var,
+                scopes,
+                value,
+                link,
+            } => CoreExprKind::Set {
                 var: var.clone(),
                 scopes: scopes.clone(),
                 value: Rc::new(f(value)),
+                link: *link,
             },
 
             CoreExprKind::Begin(exprs) => CoreExprKind::Begin(exprs.iter().map(f).collect()),
@@ -493,11 +571,15 @@ impl std::fmt::Display for CoreExprKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CoreExprKind::Literal(v) => write!(f, "{}", v),
-            CoreExprKind::Var { name, scopes } => {
+            CoreExprKind::Var { name, scopes, link } => {
                 if scopes.is_empty() {
-                    write!(f, "{}", name)
+                    write!(f, "{}", name)?;
                 } else {
-                    write!(f, "{}@{}", name, scopes)
+                    write!(f, "{}@{}", name, scopes)?;
+                }
+                match link {
+                    Some(link) => write!(f, "→{link}"),
+                    None => Ok(()),
                 }
             }
             CoreExprKind::Quote(v) => write!(f, "'{}", v),
@@ -532,12 +614,20 @@ impl std::fmt::Display for CoreExprKind {
             CoreExprKind::If { test, then, else_ } => {
                 write!(f, "(if {} {} {})", test, then, else_)
             }
-            CoreExprKind::Set { var, scopes, value } => {
-                if scopes.is_empty() {
-                    write!(f, "(set! {} {})", var, value)
-                } else {
-                    write!(f, "(set! {}@{} {})", var, scopes, value)
+            CoreExprKind::Set {
+                var,
+                scopes,
+                value,
+                link,
+            } => {
+                write!(f, "(set! {var}")?;
+                if !scopes.is_empty() {
+                    write!(f, "@{scopes}")?;
                 }
+                if let Some(link) = link {
+                    write!(f, "→{link}")?;
+                }
+                write!(f, " {value})")
             }
             CoreExprKind::Begin(exprs) => {
                 write!(f, "(begin")?;
@@ -589,6 +679,62 @@ impl std::fmt::Display for CoreExprKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A linked reference's link (#837) costs `CoreExprKind` nothing: the
+    /// pool's number is never 0, so `Option<Link>` fits a `Link`'s 8 bytes,
+    /// and `Var` and `Set` stay below `Lambda`, the largest variant, 112
+    /// bytes before the field as after it (measured 2026-11-13).
+    #[test]
+    fn a_link_leaves_the_node_its_size() {
+        assert_eq!(std::mem::size_of::<Option<Link>>(), 8);
+        assert_eq!(std::mem::size_of::<CoreExprKind>(), 112);
+        assert_eq!(std::mem::size_of::<CoreExpr>(), 168);
+    }
+
+    /// A link displays beside the spelling, and a rebuild of the node's
+    /// children carries it; a linked node without scopes is refused.
+    #[test]
+    fn a_link_displays_and_survives_a_rebuild() {
+        use crate::binding_record::{BindingLink, Linkable};
+        use crate::environment::Environment;
+        use crate::literal_pool::LiteralPool;
+
+        let heap = crate::heap::new_shared_heap();
+        let pool = LiteralPool::new(&heap.borrow());
+        let ns = Rc::new(Environment::with_heap(&heap));
+        ns.define(&heap, "f", TaggedValue::fixnum(1));
+        let record = ns.local_record("f").unwrap();
+        let link = pool.add_link(Linkable::new(BindingLink::new(record)));
+        let scopes = ScopeSet::from_iter([crate::scope::ScopeId(3)]);
+
+        let var = CoreExprKind::linked_var("f".into(), scopes.clone(), Some(link));
+        assert_eq!(var.to_string(), format!("f@{scopes}→#<link 0>"));
+        assert_eq!(
+            CoreExprKind::var("f".into(), ScopeSet::new()).to_string(),
+            "f"
+        );
+        let set = CoreExpr::new(CoreExprKind::linked_set(
+            "f".into(),
+            scopes.clone(),
+            Rc::new(CoreExpr::new(var)),
+            Some(link),
+        ));
+        assert_eq!(
+            set.to_string(),
+            format!("(set! f@{scopes}→#<link 0> f@{scopes}→#<link 0>)")
+        );
+        let rebuilt = set.map_children(|child| child.clone());
+        match &rebuilt.kind {
+            CoreExprKind::Set { link: carried, .. } => assert_eq!(*carried, Some(link)),
+            other => panic!("{other}"),
+        }
+        assert_eq!(pool.link(link).record(), record);
+
+        let refused = std::panic::catch_unwind(|| {
+            CoreExprKind::linked_var("f".into(), ScopeSet::new(), Some(link))
+        });
+        assert!(refused.is_err(), "a linked reference has scopes");
+    }
 
     /// Dropping a tree recurses a level at a time; on a 256 KiB thread these
     /// are each far deeper than the stack would hold without the `Drop` that

@@ -247,10 +247,7 @@ mod tests {
     use std::rc::Rc;
 
     fn var(name: &str) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Var {
-            name: Rc::from(name),
-            scopes: Default::default(),
-        })
+        CoreExpr::new(CoreExprKind::var(Rc::from(name), Default::default()))
     }
 
     fn lit(n: i64) -> CoreExpr {
@@ -335,11 +332,11 @@ mod tests {
     #[test]
     fn set_detected_as_mutated() {
         // (lambda (x) (set! x 1) x)
-        let set_x = CoreExpr::new(CoreExprKind::Set {
-            var: Rc::from("x"),
-            scopes: Default::default(),
-            value: Rc::new(lit(1)),
-        });
+        let set_x = CoreExpr::new(CoreExprKind::set(
+            Rc::from("x"),
+            Default::default(),
+            Rc::new(lit(1)),
+        ));
         let expr = lambda(vec!["x"], vec![set_x, var("x")]);
         let info = Pass1Analysis::run(&expr);
         assert!(info.all_mutated.contains(&Rc::from("x")));
@@ -351,11 +348,11 @@ mod tests {
     fn triple_nested_set_detected() {
         // (lambda (log) (lambda () (lambda () (set! log 1) log)))
         // log should be mutated and captured across three lambda levels.
-        let set_log = CoreExpr::new(CoreExprKind::Set {
-            var: Rc::from("log"),
-            scopes: Default::default(),
-            value: Rc::new(lit(1)),
-        });
+        let set_log = CoreExpr::new(CoreExprKind::set(
+            Rc::from("log"),
+            Default::default(),
+            Rc::new(lit(1)),
+        ));
         let inner = lambda(vec![], vec![set_log, var("log")]);
         let mid = lambda(vec![], vec![inner]);
         let outer = lambda(vec!["log"], vec![mid]);

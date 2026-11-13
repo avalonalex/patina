@@ -1,4 +1,4 @@
-use patina_core::{CoreExpr, CoreExprKind, Formals, Lit, QuasiTemplate, ScopeSet, Symbol};
+use patina_core::{CoreExpr, CoreExprKind, Formals, Link, Lit, QuasiTemplate, ScopeSet, Symbol};
 
 /// Visitor trait for walking `CoreExpr` trees.
 ///
@@ -18,7 +18,7 @@ use patina_core::{CoreExpr, CoreExprKind, Formals, Lit, QuasiTemplate, ScopeSet,
 /// }
 ///
 /// impl ExprVisitor for FreeVarCollector {
-///     fn visit_var(&mut self, name: &Symbol, _scopes: &ScopeSet) {
+///     fn visit_var(&mut self, name: &Symbol, _scopes: &ScopeSet, _link: Option<Link>) {
 ///         if !self.bound.contains(name) {
 ///             self.free.insert(name.to_string());
 ///         }
@@ -59,8 +59,10 @@ pub trait ExprVisitor {
     /// Visit a literal value (number, boolean, string, …).
     fn visit_literal(&mut self, _val: &Lit) {}
 
-    /// Visit a variable reference.
-    fn visit_var(&mut self, _name: &Symbol, _scopes: &ScopeSet) {}
+    /// Visit a variable reference: its spelling, its scopes, and the binding
+    /// it is linked to where it is (#837), which a visitor that resolves
+    /// names must not resolve again.
+    fn visit_var(&mut self, _name: &Symbol, _scopes: &ScopeSet, _link: Option<Link>) {}
 
     /// Visit a quoted datum.
     fn visit_quote(&mut self, _val: &Lit) {}
@@ -92,8 +94,15 @@ pub trait ExprVisitor {
         self.visit_expr(else_);
     }
 
-    /// Visit an assignment.  Default recurses into the value expression.
-    fn visit_set(&mut self, _var: &Symbol, _scopes: &ScopeSet, value: &CoreExpr) {
+    /// Visit an assignment, with its link as [`visit_var`](Self::visit_var)'s.
+    /// Default recurses into the value expression.
+    fn visit_set(
+        &mut self,
+        _var: &Symbol,
+        _scopes: &ScopeSet,
+        _link: Option<Link>,
+        value: &CoreExpr,
+    ) {
         self.visit_expr(value);
     }
 
@@ -157,7 +166,7 @@ pub trait ExprVisitor {
     fn walk_expr(&mut self, expr: &CoreExpr) {
         patina_core::walk::ensure_sufficient_stack(|| match &expr.kind {
             CoreExprKind::Literal(val) => self.visit_literal(val),
-            CoreExprKind::Var { name, scopes } => self.visit_var(name, scopes),
+            CoreExprKind::Var { name, scopes, link } => self.visit_var(name, scopes, *link),
             CoreExprKind::Quote(val) => self.visit_quote(val),
             CoreExprKind::Quasiquote(template) => self.visit_quasiquote(template),
             CoreExprKind::Lambda {
@@ -166,7 +175,12 @@ pub trait ExprVisitor {
                 binding_scopes,
             } => self.visit_lambda(params, body, binding_scopes),
             CoreExprKind::If { test, then, else_ } => self.visit_if(test, then, else_),
-            CoreExprKind::Set { var, scopes, value } => self.visit_set(var, scopes, value),
+            CoreExprKind::Set {
+                var,
+                scopes,
+                value,
+                link,
+            } => self.visit_set(var, scopes, *link, value),
             CoreExprKind::Begin(exprs) => self.visit_begin(exprs),
             CoreExprKind::Define {
                 name,
@@ -214,10 +228,7 @@ mod tests {
     // ── helpers ──────────────────────────────────────────────────────────
 
     fn var(name: &str) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Var {
-            name: name.into(),
-            scopes: ScopeSet::new(),
-        })
+        CoreExpr::new(CoreExprKind::var(name.into(), ScopeSet::new()))
     }
 
     fn lit() -> CoreExpr {
@@ -302,7 +313,7 @@ mod tests {
     }
 
     impl ExprVisitor for FreeVarCollector {
-        fn visit_var(&mut self, name: &Symbol, _scopes: &ScopeSet) {
+        fn visit_var(&mut self, name: &Symbol, _scopes: &ScopeSet, _link: Option<Link>) {
             if !self.bound.contains(name) {
                 self.free.insert(name.to_string());
             }
@@ -410,11 +421,11 @@ mod tests {
             ))),
             lambda(vec!["a"], vec![var("a")]),
             if_(lit(), lit(), lit()),
-            CoreExpr::new(CoreExprKind::Set {
-                var: "x".into(),
-                scopes: ScopeSet::new(),
-                value: std::rc::Rc::new(lit()),
-            }),
+            CoreExpr::new(CoreExprKind::set(
+                "x".into(),
+                ScopeSet::new(),
+                std::rc::Rc::new(lit()),
+            )),
             CoreExpr::new(CoreExprKind::Begin(vec![lit(), var("x")])),
             CoreExpr::new(CoreExprKind::Define {
                 scopes: ScopeSet::new(),
