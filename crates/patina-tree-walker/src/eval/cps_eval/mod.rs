@@ -975,4 +975,54 @@ mod tests {
         assert_eq!(answer, pair, "the step answers the pair it quoted");
         assert_still_the_pair(&evaluator, answer);
     }
+
+    /// However many `Step::Eval`s run without a collection, at most one
+    /// pool is retired (#869): each retirement releases the one before,
+    /// whose step its trampoline has taken by then. Counted by the heap's
+    /// registered roots, a pool's registration among them; the outermost
+    /// run's return releases the last.
+    #[test]
+    fn step_evals_retire_at_most_one_pool() {
+        let evaluator = make_test_evaluator();
+        let cps = CpsEvaluator::new(&evaluator);
+        let index = (evaluator.primitive_registry)
+            .resolve_index("scheme.eval/eval")
+            .expect("`eval` is registered");
+        let registered = || evaluator.heap.borrow().root_set().registered();
+        let before = registered();
+        let mut last = None;
+        for _ in 0..100 {
+            let datum = {
+                let pair = fresh_pair(&evaluator);
+                let mut heap = evaluator.heap.borrow_mut();
+                let quote = heap.intern_symbol("quote");
+                let rest = heap.alloc_pair(pair, TaggedValue::NULL);
+                heap.alloc_pair(quote, rest)
+            };
+            let step = cps
+                .resumable_step(
+                    index,
+                    Ok(patina_primitives::TaggedStep::Eval {
+                        expr: datum,
+                        env: evaluator.global_env.clone(),
+                        state: TaggedValue::UNSPECIFIED,
+                    }),
+                    types::ContValue::Halt,
+                    ContEnv::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .expect("expands");
+            assert_eq!(registered(), before + 1, "one pool retired");
+            last = Some(step);
+        }
+        cps.run_trampoline(last.expect("made"), None, types::TrampolineKind::Form)
+            .expect("runs");
+        assert_eq!(
+            registered(),
+            before,
+            "released as the outermost run returns"
+        );
+    }
 }
