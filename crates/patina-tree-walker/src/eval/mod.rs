@@ -89,16 +89,6 @@ pub struct Evaluator {
     /// reaches them while parked, so the evaluator's own root provider
     /// traces them. A thread-local until #682.
     pub(crate) pending_escape: RefCell<Option<(TaggedValue, Rc<CpsContinuation>)>>,
-    /// The literal pool of the last `Step::Eval`'s datum, retired here when
-    /// its tree became a step (`retire_pool`, #869), and released by the
-    /// next retirement, the driver's next collection or a run's return,
-    /// each after the step was taken. At most one pool.
-    #[trace(
-        skip,
-        reason = "a literal pool, which roots its entries through its own registration with the \
-                  heap's root set for as long as it lives"
-    )]
-    retiring: RefCell<Option<patina_core::LiteralPool>>,
     /// Registry of library loaders (Rust, Scheme, etc.)
     #[trace(skip, reason = "loaders, which hold no values")]
     pub(crate) loader_registry: Rc<RefCell<LibraryLoaderRegistry>>,
@@ -122,7 +112,11 @@ pub struct Evaluator {
     /// so a call of a primitive that takes the context lends it to the
     /// context with no heap borrow and no count (#706). A heap keeps one
     /// instance for its life; what changes is inside it.
-    #[trace(skip, reason = "the interpreter's metadata: no value")]
+    #[trace(
+        skip,
+        reason = "the interpreter's metadata, and a retired literal pool, which roots its entries \
+                  through its own registration with the heap's root set (#869)"
+    )]
     pub(crate) instance: Rc<patina_core::Instance>,
     /// Why `(scheme base)` could not be loaded at construction, if it could
     /// not: see [`Evaluator::bootstrap_error`].
@@ -193,7 +187,6 @@ impl Evaluator {
             library_registry,
             library_roots,
             pending_escape: RefCell::new(None),
-            retiring: RefCell::new(None),
             loader_registry,
             primitive_registry,
             fs,
@@ -520,9 +513,12 @@ impl Evaluator {
     /// one has done its work, and goes now; at most one is ever retired.
     /// The last is released as the driver's next collection begins, before
     /// it marks, or when a run returns ([`Self::release_retired_pool`]).
+    ///
+    /// Kept on the heap's instance, not here: a field of the evaluator's
+    /// own cost the tree-walker's workloads 1–2% in cycles at the same
+    /// instructions (`patina_core::Instance`'s module docs).
     pub(crate) fn retire_pool(&self, pool: patina_core::LiteralPool) {
-        let previous = self.retiring.replace(Some(pool));
-        drop(previous);
+        self.instance.retire_literal_pool(pool);
     }
 
     /// Release the pool [`Self::retire_pool`] kept, if any, once its step
@@ -533,8 +529,7 @@ impl Evaluator {
     /// only on a step that collects, the second once per run, after its
     /// loop.
     pub(crate) fn release_retired_pool(&self) {
-        let retired = self.retiring.take();
-        drop(retired);
+        self.instance.release_retired_literal_pool();
     }
 }
 
