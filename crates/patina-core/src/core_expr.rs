@@ -736,6 +736,42 @@ mod tests {
         assert!(refused.is_err(), "a linked reference has scopes");
     }
 
+    /// A rebuild carries an unquoted reference's link through the
+    /// template (`QuasiTemplate::map_unquoted`), as settling rebuilds a
+    /// form (#837): dropped there, the reference would be resolved by name
+    /// again.
+    #[test]
+    fn an_unquoted_link_survives_a_rebuild() {
+        use crate::binding_record::{BindingLink, Linkable};
+        use crate::environment::Environment;
+        use crate::literal_pool::LiteralPool;
+
+        let heap = crate::heap::new_shared_heap();
+        let pool = LiteralPool::new(&heap.borrow());
+        let ns = Rc::new(Environment::with_heap(&heap));
+        ns.define(&heap, "f", TaggedValue::fixnum(1));
+        let record = ns.local_record("f").unwrap();
+        let link = pool.add_link(Linkable::new(BindingLink::new(record)));
+        let scopes = ScopeSet::from_iter([crate::scope::ScopeId(3)]);
+        let template = CoreExpr::new(CoreExprKind::Quasiquote(QuasiTemplate::Build(
+            QuasiConstructor::List,
+            vec![QuasiTemplate::Unquoted(Rc::new(CoreExpr::new(
+                CoreExprKind::linked_var("f".into(), scopes, Some(link)),
+            )))],
+        )));
+        let rebuilt = template.map_children(|child| child.clone());
+        let CoreExprKind::Quasiquote(QuasiTemplate::Build(_, parts)) = &rebuilt.kind else {
+            panic!("{rebuilt}")
+        };
+        match parts.as_slice() {
+            [QuasiTemplate::Unquoted(expr)] => match &expr.kind {
+                CoreExprKind::Var { link: carried, .. } => assert_eq!(*carried, Some(link)),
+                other => panic!("{other}"),
+            },
+            other => panic!("{other:?}"),
+        }
+    }
+
     /// Dropping a tree recurses a level at a time; on a 256 KiB thread these
     /// are each far deeper than the stack would hold without the `Drop` that
     /// moves to a new segment (#617).

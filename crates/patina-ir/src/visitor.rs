@@ -401,6 +401,78 @@ mod tests {
         assert!(!collector.free.contains("x"));
     }
 
+    // ── The walk hands each visit its node's link (#837) ──────────────────
+
+    #[derive(Default)]
+    struct LinkCollector(Vec<(String, Option<patina_core::Link>)>);
+    impl ExprVisitor for LinkCollector {
+        fn visit_var(&mut self, name: &Symbol, _scopes: &ScopeSet, link: Option<Link>) {
+            self.0.push((name.to_string(), link));
+        }
+        fn visit_set(
+            &mut self,
+            var: &Symbol,
+            _scopes: &ScopeSet,
+            link: Option<Link>,
+            value: &CoreExpr,
+        ) {
+            self.0.push((format!("set! {var}"), link));
+            self.visit_expr(value);
+        }
+    }
+
+    #[test]
+    fn the_walk_hands_each_visit_its_link() {
+        use patina_core::environment::Environment;
+        use patina_core::{LiteralPool, NamespaceView, NoGcScope, ScopeId, TaggedValue};
+        use std::rc::Rc;
+
+        let heap = patina_core::new_shared_heap();
+        let pool = LiteralPool::new(&heap.borrow());
+        let ns = Rc::new(Environment::with_heap(&heap));
+        ns.define(&heap, "f", TaggedValue::fixnum(1));
+        let link = NoGcScope::with_cx(&heap, |cx| {
+            let (_, linkable) = cx
+                .early_link(NamespaceView::of(&ns), "f")
+                .expect("f's record");
+            pool.add_link(linkable)
+        });
+        let scopes = ScopeSet::from_iter([ScopeId(1)]);
+        let linked = || {
+            CoreExpr::new(CoreExprKind::linked_var(
+                "f".into(),
+                scopes.clone(),
+                Some(link),
+            ))
+        };
+        let expr = CoreExpr::new(CoreExprKind::Begin(vec![
+            linked(),
+            var("g"),
+            CoreExpr::new(CoreExprKind::linked_set(
+                "f".into(),
+                scopes.clone(),
+                Rc::new(linked()),
+                Some(link),
+            )),
+        ]));
+        let mut collector = LinkCollector::default();
+        collector.visit_expr(&expr);
+        let seen: Vec<(&str, Option<Link>)> = collector
+            .0
+            .iter()
+            .map(|(name, link)| (name.as_str(), *link))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("f", Some(link)),
+                ("g", None),
+                ("set! f", Some(link)),
+                ("f", Some(link)),
+            ]
+        );
+    }
+
     // ── Default walk doesn't panic ────────────────────────────────────────
 
     struct NoopVisitor;

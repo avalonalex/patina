@@ -1624,8 +1624,11 @@ environment's record, the frame-import fallback),
 shape's location against one computed without the walk, and
 `binding_location_checks_the_heap_it_borrows`; the pool's
 `a_collection_keeps_a_pooled_links_record` sentinel and
-`a_link_read_through_another_pool_panics`; `core_expr.rs`'s size pin
-(`CoreExprKind` stays 112 bytes) and its rebuild test; `link_table.rs`'s
+`a_link_read_through_another_pool_panics`, whose other pool has an entry
+at the link's index; `core_expr.rs`'s size pin (`CoreExprKind` stays 112
+bytes), its rebuild test and `an_unquoted_link_survives_a_rebuild`
+(`map_unquoted` carries the link); `patina-ir`'s
+`the_walk_hands_each_visit_its_link` (`ExprVisitor`); `link_table.rs`'s
 pinned-entry tests (`link_in` skips one, on a relink too; `read_cold`
 never reads one by name; `assignee_never_resolves_a_pinned_read_through_record`,
 a table made by hand around the check build's refusal, for the release

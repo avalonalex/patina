@@ -348,7 +348,9 @@ mod tests {
         );
     }
 
-    /// A link is read through the pool that made it, in every build.
+    /// A link is read through the pool that made it, in every build. The
+    /// other pool has an entry at the link's index, so without the check
+    /// the read would answer that entry's record rather than fail.
     #[test]
     #[should_panic(expected = "a link read through another compilation's pool")]
     fn a_link_read_through_another_pool_panics() {
@@ -359,8 +361,13 @@ mod tests {
         );
         let ns = std::rc::Rc::new(Environment::with_heap(&heap));
         ns.define(&heap, "x", TaggedValue::fixnum(1));
+        ns.define(&heap, "y", TaggedValue::fixnum(2));
         let record = ns.local_record("x").unwrap();
         let link = one.add_link(Linkable::new(BindingLink::new(record)));
+        let other = two.add_link(Linkable::new(BindingLink::new(
+            ns.local_record("y").unwrap(),
+        )));
+        assert_eq!(other.index, link.index, "an entry at the same index");
         two.link(link);
     }
 
