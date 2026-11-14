@@ -724,9 +724,11 @@ fn a_template_reference_reads_the_library_inside_a_frame_binding_of_its_spelling
 
 /// An unquoted expression of a template is ordinary code, early-bound like
 /// the rest (#445): `h`, compiled before the program defines `f`, still
-/// calls the library's. A rebuild of the quasiquote's unquoted parts that
-/// dropped what the reference was bound to (`QuasiTemplate::map_unquoted`)
-/// would bring back #438's capture there.
+/// calls the library's. It guards the desugarer's emission of an unquoted
+/// expression and the quasiquote lowering's copy of it (`quasiquote_lower`):
+/// either dropping what the reference was bound to would bring back #438's
+/// capture there. Settling does not walk this form, which introduces no
+/// definition; the next test's does.
 #[test]
 fn an_unquoted_template_reference_stays_linked() {
     let program = "(define-library (t lib-q)
@@ -740,6 +742,33 @@ fn an_unquoted_template_reference_stays_linked() {
 (define (f) 'mine)
 (list (h) (f))";
     let expected = "((lib-f) mine)".to_string();
+    assert_eq!(
+        on_both_backends(program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// The same, in a form whose expansion also introduces a definition
+/// (`tmp`) and binds `f` early, so that settling rebuilds it node by node
+/// (`Desugarer::settle_early_bindings`), the quasiquote's unquoted parts
+/// through `QuasiTemplate::map_unquoted`: a rebuild there that dropped
+/// what the reference was bound to would bring back #438's capture.
+#[test]
+fn an_unquoted_template_reference_in_a_form_settling_rebuilds_stays_linked() {
+    let program = "(define-library (t lib-qd)
+  (export quasi-def f)
+  (import (scheme base))
+  (begin
+    (define (f) 'lib-f)
+    (define-syntax quasi-def
+      (syntax-rules ()
+        ((_ name) (begin (define tmp 0) (define (name) `(,(f) ,tmp))))))))
+(import (scheme base) (t lib-qd))
+(quasi-def h)
+(define (f) 'mine)
+(list (h) (f))";
+    let expected = "((lib-f 0) mine)".to_string();
     assert_eq!(
         on_both_backends(program),
         [expected.clone(), expected],

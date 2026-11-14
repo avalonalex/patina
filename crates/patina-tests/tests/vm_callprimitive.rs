@@ -407,9 +407,28 @@ fn a_linked_and_an_own_operand_of_one_spelling_stay_apart() {
 /// takes `car`'s fast path, and after the definition still answers the
 /// library's `car` (deoptimized, through what the reference is bound to).
 /// A template expanded after the definition reaches the library's `car`
-/// too, by an ordinary call.
+/// too, by an ordinary call. The fast path is asserted on the code
+/// `compile_for_inspection` answers for `g`, an inline `Car`; which operand
+/// it names (the linked record's, `car@linked`) is the switch's to assert.
 #[test]
 fn an_early_bound_primitive_keeps_its_fast_path() {
+    let interp = Interpreter::new(patina_vm::VmBackend::new());
+    interp
+        .eval_program_owned(CARLIB)
+        .expect("the library and the import");
+    let inspected = interp
+        .backend()
+        .compile_for_inspection("(define (g p) (first-of p))")
+        .expect("compiles");
+    let (_, nested) = &inspected.units()[0];
+    assert!(
+        nested[0]
+            .instructions
+            .iter()
+            .any(|instr| matches!(instr, patina_vm::types::Instruction::Car { .. })),
+        "the template's car is inlined"
+    );
+
     let program = format!(
         "{CARLIB}(define (g p) (first-of p))
 (define before (g '(1 2)))

@@ -737,10 +737,14 @@ record (below).
   (`LinkTable::with_links`), is an entry like the rest, kept by the same
   trace from the table's making on
   (`a_pinned_entry_keeps_its_record_before_the_table_is_linked`); until
-  `load_unit` its form's pool roots the record too. `link_in` skips it and
-  the cold paths never read or write it by name, and a check build's
-  `link_in` refuses a pinned placeholder, read-through record or by-name
-  record. The sentinels are
+  `load_unit` its form's pool roots the record too: a reader of an
+  unloaded table keeps the pool alive while it reads, as
+  `VmBackend::compile_for_inspection`'s answer does by lending its code
+  and never handing it out. The record is a namespace's slot or scoped
+  entry record, or E1's fresh record over a frame's import's cell, in no
+  slot. `link_in` skips it and the cold paths never read or write it by
+  name, and a check build's `link_in` refuses a pinned placeholder,
+  read-through record or by-name record. The sentinels are
   `gc_edge_tests::environment_edges` (a frame's import),
   `gc_edge_tests::read_through_edges` (a host namespace's read-through
   table),
