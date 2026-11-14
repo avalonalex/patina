@@ -412,8 +412,14 @@ into the unit's link table, `CodeObject::links` (`patina_core::LinkTable`).
   function of the unit's code. `gen_lambda` moves the interner into the
   child `Codegen` with `std::mem::take` and back before the parent emits the
   closure's captures, so a spelling the parent and its lambdas both name has
-  one index across the unit. The key is the spelling after `alpha_rename`,
-  under which two operands of one spelling resolve to one binding.
+  one index across the unit. The key is an `OperandKey` (#837): the
+  spelling after `alpha_rename`, under which two unlinked operands of one
+  spelling resolve to one binding, or, for an operand the desugarer linked,
+  its record. A linked `car` and the unit's own `car` get two indices, both
+  spelled `car` in the table; two pool entries over one record get one.
+  `primitive_calls`' map is keyed the same way, and a linked callee's
+  eligibility for `CallPrimitive`, an inline opcode or a control sequence
+  is its record's value, never its spelling's binding.
 - **One table per unit.** The table exists only once the whole unit is
   compiled: a lambda's code waits as a pass-private `Member`, and
   `Pass5Codegen::run` makes the table and then every member's `CodeObject`,
@@ -439,6 +445,22 @@ into the unit's link table, `CodeObject::links` (`patina_core::LinkTable`).
   disassembler's and `--dump`'s, stays unlinked and serves its names alone.
   A runtime stub names no global and has an empty table
   (`LinkTable::empty`), which is never linked.
+- **Pinned entries** (#837). A linked `Var` or `Set` reaches pass 5 as a
+  `GlobalRef` or `SetGlobal` carrying its record: `alpha_rename` passes it
+  through unresolved, keeping its spelling and link; pass 1 counts it in no
+  lambda's free variables and marks nothing mutated; pass 2 makes it a
+  global without `ctx.lookup`, copying the record out of the pool
+  (`LiteralPool::link`); passes 3 and 4 carry it. Pass 5 builds the table
+  with `LinkTable::with_links`, which presets each linked entry with its
+  record and pins it: `link_in` leaves it, and the cold paths
+  (`LinkTable::read_cold`, `LinkTable::assignee`, `store_global_cold`) never
+  read or write it by name, since its spelling in the unit's namespace may
+  be another binding (#438). A definition and a global capture are never
+  linked. The disassembler and the tracer print a pinned operand as
+  `globals[car@linked]`. `VmBackend::compile_for_inspection`, the path the
+  REPL's `(vm-compile …)` prints, answers a source's code unloaded, for a
+  test that asserts what a form compiles to. Nothing links an operand until
+  4b.10's switch.
 
 ---
 

@@ -54,8 +54,9 @@ HeapObjectData::VmClosure {
 Free variable analysis runs at compile time. Variables are resolved to
 `Move` (local), `LoadClosure { slot }`, or `LoadGlobal { link }` at bytecode
 emission, `link` indexing the name in the code unit's link table
-(`docs/VM_ISA.md` §3, #836). No runtime hash lookup for local/closure
-variables.
+(`docs/VM_ISA.md` §3, #836), or for a reference the desugarer linked, the
+record it linked, in a pinned entry (#837, `docs/VM_COMPILER.md` §10.5).
+No runtime hash lookup for local/closure variables.
 
 **Global variables** are never captured into closure `free_vars` — `LoadGlobal`
 reads them at run time through the record the unit's link table linked at
