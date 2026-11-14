@@ -17,7 +17,8 @@ name: GC zeal
 # registry (GcDeferGuard::holding and the registry's roots); environments
 # and their placeholder stores, libraries and import sets, and both
 # backends' backend.rs, which stage 4b rewrites (decision 23 on #782); the
-# tree-walker's trampoline and evaluator, which poll the same way; the
+# tree-walker's trampoline and evaluator, which poll the same way, and
+# CpsExpr, whose nodes hold binding records since #837; the
 # toolchain; and the lane's own inputs. A weekly run catches what the
 # filter misses (the primitives, lib/scheme, Cargo.lock), at one lane's
 # cost a week. The filter has the limits ci.yml's has
@@ -41,6 +42,7 @@ on:
       - 'crates/patina-core/src/namespace_view.rs'
       - 'crates/patina-core/src/binding_record.rs'
       - 'crates/patina-core/src/literal_pool.rs'
+      - 'crates/patina-core/src/cps_expr.rs'
       - 'crates/patina-runtime/src/library_loader.rs'
       - 'crates/patina-runtime/src/library_registry.rs'
       - 'crates/patina-runtime/src/import_set.rs'
@@ -68,6 +70,7 @@ on:
       - 'crates/patina-core/src/namespace_view.rs'
       - 'crates/patina-core/src/binding_record.rs'
       - 'crates/patina-core/src/literal_pool.rs'
+      - 'crates/patina-core/src/cps_expr.rs'
       - 'crates/patina-runtime/src/library_loader.rs'
       - 'crates/patina-runtime/src/library_registry.rs'
       - 'crates/patina-runtime/src/import_set.rs'

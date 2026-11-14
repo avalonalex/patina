@@ -369,6 +369,23 @@ impl BindingLink {
         let value = self.0.car_cell(heap).value(heap);
         (value != TaggedValue::UNBOUND).then_some(value)
     }
+
+    /// Store `value` into the binding: into the record's cell, through the
+    /// funnel, logged as a store through a namespace's slot
+    /// (`Site::EnvSetSlot`), as `LinkTable::assign` logs the VM's. The
+    /// tree-walker's write of a linked `set!` (#837). Answers `false`, and
+    /// stores nothing, where the cell holds `UNBOUND`, which no store
+    /// binds: [`value`](Self::value)'s `None`.
+    #[inline]
+    #[must_use = "`false` is an unbound variable, which the caller reports"]
+    pub fn assign(self, heap: &mut Heap, value: TaggedValue) -> bool {
+        let cell = self.0.car_cell(heap);
+        if cell.value(heap) == TaggedValue::UNBOUND {
+            return false;
+        }
+        cell.store(heap, value, Site::EnvSetSlot);
+        true
+    }
 }
 
 /// A binding record a context found (#837), branded by that context as a
@@ -735,5 +752,25 @@ mod tests {
         let record = Record::new(&mut heap, cell);
         collect_from(&mut heap, &[cell.0]);
         record.repoint(&mut heap, cell);
+    }
+
+    /// A link's write stores into its record's cell, which every name over
+    /// the cell then reads, and refuses a cell holding `UNBOUND`, storing
+    /// nothing (#837): the tree-walker's linked `set!` reports that as an
+    /// unbound variable.
+    #[test]
+    fn a_links_write_stores_into_its_records_cell_unless_unbound() {
+        let mut heap = Heap::new();
+        let cell = BindingCell::new_own(&mut heap, n(1), 2);
+        let link = BindingLink::new(Record::new(&mut heap, cell));
+        assert!(link.assign(&mut heap, n(5)));
+        assert_eq!(cell.value(&heap), n(5), "the cell holds the store");
+        assert_eq!(link.value(&heap), Some(n(5)));
+
+        let unbound = BindingCell::free(&mut heap, TaggedValue::UNBOUND);
+        let link = BindingLink::new(Record::new(&mut heap, unbound));
+        assert!(!link.assign(&mut heap, n(6)), "no store binds a variable");
+        assert_eq!(unbound.value(&heap), TaggedValue::UNBOUND, "nothing stored");
+        assert_eq!(link.value(&heap), None);
     }
 }

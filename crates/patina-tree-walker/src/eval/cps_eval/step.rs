@@ -127,8 +127,9 @@ impl<'a> CpsEvaluator<'a> {
                     return Ok(StepResult::Done(*v));
                 }
 
-                CpsExprKind::Var { name, scopes } => {
-                    let tagged = try_catchable!(self.lookup_var_tagged(name, scopes, &current_env));
+                CpsExprKind::Var { name, scopes, link } => {
+                    let tagged =
+                        try_catchable!(self.lookup_var_tagged(name, scopes, *link, &current_env));
                     return Ok(StepResult::Done(tagged));
                 }
 
@@ -227,10 +228,11 @@ impl<'a> CpsEvaluator<'a> {
                     scopes,
                     value,
                     cont,
+                    link,
                 } => {
                     let val =
                         try_catchable!(self.eval_trivial_tagged(value, &current_env, &cont_env));
-                    try_catchable!(self.set_var_tagged(var, scopes, val, &current_env));
+                    try_catchable!(self.set_var_tagged(var, scopes, *link, val, &current_env));
                     current_expr = Rc::clone(cont);
                 }
 
@@ -473,8 +475,8 @@ fn extends_in_place(env: &Rc<Environment>) -> bool {
 
 /// Whether `expr` reads the binding of `name`, a temporary of the CPS
 /// transform's: a reference to that very symbol, which a reference the
-/// program wrote never is.
+/// program wrote never is. A temporary is unscoped, so never linked (#837).
 fn is_reference_to(expr: &CpsExpr, name: &Rc<str>) -> bool {
-    matches!(&expr.kind, CpsExprKind::Var { name: read, scopes }
+    matches!(&expr.kind, CpsExprKind::Var { name: read, scopes, link: _ }
         if scopes.is_empty() && Rc::ptr_eq(read, name))
 }

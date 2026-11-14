@@ -870,10 +870,10 @@ mod tests {
         let cps_eval = CpsEvaluator::new(&evaluator);
 
         // CPS: (halt x)
-        let expr = CpsExpr::new(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Var {
-            name: Rc::from("x"),
-            scopes: ScopeSet::new(),
-        })));
+        let expr = CpsExpr::new(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::var(
+            Rc::from("x"),
+            ScopeSet::new(),
+        ))));
         let result = cps_eval.eval(&expr).unwrap();
         assert_eq!(result.as_fixnum(), Some(10));
     }
@@ -887,10 +887,10 @@ mod tests {
         let halt_cont = CpsExpr::new(CpsExprKind::LetCont {
             name: Rc::from("k"),
             param: Rc::from("result"),
-            cont_body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Var {
-                name: Rc::from("result"),
-                scopes: ScopeSet::new(),
-            }))),
+            cont_body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::var(
+                Rc::from("result"),
+                ScopeSet::new(),
+            )))),
             body: CpsExpr::rc(CpsExprKind::PrimOp {
                 op: CpsPrimitive::Add,
                 args: vec![
@@ -903,6 +903,75 @@ mod tests {
 
         let result = cps_eval.eval(&halt_cont).unwrap();
         assert_eq!(result.as_fixnum(), Some(3));
+    }
+
+    /// A linked reference reads, and a linked assignment writes, the record
+    /// its link names, not the spelling (#837): here `f` is a library's,
+    /// linked through the library namespace's record, while the program's
+    /// environment binds `f` to something else, which neither touches. A
+    /// link to a cell holding `UNBOUND` answers an undefined variable named
+    /// by the written spelling, on the read and on the write, and stores
+    /// nothing.
+    #[test]
+    fn a_linked_node_reads_and_writes_its_record_not_its_spelling() {
+        use patina_core::{LiteralPool, NamespaceView, NoGcScope};
+
+        let evaluator = make_test_evaluator();
+        let heap = &evaluator.heap;
+        let program = &evaluator.global_env;
+        program.define(heap, "f", TaggedValue::fixnum(100));
+        let library = Rc::new(Environment::with_heap(heap));
+        library.define(heap, "f", TaggedValue::fixnum(11));
+        let literals = LiteralPool::new(&heap.borrow());
+        let (link, unbound) = NoGcScope::with_cx(heap, |cx| {
+            let (_, linkable) = cx
+                .early_link(NamespaceView::of(&library), "f")
+                .expect("a record");
+            let unbound = cx.unbound_link_for_tests();
+            (literals.add_link(linkable), literals.add_link(unbound))
+        });
+        let (link, unbound) = (literals.link(link), literals.link(unbound));
+        let scopes = ScopeSet::from_iter([patina_core::ScopeId(9)]);
+        let cps = CpsEvaluator::new(&evaluator);
+        let read = |link| {
+            let var = CpsExprKind::linked_var(Rc::from("f"), scopes.clone(), Some(link));
+            cps.eval(&CpsExpr::new(CpsExprKind::Halt(CpsExpr::rc(var))))
+        };
+        let write = |link, value| {
+            let set = CpsExprKind::linked_set(
+                Rc::from("f"),
+                scopes.clone(),
+                CpsExpr::rc(CpsExprKind::Literal(TaggedValue::fixnum(value))),
+                CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Literal(
+                    TaggedValue::UNSPECIFIED,
+                )))),
+                Some(link),
+            );
+            cps.eval(&CpsExpr::new(set))
+        };
+
+        assert_eq!(read(link).expect("reads"), TaggedValue::fixnum(11));
+        write(link, 12).expect("writes");
+        assert_eq!(library.get(heap, "f"), Some(TaggedValue::fixnum(12)));
+        assert_eq!(read(link).expect("reads"), TaggedValue::fixnum(12));
+        assert_eq!(
+            program.get(heap, "f"),
+            Some(TaggedValue::fixnum(100)),
+            "the spelling's binding is untouched"
+        );
+
+        let undefined = |result: Result<TaggedValue, EvalError>| match result {
+            Err(EvalError::UndefinedVariable(name)) => name,
+            other => panic!("not an undefined variable: {other:?}"),
+        };
+        assert_eq!(undefined(read(unbound)), "f");
+        assert_eq!(undefined(write(unbound, 13)), "f");
+        assert_eq!(
+            program.get(heap, "f"),
+            Some(TaggedValue::fixnum(100)),
+            "nor does a refused write fall back to it"
+        );
+        drop(literals);
     }
 
     /// A fresh pair `(7)`, which nothing reaches until the caller puts it

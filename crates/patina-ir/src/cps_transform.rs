@@ -129,10 +129,10 @@ impl<'a> CpsTransformer<'a> {
         CpsExpr::new(CpsExprKind::LetCont {
             name: halt_cont.clone(),
             param: result_var.clone(),
-            cont_body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Var {
-                name: result_var,
-                scopes: ScopeSet::new(),
-            }))),
+            cont_body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::var(
+                result_var,
+                ScopeSet::new(),
+            )))),
             body: Rc::new(self.transform(expr, &halt_cont)),
         })
     }
@@ -219,10 +219,7 @@ impl<'a> CpsTransformer<'a> {
                     let cps_else = self.transform(else_, k);
 
                     let if_expr = CpsExpr::new(CpsExprKind::If {
-                        test: CpsExpr::rc(CpsExprKind::Var {
-                            name: test_var.clone(),
-                            scopes: ScopeSet::new(),
-                        }),
+                        test: CpsExpr::rc(CpsExprKind::var(test_var.clone(), ScopeSet::new())),
                         consequent: Rc::new(cps_then),
                         alternate: Rc::new(cps_else),
                     });
@@ -256,43 +253,39 @@ impl<'a> CpsTransformer<'a> {
                 value,
                 link,
             } => {
-                // `CpsExpr` carries no link until 4b.10's switch, which adds
-                // its field and copies this one (#837); nothing links an
-                // assignment before then.
-                debug_assert!(
-                    link.is_none(),
-                    "a linked assignment reached the CPS transform before its CpsExpr field (#837)"
-                );
+                // The record a linked assignment writes, copied out of the
+                // form's pool, which roots it until the run that holds this
+                // tree returns (#837, #869).
+                let link = link.map(|link| self.literals.link(link));
                 // Transform: (set! var value)
                 // Into: evaluate value, do set!, continue with unspecified
 
                 if self.is_trivial(value) {
                     let cps_value = self.transform_trivial(value);
-                    CpsExpr::new(CpsExprKind::Set {
-                        var: var.clone(),
-                        scopes: scopes.clone(),
-                        value: Rc::new(cps_value),
-                        cont: CpsExpr::rc(CpsExprKind::Continue {
+                    CpsExpr::new(CpsExprKind::linked_set(
+                        var.clone(),
+                        scopes.clone(),
+                        Rc::new(cps_value),
+                        CpsExpr::rc(CpsExprKind::Continue {
                             cont: k.clone(),
                             value: CpsExpr::rc(CpsExprKind::Literal(TaggedValue::UNSPECIFIED)),
                         }),
-                    })
+                        link,
+                    ))
                 } else {
                     let val_var = self.gensym_var();
                     let val_cont = self.gensym_cont();
 
-                    let set_expr = CpsExpr::new(CpsExprKind::Set {
-                        var: var.clone(),
-                        scopes: scopes.clone(),
-                        value: CpsExpr::rc(CpsExprKind::Var {
-                            name: val_var.clone(),
-                            scopes: ScopeSet::new(),
-                        }),
-                        cont: CpsExpr::rc(CpsExprKind::Continue {
+                    let set_expr = CpsExpr::new(CpsExprKind::linked_set(
+                        var.clone(),
+                        scopes.clone(),
+                        CpsExpr::rc(CpsExprKind::var(val_var.clone(), ScopeSet::new())),
+                        CpsExpr::rc(CpsExprKind::Continue {
                             cont: k.clone(),
                             value: CpsExpr::rc(CpsExprKind::Literal(TaggedValue::UNSPECIFIED)),
                         }),
-                    });
+                        link,
+                    ));
 
                     CpsExpr::new(CpsExprKind::LetCont {
                         name: val_cont.clone(),
@@ -333,10 +326,7 @@ impl<'a> CpsTransformer<'a> {
                         name: name.clone(),
                         scopes: scopes.clone(),
                         visible_by_name,
-                        value: CpsExpr::rc(CpsExprKind::Var {
-                            name: val_var.clone(),
-                            scopes: ScopeSet::new(),
-                        }),
+                        value: CpsExpr::rc(CpsExprKind::var(val_var.clone(), ScopeSet::new())),
                         cont: CpsExpr::rc(CpsExprKind::Continue {
                             cont: k.clone(),
                             value: CpsExpr::rc(CpsExprKind::Literal(TaggedValue::UNSPECIFIED)),
@@ -394,17 +384,12 @@ impl<'a> CpsTransformer<'a> {
     fn transform_trivial(&self, expr: &CoreExpr) -> CpsExpr {
         let mut result = match &expr.kind {
             CoreExprKind::Literal(v) => CpsExpr::new(CpsExprKind::Literal(self.literals.word(*v))),
-            CoreExprKind::Var { name, scopes, link } => {
-                // As `Set`'s link above (#837).
-                debug_assert!(
-                    link.is_none(),
-                    "a linked reference reached the CPS transform before its CpsExpr field (#837)"
-                );
-                CpsExpr::new(CpsExprKind::Var {
-                    name: name.clone(),
-                    scopes: scopes.clone(),
-                })
-            }
+            // As `Set`'s link above (#837).
+            CoreExprKind::Var { name, scopes, link } => CpsExpr::new(CpsExprKind::linked_var(
+                name.clone(),
+                scopes.clone(),
+                link.map(|link| self.literals.link(link)),
+            )),
             CoreExprKind::Quote(v) => CpsExpr::new(CpsExprKind::Literal(self.literals.word(*v))),
             CoreExprKind::Lambda {
                 params,
@@ -519,19 +504,11 @@ impl<'a> CpsTransformer<'a> {
             .collect();
 
         // Build the application expression
-        let func_var = CpsExpr::new(CpsExprKind::Var {
-            name: names[0].clone(),
-            scopes: ScopeSet::new(),
-        });
+        let func_var = CpsExpr::new(CpsExprKind::var(names[0].clone(), ScopeSet::new()));
 
         let arg_vars: Vec<CpsExpr> = names[1..]
             .iter()
-            .map(|n| {
-                CpsExpr::new(CpsExprKind::Var {
-                    name: n.clone(),
-                    scopes: ScopeSet::new(),
-                })
-            })
+            .map(|n| CpsExpr::new(CpsExprKind::var(n.clone(), ScopeSet::new())))
             .collect();
 
         let app = CpsExpr::with_opt_source(
@@ -565,18 +542,10 @@ impl<'a> CpsTransformer<'a> {
         // The final apply expression, stamping the call-site source
         let apply_expr = CpsExpr::with_opt_source(
             CpsExprKind::Apply {
-                func: CpsExpr::rc(CpsExprKind::Var {
-                    name: func_name.clone(),
-                    scopes: ScopeSet::new(),
-                }),
+                func: CpsExpr::rc(CpsExprKind::var(func_name.clone(), ScopeSet::new())),
                 args: arg_names
                     .iter()
-                    .map(|n| {
-                        CpsExpr::new(CpsExprKind::Var {
-                            name: n.clone(),
-                            scopes: ScopeSet::new(),
-                        })
-                    })
+                    .map(|n| CpsExpr::new(CpsExprKind::var(n.clone(), ScopeSet::new())))
                     .collect(),
                 cont: k.clone(),
             },
@@ -816,6 +785,95 @@ mod tests {
 
         // Should sequence the expressions
         assert!(matches!(cps.kind, CpsExprKind::LetCont { .. }));
+    }
+
+    /// The transform copies a linked reference's and a linked assignment's
+    /// record out of the pool into the `CpsExpr` (#837), whichever path it
+    /// takes: a trivial value and a serious one for `set!`, a reference in
+    /// value position and as an operand. A rebuild that dropped the link
+    /// would read the spelling instead, which #438's capture is.
+    #[test]
+    fn the_transform_carries_each_link_into_its_node() {
+        use patina_core::environment::Environment;
+        use patina_core::{BindingLink, NamespaceView, NoGcScope};
+
+        let (heap, literals) = pool();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        ns.define(&heap, "f", TaggedValue::fixnum(1));
+        let link = NoGcScope::with_cx(&heap, |cx| {
+            let (_, linkable) = cx
+                .early_link(NamespaceView::of(&ns), "f")
+                .expect("a record");
+            literals.add_link(linkable)
+        });
+        let record = literals.link(link);
+        let scopes = ScopeSet::from_iter([patina_core::scope::ScopeId(4)]);
+        let linked = || {
+            CoreExpr::new(CoreExprKind::linked_var(
+                "f".into(),
+                scopes.clone(),
+                Some(link),
+            ))
+        };
+        let set = |value| {
+            CoreExpr::new(CoreExprKind::linked_set(
+                "f".into(),
+                scopes.clone(),
+                Rc::new(value),
+                Some(link),
+            ))
+        };
+        let call = |func| {
+            CoreExpr::new(CoreExprKind::App {
+                func: Rc::new(func),
+                args: vec![linked()],
+            })
+        };
+        let expr = CoreExpr::new(CoreExprKind::Begin(vec![
+            linked(),
+            set(make_literal(2)),
+            set(call(make_var("g"))),
+            call(linked()),
+        ]));
+        let cps = CpsTransformer::new(&literals).transform_toplevel(&expr);
+
+        fn links(e: &CpsExpr, found: &mut Vec<(&'static str, Option<BindingLink>)>) {
+            let children: Vec<&CpsExpr> = match &e.kind {
+                CpsExprKind::Var { link, .. } => {
+                    if link.is_some() {
+                        found.push(("var", *link));
+                    }
+                    vec![]
+                }
+                CpsExprKind::Set {
+                    link, value, cont, ..
+                } => {
+                    found.push(("set", *link));
+                    vec![value, cont]
+                }
+                CpsExprKind::LetCont {
+                    cont_body, body, ..
+                } => vec![cont_body, body],
+                CpsExprKind::LetVal { value, body, .. } => vec![value, body],
+                CpsExprKind::Continue { value, .. } => vec![value],
+                CpsExprKind::App { func, args, .. } => {
+                    std::iter::once(&**func).chain(args.iter()).collect()
+                }
+                _ => vec![],
+            };
+            for child in children {
+                links(child, found);
+            }
+        }
+        let mut found = Vec::new();
+        links(&cps, &mut found);
+        let sets = found.iter().filter(|(kind, _)| *kind == "set").count();
+        let vars = found.iter().filter(|(kind, _)| *kind == "var").count();
+        assert_eq!((vars, sets), (4, 2), "every linked node: {cps}");
+        assert!(
+            found.iter().all(|&(_, l)| l == Some(record)),
+            "each carries the pooled record: {cps}"
+        );
     }
 
     /// A call of `call/cc` is an ordinary application: the tree-walker claims
