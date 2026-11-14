@@ -465,8 +465,10 @@ into the unit's link table, `CodeObject::links` (`patina_core::LinkTable`).
   source's forms as the REPL's `(vm-compile …)` and `--dump` do, which
   print each form as it compiles, and answers the code unloaded, lent with
   the pools that root it, for a test that asserts what a form compiles to.
-  Nothing links an operand until
-  4b.10's switch.
+  The desugarer links an early-bound template reference since 4b.10's
+  switch (#837): a library macro's `car` compiles to an inline `Car` on a
+  `car@linked` operand, beside the unit's own `car` on an entry of its own
+  (`vm_callprimitive.rs`'s fast-path and two-forms tests).
 
 ---
 

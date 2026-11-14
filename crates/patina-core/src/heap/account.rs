@@ -870,10 +870,12 @@ impl Heap {
         self.account.shared.namespaces.get()
     }
 
-    /// The binding records the live namespaces hold (#834): each slot's,
-    /// each scoped entry's and each import alias's, and each of a host
-    /// namespace's read-through records (#835). A frame's imports are not
-    /// counted. A running sum, exact once the dead namespaces have dropped.
+    /// The binding records the live namespaces hold (#834): each slot's and
+    /// each scoped entry's, and each of a host namespace's read-through
+    /// records (#835). A frame's imports are not counted, nor a record that
+    /// only code keeps after its namespace dropped (an early link's, #837),
+    /// nor the fresh record an early link makes over a frame's import. A
+    /// running sum, exact once the dead namespaces have dropped.
     /// `(gc-stats)`'s `binding-records`.
     pub fn binding_records(&self) -> usize {
         self.account.shared.binding_records.get()

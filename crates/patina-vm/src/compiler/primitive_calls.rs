@@ -242,9 +242,9 @@ pub fn resolve_primitive_calls(
 /// a binding of its own and writes nothing of the parent's. A host
 /// namespace's read-through records (#835) are in no slot, so they are
 /// skipped as a parent's binding is. A definition marks by the
-/// environment's own binding for this reason (`define_global`). Imports,
-/// and the aliases early binding makes until 4b.10's switch links them
-/// (#837), are slots of their own and keep their fast paths.
+/// environment's own binding for this reason (`define_global`). Imports are
+/// slots of their own and keep their fast paths; an early-bound reference is
+/// linked (#837) and judged by its record, not here.
 fn resolved_by_name(
     view: NamespaceView<'_>,
     heap: &SharedHeap,

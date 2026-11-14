@@ -234,8 +234,9 @@ All Scheme values except `#f` are truthy (R7RS §6.3).
 `JumpUnlessShadowed` is the guard in front of the sequence a head-position
 `call-with-values` or `dynamic-wind` compiles to (§4.6 and §7.3, #442). Pass 5
 emits the sequence where the operator is *bound* to the form's procedure when
-the site is compiled — a renamed import and early binding's alias for a library
-template's reference included, a program's own definition of the name not, nor
+the site is compiled — a renamed import and a library template's early-bound
+reference included, the latter judged by the record it links (`car@linked`,
+#837), a program's own definition of the name not, nor
 a name answered through a macro-expansion alias — and puts the
 ordinary `LoadGlobal` + `Call` of the operator between the guard and the
 sequence. `VmState::shadowed_controls` holds one bit per form, set when any

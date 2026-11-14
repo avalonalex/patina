@@ -1137,8 +1137,8 @@ namespace since #835, to rooting what is bound in it, on both backends
   template names, which keeps that binding past a later host definition of
   the name, as at top level, while the global environment imports nothing
   of it (#851; the owner's ruling (c) of 2026-11-07 on #835's question 3
-  has the desugarer ask the host namespace for the import alias before the
-  global environment);
+  has the desugarer ask the host namespace whether it imports the binding
+  before the global environment);
 - the same macro used in a host namespace that imports nothing, after the
   global environment imports it and the binding its template names, which
   keeps the global environment's import: the desugarer asks the global
@@ -1194,7 +1194,9 @@ is one record more on the VM, its placeholder, and none on the tree-walker; a
 caught call of it that misses adds none; and once it is let go two
 collections give the count back. `keep` is defined and a `guard` expanded
 before the baseline, since a definition's operand is linked at load and
-`guard`'s first expansion binds import aliases that outlive the collections.
+`guard`'s first expansion relinks its private helpers, whose aliases
+outlive the collections (until #837 it also bound import aliases, records of
+their own).
 `a_host_namespace_s_placeholders_are_dropped_with_their_code` does the same
 in a host namespace, on both backends: a held host procedure reading an
 unbound name is two records on the VM, a weak read-through record and the
@@ -1613,7 +1615,7 @@ collection the driver runs at a safe point, which the run reaches by
 allocating.
 
 **A template reference's link (#837, 4b.10).** An early-bound template
-reference will be bound to a binding record, a `Link` in its form's pool,
+reference is bound to a binding record, a `Link` in its form's pool,
 rather than renamed to an alias spelling. The first step, inert, adds the
 link to core, `CoreExpr` and the VM, and tests each part with links built by
 hand: core's `early_link_tests` (only an import is linked early, a location
@@ -1659,6 +1661,35 @@ on both backends: `macro_definition_env.rs`'s
 and `an_early_bound_primitive_keeps_its_fast_path`, which also asserts the
 template's inline `Car` on the code `compile_for_inspection` answers. Both
 targets' stress counts were re-pinned for them.
+
+The second step carries the link into the tree-walker and switches the
+desugarer to it. The tree-walker's half is tested by hand-built nodes:
+`cps_expr.rs`'s size pin (`CpsExprKind` stays 112 bytes) and
+`a_linked_node_displays_and_needs_scopes`; the sentinel
+`expression_links_under_var_and_set`, a linked `Var`'s and `Set`'s record
+reachable only through the node; `patina-ir`'s
+`the_transform_carries_each_link_into_its_node`; the tree-walker's
+`a_linked_node_reads_and_writes_its_record_not_its_spelling`, whose
+program binds the spelling to something else, and whose link to an
+`UNBOUND` cell answers an undefined variable named by the spelling; and
+`binding_record.rs`'s `a_links_write_stores_into_its_records_cell_unless_unbound`.
+The switch's own tests failed before it and pass after, on both backends:
+`macro_definition_env.rs`'s `an_early_bound_reference_mints_no_spelling`
+(no `f.k`, `k` below 100,000, is a name of the program's namespace),
+`an_early_bound_expansion_leaves_the_programs_names_alone` (its names
+three ways, its placeholders and the count of binding records, before and
+after an expansion; the enumerations hid the alias before, so the count is
+what failed) and
+`a_minted_spelling_defined_by_the_program_leaves_earlier_code_alone`; the
+operand checks of `vm_callprimitive.rs`'s two tests, `car@linked` where the
+base had `car.N`; and `expansion/template-references.scm`'s last two rows,
+which pass under Gauche and under chibi with the library as a `.sld`, and
+which can pass vacuously in a process that has minted many aliases first, so
+they were shown failing with the file run alone. `scope_trace.rs`'s grammar
+tests hold the `via=early-link` record, and
+`relink_alias_tests::minting_skips_a_name_already_bound` keeps the one
+property of the deleted `import_alias_tests` no other test had.
+`macro_definition_env`'s stress count was re-pinned for its three tests.
 
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):

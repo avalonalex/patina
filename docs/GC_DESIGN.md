@@ -131,14 +131,25 @@ word in each slot, plain and scoped, which in a namespace is the binding's
 record, so that its cell and value are marked as the pairs they are; each
 cell a frame imports; and one kind of edge that leaves the parent chain, an
 `Rc<Environment>` in a side table rather than a value in a slot: a
-macro-expansion alias into the environment the macro was defined in. An
+macro-expansion alias into the environment the macro was defined in
+(relinking's and keywords'; early binding made none in any table since
+4b.10, which links the binding's record instead, #837). An
 import is no such edge: it is the exporter's cell, which the importer's
 record names, or a frame's import table holds, and which the trace marks
 like any value, so an importer keeps the cell and not the library's
 environment (§4.7, #834). One more value sits beside the slots: the
 environment's mutable specifier, which `interaction-environment` and `load`
 hand out again rather than allocate per call (#615), and which is live
-exactly as long as the bindings are. A host namespace (#835), the
+exactly as long as the bindings are. One edge outside `Environment` is
+**counted** among a namespace's holders rather than replaced (#837): a live
+macro that a macro of another library generated keeps its generator's
+environment through `CompiledMacro.foreign_expansions`, which early binding
+reads for the record a later expansion links. A replacement would release
+nothing where the template names a procedure of the generator's library,
+since its closure keeps the namespace anyway, and would need every name a
+later expansion asks about, so 4b.11's audit lists the edge among a
+replaced namespace's holders and a later narrowing can trim it
+(`PRD/GC_PRD.md` §17.2). A host namespace (#835), the
 namespace `Interpreter::new_environment` answers, whose parent is the global
 namespace, is traced as any namespace is, and has one table more: its
 read-through records (`RareTables::read_through`, §4.7), whose derived trace
@@ -380,7 +391,11 @@ Live procedures keep their code alive, and code embeds heap values:
 `Procedure` or `Continuation`, it must trace the literals in the body
 `Rc<CpsExpr>`. A `CoreExpr` holds no heap word: until its form is compiled,
 its literals, and the binding records it links (#837), are its
-compilation's literal pool's (§9.7).
+compilation's literal pool's (§9.7). A `CpsExpr` holds words of both kinds:
+its literals, and since #837 the record a linked `Var` or `Set` reads or
+writes (`link: Option<BindingLink>`), which the derived trace reports
+through the same walk, so a closure's body, a continuation's and the
+trampoline's step keep each linked record (`expression_links_under_var_and_set`).
 
 - **Tree-walker:** walk the expression tree, memoized per collection by
   `Rc::as_ptr` (an expression shared by many closures is walked once).
@@ -624,9 +639,10 @@ record (below).
   share a cell the namespace owns, and each own cell has exactly one record.
   So the record a VM unit's link table links for a name stays the name's
   record for the namespace's life, whatever is defined or imported later
-  (#836). Two names may share an imported cell: an import alias
-  (`Environment::import_alias`, #438), or one export imported under two
-  names, is a second record over the same cell. A frame holds no record: its own
+  (#836). Two names may share an imported cell: one export imported under
+  two names is a second record over the same cell. (An import alias, early
+  binding's second record over an import's cell, was another until 4b.10
+  linked the import's record instead, #837.) A frame holds no record: its own
   bindings are values, and an import is the frame-only marker
   `TaggedValue::IMPORTED` in its slot, with the cell beside it in
   `RareTables::frame_imports` (D5/D6), so installing one allocates nothing
@@ -671,8 +687,9 @@ record (below).
   that linked it reads the binding from then on; its own `UNBOUND` cell is
   garbage. A scoped definition of the name leaves it in place, and a read by
   name finds the scoped binding, as today. No alias is minted at a name a
-  placeholder or a weak read-through record holds (`import_alias`,
-  `relink_alias`): an import alias's install would adopt it. A check build
+  placeholder or a weak read-through record holds (`relink_alias`): it
+  would leave code that linked the name reading the entry where `get` reads
+  the alias. A check build
   asserts that no slot is given a flagged or read-through record, at the
   slots' one writer (`Environment::append_slot`). The placement, a store per
   namespace with a list per heap rather than the slots themselves, is P2, the
@@ -759,7 +776,13 @@ record (below).
   and their `unbound` cell included (SD3,
   `a_read_through_record_dies_with_its_host_namespace`); a VM unit's link
   table, traced, marks the records it links as well, and keeps its
-  namespace (§5.2, §8). Placeholders and
+  namespace (§5.2, §8). Code that links a record keeps it past its
+  namespace's life (#837): a pinned link-table entry, or a linked
+  `CpsExpr` node, of code expanded before a library was redefined keeps the
+  old library's record and cell, and records and cells are freed only by
+  the sweep, never by a namespace's drop
+  (`an_early_link_keeps_the_old_library_binding_across_a_redefinition`).
+  Such a record or cell is no longer counted (§6). Placeholders and
   weak read-through records are weak (R1, R7, #836): no slot holds them and
   no derived trace marks them, so one lives while a traced link table names
   it, and the sweep's pass drops it once none does (§4.5); a weak record
@@ -812,17 +835,16 @@ record (below).
   an adoption of a placeholder logs the same two, the flags fixnum clearing
   its flag, and a define's value initialises its fresh cell with no holder,
   as any by-name definition's first value does (#836).
-- **The identity condition.** `RareTables::import_aliases` keys each
-  imported cell by `BindingCell::key`, its word less a check build's
-  generation stamp, so a cell made in a swept cell's slot has the swept
-  cell's key in every build. The keys are compared, never traced or
-  dereferenced, and an entry goes when its alias's record is re-pointed
-  (`forget_alias`, in `define`'s and an import's re-point), so no key
-  outlives its cell (the owner's rulings of 2026-11-03 on #782).
-  `import_alias_reuse_tests` makes a cell in the swept cell's slot after
-  each of the two re-points, and each test fails without its re-point's
-  `forget_alias` in a debug build, whose words carry the stamp, as in
-  release.
+- **The identity condition.** A key that is a record's or a cell's word
+  less a check build's stamp (`Record::key`) is the swept object's key in
+  every build once its slot is reused, so a holder of keys keeps every
+  object it keys live while it holds the key (the owner's rulings of
+  2026-11-03 on #782). Since 4b.10 the holders are one compilation's maps
+  (`OperandKey::Record`, in `primitive_calls` and pass 5), whose pool roots
+  every record they key for the maps' whole life, and which die before it
+  (#837's W11). `RareTables::import_aliases`, which keyed imported cells
+  and dropped a key as its alias's record was re-pointed (`forget_alias`),
+  went with early binding's aliases, and with it the condition's tests.
 
 What a namespace holds is counted by the `namespaces`, `binding-records` and
 `cells` keys (§6). Records and cells are charged in L as the pair arena's,
@@ -850,6 +872,7 @@ the `current_step: StepResult` local** in `eval_in_env`'s trampoline loop
 | Root | Location | Notes |
 |------|----------|-------|
 | `current_step: StepResult` | Rust local in the trampoline loop | Carries value/proc/args, env, the value delivered to a continuation that the next step binds (#680), `ContEnv` continuation chain, `prompt_stack`, `dynamic_winds`, `exception_handlers` (`eval/cps_eval/types.rs`). Passed to `collect` as a transient root at the safe point. |
+| Linked `CpsExpr` nodes' records | every `CpsExpr` a step, a closure or a continuation holds | Since #837 a `Var` or `Set` the desugarer linked carries the binding record it reads or writes (`link`), reported by `CpsExpr`'s derived trace through `expr_literals`, as a literal is (§4.4); the tree-walker's one holder of records outside a namespace, beside the VM's pinned link-table entries (§4.7) |
 | `ContValue` chain | inside `StepResult` | Recursive via `Box<ContValue>`; variants embed `TaggedValue`s (`types.rs:168`) — needs its own trace impl |
 | `Evaluator.global_env` | `eval/mod.rs:43` | `env` |
 | `LibraryRegistry` | `eval/mod.rs:47` | §5.3 |
@@ -1410,14 +1433,17 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   environment, each loaded library's, each live specifier's,
   `%parameterize-swap!`'s compile namespace and each live host namespace,
   #835; a frame is not counted); the binding records they hold, one per
-  slot, per scoped entry, per import alias and per read-through record of
+  slot, per scoped entry and per read-through record of
   a host namespace's, and, on the VM, one per placeholder and per weak
   read-through record a unit's link table linked (#836), until the sweep's
   pass drops it or a define or an import adopts it; and the cells of their
   own their records name now, a placeholder's own `UNBOUND` cell among them
   (a weak read-through record's is the host namespace's one `unbound`
   cell, uncounted as before), leaving out a frame's imports, a free cell,
-  and a cell only an importer's record or an export keeps. The heap's
+  and a cell only an importer's record or an export keeps. Neither sum
+  counts a record or cell that only code keeps after its namespace dropped
+  (an early link's, #837), nor the fresh record an early link makes over a
+  frame's import. The heap's
   by-name record is in neither. Each is a running sum, raised as a
   namespace or a store makes one, `cells` lowered as a record is
   re-pointed away from an own cell, both lowered by the pass for what it
@@ -2553,8 +2579,10 @@ Each literal is a `Lit` (`crates/patina-core/src/literal_pool.rs`):
   answers a `BindingLink` for a backend to copy into its code (the VM's
   pass 2, into a pinned entry of the unit's link table) and asserts the
   pool's id in every build; `LiteralPool::value` takes a `Lit`, so a record
-  never reaches a program as a value. Nothing makes a link until 4b.10's
-  switch.
+  never reaches a program as a value. The desugarer makes one for each
+  early-bound reference since 4b.10's switch; the tree-walker's CPS
+  transform copies it into the `CpsExpr`, which then holds the record
+  itself (§4.4).
 - **Tests.** `a_collection_keeps_a_pooled_literal` and
   `a_collection_keeps_a_pooled_links_record` are the sentinels, and
   `literal_pools.rs` holds every compilation path to dropping its pool.
