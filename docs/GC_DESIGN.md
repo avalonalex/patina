@@ -379,7 +379,8 @@ Live procedures keep their code alive, and code embeds heap values:
 (`crates/patina-core/src/cps_expr.rs:158,:324`). When the tracer reaches a
 `Procedure` or `Continuation`, it must trace the literals in the body
 `Rc<CpsExpr>`. A `CoreExpr` holds no heap word: until its form is compiled,
-its literals are its compilation's literal pool's (§9.7).
+its literals, and the binding records it links (#837), are its
+compilation's literal pool's (§9.7).
 
 - **Tree-walker:** walk the expression tree, memoized per collection by
   `Rc::as_ptr` (an expression shared by many closures is walked once).
@@ -731,7 +732,21 @@ record (below).
   store, whose entries are weak (#836); `Library`'s reports each export's
   cell, and a `LinkTable`'s each linked entry and the namespace it was
   linked in (`link_table_fields`), which the VM traces by its unit's code
-  id (§9.5), never from the code store. The sentinels are
+  id (§9.5), never from the code store. A pinned entry (#837), which pass 5
+  presets with the record a linked operand names
+  (`LinkTable::with_links`), is an entry like the rest, kept by the same
+  trace once its unit is loaded (the trace itself covers it before the
+  table is linked:
+  `a_pinned_entry_keeps_its_record_before_the_table_is_linked`, which
+  traces the table directly); until `load_unit` nothing traces the table,
+  and its form's pool roots the record: a reader of an unloaded table
+  keeps the pool alive while it reads, as
+  `VmBackend::compile_for_inspection`'s answer does by lending its code
+  and never handing it out. The record is a namespace's slot or scoped
+  entry record, or E1's fresh record over a frame's import's cell, in no
+  slot. `link_in` skips it and the cold paths never read or write it by
+  name, and a check build's `link_in` refuses a pinned placeholder,
+  read-through record or by-name record. The sentinels are
   `gc_edge_tests::environment_edges` (a frame's import),
   `gc_edge_tests::read_through_edges` (a host namespace's read-through
   table),
@@ -2528,7 +2543,20 @@ Each literal is a `Lit` (`crates/patina-core/src/literal_pool.rs`):
   `an_evald_datum_is_let_go_of_by_the_next_collection` and
   `an_evald_datum_is_let_go_of_by_the_next_safe_point_collection` hold an
   `eval`'d datum to that within its run.
-- **Tests.** `a_collection_keeps_a_pooled_literal` is the sentinel, and
+- **Links** (#837). A `Var` or `Set` may carry a `Link`, a binding record
+  an early-bound template reference is bound to: an entry of the same
+  table, so the pool roots the record, its cell and the value as it roots a
+  literal, from `Cx::early_link`, beneath the desugarer's context, which
+  brands the handle (`Linkable<'gc>`, so a safe crate cannot pool one a
+  collection has freed), to the code. It is made only by
+  `LiteralPool::add_link` and read only by `LiteralPool::link`, which
+  answers a `BindingLink` for a backend to copy into its code (the VM's
+  pass 2, into a pinned entry of the unit's link table) and asserts the
+  pool's id in every build; `LiteralPool::value` takes a `Lit`, so a record
+  never reaches a program as a value. Nothing makes a link until 4b.10's
+  switch.
+- **Tests.** `a_collection_keeps_a_pooled_literal` and
+  `a_collection_keeps_a_pooled_links_record` are the sentinels, and
   `literal_pools.rs` holds every compilation path to dropping its pool.
 - **Why indices, not a root beside the words.** Until the pool, the literals
   were words in the tree, sound only because nothing collects while a form is

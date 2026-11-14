@@ -56,10 +56,7 @@ fn run(expr: CoreExpr) -> TaggedValue {
 }
 
 fn var(name: &str) -> CoreExpr {
-    CoreExpr::new(CoreExprKind::Var {
-        name: Rc::from(name),
-        scopes: ScopeSet::new(),
-    })
+    CoreExpr::new(CoreExprKind::var(Rc::from(name), ScopeSet::new()))
 }
 
 fn lit(n: i64) -> CoreExpr {
@@ -117,11 +114,11 @@ fn define(name: &str, value: CoreExpr) -> CoreExpr {
 }
 
 fn set(name: &str, value: CoreExpr) -> CoreExpr {
-    CoreExpr::new(CoreExprKind::Set {
-        var: Rc::from(name),
-        scopes: ScopeSet::new(),
-        value: Rc::new(value),
-    })
+    CoreExpr::new(CoreExprKind::set(
+        Rc::from(name),
+        ScopeSet::new(),
+        Rc::new(value),
+    ))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -258,19 +255,10 @@ fn tail_call_self_recursion() {
     let body = if_(
         CoreExpr::new(CoreExprKind::Literal(Lit::immediate(TaggedValue::FALSE))),
         app(
-            CoreExpr::new(CoreExprKind::Var {
-                name: self_sym.clone(),
-                scopes: ScopeSet::new(),
-            }),
+            CoreExpr::new(CoreExprKind::var(self_sym.clone(), ScopeSet::new())),
             vec![
-                CoreExpr::new(CoreExprKind::Var {
-                    name: self_sym.clone(),
-                    scopes: ScopeSet::new(),
-                }),
-                CoreExpr::new(CoreExprKind::Var {
-                    name: n_sym.clone(),
-                    scopes: ScopeSet::new(),
-                }),
+                CoreExpr::new(CoreExprKind::var(self_sym.clone(), ScopeSet::new())),
+                CoreExpr::new(CoreExprKind::var(n_sym.clone(), ScopeSet::new())),
             ],
         ),
         lit(42),
@@ -287,15 +275,9 @@ fn tail_call_self_recursion() {
     // ((lambda (f) (f f 0)) inner)
     let f_sym = Rc::<str>::from("f");
     let outer_body = app(
-        CoreExpr::new(CoreExprKind::Var {
-            name: f_sym.clone(),
-            scopes: ScopeSet::new(),
-        }),
+        CoreExpr::new(CoreExprKind::var(f_sym.clone(), ScopeSet::new())),
         vec![
-            CoreExpr::new(CoreExprKind::Var {
-                name: f_sym.clone(),
-                scopes: ScopeSet::new(),
-            }),
+            CoreExpr::new(CoreExprKind::var(f_sym.clone(), ScopeSet::new())),
             lit(0),
         ],
     );

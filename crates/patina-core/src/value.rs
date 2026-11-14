@@ -55,7 +55,7 @@ use crate::tagged_value::TaggedValue;
 
 /// The brand: invariant in `'gc` (`fn(&'gc ()) -> &'gc ()`), and neither
 /// `Send` nor `Sync` (`*const ()`).
-type Brand<'gc> = PhantomData<(fn(&'gc ()) -> &'gc (), *const ())>;
+pub(crate) type Brand<'gc> = PhantomData<(fn(&'gc ()) -> &'gc (), *const ())>;
 
 /// A Scheme value, valid while the [`Cx`](crate::Cx) it came from lives.
 /// See the [module docs](self).

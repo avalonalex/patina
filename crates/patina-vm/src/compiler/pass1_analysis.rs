@@ -94,13 +94,40 @@ fn collect_inner(
             HashSet::new()
         }
 
-        CoreExprKind::Var { name, .. } => {
+        // A linked reference is a global the desugarer bound (#837): it is
+        // no free variable of any lambda, and its spelling cannot collide
+        // with a local, which `alpha_rename` renamed uniquely.
+        CoreExprKind::Var {
+            link: Some(_),
+            name: _,
+            scopes: _,
+        } => HashSet::new(),
+
+        CoreExprKind::Var {
+            name,
+            link: None,
+            scopes: _,
+        } => {
             let mut refs = HashSet::new();
             refs.insert(name.clone());
             refs
         }
 
-        CoreExprKind::Set { var, value, .. } => {
+        // A linked assignment marks nothing mutated, as a linked reference
+        // is free in nothing.
+        CoreExprKind::Set {
+            value,
+            link: Some(_),
+            var: _,
+            scopes: _,
+        } => collect(value, outer_bindings, counter, info),
+
+        CoreExprKind::Set {
+            var,
+            value,
+            link: None,
+            scopes: _,
+        } => {
             info.all_mutated.insert(var.clone());
             // Record mutation in the innermost enclosing lambda that owns this binding.
             for (nid, bound) in outer_bindings.iter().rev() {
@@ -247,10 +274,7 @@ mod tests {
     use std::rc::Rc;
 
     fn var(name: &str) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Var {
-            name: Rc::from(name),
-            scopes: Default::default(),
-        })
+        CoreExpr::new(CoreExprKind::var(Rc::from(name), Default::default()))
     }
 
     fn lit(n: i64) -> CoreExpr {
@@ -335,11 +359,11 @@ mod tests {
     #[test]
     fn set_detected_as_mutated() {
         // (lambda (x) (set! x 1) x)
-        let set_x = CoreExpr::new(CoreExprKind::Set {
-            var: Rc::from("x"),
-            scopes: Default::default(),
-            value: Rc::new(lit(1)),
-        });
+        let set_x = CoreExpr::new(CoreExprKind::set(
+            Rc::from("x"),
+            Default::default(),
+            Rc::new(lit(1)),
+        ));
         let expr = lambda(vec!["x"], vec![set_x, var("x")]);
         let info = Pass1Analysis::run(&expr);
         assert!(info.all_mutated.contains(&Rc::from("x")));
@@ -351,11 +375,11 @@ mod tests {
     fn triple_nested_set_detected() {
         // (lambda (log) (lambda () (lambda () (set! log 1) log)))
         // log should be mutated and captured across three lambda levels.
-        let set_log = CoreExpr::new(CoreExprKind::Set {
-            var: Rc::from("log"),
-            scopes: Default::default(),
-            value: Rc::new(lit(1)),
-        });
+        let set_log = CoreExpr::new(CoreExprKind::set(
+            Rc::from("log"),
+            Default::default(),
+            Rc::new(lit(1)),
+        ));
         let inner = lambda(vec![], vec![set_log, var("log")]);
         let mid = lambda(vec![], vec![inner]);
         let outer = lambda(vec!["log"], vec![mid]);

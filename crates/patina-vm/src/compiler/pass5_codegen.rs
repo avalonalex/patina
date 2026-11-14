@@ -16,10 +16,15 @@
 //! into the unit's link table in place of the name. One interner serves the
 //! whole unit, passed down into each lambda's `Codegen` and back, so a
 //! spelling has one index across the unit, given in the order its first
-//! operand is emitted; every member holds the one table it becomes.
+//! operand is emitted; every member holds the one table it becomes. An
+//! operand the desugarer linked (#837) is keyed by its record instead
+//! (`OperandKey`), so it has an index of its own beside an unlinked operand
+//! of the same spelling, and its entry is pinned to the record
+//! (`LinkTable::with_links`).
 //!
 //! See VM_COMPILER.md §Pass 5.
 
+use super::OperandKey;
 use super::pass4_registers::{AllocatedExpr, CaptureSource, RegExpr, RegExprKind, RegLambda};
 use super::primitive_calls::{InlineOp, PrimitiveCallMap, ResolvedPrimitive};
 use crate::error::CompileError;
@@ -28,7 +33,7 @@ use crate::types::instruction::{ControlForm, Instruction, TestOp};
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{LinkIdx, LinkTable};
+use patina_core::{BindingLink, LinkIdx, LinkTable};
 use rustc_hash::FxHashMap;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -59,13 +64,17 @@ struct Codegen {
 }
 
 /// The unit's global operands as pass 5 emits them (#836): each distinct
-/// spelling's [`LinkIdx`], given in the order the first operand naming it
-/// is emitted, so the same unit always gets the same indices. Becomes the
-/// unit's one [`LinkTable`] once every member is compiled.
+/// spelling's or linked record's [`LinkIdx`] (#837), given in the order the
+/// first operand naming it is emitted, so the same unit always gets the
+/// same indices. Becomes the unit's one [`LinkTable`] once every member is
+/// compiled.
 #[derive(Default)]
 struct UnitLinks {
-    index: FxHashMap<Symbol, LinkIdx>,
+    index: FxHashMap<OperandKey, LinkIdx>,
+    /// The written spelling, per entry: two may share one.
     names: Vec<Symbol>,
+    /// The record a linked entry is pinned to, per entry.
+    links: Vec<Option<BindingLink>>,
 }
 
 /// A member of the unit being compiled, all of its `CodeObject` but the
@@ -114,11 +123,13 @@ impl Codegen {
         }
     }
 
-    /// The link index of the global `name`, given now if no operand of the
-    /// unit has named it yet.
-    fn link(&mut self, name: &Symbol) -> Result<LinkIdx, CompileError> {
+    /// The link index of the global `name`, linked to `link` where the
+    /// desugarer linked it (#837), given now if no operand of the unit has
+    /// named it (or linked its record) yet.
+    fn link(&mut self, name: &Symbol, link: Option<BindingLink>) -> Result<LinkIdx, CompileError> {
         let links = &mut self.links;
-        if let Some(&k) = links.index.get(name) {
+        let key = OperandKey::of(name, link);
+        if let Some(&k) = links.index.get(&key) {
             return Ok(k);
         }
         let k = LinkIdx::try_from(links.names.len()).map_err(|_| {
@@ -127,8 +138,9 @@ impl Codegen {
                 u64::from(LinkIdx::MAX) + 1
             ))
         })?;
-        links.index.insert(Rc::clone(name), k);
+        links.index.insert(key, k);
         links.names.push(Rc::clone(name));
+        links.links.push(link);
         Ok(k)
     }
 
@@ -216,7 +228,12 @@ impl Pass5Codegen {
         cg.emit(Instruction::Return { val: expr.dst });
         thread_returns(&mut cg.instructions);
         let register_roots = register_root_maps(&cg, allocated.num_regs.max(1), 0);
-        let links = Rc::new(LinkTable::new(cg.links.names.into_boxed_slice()));
+        let UnitLinks { names, links, .. } = cg.links;
+        let links = Rc::new(if links.iter().any(Option::is_some) {
+            LinkTable::with_links(names.into_boxed_slice(), &links)
+        } else {
+            LinkTable::new(names.into_boxed_slice())
+        });
         let code = Member {
             id,
             name: cg.name,
@@ -804,8 +821,8 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
             });
         }
 
-        RegExprKind::GlobalRef { name } => {
-            let link = cg.link(name)?;
+        RegExprKind::GlobalRef { name, link } => {
+            let link = cg.link(name, *link)?;
             cg.emit(Instruction::LoadGlobal {
                 dst: expr.dst,
                 link,
@@ -909,10 +926,10 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
             });
         }
 
-        RegExprKind::SetGlobal { name, value } => {
+        RegExprKind::SetGlobal { name, value, link } => {
             gen_expr(value, cg)?;
             cg.record_source(&expr.source);
-            let link = cg.link(name)?;
+            let link = cg.link(name, *link)?;
             cg.emit(Instruction::StoreGlobal {
                 link,
                 src: value.dst,
@@ -935,7 +952,8 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
 
         RegExprKind::Define { name, value } => {
             gen_expr(value, cg)?;
-            let link = cg.link(name)?;
+            // A definition is by name in the unit's namespace, never linked.
+            let link = cg.link(name, None)?;
             cg.emit(Instruction::Define {
                 link,
                 src: value.dst,
@@ -954,8 +972,8 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
         } => {
             // `call-with-values` and `dynamic-wind`, where the operator is
             // bound to them: see `gen_inline_control`.
-            if let RegExprKind::GlobalRef { name } = &func.kind
-                && let Some(&form) = cg.prim_calls.control.get(name)
+            if let RegExprKind::GlobalRef { name, link } = &func.kind
+                && let Some(&form) = cg.prim_calls.control.get(&OperandKey::of(name, *link))
                 && form.arity() == args.len()
             {
                 return gen_inline_control(form, func, args, arg_tmps, *is_tail, expr.dst, cg);
@@ -988,13 +1006,13 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
                 return Ok(());
             }
 
-            if let RegExprKind::GlobalRef { name } = &func.kind
-                && let Some(&resolved) = cg.prim_calls.by_name.get(name)
+            if let RegExprKind::GlobalRef { name, link } = &func.kind
+                && let Some(&resolved) = cg.prim_calls.by_name.get(&OperandKey::of(name, *link))
             {
                 let inline = resolved.inline.filter(|op| op.arity() == args.len());
                 let (regs, imm) = primitive_operands(args, arg_tmps, inline, cg)?;
                 cg.record_source(&expr.source);
-                let link = cg.link(name)?;
+                let link = cg.link(name, *link)?;
                 cg.emit(primitive_call_instruction(
                     inline, resolved, link, &regs, imm, expr.dst,
                 ));
@@ -1284,8 +1302,10 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
                     slot: *slot,
                 });
             }
+            // A capture list holds pass 1's free variables, among which no
+            // linked reference is, so a global capture is by name.
             CaptureSource::Global(name) => {
-                let link = cg.link(name)?;
+                let link = cg.link(name, None)?;
                 cg.emit(Instruction::LoadGlobal { dst: scratch, link });
             }
         }
@@ -1312,10 +1332,7 @@ mod tests {
     use patina_core::{Lit, LiteralPool};
 
     fn var(name: &str) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Var {
-            name: Rc::from(name),
-            scopes: Default::default(),
-        })
+        CoreExpr::new(CoreExprKind::var(Rc::from(name), Default::default()))
     }
 
     fn lit(n: i64) -> CoreExpr {
@@ -1361,11 +1378,11 @@ mod tests {
     }
 
     fn set(name: &str, value: CoreExpr) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Set {
-            var: Rc::from(name),
-            scopes: Default::default(),
-            value: Rc::new(value),
-        })
+        CoreExpr::new(CoreExprKind::set(
+            Rc::from(name),
+            Default::default(),
+            Rc::new(value),
+        ))
     }
 
     fn if_(test: CoreExpr, then: CoreExpr, else_: CoreExpr) -> CoreExpr {
@@ -1492,6 +1509,7 @@ mod tests {
             body: vec![expr(
                 RegExprKind::GlobalRef {
                     name: Rc::from("h"),
+                    link: None,
                 },
                 0,
                 1,
@@ -1573,7 +1591,7 @@ mod tests {
         for code in std::iter::once(&top).chain(&nested) {
             for instr in &code.instructions {
                 let Some(k) = instr.link() else { continue };
-                let line = crate::disasm::format_instruction(instr, names, &mut Vec::new());
+                let line = crate::disasm::format_instruction(instr, &top.links, &mut Vec::new());
                 let name = &names[k as usize];
                 let shown = match instr {
                     Instruction::LoadGlobal { .. } => format!("← globals[{name}]"),
@@ -1637,5 +1655,154 @@ mod tests {
             code.instructions.iter().map(Instruction::link).collect()
         };
         assert_eq!(links(&again), links(&top));
+    }
+
+    /// A fresh VM with its primitives, a library namespace on its heap
+    /// binding `f` to 1 and `g` to 2, and a pool on that heap (#837).
+    fn with_library() -> (
+        VmState,
+        Rc<patina_core::environment::Environment>,
+        LiteralPool,
+    ) {
+        let mut state = VmState::on_a_fresh_heap();
+        state.install_primitives();
+        let heap = state.heap().clone();
+        let library = Rc::new(patina_core::environment::Environment::with_heap(&heap));
+        library.define(&heap, "f", TaggedValue::fixnum(1));
+        library.define(&heap, "g", TaggedValue::fixnum(2));
+        let literals = LiteralPool::new(&heap.borrow());
+        (state, library, literals)
+    }
+
+    /// A reference to `name` linked to `link`, at an expansion's scope.
+    fn linked(name: &str, link: patina_core::Link) -> CoreExpr {
+        let scopes = patina_core::ScopeSet::from_iter([patina_core::ScopeId(400)]);
+        CoreExpr::new(CoreExprKind::linked_var(Rc::from(name), scopes, Some(link)))
+    }
+
+    /// Compile `expr`, whose links are `literals`' entries, in `state`'s
+    /// globals.
+    fn compile_in(
+        state: &VmState,
+        literals: &LiteralPool,
+        expr: &CoreExpr,
+    ) -> (CodeObject, Vec<CodeObject>) {
+        compile_with_qq_resolving(
+            expr,
+            literals,
+            state.heap(),
+            state.global_env(),
+            state.primitive_registry(),
+        )
+        .expect("compiles")
+    }
+
+    /// A linked `f` and the unit's own `f` get two entries (#837's
+    /// `OperandKey`), both spelled `f`; the linked one is pinned to the
+    /// library's record, which the unlinked table already answers through,
+    /// before any link.
+    #[test]
+    fn a_linked_and_an_own_operand_of_one_spelling_get_two_entries() {
+        let (state, library, literals) = with_library();
+        let link = crate::compiler::link_to(state.heap(), &library, "f", &literals);
+        let (top, _) = compile_in(&state, &literals, &begin(vec![linked("f", link), var("f")]));
+        assert_eq!(table(&top), ["f", "f"]);
+        assert_eq!(top.links.pinned(), &[0]);
+        assert_eq!(operand_names(&top), ["f", "f"]);
+        let loads: Vec<LinkIdx> = top
+            .instructions
+            .iter()
+            .filter_map(Instruction::link)
+            .collect();
+        assert_eq!(
+            loads,
+            [0, 1],
+            "the linked load reads entry 0, the own one entry 1"
+        );
+        assert_eq!(
+            top.links.get(&state.heap().borrow(), 0),
+            Some(TaggedValue::fixnum(1)),
+            "the pinned record, preset"
+        );
+        let shown =
+            crate::disasm::format_instruction(&top.instructions[0], &top.links, &mut Vec::new());
+        assert!(shown.contains("globals[f@linked]"), "{shown}");
+        let own =
+            crate::disasm::format_instruction(&top.instructions[1], &top.links, &mut Vec::new());
+        assert!(own.contains("globals[f]"), "{own}");
+    }
+
+    /// Two pool entries over one record — the shape a form makes when the
+    /// desugarer's memo is cleared mid-form (`declare_top_level_variable`)
+    /// — intern one entry, keyed by the record and not by the pool's index;
+    /// a second record gets its own. Indices stay in first-emission order,
+    /// the pinned ones ascending among the rest.
+    #[test]
+    fn two_pool_entries_over_one_record_get_one_entry() {
+        let (state, library, literals) = with_library();
+        let heap = state.heap();
+        let first = crate::compiler::link_to(heap, &library, "f", &literals);
+        let again = crate::compiler::link_to(heap, &library, "f", &literals);
+        let other = crate::compiler::link_to(heap, &library, "g", &literals);
+        assert_ne!(first, again, "two pool entries");
+        let expr = begin(vec![
+            linked("f", first),
+            var("x"),
+            linked("g", other),
+            linked("f", again),
+            var("y"),
+        ]);
+        let (top, _) = compile_in(&state, &literals, &expr);
+        assert_eq!(table(&top), ["f", "x", "g", "y"]);
+        assert_eq!(top.links.pinned(), &[0, 2]);
+        assert_eq!(operand_names(&top), ["f", "x", "g", "f", "y"]);
+        let loads: Vec<LinkIdx> = top
+            .instructions
+            .iter()
+            .filter_map(Instruction::link)
+            .collect();
+        assert_eq!(loads, [0, 1, 2, 0, 3]);
+        let h = heap.borrow();
+        assert_eq!(top.links.get(&h, 2), Some(TaggedValue::fixnum(2)));
+    }
+
+    /// C1, end to end (#837): a linked `f` beside a top-level definition of
+    /// `f` at the same scopes gets the pinned entry, spelled `f`, not the
+    /// definition's renamed global; an unlinked reference at those scopes
+    /// gets the renamed global.
+    #[test]
+    fn a_linked_reference_beside_a_definition_of_its_spelling_is_pinned() {
+        let (state, library, literals) = with_library();
+        let link = crate::compiler::link_to(state.heap(), &library, "f", &literals);
+        let scopes = patina_core::ScopeSet::from_iter([patina_core::ScopeId(400)]);
+        let expr = begin(vec![
+            CoreExpr::new(CoreExprKind::Define {
+                name: Rc::from("f"),
+                scopes: scopes.clone(),
+                value: Rc::new(lit(5)),
+            }),
+            linked("f", link),
+            CoreExpr::new(CoreExprKind::var(Rc::from("f"), scopes)),
+        ]);
+        let (top, _) = compile_in(&state, &literals, &expr);
+        let names = table(&top);
+        let pinned = top.links.pinned();
+        assert_eq!(pinned.len(), 1);
+        assert_eq!(names[pinned[0] as usize], "f");
+        let renamed: Vec<&str> = names
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| !top.links.is_pinned(*k as LinkIdx))
+            .map(|(_, name)| *name)
+            .collect();
+        assert_eq!(renamed.len(), 1, "{names:?}");
+        assert_ne!(
+            renamed[0], "f",
+            "the definition's renamed global: {names:?}"
+        );
+        assert_eq!(
+            top.links.get(&state.heap().borrow(), pinned[0]),
+            Some(TaggedValue::fixnum(1))
+        );
     }
 }

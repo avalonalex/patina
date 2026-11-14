@@ -15,7 +15,9 @@ It is the single source of truth. All other VM docs should be consistent with it
 Each `CallFrame` owns a register window: a contiguous slice of a shared
 `Vec<TaggedValue>`. Local variables and temporaries are accessed by index (O(1),
 no hash lookup). Global variables are linked once per distinct name when a
-code unit loads, and read by index through the unit's link table (#836). A
+code unit loads (an operand the desugarer linked has an entry of its own,
+preset by pass 5 with its record and left alone at load, #837), and read by
+index through the unit's link table (#836). A
 name lookup is left to `Define`; to the cold read or store of a name not yet
 bound; to every read and store of a name its namespace reaches by an alias
 or a visible scoped definition, which is bound and goes by name each time;
@@ -54,8 +56,9 @@ HeapObjectData::VmClosure {
 Free variable analysis runs at compile time. Variables are resolved to
 `Move` (local), `LoadClosure { slot }`, or `LoadGlobal { link }` at bytecode
 emission, `link` indexing the name in the code unit's link table
-(`docs/VM_ISA.md` §3, #836). No runtime hash lookup for local/closure
-variables.
+(`docs/VM_ISA.md` §3, #836), or for a reference the desugarer linked, the
+record it linked, in a pinned entry (#837, `docs/VM_COMPILER.md` §10.5).
+No runtime hash lookup for local/closure variables.
 
 **Global variables** are never captured into closure `free_vars` — `LoadGlobal`
 reads them at run time through the record the unit's link table linked at

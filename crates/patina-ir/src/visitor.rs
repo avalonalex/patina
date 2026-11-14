@@ -1,4 +1,4 @@
-use patina_core::{CoreExpr, CoreExprKind, Formals, Lit, QuasiTemplate, ScopeSet, Symbol};
+use patina_core::{CoreExpr, CoreExprKind, Formals, Link, Lit, QuasiTemplate, ScopeSet, Symbol};
 
 /// Visitor trait for walking `CoreExpr` trees.
 ///
@@ -18,7 +18,7 @@ use patina_core::{CoreExpr, CoreExprKind, Formals, Lit, QuasiTemplate, ScopeSet,
 /// }
 ///
 /// impl ExprVisitor for FreeVarCollector {
-///     fn visit_var(&mut self, name: &Symbol, _scopes: &ScopeSet) {
+///     fn visit_var(&mut self, name: &Symbol, _scopes: &ScopeSet, _link: Option<Link>) {
 ///         if !self.bound.contains(name) {
 ///             self.free.insert(name.to_string());
 ///         }
@@ -59,8 +59,10 @@ pub trait ExprVisitor {
     /// Visit a literal value (number, boolean, string, …).
     fn visit_literal(&mut self, _val: &Lit) {}
 
-    /// Visit a variable reference.
-    fn visit_var(&mut self, _name: &Symbol, _scopes: &ScopeSet) {}
+    /// Visit a variable reference: its spelling, its scopes, and the binding
+    /// it is linked to where it is (#837), which a visitor that resolves
+    /// names must not resolve again.
+    fn visit_var(&mut self, _name: &Symbol, _scopes: &ScopeSet, _link: Option<Link>) {}
 
     /// Visit a quoted datum.
     fn visit_quote(&mut self, _val: &Lit) {}
@@ -92,8 +94,15 @@ pub trait ExprVisitor {
         self.visit_expr(else_);
     }
 
-    /// Visit an assignment.  Default recurses into the value expression.
-    fn visit_set(&mut self, _var: &Symbol, _scopes: &ScopeSet, value: &CoreExpr) {
+    /// Visit an assignment, with its link as [`visit_var`](Self::visit_var)'s.
+    /// Default recurses into the value expression.
+    fn visit_set(
+        &mut self,
+        _var: &Symbol,
+        _scopes: &ScopeSet,
+        _link: Option<Link>,
+        value: &CoreExpr,
+    ) {
         self.visit_expr(value);
     }
 
@@ -157,7 +166,7 @@ pub trait ExprVisitor {
     fn walk_expr(&mut self, expr: &CoreExpr) {
         patina_core::walk::ensure_sufficient_stack(|| match &expr.kind {
             CoreExprKind::Literal(val) => self.visit_literal(val),
-            CoreExprKind::Var { name, scopes } => self.visit_var(name, scopes),
+            CoreExprKind::Var { name, scopes, link } => self.visit_var(name, scopes, *link),
             CoreExprKind::Quote(val) => self.visit_quote(val),
             CoreExprKind::Quasiquote(template) => self.visit_quasiquote(template),
             CoreExprKind::Lambda {
@@ -166,7 +175,12 @@ pub trait ExprVisitor {
                 binding_scopes,
             } => self.visit_lambda(params, body, binding_scopes),
             CoreExprKind::If { test, then, else_ } => self.visit_if(test, then, else_),
-            CoreExprKind::Set { var, scopes, value } => self.visit_set(var, scopes, value),
+            CoreExprKind::Set {
+                var,
+                scopes,
+                value,
+                link,
+            } => self.visit_set(var, scopes, *link, value),
             CoreExprKind::Begin(exprs) => self.visit_begin(exprs),
             CoreExprKind::Define {
                 name,
@@ -214,10 +228,7 @@ mod tests {
     // ── helpers ──────────────────────────────────────────────────────────
 
     fn var(name: &str) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Var {
-            name: name.into(),
-            scopes: ScopeSet::new(),
-        })
+        CoreExpr::new(CoreExprKind::var(name.into(), ScopeSet::new()))
     }
 
     fn lit() -> CoreExpr {
@@ -302,7 +313,7 @@ mod tests {
     }
 
     impl ExprVisitor for FreeVarCollector {
-        fn visit_var(&mut self, name: &Symbol, _scopes: &ScopeSet) {
+        fn visit_var(&mut self, name: &Symbol, _scopes: &ScopeSet, _link: Option<Link>) {
             if !self.bound.contains(name) {
                 self.free.insert(name.to_string());
             }
@@ -390,6 +401,78 @@ mod tests {
         assert!(!collector.free.contains("x"));
     }
 
+    // ── The walk hands each visit its node's link (#837) ──────────────────
+
+    #[derive(Default)]
+    struct LinkCollector(Vec<(String, Option<patina_core::Link>)>);
+    impl ExprVisitor for LinkCollector {
+        fn visit_var(&mut self, name: &Symbol, _scopes: &ScopeSet, link: Option<Link>) {
+            self.0.push((name.to_string(), link));
+        }
+        fn visit_set(
+            &mut self,
+            var: &Symbol,
+            _scopes: &ScopeSet,
+            link: Option<Link>,
+            value: &CoreExpr,
+        ) {
+            self.0.push((format!("set! {var}"), link));
+            self.visit_expr(value);
+        }
+    }
+
+    #[test]
+    fn the_walk_hands_each_visit_its_link() {
+        use patina_core::environment::Environment;
+        use patina_core::{LiteralPool, NamespaceView, NoGcScope, ScopeId, TaggedValue};
+        use std::rc::Rc;
+
+        let heap = patina_core::new_shared_heap();
+        let pool = LiteralPool::new(&heap.borrow());
+        let ns = Rc::new(Environment::with_heap(&heap));
+        ns.define(&heap, "f", TaggedValue::fixnum(1));
+        let link = NoGcScope::with_cx(&heap, |cx| {
+            let (_, linkable) = cx
+                .early_link(NamespaceView::of(&ns), "f")
+                .expect("f's record");
+            pool.add_link(linkable)
+        });
+        let scopes = ScopeSet::from_iter([ScopeId(1)]);
+        let linked = || {
+            CoreExpr::new(CoreExprKind::linked_var(
+                "f".into(),
+                scopes.clone(),
+                Some(link),
+            ))
+        };
+        let expr = CoreExpr::new(CoreExprKind::Begin(vec![
+            linked(),
+            var("g"),
+            CoreExpr::new(CoreExprKind::linked_set(
+                "f".into(),
+                scopes.clone(),
+                Rc::new(linked()),
+                Some(link),
+            )),
+        ]));
+        let mut collector = LinkCollector::default();
+        collector.visit_expr(&expr);
+        let seen: Vec<(&str, Option<Link>)> = collector
+            .0
+            .iter()
+            .map(|(name, link)| (name.as_str(), *link))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("f", Some(link)),
+                ("g", None),
+                ("set! f", Some(link)),
+                ("f", Some(link)),
+            ]
+        );
+    }
+
     // ── Default walk doesn't panic ────────────────────────────────────────
 
     struct NoopVisitor;
@@ -410,11 +493,11 @@ mod tests {
             ))),
             lambda(vec!["a"], vec![var("a")]),
             if_(lit(), lit(), lit()),
-            CoreExpr::new(CoreExprKind::Set {
-                var: "x".into(),
-                scopes: ScopeSet::new(),
-                value: std::rc::Rc::new(lit()),
-            }),
+            CoreExpr::new(CoreExprKind::set(
+                "x".into(),
+                ScopeSet::new(),
+                std::rc::Rc::new(lit()),
+            )),
             CoreExpr::new(CoreExprKind::Begin(vec![lit(), var("x")])),
             CoreExpr::new(CoreExprKind::Define {
                 scopes: ScopeSet::new(),
