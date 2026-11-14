@@ -1250,8 +1250,8 @@ fn shapes_score_as_recorded() {
 const HOST_EXEMPT: &[(&str, &str)] = &[
     // Empty since the host-namespace kind (#835). The eight `redefined`
     // rows were listed here until the desugarer asked the host namespace
-    // for a library template's import alias before the global environment,
-    // which imported nothing of `(hm gen)` (#851).
+    // whether it imports a library template's reference before the global
+    // environment, which imported nothing of `(hm gen)` (#851).
 ];
 
 /// Every shape answers in a host namespace what it records (#835): its
@@ -1452,7 +1452,8 @@ fn introduced_globals_are_private_but_their_accessors_can_be_exported() {
 /// here they truthfully do — the program's `count` *is* the import. Left
 /// alone it was a bare global name, resolved again when it ran, and `define`
 /// over an import makes the program a binding of its own in the same slot. It
-/// is bound to the import's *location* now (`Environment::import_alias`).
+/// is bound to the import's binding now: an alias for its location from #438,
+/// a link to its record since #837 (`Desugarer::early_bound`).
 ///
 /// [`MADE`]'s `redefined` rows score the axis. This test stays for the shape
 /// they do not have — the same procedure called on both sides of the
@@ -1590,15 +1591,16 @@ fn a_literal_is_not_another_librarys_binding_of_its_spelling() {
 /// `slen` by a `rename` — keeps its two spellings apart when a reference is
 /// bound early (#438). Gauche 0.9.15 answers `(2 introduced)` and `(3 3)`.
 ///
-/// The alias is a name for the *location*, and the end of the form reads the
-/// spelling a reference was written with back off it, to take the binding
-/// back where the same expansion introduced a definition of that spelling
-/// (`Desugarer::settle_early_bindings`). With one alias per location both
-/// spellings shared it, the first one seen was what it read back, and the
-/// template's `(slen "abc")` beside the `(define (slen s) …)` its own
-/// expansion introduced stayed bound to the import: `(2 3)`, where `main`
-/// answered `(2 introduced)` before there was any early binding. An alias per
-/// imported name (`Environment::import_alias`) is what keeps them apart.
+/// The end of the form takes the binding back where the same expansion
+/// introduced a definition of the spelling a reference was written with
+/// (`Desugarer::settle_early_bindings`). When the reference was renamed to
+/// an alias, one alias per location had both spellings share it, the first
+/// one seen was what settling read back, and the template's `(slen "abc")`
+/// beside the `(define (slen s) …)` its own expansion introduced stayed
+/// bound to the import: `(2 3)`, where `main` answered `(2 introduced)`
+/// before there was any early binding. An alias per imported name kept them
+/// apart; since #837 the reference keeps its own spelling and links the
+/// record, so settling reads the spelling off the node itself.
 ///
 /// The second program is the other half: with no introduced definition both
 /// spellings are bound early, so a later definition of either captures

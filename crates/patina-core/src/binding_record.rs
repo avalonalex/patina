@@ -160,15 +160,6 @@ impl BindingCell {
         heap.cdr(self.0) == owner_tag(env_id)
     }
 
-    /// The cell's identity: its word less a check build's generation stamp.
-    /// Compared, never dereferenced: a cell made in a swept cell's slot has
-    /// the swept cell's key in every build, so a holder of keys must let a
-    /// key go before its cell can be swept (the rulings of 2026-11-03).
-    #[inline]
-    pub(crate) fn key(self) -> u64 {
-        stamp_free(self.0)
-    }
-
     /// The location this cell is, as `Environment::binding_location`
     /// answers it: its word, stamp and all, as an integer identity.
     #[inline]
@@ -315,7 +306,10 @@ impl Record {
     }
 
     /// The record's identity: its word less a check build's generation
-    /// stamp, as [`BindingCell::key`].
+    /// stamp. Compared, never dereferenced: a record made in a swept
+    /// record's slot has the swept record's key in every build, so a holder
+    /// of keys must keep each record live while it holds its key (the
+    /// rulings of 2026-11-03).
     #[inline]
     pub(crate) fn key(self) -> u64 {
         stamp_free(self.0)
@@ -478,28 +472,31 @@ mod tests {
         TaggedValue::fixnum(i)
     }
 
-    /// A cell's key is its slot's, whoever holds the slot: a cell made in a
-    /// swept cell's slot has the swept cell's key, in a check build too,
-    /// where the two words differ by their generation stamps. So a table
-    /// keyed by cells must drop a key before its cell can be swept, and a
-    /// test of that fails in CI's debug lane as in release (the rulings of
-    /// 2026-11-03).
+    /// A record's key is its slot's, whoever holds the slot: a record made
+    /// in a swept record's slot has the swept record's key, in a check build
+    /// too, where the two words differ by their generation stamps. So a map
+    /// keyed by records (a compilation's `OperandKey::Record`, #837) is
+    /// sound only while something roots every record it keys — the
+    /// compilation's pool — and a test of that fails in CI's debug lane as
+    /// in release (the rulings of 2026-11-03). Until 4b.10 a cell's key had
+    /// the same rule, for the import aliases' table it keyed.
     #[test]
-    fn a_cells_key_survives_slot_reuse_and_carries_no_stamp() {
+    fn a_records_key_survives_slot_reuse_and_carries_no_stamp() {
         let mut heap = Heap::new();
-        let old = BindingCell::new_own(&mut heap, n(1), 7);
+        let cell = BindingCell::free(&mut heap, n(1));
+        let old = Record::new(&mut heap, cell);
         let key = old.key();
         assert_eq!(key, TaggedValue::pair(old.0.heap_index()).raw());
 
-        collect_from(&mut heap, &[]);
+        collect_from(&mut heap, &[cell.0]);
         assert!(
             heap.free_pair_slots().contains(&old.0.heap_index()),
-            "nothing holds the cell, so the collection swept it"
+            "nothing holds the record, so the collection swept it"
         );
         while heap.free_pair_slots().last() != Some(&old.0.heap_index()) {
             heap.alloc_pair(TaggedValue::UNSPECIFIED, TaggedValue::UNSPECIFIED);
         }
-        let fresh = BindingCell::new_own(&mut heap, n(2), 9);
+        let fresh = Record::new(&mut heap, cell);
         assert_eq!(
             fresh.0.heap_index(),
             old.0.heap_index(),
@@ -512,10 +509,6 @@ mod tests {
                 "a check build stamps the reused slot's word"
             );
         }
-
-        // A record's key is stamp-free the same way.
-        let record = Record::new(&mut heap, fresh);
-        assert_eq!(record.key(), TaggedValue::pair(record.0.heap_index()).raw());
     }
 
     #[test]

@@ -200,8 +200,7 @@ impl<'e> NamespaceView<'e> {
     }
 
     /// The names a program bound in this environment only, in slot order
-    /// ([`Environment::local_names`]). A namespace holding an import alias
-    /// borrows `heap` shared.
+    /// ([`Environment::local_names`]). Borrows nothing.
     #[inline]
     pub fn local_names(self, heap: &RefCell<Heap>) -> Vec<String> {
         self.env.local_names(heap)
@@ -311,25 +310,6 @@ impl<'e> NamespaceView<'e> {
     #[inline]
     pub fn define_introduced_global(self, name: Rc<str>, scopes: ScopeSet, renamed_to: Rc<str>) {
         self.env.define_introduced_global(name, scopes, renamed_to);
-    }
-
-    /// A name of this environment's own for the location `name` imports
-    /// ([`Environment::import_alias`]): the one remembered for that
-    /// location and spelling while it still is that import, which writes
-    /// nothing, or a fresh one `mint` offers, inserted as an import of the
-    /// same location. `None` when `name` is not an import here, and always
-    /// for a frame, whose imports hold no record: a namespace's only, as
-    /// `Desugarer::import_of` asks a namespace, the nearest and then each
-    /// above it (#834, #835). Borrows `heap` shared over the lookup and
-    /// mutably to insert.
-    #[inline]
-    pub fn import_alias(
-        self,
-        heap: &RefCell<Heap>,
-        name: &str,
-        mint: impl FnMut() -> Rc<str>,
-    ) -> Option<Rc<str>> {
-        self.env.import_alias(heap, name, mint)
     }
 
     /// An alias here to `name` in `target_env`, under `scopes`

@@ -78,7 +78,7 @@ use crate::source_map::SourceMap;
 use patina_core::error::SourceLocation;
 use patina_core::source_document::ExpansionChain;
 use patina_core::walk::OpenNodes;
-use patina_core::{CoreForm, Cx, Lit, LiteralPool, NamespaceView, Value};
+use patina_core::{CoreForm, Cx, Link, Lit, LiteralPool, NamespaceView, Value};
 use patina_ir::{CoreExpr, CoreExprKind};
 use patina_macros::IdentifierKey;
 use patina_macros::macro_expander::utils::list_to_vec_with_tail;
@@ -333,9 +333,10 @@ impl SyntaxRef<'_> {
 }
 
 /// What a name means to a macro's environment, where a namespace here
-/// imports that very location: the location, and that namespace's alias for
-/// it (`Desugarer::import_of`).
-type ImportOf = Option<(patina_core::BindingLocation, Rc<str>)>;
+/// imports that very location: the location, and the link to the record the
+/// macro's environment finds for the name, pooled in this form's pool
+/// (`Desugarer::import_of`, #837).
+type ImportOf = Option<(patina_core::BindingLocation, Link)>;
 
 /// What early binding (#438, `Desugarer::early_bound`) has to remember across
 /// one top-level form. Shared, not cloned, with the child desugarers made for
@@ -345,12 +346,18 @@ struct EarlyBinding {
     /// The scope of each expansion, in this form, of a macro defined in
     /// another program or library, with the environment it was defined in.
     foreign: RefCell<FxHashMap<ScopeId, Rc<Environment>>>,
-    /// Alias → the spelling it was written with, for each reference bound
-    /// early in this form.
-    bound: RefCell<FxHashMap<Rc<str>, Rc<str>>>,
+    /// Whether this form linked a reference early, which is what tells
+    /// settling it has something to take back.
+    linked: Cell<bool>,
     /// Per macro environment, then name: the location the name means there
-    /// and the alias for it of the namespace here that imports it, or `None`
-    /// where it is not an import to bind. Two levels so that a hit is looked
+    /// and the link to its record there, where a namespace here imports that
+    /// location, or `None` where it is not an import to bind. Pool indices
+    /// and locations, never a handle: each `Link` is an entry of the pool of
+    /// the form that made it, which `finish_form` forgets with the form; the
+    /// memo is also emptied mid-form wherever a top-level variable is
+    /// declared or an import runs, so one record may be pooled twice in a
+    /// form, which is one operand still: the backends key a linked operand
+    /// by its record, not by its entry. Two levels so that a hit is looked
     /// up by `&str`, without minting a key — this is asked once per reference
     /// a library macro makes, and with the default hasher and a cloned key it
     /// was most of what early binding cost. Not keyed by the namespace here
@@ -363,14 +370,14 @@ struct EarlyBinding {
 }
 
 /// What `Desugarer::settle_early_bindings` reads of a finished form: the
-/// definitions it introduced, and alias → spelling for what it bound early.
-type FinishedForm = (Vec<(Rc<str>, ScopeSet)>, FxHashMap<Rc<str>, Rc<str>>);
+/// definitions it introduced, and whether it linked a reference early.
+type FinishedForm = (Vec<(Rc<str>, ScopeSet)>, bool);
 
 impl EarlyBinding {
     /// Whether no form is in progress — what `desugar_tagged` finds on entry.
     fn is_idle(&self) -> bool {
         self.foreign.borrow().is_empty()
-            && self.bound.borrow().is_empty()
+            && !self.linked.get()
             && self.imports.borrow().is_empty()
             && self.introduced.borrow().is_empty()
     }
@@ -381,7 +388,7 @@ impl EarlyBinding {
         self.imports.borrow_mut().clear();
         (
             std::mem::take(&mut *self.introduced.borrow_mut()),
-            std::mem::take(&mut *self.bound.borrow_mut()),
+            self.linked.replace(false),
         )
     }
 }
@@ -1515,14 +1522,20 @@ impl<'a> Desugarer<'a> {
     /// `apply` (#443), `call/cc` and `call-with-current-continuation` (#441),
     /// and `call-with-values` and `dynamic-wind` (#442). Each recogniser now
     /// asks what the name is bound to, so the alias is recognised as the name
-    /// is. A new fast path has to do the same, or this binding defeats it.
+    /// is. A new fast path has to do the same, or this binding defeats it:
+    /// on the VM `primitive_calls` asks a linked callee's record (#837).
     ///
-    /// The alias is `Environment::import_alias`: a second record over the
-    /// same cell (#834), one per imported name rather than one per
-    /// expansion — and per name, not per location, because `bound` below is
-    /// how `settle_early_bindings` reads back what a reference was written as.
-    /// The reference keeps its scopes, which is what lets
-    /// `settle_early_bindings` take a decision back.
+    /// The answer is a link (#837): the reference keeps its spelling and its
+    /// scopes, and carries the binding record the macro's environment finds
+    /// for the name (`Cx::early_link`, the owner's ruling E1), which both
+    /// backends read and write in place of the spelling — the VM through a
+    /// pinned link-table entry, the tree-walker through the record its
+    /// `CpsExpr` carries. Until 4b.10 it was an alias, a second record over
+    /// the import's cell in a slot of the use site's namespace, spelled
+    /// `name.N`: a name a program could read, and define over to change
+    /// code compiled before (#837's question 3). The reference keeps its
+    /// scopes, which is what lets `settle_early_bindings` take a decision
+    /// back, and what the tree-walker tests for before it asks for a link.
     ///
     /// Cost, measured 2026-09-19 against `main`, best of 9 interleaved: 2–4% on
     /// 12,000 expansions of templates that each call a dozen imported
@@ -1536,8 +1549,9 @@ impl<'a> Desugarer<'a> {
         name: &Rc<str>,
         scopes: &ScopeSet,
         by_name: bool,
-        cx: &mut Cx<'_>,
-    ) -> Option<Rc<str>> {
+        op: patina_core::scope_trace::Op,
+        cx: &mut FormCx<'_, '_>,
+    ) -> Option<Link> {
         if !by_name || scopes.is_empty() {
             return None;
         }
@@ -1575,7 +1589,7 @@ impl<'a> Desugarer<'a> {
                 .insert(Rc::clone(name), import.clone());
             import
         });
-        let (location, alias) = import?;
+        let (location, link) = import?;
         if cx
             .binding_location(NamespaceView::of(&self.env), name)
             .as_ref()
@@ -1583,41 +1597,46 @@ impl<'a> Desugarer<'a> {
         {
             return None;
         }
-        let mut bound = self.early.bound.borrow_mut();
-        if !bound.contains_key(&alias) {
-            bound.insert(Rc::clone(&alias), Rc::clone(name));
-        }
-        Some(alias)
+        self.early.linked.set(true);
+        // After this neither backend resolves the reference, so this is
+        // where the trace says how it was bound.
+        patina_core::scope_trace::resolve(
+            name,
+            scopes,
+            0,
+            None,
+            op,
+            patina_core::scope_trace::Outcome::EarlyLink,
+        );
+        Some(link)
     }
 
-    /// The location `name` means to `def_env`, with an alias for it, when a
-    /// namespace here imports that very location: the nearest namespace
-    /// (`Environment::namespace_root`), else each namespace above it in turn,
-    /// and the alias is that namespace's. For a host form that is its host
-    /// namespace, then the global namespace (the owner's ruling (c) of
-    /// 2026-11-07 on #835's question 3): a library macro used in a host
-    /// namespace that imported the location keeps it past a later host
-    /// definition of the name (#851), and one the host does not import is
-    /// bound early by the global namespace's import, as before. Anywhere
-    /// else the nearest namespace is the root, which has no parent.
+    /// The location `name` means to `def_env`, with a link to the record
+    /// `def_env`'s walk finds for it (`Cx::early_link`, the owner's ruling
+    /// E1), pooled in this form's pool, when a namespace here imports that
+    /// very location (`Cx::imports_location`): the nearest namespace
+    /// (`Environment::namespace_root`), else each namespace above it in
+    /// turn. For a host form that is its host namespace, then the global
+    /// namespace (the owner's ruling (c) of 2026-11-07 on #835's question
+    /// 3): a library macro used in a host namespace that imported the
+    /// location keeps it past a later host definition of the name (#851),
+    /// and one the host does not import is bound early by the global
+    /// namespace's import, as before. Anywhere else the nearest namespace is
+    /// the root, which has no parent. Nothing is installed in any of them
+    /// (#837): each is only asked.
     fn import_of(
         &self,
         name: &Rc<str>,
         def_env: &Rc<Environment>,
-        cx: &mut Cx<'_>,
-    ) -> Option<(patina_core::BindingLocation, Rc<str>)> {
-        let location = cx.binding_location(NamespaceView::of(def_env), name)?;
+        cx: &mut FormCx<'_, '_>,
+    ) -> ImportOf {
+        let (location, linkable) = cx.early_link(NamespaceView::of(def_env), name)?;
         let mut target_env = self.env.namespace_root();
         loop {
-            if cx
-                .binding_location(NamespaceView::of(&target_env), name)
-                .as_ref()
-                == Some(&location)
-                && let Some(alias) = cx.import_alias(NamespaceView::of(&target_env), name, || {
-                    Rc::from(alias_name(name))
-                })
-            {
-                return Some((location, alias));
+            if cx.imports_location(NamespaceView::of(&target_env), name, &location) {
+                // Pooled beneath the context that found it, which is what
+                // its brand allows: the pool roots the record from here.
+                return Some((location, cx.literals.add_link(linkable)));
             }
             let next = target_env.parent()?.namespace_root();
             target_env = next;
@@ -1659,7 +1678,8 @@ impl<'a> Desugarer<'a> {
     /// headed for the import. It is known by the end of the form, since an
     /// expansion's output lies within one form: every introduced definition
     /// has been emitted, and a reference whose scopes one of them is a
-    /// candidate for goes back to the spelling it was written with.
+    /// candidate for loses its link (#837), and is resolved by its spelling,
+    /// which it never left, as a reference bound late is.
     ///
     /// A form that defines nothing under scopes, or binds nothing early, is
     /// returned untouched without being walked, and that is nearly all of
@@ -1667,54 +1687,37 @@ impl<'a> Desugarer<'a> {
     /// The rest — a form with an internal `define` *and* an early-bound
     /// reference, which ordinary code does have — is rebuilt node by node,
     /// once.
-    fn settle_early_bindings(expr: CoreExpr, (introduced, bound): FinishedForm) -> CoreExpr {
-        if introduced.is_empty() || bound.is_empty() {
+    fn settle_early_bindings(expr: CoreExpr, (introduced, linked): FinishedForm) -> CoreExpr {
+        if introduced.is_empty() || !linked {
             return expr;
         }
-        fn settle(
-            expr: &CoreExpr,
-            bound: &FxHashMap<Rc<str>, Rc<str>>,
-            introduced: &[(Rc<str>, ScopeSet)],
-        ) -> CoreExpr {
-            let written = |alias: &Rc<str>, scopes: &ScopeSet| {
-                let name = bound.get(alias)?;
-                introduced
-                    .iter()
-                    .any(|(defined, at)| {
-                        defined == name && patina_core::scope_resolve::is_candidate(at, scopes)
-                    })
-                    .then(|| Rc::clone(name))
+        fn settle(expr: &CoreExpr, introduced: &[(Rc<str>, ScopeSet)]) -> CoreExpr {
+            let introduced_here = |name: &Rc<str>, scopes: &ScopeSet| {
+                introduced.iter().any(|(defined, at)| {
+                    defined == name && patina_core::scope_resolve::is_candidate(at, scopes)
+                })
             };
-            // Grown with the depth of the code (#617).
+            // Grown with the depth of the code (#617). The rebuild carries
+            // every other node's link (`map_children`).
             let mut settled = patina_core::walk::ensure_sufficient_stack(|| {
-                expr.map_children(|child| settle(child, bound, introduced))
+                expr.map_children(|child| settle(child, introduced))
             });
-            match &mut settled.kind {
-                // A link stays where the rebuild carried it: nothing links a
-                // reference until 4b.10's switch, which has settling take a
-                // link back where it puts a spelling back today (#837).
-                CoreExprKind::Var { name, scopes, link } => {
-                    debug_assert!(link.is_none(), "settled before 4b.10's links (#837)");
-                    if let Some(original) = written(name, scopes) {
-                        *name = original;
-                    }
-                }
+            let (name, scopes, link) = match &mut settled.kind {
+                CoreExprKind::Var { name, scopes, link } => (name, scopes, link),
                 CoreExprKind::Set {
                     var,
                     scopes,
                     link,
                     value: _,
-                } => {
-                    debug_assert!(link.is_none(), "settled before 4b.10's links (#837)");
-                    if let Some(original) = written(var, scopes) {
-                        *var = original;
-                    }
-                }
-                _ => {}
+                } => (var, scopes, link),
+                _ => return settled,
+            };
+            if link.is_some() && introduced_here(name, scopes) {
+                *link = None;
             }
             settled
         }
-        settle(&expr, &bound, &introduced)
+        settle(&expr, &introduced)
     }
 
     /// The alias for `tv`, if it is a reference *this expansion introduced*
@@ -2182,11 +2185,14 @@ impl<'a> Desugarer<'a> {
         // Identifier - variable reference with scopes (for hygiene)
         if let Some((name, scopes)) = cx.get_identifier_data_any(tagged) {
             let by_name = self.checked_reference(&name, &scopes, cx)?;
-            let name = self
-                .early_bound(&name, &scopes, by_name, cx)
-                .unwrap_or(name);
-            // Linked by 4b.10's switch (#837); renamed to an alias until then.
-            return Ok(CoreExpr::new(CoreExprKind::linked_var(name, scopes, None)));
+            let link = self.early_bound(
+                &name,
+                &scopes,
+                by_name,
+                patina_core::scope_trace::Op::Get,
+                cx,
+            );
+            return Ok(CoreExpr::new(CoreExprKind::linked_var(name, scopes, link)));
         }
 
         // Native heap types - self-evaluating literals
@@ -2746,14 +2752,17 @@ impl<'a> Desugarer<'a> {
         // breaks inside its own startup code. Without this, reading syntax was
         // an error while overwriting it silently succeeded.
         let by_name = self.checked_reference(&name, &scopes, cx)?;
-        let name = self
-            .early_bound(&name, &scopes, by_name, cx)
-            .unwrap_or(name);
+        let link = self.early_bound(
+            &name,
+            &scopes,
+            by_name,
+            patina_core::scope_trace::Op::Set,
+            cx,
+        );
 
         let value = self.desugar_expression(args_vec[1], cx)?;
 
-        // Linked by 4b.10's switch (#837); renamed to an alias until then.
-        let mut expr = CoreExpr::new(CoreExprKind::linked_set(name, scopes, Rc::new(value), None));
+        let mut expr = CoreExpr::new(CoreExprKind::linked_set(name, scopes, Rc::new(value), link));
         expr.source = self.lookup_source(var_tv, cx);
         Ok(expr)
     }

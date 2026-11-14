@@ -377,6 +377,29 @@ const CARLIB: &str = "(define-library (t carlib)
 (import (scheme base) (t carlib))
 ";
 
+/// Each inline `Car`'s operand among `code`'s and its lambdas'
+/// instructions, as the disassembler prints it: its link-table spelling,
+/// marked `@linked` where the entry is pinned to a record the desugarer
+/// linked (#837).
+fn car_operands(inspected: &patina_vm::backend::Inspected) -> Vec<String> {
+    let mut operands = Vec::new();
+    for (top, nested) in inspected.units() {
+        for code in std::iter::once(top).chain(nested) {
+            for instr in &code.instructions {
+                if let patina_vm::types::Instruction::Car { link, .. } = instr {
+                    let spelling = code.links.name(*link);
+                    operands.push(if code.links.is_pinned(*link) {
+                        format!("{spelling}@linked")
+                    } else {
+                        spelling.to_string()
+                    });
+                }
+            }
+        }
+    }
+    operands
+}
+
 /// A template's `car` and the program's own `car` in one procedure stay two
 /// operands (#837's `OperandKey`): once the program defines `car`, the
 /// template's still reads the library's binding and the program's reads
@@ -386,8 +409,23 @@ const CARLIB: &str = "(define-library (t carlib)
 /// Patina's own `car` follows the name. An implementation that gave both
 /// operands the template's binding would also answer `(1 1)`, so this is
 /// not to be "corrected" to the oracles' answer.
+///
+/// On the VM the two are two inline `Car`s on two link-table entries of
+/// one spelling, the template's pinned to the library's record
+/// (`car@linked`) and the program's its own (`car`); before the switch
+/// the template's was an ordinary entry spelled `car.N`.
 #[test]
 fn a_linked_and_an_own_operand_of_one_spelling_stay_apart() {
+    let interp = Interpreter::new(patina_vm::VmBackend::new());
+    interp
+        .eval_program_owned(CARLIB)
+        .expect("the library and the import");
+    let inspected = interp
+        .backend()
+        .compile_for_inspection("(define (g p) (list (first-of p) (car p)))")
+        .expect("compiles");
+    assert_eq!(car_operands(&inspected), ["car@linked", "car"]);
+
     let program = format!(
         "{CARLIB}(define (g p) (list (first-of p) (car p)))
 (define before (g '(1 2)))
@@ -408,8 +446,9 @@ fn a_linked_and_an_own_operand_of_one_spelling_stay_apart() {
 /// library's `car` (deoptimized, through what the reference is bound to).
 /// A template expanded after the definition reaches the library's `car`
 /// too, by an ordinary call. The fast path is asserted on the code
-/// `compile_for_inspection` answers for `g`, an inline `Car`; which operand
-/// it names (the linked record's, `car@linked`) is the switch's to assert.
+/// `compile_for_inspection` answers for `g`, the path `(vm-compile …)`
+/// prints: an inline `Car` on the linked record's operand, `car@linked`
+/// (#837; `car.N`, an ordinary entry, before the switch).
 #[test]
 fn an_early_bound_primitive_keeps_its_fast_path() {
     let interp = Interpreter::new(patina_vm::VmBackend::new());
@@ -420,13 +459,10 @@ fn an_early_bound_primitive_keeps_its_fast_path() {
         .backend()
         .compile_for_inspection("(define (g p) (first-of p))")
         .expect("compiles");
-    let (_, nested) = &inspected.units()[0];
-    assert!(
-        nested[0]
-            .instructions
-            .iter()
-            .any(|instr| matches!(instr, patina_vm::types::Instruction::Car { .. })),
-        "the template's car is inlined"
+    assert_eq!(
+        car_operands(&inspected),
+        ["car@linked"],
+        "the template's car is inlined, on its linked operand"
     );
 
     let program = format!(

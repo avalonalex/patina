@@ -204,9 +204,17 @@ impl PlaceholderStore {
 
     /// Whether the store holds an entry for `name`: a name a placeholder or
     /// a weak read-through record holds is taken, for the minting of an
-    /// alias (`Environment::import_alias`, `relink_alias`).
+    /// alias (`Environment::relink_alias`).
     pub(crate) fn contains(&self, name: &str) -> bool {
         self.state.with(|state| state.entries.contains_key(name))
+    }
+
+    /// The names the store holds an entry for, in no order: for a test of
+    /// what an expansion leaves in a namespace (#837).
+    #[cfg(feature = "test-support")]
+    pub(crate) fn names(&self) -> Vec<String> {
+        self.state
+            .with(|state| state.entries.keys().map(|name| name.to_string()).collect())
     }
 
     /// The pass's part for this store: take out every entry whose record

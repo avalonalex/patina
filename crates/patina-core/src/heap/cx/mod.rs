@@ -624,19 +624,6 @@ impl<'gc> Cx<'gc> {
         ns.copy_binding(self.heap, name, staging, staged_name)
     }
 
-    /// A name of `ns`'s own for the location `name` imports
-    /// ([`NamespaceView::import_alias`]), minted by `mint` the first time.
-    /// Raw: names `NamespaceView`.
-    #[inline]
-    pub fn import_alias(
-        &mut self,
-        ns: NamespaceView<'_>,
-        name: &str,
-        mint: impl FnMut() -> Rc<str>,
-    ) -> Option<Rc<str>> {
-        ns.import_alias(self.heap, name, mint)
-    }
-
     /// The record an early-bound reference to `name` links when `ns` is
     /// its macro's environment, branded by this context, and the location
     /// of its cell (#837; `Environment::early_link`, the owner's ruling
