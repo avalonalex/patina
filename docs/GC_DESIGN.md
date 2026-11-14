@@ -392,9 +392,10 @@ Live procedures keep their code alive, and code embeds heap values:
 `Rc<CpsExpr>`. A `CoreExpr` holds no heap word: until its form is compiled,
 its literals, and the binding records it links (#837), are its
 compilation's literal pool's (§9.7). A `CpsExpr` holds words of both kinds:
-its literals, and since #837 the record a linked `Var` or `Set` reads or
-writes (`link: Option<BindingLink>`), which the derived trace reports
-through the same walk, so a closure's body, a continuation's and the
+its literals, and since #837 the record a `LinkedVar` or `LinkedSet` reads
+or writes (`link: BindingLink`; variants of their own, so that a read by name
+tests nothing for a link), which the derived trace reports through the same
+walk, so a closure's body, a continuation's and the
 trampoline's step keep each linked record (`expression_links_under_var_and_set`).
 
 - **Tree-walker:** walk the expression tree, memoized per collection by
@@ -872,7 +873,7 @@ the `current_step: StepResult` local** in `eval_in_env`'s trampoline loop
 | Root | Location | Notes |
 |------|----------|-------|
 | `current_step: StepResult` | Rust local in the trampoline loop | Carries value/proc/args, env, the value delivered to a continuation that the next step binds (#680), `ContEnv` continuation chain, `prompt_stack`, `dynamic_winds`, `exception_handlers` (`eval/cps_eval/types.rs`). Passed to `collect` as a transient root at the safe point. |
-| Linked `CpsExpr` nodes' records | every `CpsExpr` a step, a closure or a continuation holds | Since #837 a `Var` or `Set` the desugarer linked carries the binding record it reads or writes (`link`), reported by `CpsExpr`'s derived trace through `expr_literals`, as a literal is (§4.4); the tree-walker's one holder of records outside a namespace, beside the VM's pinned link-table entries (§4.7) |
+| Linked `CpsExpr` nodes' records | every `CpsExpr` a step, a closure or a continuation holds | Since #837 a reference or assignment the desugarer linked is a `LinkedVar` or `LinkedSet`, which carries the binding record it reads or writes (`link`), reported by `CpsExpr`'s derived trace through `expr_literals`, as a literal is (§4.4); the tree-walker's one holder of records outside a namespace, beside the VM's pinned link-table entries (§4.7) |
 | `ContValue` chain | inside `StepResult` | Recursive via `Box<ContValue>`; variants embed `TaggedValue`s (`types.rs:168`) — needs its own trace impl |
 | `Evaluator.global_env` | `eval/mod.rs:43` | `env` |
 | `LibraryRegistry` | `eval/mod.rs:47` | §5.3 |

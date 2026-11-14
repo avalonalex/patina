@@ -933,9 +933,21 @@ mod tests {
         let (link, unbound) = (literals.link(link), literals.link(unbound));
         let scopes = ScopeSet::from_iter([patina_core::ScopeId(9)]);
         let cps = CpsEvaluator::new(&evaluator);
+        // Read both ways a node is read: as a trivial argument
+        // (`eval_trivial_tagged`, `Halt`'s) and as the step itself (the step
+        // loop's own `Var` arm). Each tests the link at its call (#837).
         let read = |link| {
-            let var = CpsExprKind::linked_var(Rc::from("f"), scopes.clone(), Some(link));
-            cps.eval(&CpsExpr::new(CpsExprKind::Halt(CpsExpr::rc(var))))
+            let var = || CpsExprKind::linked_var(Rc::from("f"), scopes.clone(), Some(link));
+            let as_argument = cps.eval(&CpsExpr::new(CpsExprKind::Halt(CpsExpr::rc(var()))));
+            let as_step = cps.eval(&CpsExpr::new(var()));
+            match (as_argument, as_step) {
+                (Ok(a), Ok(b)) => {
+                    assert_eq!(a, b, "as an argument and as the step");
+                    Ok(a)
+                }
+                (Err(e), Err(EvalError::UndefinedVariable(_))) => Err(e),
+                (a, b) => panic!("as an argument {a:?}, as the step {b:?}"),
+            }
         };
         let write = |link, value| {
             let set = CpsExprKind::linked_set(

@@ -187,9 +187,17 @@ fn expression_literals_under_every_node() {
     let alternate = s.pair(h, "CpsExprKind::If.alternate");
     let set_value = s.vector(h, "CpsExprKind::Set.value");
     let set_cont = s.string(h, "CpsExprKind::Set.cont");
+    let linked_set_value = s.pair(h, "CpsExprKind::LinkedSet.value");
+    let linked_set_cont = s.object(h, "CpsExprKind::LinkedSet.cont");
     let define_value = s.object(h, "CpsExprKind::Define.value");
     let define_cont = s.pair(h, "CpsExprKind::Define.cont");
     let primop_arg = s.vector(h, "CpsExprKind::PrimOp.args");
+    // A linked node's record, which `expression_links_under_var_and_set`
+    // holds to its trace; here it is only what the variants carry.
+    let link = {
+        let cell = crate::binding_record::BindingCell::free(h, TaggedValue::fixnum(0));
+        crate::binding_record::BindingLink::new(crate::binding_record::Record::new(h, cell))
+    };
 
     let node = CpsExpr::new;
     let literal = |value| CpsExpr::new(CpsExprKind::Literal(value));
@@ -200,6 +208,11 @@ fn expression_literals_under_every_node() {
     let var = || node(CpsExprKind::var(name(), ScopeSet::new()));
     let every_node = vec![
         var(),
+        node(CpsExprKind::LinkedVar {
+            name: name(),
+            scopes: ScopeSet::from_iter([ScopeId(1)]),
+            link,
+        }),
         literal(primop_arg),
         node(CpsExprKind::ContRef(name())),
         node(CpsExprKind::Lambda {
@@ -244,7 +257,13 @@ fn expression_literals_under_every_node() {
             scopes: ScopeSet::new(),
             value: shared(set_value),
             cont: shared(set_cont),
-            link: None,
+        }),
+        node(CpsExprKind::LinkedSet {
+            var: name(),
+            scopes: ScopeSet::from_iter([ScopeId(1)]),
+            value: shared(linked_set_value),
+            cont: shared(linked_set_cont),
+            link,
         }),
         node(CpsExprKind::Define {
             name: name(),
@@ -264,7 +283,7 @@ fn expression_literals_under_every_node() {
     s.assert_survived(&heap);
 }
 
-/// A linked `Var`'s and a linked `Set`'s record (#837): each a record over
+/// A `LinkedVar`'s and a `LinkedSet`'s record (#837): each a record over
 /// a free cell holding a fresh value, reachable only through the node's
 /// `link`, and the nodes rooted through `visit_expr_literals`, as a closure's
 /// body, a continuation's and the trampoline's step are. A collection keeps
@@ -277,8 +296,8 @@ fn expression_links_under_var_and_set() {
     let mut heap = Heap::new();
     let mut s = Sentinels::new(&mut heap);
     let h = &mut heap;
-    let var_value = s.pair(h, "CpsExprKind::Var.link: its record's cell's value");
-    let set_value = s.vector(h, "CpsExprKind::Set.link: its record's cell's value");
+    let var_value = s.pair(h, "CpsExprKind::LinkedVar.link: its record's cell's value");
+    let set_value = s.vector(h, "CpsExprKind::LinkedSet.link: its record's cell's value");
     let mut link_to = |value| {
         let cell = BindingCell::free(h, value);
         Some(BindingLink::new(Record::new(h, cell)))

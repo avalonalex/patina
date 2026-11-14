@@ -4,7 +4,7 @@
 //! all CpsExpr forms, returning a StepResult for the trampoline loop.
 
 use super::CpsEvaluator;
-use super::environment::definition_environment;
+use super::environment::{Linked, definition_environment};
 use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::error::EvalError;
 use patina_core::DynamicWindRecord;
@@ -127,9 +127,8 @@ impl<'a> CpsEvaluator<'a> {
                     return Ok(StepResult::Done(*v));
                 }
 
-                CpsExprKind::Var { name, scopes, link } => {
-                    let tagged =
-                        try_catchable!(self.lookup_var_tagged(name, scopes, *link, &current_env));
+                CpsExprKind::Var { name, scopes } => {
+                    let tagged = try_catchable!(self.lookup_var_tagged(name, scopes, &current_env));
                     return Ok(StepResult::Done(tagged));
                 }
 
@@ -228,12 +227,21 @@ impl<'a> CpsEvaluator<'a> {
                     scopes,
                     value,
                     cont,
-                    link,
                 } => {
                     let val =
                         try_catchable!(self.eval_trivial_tagged(value, &current_env, &cont_env));
-                    try_catchable!(self.set_var_tagged(var, scopes, *link, val, &current_env));
+                    try_catchable!(self.set_var_tagged(var, scopes, val, &current_env));
                     current_expr = Rc::clone(cont);
+                }
+
+                // A linked reference or assignment (#837): one arm and one
+                // call, so that the loop's other arms keep the code and the
+                // registers they had.
+                CpsExprKind::LinkedVar { .. } | CpsExprKind::LinkedSet { .. } => {
+                    match try_catchable!(self.step_linked(&current_expr, &current_env, &cont_env)) {
+                        Linked::Read(tagged) => return Ok(StepResult::Done(tagged)),
+                        Linked::Written(cont) => current_expr = cont,
+                    }
                 }
 
                 CpsExprKind::Define {
@@ -475,8 +483,9 @@ fn extends_in_place(env: &Rc<Environment>) -> bool {
 
 /// Whether `expr` reads the binding of `name`, a temporary of the CPS
 /// transform's: a reference to that very symbol, which a reference the
-/// program wrote never is. A temporary is unscoped, so never linked (#837).
+/// program wrote never is. A temporary is unscoped, so never a
+/// `LinkedVar` (#837).
 fn is_reference_to(expr: &CpsExpr, name: &Rc<str>) -> bool {
-    matches!(&expr.kind, CpsExprKind::Var { name: read, scopes, link: _ }
+    matches!(&expr.kind, CpsExprKind::Var { name: read, scopes }
         if scopes.is_empty() && Rc::ptr_eq(read, name))
 }

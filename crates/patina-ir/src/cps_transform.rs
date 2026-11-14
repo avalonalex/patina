@@ -839,16 +839,19 @@ mod tests {
 
         fn links(e: &CpsExpr, found: &mut Vec<(&'static str, Option<BindingLink>)>) {
             let children: Vec<&CpsExpr> = match &e.kind {
-                CpsExprKind::Var { link, .. } => {
-                    if link.is_some() {
-                        found.push(("var", *link));
-                    }
+                CpsExprKind::LinkedVar { link, .. } => {
+                    found.push(("var", Some(*link)));
                     vec![]
                 }
-                CpsExprKind::Set {
+                // An assignment that lost its link is found without one.
+                CpsExprKind::Set { value, cont, .. } => {
+                    found.push(("set", None));
+                    vec![value, cont]
+                }
+                CpsExprKind::LinkedSet {
                     link, value, cont, ..
                 } => {
-                    found.push(("set", *link));
+                    found.push(("set", Some(*link)));
                     vec![value, cont]
                 }
                 CpsExprKind::LetCont {
