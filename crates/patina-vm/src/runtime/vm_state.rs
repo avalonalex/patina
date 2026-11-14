@@ -3702,6 +3702,79 @@ mod tests {
         );
     }
 
+    /// A pinned operand whose record's cell holds `UNBOUND` is never read
+    /// or written by its spelling (#837, C2): `(set! f→pin 1)` and `f→pin`,
+    /// run in a namespace that binds `f`, each answer an unbound `f` and
+    /// leave the namespace's `f` alone, where an operand that fell back to
+    /// its spelling would write or read it (#438's capture). The store
+    /// reaches `store_global_cold`'s refusal, which nothing else tests; the
+    /// read `read_cold`'s, through `load_global_cold`.
+    #[test]
+    fn a_pinned_operand_over_an_unbound_cell_never_falls_back_to_its_spelling() {
+        use patina_core::core_expr::{CoreExpr, CoreExprKind};
+        use patina_core::{Lit, ScopeId, ScopeSet};
+
+        let mut state = VmState::on_a_fresh_heap();
+        state.install_primitives();
+        let globals = Rc::clone(state.global_env());
+        globals.define(&state.heap, "f", TaggedValue::fixnum(100));
+        let scopes = ScopeSet::from_iter([ScopeId(601)]);
+        let run = |state: &mut VmState, make: &dyn Fn(patina_core::Link) -> CoreExpr| {
+            let literals = patina_core::LiteralPool::new(&state.heap.borrow());
+            let link = patina_core::NoGcScope::with_cx(&state.heap, |cx| {
+                literals.add_link(cx.unbound_link_for_tests())
+            });
+            let (top, nested) = compile_with_qq_resolving(
+                &make(link),
+                &literals,
+                &state.heap,
+                &globals,
+                state.primitive_registry(),
+            )
+            .expect("compiles");
+            let unit = state.load_unit(top, nested, &globals, literals);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "a driver entry on a machine the test owns: the record is in the \
+                          loaded unit's table, and the test reads only the error and a global"
+            )]
+            let answer = execute(state, unit);
+            answer
+        };
+
+        let stored = run(&mut state, &|link| {
+            CoreExpr::new(CoreExprKind::linked_set(
+                Rc::from("f"),
+                scopes.clone(),
+                Rc::new(CoreExpr::new(CoreExprKind::Literal(Lit::immediate(
+                    TaggedValue::fixnum(1),
+                )))),
+                Some(link),
+            ))
+        });
+        assert!(
+            matches!(&stored, Err(VmError::UnboundVariable { name }) if &**name == "f"),
+            "the store: {stored:?}"
+        );
+        assert_eq!(
+            globals.get(&state.heap, "f"),
+            Some(TaggedValue::fixnum(100)),
+            "the namespace's f, unwritten"
+        );
+
+        let read = run(&mut state, &|link| {
+            CoreExpr::new(CoreExprKind::linked_var(
+                Rc::from("f"),
+                scopes.clone(),
+                Some(link),
+            ))
+        });
+        assert!(
+            matches!(&read, Err(VmError::UnboundVariable { name }) if &**name == "f"),
+            "the read: {read:?}"
+        );
+    }
+
     /// A slot that has used every generation stays empty, and the next code
     /// loaded takes a new slot, so no id is ever given out twice (#352).
     #[test]
