@@ -656,6 +656,21 @@ impl<'gc> Cx<'gc> {
         Some((location, crate::Linkable::new(link)))
     }
 
+    /// A record over a fresh free cell holding `UNBOUND`, branded by this
+    /// context, for a backend's tests (#837): a pinned operand over it is
+    /// one no early link makes, and reaches the cold paths that refuse to
+    /// read or write a pinned entry by name (the VM's `store_global_cold`),
+    /// which no record a program can link reaches. Pool it as
+    /// [`early_link`](Self::early_link)'s. Only with `test-support`.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn unbound_link_for_tests(&mut self) -> crate::Linkable<'gc> {
+        let mut heap = self.heap.borrow_mut();
+        let cell = crate::BindingCell::free(&mut heap, TaggedValue::UNBOUND);
+        let record = crate::binding_record::Record::new(&mut heap, cell);
+        crate::Linkable::new(crate::BindingLink::new(record))
+    }
+
     /// Whether `name` is `ns`'s import of `location` (#837;
     /// `Environment::imports_location`): a slot of its own over a cell it
     /// does not own, at `location`. `false` for a frame. Raw: names

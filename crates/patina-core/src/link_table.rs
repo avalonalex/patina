@@ -41,7 +41,10 @@
 //! be another binding (#438). Its spelling serves messages, the disassembler
 //! and the tracer. A pinned record is a namespace's slot or scoped entry
 //! record, which a definition or an import re-points in place and never
-//! replaces, so the linked read finds a binding there.
+//! replaces, so the linked read finds a binding there; or, where the macro
+//! environment's walk ends at a frame's import, a fresh record over the
+//! import's cell (E1's fallback, `Environment::early_link`), in no slot and
+//! re-pointed by nothing, which reads that cell.
 //!
 //! The table is traced only by its unit's code id (`VmState::trace_code_ids`),
 //! never from the code store, and with it the records, placeholders and weak
@@ -86,7 +89,10 @@ pub struct LinkTable {
     /// `(cell . PLACEHOLDER)` over `(UNBOUND . owner)`, or, for a name the
     /// namespace reaches by an alias or a visible scoped definition, which
     /// is read by name, the heap's by-name record `(cell . BY_NAME)` over a
-    /// free cell holding `UNBOUND`. `UNBOUND` until linked. Cells, so the
+    /// free cell holding `UNBOUND`. `UNBOUND` until linked, but for a
+    /// pinned entry (#837), which holds from the table's making the record
+    /// an early link names: a namespace's slot or scoped entry record, or
+    /// E1's fresh record over a frame's import's cell. Cells, so the
     /// collector is shown each where it lives (#682).
     entries: Box<[Cell<TaggedValue>]>,
     /// The spellings, in the order pass 5 first emitted an operand naming
@@ -146,9 +152,11 @@ impl LinkTable {
     /// are unlinked, as [`LinkTable::new`]'s.
     ///
     /// The records are rooted by the compilation's literal pool until the
-    /// unit is loaded, and by this table's trace from then on. An unloaded
-    /// table's entries are dereferenced by nothing: running code reads a
-    /// table only once `load_unit` has linked it.
+    /// unit is loaded, and by this table's trace from then on. Running code
+    /// reads a table only once `load_unit` has linked it; anything else that
+    /// reads an unloaded table's entries (a test, through
+    /// [`LinkTable::get`]) keeps the pool alive while it does, since nothing
+    /// else roots a pinned record then.
     pub fn with_links(names: Box<[Rc<str>]>, links: &[Option<BindingLink>]) -> Self {
         assert_eq!(names.len(), links.len(), "a link per operand, or none");
         let mut table = LinkTable::new(names);
@@ -224,8 +232,9 @@ impl LinkTable {
     /// on the first link and on a relink. A debug or `gc-check` build checks
     /// here, where the table first becomes readable, under `load_unit`'s
     /// window, that each pinned record is one an early link names — a
-    /// namespace's slot or scoped entry record — and not a placeholder, a
-    /// read-through record or the by-name record: the linked read finds
+    /// namespace's slot or scoped entry record, or E1's fresh record over a
+    /// frame's import's cell — and not a placeholder, a read-through record
+    /// or the by-name record: the linked read finds
     /// `UNBOUND` through those, and the cold paths refuse a pinned entry,
     /// so it would answer unbound for good instead of following an
     /// adoption.
@@ -1008,8 +1017,10 @@ mod tests {
         assert_eq!(site.get(&heap, "f"), Some(n(100)), "not the use site's");
     }
 
-    /// A relink in another namespace (a release build's path; a debug
-    /// build refuses it after the relink) leaves a pinned entry too.
+    /// A link in another namespace (a release build's path; a debug build
+    /// refuses it after the relink) relinks against the first, so the
+    /// unpinned `f` stays the use site's record, never `other`'s, and the
+    /// pinned entry is left as it was.
     #[test]
     fn a_relink_leaves_a_pinned_entry() {
         let heap = new_shared_heap();
@@ -1021,15 +1032,23 @@ mod tests {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             linked.link_in(&heap, &other);
         }));
-        assert_eq!(linked.entry(1), word);
+        assert_eq!(linked.entry(1), word, "the pin, left");
+        assert_eq!(
+            linked.entry(0),
+            site.local_record("f").unwrap().word(),
+            "relinked against the first namespace"
+        );
+        assert_ne!(linked.entry(0), other.local_record("f").unwrap().word());
     }
 
-    /// The cold paths never go by name for a pinned entry (C2): `read_cold`
-    /// answers `None` and `assignee` resolves no cell, though the use site
-    /// binds the spelling, where an unpinned entry over the same kind of
-    /// record is read by name. Here the pinned record's cell holds
-    /// `UNBOUND`, which no early link's does, to reach the cold paths at
-    /// all.
+    /// `read_cold` never goes by name for a pinned entry (C2): it answers
+    /// `None`, though the use site binds the spelling, where an unpinned
+    /// entry over the same kind of record is read by name. Here the pinned
+    /// record's cell holds `UNBOUND`, which no early link's does, to reach
+    /// the cold path at all. (`assignee` resolves no cell for this record
+    /// pinned or not, since `assignee_cold` follows only a read-through
+    /// record: its refusal is
+    /// `assignee_never_resolves_a_pinned_read_through_record`'s.)
     #[test]
     fn the_cold_paths_never_read_or_write_a_pinned_entry_by_name() {
         let heap = new_shared_heap();
@@ -1045,13 +1064,49 @@ mod tests {
         linked.link_in(&heap, &site);
         assert_eq!(linked.get(&heap.borrow(), 0), None);
         assert_eq!(linked.read_cold(&heap, 0), None, "never the use site's `f`");
-        assert!(linked.assignee(&heap.borrow(), 0).is_none());
         assert_eq!(site.get(&heap, "f"), Some(n(100)));
 
         // Read before it is linked, too.
         let unlinked =
             LinkTable::with_links(Box::new([Rc::from("f")]), &[Some(BindingLink::new(record))]);
         assert_eq!(unlinked.read_cold(&heap, 0), None);
+    }
+
+    /// `assignee_cold`'s refusal of a pinned entry (C2): a pinned host
+    /// namespace's read-through record over a bound parent, which a check
+    /// build's `link_in` refuses and so only a release build could link,
+    /// resolves no cell, where unpinned it resolves the parent's, as a
+    /// store by name would; and `read_cold` reads no parent through it.
+    /// The table is made by hand, linked, around the kind check.
+    #[test]
+    fn assignee_never_resolves_a_pinned_read_through_record() {
+        let heap = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(&heap));
+        global.define(&heap, "x", n(1));
+        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
+        let read_through = host.link_record(&heap, "x").unwrap();
+        let made = |pinned: &[super::LinkIdx]| LinkTable {
+            entries: Box::new([Cell::new(read_through.word())]),
+            names: Box::new([Rc::from("x")]),
+            pinned: pinned.into(),
+            namespace: OnceCell::from(Rc::clone(&host)),
+            compiled_in: Cell::new(0),
+            traced: Cell::new(0),
+        };
+        let unpinned = made(&[]);
+        let (_, old) = unpinned
+            .assignee(&heap.borrow(), 0)
+            .expect("the parent's cell, unpinned");
+        assert_eq!(old, n(1));
+        assert_eq!(unpinned.read_cold(&heap, 0), Some(n(1)));
+
+        let pinned = made(&[0]);
+        assert!(
+            pinned.assignee(&heap.borrow(), 0).is_none(),
+            "no cell resolved through a pinned entry"
+        );
+        assert_eq!(pinned.read_cold(&heap, 0), None);
+        assert_eq!(global.get(&heap, "x"), Some(n(1)));
     }
 
     /// A pinned entry is an entry: a collection that traces only the table,
