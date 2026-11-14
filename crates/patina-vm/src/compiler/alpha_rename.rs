@@ -858,4 +858,81 @@ mod tests {
             "empty-scoped ref should resolve to non-macro binding, not macro-introduced one"
         );
     }
+
+    /// C1 (#837): a linked reference, and a linked assignment, beside a
+    /// top-level definition of the same spelling at the same scopes, which
+    /// makes that definition a candidate for an unlinked reference, keep
+    /// their spelling and their link: `alpha_rename` resolves neither, and
+    /// clears their scopes as every node's. The unlinked reference beside
+    /// them resolves to the definition's renamed global.
+    #[test]
+    fn a_linked_reference_is_passed_through_unresolved() {
+        let heap = patina_core::new_shared_heap();
+        let literals = patina_core::LiteralPool::new(&heap.borrow());
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "f", TaggedValue::fixnum(1));
+        let link = crate::compiler::link_to(&heap, &library, "f", &literals);
+        let scopes = ScopeSet::from_iter([ScopeId(300)]);
+        let lit = |n| {
+            CoreExpr::new(CoreExprKind::Literal(Lit::immediate(TaggedValue::fixnum(
+                n,
+            ))))
+        };
+        let expr = CoreExpr::new(CoreExprKind::Begin(vec![
+            CoreExpr::new(CoreExprKind::Define {
+                name: Rc::from("f"),
+                scopes: scopes.clone(),
+                value: Rc::new(lit(2)),
+            }),
+            CoreExpr::new(CoreExprKind::linked_var(
+                Rc::from("f"),
+                scopes.clone(),
+                Some(link),
+            )),
+            CoreExpr::new(CoreExprKind::linked_set(
+                Rc::from("f"),
+                scopes.clone(),
+                Rc::new(lit(3)),
+                Some(link),
+            )),
+            var_scoped("f", scopes),
+        ]));
+        let renamed = alpha_rename(&expr, None).expect("renames").expr;
+        let CoreExprKind::Begin(forms) = &renamed.kind else {
+            panic!("{renamed}")
+        };
+        let CoreExprKind::Define { name: defined, .. } = &forms[0].kind else {
+            panic!("{}", forms[0])
+        };
+        assert_ne!(&**defined, "f", "the introduced definition is renamed");
+        match &forms[1].kind {
+            CoreExprKind::Var {
+                name,
+                scopes,
+                link: linked,
+            } => {
+                assert_eq!((&**name, *linked), ("f", Some(link)));
+                assert!(scopes.is_empty());
+            }
+            other => panic!("{other}"),
+        }
+        match &forms[2].kind {
+            CoreExprKind::Set {
+                var,
+                scopes,
+                link: linked,
+                value: _,
+            } => {
+                assert_eq!((&**var, *linked), ("f", Some(link)));
+                assert!(scopes.is_empty());
+            }
+            other => panic!("{other}"),
+        }
+        match &forms[3].kind {
+            CoreExprKind::Var {
+                name, link: None, ..
+            } => assert_eq!(name, defined),
+            other => panic!("{other}"),
+        }
+    }
 }

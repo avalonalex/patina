@@ -27,6 +27,7 @@
 //! See VM_COMPILER.md §Pass 2.
 
 use super::pass1_analysis::{AnalysisInfo, NodeId};
+use patina_core::BindingLink;
 use patina_core::LiteralPool;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, Symbol};
 use patina_core::error::SourceLocation;
@@ -88,8 +89,12 @@ pub enum ClosedExprKind {
         name: Symbol,
         slot: u16,
     },
-    /// Plain global lookup.
-    GlobalRef(Symbol),
+    /// Plain global lookup: by its spelling, or for a reference the
+    /// desugarer linked, through the record it linked (#837).
+    GlobalRef {
+        name: Symbol,
+        link: Option<BindingLink>,
+    },
 
     /// Read value out of a `MutableCell` held in a local register.
     ReadLocalCell(Symbol),
@@ -123,10 +128,11 @@ pub enum ClosedExprKind {
         slot: u16,
         value: Box<ClosedExpr>,
     },
-    /// `set!` on a global.
+    /// `set!` on a global, linked as `GlobalRef` is (#837).
     SetGlobal {
         var: Symbol,
         value: Box<ClosedExpr>,
+        link: Option<BindingLink>,
     },
 
     Begin(Vec<ClosedExpr>),
@@ -247,7 +253,23 @@ fn convert_inner(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
         CoreExprKind::Quote(v) => ClosedExprKind::Quote(ctx.literals.word(*v)),
         CoreExprKind::Quasiquote(_) => ClosedExprKind::Quasiquote,
 
-        CoreExprKind::Var { name, .. } => match ctx.lookup(name) {
+        // A linked reference is always a global, through the record the
+        // desugarer linked, which `ctx.lookup` must not resolve by name
+        // (#837). The pool roots the record until the unit's table does.
+        CoreExprKind::Var {
+            name,
+            link: Some(link),
+            scopes: _,
+        } => ClosedExprKind::GlobalRef {
+            name: name.clone(),
+            link: Some(ctx.literals.link(*link)),
+        },
+
+        CoreExprKind::Var {
+            name,
+            link: None,
+            scopes: _,
+        } => match ctx.lookup(name) {
             VarLoc::Local => ClosedExprKind::LocalRef(name.clone()),
             VarLoc::LocalBoxed => ClosedExprKind::ReadLocalCell(name.clone()),
             VarLoc::Closure(slot) => ClosedExprKind::ClosureRef {
@@ -258,10 +280,30 @@ fn convert_inner(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
                 name: name.clone(),
                 slot,
             },
-            VarLoc::Global => ClosedExprKind::GlobalRef(name.clone()),
+            VarLoc::Global => ClosedExprKind::GlobalRef {
+                name: name.clone(),
+                link: None,
+            },
         },
 
-        CoreExprKind::Set { var, value, .. } => {
+        // As a linked reference, above.
+        CoreExprKind::Set {
+            var,
+            value,
+            link: Some(link),
+            scopes: _,
+        } => ClosedExprKind::SetGlobal {
+            var: var.clone(),
+            value: Box::new(convert(value, ctx)),
+            link: Some(ctx.literals.link(*link)),
+        },
+
+        CoreExprKind::Set {
+            var,
+            value,
+            link: None,
+            scopes: _,
+        } => {
             let converted_val = convert(value, ctx);
             match ctx.lookup(var) {
                 VarLoc::Local => ClosedExprKind::SetLocal {
@@ -277,6 +319,7 @@ fn convert_inner(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
                     // (shouldn't happen after analysis, but safe fallback).
                     var: var.clone(),
                     value: Box::new(converted_val),
+                    link: None,
                 },
                 VarLoc::ClosureBoxed(slot) => ClosedExprKind::WriteClosureCell {
                     slot,
@@ -285,6 +328,7 @@ fn convert_inner(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
                 VarLoc::Global => ClosedExprKind::SetGlobal {
                     var: var.clone(),
                     value: Box::new(converted_val),
+                    link: None,
                 },
             }
         }
@@ -505,14 +549,18 @@ mod tests {
             lam.capture_list.is_empty(),
             "global var must not be captured"
         );
-        assert!(matches!(&lam.body[0].kind, ClosedExprKind::GlobalRef(n) if n.as_ref() == "y"));
+        assert!(
+            matches!(&lam.body[0].kind, ClosedExprKind::GlobalRef { name, link: None } if name.as_ref() == "y")
+        );
     }
 
     #[test]
     fn unresolved_var_becomes_global_ref() {
         let info = Pass1Analysis::run(&var("foo"));
         let closed = Pass2Closure::run(&var("foo"), &info, &crate::compiler::no_literals());
-        assert!(matches!(&closed.kind, ClosedExprKind::GlobalRef(n) if n.as_ref() == "foo"));
+        assert!(
+            matches!(&closed.kind, ClosedExprKind::GlobalRef { name, link: None } if name.as_ref() == "foo")
+        );
     }
 
     #[test]

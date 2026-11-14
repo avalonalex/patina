@@ -15,6 +15,7 @@
 //! See VM_COMPILER.md §Pass 3.
 
 use super::pass2_closure::{ClosedExpr, ClosedExprKind};
+use patina_core::BindingLink;
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
@@ -73,7 +74,11 @@ pub enum TailedExprKind {
         name: Symbol,
         slot: u16,
     },
-    GlobalRef(Symbol),
+    /// A global, by spelling or by the record linked (#837).
+    GlobalRef {
+        name: Symbol,
+        link: Option<BindingLink>,
+    },
 
     /// Read value out of a `MutableCell` held in a local register.
     ReadLocalCell(Symbol),
@@ -108,6 +113,7 @@ pub enum TailedExprKind {
     SetGlobal {
         var: Symbol,
         value: Box<TailedExpr>,
+        link: Option<BindingLink>,
     },
 
     Begin(Vec<TailedExpr>),
@@ -173,7 +179,10 @@ fn mark_inner(expr: &ClosedExpr, tail: bool) -> TailedExpr {
             name: name.clone(),
             slot: *slot,
         },
-        ClosedExprKind::GlobalRef(s) => TailedExprKind::GlobalRef(s.clone()),
+        ClosedExprKind::GlobalRef { name, link } => TailedExprKind::GlobalRef {
+            name: name.clone(),
+            link: *link,
+        },
 
         ClosedExprKind::ReadLocalCell(s) => TailedExprKind::ReadLocalCell(s.clone()),
         ClosedExprKind::ReadClosureCell { name, slot } => TailedExprKind::ReadClosureCell {
@@ -219,9 +228,10 @@ fn mark_inner(expr: &ClosedExpr, tail: bool) -> TailedExpr {
             slot: *slot,
             value: Box::new(mark(value, false)),
         },
-        ClosedExprKind::SetGlobal { var, value } => TailedExprKind::SetGlobal {
+        ClosedExprKind::SetGlobal { var, value, link } => TailedExprKind::SetGlobal {
             var: var.clone(),
             value: Box::new(mark(value, false)),
+            link: *link,
         },
 
         ClosedExprKind::Begin(exprs) => {

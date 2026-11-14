@@ -678,7 +678,22 @@ impl VmBackend {
     ///
     /// Used by the `(vm-compile ...)` REPL special form.
     pub fn disasm_source(&self, source: &str) -> Result<(), VmBackendError> {
-        use crate::disasm::disassemble;
+        let inspected = self.compile_for_inspection(source)?;
+        for (top, nested) in &inspected.units {
+            crate::disasm::disassemble(top, nested);
+        }
+        Ok(())
+    }
+
+    /// Desugar and compile each form of `source` in the global environment,
+    /// as [`disasm_source`](Self::disasm_source) prints them, and answer
+    /// the code, never loaded or run: for tests that assert what a form
+    /// compiles to on the real path, its link tables' pinned operands among
+    /// it (#837). The forms are compiled one after another, none run, so a
+    /// form sees the environment as it was before `source`, but for the
+    /// identities an earlier form's macro-introduced definitions record.
+    #[doc(hidden)]
+    pub fn compile_for_inspection(&self, source: &str) -> Result<Inspected, VmBackendError> {
         use patina_frontend::Parser;
 
         let heap = self.heap.clone();
@@ -696,6 +711,10 @@ impl VmBackend {
 
         let desugarer = Desugarer::with_env(Rc::clone(&self.global_env))
             .with_fs(self.state.borrow().fs().clone());
+        let mut inspected = Inspected {
+            units: Vec::new(),
+            literals: Vec::new(),
+        };
         for tv in parsed {
             let literals = patina_core::LiteralPool::new(&heap.borrow());
             let core_expr = patina_core::NoGcScope::cross(&heap, [tv], |cx, [form]| {
@@ -704,17 +723,17 @@ impl VmBackend {
             .map_err(VmBackendError::from)?;
 
             let registry = Rc::clone(self.state.borrow().primitive_registry());
-            let (top, nested) = compile_with_qq_resolving(
+            let unit = compile_with_qq_resolving(
                 &core_expr,
                 &literals,
                 &heap,
                 &self.global_env,
                 &registry,
             )?;
-
-            disassemble(&top, &nested);
+            inspected.units.push(unit);
+            inspected.literals.push(literals);
         }
-        Ok(())
+        Ok(inspected)
     }
 
     /// Load a library by name (shared heap variant for TaggedValue compatibility).
@@ -1091,6 +1110,27 @@ impl patina_runtime::HasDiagnostic for VmBackendError {
     }
 }
 
+/// What [`VmBackend::compile_for_inspection`] answers: each form's code,
+/// never loaded, with the literal pools that root the words its constants
+/// and its link tables' pinned entries copied (#869, #837), held as long as
+/// the code. Nothing dereferences an unloaded table's entries, and nothing
+/// may load this code.
+#[doc(hidden)]
+pub struct Inspected {
+    /// Each form's top-level code object and the lambdas compiled with it.
+    pub units: Vec<(crate::types::CodeObject, Vec<crate::types::CodeObject>)>,
+    /// The forms' pools, one per unit.
+    literals: Vec<patina_core::LiteralPool>,
+}
+
+impl Inspected {
+    /// The pools of the forms, one per unit, which a test may read a
+    /// constant's literal through.
+    pub fn literals(&self) -> &[patina_core::LiteralPool] {
+        &self.literals
+    }
+}
+
 #[cfg(test)]
 #[expect(
     clippy::disallowed_methods,
@@ -1127,6 +1167,42 @@ mod tests {
             .eval_program_resilient_with_source_name_owned("(no-such)\n(also-no-such)\n", "k.scm");
         assert_eq!(outcome.eval_errors, 2);
         assert!(outcome.read_to_end);
+    }
+
+    /// `compile_for_inspection` answers each form's code on the real path,
+    /// none of it loaded or run (#837), and `disasm_source` prints what it
+    /// answers: here a form defining `g` compiles, after the program's
+    /// import, to the inline `car` on the global `car`, and `g` stays
+    /// unbound since nothing ran.
+    #[test]
+    fn compile_for_inspection_answers_each_forms_code_unloaded() {
+        let interp = Interpreter::new(VmBackend::new());
+        interp
+            .eval_program_owned("(import (scheme base))")
+            .expect("imports");
+        let backend = interp.backend();
+        let inspected = backend
+            .compile_for_inspection("(define (g p) (car p)) (g '(1 2))")
+            .expect("compiles");
+        assert_eq!(inspected.units.len(), 2, "a unit per form");
+        assert_eq!(inspected.literals().len(), 2, "and its pool");
+        let (_, nested) = &inspected.units[0];
+        let code = &nested[0];
+        let car = code
+            .instructions
+            .iter()
+            .find_map(|instr| match instr {
+                crate::types::Instruction::Car { link, .. } => Some(*link),
+                _ => None,
+            })
+            .expect("the inline car");
+        assert_eq!(&**code.links.name(car), "car");
+        assert!(code.links.pinned().is_empty(), "nothing links yet");
+        assert!(code.links.namespace().is_none(), "never loaded");
+        assert!(backend.global_env().get(&backend.heap, "g").is_none());
+        backend
+            .disasm_source("(car '(1 2))")
+            .expect("prints what it compiles");
     }
 
     #[test]

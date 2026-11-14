@@ -27,13 +27,40 @@ pub(crate) use body_defines::for_each_define;
 
 use crate::error::CompileError;
 use crate::types::CodeObject;
-use patina_core::NamespaceView;
-use patina_core::core_expr::CoreExpr;
+use patina_core::core_expr::{CoreExpr, Symbol};
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
+use patina_core::{BindingLink, NamespaceView};
 use patina_core::{Lit, LiteralPool};
 use patina_primitives::PrimitiveRegistry;
 use std::rc::Rc;
+
+/// What identifies a global operand within one compilation (#837): its
+/// spelling, or for an operand the desugarer linked, its record. A linked
+/// `car` and the unit's own `car` never share an entry, in pass 5's link
+/// table or in `primitive_calls`' map: sharing one would give one site the
+/// other's binding once the program defines `car`.
+///
+/// A `Record` key is the record's identity less a check build's stamp
+/// (`BindingLink::key`), sound because the compilation's literal pool roots
+/// every linked record for the maps' whole life.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum OperandKey {
+    /// An operand looked up by its spelling.
+    Name(Symbol),
+    /// An operand linked to a binding record.
+    Record(u64),
+}
+
+impl OperandKey {
+    /// The key of the operand spelled `name`, linked to `link` if set.
+    pub fn of(name: &Symbol, link: Option<BindingLink>) -> Self {
+        match link {
+            Some(link) => OperandKey::Record(link.key()),
+            None => OperandKey::Name(Rc::clone(name)),
+        }
+    }
+}
 
 /// The global environment + registry a compilation unit resolves primitive
 /// callees against. `None` disables `CallPrimitive` emission entirely.
@@ -169,6 +196,24 @@ pub fn compile_with_qq_resolving(
 #[cfg(test)]
 pub(crate) fn no_literals() -> LiteralPool {
     LiteralPool::new(&patina_core::new_shared_heap().borrow())
+}
+
+/// A link to the record `ns`'s walk finds for `name`, pooled in `literals`,
+/// built by hand as the desugarer will build one (#837): through
+/// `Cx::early_link` beneath a context, then the pool.
+#[cfg(test)]
+pub(crate) fn link_to(
+    heap: &SharedHeap,
+    ns: &Environment,
+    name: &str,
+    literals: &LiteralPool,
+) -> patina_core::Link {
+    patina_core::NoGcScope::with_cx(heap, |cx| {
+        let (_, linkable) = cx
+            .early_link(NamespaceView::of(ns), name)
+            .unwrap_or_else(|| panic!("{name} names a record"));
+        literals.add_link(linkable)
+    })
 }
 
 /// Each pass grows its stack with the depth of the code, and each tree a pass

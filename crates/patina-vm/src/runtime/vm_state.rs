@@ -2140,6 +2140,12 @@ pub(super) fn load_global_cold(
 /// a binding private to the library that defined it; marking first by the
 /// binding `get` finds, which may be a parent's or an alias's. An unbound
 /// name is an error, as it was.
+///
+/// A pinned operand (#837), one the desugarer linked, is never stored by
+/// name: its spelling in the namespace may be another binding than the one
+/// it links, and writing that would be #438's capture. Its record's cell
+/// holds `UNBOUND` to be here, which no linked record's does, and the store
+/// is refused as unbound.
 #[cold]
 #[inline(never)]
 fn store_global_cold(
@@ -2148,9 +2154,12 @@ fn store_global_cold(
     k: LinkIdx,
     val: TaggedValue,
 ) -> Result<(), VmError> {
+    let name = links.name(k);
+    if links.is_pinned(k) {
+        return Err(VmError::UnboundVariable { name: name.clone() });
+    }
     let ns = links.namespace().expect("a unit's table is linked at load");
     let view = NamespaceView::of(ns);
-    let name = links.name(k);
     mark_if_shadowing_primitive(state, view, name, val);
     view.set(&state.heap, name, val)
         .map_err(|_| VmError::UnboundVariable { name: name.clone() })
@@ -3600,6 +3609,97 @@ mod tests {
         let heap = state.heap.borrow();
         assert_eq!(heap.car(answer), TaggedValue::fixnum(7));
         assert_eq!(heap.cdr(answer), TaggedValue::NULL);
+    }
+
+    /// A linked operand (#837), built by hand as 4b.10's switch will have
+    /// the desugarer build one, reads and writes the record it links, never
+    /// its spelling in the namespace the unit runs in, which binds `f` to
+    /// something else: `(begin (set! f→lib (+ f→lib 10)) (cons f→lib f))`
+    /// answers `(11 . 100)` and leaves the namespace's `f` alone. The
+    /// library's namespace is dropped and a collection runs between the
+    /// compile and the load, so only the form's pool keeps the record then,
+    /// and only the unit's table once it is loaded.
+    #[test]
+    fn a_linked_operand_reads_and_writes_its_record_not_its_spelling() {
+        use patina_core::core_expr::{CoreExpr, CoreExprKind};
+        use patina_core::heap::gc::collect_for_tests;
+        use patina_core::{Lit, ScopeId, ScopeSet};
+
+        let mut state = VmState::on_a_fresh_heap();
+        state.install_primitives();
+        let globals = Rc::clone(state.global_env());
+        globals.define(&state.heap, "f", TaggedValue::fixnum(100));
+        let literals = patina_core::LiteralPool::new(&state.heap.borrow());
+        let link = {
+            let library = Rc::new(Environment::with_heap(&state.heap));
+            library.define(&state.heap, "f", TaggedValue::fixnum(1));
+            crate::compiler::link_to(&state.heap, &library, "f", &literals)
+        };
+        let scopes = ScopeSet::from_iter([ScopeId(600)]);
+        let linked = || {
+            CoreExpr::new(CoreExprKind::linked_var(
+                Rc::from("f"),
+                scopes.clone(),
+                Some(link),
+            ))
+        };
+        let call = |name: &str, args| {
+            CoreExpr::new(CoreExprKind::App {
+                func: Rc::new(CoreExpr::new(CoreExprKind::var(
+                    Rc::from(name),
+                    ScopeSet::new(),
+                ))),
+                args,
+            })
+        };
+        let ten = CoreExpr::new(CoreExprKind::Literal(Lit::immediate(TaggedValue::fixnum(
+            10,
+        ))));
+        let expr = CoreExpr::new(CoreExprKind::Begin(vec![
+            CoreExpr::new(CoreExprKind::linked_set(
+                Rc::from("f"),
+                scopes.clone(),
+                Rc::new(call("+", vec![linked(), ten])),
+                Some(link),
+            )),
+            call(
+                "cons",
+                vec![
+                    linked(),
+                    CoreExpr::new(CoreExprKind::var(Rc::from("f"), ScopeSet::new())),
+                ],
+            ),
+        ]));
+        let (top, nested) = compile_with_qq_resolving(
+            &expr,
+            &literals,
+            &state.heap,
+            &globals,
+            state.primitive_registry(),
+        )
+        .expect("compiles");
+        drop(expr);
+        collect_for_tests(&mut state.heap.borrow_mut(), &[&state]);
+
+        let unit = state.load_unit(top, nested, &globals, literals);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a driver entry on a machine the test owns: the record is in the loaded \
+                      unit's table, and the test reads only the answer and a global"
+        )]
+        let answer = execute(&mut state, unit).expect("runs");
+        let heap = state.heap.borrow();
+        assert_eq!(heap.car(answer), TaggedValue::fixnum(11), "the library's f");
+        assert_eq!(
+            heap.cdr(answer),
+            TaggedValue::fixnum(100),
+            "the namespace's f"
+        );
+        drop(heap);
+        assert_eq!(
+            globals.get(&state.heap, "f"),
+            Some(TaggedValue::fixnum(100))
+        );
     }
 
     /// A slot that has used every generation stays empty, and the next code

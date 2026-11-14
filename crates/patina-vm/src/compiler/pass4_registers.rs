@@ -29,6 +29,7 @@
 
 use super::pass3_tail::{TailedExpr, TailedExprKind, TailedLambda};
 use crate::compiler::pass1_analysis::NodeId;
+use patina_core::BindingLink;
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
@@ -93,9 +94,11 @@ pub enum RegExprKind {
         slot: u16,
     },
 
-    /// Load from the global environment.
+    /// Load from the global environment: by spelling, or through the
+    /// record the desugarer linked (#837).
     GlobalRef {
         name: Symbol,
+        link: Option<BindingLink>,
     },
 
     /// Read value out of a `MutableCell` held in a local register.
@@ -132,6 +135,7 @@ pub enum RegExprKind {
     SetGlobal {
         name: Symbol,
         value: Box<RegExpr>,
+        link: Option<BindingLink>,
     },
 
     Begin(Vec<RegExpr>),
@@ -306,7 +310,10 @@ fn allocate_ctx_inner(
 
         TailedExprKind::ClosureRef { slot, .. } => RegExprKind::ClosureRef { slot: *slot },
 
-        TailedExprKind::GlobalRef(name) => RegExprKind::GlobalRef { name: name.clone() },
+        TailedExprKind::GlobalRef { name, link } => RegExprKind::GlobalRef {
+            name: name.clone(),
+            link: *link,
+        },
 
         TailedExprKind::ReadLocalCell(name) => {
             let src = alloc.lookup(name).unwrap_or(0);
@@ -374,12 +381,13 @@ fn allocate_ctx_inner(
             }
         }
 
-        TailedExprKind::SetGlobal { var, value } => {
+        TailedExprKind::SetGlobal { var, value, link } => {
             let tmp = alloc.alloc();
             let val_reg = allocate_ctx(value, tmp, alloc, own_captures);
             RegExprKind::SetGlobal {
                 name: var.clone(),
                 value: Box::new(val_reg),
+                link: *link,
             }
         }
 

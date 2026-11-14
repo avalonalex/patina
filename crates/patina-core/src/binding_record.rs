@@ -206,6 +206,12 @@ impl Record {
         Record(heap.alloc_pair(cell.0, TaggedValue::fixnum(BY_NAME)))
     }
 
+    /// Whether this record is the heap's by-name record ([`BY_NAME`]).
+    #[inline]
+    pub(crate) fn is_by_name(self, heap: &Heap) -> bool {
+        heap.cdr(self.0) == TaggedValue::fixnum(BY_NAME)
+    }
+
     /// Whether this record is a placeholder ([`PLACEHOLDER`]), not yet
     /// adopted (#836).
     #[inline]
