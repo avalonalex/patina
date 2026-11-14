@@ -1,7 +1,8 @@
 //! A VM code unit's global operands (#836; `PRD/GC_PRD.md` §11.6).
 //!
 //! The VM's compiler (pass 5) gives each distinct global spelling a unit
-//! names an index, a [`LinkIdx`], in the order it first emits one, and the
+//! names an index, a [`LinkIdx`], in the order it first emits one (and each
+//! linked operand an index of its own, under **Pinned entries** below), and the
 //! instructions that read, write or define a global, or call a primitive
 //! through one, carry that index in place of the name. The spellings sit in
 //! the unit's [`LinkTable`], one per unit, shared by every member of the unit
@@ -16,7 +17,8 @@
 //! bind yet (`Environment::link_record`), or the heap's by-name record for a
 //! name it reaches by an alias or a visible scoped definition. A table the
 //! VM compiles and never loads (the disassembler's) stays unlinked, its
-//! entries `UNBOUND`, an immediate, and serves its names alone.
+//! entries `UNBOUND`, an immediate, but for its pinned entries, and serves
+//! its names alone.
 //!
 //! A linked table is read through [`LinkTable::get`], two loads and a test
 //! for `UNBOUND`, which answers every own and imported binding; a
@@ -50,9 +52,10 @@
 //! never from the code store, and with it the records, placeholders and weak
 //! read-through records it links and the namespace it holds: a placeholder
 //! lives exactly as long as code that links it can run. A pinned entry is an
-//! entry like the rest, so the trace keeps its record, its cell and the
-//! value from the table's making on; until the unit is loaded, its form's
-//! literal pool roots the record too (#869).
+//! entry like the rest, so once the unit is loaded the trace keeps its
+//! record, its cell and the value; before that nothing traces the table,
+//! and its form's literal pool roots the record (#869), which a reader of an
+//! unloaded table keeps alive while it reads.
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;

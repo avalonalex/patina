@@ -2894,7 +2894,8 @@ impl Environment {
 
     /// Whether `name` is this namespace's import of `location` (#837): a
     /// slot of its own for `name` whose record names a cell this namespace
-    /// does not own, at `location`. What `Desugarer::import_of` asks of
+    /// does not own, at `location`. What `Desugarer::import_of` is to ask
+    /// (from 4b.10's switch; today it asks through `binding_location`) of
     /// each namespace from the use site's up, so that a template's
     /// reference is bound early only where the use site imported the
     /// binding the macro means. `false` for a frame, whose imports hold no

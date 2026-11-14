@@ -735,10 +735,12 @@ record (below).
   id (§9.5), never from the code store. A pinned entry (#837), which pass 5
   presets with the record a linked operand names
   (`LinkTable::with_links`), is an entry like the rest, kept by the same
-  trace from the table's making on
-  (`a_pinned_entry_keeps_its_record_before_the_table_is_linked`); until
-  `load_unit` its form's pool roots the record too: a reader of an
-  unloaded table keeps the pool alive while it reads, as
+  trace once its unit is loaded (the trace itself covers it before the
+  table is linked:
+  `a_pinned_entry_keeps_its_record_before_the_table_is_linked`, which
+  traces the table directly); until `load_unit` nothing traces the table,
+  and its form's pool roots the record: a reader of an unloaded table
+  keeps the pool alive while it reads, as
   `VmBackend::compile_for_inspection`'s answer does by lending its code
   and never handing it out. The record is a namespace's slot or scoped
   entry record, or E1's fresh record over a frame's import's cell, in no

@@ -433,7 +433,8 @@ into the unit's link table, `CodeObject::links` (`patina_core::LinkTable`).
   (`LinkTable::set_compiled_in`), since pass 5 resolved the unit's primitive
   calls and macro-introduced names there; `compile`, for hand-built trees,
   leaves it 0. An id, so the table holds no namespace before it is linked.
-- **Linked at load.** The compiler leaves the table's entries unlinked.
+- **Linked at load.** The compiler leaves the table's entries unlinked, but
+  for pinned ones (below).
   `VmState::load_unit` links the table in the namespace the unit was compiled
   in before any read goes through it (`LinkTable::link_in`; `VM_ISA.md`
   §4.1), and a debug build refuses a link in another namespace than the one
@@ -441,8 +442,10 @@ into the unit's link table, `CodeObject::links` (`patina_core::LinkTable`).
   the record each entry links; whatever needs an operand's name reads it in
   the table: `Define`, the cold read and a store the record cannot resolve,
   an unbound-variable error, the disassembler and the tracer, which print the
-  spelling as before. A table compiled and never loaded, as the
-  disassembler's and `--dump`'s, stays unlinked and serves its names alone.
+  spelling as before; a pinned entry is never read or written by name
+  (below). A table compiled and never loaded, as the disassembler's and
+  `--dump`'s, stays unlinked, but for its pinned entries, and serves its
+  names alone.
   A runtime stub names no global and has an empty table
   (`LinkTable::empty`), which is never linked.
 - **Pinned entries** (#837). A linked `Var` or `Set` reaches pass 5 as a
@@ -450,8 +453,9 @@ into the unit's link table, `CodeObject::links` (`patina_core::LinkTable`).
   through unresolved, keeping its spelling and link; pass 1 counts it in no
   lambda's free variables and marks nothing mutated; pass 2 makes it a
   global without `ctx.lookup`, copying the record out of the pool
-  (`LiteralPool::link`); passes 3 and 4 carry it. Pass 5 builds the table
-  with `LinkTable::with_links`, which presets each linked entry with its
+  (`LiteralPool::link`); passes 3 and 4 carry it. Pass 5 builds the table,
+  when any entry is linked, with `LinkTable::with_links` (otherwise with
+  `LinkTable::new`), which presets each linked entry with its
   record and pins it: `link_in` leaves it, and the cold paths
   (`LinkTable::read_cold`, `LinkTable::assignee`, `store_global_cold`) never
   read or write it by name, since its spelling in the unit's namespace may
