@@ -3623,7 +3623,18 @@ impl Environment {
     /// [`insert_scoped`](Self::insert_scoped)'s body for a frame, for
     /// non-empty `scopes`: no heap and no step. A namespace's goes through
     /// [`insert_scoped_record`](Self::insert_scoped_record).
-    #[inline]
+    ///
+    /// Never inlined, so that its one copy is this crate's, whose instance
+    /// of the table's `entry` (the one `insert_scoped_record` uses) inlines
+    /// the spelling's hash. Inlined, it was instantiated in the tree-walker,
+    /// which binds each call's parameters here, and whether that crate's own
+    /// instance of `entry` inlined the hash turned on which codegen unit
+    /// rustc put it in: adding the linked variants to `CpsExprKind` moved
+    /// it, and the hash out of line cost a tree-walker `fib` 2–3% in cycles
+    /// at equal instructions (#837, profiled 2026-11-15). Out of line, it
+    /// saved a tree-walker `fib` and a loop 0.6–1.7% of their cycles on the
+    /// code before the variants too.
+    #[inline(never)]
     fn insert_scoped_here(
         &self,
         name: Rc<str>,

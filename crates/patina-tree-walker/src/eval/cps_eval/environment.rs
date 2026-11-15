@@ -39,12 +39,8 @@ impl<'a> CpsEvaluator<'a> {
                 .lookup_var_tagged(name, scopes, env)
                 .map_err(|error| error.at_opt(expr.source.clone())),
 
-            CpsExprKind::LinkedVar {
-                name,
-                scopes: _,
-                link,
-            } => self
-                .lookup_linked(name, *link)
+            CpsExprKind::LinkedVar(linked) => self
+                .lookup_linked(&linked.name, linked.link)
                 .map_err(|error| error.at_opt(expr.source.clone())),
 
             CpsExprKind::ContRef(k) => {
@@ -152,21 +148,13 @@ impl<'a> CpsEvaluator<'a> {
         cont_env: &ContEnv,
     ) -> Result<Linked, EvalError> {
         match &expr.kind {
-            CpsExprKind::LinkedVar {
-                name,
-                scopes: _,
-                link,
-            } => self.lookup_linked(name, *link).map(Linked::Read),
-            CpsExprKind::LinkedSet {
-                var,
-                scopes: _,
-                value,
-                cont,
-                link,
-            } => {
-                let value = self.eval_trivial_tagged(value, env, cont_env)?;
-                self.assign_linked(var, *link, value)?;
-                Ok(Linked::Written(Rc::clone(cont)))
+            CpsExprKind::LinkedVar(linked) => self
+                .lookup_linked(&linked.name, linked.link)
+                .map(Linked::Read),
+            CpsExprKind::LinkedSet(linked) => {
+                let value = self.eval_trivial_tagged(&linked.value, env, cont_env)?;
+                self.assign_linked(&linked.var, linked.link, value)?;
+                Ok(Linked::Written(Rc::clone(&linked.cont)))
             }
             _ => Err(EvalError::InternalError(format!(
                 "not a linked node: {}",

@@ -1664,12 +1664,13 @@ targets' stress counts were re-pinned for them.
 
 The second step carries the link into the tree-walker and switches the
 desugarer to it. The tree-walker's half is tested by hand-built nodes:
-`cps_expr.rs`'s size pin (`CpsExprKind` stays 112 bytes) and
+`cps_expr.rs`'s size pin (`CpsExprKind` stays 112 bytes, each linked
+variant one `Rc` of its payload) and
 `a_linked_node_displays_and_needs_scopes` (a linked reference or
 assignment without scopes panics); the sentinel
 `expression_links_under_var_and_set`, a `LinkedVar`'s and `LinkedSet`'s
-record reachable only through the node, and `expression_literals_under_every_node`,
-which holds both variants' other fields; `patina-ir`'s
+record reachable only through the node and its payload's `Rc`, and
+`expression_literals_under_every_node`, which holds both variants' other fields; `patina-ir`'s
 `the_transform_carries_each_link_into_its_node`; the tree-walker's
 `a_linked_node_reads_and_writes_its_record_not_its_spelling`, whose
 program binds the spelling to something else, and whose link to an

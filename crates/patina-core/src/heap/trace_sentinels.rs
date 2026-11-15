@@ -208,11 +208,13 @@ fn expression_literals_under_every_node() {
     let var = || node(CpsExprKind::var(name(), ScopeSet::new()));
     let every_node = vec![
         var(),
-        node(CpsExprKind::LinkedVar {
-            name: name(),
-            scopes: ScopeSet::from_iter([ScopeId(1)]),
-            link,
-        }),
+        node(CpsExprKind::LinkedVar(Rc::new(
+            crate::cps_expr::LinkedRef {
+                name: name(),
+                scopes: ScopeSet::from_iter([ScopeId(1)]),
+                link,
+            },
+        ))),
         literal(primop_arg),
         node(CpsExprKind::ContRef(name())),
         node(CpsExprKind::Lambda {
@@ -258,13 +260,15 @@ fn expression_literals_under_every_node() {
             value: shared(set_value),
             cont: shared(set_cont),
         }),
-        node(CpsExprKind::LinkedSet {
-            var: name(),
-            scopes: ScopeSet::from_iter([ScopeId(1)]),
-            value: shared(linked_set_value),
-            cont: shared(linked_set_cont),
-            link,
-        }),
+        node(CpsExprKind::LinkedSet(Rc::new(
+            crate::cps_expr::LinkedAssign {
+                var: name(),
+                scopes: ScopeSet::from_iter([ScopeId(1)]),
+                value: shared(linked_set_value),
+                cont: shared(linked_set_cont),
+                link,
+            },
+        ))),
         node(CpsExprKind::Define {
             name: name(),
             scopes: ScopeSet::new(),

@@ -237,7 +237,7 @@ impl<'a> CpsEvaluator<'a> {
                 // A linked reference or assignment (#837): one arm and one
                 // call, so that the loop's other arms keep the code and the
                 // registers they had.
-                CpsExprKind::LinkedVar { .. } | CpsExprKind::LinkedSet { .. } => {
+                CpsExprKind::LinkedVar(_) | CpsExprKind::LinkedSet(_) => {
                     match try_catchable!(self.step_linked(&current_expr, &current_env, &cont_env)) {
                         Linked::Read(tagged) => return Ok(StepResult::Done(tagged)),
                         Linked::Written(cont) => current_expr = cont,
