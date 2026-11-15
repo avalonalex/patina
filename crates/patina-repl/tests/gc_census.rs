@@ -471,6 +471,51 @@ fn a_store_into_an_introduced_definition_names_its_cell() {
     }
 }
 
+/// A template's `set!` the desugarer bound early stores into its linked
+/// record's cell, logged at `env_set_slot_value` with the cell as its
+/// holder (#837), as a store through a namespace's slot is: the VM's
+/// through its pinned link-table entry (`LinkTable::assign`), the
+/// tree-walker's through the record its `LinkedSet` carries
+/// (`BindingLink::assign`). A store that bypassed the funnel would leave
+/// the edge unlogged, which stage 7's barrier must see. Read as the growth
+/// over the same program without the assignment.
+#[test]
+fn a_linked_assignment_names_its_records_cell() {
+    if !GC_CENSUS {
+        return;
+    }
+    let program = |set: &str| {
+        format!(
+            "(define-library (probe counter)
+  (export counter bump!)
+  (import (scheme base))
+  (begin
+    (define counter 0)
+    (define-syntax bump!
+      (syntax-rules () ((_ v) (set! counter v))))))
+(import (scheme base) (scheme write) (probe counter))
+{set}(display counter)
+(display \"done\")
+"
+        )
+    };
+    for backend in BOTH_BACKENDS {
+        let read = census(backend, &program(""), &[]);
+        let written = census(backend, &program("(bump! 7)\n"), &[]);
+        assert_eq!(
+            site_growth(&read, &written, "env_set_slot_value"),
+            (1, 0),
+            "{backend:?}: a linked `set!` stores into its record's cell, which it names: {:?}",
+            written.sites.get("env_set_slot_value")
+        );
+        assert_eq!(
+            site_growth(&read, &written, "env_set_scoped"),
+            (0, 0),
+            "{backend:?}: and through no scoped entry"
+        );
+    }
+}
+
 #[test]
 fn heaps_are_counted_per_process() {
     if !GC_CENSUS {

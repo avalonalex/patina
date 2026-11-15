@@ -798,6 +798,16 @@ mod tests {
             CpsExprKind::linked_var("f".into(), ScopeSet::new(), Some(link))
         });
         assert!(unscoped.is_err(), "a linked reference needs scopes");
+        let unscoped = std::panic::catch_unwind(|| {
+            CpsExprKind::linked_set(
+                "f".into(),
+                ScopeSet::new(),
+                CpsExpr::rc(CpsExprKind::Literal(TaggedValue::fixnum(2))),
+                CpsExpr::rc(CpsExprKind::Literal(TaggedValue::UNSPECIFIED)),
+                Some(link),
+            )
+        });
+        assert!(unscoped.is_err(), "a linked assignment needs scopes");
     }
 
     #[test]

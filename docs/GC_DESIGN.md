@@ -821,7 +821,9 @@ record (below).
   `EnvDefine` for a `define` over the namespace's own binding, by name or
   at a scope set it already holds, and `EnvSetSlot` and `EnvSetScoped` for
   an assignment, a scoped entry's included (`gc_census.rs`'s
-  `a_store_into_an_introduced_definition_names_its_cell`). A by-name
+  `a_store_into_an_introduced_definition_names_its_cell`) and a linked
+  one's, on either backend (`a_linked_assignment_names_its_records_cell`,
+  #837). A by-name
   definition's first value initialises a fresh cell and is logged at
   `EnvDefine` with no holder, one `EnvDefine` per by-name `define` (the
   tree-walker's `TwContinuationDefine` relies on the same rule for a
