@@ -1599,7 +1599,9 @@ impl<'a> Desugarer<'a> {
         }
         self.early.linked.set(true);
         // After this neither backend resolves the reference, so this is
-        // where the trace says how it was bound.
+        // where the trace says how it was bound — unless settling takes the
+        // link back at the form's end, when the backend's own record follows
+        // this one (`settle_early_bindings`).
         patina_core::scope_trace::resolve(
             name,
             scopes,

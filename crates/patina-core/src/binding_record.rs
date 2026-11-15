@@ -326,9 +326,12 @@ impl Record {
 /// branded: a backend holds one only while something the collector traces
 /// does — the literal pool of the compilation that found it
 /// ([`LiteralPool::link`](crate::LiteralPool::link) is the only way to get
-/// one), and from there a VM unit's link table — and a safe crate never
-/// holds one at all: the desugarer holds a [`Linkable`], which a context
-/// brands, and pools it as a [`Link`](crate::Link).
+/// one), and from there a VM unit's link table or a tree-walker's
+/// `CpsExprKind::LinkedVar` and `LinkedSet`. A safe crate holds one only
+/// in passing: the desugarer holds a [`Linkable`], which a context brands,
+/// and pools it as a [`Link`](crate::Link), and the CPS transform
+/// (`patina-ir`) copies the link out of the live pool straight into the
+/// node it builds, which the backend then traces.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Trace)]
 pub struct BindingLink(Record);
 

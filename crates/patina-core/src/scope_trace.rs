@@ -68,7 +68,8 @@
 //!   `ambiguous` (two candidates, neither more specific — an error rather
 //!   than an answer), or `early-link` (the desugarer bound a library macro's
 //!   reference to the binding its macro means, which no backend resolves
-//!   after: `phase=desugar`, #837).
+//!   after unless the same form's settling takes the link back, when a
+//!   backend's record follows: `phase=desugar`, #837).
 //! - `op` — `get`, `set`, or `bind` for a binding occurrence being renamed.
 //!   The VM's renamer serves all three through one function, so without this
 //!   a VM trace could not be diffed against the tree-walker's for the
@@ -196,8 +197,12 @@ pub enum Outcome {
     /// The desugarer bound a library macro's reference early (#438): it
     /// links the binding record the macro's environment finds for the name,
     /// which both backends read in place of the spelling, and neither
-    /// resolves it after (#837). `phase=desugar` only, with `cands=0`: a
-    /// reference is linked only where no scoped binding selects it.
+    /// resolves it after (#837) — unless the same top-level form introduces
+    /// a definition the reference selects, when settling takes the link
+    /// back at the form's end and the backend's own record follows
+    /// (`phase=compile` on the VM, `phase=run` on the tree-walker).
+    /// `phase=desugar` only, with `cands=0`: a reference is linked only where
+    /// no scoped binding selects it.
     EarlyLink,
 }
 

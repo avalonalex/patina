@@ -6409,8 +6409,7 @@ mod record_read_tests {
     #[test]
     fn no_namespace_read_answers_a_record() {
         let heap = new_shared_heap();
-        // Where the imports come from, and where the two macro-expansion
-        // aliases point.
+        // Where the imports come from, and where the two aliases point.
         let library = Rc::new(Environment::with_heap(&heap));
         library.define(&heap, "lib", n(2));
         library.define(&heap, "aliased-lib", n(8));
@@ -6440,8 +6439,17 @@ mod record_read_tests {
             "deep".into(),
             scopes(&[7]),
         );
-        // A second import, under a name of its own.
+        // One export imported under two names: two records over one cell
+        // (GC_DESIGN §4.7), which until #837 the desugarer's import alias
+        // also made.
         share(&heap, &ns, "aliased", &library, "aliased-lib");
+        share(&heap, &ns, "aliased-too", &library, "aliased-lib");
+        assert_ne!(ns.local_slot("aliased"), ns.local_slot("aliased-too"));
+        assert_eq!(
+            ns.cell_of(&heap, "aliased"),
+            ns.cell_of(&heap, "aliased-too"),
+            "two records, one cell"
+        );
         // A free cell's export.
         assert!(exporting.import_into(&heap, &ns, "free", "free"));
 
@@ -6453,6 +6461,7 @@ mod record_read_tests {
             ("plain-alias", 6),
             ("scoped-alias", 7),
             ("aliased", 8),
+            ("aliased-too", 8),
             ("free", 9),
         ];
         let unscoped = ScopeSet::new();
@@ -6529,6 +6538,7 @@ mod record_read_tests {
             ("imported", 2),
             ("renamed #5", 5),
             ("aliased", 8),
+            ("aliased-too", 8),
             ("free", 9),
         ] {
             let slot = ns.local_slot(name).unwrap();
@@ -6556,6 +6566,7 @@ mod record_read_tests {
         bindings.sort_by(|a, b| a.0.cmp(&b.0));
         let expected: Vec<(String, TaggedValue)> = [
             ("aliased", 8),
+            ("aliased-too", 8),
             ("free", 9),
             ("imported", 2),
             ("own", 1),

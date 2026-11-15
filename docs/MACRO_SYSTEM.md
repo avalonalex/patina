@@ -457,8 +457,12 @@ cannot be made even at emission — the same expansion also introducing a
 definition of the name, which is in no environment until it runs — and is
 taken back at the end of the top-level form (`settle_early_bindings`), which
 clears the link and leaves the reference to its spelling. With
-`PATINA_SCOPE_TRACE` set, a linked reference shows as one desugar-time
-`RESOLVE … via=early-link` record: neither backend resolves it after.
+`PATINA_SCOPE_TRACE` set, a linked reference shows a desugar-time
+`RESOLVE … via=early-link` record, after the desugarer's own resolution of it
+(`via=byname`), and neither backend resolves it after. A reference settling
+takes back shows the same record and then the backend's own (`phase=compile`
+on the VM, `phase=run` on the tree-walker), which finds the introduced
+definition.
 
 A macro of the use site's own is not bound early (chibi and Gauche disagree
 there). No name is left out for its spelling. Five were, listed in
@@ -837,7 +841,7 @@ exists to catch.
 | `scopes` | what the binding is *filed under*. `{}` means the plain by-name table, where set-of-scopes resolution cannot see it. |
 | `byname` | `visible_by_name` — whether a name-only lookup may also reach it. Source-written parameters and definitions need this view; introduced definitions stay scope-only. |
 | `cands` | how many bindings **passed** `is_candidate` — the same meaning at every site, so the backends can be compared. |
-| `picked` / `via` | which binding won, and how it ended: `scoped`, `byname` (the rule declined and the by-name fallback answered), `unbound` (the rule declined and the fallback found nothing — on a name whose `BIND` shows a scoped binding, that is the fallback *refusing* a rejected binding, the family-36 rule at work), `ambiguous` (two candidates, neither more specific), `early-link` (`phase=desugar`, `cands=0`: the desugarer bound a library macro's reference to the binding its macro means, #438, and linked its record, #837, so no backend resolves it after). At `phase=compile` the VM defers its fallback to runtime, so `byname` there means only "left to a by-name lookup". |
+| `picked` / `via` | which binding won, and how it ended: `scoped`, `byname` (the rule declined and the by-name fallback answered), `unbound` (the rule declined and the fallback found nothing — on a name whose `BIND` shows a scoped binding, that is the fallback *refusing* a rejected binding, the family-36 rule at work), `ambiguous` (two candidates, neither more specific), `early-link` (`phase=desugar`, `cands=0`: the desugarer bound a library macro's reference to the binding its macro means, #438, and linked its record, #837, so no backend resolves it after, unless the same form's settling takes the link back, when a backend's record follows). At `phase=compile` the VM defers its fallback to runtime, so `byname` there means only "left to a by-name lookup". |
 | `op` | `get`, `set`, or `bind` for a binding occurrence being renamed. The VM's renamer serves all three through one function. |
 | `landed` | on `WROTE`: where a scoped write finally went. A write walks environment by environment, so its trace is a sequence; this is its conclusion. |
 

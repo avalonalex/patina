@@ -1587,6 +1587,23 @@ fn a_literal_is_not_another_librarys_binding_of_its_spelling() {
     }
 }
 
+/// The library and imports of [`two_names_for_one_import_are_bound_early_as_two`]
+/// and [`the_trace_says_how_an_early_bound_reference_ended`]: `def-and-use`
+/// introduces `(define (slen s) …)` beside a reference to `slen`, and
+/// `both` refers to `slen` and `string-length` with nothing introduced.
+const TWO_NAMES: &str = "(define-library (hm two-names)\n  (import (scheme base)\n    \
+                   (rename (only (scheme base) string-length) (string-length slen)))\n  \
+                   (export def-and-use both)\n  (begin\n    \
+                   (define-syntax def-and-use\n      (syntax-rules ()\n        \
+                   ((_ getter)\n         \
+                   (begin (define (getter) (list (string-length \"ab\") (slen \"abc\")))\n                \
+                   (define (slen s) 'introduced)))))\n    \
+                   (define-syntax both\n      \
+                   (syntax-rules () ((_ s) (list (string-length s) (slen s)))))))\n\
+                   (import (scheme base)\n  \
+                   (rename (only (scheme base) string-length) (string-length slen))\n  \
+                   (hm two-names))\n";
+
 /// A location both sides imported under **two names** — `string-length`, and
 /// `slen` by a `rename` — keeps its two spellings apart when a reference is
 /// bound early (#438). Gauche 0.9.15 answers `(2 introduced)` and `(3 3)`.
@@ -1607,18 +1624,7 @@ fn a_literal_is_not_another_librarys_binding_of_its_spelling() {
 /// neither — `(3 mine)` is the second spelling having been left as written.
 #[test]
 fn two_names_for_one_import_are_bound_early_as_two() {
-    let library = "(define-library (hm two-names)\n  (import (scheme base)\n    \
-                   (rename (only (scheme base) string-length) (string-length slen)))\n  \
-                   (export def-and-use both)\n  (begin\n    \
-                   (define-syntax def-and-use\n      (syntax-rules ()\n        \
-                   ((_ getter)\n         \
-                   (begin (define (getter) (list (string-length \"ab\") (slen \"abc\")))\n                \
-                   (define (slen s) 'introduced)))))\n    \
-                   (define-syntax both\n      \
-                   (syntax-rules () ((_ s) (list (string-length s) (slen s)))))))\n\
-                   (import (scheme base)\n  \
-                   (rename (only (scheme base) string-length) (string-length slen))\n  \
-                   (hm two-names))\n";
+    let library = TWO_NAMES;
     let introduced_beside = format!("{library}(def-and-use get)\n(get)");
     let defined_over = format!(
         "{library}(define (f) (both \"abc\"))\n(define (slen s) 'mine)\n\
@@ -1631,6 +1637,110 @@ fn two_names_for_one_import_are_bound_early_as_two() {
             "`(2 3)` is `slen` settled by what the form said about `string-length`"
         );
         assert_eq!(answer(&defined_over, vm), "(3 3)");
+    }
+}
+
+/// Set when this test binary runs itself as the child of
+/// [`the_trace_says_how_an_early_bound_reference_ended`]:
+/// `<program>/<backend>`.
+const EARLY_TRACE_CASE: &str = "PATINA_HYGIENE_EARLY_TRACE_CASE";
+
+/// The programs of [`the_trace_says_how_an_early_bound_reference_ended`]:
+/// its name, its source after [`TWO_NAMES`], and its answer.
+const EARLY_TRACE_PROGRAMS: &[(&str, &str, &str)] = &[
+    (
+        "linked",
+        "(define (f) (both \"abc\"))\n(define (slen s) 'mine)\n(f)",
+        "(3 3)",
+    ),
+    ("settled", "(def-and-use get)\n(get)", "(2 introduced)"),
+];
+
+/// What `PATINA_SCOPE_TRACE` says of a reference the desugarer bound early
+/// (#837, `docs/MACRO_SYSTEM.md`), for `slen` in each program, on each
+/// backend:
+///
+/// - **linked** (`both`'s reference, nothing introduced): one
+///   `phase=desugar … via=early-link op=get` record, and no record of a
+///   backend's for the same reference after it — the tree-walker reads the
+///   link and the VM's renamer passes the node through.
+/// - **settled** (`def-and-use`'s reference beside the `slen` its own
+///   expansion introduces): the same desugar record, and then the backend's
+///   own resolution of the reference, `via=scoped`, since settling took the
+///   link back at the form's end — `phase=compile` on the VM, `phase=run` on
+///   the tree-walker.
+///
+/// The trace's sink is read once per process, so each program and backend
+/// runs in a child process, as in
+/// [`an_introduced_definitions_record_carries_its_identity_and_scope`].
+#[test]
+fn the_trace_says_how_an_early_bound_reference_ended() {
+    if let Ok(case) = std::env::var(EARLY_TRACE_CASE) {
+        let (program, backend) = case.split_once('/').expect("<program>/<backend>");
+        let &(_, source, expected) = EARLY_TRACE_PROGRAMS
+            .iter()
+            .find(|(name, _, _)| *name == program)
+            .expect("a program");
+        assert_eq!(
+            answer(&format!("{TWO_NAMES}{source}"), backend == "vm"),
+            expected
+        );
+        return;
+    }
+    for &(program, _, _) in EARLY_TRACE_PROGRAMS {
+        for backend in ["vm", "tree-walker"] {
+            let what = format!("{program} on the {backend}");
+            let dir = tempfile::tempdir().expect("a scratch directory");
+            let trace_path = dir.path().join("trace.txt");
+            let child =
+                std::process::Command::new(std::env::current_exe().expect("this test binary"))
+                    .env(EARLY_TRACE_CASE, format!("{program}/{backend}"))
+                    .env("PATINA_SCOPE_TRACE", &trace_path)
+                    .args([
+                        "--exact",
+                        "the_trace_says_how_an_early_bound_reference_ended",
+                        "--test-threads=1",
+                    ])
+                    .output()
+                    .expect("run the child");
+            assert!(
+                child.status.success(),
+                "{what}: the child failed: {}\n{}{}",
+                child.status,
+                String::from_utf8_lossy(&child.stdout),
+                String::from_utf8_lossy(&child.stderr)
+            );
+            let trace = std::fs::read_to_string(&trace_path).expect("the scope trace");
+            let resolves: Vec<&str> = trace
+                .lines()
+                .filter(|line| line.starts_with("RESOLVE ") && line.contains(" name=\"slen\" "))
+                .collect();
+            let field = |line: &str, key: &str| -> String {
+                let start = line.find(&format!(" {key}=")).expect(key) + key.len() + 2;
+                line[start..].split(' ').next().unwrap_or("").to_string()
+            };
+            let linked: Vec<usize> = (0..resolves.len())
+                .filter(|&i| resolves[i].ends_with(" via=early-link op=get"))
+                .collect();
+            assert_eq!(linked.len(), 1, "{what}: one early link: {resolves:#?}");
+            let at = linked[0];
+            assert_eq!(field(resolves[at], "phase"), "desugar", "{what}");
+            let reference = field(resolves[at], "ref");
+            let after: Vec<&str> = resolves[at + 1..]
+                .iter()
+                .copied()
+                .filter(|line| field(line, "ref") == reference && line.ends_with(" op=get"))
+                .collect();
+            let phase = if backend == "vm" { "compile" } else { "run" };
+            match program {
+                "linked" => assert!(after.is_empty(), "{what}: resolved again: {after:#?}"),
+                _ => {
+                    assert_eq!(after.len(), 1, "{what}: {resolves:#?}");
+                    assert_eq!(field(after[0], "phase"), phase, "{what}: {after:?}");
+                    assert_eq!(field(after[0], "via"), "scoped", "{what}: {after:?}");
+                }
+            }
+        }
     }
 }
 

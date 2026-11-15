@@ -614,9 +614,11 @@
 ;;
 ;; Measured 2026-11-14: both pass under Gauche 0.9.15, and under chibi 0.12
 ;; with `(probe early)` as a `.sld` file on its load path. Before the change
-;; Patina answered `(f.0)` and `mine` on both backends, with the file run on
-;; its own; in a process that has minted more aliases first the spelling
-;; can fall past the scan, so there the rows can pass without the change.
+;; Patina answered `(f.N)` (`(f.112)` with the file run on its own, measured
+;; 2026-11-14) and `mine` on both backends; the number is what the process
+;; minted first, so in a process that has minted more aliases first the
+;; spelling can fall past the scan, and there the rows can pass without the
+;; change.
 (define (call-f-through-a-procedure) (call-f))
 (call-f)
 

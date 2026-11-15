@@ -824,7 +824,7 @@ fn an_early_link_keeps_the_old_library_binding_across_a_redefinition() {
 /// `call-f`, each binding its `f` early.
 fn expand_call_f<B: patina_runtime::Backend>(interp: &patina_interpreter::Interpreter<B>) {
     interp
-        .eval_program(&format!(
+        .eval_program_owned(&format!(
             "{CALL_F}(import (scheme base) (t lib-f))\n(define (h) (call-f))\n(call-f)\n(h)"
         ))
         .expect("the library, the import and the expansions");
@@ -895,21 +895,24 @@ fn an_expansion_leaves<B: patina_runtime::Backend>(
     interp: patina_interpreter::Interpreter<B>,
 ) -> (NamesAndRecords, NamesAndRecords) {
     interp
-        .eval_program(&format!("{CALL_F}(import (scheme base) (t lib-f))"))
+        .eval_program_owned(&format!("{CALL_F}(import (scheme base) (t lib-f))"))
         .expect("the library and the import");
     let before = names_and_records(&interp);
     interp
-        .eval_program("(call-f) (list (call-f))")
+        .eval_program_owned("(call-f) (list (call-f))")
         .expect("the expansions");
     (before, names_and_records(&interp))
 }
 
 #[test]
 fn an_early_bound_expansion_leaves_the_programs_names_alone() {
-    let (before, after) = an_expansion_leaves(common::vm_interpreter());
-    assert_eq!(after, before, "VM");
-    let (before, after) = an_expansion_leaves(common::tree_walker_interpreter());
-    assert_eq!(after, before, "tree-walker");
+    let (vm_before, vm_after) = an_expansion_leaves(common::vm_interpreter());
+    let (tw_before, tw_after) = an_expansion_leaves(common::tree_walker_interpreter());
+    assert_eq!(
+        [vm_after, tw_after],
+        [vm_before, tw_before],
+        "[VM, tree-walker]"
+    );
 }
 
 /// A program's definition of a spelling an alias once had leaves code
@@ -930,11 +933,11 @@ fn defining_a_minted_spelling<B: patina_runtime::Backend>(
         .collect();
     for spelling in &spellings {
         interp
-            .eval_program(&format!("(define ({spelling}) 'mine)"))
+            .eval_program_owned(&format!("(define ({spelling}) 'mine)"))
             .expect("a definition");
     }
-    let answer = interp.eval_str("(h)").expect("calls h");
-    interp.display_tagged(answer)
+    let answer = interp.eval_str_owned("(h)").expect("calls h");
+    interp.display_tagged(&answer)
 }
 
 #[test]
