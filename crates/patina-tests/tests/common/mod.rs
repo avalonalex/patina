@@ -1519,7 +1519,7 @@ macro_rules! gc_shared_tests {
             (import (tmp steady))\n(m 1)\n";
 
         /// The keys [`release_readings`] reads, in the order it writes them.
-        const RELEASE_KEYS: [&str; 11] = [
+        const RELEASE_KEYS: [&str; 12] = [
             "live objects",
             "namespaces",
             "cells",
@@ -1531,6 +1531,7 @@ macro_rules! gc_shared_tests {
             "live vectors",
             "live strings",
             "live-bytes",
+            "bytes-allocated",
         ];
 
         /// Run `form` 200 times, read [`RELEASE_KEYS`], run it 600 times
@@ -1562,7 +1563,8 @@ macro_rules! gc_shared_tests {
                        (vector-set! r (+ at 7) (live 'pairs 'free-pairs))
                        (vector-set! r (+ at 8) (live 'vectors 'free-vectors))
                        (vector-set! r (+ at 9) (live 'strings 'free-strings))
-                       (vector-set! r (+ at 10) (key 'live-bytes))))
+                       (vector-set! r (+ at 10) (key 'live-bytes))
+                       (vector-set! r (+ at 11) (key 'bytes-allocated))))
                    {first}(gc) (gc) (keys! 0)
                    {rest}(gc) (gc) (keys! 16)
                    (append (vector->list r) (list (cdr (assq 'collections (gc-stats)))))"#,
@@ -1600,8 +1602,27 @@ macro_rules! gc_shared_tests {
                 show(&at_800)
             );
             for (i, key) in RELEASE_KEYS.iter().enumerate() {
+                // Every key reads above 0 at each reading but the code
+                // units, which the tree-walker has none of: a key that
+                // reads 0 is one the reading lost, and its delta would be
+                // 0 whatever the run kept.
+                if *key != "code-units" {
+                    assert!(
+                        at_200[i] > 0 && at_800[i] > 0,
+                        "{key} read 0, so the reading does not read it{report}"
+                    );
+                }
                 let delta = at_800[i] - at_200[i];
                 match *key {
+                    // What the 600 cycles allocated, about 39 KB each
+                    // (measured): far less is two readings that do not
+                    // straddle them, whose every other delta is 0 whatever
+                    // the run kept.
+                    "bytes-allocated" => assert!(
+                        delta >= 600 * 16 * 1024,
+                        "{delta} bytes allocated between the readings, which \
+                         do not straddle the 600 redefinitions{report}"
+                    ),
                     // One namespace charges about 32 KB, so one kept
                     // namespace fails; the bound absorbs a table stepping
                     // its capacity.
@@ -1772,18 +1793,23 @@ macro_rules! gc_shared_tests {
                 "(define (f x) (list 'old x)) (define-syntax defgen (syntax-rules () \
                  ((_ name) (define-syntax name (syntax-rules () ((_ y) (f y)))))))",
             );
+            let kept_specifier_macro_old = steady(
+                "m",
+                "(scheme base)",
+                "(define secret (list 'old)) \
+                 (define-syntax m (syntax-rules () ((_ x) (cons x secret))))",
+            );
             let importer_old = steady("f", "(scheme base)", "(define (f x) (list 'old x))");
             let user = "(define-library (tmp user) (export g) (import (scheme base) (tmp steady)) \
                         (begin (define (g) (f 1))))\n(import (tmp user))";
             let continuation_use = "(if (procedure? holder) (holder 42))\n\
                                     (set! out holder)\n(set! holder #f)";
-            let rows: [(&str, String, &str, String, String, &str); 8] = [
+            let rows: [(&str, String, &str, String, String, &str); 9] = [
                 // A kept environment specifier holds its own namespace, and
                 // through its import records over the old values, which
                 // reach the old code, the old library's. The old macro
                 // expands after the replacement and the collections, and a
-                // macro over it too: a lost `definition_env` trace that
-                // freed the old namespace's records would panic here.
+                // macro over it too.
                 (
                     "kept-specifier",
                     kept_specifier_old.clone(),
@@ -1795,6 +1821,21 @@ macro_rules! gc_shared_tests {
                      holder)))\n(set! holder #f)"
                         .to_string(),
                     "(((0 old) (0 old) (7 old)) 2 0)",
+                ),
+                // The same where the library exports only its macro, whose
+                // template reads a private variable that no procedure
+                // does: only the macro's `definition_env` keeps the old
+                // namespace, so a lost `definition_env` trace frees the
+                // records the old macro's expansion links, which panics
+                // here. The row above cannot see that: its `f` keeps the
+                // namespace anyway.
+                (
+                    "kept-specifier-macro",
+                    kept_specifier_macro_old.clone(),
+                    "(set! holder (environment '(tmp steady)))",
+                    kept_specifier_macro_old.replace("'old", "'new"),
+                    "(set! out (list (eval '(m 0) holder) (m 1)))\n(set! holder #f)".to_string(),
+                    "(((0 old) (1 new)) 2 0)",
                 ),
                 // A continuation captured inside the old `f`, whose frames
                 // run its code. Calling it re-enters the form that took it,

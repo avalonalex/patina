@@ -2363,7 +2363,8 @@ tests that hold it: `gc_shared_tests!`'s `a_redefined_library_is_released`
 (#614's program 1 and its macro variant, every count flat across 600
 redefinitions), `a_value_from_a_replaced_library_still_runs` and
 `a_replaced_library_lives_only_as_long_as_its_holders` (the audit's rows,
-the generated macro's, R-A's and R-C's among them); R-D's pins, `gc_vm`'s
+the generated macro's, a macro's `definition_env` alone, R-A's and R-C's
+among them); R-D's pins, `gc_vm`'s
 `a_library_body_s_code_quoting_its_own_procedure_keeps_it_loaded` and
 `gc_tree_walker`'s `a_library_body_s_code_quoting_its_own_procedure_is_released`;
 `gc_namespace_bytes.rs`'s `a_replaced_library_with_a_procedure_is_released`;

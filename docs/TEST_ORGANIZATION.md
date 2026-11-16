@@ -1479,8 +1479,11 @@ what lives (objects, `namespaces`, `cells`, `binding-records`,
 `code-units`, `symbols`, and the pair, vector and string arenas, which see
 a record or cell that outlived its namespace), each exactly where it was,
 and `external-bytes` within 16 KiB, where one kept namespace a cycle would
-read 600 more namespaces; under zeal it also asserts more collections than
-one a cycle. `a_value_from_a_replaced_library_still_runs` keeps the old
+read 600 more namespaces; each reading also has every key but
+`code-units` above 0, and `bytes-allocated` grow by at least 600 × 16 KiB
+between them, so a reading that lost a key, or two that do not straddle
+the redefinitions, fails rather than reading every delta 0; under zeal it
+also asserts more collections than one a cycle. `a_value_from_a_replaced_library_still_runs` keeps the old
 `f` and a procedure that expanded the old macro across a redefinition and
 two `(gc)`s: both run the old code, in the debug-poison build where a
 freed record, cell or closure panics; the namespace is counted while they
@@ -1488,7 +1491,9 @@ are held and goes when they are dropped.
 `a_replaced_library_lives_only_as_long_as_its_holders` is the holder
 audit's table (`docs/GC_DESIGN.md` §8), one program a row reading the
 namespaces held after the redefinition and after the holder is dropped: a
-kept environment specifier, in which the old macro still expands; a
+kept environment specifier, in which the old macro still expands, and
+one over a library exporting only a macro whose template reads a private
+variable, which only the macro's `definition_env` keeps; a
 continuation running the old code, and one holding only the program's
 frame; an importing library not yet redefined; a macro-introduced
 definition over a plain value; a macro the old library's generator
@@ -1516,7 +1521,13 @@ under the build that keeps the library, fails on
 `main` before #872 (`3c4aa637`) by 600 namespaces on both backends, and
 `a_value_from_a_replaced_library_still_runs` there at `dropped`: both rest
 on #872's early links, and on the tree-walker on #837's question 1 (a),
-pending.
+pending. The mutation matrix run on the PR's final tree added the
+macro-only specifier row, which a build that stops tracing
+`CompiledMacro.definition_env` fails on both backends, where every other
+test passed, and the reading's two checks, which a helper that slices the
+same reading twice, takes the second reading before the redefinitions or
+runs none of them would otherwise pass even in the build that keeps the
+replaced library.
 
 The heap's list of placeholder stores holds no
 namespace (#836): 200 procedures `eval`'d in fresh specifiers, each reading
@@ -2259,7 +2270,8 @@ with its test of a procedure that drops itself and tail-calls; 17266 and
 library's release and each file's test of R-D, the zeal halves of
 `a_redefined_library_is_released` redefining a library 800 times for each
 variant, so the stress lane's minimum rule takes the tree-walker's minimum
-midway between its two counts), which their minimums must stay above.
+midway between its two counts; 17464 and 55000 times since that PR's
+mutation matrix added a holder row and the release reading's checks), which their minimums must stay above.
 `vm_interpreter_adaptive` names the adaptive threshold the same way, for a
 test of the pacing itself, which stress and zeal replace.
 

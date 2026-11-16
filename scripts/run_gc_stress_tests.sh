@@ -339,7 +339,11 @@ fi
 # their zeal halves: both counts without stress had passed their minimums,
 # so gc_vm's minimum is half its count at 16, and gc_tree_walker's, whose
 # count without stress is above that half, midway between its two counts,
-# as the rule at the top now says)
+# as the rule at the top now says; then, for #838's mutation matrix, a
+# holder row that a macro's definition environment alone keeps and two
+# checks in the release test's reading, which raised the counts at 16 to
+# 39361 and 83012 and without stress to 17464 and 55000, the minimums taken
+# by the same rule)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -347,8 +351,8 @@ TARGETS=(
     "ephemerons 16 289 30"                    # 5738 (204)
     "escape_from_primitive 16 3669 19"        # 9789 (94)
     "finished_forms_release_code 16 2040 12"  # 4057 (15)
-    "gc_tree_walker 16 68217 38"              # 82199 (54236)
-    "gc_vm 16 19559 51"                       # 39118 (17266)
+    "gc_tree_walker 16 69006 38"              # 83012 (55000)
+    "gc_vm 16 19680 51"                       # 39361 (17464)
     "host_environments 16 58646 31"           # 117298 (754)
     "hygiene_matrix 16 11136 18"              # 21790 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
