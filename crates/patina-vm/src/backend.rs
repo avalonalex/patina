@@ -19,6 +19,7 @@ use crate::runtime::{VmState, execute};
 use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
 use patina_core::heap::SharedHeap;
+use patina_core::heap::handles::{Owned, OwnedEnvironment};
 use patina_core::tagged_value::TaggedValue;
 use patina_frontend::{Desugarer, SchemeLibraryLoader};
 use patina_runtime::HasDiagnostic;
@@ -1110,6 +1111,54 @@ impl Backend for VmBackend {
     /// no binding (`call_procedure`, #710).
     fn call(&self, f: TaggedValue, args: &[TaggedValue]) -> Result<TaggedValue, Self::Error> {
         self.call_procedure(f, args)
+    }
+
+    /// Evaluates through `eval_datum`, as `eval` does, so a frame a
+    /// deprecated holder held is refused first (#835), and holds the answer
+    /// (#839).
+    fn eval_in(
+        &self,
+        env: &OwnedEnvironment,
+        expr: &Owned,
+        source_map: Option<&Rc<RefCell<patina_frontend::SourceMap>>>,
+    ) -> Result<Owned, Self::Error> {
+        let (env, word) = {
+            let heap = self.heap.borrow();
+            (heap.held_environment(env), heap.held(expr))
+        };
+        let value = self.eval_datum(word, &env, source_map)?;
+        Ok(self.heap.borrow().hold(value))
+    }
+
+    /// Marks the primitive the definition rebinds, as `define` does
+    /// (`define_global`, #673).
+    fn define_in(&self, env: &OwnedEnvironment, name: &str, value: &Owned) {
+        let (env, value) = {
+            let heap = self.heap.borrow();
+            (heap.held_environment(env), heap.held(value))
+        };
+        define_global(&mut self.state.borrow_mut(), &env, Rc::from(name), value);
+    }
+
+    /// Runs the application as `call` does (`call_procedure`, #710), with
+    /// the words read from the caller's handles, and holds the answer.
+    fn call_owned(&self, f: &Owned, args: &[Owned]) -> Result<Owned, Self::Error> {
+        let (callee, operands) = {
+            let heap = self.heap.borrow();
+            (
+                heap.held(f),
+                args.iter().map(|arg| heap.held(arg)).collect::<Vec<_>>(),
+            )
+        };
+        let value = self.call_procedure(callee, &operands)?;
+        Ok(self.heap.borrow().hold(value))
+    }
+
+    /// The VM's global environment is always a namespace.
+    fn global_namespace(&self) -> OwnedEnvironment {
+        self.heap
+            .borrow()
+            .hold_namespace(Rc::clone(&self.global_env))
     }
 }
 

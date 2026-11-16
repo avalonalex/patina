@@ -76,6 +76,8 @@ disallowed-methods = [
     { path = "patina_runtime::backend::Backend::eval_global", reason = "evaluates a form, outermost when nothing else runs, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_runtime::backend::Backend::eval_with_source_map", reason = "evaluates a form, outermost when nothing else runs, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_runtime::backend::Backend::call", reason = "applies a procedure as a form, outermost when nothing else runs, so it may collect; give what the caller holds across it in an `expect` (#622, #710)" },
+    { path = "patina_runtime::backend::Backend::eval_in", reason = "evaluates a form, outermost when nothing else runs, so it may collect; give what the caller holds across it in an `expect` (#622, #839)" },
+    { path = "patina_runtime::backend::Backend::call_owned", reason = "applies a procedure as a form, outermost when nothing else runs, so it may collect; give what the caller holds across it in an `expect` (#622, #710, #839)" },
     { path = "patina_interpreter::Interpreter::eval_str", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_interpreter::Interpreter::eval_str_with_source_name", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_interpreter::Interpreter::eval_str_in_env", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },

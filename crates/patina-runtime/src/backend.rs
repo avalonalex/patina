@@ -15,7 +15,7 @@
 //! - Providing access to the global environment for introspection
 
 use crate::Environment;
-use patina_core::{SourceMap, TaggedValue};
+use patina_core::{Owned, OwnedEnvironment, SourceMap, TaggedValue};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -185,6 +185,100 @@ pub trait Backend {
         let value = self.eval_global(form);
         value
     }
+
+    /// Evaluate the datum `expr` holds in the namespace `env` holds, and
+    /// answer a handle on its value: [`Self::eval`] over handles. A driver
+    /// entry: it may collect, with the datum and the namespace rooted by the
+    /// caller's handles through the call. `source_map` is the map the datum
+    /// was read into, when it was, so that what the evaluation reports
+    /// carries its positions, as [`Self::eval_with_source_map`] does.
+    ///
+    /// It refuses what `eval` refuses: on the VM, a frame a deprecated holder
+    /// held (#835). Panics on a handle from another heap.
+    ///
+    /// An implementor that overrides this writes it from its own state, not
+    /// by calling the deprecated methods, which warn there as anywhere;
+    /// reading and making handles goes through `heap()`, the raw layer, which
+    /// changes at stage 5e. An implementor that wants nothing raw keeps this
+    /// default. The parameter list is question 1 (a) on #839, pending the
+    /// owner's ruling.
+    fn eval_in(
+        &self,
+        env: &OwnedEnvironment,
+        expr: &Owned,
+        source_map: Option<&Rc<RefCell<SourceMap>>>,
+    ) -> Result<Owned, Self::Error> {
+        let (env, word) = {
+            let heap = self.heap().borrow();
+            (heap.held_environment(env), heap.held(expr))
+        };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds `env`, an `Rc` of the namespace the caller's handle roots through the \
+                      call, and the datum's word, which the caller's handle roots; the answer is \
+                      held before the next evaluation, by `Backend`'s second rule"
+        )]
+        let value = match source_map {
+            Some(map) => self.eval_with_source_map(word, &env, map),
+            None => self.eval(word, &env),
+        };
+        let value = value?;
+        Ok(self.heap().borrow().hold(value))
+    }
+
+    /// Bind `name` to the value `value` holds in the namespace `env` holds,
+    /// as a program's `define` there does: [`Self::define`] over handles, so
+    /// the VM marks the primitive it rebinds (#673). Evaluates nothing.
+    /// Panics on a handle from another heap.
+    fn define_in(&self, env: &OwnedEnvironment, name: &str, value: &Owned) {
+        let (env, value) = {
+            let heap = self.heap().borrow();
+            (heap.held_environment(env), heap.held(value))
+        };
+        self.define(&env, name, value);
+    }
+
+    /// Apply the procedure `f` holds to the values `args` hold as a
+    /// top-level form, and answer a handle on its value: [`Self::call`] over
+    /// handles. A driver entry, as `eval_in` is; the handles root the callee
+    /// and its arguments through the call. Panics on a handle from another
+    /// heap.
+    fn call_owned(&self, f: &Owned, args: &[Owned]) -> Result<Owned, Self::Error> {
+        let (callee, operands) = {
+            let heap = self.heap().borrow();
+            (
+                heap.held(f),
+                args.iter().map(|arg| heap.held(arg)).collect::<Vec<_>>(),
+            )
+        };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds the callee's and the arguments' words, not read after the call: the \
+                      caller's handles root them through it; the answer is held before the next \
+                      evaluation, by `Backend`'s second rule"
+        )]
+        let value = self.call(callee, &operands);
+        let value = value?;
+        Ok(self.heap().borrow().hold(value))
+    }
+
+    /// A handle on the backend's global namespace, which roots it until the
+    /// handle is dropped: what `eval_in` and `define_in` take for the global
+    /// environment. A fresh handle each call.
+    ///
+    /// Until stage 5e, a host backend whose global environment is a frame
+    /// (made with the deprecated `Environment::with_parent`) gets a handle on
+    /// the frame, through the deprecated holder; from 5e, when the deprecated
+    /// holders go, the handle holds a namespace, as `OwnedEnvironment`'s own
+    /// documentation says (question 4 (b) on #839, pending the owner's
+    /// ruling). An implementor that overrides this writes it from its own
+    /// state (`heap().borrow().hold_namespace(..)` of its global), not over
+    /// `global_env()`, which warns there as anywhere. Panics on a global of
+    /// another heap.
+    fn global_namespace(&self) -> OwnedEnvironment {
+        let global = Rc::clone(self.global_env());
+        self.heap().borrow().hold_global(global)
+    }
 }
 
 #[cfg(test)]
@@ -278,5 +372,199 @@ mod tests {
         let result = backend.eval(expr, &custom_env).unwrap();
 
         assert_eq!(result, TaggedValue::TRUE);
+    }
+
+    /// A backend over `MockBackend` that overrides the old provided methods
+    /// to note which one a handle method's default went through, and then
+    /// does what the default does (#839).
+    struct Recorder {
+        inner: MockBackend,
+        calls: RefCell<Vec<String>>,
+    }
+
+    impl Recorder {
+        fn new() -> Self {
+            Self {
+                inner: MockBackend::new(),
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    impl Backend for Recorder {
+        type Error = RuntimeError;
+
+        fn eval(
+            &self,
+            expr: TaggedValue,
+            env: &Rc<Environment>,
+        ) -> Result<TaggedValue, Self::Error> {
+            self.calls.borrow_mut().push("eval".to_string());
+            self.inner.eval(expr, env)
+        }
+
+        fn global_env(&self) -> &Rc<Environment> {
+            self.inner.global_env()
+        }
+
+        fn heap(&self) -> &crate::heap::SharedHeap {
+            self.inner.heap()
+        }
+
+        fn eval_with_source_map(
+            &self,
+            expr: TaggedValue,
+            env: &Rc<Environment>,
+            source_map: &Rc<RefCell<SourceMap>>,
+        ) -> Result<TaggedValue, Self::Error> {
+            self.calls
+                .borrow_mut()
+                .push("eval_with_source_map".to_string());
+            self.inner.eval_with_source_map(expr, env, source_map)
+        }
+
+        fn define(&self, env: &Rc<Environment>, name: &str, value: TaggedValue) {
+            self.calls.borrow_mut().push(format!("define {name}"));
+            self.inner.define(env, name, value);
+        }
+
+        fn call(&self, f: TaggedValue, args: &[TaggedValue]) -> Result<TaggedValue, Self::Error> {
+            self.calls.borrow_mut().push(format!("call {}", args.len()));
+            Ok(f)
+        }
+    }
+
+    /// `eval_in`'s default evaluates the held datum in the held namespace
+    /// through `eval`, or through `eval_with_source_map` when it is given a
+    /// map, and answers a handle on the value.
+    #[test]
+    fn eval_in_defaults_to_eval() {
+        let backend = MockBackend::new();
+        let ns = backend.global_namespace();
+        let expr = backend.heap().borrow().hold(TaggedValue::fixnum(7));
+        let before = backend.heap().borrow().handle_count();
+        let value = backend.eval_in(&ns, &expr, None).unwrap();
+        assert_eq!(backend.heap().borrow().held(&value), TaggedValue::fixnum(7));
+        assert_eq!(backend.heap().borrow().handle_count(), before + 1);
+        drop(value);
+        let source_map = Rc::new(RefCell::new(SourceMap::new()));
+        let value = backend.eval_in(&ns, &expr, Some(&source_map)).unwrap();
+        assert_eq!(backend.heap().borrow().held(&value), TaggedValue::fixnum(7));
+        drop(value);
+        assert_eq!(backend.heap().borrow().handle_count(), before);
+
+        let recorder = Recorder::new();
+        let ns = recorder.global_namespace();
+        let expr = recorder.heap().borrow().hold(TaggedValue::fixnum(7));
+        recorder.eval_in(&ns, &expr, None).unwrap();
+        assert_eq!(recorder.calls(), ["eval"]);
+        let recorder = Recorder::new();
+        let ns = recorder.global_namespace();
+        let expr = recorder.heap().borrow().hold(TaggedValue::fixnum(7));
+        recorder.eval_in(&ns, &expr, Some(&source_map)).unwrap();
+        assert_eq!(recorder.calls(), ["eval_with_source_map"]);
+    }
+
+    /// `define_in`'s default binds in the held namespace through `define`,
+    /// so a backend that overrides `define` keeps its meaning.
+    #[test]
+    fn define_in_defaults_to_define() {
+        let backend = MockBackend::new();
+        let ns = backend.global_namespace();
+        let value = backend.heap().borrow().hold(TaggedValue::fixnum(9));
+        backend.define_in(&ns, "x", &value);
+        assert_eq!(
+            patina_core::NamespaceView::of(backend.global_env()).get(backend.heap(), "x"),
+            Some(TaggedValue::fixnum(9))
+        );
+
+        let recorder = Recorder::new();
+        let ns = recorder.global_namespace();
+        let value = recorder.heap().borrow().hold(TaggedValue::fixnum(9));
+        recorder.define_in(&ns, "x", &value);
+        assert_eq!(recorder.calls(), ["define x"]);
+    }
+
+    /// `call_owned`'s default goes through `call`, which builds the quoted
+    /// application and evaluates it in the global environment.
+    #[test]
+    fn call_owned_defaults_to_call() {
+        let backend = MockBackend::new();
+        let (f, args) = {
+            let heap = backend.heap().borrow();
+            (
+                heap.hold(TaggedValue::fixnum(5)),
+                [
+                    heap.hold(TaggedValue::fixnum(1)),
+                    heap.hold(TaggedValue::fixnum(2)),
+                ],
+            )
+        };
+        let form = backend.call_owned(&f, &args).unwrap();
+        let heap = backend.heap().borrow();
+        assert_eq!(
+            patina_core::format_tagged(heap.held(&form), &heap),
+            "((quote 5) (quote 1) (quote 2))"
+        );
+        drop(heap);
+
+        let recorder = Recorder::new();
+        let (f, args) = {
+            let heap = recorder.heap().borrow();
+            (
+                heap.hold(TaggedValue::fixnum(5)),
+                [
+                    heap.hold(TaggedValue::fixnum(1)),
+                    heap.hold(TaggedValue::fixnum(2)),
+                ],
+            )
+        };
+        let value = recorder.call_owned(&f, &args).unwrap();
+        assert_eq!(
+            recorder.heap().borrow().held(&value),
+            TaggedValue::fixnum(5)
+        );
+        assert_eq!(recorder.calls(), ["call 2"]);
+    }
+
+    /// `global_namespace`'s default holds the backend's own global
+    /// environment, in a fresh handle each call, which roots it until it is
+    /// dropped.
+    #[test]
+    fn global_namespace_holds_the_global_environment() {
+        let backend = MockBackend::new();
+        let before = backend.heap().borrow().handle_count();
+        let ns = backend.global_namespace();
+        let again = backend.global_namespace();
+        assert_eq!(backend.heap().borrow().handle_count(), before + 2);
+        assert!(Rc::ptr_eq(
+            &backend.heap().borrow().held_environment(&ns),
+            backend.global_env()
+        ));
+        assert!(Rc::ptr_eq(
+            &backend.heap().borrow().held_environment(&again),
+            backend.global_env()
+        ));
+        drop((ns, again));
+        assert_eq!(backend.heap().borrow().handle_count(), before);
+    }
+
+    /// Until stage 5e a backend whose global environment is a frame gets a
+    /// handle on the frame, through the deprecated holder (question 4 (b) on
+    /// #839, pending the owner's ruling; under (a) this panics instead).
+    #[test]
+    fn global_namespace_holds_a_frame_global_until_5e() {
+        let mut backend = MockBackend::new();
+        let frame = Rc::new(Environment::child_frame(Rc::clone(&backend.global)));
+        backend.global = frame;
+        let ns = backend.global_namespace();
+        assert!(Rc::ptr_eq(
+            &backend.heap().borrow().held_environment(&ns),
+            backend.global_env()
+        ));
     }
 }

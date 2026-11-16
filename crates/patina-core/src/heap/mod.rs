@@ -875,6 +875,27 @@ impl Heap {
         self.handles.hold_environment(env)
     }
 
+    /// A handle on `global`, a backend's global environment, of this heap:
+    /// a namespace through [`Heap::hold_namespace`], and until stage 5e a
+    /// frame through the deprecated holder, so that a host backend, or a
+    /// tree-walker `Evaluator`, whose global is a frame keeps running
+    /// (#839; question 4 (b), pending the owner's ruling). What
+    /// `Backend::global_namespace` answers. Not an interface: it loses its
+    /// frame branch, or goes, at 5e.
+    #[doc(hidden)]
+    #[allow(
+        deprecated,
+        reason = "a frame global is held through the deprecated holder until it goes at stage 5e \
+                  (#839, question 4 (b))"
+    )]
+    pub fn hold_global(&self, global: Rc<crate::environment::Environment>) -> OwnedEnvironment {
+        if global.is_namespace() {
+            self.hold_namespace(global)
+        } else {
+            self.hold_environment(global)
+        }
+    }
+
     /// A new host namespace over `parent`, this heap's parentless namespace,
     /// held (#835): what `Interpreter::new_environment` answers. A host
     /// namespace is made only here, so none that is not held leaves core.

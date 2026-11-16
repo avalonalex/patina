@@ -87,6 +87,11 @@ fn every_nameable_entry_is_matched() {
     };
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |b: &VmBackend| b.call(TaggedValue::NULL, &[]);
+    // the handle methods (#839)
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |b: &VmBackend, e: &crate::OwnedEnvironment, d: &crate::Owned| b.eval_in(e, d, None);
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |b: &VmBackend, f: &crate::Owned| b.call_owned(f, &[]);
 
     // patina-interpreter: a host's call of a procedure (#710)
     #[expect(clippy::disallowed_methods, reason = "positive control")]

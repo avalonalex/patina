@@ -12,7 +12,7 @@
 //! codebase including `call/cc`, `dynamic-wind`, and exception handling.
 
 use crate::eval::{EvalError, Evaluator, eval_cps};
-use patina_core::TaggedValue;
+use patina_core::{Owned, OwnedEnvironment, TaggedValue};
 use patina_frontend::SourceMap;
 use patina_runtime::HasDiagnostic;
 use patina_runtime::{Backend, Environment};
@@ -342,6 +342,57 @@ impl Backend for TreeWalker {
     /// no binding (`call_procedure`, #710).
     fn call(&self, f: TaggedValue, args: &[TaggedValue]) -> Result<TaggedValue, Self::Error> {
         self.call_procedure(f, args)
+    }
+
+    /// Evaluates through `eval_datum`, as `eval` does, and holds the answer
+    /// (#839). A frame is evaluated by name.
+    fn eval_in(
+        &self,
+        env: &OwnedEnvironment,
+        expr: &Owned,
+        source_map: Option<&Rc<RefCell<SourceMap>>>,
+    ) -> Result<Owned, Self::Error> {
+        let (env, word) = {
+            let heap = self.evaluator.heap.borrow();
+            (heap.held_environment(env), heap.held(expr))
+        };
+        let value = self.eval_datum(word, &env, source_map)?;
+        Ok(self.evaluator.heap.borrow().hold(value))
+    }
+
+    /// Writes the binding, as `define`'s default does: the tree-walker
+    /// looks a name up at each call.
+    fn define_in(&self, env: &OwnedEnvironment, name: &str, value: &Owned) {
+        let (env, value) = {
+            let heap = self.evaluator.heap.borrow();
+            (heap.held_environment(env), heap.held(value))
+        };
+        patina_core::NamespaceView::of(&env).define(&self.evaluator.heap, name, value);
+    }
+
+    /// Runs the application as `call` does (`call_procedure`, #710), with
+    /// the words read from the caller's handles, and holds the answer.
+    fn call_owned(&self, f: &Owned, args: &[Owned]) -> Result<Owned, Self::Error> {
+        let (callee, operands) = {
+            let heap = self.evaluator.heap.borrow();
+            (
+                heap.held(f),
+                args.iter().map(|arg| heap.held(arg)).collect::<Vec<_>>(),
+            )
+        };
+        let value = self.call_procedure(callee, &operands)?;
+        Ok(self.evaluator.heap.borrow().hold(value))
+    }
+
+    /// Holds the evaluator's global environment through `hold_global`, as
+    /// the default does: `Evaluator::global_env` is a pub field a host can
+    /// set to a frame, which is held through the deprecated holder until
+    /// stage 5e (question 4 (b) on #839, pending the owner's ruling).
+    fn global_namespace(&self) -> OwnedEnvironment {
+        self.evaluator
+            .heap
+            .borrow()
+            .hold_global(Rc::clone(&self.evaluator.global_env))
     }
 }
 
