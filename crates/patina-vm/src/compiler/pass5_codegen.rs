@@ -1092,8 +1092,8 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
 /// spelling. Until #442 the sequence was emitted for any global *spelled*
 /// `call-with-values`: a program's own definition was never called, and the
 /// procedure reached under another name went the slower value path. Now a
-/// renamed import, or the alias early binding gives a library template's
-/// reference (#438), gets the sequence, and a program that defines or
+/// renamed import, or a library template's reference early binding linked
+/// (#438, #837), judged by its record, gets the sequence, and a program that defines or
 /// `set!`s the name after the site was compiled gets its own procedure
 /// called.
 ///

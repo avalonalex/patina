@@ -651,10 +651,10 @@ fn nested_expansions_sharing_an_alias_do_not_capture_each_other() {
 
 // ─── Early and relinked references across forms (#837) ──────────────────────
 //
-// 4b.10 replaces the spelling an early-bound template reference is renamed
-// to (`f.0`, `Environment::import_alias`) with a link to the binding's
-// record, and later does the same for relinked references. These pin what
-// programs answer through both, on the base and after each step.
+// 4b.10 replaced the spelling an early-bound template reference was renamed
+// to (`f.0`, an import alias) with a link to the binding's record, and its
+// second PR does the same for relinked references. These pin what programs
+// answer through both, before and after each step.
 
 /// Run `program` on each backend: `[VM, tree-walker]`.
 fn on_both_backends(program: &str) -> [String; 2] {
@@ -807,6 +807,147 @@ fn an_early_link_keeps_the_old_library_binding_across_a_redefinition() {
     assert_eq!(
         on_both_backends(&program),
         [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+// ─── The switch: an early-bound reference links, and mints nothing (#837) ───
+//
+// Until 4b.10 an early-bound template reference was renamed to an alias,
+// `f.N`, a second record over the import's cell in a slot of the use
+// site's namespace: a name a program could read, and define over to change
+// code compiled before it. It links the binding's record now and leaves no
+// name behind (#837's question 3), as chibi 0.12 and Gauche 0.9.15 leave
+// none. Each test below failed before the switch.
+
+/// `CALL_F` imported, then a procedure and a bare form that expand
+/// `call-f`, each binding its `f` early.
+fn expand_call_f<B: patina_runtime::Backend>(interp: &patina_interpreter::Interpreter<B>) {
+    interp
+        .eval_program_owned(&format!(
+            "{CALL_F}(import (scheme base) (t lib-f))\n(define (h) (call-f))\n(call-f)\n(h)"
+        ))
+        .expect("the library, the import and the expansions");
+}
+
+/// Every `f.k`, `k` below 100,000, that the use site's namespace answers by
+/// name or holds a slot for.
+fn spellings_of_f<B: patina_runtime::Backend>(
+    interp: &patina_interpreter::Interpreter<B>,
+) -> Vec<String> {
+    let env = interp.global_env();
+    let heap = interp.backend().heap();
+    (0..100_000)
+        .map(|k| format!("f.{k}"))
+        .filter(|spelling| env.get(heap, spelling).is_some() || env.local_slot(spelling).is_some())
+        .collect()
+}
+
+/// After the expansions, no `f.k` is a name of the program's namespace: no
+/// slot, and nothing `get` answers. The spelling's number comes from one
+/// counter every alias in the process shares, so the scan is wide rather
+/// than a guess at it. Before the switch the alias was there, on both
+/// backends.
+#[test]
+fn an_early_bound_reference_mints_no_spelling() {
+    let vm = common::vm_interpreter();
+    expand_call_f(&vm);
+    let tree_walker = common::tree_walker_interpreter();
+    expand_call_f(&tree_walker);
+    assert_eq!(
+        [spellings_of_f(&vm), spellings_of_f(&tree_walker)],
+        [Vec::<String>::new(), Vec::new()],
+        "[VM, tree-walker]"
+    );
+}
+
+/// What the program's namespace lists and counts: its names three ways, its
+/// placeholders, and the binding records the live namespaces hold.
+type NamesAndRecords = (
+    Vec<String>,
+    Vec<(String, patina_core::TaggedValue)>,
+    Vec<String>,
+    Vec<String>,
+    usize,
+);
+
+fn names_and_records<B: patina_runtime::Backend>(
+    interp: &patina_interpreter::Interpreter<B>,
+) -> NamesAndRecords {
+    let env = interp.global_env();
+    let heap = interp.backend().heap();
+    (
+        env.local_names(heap),
+        env.bindings(heap),
+        env.get_all_names(heap),
+        env.weak_entry_names_for_tests(),
+        heap.borrow().binding_records(),
+    )
+}
+
+/// An early-bound expansion leaves the program's names as they were: the
+/// namespace's `local_names`, `bindings` and `get_all_names`, its
+/// placeholders, and the count of binding records, before and after a form
+/// that expands `call-f` and defines nothing. The enumerations hid the alias
+/// before the switch (`visible_slots`' filter, deleted with it), so what
+/// failed there is the count: the alias was a record more, in a slot.
+fn an_expansion_leaves<B: patina_runtime::Backend>(
+    interp: patina_interpreter::Interpreter<B>,
+) -> (NamesAndRecords, NamesAndRecords) {
+    interp
+        .eval_program_owned(&format!("{CALL_F}(import (scheme base) (t lib-f))"))
+        .expect("the library and the import");
+    let before = names_and_records(&interp);
+    interp
+        .eval_program_owned("(call-f) (list (call-f))")
+        .expect("the expansions");
+    (before, names_and_records(&interp))
+}
+
+#[test]
+fn an_early_bound_expansion_leaves_the_programs_names_alone() {
+    let (vm_before, vm_after) = an_expansion_leaves(common::vm_interpreter());
+    let (tw_before, tw_after) = an_expansion_leaves(common::tree_walker_interpreter());
+    assert_eq!(
+        [vm_after, tw_after],
+        [vm_before, tw_before],
+        "[VM, tree-walker]"
+    );
+}
+
+/// A program's definition of a spelling an alias once had leaves code
+/// compiled before it alone (§9.1): `h`, compiled before, still calls the
+/// library's `f`. The definitions cover each spelling the namespace answers
+/// (before the switch, the alias `h` was compiled against) and `f.0` to
+/// `f.9`; before the switch the definition re-pointed the alias's record
+/// under `h`, and `h` answered `mine`, where chibi 0.12 and Gauche 0.9.15
+/// answer `lib-f`. The suite file's last two rows
+/// (`expansion/template-references.scm`) are the same in Scheme.
+fn defining_a_minted_spelling<B: patina_runtime::Backend>(
+    interp: patina_interpreter::Interpreter<B>,
+) -> String {
+    expand_call_f(&interp);
+    let spellings: Vec<String> = spellings_of_f(&interp)
+        .into_iter()
+        .chain((0..10).map(|k| format!("f.{k}")))
+        .collect();
+    for spelling in &spellings {
+        interp
+            .eval_program_owned(&format!("(define ({spelling}) 'mine)"))
+            .expect("a definition");
+    }
+    let answer = interp.eval_str_owned("(h)").expect("calls h");
+    interp.display_tagged(&answer)
+}
+
+#[test]
+fn a_minted_spelling_defined_by_the_program_leaves_earlier_code_alone() {
+    assert_eq!(
+        [
+            defining_a_minted_spelling(common::vm_interpreter()),
+            defining_a_minted_spelling(common::tree_walker_interpreter()),
+        ],
+        ["lib-f", "lib-f"],
         "[VM, tree-walker]"
     );
 }

@@ -187,9 +187,17 @@ fn expression_literals_under_every_node() {
     let alternate = s.pair(h, "CpsExprKind::If.alternate");
     let set_value = s.vector(h, "CpsExprKind::Set.value");
     let set_cont = s.string(h, "CpsExprKind::Set.cont");
+    let linked_set_value = s.pair(h, "CpsExprKind::LinkedSet.value");
+    let linked_set_cont = s.object(h, "CpsExprKind::LinkedSet.cont");
     let define_value = s.object(h, "CpsExprKind::Define.value");
     let define_cont = s.pair(h, "CpsExprKind::Define.cont");
     let primop_arg = s.vector(h, "CpsExprKind::PrimOp.args");
+    // A linked node's record, which `expression_links_under_var_and_set`
+    // holds to its trace; here it is only what the variants carry.
+    let link = {
+        let cell = crate::binding_record::BindingCell::free(h, TaggedValue::fixnum(0));
+        crate::binding_record::BindingLink::new(crate::binding_record::Record::new(h, cell))
+    };
 
     let node = CpsExpr::new;
     let literal = |value| CpsExpr::new(CpsExprKind::Literal(value));
@@ -197,14 +205,16 @@ fn expression_literals_under_every_node() {
     let name = || -> Rc<str> { Rc::from("x") };
     // A leaf first in each argument list, so a walk that stopped after the
     // first argument would miss the literal.
-    let var = || {
-        node(CpsExprKind::Var {
-            name: name(),
-            scopes: ScopeSet::new(),
-        })
-    };
+    let var = || node(CpsExprKind::var(name(), ScopeSet::new()));
     let every_node = vec![
         var(),
+        node(CpsExprKind::LinkedVar(Rc::new(
+            crate::cps_expr::LinkedRef {
+                name: name(),
+                scopes: ScopeSet::from_iter([ScopeId(1)]),
+                link,
+            },
+        ))),
         literal(primop_arg),
         node(CpsExprKind::ContRef(name())),
         node(CpsExprKind::Lambda {
@@ -250,6 +260,15 @@ fn expression_literals_under_every_node() {
             value: shared(set_value),
             cont: shared(set_cont),
         }),
+        node(CpsExprKind::LinkedSet(Rc::new(
+            crate::cps_expr::LinkedAssign {
+                var: name(),
+                scopes: ScopeSet::from_iter([ScopeId(1)]),
+                value: shared(linked_set_value),
+                cont: shared(linked_set_cont),
+                link,
+            },
+        ))),
         node(CpsExprKind::Define {
             name: name(),
             scopes: ScopeSet::new(),
@@ -263,6 +282,46 @@ fn expression_literals_under_every_node() {
         args: every_node,
         cont: name(),
     }))));
+
+    collect_only(&mut heap, |visitor| visitor.expr_literals(&expr));
+    s.assert_survived(&heap);
+}
+
+/// A `LinkedVar`'s and a `LinkedSet`'s record (#837): each a record over
+/// a free cell holding a fresh value, reachable only through the node's
+/// `link`, and the nodes rooted through `visit_expr_literals`, as a closure's
+/// body, a continuation's and the trampoline's step are. A collection keeps
+/// each record, its cell and the value, so the tree-walker's read by record
+/// never meets a swept pair.
+#[test]
+fn expression_links_under_var_and_set() {
+    use crate::binding_record::{BindingCell, BindingLink, Record};
+
+    let mut heap = Heap::new();
+    let mut s = Sentinels::new(&mut heap);
+    let h = &mut heap;
+    let var_value = s.pair(h, "CpsExprKind::LinkedVar.link: its record's cell's value");
+    let set_value = s.vector(h, "CpsExprKind::LinkedSet.link: its record's cell's value");
+    let mut link_to = |value| {
+        let cell = BindingCell::free(h, value);
+        Some(BindingLink::new(Record::new(h, cell)))
+    };
+    let (var_link, set_link) = (link_to(var_value), link_to(set_value));
+    let scopes = ScopeSet::from_iter([ScopeId(1)]);
+    let unspecified = || Rc::new(CpsExpr::new(CpsExprKind::Literal(TaggedValue::UNSPECIFIED)));
+    let set = CpsExpr::new(CpsExprKind::linked_set(
+        Rc::from("x"),
+        scopes.clone(),
+        unspecified(),
+        unspecified(),
+        set_link,
+    ));
+    let var = CpsExpr::new(CpsExprKind::linked_var(Rc::from("x"), scopes, var_link));
+    let expr = CpsExpr::new(CpsExprKind::App {
+        func: Rc::new(set),
+        args: vec![var],
+        cont: Rc::from("k"),
+    });
 
     collect_only(&mut heap, |visitor| visitor.expr_literals(&expr));
     s.assert_survived(&heap);

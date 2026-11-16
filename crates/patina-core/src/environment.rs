@@ -696,19 +696,6 @@ struct RareTables {
     /// itself by its marker, so the read path pays one compare, and so does
     /// the one writer that must drop an entry — `define` over an import.
     frame_imports: RefCell<Vec<Option<BindingCell>>>,
-    /// For each imported location something here has been *early-bound* to,
-    /// the hidden names that hold it — see [`Environment::import_alias`].
-    /// Keyed by the imported cell's key ([`BindingCell::key`], its word less
-    /// a check build's stamp), then by the spelling that was asked about:
-    /// one name for one location has one alias however many expansions ask.
-    /// Nearly always one entry; a location imported under two names has
-    /// two, because the desugarer reads a spelling back off an alias
-    /// (`Desugarer::settle_early_bindings`).
-    #[trace(
-        skip,
-        reason = "cell keys less the stamp, and names: never dereferenced; an entry lives only while its alias's record names the cell (`forget_alias`)"
-    )]
-    import_aliases: RefCell<FxHashMap<u64, ImportAliases>>,
     /// For each binding the desugarer's relinking aliased here, the alias it
     /// minted — see [`Environment::relink_alias`]. One target has one alias
     /// however many expansions ask (#611), where each expansion used to mint
@@ -857,7 +844,7 @@ fn flagged_record_in_a_slot(name: &str) -> ! {
 /// **What is counted** ([`Environment::table_bytes`]): the environment and
 /// its out-of-line tables' box; every table's own buffer at its capacity —
 /// the slot vector once it is out of line, the name index, the scoped and
-/// alias tables, the import and relink aliases, the table of introduced
+/// alias tables, the relink aliases, the table of introduced
 /// globals and the table of the scoped bindings' indexes, a host
 /// namespace's table of read-through records (#835), whose keys are its
 /// parent's slot names and are counted there, and a frame's import cells,
@@ -912,8 +899,8 @@ fn flagged_record_in_a_slot(name: &str) -> ! {
 ///
 /// **What it counts** (#834): `records`, every binding record the namespace
 /// holds — one per slot, per scoped entry (the splicing `let-syntax`
-/// keywords filed at top level among them) and per import alias, each of
-/// which is a slot, and per read-through record of a host namespace's,
+/// keywords filed at top level among them), and per read-through record
+/// of a host namespace's,
 /// which is in no slot until a define or an import adopts it (#835); and
 /// `cells`, the cells of its own its records name now. Its weak entries
 /// (#836) are not among them: its placeholder store counts a placeholder and
@@ -1065,10 +1052,6 @@ pub(crate) const fn hash_table_bytes<K, V>(capacity: usize) -> usize {
     buckets * (size_of::<(K, V)>() + 1) + 16
 }
 
-/// The aliases for one imported location: the spelling each was asked for
-/// under, and the alias. A scan, not a table — it holds one entry, or two.
-type ImportAliases = SmallVec<[(Rc<str>, Rc<str>); 1]>;
-
 /// What a relink alias stands for ([`Environment::relink_alias`]): the
 /// environment that holds the binding, by id, the binding's name there, the
 /// scopes that select it (`None` for one the name alone reaches), and the
@@ -1213,7 +1196,7 @@ pub struct Environment {
     /// borrow-flag round trips.
     ///
     /// These are the **only** copies of those two facts, and each has exactly
-    /// one writer — `define_alias` and `insert_scoped`. A second copy stored
+    /// one writer — `install_alias` and `insert_scoped`. A second copy stored
     /// beside the table it describes is how a lookup comes to miss a binding
     /// that scoped resolution still finds, which is what triage families 36
     /// and 38 were. Both latch on and never clear: nothing removes a binding
@@ -1351,7 +1334,7 @@ impl Environment {
     /// `parent` is a parentless namespace, so no host namespace sits under a
     /// frame or under another host namespace. Its heap is its parent's. Its
     /// `RareTables` is built here under every charging rule, as a parentless
-    /// namespace's is: `import_alias` and `link_record` need it.
+    /// namespace's is: `link_record` needs it.
     pub(crate) fn host_namespace(parent: Rc<Environment>) -> Self {
         assert!(
             parent.kind == Kind::Namespace,
@@ -1858,7 +1841,6 @@ impl Environment {
                 introduced_global_names,
                 scoped_index,
                 frame_imports,
-                import_aliases,
                 relink_aliases,
                 // A heap value, in the arenas.
                 specifier: _,
@@ -1876,7 +1858,6 @@ impl Environment {
                 + hash_table_bytes::<Rc<str>, ScopeIndex>(scoped_index.borrow().capacity())
                 // Always empty in a namespace, whose imports are records.
                 + frame_imports.borrow().capacity() * size_of::<Option<BindingCell>>()
-                + hash_table_bytes::<u64, ImportAliases>(import_aliases.borrow().capacity())
                 + hash_table_bytes::<RelinkKey, Rc<str>>(relink_aliases.borrow().capacity())
                 // A host namespace's read-through records (#835): the box and
                 // the table's buffer. Its keys are its parent's slot names,
@@ -1993,7 +1974,6 @@ impl Environment {
                     cell.store(heap, value, Site::EnvDefine);
                 } else {
                     crate::census::store(Site::EnvDefine, None, value);
-                    self.forget_alias(&name, cell);
                     let fresh = BindingCell::new_own(heap, value, self.env_id);
                     record.repoint(heap, fresh);
                     self.count(0, 1);
@@ -2162,6 +2142,20 @@ impl Environment {
             .placeholders
             .get()
             .map(PlaceholderHandle::store)
+    }
+
+    /// The names this namespace's weak entries' store holds, sorted: its
+    /// placeholders (#836), and a host namespace's weak read-through
+    /// records. For an integration test of what an expansion leaves in a
+    /// namespace (#837). Only with `test-support`.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn weak_entry_names_for_tests(&self) -> Vec<String> {
+        let mut names = self
+            .weak_entries()
+            .map_or_else(Vec::new, PlaceholderStore::names);
+        names.sort();
+        names
     }
 
     /// This namespace's weak entries' store, made of `kind` and listed on
@@ -2349,10 +2343,8 @@ impl Environment {
     }
 
     /// Whether a placeholder or a weak read-through record holds `name` here
-    /// (#836). An alias is never minted at such a name: an import alias's
-    /// install would adopt the entry, and code that linked an unbound name
-    /// would read the alias's location; a relink alias would leave linked
-    /// code reading the entry where `get` reads the alias.
+    /// (#836). An alias is never minted at such a name: a relink alias would
+    /// leave linked code reading the entry where `get` reads the alias.
     fn holds_placeholder(&self, name: &str) -> bool {
         self.weak_entries()
             .is_some_and(|store| store.contains(name))
@@ -2386,8 +2378,7 @@ impl Environment {
         let existing = self.local_record(&name);
         if cell.owned_by(heap, self.env_id) {
             // Two names of one namespace never share a cell, or a later
-            // `define` of either would assign both: copied, as a forward to
-            // itself was copied before records.
+            // `define` of either would assign both: copied.
             if existing.is_none_or(|record| record.cell(heap) != cell) {
                 let value = cell.value(heap);
                 self.define_record(heap, name, value);
@@ -2403,7 +2394,6 @@ impl Environment {
                 if old == cell {
                     return;
                 }
-                self.forget_alias(&name, old);
                 if old.owned_by(heap, self.env_id) {
                     self.count_cell_let_go();
                 }
@@ -2431,26 +2421,6 @@ impl Environment {
                         self.count_in(rare, 1, 0);
                     }
                 }
-            }
-        }
-    }
-
-    /// `name`'s record is re-pointed away from `cell`, so it is no longer an
-    /// alias [`import_alias`](Self::import_alias) minted for `cell`, and its
-    /// entry goes. An entry lives only while its alias's record names its
-    /// cell, which keeps the cell alive, so no key outlives its cell and
-    /// meets a cell made in its slot after a collection (the rulings of
-    /// 2026-11-03). Another spelling's entry for `cell` stays.
-    fn forget_alias(&self, name: &str, cell: BindingCell) {
-        let Some(rare) = self.rare.get() else {
-            return;
-        };
-        let key = cell.key();
-        let mut table = rare.import_aliases.borrow_mut();
-        if let Some(aliases) = table.get_mut(&key) {
-            aliases.retain(|(_, alias)| &**alias != name);
-            if aliases.is_empty() {
-                table.remove(&key);
             }
         }
     }
@@ -2489,7 +2459,7 @@ impl Environment {
     /// the tree-walker's export of a Rust-built library. A namespace; a
     /// frame answers its imports alone.
     pub fn cells(&self, heap: &RefCell<Heap>) -> Vec<(String, BindingCell)> {
-        let slots = self.visible_slots(heap);
+        let slots = self.named_slots();
         let step = self.read_step(heap);
         let bindings = self.bindings.borrow();
         slots
@@ -2552,106 +2522,6 @@ impl Environment {
             self.recharge();
         }
         (slot, was_imported)
-    }
-
-    /// A name of this environment's own for the *location* `name` is imported
-    /// from, which goes on meaning that location whatever `name` later comes
-    /// to mean here — or `None` when `name` is not an import of this
-    /// environment's.
-    ///
-    /// For a macro template's reference to a name its use site imported
-    /// (#438). Such a reference is a bare global name, looked up when it runs,
-    /// and `define` over an import rightly gives the *importer* a binding of
-    /// its own under that name: a program that defined `count`, or `car`,
-    /// after using a library macro whose template mentions it captured the
-    /// template's reference. Bound to this alias instead, the reference is to
-    /// the location.
-    ///
-    /// The alias is a second record over the same cell (#834), so it reads,
-    /// writes and links like the import it stands beside; it is minted once
-    /// per name for a location (`mint` runs only then) and shared by every
-    /// expansion after. It stays a name until 4b.10.
-    ///
-    /// Per *name*, not per location alone: a location this environment
-    /// imported under two names — `car`, and `first` by a `rename` — gets an
-    /// alias for each. The desugarer takes an early binding back by reading
-    /// the spelling off the alias, and one alias for both spellings settled a
-    /// reference written `first` by what the form said about `car`.
-    ///
-    /// Being an ordinary slot, it can be defined over like one, by a program
-    /// that happens to spell it — `car.17` is a legal identifier, and
-    /// machine-written Scheme is full of names like it. A definition over it
-    /// re-points its record and forgets it as an alias (`forget_alias`), so
-    /// the next request mints another: what was bound to the old one is lost
-    /// to that definition, but nothing expanded afterwards follows it there.
-    /// For the same reason `mint` is asked again while the spelling it
-    /// offers is already bound here. (Only a *reference* is ever given this
-    /// name — `Desugarer::early_bound` — so nothing Patina does defines over
-    /// one.)
-    ///
-    /// A namespace's only: a frame answers `None`, and `Desugarer::import_of`
-    /// asks a namespace, the nearest and then each above it (#835). Borrows
-    /// `heap` shared over the lookup, and mutably to insert a fresh alias
-    /// (#834).
-    pub fn import_alias(
-        &self,
-        heap: &RefCell<Heap>,
-        name: &str,
-        mut mint: impl FnMut() -> Rc<str>,
-    ) -> Option<Rc<str>> {
-        let record = self.local_record(name)?;
-        let rare = self.rare.get()?;
-        let (cell, key) = {
-            // One step over the lookup: the imported cell, the alias
-            // remembered for it, and whether that still names it.
-            let step = self.borrow_read(heap);
-            let cell = record.cell(&step);
-            if cell.owned_by(&step, self.env_id) {
-                return None;
-            }
-            let key = cell.key();
-            let known = rare.import_aliases.borrow().get(&key).and_then(|aliases| {
-                aliases
-                    .iter()
-                    .find(|(spelling, _)| &**spelling == name)
-                    .map(|(_, alias)| Rc::clone(alias))
-            });
-            if let Some(alias) = known {
-                // `forget_alias` makes a mismatch impossible; checked anyway,
-                // as the defence the reuse tests exercise.
-                let still_names = self
-                    .local_record(&alias)
-                    .is_some_and(|alias_record| alias_record.cell(&step) == cell);
-                if still_names {
-                    return Some(alias);
-                }
-            }
-            (cell, key)
-        };
-        // A name a placeholder holds is taken too (#836): the alias's
-        // install would adopt it.
-        let alias = loop {
-            let candidate = mint();
-            if self.local_slot(&candidate).is_none() && !self.holds_placeholder(&candidate) {
-                break candidate;
-            }
-        };
-        self.bind_cell(&mut self.borrow_write(heap), Rc::clone(&alias), cell);
-        let grew = {
-            let mut table = rare.import_aliases.borrow_mut();
-            let capacity = table.capacity();
-            let aliases = table.entry(key).or_default();
-            match aliases.iter_mut().find(|(spelling, _)| &**spelling == name) {
-                // Replacing one that was defined over.
-                Some((_, stale)) => *stale = Rc::clone(&alias),
-                None => aliases.push((Rc::from(name), Rc::clone(&alias))),
-            }
-            table.capacity() != capacity
-        };
-        if grew {
-            self.recharge();
-        }
-        Some(alias)
     }
 
     /// The value of a binding in this environment's own table, read through
@@ -2894,8 +2764,7 @@ impl Environment {
 
     /// Whether `name` is this namespace's import of `location` (#837): a
     /// slot of its own for `name` whose record names a cell this namespace
-    /// does not own, at `location`. What `Desugarer::import_of` is to ask
-    /// (from 4b.10's switch; today it asks through `binding_location`) of
+    /// does not own, at `location`. What `Desugarer::import_of` asks of
     /// each namespace from the use site's up, so that a template's
     /// reference is bound early only where the use site imported the
     /// binding the macro means. `false` for a frame, whose imports hold no
@@ -3308,8 +3177,9 @@ impl Environment {
     /// for a `let-syntax` or internal-define body and dropped once desugaring
     /// finishes, so aliases go to the root instead. For a host form the root
     /// is the global namespace, past its host namespace: a relink alias goes
-    /// there, and only an import alias is asked of the host namespace first
-    /// ([`namespace_root`](Self::namespace_root), #835).
+    /// there. Early binding, which asks the host namespace first
+    /// ([`namespace_root`](Self::namespace_root), #835), installs nothing
+    /// anywhere since 4b.10 (#837).
     pub fn root(self: &Rc<Self>) -> Rc<Environment> {
         let mut env = self.clone();
         while let Some(parent) = env.parent.clone() {
@@ -3396,9 +3266,9 @@ impl Environment {
     /// alias for every expansion that needed one, so a library macro whose
     /// template names a private helper, as `guard` names `%guard-aux`, left an
     /// alias and an interned symbol in the program per top-level form, which
-    /// nothing removes. One target now has one alias here, as one imported
-    /// location has one in [`import_alias`]. Two targets, or two identities of
-    /// one spelling that select different bindings, still get one each.
+    /// nothing removes. One target now has one alias here. Two targets, or
+    /// two identities of one spelling that select different bindings, still
+    /// get one each.
     ///
     /// And two mentions of one target get one each. The alias's spelling is
     /// also how a renamed mention is told from another of the same name: a
@@ -3424,7 +3294,6 @@ impl Environment {
     /// desugarer's speculative body scan works in a frame, which it drops with
     /// whatever was minted there.
     ///
-    /// [`import_alias`]: Self::import_alias
     /// [`define_alias`]: Self::define_alias
     /// [`define_scoped_alias`]: Self::define_scoped_alias
     pub fn relink_alias(
@@ -3754,7 +3623,18 @@ impl Environment {
     /// [`insert_scoped`](Self::insert_scoped)'s body for a frame, for
     /// non-empty `scopes`: no heap and no step. A namespace's goes through
     /// [`insert_scoped_record`](Self::insert_scoped_record).
-    #[inline]
+    ///
+    /// Never inlined, so that its one copy is this crate's, whose instance
+    /// of the table's `entry` (the one `insert_scoped_record` uses) inlines
+    /// the spelling's hash. Inlined, it was instantiated in the tree-walker,
+    /// which binds each call's parameters here, and whether that crate's own
+    /// instance of `entry` inlined the hash turned on which codegen unit
+    /// rustc put it in: adding the linked variants to `CpsExprKind` moved
+    /// it, and the hash out of line cost a tree-walker `fib` 2–3% in cycles
+    /// at equal instructions (#837, profiled 2026-11-15). Out of line, it
+    /// saved a tree-walker `fib` and a loop 0.6–1.7% of their cycles on the
+    /// code before the variants too.
+    #[inline(never)]
     fn insert_scoped_here(
         &self,
         name: Rc<str>,
@@ -4630,7 +4510,6 @@ impl Environment {
         let mut names = Vec::new();
         let mut env = Some(self);
         while let Some(current) = env {
-            // Through `local_names`, so an `import_alias` is left out here too.
             names.extend(current.local_names(heap));
             // Include names from scoped bindings
             names.extend(
@@ -4651,65 +4530,25 @@ impl Environment {
     /// import set walks when it filters or renames: it moves bindings, so it
     /// has no use for the values `bindings` would read.
     ///
-    /// An [`import_alias`] is a slot here too, and is left out: it is this
-    /// environment's bookkeeping, not a name a program bound, and nothing that
-    /// enumerates names — an import set today, completion tomorrow — should
-    /// offer it.
-    ///
-    /// Borrows `heap` shared at a namespace's step, to tell an alias from a
-    /// name a program bound, when it holds any alias (#834).
-    ///
-    /// [`import_alias`]: Self::import_alias
-    pub fn local_names(&self, heap: &RefCell<Heap>) -> Vec<String> {
-        self.visible_slots(heap)
-            .into_iter()
-            .map(|(_, name)| name)
+    /// Every slot is a name a program or a library bound. Early binding put
+    /// an alias in a slot until 4b.10, which this left out; it links the
+    /// binding's record now and names nothing here (#837), and relinking's
+    /// and keywords' aliases live in `alias_bindings`, not in a slot.
+    /// `heap` is read no more, and kept for the raw layer's callers.
+    pub fn local_names(&self, _heap: &RefCell<Heap>) -> Vec<String> {
+        self.bindings
+            .borrow()
+            .names()
+            .map(|name| name.to_string())
             .collect()
     }
 
-    /// Each name a program bound here with its slot, in slot order. With the
-    /// slot, because leaving a name out makes position and slot two things.
-    fn visible_slots(&self, heap: &RefCell<Heap>) -> Vec<(u32, String)> {
-        // A table, not a scan per name: an importer that expands library
-        // macros holds an alias for each location their templates mention.
-        // Each alias's spelling, with the key of the cell it was minted for.
-        let hidden: FxHashMap<Rc<str>, u64> =
-            self.rare.get().map_or_else(FxHashMap::default, |rare| {
-                rare.import_aliases
-                    .borrow()
-                    .iter()
-                    .flat_map(|(key, aliases)| {
-                        aliases.iter().map(|(_, alias)| (Rc::clone(alias), *key))
-                    })
-                    .collect()
-            });
-        // Whether an alias still names the cell it was minted for is read at
-        // the step, through its record (#834). Only a namespace mints one.
-        let step = if hidden.is_empty() {
-            None
-        } else {
-            self.read_step(heap)
-        };
-        let bindings = self.bindings.borrow();
-        bindings
+    /// Each slot with its name, in slot order.
+    fn named_slots(&self) -> Vec<(u32, String)> {
+        self.bindings
+            .borrow()
             .names()
             .enumerate()
-            .filter(|(slot, name)| {
-                // Hidden only while it still names the cell it was minted
-                // for. `forget_alias` drops the entry of an alias a program
-                // defined over or imported over, so a mismatch cannot
-                // happen; compared all the same, as the defence the reuse
-                // tests exercise.
-                match (hidden.get(&***name), &step) {
-                    (Some(&key), Some(step)) => {
-                        Record::from_word(bindings.read_slot(*slot as u32))
-                            .cell(step)
-                            .key()
-                            != key
-                    }
-                    _ => true,
-                }
-            })
             .map(|(slot, name)| (slot as u32, name.to_string()))
             .collect()
     }
@@ -4724,7 +4563,7 @@ impl Environment {
     pub fn bindings(&self, heap: &RefCell<Heap>) -> Vec<(String, TaggedValue)> {
         // Names first and values after: an imported binding's value is read
         // from its cell, and that read must not happen under this borrow.
-        self.visible_slots(heap)
+        self.named_slots()
             .into_iter()
             .map(|(slot, name)| (name, self.slot_value(heap, slot)))
             .collect()
@@ -6554,363 +6393,6 @@ mod introduced_definition_tests {
     }
 }
 
-/// `import_alias` gives a root a name of its own for an imported *location*,
-/// so that a reference bound to it survives the importer defining the
-/// spelling itself (#438).
-#[cfg(test)]
-mod import_alias_tests {
-    use super::*;
-    use crate::heap::new_shared_heap;
-
-    fn n(i: i64) -> TaggedValue {
-        TaggedValue::fixnum(i)
-    }
-
-    fn library_and_program(heap: &SharedHeap) -> (Rc<Environment>, Rc<Environment>) {
-        let library = Rc::new(Environment::with_heap(heap));
-        library.define(heap, "count", n(0));
-        let program = Rc::new(Environment::with_heap(heap));
-        share(heap, &program, "count", &library, "count");
-        (library, program)
-    }
-
-    #[test]
-    fn the_alias_outlives_a_definition_over_the_import() {
-        let heap = new_shared_heap();
-        let (library, program) = library_and_program(&heap);
-        let alias = program
-            .import_alias(&heap, "count", || "count.alias".into())
-            .unwrap();
-
-        // The program defines the spelling itself: a binding of its own.
-        program.define(&heap, "count", n(100));
-        library.set(&heap, "count", n(1)).unwrap();
-
-        assert_eq!(program.get(&heap, "count"), Some(n(100)));
-        assert_eq!(program.get(&heap, &alias), Some(n(1)));
-        // And it writes where it reads.
-        program.set(&heap, &alias, n(2)).unwrap();
-        assert_eq!(library.get(&heap, "count"), Some(n(2)));
-        assert_eq!(program.get(&heap, "count"), Some(n(100)));
-        assert_eq!(
-            program.binding_location(&heap, &alias),
-            library.binding_location(&heap, "count")
-        );
-    }
-
-    #[test]
-    fn one_name_has_one_alias_however_often_it_is_asked_for() {
-        let heap = new_shared_heap();
-        let (_, program) = library_and_program(&heap);
-        let mut minted = 0;
-        let mut mint = || {
-            minted += 1;
-            Rc::<str>::from(format!("count.{minted}"))
-        };
-        let first = program.import_alias(&heap, "count", &mut mint).unwrap();
-        let again = program.import_alias(&heap, "count", &mut mint).unwrap();
-        assert_eq!(first, again);
-
-        assert_eq!(minted, 1, "an alias per name, not per request");
-    }
-
-    #[test]
-    fn a_second_name_for_the_location_has_an_alias_of_its_own() {
-        let heap = new_shared_heap();
-        let (library, program) = library_and_program(&heap);
-        let mut minted = 0;
-        let mut mint = || {
-            minted += 1;
-            Rc::<str>::from(format!("alias.{minted}"))
-        };
-        let first = program.import_alias(&heap, "count", &mut mint).unwrap();
-
-        // A second name for the same location — a prefixed import. The
-        // desugarer reads the spelling a reference was written with back off
-        // its alias, so the two names cannot share one.
-        share(&heap, &program, "c:count", &library, "count");
-        let prefixed = program.import_alias(&heap, "c:count", &mut mint).unwrap();
-        assert_ne!(first, prefixed);
-        assert_eq!(
-            program.import_alias(&heap, "c:count", &mut mint).unwrap(),
-            prefixed
-        );
-        assert_eq!(
-            program.import_alias(&heap, "count", &mut mint).unwrap(),
-            first
-        );
-        assert_eq!(minted, 2);
-
-        // Both are the library's location, and both are bookkeeping.
-        library.set(&heap, "count", n(9)).unwrap();
-        assert_eq!(program.get(&heap, &first), Some(n(9)));
-        assert_eq!(program.get(&heap, &prefixed), Some(n(9)));
-        assert_eq!(program.local_names(&heap), ["count", "c:count"]);
-    }
-
-    #[test]
-    fn an_alias_is_not_among_the_names_a_program_bound() {
-        let heap = new_shared_heap();
-        let (_, program) = library_and_program(&heap);
-        program.define(&heap, "before", n(1));
-        program
-            .import_alias(&heap, "count", || "count.alias".into())
-            .unwrap();
-        program.define(&heap, "after", n(2));
-
-        assert_eq!(program.local_names(&heap), ["count", "before", "after"]);
-        // And leaving it out does not shift the values after it.
-        assert_eq!(
-            program.bindings(&heap),
-            [
-                ("count".to_string(), n(0)),
-                ("before".to_string(), n(1)),
-                ("after".to_string(), n(2)),
-            ]
-        );
-    }
-
-    #[test]
-    fn an_alias_defined_over_is_replaced_not_handed_out_again() {
-        let heap = new_shared_heap();
-        let (library, program) = library_and_program(&heap);
-        let first = program
-            .import_alias(&heap, "count", || "count.alias".into())
-            .unwrap();
-
-        // Something defines the alias's own spelling: the slot is the
-        // definer's from now on, and no longer the library's location.
-        program.define(&heap, Rc::clone(&first), n(7));
-        // A name the program bound from that moment, not from whenever the
-        // location is next asked for.
-        assert_eq!(program.local_names(&heap), ["count", "count.alias"]);
-        assert_eq!(
-            program.bindings(&heap),
-            [
-                ("count".to_string(), n(0)),
-                ("count.alias".to_string(), n(7))
-            ]
-        );
-        let second = program
-            .import_alias(&heap, "count", || "count.again".into())
-            .unwrap();
-
-        assert_ne!(first, second);
-        library.set(&heap, "count", n(1)).unwrap();
-        assert_eq!(program.get(&heap, &second), Some(n(1)));
-        assert_eq!(program.get(&heap, &first), Some(n(7)));
-        // The definition is a name the program bound; the new alias is not.
-        assert_eq!(program.local_names(&heap), ["count", "count.alias"]);
-    }
-
-    #[test]
-    fn minting_never_forwards_over_a_name_already_bound() {
-        let heap = new_shared_heap();
-        let (_, program) = library_and_program(&heap);
-        program.define(&heap, "count.0", n(42));
-        let mut offered = ["count.0", "count.1"].into_iter();
-        let alias = program
-            .import_alias(&heap, "count", || offered.next().unwrap().into())
-            .unwrap();
-
-        assert_eq!(&*alias, "count.1");
-        assert_eq!(program.get(&heap, "count.0"), Some(n(42)));
-    }
-
-    /// [`minting_never_forwards_over_a_name_already_bound`]'s twin (#836):
-    /// a name a placeholder holds is taken too, or the alias's install would
-    /// adopt the placeholder, and code that linked the unbound name would
-    /// read the import.
-    #[test]
-    fn minting_never_forwards_over_a_name_a_placeholder_holds() {
-        let heap = new_shared_heap();
-        let (_, program) = library_and_program(&heap);
-        let placeholder = program
-            .link_record(&heap, "count.0")
-            .expect("a placeholder");
-        let mut offered = ["count.0", "count.1"].into_iter();
-        let alias = program
-            .import_alias(&heap, "count", || offered.next().unwrap().into())
-            .unwrap();
-
-        assert_eq!(&*alias, "count.1");
-        assert_eq!(program.get(&heap, "count.0"), None, "still unbound");
-        assert_eq!(
-            program.link_record(&heap, "count.0"),
-            Some(placeholder),
-            "and still the placeholder"
-        );
-        assert!(placeholder.is_placeholder(&heap.borrow()));
-    }
-
-    /// The same in a host namespace (#836): a name its weak read-through
-    /// record holds, over the parent's placeholder, is taken too, or the
-    /// alias's install would adopt the record.
-    #[test]
-    fn minting_never_forwards_over_a_name_a_weak_read_through_record_holds() {
-        let heap = new_shared_heap();
-        let library = Rc::new(Environment::with_heap(&heap));
-        library.define(&heap, "count", n(0));
-        let global = Rc::new(Environment::with_heap(&heap));
-        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
-        share(&heap, &host, "count", &library, "count");
-        let child = host.link_record(&heap, "count.0").expect("a weak child");
-        let mut offered = ["count.0", "count.1"].into_iter();
-        let alias = host
-            .import_alias(&heap, "count", || offered.next().unwrap().into())
-            .unwrap();
-
-        assert_eq!(&*alias, "count.1");
-        assert_eq!(host.get(&heap, "count.0"), None, "still unbound");
-        assert_eq!(
-            host.weak_entries().and_then(|store| store.get("count.0")),
-            Some(child),
-            "and still the weak record, in the store"
-        );
-        assert_eq!(host.link_record(&heap, "count.0"), Some(child));
-    }
-
-    #[test]
-    fn every_enumeration_of_names_leaves_an_alias_out() {
-        let heap = new_shared_heap();
-        let (_, program) = library_and_program(&heap);
-        program
-            .import_alias(&heap, "count", || "count.alias".into())
-            .unwrap();
-        assert_eq!(program.get_all_names(&heap), ["count"]);
-    }
-
-    #[test]
-    fn only_an_import_has_one() {
-        let heap = new_shared_heap();
-        let (_, program) = library_and_program(&heap);
-        program.define(&heap, "own", n(5));
-        let never = || -> Rc<str> { unreachable!("nothing to alias") };
-        assert_eq!(program.import_alias(&heap, "own", never), None);
-        assert_eq!(program.import_alias(&heap, "missing", never), None);
-
-        // Defined over, the name is no longer an import.
-        program.define(&heap, "count", n(100));
-        assert_eq!(program.import_alias(&heap, "count", never), None);
-    }
-}
-
-/// Spike 4b.1's condition (#829; the owner's rulings of 2026-11-03 on
-/// #782): `import_aliases` keys an imported cell by its word less a check
-/// build's generation stamp (`BindingCell::key`), and the arena reuses a
-/// slot once its cell is swept. A key must not outlive every record that
-/// names its cell, or it meets the key of a cell made in that slot after a
-/// collection: it would then hide a name the program bound under the
-/// alias's spelling (`visible_slots`), and be taken for that cell's alias
-/// (`import_alias`). `forget_alias` drops it as the alias's record leaves
-/// the cell, on each of the two paths that re-point a record; each test
-/// below holds one of them, and fails without it in either build.
-#[cfg(test)]
-mod import_alias_reuse_tests {
-    use super::*;
-    use crate::heap::new_shared_heap;
-    use crate::heap::trace_sentinels::collect_only;
-
-    fn n(i: i64) -> TaggedValue {
-        TaggedValue::fixnum(i)
-    }
-
-    /// The cell `env`'s record for `name` names.
-    fn cell_of(heap: &SharedHeap, env: &Environment, name: &str) -> BindingCell {
-        let record = env.local_record(name).expect("a namespace's name");
-        record.cell(&heap.borrow())
-    }
-
-    /// An importer mints the alias `f.1` for a library's `f`, the library
-    /// drops, as a redefined one's does since #834, and `repoint` moves
-    /// both spellings off the library's cell, so that nothing names it but
-    /// the alias's key, if that is still there. A collection sweeps the
-    /// cell, a second library makes a cell in its slot, and the program
-    /// imports that cell as `f.1` and as `f`.
-    fn reuse_case(repoint: impl FnOnce(&SharedHeap, &Environment)) {
-        let heap = new_shared_heap();
-        let importer = Rc::new(Environment::with_heap(&heap));
-        let minted = Cell::new(0);
-        let mint = || {
-            minted.set(minted.get() + 1);
-            Rc::<str>::from(format!("f.{}", minted.get()))
-        };
-        let old = {
-            let library = Rc::new(Environment::with_heap(&heap));
-            library.define(&heap, "f", n(1));
-            share(&heap, &importer, "f", &library, "f");
-            assert_eq!(
-                importer.import_alias(&heap, "f", mint).as_deref(),
-                Some("f.1")
-            );
-            cell_of(&heap, &importer, "f")
-        };
-        repoint(&heap, &importer);
-        collect_only(&mut heap.borrow_mut(), |visitor| visitor.env(&importer));
-
-        // The keys are never traced, so nothing kept the cell: swept, and
-        // the next pair allocated takes its slot.
-        let slot = old.word().heap_index();
-        assert!(
-            heap.borrow().free_pair_slots().contains(&slot),
-            "nothing names the library's cell, so the collection swept it"
-        );
-        let exporter = Rc::new(Environment::with_heap(&heap));
-        {
-            let mut held = heap.borrow_mut();
-            while held.free_pair_slots().last() != Some(&slot) {
-                held.alloc_pair(TaggedValue::UNSPECIFIED, TaggedValue::UNSPECIFIED);
-            }
-        }
-        exporter.define(&heap, "h", n(4));
-        let fresh = cell_of(&heap, &exporter, "h");
-        assert_eq!(fresh.word().heap_index(), slot, "the slot is reused");
-        assert_eq!(
-            fresh.key(),
-            old.key(),
-            "and the key with it, in every build"
-        );
-
-        share(&heap, &importer, "f.1", &exporter, "h");
-        share(&heap, &importer, "f", &exporter, "h");
-        assert!(
-            importer.local_names(&heap).iter().any(|name| name == "f.1"),
-            "`f.1` is the program's import, not an alias: {:?}",
-            importer.local_names(&heap)
-        );
-        let alias = importer.import_alias(&heap, "f", mint);
-        assert!(
-            alias.as_deref().is_some_and(|alias| alias != "f.1"),
-            "a fresh alias, not the program's `f.1`: {alias:?}"
-        );
-        assert_eq!(importer.get(&heap, "f.1"), Some(n(4)));
-        assert_eq!(importer.get(&heap, &alias.unwrap()), Some(n(4)));
-        assert_eq!(importer.recount(&heap.borrow()), importer.counted());
-    }
-
-    /// Both spellings defined over: the alias leaves its cell through
-    /// `define_record`'s re-point.
-    #[test]
-    fn an_alias_key_never_meets_a_cell_made_in_its_cells_slot() {
-        reuse_case(|heap, importer| {
-            importer.define(heap, "f", n(2));
-            importer.define(heap, "f.1", n(3));
-        });
-    }
-
-    /// Both spellings imported over: the alias leaves its cell through
-    /// `bind_cell`'s re-point.
-    #[test]
-    fn an_alias_imported_over_leaves_no_key_either() {
-        reuse_case(|heap, importer| {
-            let other = Rc::new(Environment::with_heap(heap));
-            other.define(heap, "g", n(5));
-            share(heap, importer, "f", &other, "g");
-            share(heap, importer, "f.1", &other, "g");
-        });
-    }
-}
-
 /// No read of a namespace answers a record or a cell (#834, critique D2): a
 /// namespace's every binding is a record over a cell, and every path that
 /// reads one dereferences it, whatever kind of binding it is. Each kind
@@ -6938,8 +6420,7 @@ mod record_read_tests {
     #[test]
     fn no_namespace_read_answers_a_record() {
         let heap = new_shared_heap();
-        // Where the imports come from, and where the two macro-expansion
-        // aliases point.
+        // Where the imports come from, and where the two aliases point.
         let library = Rc::new(Environment::with_heap(&heap));
         library.define(&heap, "lib", n(2));
         library.define(&heap, "aliased-lib", n(8));
@@ -6969,11 +6450,17 @@ mod record_read_tests {
             "deep".into(),
             scopes(&[7]),
         );
-        // An import alias (#438), a second record over an import's cell.
+        // One export imported under two names: two records over one cell
+        // (GC_DESIGN §4.7), which until #837 the desugarer's import alias
+        // also made.
         share(&heap, &ns, "aliased", &library, "aliased-lib");
-        let alias = ns
-            .import_alias(&heap, "aliased", || "aliased.1".into())
-            .unwrap();
+        share(&heap, &ns, "aliased-too", &library, "aliased-lib");
+        assert_ne!(ns.local_slot("aliased"), ns.local_slot("aliased-too"));
+        assert_eq!(
+            ns.cell_of(&heap, "aliased"),
+            ns.cell_of(&heap, "aliased-too"),
+            "two records, one cell"
+        );
         // A free cell's export.
         assert!(exporting.import_into(&heap, &ns, "free", "free"));
 
@@ -6985,7 +6472,7 @@ mod record_read_tests {
             ("plain-alias", 6),
             ("scoped-alias", 7),
             ("aliased", 8),
-            (&*alias, 8),
+            ("aliased-too", 8),
             ("free", 9),
         ];
         let unscoped = ScopeSet::new();
@@ -7062,7 +6549,7 @@ mod record_read_tests {
             ("imported", 2),
             ("renamed #5", 5),
             ("aliased", 8),
-            (&*alias, 8),
+            ("aliased-too", 8),
             ("free", 9),
         ] {
             let slot = ns.local_slot(name).unwrap();
@@ -7085,12 +6572,12 @@ mod record_read_tests {
             );
         }
 
-        // Enumerated, as an import set reads a library: the import alias is
-        // bookkeeping and left out.
+        // Enumerated, as an import set reads a library: every slot.
         let mut bindings = ns.bindings(&heap);
         bindings.sort_by(|a, b| a.0.cmp(&b.0));
         let expected: Vec<(String, TaggedValue)> = [
             ("aliased", 8),
+            ("aliased-too", 8),
             ("free", 9),
             ("imported", 2),
             ("own", 1),
@@ -8568,7 +8055,6 @@ mod gc_edge_tests {
                 introduced_global_names: RefCell::default(),
                 scoped_index: RefCell::default(),
                 frame_imports: RefCell::new(vec![None, Some(exported)]),
-                import_aliases: RefCell::default(),
                 relink_aliases: RefCell::default(),
                 specifier: Cell::new(Some(specifier)),
                 namespace: None,
@@ -8981,6 +8467,39 @@ mod relink_alias_tests {
         assert_eq!(program.get(&heap, &alias), Some(n(1)));
         assert_eq!(program.get(&heap, "helper.1"), None, "still unbound");
         assert_eq!(program.link_record(&heap, "helper.1"), Some(placeholder));
+    }
+
+    /// The mint skips a name already bound here, which an alias would
+    /// shadow (#837): the program's binding of the spelling stays its own,
+    /// and the alias takes the next spelling offered. The one test of
+    /// `relink_alias`'s refusal of a bound spelling, ported from
+    /// `import_alias_tests`' `minting_never_forwards_over_a_name_already_bound`
+    /// when early binding stopped minting. Over a variable target, which the
+    /// second PR re-targets.
+    #[test]
+    fn minting_skips_a_name_already_bound() {
+        let heap = new_shared_heap();
+        let (library, program) = library_and_program(&heap);
+        program.define(&heap, "helper.1", n(42));
+        let minted = Cell::new(0);
+        let mut mint = || {
+            minted.set(minted.get() + 1);
+            Rc::<str>::from(format!("helper.{}", minted.get()))
+        };
+        let alias = program.relink_alias(
+            Rc::clone(&library),
+            "helper".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        assert_eq!(&*alias, "helper.2");
+        assert_eq!(program.get(&heap, &alias), Some(n(1)));
+        assert_eq!(
+            program.get(&heap, "helper.1"),
+            Some(n(42)),
+            "the program's own binding"
+        );
     }
 
     /// The same in a host namespace (#836): the mint skips a name its weak

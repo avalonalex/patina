@@ -15,7 +15,8 @@
 ;; with #446, for a macro the program made with a library's generator, two
 ;; with #443, for the program's own `apply` in head position, two with
 ;; #441, for a template's `call/cc` and the program's own, and two with #442,
-;; the same for `call-with-values` and `dynamic-wind`.
+;; the same for `call-with-values` and `dynamic-wind`. Two more, last in the
+;; file, came with #837: an early-bound reference leaves no name behind.
 ;;
 ;; ── Why this file needs libraries, and what that costs ──────────────────────
 ;;
@@ -34,10 +35,11 @@
 ;; a reading, not a citation — nobody has checked the text against it. That is registered as `*` / `incomplete` in
 ;; `DIVERGENCES.tsv` rather than worked around, so the lane holds the claim and
 ;; reports it if chibi gains the support. Gauche runs the file and arbitrates
-;; twenty-four of the twenty-five rows. The three #407 rows, the four #408 rows and
+;; twenty-six of the twenty-seven rows. The three #407 rows, the four #408 rows and
 ;; the three #438 rows were also run under chibi with the libraries as files
-;; (2026-09-19), the #445 row on 2026-09-22 and the two #446, two #443, two
-;; #441 and two #442 rows on 2026-09-23, and it answers as Gauche does.
+;; (2026-09-19), the #445 row on 2026-09-22, the two #446, two #443, two
+;; #441 and two #442 rows on 2026-09-23 and the two #837 rows on 2026-11-14,
+;; and it answers as Gauche does.
 ;;
 ;; **The import set is the other half of the staging.** `(scheme base)`'s
 ;; `quote`, `car`, `cons`, `list` and `list?` are excluded and SRFI 101 supplies
@@ -89,7 +91,8 @@
 ;; 15 + 1 skip since #438's, all measured 2026-09-19; 17 / 16 + 1 skip since
 ;; #445's, measured 2026-09-22; 19 / 18 + 1 skip since #446's, 21 / 20 + 1
 ;; skip since #443's, 23 / 22 + 1 skip since #441's and 25 / 24 + 1 skip
-;; since #442's, all measured 2026-09-23.
+;; since #442's, all measured 2026-09-23; 27 / 26 + 1 skip since #837's,
+;; measured 2026-11-14.
 ;;
 ;; ── One row was rewritten, and the reason is worth reading ──────────────────
 ;;
@@ -252,6 +255,15 @@
            (define-syntax name
              (syntax-rules () ((_) (begin (set! tally (+ tally 1)) tally))))))))))
 
+;; For the last two rows (#837): a template's call of a procedure the
+;; program imports from the same library, which the desugarer binds early.
+(define-library (probe early)
+  (import (scheme base))
+  (export call-f f)
+  (begin
+    (define (f) 'lib-f)
+    (define-syntax call-f (syntax-rules () ((_) (f))))))
+
 (import (scheme eval) (scheme repl)
         (except (scheme base)
           quote car cdr caar cadr cdar cddr cons pair? null?
@@ -261,7 +273,7 @@
         (srfi 101)
         (srfi 64)
         (probe lit) (probe both) (probe qq) (probe wq) (probe esc) (probe same)
-        (probe introduced) (probe runner) (probe measurer))
+        (probe introduced) (probe runner) (probe measurer) (probe early))
 
 (test-begin "template-references")
 
@@ -582,5 +594,56 @@
   (let ((vec (vector 1 2)))
     (eval (r7:list 'outer-mut vec) (interaction-environment))
     vec))
+
+;; ── An early-bound reference leaves no name behind ──────────────────────────
+;;
+;; **#837.** A template's reference to a procedure the program imported from
+;; the macro's library is bound to it early (#438), and until 4b.10 that was
+;; done by renaming it to an alias of the program's own, `f.N`: a second name
+;; for the import, in the program's namespace. A program could read it, and
+;; define it, which changed what code compiled before the definition called.
+;; The reference links the binding now and leaves no name, as chibi and
+;; Gauche leave none. The spelling's number comes from a counter every alias
+;; in the process shares, so each row scans every `f.k` below 10,000 rather
+;; than guess it; the Rust tests in `macro_definition_env.rs` scan further.
+;;
+;; **Last in the file, on purpose.** On Patina the second row defines 10,000
+;; globals `f.k` in the program's namespace, and on the VM the first leaves a
+;; placeholder (#836) for each spelling it reads: a row after these that
+;; minted an `f.*` alias would have its spelling moved past them. None does.
+;;
+;; Measured 2026-11-14: both pass under Gauche 0.9.15, and under chibi 0.12
+;; with `(probe early)` as a `.sld` file on its load path. Before the change
+;; Patina answered `(f.N)` (`(f.112)` with the file run on its own, measured
+;; 2026-11-14) and `mine` on both backends; the number is what the process
+;; minted first, so in a process that has minted more aliases first the
+;; spelling can fall past the scan, and there the rows can pass without the
+;; change.
+(define (call-f-through-a-procedure) (call-f))
+(call-f)
+
+(define (f-spelling k) (string->symbol (string-append "f." (number->string k))))
+
+(test-equal "an early-bound template reference leaves no name behind"
+  (r7:list)
+  (let loop ((k 0) (found (r7:list)))
+    (if (= k 10000)
+        found
+        (loop (+ k 1)
+              (if (guard (e (#t #f))
+                    (eval (f-spelling k) (interaction-environment))
+                    #t)
+                  (r7:cons (f-spelling k) found)
+                  found)))))
+
+(test-equal "nor a name whose definition captures earlier code"
+  'lib-f
+  (begin
+    (let loop ((k 0))
+      (when (< k 10000)
+        (eval (r7:list 'define (r7:list (f-spelling k)) (r7:list 'quote 'mine))
+              (interaction-environment))
+        (loop (+ k 1))))
+    (call-f-through-a-procedure)))
 
 (test-end)

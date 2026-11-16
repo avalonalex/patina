@@ -434,14 +434,20 @@ binding by a name, relinking has nothing to correct — but leaving the
 reference as the bare name leaves it to be looked up when it *runs*, and a
 program may by then have defined the spelling itself: `define` over an import
 gives the importer a binding of its own, and the template's `count`, or `car`,
-followed the name to it. So such a reference is given
-`Environment::import_alias` — a name of the use site's own for the import's
-*location*, a second record over the same cell (#834), minted once per
-imported name.
+followed the name to it. So such a reference is **linked** (#837): it keeps
+its spelling and its scopes and carries the binding record the macro's
+environment finds for the name (`Cx::early_link`, the owner's ruling E1),
+which both backends read and write in place of the spelling — the VM through
+a pinned link-table entry, the tree-walker through the record its `CpsExpr`
+carries. Nothing is minted. Until 4b.10 the reference was renamed to an
+alias, `name.N`, a second record over the import's cell in a slot of the use
+site's namespace: a name a program could read, and define to change code
+compiled before it, where chibi and Gauche leave no name
+(`expansion/template-references.scm`'s last two rows).
 
 **Where** matters more than it looks. Relinking only records that the
-expansion came from another program or library; the name is changed where the
-desugarer *emits a reference or an assignment* (`Desugarer::early_bound`), not
+expansion came from another program or library; the reference is linked where
+the desugarer *emits a reference or an assignment* (`Desugarer::early_bound`), not
 in the expansion's syntax where relinking's other aliases are made. A first
 version did it in the syntax, and an identifier there is not yet known to be a
 reference: it was a `case` datum, a `let` binder, a `define` target, data
@@ -449,7 +455,14 @@ handed to a quoting macro and `cond-expand`'s `not` — five silent wrong
 answers, pinned in `expansion/imported-names-in-templates.scm`. One decision
 cannot be made even at emission — the same expansion also introducing a
 definition of the name, which is in no environment until it runs — and is
-taken back at the end of the top-level form (`settle_early_bindings`).
+taken back at the end of the top-level form (`settle_early_bindings`), which
+clears the link and leaves the reference to its spelling. With
+`PATINA_SCOPE_TRACE` set, a linked reference shows a desugar-time
+`RESOLVE … via=early-link` record, after the desugarer's own resolution of it
+(`via=byname`), and neither backend resolves it after. A reference settling
+takes back shows the same record and then the backend's own (`phase=compile`
+on the VM, `phase=run` on the tree-walker), which finds the introduced
+definition.
 
 A macro of the use site's own is not bound early (chibi and Gauche disagree
 there). No name is left out for its spelling. Five were, listed in
@@ -828,7 +841,7 @@ exists to catch.
 | `scopes` | what the binding is *filed under*. `{}` means the plain by-name table, where set-of-scopes resolution cannot see it. |
 | `byname` | `visible_by_name` — whether a name-only lookup may also reach it. Source-written parameters and definitions need this view; introduced definitions stay scope-only. |
 | `cands` | how many bindings **passed** `is_candidate` — the same meaning at every site, so the backends can be compared. |
-| `picked` / `via` | which binding won, and how it ended: `scoped`, `byname` (the rule declined and the by-name fallback answered), `unbound` (the rule declined and the fallback found nothing — on a name whose `BIND` shows a scoped binding, that is the fallback *refusing* a rejected binding, the family-36 rule at work), `ambiguous` (two candidates, neither more specific). At `phase=compile` the VM defers its fallback to runtime, so `byname` there means only "left to a by-name lookup". |
+| `picked` / `via` | which binding won, and how it ended: `scoped`, `byname` (the rule declined and the by-name fallback answered), `unbound` (the rule declined and the fallback found nothing — on a name whose `BIND` shows a scoped binding, that is the fallback *refusing* a rejected binding, the family-36 rule at work), `ambiguous` (two candidates, neither more specific), `early-link` (`phase=desugar`, `cands=0`: the desugarer bound a library macro's reference to the binding its macro means, #438, and linked its record, #837, so no backend resolves it after, unless the same form's settling takes the link back, when a backend's record follows). At `phase=compile` the VM defers its fallback to runtime, so `byname` there means only "left to a by-name lookup". |
 | `op` | `get`, `set`, or `bind` for a binding occurrence being renamed. The VM's renamer serves all three through one function. |
 | `landed` | on `WROTE`: where a scoped write finally went. A write walks environment by environment, so its trace is a sequence; this is its conclusion. |
 

@@ -822,8 +822,9 @@ const SUM_PROGRAM: &str = "(define (f) (sum-list '(1 2 3))) (define fold 'captur
 /// A library macro used in a host namespace that imports the binding its
 /// template names keeps that binding past a later host definition of the
 /// name, as the same program does at top level (#851). The desugarer binds
-/// the template's `fold` early to an import alias of the nearest namespace
-/// that imports it, the host namespace, before asking the global namespace,
+/// the template's `fold` early, linking its record (#837), where the
+/// nearest namespace imports it, the host namespace, before asking the
+/// global namespace,
 /// which here imports nothing of `(srfi 1)` (the owner's ruling (c) of
 /// 2026-11-07 on #835's question 3). The host's own `fold` is its
 /// definition all the same.
@@ -857,8 +858,8 @@ fn a_library_macro_in_a_host_namespace_keeps_its_import() {
 /// The same program in a host namespace that imports nothing, after the
 /// global namespace imports `(srfi 1)` and `(host4b sum)`: the host
 /// namespace holds no import of `fold`'s location, so the desugarer asks the
-/// global namespace next, whose import alias keeps the template's `fold`
-/// the library's, as before the host-namespace kind (the owner's ruling
+/// global namespace next, whose import lets it link the template's `fold`
+/// to the library's binding, as before the host-namespace kind (the owner's ruling
 /// (c) of 2026-11-07 on #835's question 3). The host's `fold` is its own
 /// definition, and the global's is still `(srfi 1)`'s.
 fn library_macro_keeps_the_global_import<B: Backend>(interp: Interpreter<B>) -> [String; 3] {
@@ -978,7 +979,7 @@ fn no_namespace_read_answers_a_record() {
 }
 
 /// The binding records the heap counts, read by a form that calls only
-/// procedures, so that expanding it mints no import alias.
+/// procedures, so that expanding it makes no alias.
 const RECORDS: &str = "(cdr (assq 'binding-records (gc-stats)))";
 
 /// A read of a name nothing binds makes no binding record (#834, critique
@@ -1002,8 +1003,11 @@ const RECORDS: &str = "(cdr (assq 'binding-records (gc-stats)))";
 /// other; and once `keep` lets it go, two collections give the count back.
 /// `keep` is defined, and a `guard` of the same shape expanded, before the
 /// baseline, since a definition's operand is linked at load and the first
-/// expansion of `guard` binds import aliases for its template's
-/// procedures, which outlive the collections.
+/// expansion of `guard` relinks its template's private helpers, whose
+/// aliases outlive the collections. (Its imported procedures it links,
+/// making no record, since #837; until then each was an import alias, a
+/// record more in the global namespace, which this baseline also waited
+/// for.)
 fn read_makes_no_record<B: Backend>(interp: Interpreter<B>, backend: &str) {
     interp
         .eval_program_owned(

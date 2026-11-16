@@ -133,10 +133,10 @@ impl<'a> CpsEvaluator<'a> {
         prompt_stack: &[PromptFrame],
     ) -> Rc<CpsContinuation> {
         let sentinel = |name: &str| -> (Rc<CpsExpr>, Rc<str>) {
-            let body = CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Var {
-                name: Rc::from(name),
-                scopes: ScopeSet::new(),
-            })));
+            let body = CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::var(
+                Rc::from(name),
+                ScopeSet::new(),
+            ))));
             (body, Rc::from(name))
         };
         let (body, param, env, captured_cont_env, resume) = match cont {

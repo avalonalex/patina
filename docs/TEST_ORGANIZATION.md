@@ -1137,8 +1137,8 @@ namespace since #835, to rooting what is bound in it, on both backends
   template names, which keeps that binding past a later host definition of
   the name, as at top level, while the global environment imports nothing
   of it (#851; the owner's ruling (c) of 2026-11-07 on #835's question 3
-  has the desugarer ask the host namespace for the import alias before the
-  global environment);
+  has the desugarer ask the host namespace whether it imports the binding
+  before the global environment);
 - the same macro used in a host namespace that imports nothing, after the
   global environment imports it and the binding its template names, which
   keeps the global environment's import: the desugarer asks the global
@@ -1194,7 +1194,9 @@ is one record more on the VM, its placeholder, and none on the tree-walker; a
 caught call of it that misses adds none; and once it is let go two
 collections give the count back. `keep` is defined and a `guard` expanded
 before the baseline, since a definition's operand is linked at load and
-`guard`'s first expansion binds import aliases that outlive the collections.
+`guard`'s first expansion relinks its private helpers, whose aliases
+outlive the collections (until #837 it also bound import aliases, records of
+their own).
 `a_host_namespace_s_placeholders_are_dropped_with_their_code` does the same
 in a host namespace, on both backends: a held host procedure reading an
 unbound name is two records on the VM, a weak read-through record and the
@@ -1345,7 +1347,7 @@ later as a wrong answer or not at all (#621, #624, #625).
 | Lane | Script | What it runs | Interval | Budget | In CI |
 |---|---|---|---|---|---|
 | Differential | `scripts/run_gc_differential.sh [binary]` | the chibi suite under GC off, the adaptive default and stress, on both backends, with the tally pinned; plus two reclamation proofs per backend, in bytes (below) | `PATINA_GC_STRESS_INTERVAL`, default 16; 1 in the release lane | the release lane's step took 5.9 min on the runner and the debug lane's 1.1 min (2026-10-03) | `ci.yml`, every change: release `gc-check` at 1, and debug at 16 |
-| Zeal | `scripts/run_gc_zeal.sh [binary]` | `tests/scheme/control/*.scm` except `tail-recursion.scm` under GC off and zeal, on both backends; each file must match, exit 0, print its SRFI 64 summary and have collected, and the binary must first pass a probe that it honours zeal (below) | `PATINA_GC_ZEAL=entry`: every outermost safe point, which on the VM is a frame's entry or a generic call's return (#700) | 10 min on the runner (2026-10-03), within the job's 60 | `gc-zeal.yml`, release `gc-check`, when a change touches the VM's runtime, compiler or types, `patina-core`'s heap, `tagged_value.rs`, `environment.rs`, `library.rs`, `link_table.rs`, `placeholder_store.rs` or `literal_pool.rs`, the library loader or registry, the runtime's `import_set.rs`, either backend's `backend.rs`, the tree-walker's evaluator, the toolchain, or the lane's own files, and weekly on `main`; it also runs `finished_forms_release_code` under zeal |
+| Zeal | `scripts/run_gc_zeal.sh [binary]` | `tests/scheme/control/*.scm` except `tail-recursion.scm` under GC off and zeal, on both backends; each file must match, exit 0, print its SRFI 64 summary and have collected, and the binary must first pass a probe that it honours zeal (below) | `PATINA_GC_ZEAL=entry`: every outermost safe point, which on the VM is a frame's entry or a generic call's return (#700) | 10 min on the runner (2026-10-03), within the job's 60 | `gc-zeal.yml`, release `gc-check`, when a change touches the VM's runtime, compiler or types, `patina-core`'s heap, `tagged_value.rs`, `environment.rs`, `library.rs`, `link_table.rs`, `placeholder_store.rs`, `literal_pool.rs` or `cps_expr.rs` (whose linked nodes hold binding records, #837), the library loader or registry, the runtime's `import_set.rs`, either backend's `backend.rs`, the tree-walker's evaluator, the toolchain, or the lane's own files, and weekly on `main`; it also runs `finished_forms_release_code` under zeal |
 | Stress, per PR | `scripts/run_gc_stress_tests.sh` | 16 `cargo test` targets that drive the collector, control flow and library loading through the embedding API (`callability`, `control_flow_matrix`, `cps_features`, `ephemerons`, `escape_from_primitive`, `finished_forms_release_code`, `gc_tree_walker`, `gc_vm`, `host_environments`, `hygiene_matrix`, `interpreter_api`, `library_loading`, `macro_definition_env`, `owned_handles`, `rooted_loading`, `vm_callprimitive`), and `scheme_suite.rs`; each must run its pinned number of tests, none filtered out, pass, and report at least its pinned number of collections | `PATINA_GC_STRESS=16`; 4096 for `scheme_suite.rs` | about a minute: 66 s here (2026-11-07, and again 2026-11-09 with #836's placeholder tests) after `cargo test --all --lib --tests`, whose build it reuses, as CI runs it, 49 s of it the 16 targets, 27 s of those `gc_tree_walker`, nearly all one deep-recursion test, and 17 s `scheme_suite.rs`; 105–117 s that day in runs that had cargo build around each target first, their tests taking the same 67–68 s; the step's limit is 15 min | `ci.yml`'s Test Suite, every change, on ubuntu and macOS, in the debug build that job has just tested |
 | Stress, nightly | `scripts/run_larceny_gc_stress.sh [--tree-walker] [--r6rs]` | Larceny's R7RS and `(r6rs ...)` suites at the pinned commit, on both backends; each suite's tally must be its row in `scheme_tests/reports/larceny_gc_stress.tsv`, its exit status the one its tally implies, with no panic, no timeout, at least the row's pinned number of collections, and only the job's backend in its process | 16; 4096 for `char`, `flonum`, `lazy`, `sort` and `stream`; `ephemeron` left out until #609 | a job per backend, each limited to 75 min; on the runner (2026-10-03) the VM's R7RS lane took 434 s and its `(r6rs ...)` lane 24 s, a 9-minute job, and the tree-walker's 1774 s and 51 s, a 31-minute job, about 2.2 times the time on an M-series Mac (307 s, 20–22 s, 757–1008 s, 29–36 s); a suite may take 600 s on the VM and 1500 s on the tree-walker, whose slowest, `stream`, took 783 s | `nightly.yml`, release `gc-check`, daily on `main`, and on a pull request that changes the lane |
 
@@ -1613,7 +1615,7 @@ collection the driver runs at a safe point, which the run reaches by
 allocating.
 
 **A template reference's link (#837, 4b.10).** An early-bound template
-reference will be bound to a binding record, a `Link` in its form's pool,
+reference is bound to a binding record, a `Link` in its form's pool,
 rather than renamed to an alias spelling. The first step, inert, adds the
 link to core, `CoreExpr` and the VM, and tests each part with links built by
 hand: core's `early_link_tests` (only an import is linked early, a location
@@ -1659,6 +1661,45 @@ on both backends: `macro_definition_env.rs`'s
 and `an_early_bound_primitive_keeps_its_fast_path`, which also asserts the
 template's inline `Car` on the code `compile_for_inspection` answers. Both
 targets' stress counts were re-pinned for them.
+
+The second step carries the link into the tree-walker and switches the
+desugarer to it. The tree-walker's half is tested by hand-built nodes:
+`cps_expr.rs`'s size pin (`CpsExprKind` stays 112 bytes, each linked
+variant one `Rc` of its payload) and
+`a_linked_node_displays_and_needs_scopes` (a linked reference or
+assignment without scopes panics); the sentinel
+`expression_links_under_var_and_set`, a `LinkedVar`'s and `LinkedSet`'s
+record reachable only through the node and its payload's `Rc`, and
+`expression_literals_under_every_node`, which holds both variants' other fields; `patina-ir`'s
+`the_transform_carries_each_link_into_its_node`; the tree-walker's
+`a_linked_node_reads_and_writes_its_record_not_its_spelling`, whose
+program binds the spelling to something else, and whose link to an
+`UNBOUND` cell answers an undefined variable named by the spelling; and
+`binding_record.rs`'s `a_links_write_stores_into_its_records_cell_unless_unbound`;
+and `gc_census.rs`'s `a_linked_assignment_names_its_records_cell`, which
+holds a linked `set!`'s store to the funnel on both backends: logged at
+`env_set_slot_value` with a holder. The mutation matrix found a store that
+bypassed the funnel caught by nothing else.
+The switch's own tests failed before it and pass after, on both backends:
+`macro_definition_env.rs`'s `an_early_bound_reference_mints_no_spelling`
+(no `f.k`, `k` below 100,000, is a name of the program's namespace),
+`an_early_bound_expansion_leaves_the_programs_names_alone` (its names
+three ways, its placeholders and the count of binding records, before and
+after an expansion; the enumerations hid the alias before, so the count is
+what failed) and
+`a_minted_spelling_defined_by_the_program_leaves_earlier_code_alone`; the
+operand checks of `vm_callprimitive.rs`'s two tests, `car@linked` where the
+base had `car.N`; and `expansion/template-references.scm`'s last two rows,
+which pass under Gauche and under chibi with the library as a `.sld`, and
+which can pass vacuously in a process that has minted many aliases first, so
+they were shown failing with the file run alone. `scope_trace.rs`'s grammar
+tests hold the `via=early-link` record, and
+`relink_alias_tests::minting_skips_a_name_already_bound` keeps the one
+property of the deleted `import_alias_tests` no other test had, and
+`hygiene_matrix.rs`'s `the_trace_says_how_an_early_bound_reference_ended`
+holds both outcomes the scope trace records for one. The stress counts of
+`macro_definition_env`, `vm_callprimitive`, `hygiene_matrix` and
+`scheme_suite` were re-pinned.
 
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):

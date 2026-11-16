@@ -590,8 +590,9 @@ pub struct CompiledMacro {
     /// form that ran the generator, while it is still known — and put back
     /// for the form of each expansion (#446). Empty for a written macro.
     ///
-    /// Traced. Early binding asks these environments only where a name's
-    /// binding lives, never for a value. The registry roots each while its
+    /// Traced. Early binding asks these environments only for the binding
+    /// record a name's walk finds there, which the reference links (#837),
+    /// never for a value. The registry roots each while its
     /// library is registered; once a redefinition replaces the library,
     /// nothing else need: an importer holds the library's cells, not its
     /// environment, since the import owners that kept every replaced one
@@ -599,8 +600,14 @@ pub struct CompiledMacro {
     /// an environment, and it is traced because the macro holds them by `Rc`
     /// for as long as it lives, and an environment kept alive with its values
     /// swept is #38's shape. It is one of the holders of a replaced library's
-    /// namespace that #614's release settles. Otherwise one or two
-    /// environments the walk has nearly always seen already.
+    /// namespace that #614's release settles, and is **counted** among them
+    /// rather than replaced (#837; `PRD/GC_PRD.md` §17.2): where the template
+    /// names a procedure of the generator's library, that procedure's closure
+    /// keeps the namespace anyway, so a narrower edge (the records alone)
+    /// would release nothing there, and it would have to hold every name a
+    /// later expansion asks early binding about, or turn "bound early" into
+    /// "left alone" silently. 4b.11's audit lists the edge. Otherwise one or
+    /// two environments the walk has nearly always seen already.
     pub foreign_expansions: Vec<(ScopeId, Rc<Environment>)>,
 }
 

@@ -43,6 +43,7 @@
 //!   first-class values that can be stored and invoked.
 
 use crate::Trace;
+use crate::binding_record::BindingLink;
 use crate::error::SourceLocation;
 use crate::scope::ScopeSet;
 use crate::tagged_value::TaggedValue;
@@ -180,6 +181,9 @@ pub enum CpsExprKind {
 
     /// Variable reference
     /// Example: x, my-function
+    ///
+    /// Read by name. A reference the desugarer bound early is a
+    /// [`LinkedVar`](CpsExprKind::LinkedVar) instead.
     Var { name: Symbol, scopes: ScopeSet },
 
     /// Continuation variable reference
@@ -336,7 +340,72 @@ pub enum CpsExprKind {
     /// Halt - top-level continuation (program termination)
     /// This is the "end of the program" continuation.
     Halt(Rc<CpsExpr>),
+
+    // ==================== Linked references (#837) ====================
+    // Last, so that the variants before them keep the discriminants they
+    // had: placed after `Var` and `Set`, they moved the dispatch on the
+    // kind in `eval_trivial_tagged` behind more compares, which cost a
+    // tree-walker `fib` more than the variants saved (measured 2026-11-14).
+    /// A reference the desugarer bound early (#438, #837): its
+    /// [`LinkedRef`]'s `link` is the binding record its expansion linked,
+    /// which the tree-walker reads in place of resolving the spelling — its
+    /// one read by record. A variant of its own rather than a field of
+    /// `Var`, so that a read by name tests nothing for it: the step loop's
+    /// dispatch on the kind is the test (§5.3's first mitigation; a field
+    /// cost an unlinked read a test and its arguments, measured 2026-11-14).
+    /// It always carries scopes ([`CpsExprKind::linked_var`] refuses one
+    /// without, C4). Its payload is behind one `Rc`, so that the variant
+    /// adds one field to the kind's drop glue, clone and trace, as `Halt`
+    /// does, rather than three: a payload in place cost the tree-walker's
+    /// workloads 0.2–0.4% in instructions, which the `Rc` takes back
+    /// (measured 2026-11-15). Traced by the derive, through the `Rc`,
+    /// so a closure's or a continuation's body, and the trampoline's step,
+    /// keep the record while they hold the node.
+    LinkedVar(Rc<LinkedRef>),
+
+    /// An assignment the desugarer bound early: it writes its
+    /// [`LinkedAssign`]'s record, as a [`LinkedVar`](CpsExprKind::LinkedVar)
+    /// reads one (#837). Its payload is behind one `Rc`, as `LinkedVar`'s is.
+    LinkedSet(Rc<LinkedAssign>),
 }
+
+/// A [`CpsExprKind::LinkedVar`]'s payload (#837). Made by
+/// [`CpsExprKind::linked_var`], which refuses one without scopes (C4); its
+/// fields are public, so the constructor, not the type, holds C4.
+#[derive(Debug, Trace)]
+pub struct LinkedRef {
+    /// The spelling, for an error and the display; never resolved.
+    pub name: Symbol,
+    /// The reference's scopes: never empty.
+    pub scopes: ScopeSet,
+    /// The binding record the reference reads.
+    pub link: BindingLink,
+}
+
+/// Traced wherever its node is: each is held by the node
+/// [`CpsExprKind::linked_var`] made and by that node's clones, and the
+/// visitor walks a node once however many paths reach it.
+impl crate::heap::trace::TraceThroughRc for LinkedRef {}
+
+/// A [`CpsExprKind::LinkedSet`]'s payload (#837). Made by
+/// [`CpsExprKind::linked_set`], which refuses one without scopes (C4); its
+/// fields are public, so the constructor, not the type, holds C4.
+#[derive(Debug, Trace)]
+pub struct LinkedAssign {
+    /// The spelling, for an error and the display; never resolved.
+    pub var: Symbol,
+    /// The assignment's scopes: never empty.
+    pub scopes: ScopeSet,
+    /// The value to store: trivial.
+    pub value: Rc<CpsExpr>,
+    /// What to do after the store.
+    pub cont: Rc<CpsExpr>,
+    /// The binding record the assignment writes.
+    pub link: BindingLink,
+}
+
+/// Traced wherever its node is, as [`LinkedRef`] is.
+impl crate::heap::trace::TraceThroughRc for LinkedAssign {}
 
 /// A parameter in CPS lambda
 #[derive(Debug, Clone)]
@@ -475,12 +544,88 @@ impl CpsPrimitive {
 }
 
 impl CpsExprKind {
+    /// A reference read by name: a bare symbol's, a scoped one's that no
+    /// early binding linked, or a temporary of the transform's.
+    pub fn var(name: Symbol, scopes: ScopeSet) -> Self {
+        CpsExprKind::Var { name, scopes }
+    }
+
+    /// A reference that reads `link`'s record when it has one (#837): a
+    /// [`LinkedVar`](CpsExprKind::LinkedVar), else a `Var`.
+    ///
+    /// # Panics
+    ///
+    /// Where `link` is `Some` and `scopes` is empty, in every build: a link
+    /// is made only for a macro-introduced reference, which carries its
+    /// expansion's scope, so one without them is a desugarer's defect (C4).
+    pub fn linked_var(name: Symbol, scopes: ScopeSet, link: Option<BindingLink>) -> Self {
+        match link {
+            None => CpsExprKind::Var { name, scopes },
+            Some(link) => {
+                assert!(
+                    !scopes.is_empty(),
+                    "a linked reference without scopes: {name} (#837)"
+                );
+                CpsExprKind::LinkedVar(Rc::new(LinkedRef { name, scopes, link }))
+            }
+        }
+    }
+
+    /// An assignment that writes `link`'s record when it has one (#837): a
+    /// [`LinkedSet`](CpsExprKind::LinkedSet), else a `Set`.
+    ///
+    /// # Panics
+    ///
+    /// As [`linked_var`](Self::linked_var)'s.
+    pub fn linked_set(
+        var: Symbol,
+        scopes: ScopeSet,
+        value: Rc<CpsExpr>,
+        cont: Rc<CpsExpr>,
+        link: Option<BindingLink>,
+    ) -> Self {
+        match link {
+            None => CpsExprKind::Set {
+                var,
+                scopes,
+                value,
+                cont,
+            },
+            Some(link) => {
+                assert!(
+                    !scopes.is_empty(),
+                    "a linked assignment without scopes: {var} (#837)"
+                );
+                CpsExprKind::LinkedSet(Rc::new(LinkedAssign {
+                    var,
+                    scopes,
+                    value,
+                    cont,
+                    link,
+                }))
+            }
+        }
+    }
+
+    /// The record a linked reference or assignment reads or writes (#837),
+    /// and `None` for every other node.
+    pub fn link(&self) -> Option<BindingLink> {
+        match self {
+            CpsExprKind::LinkedVar(linked) => Some(linked.link),
+            CpsExprKind::LinkedSet(linked) => Some(linked.link),
+            _ => None,
+        }
+    }
+
     /// Whether this node has subexpressions: a walk of the tree goes deeper
     /// from it, and grows its stack to (#617).
     pub fn is_nested(&self) -> bool {
         !matches!(
             self,
-            CpsExprKind::Literal(_) | CpsExprKind::Var { .. } | CpsExprKind::ContRef(_)
+            CpsExprKind::Literal(_)
+                | CpsExprKind::Var { .. }
+                | CpsExprKind::LinkedVar(_)
+                | CpsExprKind::ContRef(_)
         )
     }
 
@@ -490,6 +635,7 @@ impl CpsExprKind {
             self,
             CpsExprKind::Literal(_)
                 | CpsExprKind::Var { .. }
+                | CpsExprKind::LinkedVar(_)
                 | CpsExprKind::ContRef(_)
                 | CpsExprKind::Lambda { .. }
         )
@@ -499,7 +645,7 @@ impl CpsExprKind {
     pub fn expr_kind(&self) -> &'static str {
         match self {
             CpsExprKind::Literal(_) => "literal",
-            CpsExprKind::Var { .. } => "var",
+            CpsExprKind::Var { .. } | CpsExprKind::LinkedVar(_) => "var",
             CpsExprKind::ContRef(_) => "cont-ref",
             CpsExprKind::Lambda { .. } => "lambda",
             CpsExprKind::LetVal { .. } => "let-val",
@@ -508,7 +654,7 @@ impl CpsExprKind {
             CpsExprKind::Apply { .. } => "apply",
             CpsExprKind::Continue { .. } => "continue",
             CpsExprKind::If { .. } => "if",
-            CpsExprKind::Set { .. } => "set!",
+            CpsExprKind::Set { .. } | CpsExprKind::LinkedSet(_) => "set!",
             CpsExprKind::Define { .. } => "define",
             CpsExprKind::PrimOp { .. } => "prim-op",
             CpsExprKind::Halt(_) => "halt",
@@ -526,6 +672,9 @@ impl std::fmt::Display for CpsExprKind {
                 } else {
                     write!(f, "{}@{}", name, scopes)
                 }
+            }
+            CpsExprKind::LinkedVar(linked) => {
+                write!(f, "{}@{}@linked", linked.name, linked.scopes)
             }
             CpsExprKind::ContRef(k) => write!(f, "#{}", k),
             CpsExprKind::Lambda {
@@ -594,6 +743,13 @@ impl std::fmt::Display for CpsExprKind {
             } => {
                 write!(f, "(set! {} {} {})", var, value, cont)
             }
+            CpsExprKind::LinkedSet(linked) => {
+                write!(
+                    f,
+                    "(set! {}@linked {} {})",
+                    linked.var, linked.value, linked.cont
+                )
+            }
             CpsExprKind::Define {
                 name, value, cont, ..
             } => {
@@ -632,6 +788,58 @@ mod tests {
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     }
 
+    /// A link leaves the node its size (#837, §5.1's check): `LinkedVar`
+    /// and `LinkedSet` each hold one `Rc` (8 B) of their payload, far below
+    /// `Lambda`, the largest variant, so the 8 B slot the design held in
+    /// reserve is not needed. Measured before the variants: 112 and 168.
+    #[test]
+    fn a_link_leaves_the_node_its_size() {
+        assert_eq!(std::mem::size_of::<BindingLink>(), 8);
+        assert_eq!(std::mem::size_of::<Rc<LinkedRef>>(), 8);
+        assert_eq!(std::mem::size_of::<Rc<LinkedAssign>>(), 8);
+        assert_eq!(std::mem::size_of::<CpsExprKind>(), 112);
+        assert_eq!(std::mem::size_of::<CpsExpr>(), 168);
+    }
+
+    /// A linked node displays its link, and one without scopes is refused
+    /// in every build (C4).
+    #[test]
+    fn a_linked_node_displays_and_needs_scopes() {
+        use crate::binding_record::{BindingCell, Record};
+        let mut heap = crate::heap::Heap::new();
+        let cell = BindingCell::free(&mut heap, TaggedValue::fixnum(1));
+        let link = BindingLink::new(Record::new(&mut heap, cell));
+        let scopes = ScopeSet::from_iter([crate::scope::ScopeId(3)]);
+        let var = CpsExprKind::linked_var("f".into(), scopes.clone(), Some(link));
+        assert_eq!(var.to_string(), format!("f@{scopes}@linked"));
+        assert_eq!(var.link(), Some(link));
+        let unlinked = CpsExprKind::linked_var("f".into(), scopes.clone(), None);
+        assert!(matches!(unlinked, CpsExprKind::Var { .. }), "{unlinked:?}");
+        let set = CpsExprKind::linked_set(
+            "f".into(),
+            scopes,
+            CpsExpr::rc(CpsExprKind::Literal(TaggedValue::fixnum(2))),
+            CpsExpr::rc(CpsExprKind::Literal(TaggedValue::UNSPECIFIED)),
+            Some(link),
+        );
+        assert!(set.to_string().starts_with("(set! f@linked 2 "), "{set}");
+        assert_eq!(set.link(), Some(link));
+        let unscoped = std::panic::catch_unwind(|| {
+            CpsExprKind::linked_var("f".into(), ScopeSet::new(), Some(link))
+        });
+        assert!(unscoped.is_err(), "a linked reference needs scopes");
+        let unscoped = std::panic::catch_unwind(|| {
+            CpsExprKind::linked_set(
+                "f".into(),
+                ScopeSet::new(),
+                CpsExpr::rc(CpsExprKind::Literal(TaggedValue::fixnum(2))),
+                CpsExpr::rc(CpsExprKind::Literal(TaggedValue::UNSPECIFIED)),
+                Some(link),
+            )
+        });
+        assert!(unscoped.is_err(), "a linked assignment needs scopes");
+    }
+
     #[test]
     fn test_prompt_tag_uniqueness() {
         let tag1 = PromptTag::new("test");
@@ -648,20 +856,14 @@ mod tests {
         let lit = CpsExpr::new(CpsExprKind::Literal(TaggedValue::fixnum(42)));
         assert!(lit.is_trivial());
 
-        let var = CpsExpr::new(CpsExprKind::Var {
-            name: "x".into(),
-            scopes: ScopeSet::new(),
-        });
+        let var = CpsExpr::new(CpsExprKind::var("x".into(), ScopeSet::new()));
         assert!(var.is_trivial());
 
         let cont_ref = CpsExpr::new(CpsExprKind::ContRef("k".into()));
         assert!(cont_ref.is_trivial());
 
         let app = CpsExpr::new(CpsExprKind::App {
-            func: CpsExpr::rc(CpsExprKind::Var {
-                name: "f".into(),
-                scopes: ScopeSet::new(),
-            }),
+            func: CpsExpr::rc(CpsExprKind::var("f".into(), ScopeSet::new())),
             args: vec![],
             cont: "k".into(),
         });

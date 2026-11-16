@@ -11,8 +11,15 @@ use crate::eval::error::EvalError;
 use patina_core::Procedure;
 use patina_core::cps_expr::{CpsExpr, CpsExprKind, CpsParam};
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{Environment, ScopeSet, ScopedParam, ScopedSetError};
+use patina_core::{BindingLink, Environment, ScopeSet, ScopedParam, ScopedSetError};
 use std::rc::Rc;
+
+/// What [`CpsEvaluator::step_linked`] did: read a linked reference, or
+/// write a linked assignment and leave its continuation to run.
+pub(super) enum Linked {
+    Read(TaggedValue),
+    Written(Rc<CpsExpr>),
+}
 
 impl<'a> CpsEvaluator<'a> {
     /// Evaluate a trivial expression to a TaggedValue
@@ -30,6 +37,10 @@ impl<'a> CpsEvaluator<'a> {
 
             CpsExprKind::Var { name, scopes } => self
                 .lookup_var_tagged(name, scopes, env)
+                .map_err(|error| error.at_opt(expr.source.clone())),
+
+            CpsExprKind::LinkedVar(linked) => self
+                .lookup_linked(&linked.name, linked.link)
                 .map_err(|error| error.at_opt(expr.source.clone())),
 
             CpsExprKind::ContRef(k) => {
@@ -99,6 +110,75 @@ impl<'a> CpsEvaluator<'a> {
             env.get_with_scopes(&self.evaluator.heap, name, scopes)
                 .map_err(|e| EvalError::InvalidSyntax(e.to_string()))?
                 .ok_or_else(|| EvalError::UndefinedVariable(name.to_string()))
+        }
+    }
+
+    /// Read a reference the desugarer bound early (#438): the binding
+    /// record its expansion linked, and never its spelling, which a later
+    /// definition of the program's or a frame between could capture (#837).
+    /// That is the tree-walker's one read by record (#837's question 1,
+    /// (a)); every other reference reads by name, as 4b's start decision 8
+    /// has it. Only a `CpsExprKind::LinkedVar` comes here, a variant of its
+    /// own, so a read by name ([`lookup_var_tagged`](Self::lookup_var_tagged))
+    /// tests nothing for it and takes the arguments it took before #837.
+    ///
+    /// Record → cell → value, two loads. Its record is traced from the node
+    /// that holds it, by every closure's and continuation's body and by the
+    /// trampoline's step (#837). Out of line, as `lookup_var_tagged` is.
+    #[inline(never)]
+    pub(super) fn lookup_linked(
+        &self,
+        name: &str,
+        link: BindingLink,
+    ) -> Result<TaggedValue, EvalError> {
+        link.value(&self.evaluator.heap.borrow())
+            .ok_or_else(|| EvalError::UndefinedVariable(name.to_string()))
+    }
+
+    /// A step that is a linked reference or assignment (#837): what the
+    /// reference reads, or the assignment's continuation once it has
+    /// written. The step loop's one call for both, so that they add one arm
+    /// to it and no more: an arm each, inlined, grew the loop by some 200
+    /// instructions and moved its registers (measured 2026-11-14).
+    #[inline(never)]
+    pub(super) fn step_linked(
+        &self,
+        expr: &CpsExpr,
+        env: &Rc<Environment>,
+        cont_env: &ContEnv,
+    ) -> Result<Linked, EvalError> {
+        match &expr.kind {
+            CpsExprKind::LinkedVar(linked) => self
+                .lookup_linked(&linked.name, linked.link)
+                .map(Linked::Read),
+            CpsExprKind::LinkedSet(linked) => {
+                let value = self.eval_trivial_tagged(&linked.value, env, cont_env)?;
+                self.assign_linked(&linked.var, linked.link, value)?;
+                Ok(Linked::Written(Rc::clone(&linked.cont)))
+            }
+            _ => Err(EvalError::InternalError(format!(
+                "not a linked node: {}",
+                expr.expr_kind()
+            ))),
+        }
+    }
+
+    /// A linked assignment (`CpsExprKind::LinkedSet`) writes its record, as
+    /// a linked reference reads it ([`lookup_linked`](Self::lookup_linked)):
+    /// a store into the record's cell through the funnel, logged as a store
+    /// through a namespace's slot (#837). A cell that holds `UNBOUND` is
+    /// refused, and nothing is stored.
+    #[inline(never)]
+    pub(super) fn assign_linked(
+        &self,
+        name: &str,
+        link: BindingLink,
+        value: TaggedValue,
+    ) -> Result<(), EvalError> {
+        if link.assign(&mut self.evaluator.heap.borrow_mut(), value) {
+            Ok(())
+        } else {
+            Err(EvalError::UndefinedVariable(name.to_string()))
         }
     }
 

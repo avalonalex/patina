@@ -64,8 +64,12 @@
 //!   the number means one thing and the two backends can be compared.
 //! - `picked` / `via` — which binding the rule chose and how it ended:
 //!   `scoped` (the rule decided), `byname` (it declined and the caller fell
-//!   back to spelling), `ambiguous` (two candidates, neither more specific —
-//!   an error rather than an answer).
+//!   back to spelling), `unbound` (it declined and nothing answered),
+//!   `ambiguous` (two candidates, neither more specific — an error rather
+//!   than an answer), or `early-link` (the desugarer bound a library macro's
+//!   reference to the binding its macro means, which no backend resolves
+//!   after unless the same form's settling takes the link back, when a
+//!   backend's record follows: `phase=desugar`, #837).
 //! - `op` — `get`, `set`, or `bind` for a binding occurrence being renamed.
 //!   The VM's renamer serves all three through one function, so without this
 //!   a VM trace could not be diffed against the tree-walker's for the
@@ -190,6 +194,16 @@ pub enum Outcome {
     Unbound,
     /// Two candidates and neither more specific: an error, not an answer.
     Ambiguous,
+    /// The desugarer bound a library macro's reference early (#438): it
+    /// links the binding record the macro's environment finds for the name,
+    /// which both backends read in place of the spelling, and neither
+    /// resolves it after (#837) — unless the same top-level form introduces
+    /// a definition the reference selects, when settling takes the link
+    /// back at the form's end and the backend's own record follows
+    /// (`phase=compile` on the VM, `phase=run` on the tree-walker).
+    /// `phase=desugar` only, with `cands=0`: a reference is linked only where
+    /// no scoped binding selects it.
+    EarlyLink,
 }
 
 impl Outcome {
@@ -199,6 +213,7 @@ impl Outcome {
             Outcome::ByName => "byname",
             Outcome::Unbound => "unbound",
             Outcome::Ambiguous => "ambiguous",
+            Outcome::EarlyLink => "early-link",
         }
     }
 }
@@ -453,6 +468,19 @@ mod tests {
             wrote_record("run", "c", &set(&[137]), "byname"),
             "WROTE   phase=run name=\"c\" ref={S137} landed=byname\n"
         );
+        // A library macro's reference, linked to its binding (#837).
+        assert_eq!(
+            resolve_record(
+                "desugar",
+                "f",
+                &set(&[140]),
+                0,
+                None,
+                Op::Get,
+                Outcome::EarlyLink
+            ),
+            "RESOLVE phase=desugar name=\"f\" ref={S140} cands=0 picked=- via=early-link op=get\n"
+        );
     }
 
     /// A name that could otherwise forge a field or a whole record is escaped.
@@ -480,10 +508,11 @@ mod tests {
                 Outcome::Scoped,
                 Outcome::ByName,
                 Outcome::Unbound,
-                Outcome::Ambiguous
+                Outcome::Ambiguous,
+                Outcome::EarlyLink
             ]
             .map(Outcome::as_str),
-            ["scoped", "byname", "unbound", "ambiguous"]
+            ["scoped", "byname", "unbound", "ambiguous", "early-link"]
         );
     }
 }

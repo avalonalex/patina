@@ -160,15 +160,6 @@ impl BindingCell {
         heap.cdr(self.0) == owner_tag(env_id)
     }
 
-    /// The cell's identity: its word less a check build's generation stamp.
-    /// Compared, never dereferenced: a cell made in a swept cell's slot has
-    /// the swept cell's key in every build, so a holder of keys must let a
-    /// key go before its cell can be swept (the rulings of 2026-11-03).
-    #[inline]
-    pub(crate) fn key(self) -> u64 {
-        stamp_free(self.0)
-    }
-
     /// The location this cell is, as `Environment::binding_location`
     /// answers it: its word, stamp and all, as an integer identity.
     #[inline]
@@ -315,7 +306,10 @@ impl Record {
     }
 
     /// The record's identity: its word less a check build's generation
-    /// stamp, as [`BindingCell::key`].
+    /// stamp. Compared, never dereferenced: a record made in a swept
+    /// record's slot has the swept record's key in every build, so a holder
+    /// of keys must keep each record live while it holds its key (the
+    /// rulings of 2026-11-03).
     #[inline]
     pub(crate) fn key(self) -> u64 {
         stamp_free(self.0)
@@ -332,9 +326,12 @@ impl Record {
 /// branded: a backend holds one only while something the collector traces
 /// does — the literal pool of the compilation that found it
 /// ([`LiteralPool::link`](crate::LiteralPool::link) is the only way to get
-/// one), and from there a VM unit's link table — and a safe crate never
-/// holds one at all: the desugarer holds a [`Linkable`], which a context
-/// brands, and pools it as a [`Link`](crate::Link).
+/// one), and from there a VM unit's link table or a tree-walker's
+/// `CpsExprKind::LinkedVar` and `LinkedSet`. A safe crate holds one only
+/// in passing: the desugarer holds a [`Linkable`], which a context brands,
+/// and pools it as a [`Link`](crate::Link), and the CPS transform
+/// (`patina-ir`) copies the link out of the live pool straight into the
+/// node it builds, which the backend then traces.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Trace)]
 pub struct BindingLink(Record);
 
@@ -368,6 +365,23 @@ impl BindingLink {
     pub fn value(self, heap: &Heap) -> Option<TaggedValue> {
         let value = self.0.car_cell(heap).value(heap);
         (value != TaggedValue::UNBOUND).then_some(value)
+    }
+
+    /// Store `value` into the binding: into the record's cell, through the
+    /// funnel, logged as a store through a namespace's slot
+    /// (`Site::EnvSetSlot`), as `LinkTable::assign` logs the VM's. The
+    /// tree-walker's write of a linked `set!` (#837). Answers `false`, and
+    /// stores nothing, where the cell holds `UNBOUND`, which no store
+    /// binds: [`value`](Self::value)'s `None`.
+    #[inline]
+    #[must_use = "`false` is an unbound variable, which the caller reports"]
+    pub fn assign(self, heap: &mut Heap, value: TaggedValue) -> bool {
+        let cell = self.0.car_cell(heap);
+        if cell.value(heap) == TaggedValue::UNBOUND {
+            return false;
+        }
+        cell.store(heap, value, Site::EnvSetSlot);
+        true
     }
 }
 
@@ -461,28 +475,31 @@ mod tests {
         TaggedValue::fixnum(i)
     }
 
-    /// A cell's key is its slot's, whoever holds the slot: a cell made in a
-    /// swept cell's slot has the swept cell's key, in a check build too,
-    /// where the two words differ by their generation stamps. So a table
-    /// keyed by cells must drop a key before its cell can be swept, and a
-    /// test of that fails in CI's debug lane as in release (the rulings of
-    /// 2026-11-03).
+    /// A record's key is its slot's, whoever holds the slot: a record made
+    /// in a swept record's slot has the swept record's key, in a check build
+    /// too, where the two words differ by their generation stamps. So a map
+    /// keyed by records (a compilation's `OperandKey::Record`, #837) is
+    /// sound only while something roots every record it keys — the
+    /// compilation's pool — and a test of that fails in CI's debug lane as
+    /// in release (the rulings of 2026-11-03). Until 4b.10 a cell's key had
+    /// the same rule, for the import aliases' table it keyed.
     #[test]
-    fn a_cells_key_survives_slot_reuse_and_carries_no_stamp() {
+    fn a_records_key_survives_slot_reuse_and_carries_no_stamp() {
         let mut heap = Heap::new();
-        let old = BindingCell::new_own(&mut heap, n(1), 7);
+        let cell = BindingCell::free(&mut heap, n(1));
+        let old = Record::new(&mut heap, cell);
         let key = old.key();
         assert_eq!(key, TaggedValue::pair(old.0.heap_index()).raw());
 
-        collect_from(&mut heap, &[]);
+        collect_from(&mut heap, &[cell.0]);
         assert!(
             heap.free_pair_slots().contains(&old.0.heap_index()),
-            "nothing holds the cell, so the collection swept it"
+            "nothing holds the record, so the collection swept it"
         );
         while heap.free_pair_slots().last() != Some(&old.0.heap_index()) {
             heap.alloc_pair(TaggedValue::UNSPECIFIED, TaggedValue::UNSPECIFIED);
         }
-        let fresh = BindingCell::new_own(&mut heap, n(2), 9);
+        let fresh = Record::new(&mut heap, cell);
         assert_eq!(
             fresh.0.heap_index(),
             old.0.heap_index(),
@@ -495,10 +512,6 @@ mod tests {
                 "a check build stamps the reused slot's word"
             );
         }
-
-        // A record's key is stamp-free the same way.
-        let record = Record::new(&mut heap, fresh);
-        assert_eq!(record.key(), TaggedValue::pair(record.0.heap_index()).raw());
     }
 
     #[test]
@@ -735,5 +748,25 @@ mod tests {
         let record = Record::new(&mut heap, cell);
         collect_from(&mut heap, &[cell.0]);
         record.repoint(&mut heap, cell);
+    }
+
+    /// A link's write stores into its record's cell, which every name over
+    /// the cell then reads, and refuses a cell holding `UNBOUND`, storing
+    /// nothing (#837): the tree-walker's linked `set!` reports that as an
+    /// unbound variable.
+    #[test]
+    fn a_links_write_stores_into_its_records_cell_unless_unbound() {
+        let mut heap = Heap::new();
+        let cell = BindingCell::new_own(&mut heap, n(1), 2);
+        let link = BindingLink::new(Record::new(&mut heap, cell));
+        assert!(link.assign(&mut heap, n(5)));
+        assert_eq!(cell.value(&heap), n(5), "the cell holds the store");
+        assert_eq!(link.value(&heap), Some(n(5)));
+
+        let unbound = BindingCell::free(&mut heap, TaggedValue::UNBOUND);
+        let link = BindingLink::new(Record::new(&mut heap, unbound));
+        assert!(!link.assign(&mut heap, n(6)), "no store binds a variable");
+        assert_eq!(unbound.value(&heap), TaggedValue::UNBOUND, "nothing stored");
+        assert_eq!(link.value(&heap), None);
     }
 }

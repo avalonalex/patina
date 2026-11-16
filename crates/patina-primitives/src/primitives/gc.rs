@@ -102,8 +102,8 @@
 //!   `Interpreter::new_environment` answers (#835). A frame is not counted.
 //! - `binding-records` (#834): the binding records the live namespaces hold,
 //!   one for each slot, each scoped entry (the splicing `let-syntax`
-//!   keywords filed at top level among them), each import alias, and each
-//!   of a host namespace's read-through records (#835); and on the VM each
+//!   keywords filed at top level among them), and each of a host
+//!   namespace's read-through records (#835); and on the VM each
 //!   placeholder a loaded unit's link table linked for a name its namespace
 //!   does not bind yet, and each weak read-through record a host namespace's
 //!   unit linked over one, until the collection after no code links it or a
