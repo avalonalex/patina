@@ -2684,8 +2684,10 @@ impl Environment {
             // mutates a binding private to its defining library works. Reads
             // follow aliases in `get`; writes have to as well or the two
             // disagree.
-            if let Some(target) = env.alias_target(name) {
-                return target.set(env, heap, value);
+            if env.has_aliases.get()
+                && let Some(set) = env.set_through_alias(heap, name, value)
+            {
+                return set;
             }
             // The write side of the same fallback `get` takes, and it has to
             // be here for the reason `alias_bindings` gives for its own pair:
@@ -2734,9 +2736,9 @@ impl Environment {
             // wins, and before the parent so the alias is not shadowed by an
             // unrelated outer binding of the same (unique) name.
             if env.has_aliases.get()
-                && let Some(target) = env.alias_target(name)
+                && let Some(found) = env.get_through_alias(heap, name)
             {
-                return target.get(env, heap);
+                return found;
             }
             // A macro-introduced definition lives under its scopes; this is the
             // name-only view of it. Checked after real bindings and aliases, so a
@@ -3144,6 +3146,37 @@ impl Environment {
             return None;
         }
         aliases.get(name).cloned()
+    }
+
+    /// What a macro-expansion alias here for `name` reads, if one is
+    /// installed: `Some` of [`AliasTarget::get`]'s answer.
+    ///
+    /// Out of line, and reading the entry in place rather than cloning it,
+    /// so that the walks that check for an alias at every step — `get` and
+    /// `resolve_with_scopes`, the tree-walker's hottest — carry neither the
+    /// entry nor its read in their own frames (#837). The table's shared
+    /// borrow is held across the read, which may borrow it again (a target
+    /// in the holder) but never mutably: only an install does.
+    #[inline(never)]
+    fn get_through_alias(&self, heap: &RefCell<Heap>, name: &str) -> Option<Option<TaggedValue>> {
+        let aliases = self.alias_bindings.borrow();
+        let target = aliases.get(name)?;
+        Some(target.get(self, heap))
+    }
+
+    /// [`get_through_alias`](Self::get_through_alias)'s write: `Some` of
+    /// [`AliasTarget::set`]'s answer where an alias for `name` is installed
+    /// here. A store borrows nothing that an install does.
+    #[inline(never)]
+    fn set_through_alias(
+        &self,
+        heap: &RefCell<Heap>,
+        name: &str,
+        value: TaggedValue,
+    ) -> Option<Result<(), String>> {
+        let aliases = self.alias_bindings.borrow();
+        let target = aliases.get(name)?;
+        Some(target.set(self, heap, value))
     }
 
     /// Each macro-expansion alias here, sorted by spelling, for the tests
@@ -4164,9 +4197,9 @@ impl Environment {
                 return Ok(());
             }
             if env.has_aliases.get()
-                && let Some(target) = env.alias_target(name)
+                && let Some(set) = env.set_through_alias(heap, name, value)
             {
-                return target.set(env, heap, value);
+                return set;
             }
             if env.has_visible_scoped.get()
                 && let Some(i) = env.visible_scoped_index(name)
@@ -4376,9 +4409,9 @@ impl Environment {
                 return Some(tv);
             }
             if env.has_aliases.get()
-                && let Some(target) = env.alias_target(name)
+                && let Some(found) = env.get_through_alias(heap, name)
             {
-                return target.get(env, heap);
+                return found;
             }
             if env.has_visible_scoped.get()
                 && let Some(i) = env.visible_scoped_index(name)
