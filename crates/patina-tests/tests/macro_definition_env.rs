@@ -951,3 +951,131 @@ fn a_minted_spelling_defined_by_the_program_leaves_earlier_code_alone() {
         "[VM, tree-walker]"
     );
 }
+
+// ─── Keyword aliases hold their target's record (#837, R6) ──────────────────
+//
+// A library macro whose template names a private macro (`priv`) gets a
+// relink alias in the program, `priv.N`. Since 4b.10's PR-1c the alias holds
+// the private keyword's binding record, not the library's namespace.
+
+/// A library whose exported `m` expands to its private macro `priv`.
+const KEYWORD_LIB: &str = "(define-library (t kw)
+  (export m)
+  (import (scheme base))
+  (begin
+    (define-syntax priv (syntax-rules () ((_ x) (+ x 1))))
+    (define-syntax m (syntax-rules () ((_ x) (priv x))))))
+";
+
+/// The program namespace's aliases for `priv`: each spelling, its home and
+/// how many environments the alias entry's own trace reports.
+fn aliases_of_priv<B: patina_runtime::Backend>(
+    interp: &patina_interpreter::Interpreter<B>,
+) -> Vec<(String, &'static str, usize)> {
+    interp
+        .global_env()
+        .alias_homes_for_tests()
+        .into_iter()
+        .filter(|(spelling, _, _)| spelling.starts_with("priv."))
+        .collect()
+}
+
+/// After `(m 1)`, the expansion's alias for `priv` and its answer.
+fn a_keyword_alias_after_an_expansion<B: patina_runtime::Backend>(
+    interp: patina_interpreter::Interpreter<B>,
+) -> (String, Vec<(&'static str, usize)>) {
+    let answer = interp
+        .eval_program_owned(&format!(
+            "{KEYWORD_LIB}(import (scheme base) (t kw))\n(m 1)"
+        ))
+        .expect("the library, the import and the expansion");
+    let homes = aliases_of_priv(&interp)
+        .into_iter()
+        .map(|(_, home, envs)| (home, envs))
+        .collect();
+    (interp.display_tagged(&answer), homes)
+}
+
+/// The keyword alias an expansion of `m` leaves in the program is one, holds
+/// `priv`'s record, and its entry's own trace reports no environment: a
+/// collection reaches the library's namespace through it, if at all, only
+/// through what the record reaches (the next test). Before R6 the alias
+/// named the library's namespace, an edge its trace reported.
+#[test]
+fn a_keyword_alias_names_no_environment_directly() {
+    let expected = ("2".to_string(), vec![("keyword", 0)]);
+    assert_eq!(
+        [
+            a_keyword_alias_after_an_expansion(common::vm_interpreter()),
+            a_keyword_alias_after_an_expansion(common::tree_walker_interpreter()),
+        ],
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// Whether the library namespace `m` was defined in is alive after the
+/// library is redefined and imported again and two collections run, with
+/// `(m 1)` expanded before the redefinition or not, and the program's
+/// aliases for `priv` then. The namespace is watched through `m`'s macro,
+/// whose definition environment it is, by a `Weak` taken before the
+/// redefinition.
+fn the_old_library_namespace_after_a_redefinition<B: patina_runtime::Backend>(
+    interp: patina_interpreter::Interpreter<B>,
+    expand: bool,
+) -> (bool, Vec<(&'static str, usize)>) {
+    interp
+        .eval_program_owned(&format!(
+            "{KEYWORD_LIB}(import (scheme base) (patina debug) (t kw))\n{}",
+            if expand { "(m 1)" } else { "" }
+        ))
+        .expect("the library and the import");
+    let old = {
+        let env = interp.global_env();
+        let heap = interp.backend().heap();
+        let m = env.get(heap, "m").expect("the program imports m");
+        let heap = heap.borrow();
+        let compiled = heap.get_macro(m).expect("m is a macro");
+        std::rc::Rc::downgrade(
+            compiled
+                .definition_env
+                .as_ref()
+                .expect("m's library namespace"),
+        )
+    };
+    interp
+        .eval_program_owned(&format!("{KEYWORD_LIB}(import (t kw))\n(gc) (gc)"))
+        .expect("the redefinition, the import and the collections");
+    let homes = aliases_of_priv(&interp)
+        .into_iter()
+        .map(|(_, home, envs)| (home, envs))
+        .collect();
+    (old.upgrade().is_some(), homes)
+}
+
+/// R6 alone does not release a replaced library's namespace (#837's
+/// question 4, #614's keyword variant): the program's keyword alias is never
+/// removed, and its record reaches its cell, the private macro, and the
+/// macro's `definition_env`, the old namespace. With no expansion before the
+/// redefinition there is no alias, and the namespace goes, so the alias is
+/// what keeps it. This pins the edge the design forecast; it flips when
+/// question 4 takes (a), keyword aliases travelling with the syntax, or (c),
+/// a macro's definition environment narrowed to the records it reads.
+#[test]
+fn a_keyword_aliass_record_still_keeps_its_macros_definition_namespace() {
+    let kept = (true, vec![("keyword", 0)]);
+    let released = (false, Vec::new());
+    assert_eq!(
+        [
+            the_old_library_namespace_after_a_redefinition(common::vm_interpreter(), true),
+            the_old_library_namespace_after_a_redefinition(common::tree_walker_interpreter(), true),
+            the_old_library_namespace_after_a_redefinition(common::vm_interpreter(), false),
+            the_old_library_namespace_after_a_redefinition(
+                common::tree_walker_interpreter(),
+                false
+            ),
+        ],
+        [kept.clone(), kept, released.clone(), released],
+        "[VM and tree-walker with the expansion, VM and tree-walker without]"
+    );
+}

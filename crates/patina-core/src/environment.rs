@@ -9131,6 +9131,43 @@ mod alias_home_tests {
         assert_eq!(program.get(&heap, &own), Some(keyword));
     }
 
+    /// A keyword alias's entry reports no environment to a collector,
+    /// where an alias by name to the same keyword reports its namespace,
+    /// even when the keyword's macro was defined in that namespace: the
+    /// record is a pair, and what it reaches transitively — the macro's
+    /// `definition_env` among it — is the collector's to follow from the
+    /// record, not the entry's (#837's question 4;
+    /// `macro_definition_env.rs` runs the same end to end).
+    #[test]
+    fn a_keyword_alias_names_no_environment_directly() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        let compiled = CompiledMacro {
+            name: Rc::from("kw"),
+            rules: vec![],
+            max_pvars: 0,
+            definition_scopes: ScopeSet::new(),
+            template_symbols: HashSet::new(),
+            inherited_identifiers: HashMap::new(),
+            definition_env: Some(Rc::clone(&library)),
+            foreign_expansions: vec![],
+        };
+        let keyword = heap.borrow_mut().alloc_macro(Rc::new(compiled), vec![]);
+        library.define(&heap, "kw", keyword);
+        let program = Rc::new(Environment::with_heap(&heap));
+        let relinked = relinked(&heap, &program, &library, "kw", None);
+        program.define_alias("kw.by-name", Rc::clone(&library), Rc::from("kw"));
+        assert_eq!(
+            program.alias_homes_for_tests(),
+            vec![
+                (relinked.to_string(), "keyword", 0),
+                ("kw.by-name".to_string(), "env", 1),
+            ]
+        );
+        assert_eq!(program.get(&heap, &relinked), Some(keyword));
+        assert_eq!(program.get(&heap, "kw.by-name"), Some(keyword));
+    }
+
     /// One keyword target asked for repeatedly gets one alias
     /// (`remembered_relink`'s `Keyword` arm, #611), and a keyword of the
     /// same spelling in another namespace gets its own.

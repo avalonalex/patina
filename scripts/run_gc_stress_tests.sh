@@ -320,7 +320,12 @@ fi
 # count re-pinned 2026-11-14 for the review's test of what the scope trace
 # says of an early-bound reference, linked and settled, whose children run
 # under the trace, which raised its count at 16 from 21652 to 21790 and
-# left it at 6 without stress, the minimum left)
+# left it at 6 without stress, the minimum left; and macro_definition_env's
+# test count re-pinned 2026-11-15 for 4b.10's keyword aliases (#837), two
+# tests that a keyword alias holds its target's record and names no
+# environment, and that the record still keeps a replaced library's
+# namespace, which raised its count at 16 from 34214 to 34428 and without
+# stress from 75 to 83, the minimum left)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -334,7 +339,7 @@ TARGETS=(
     "hygiene_matrix 16 11136 18"              # 21790 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
-    "macro_definition_env 16 16626 27"        # 34214 (75): see the header
+    "macro_definition_env 16 16626 29"        # 34428 (83): see the header
     "owned_handles 16 62714 9"                # 125648 (14)
     "rooted_loading 16 371 6"                 # 1269 (10)
     "vm_callprimitive 16 545 20"              # 1382 (0)
