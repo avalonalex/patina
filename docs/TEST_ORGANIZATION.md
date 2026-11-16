@@ -1491,17 +1491,32 @@ namespaces held after the redefinition and after the holder is dropped: a
 kept environment specifier, in which the old macro still expands; a
 continuation running the old code, and one holding only the program's
 frame; an importing library not yet redefined; a macro-introduced
-definition over a plain value; and two residual rows, which pin what is
-not released today and name what flips them (a macro-introduced
-definition linking an old procedure, until 5c; a relinked variable alias,
-until #837's second PR). R-D, the VM's loaded units' constants keeping a
-replaced library whose body keeps code quoting its own procedure (#866,
-pending the owner's ruling on #838's question 2), is pinned by a test in
-each backend's file: `gc_vm`'s
+definition over a plain value; a macro the old library's generator
+defined, whose `foreign_expansions` keeps the old namespace while the
+macro lives (counted, pending the owner's ruling on #837's first PR, whose
+alternative, keeping only binding locations, flips its `held` to 0); and
+two residual rows, which pin what is not released today and name what
+flips them (a macro-introduced definition linking an old procedure, until
+5c; a relinked variable alias, until #837's second PR). R-D, the VM's
+loaded units' constants keeping a replaced library whose body keeps code
+quoting its own procedure (#866, pending the owner's ruling on #838's
+question 2), is pinned by a test in each backend's file: `gc_vm`'s
 `a_library_body_s_code_quoting_its_own_procedure_keeps_it_loaded` and
 `gc_tree_walker`'s `a_library_body_s_code_quoting_its_own_procedure_is_released`.
 Each test was shown failing under a build that keeps the replaced library
-and under one that releases it at the replacement.
+or one that releases it at the replacement: the build that keeps it fails
+the three shared tests on both backends (`a_redefined_library_is_released`
+by 600 namespaces, the others at `dropped`) and the tree-walker's R-D pin;
+the one that releases it fails `a_value_from_a_replaced_library_still_runs`
+and the table on both backends at the old value's first call, and on the
+VM `a_redefined_library_is_released` and the R-D pin only through
+`release_dead_code`'s check-build assertion. The macro half of
+`a_redefined_library_is_released`, which the plain half's failure hides
+under the build that keeps the library, fails on
+`main` before #872 (`3c4aa637`) by 600 namespaces on both backends, and
+`a_value_from_a_replaced_library_still_runs` there at `dropped`: both rest
+on #872's early links, and on the tree-walker on #837's question 1 (a),
+pending.
 
 The heap's list of placeholder stores holds no
 namespace (#836): 200 procedures `eval`'d in fresh specifiers, each reading
@@ -1778,8 +1793,11 @@ the collections it has run, rewritten at every collection
 soon as it makes a collector, so a process that never collects says so. Both
 stress lanes require a record from every run, under the run's interval, with
 at least the pinned minimum: half the count measured when it was pinned,
-which is deterministic for a program at an interval, never below 1, and
-above what the run makes without stress. The nightly lane also requires the
+or, for a per-PR target whose zeal halves keep its count without stress
+above that half, midway between its counts without stress and at its
+interval (`gc_tree_walker` since #838), which is deterministic for a
+program at an interval, never below 1, and above what the run makes without
+stress. The nightly lane also requires the
 record to name its job's backend and no other: a tree-walker job that ran the
 VM would pass nearly every row, since the two backends' tallies differ only
 in `time`. One per-PR target pins a minimum near zero on purpose:
@@ -1852,8 +1870,8 @@ The REPL rows declare SS1, SS4 and SS5,
 since their growth shows in L and the counts and their footprints are the
 deferred library loads' high-water (#616); the server and churn rows declare
 SS2 as well. A clause a row fails today is marked red in the runner's table
-with the issue or stage that fixes it — #616, #656, stage 4e, stage
-5c — and is reported, not failed; a red clause that passes is called out for
+with the issue or stage that fixes it — #616, #656, #866, stage 5c —
+and is reported, not failed; a red clause that passes is called out for
 promotion. A mark names one clause, or one clause on one backend
 (`SS1/vm`), and SS5's by its key (`SS5:symbols`), so that it silences no
 other key: the runner refuses a bare `SS5`, or a mark naming no clause the
@@ -2236,12 +2254,12 @@ placeholder tests, whose drop test's zeal half runs 100 `eval`s; `gc_vm`
 20510 times since later that day, with #836's tests of code that runs
 after its namespace's other holders have died; 6142 and 21510 times since
 that PR's review added two more; 6264 and 21898 times since 2026-11-12,
-with its test of a procedure that drops itself and tail-calls; 17074 and
-53560 times since 2026-11-16, with #838's three shared tests of a redefined
-library's release and each file's test of R-D, whose zeal halves redefine
-a library 800 times each, so the stress lane's minimum rule takes the
-tree-walker's minimum midway between its two counts), which their minimums
-must stay above.
+with its test of a procedure that drops itself and tail-calls; 17266 and
+54236 times since 2026-11-16, with #838's three shared tests of a redefined
+library's release and each file's test of R-D, the zeal halves of
+`a_redefined_library_is_released` redefining a library 800 times for each
+variant, so the stress lane's minimum rule takes the tree-walker's minimum
+midway between its two counts), which their minimums must stay above.
 `vm_interpreter_adaptive` names the adaptive threshold the same way, for a
 test of the pacing itself, which stress and zeal replace.
 

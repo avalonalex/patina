@@ -1637,7 +1637,10 @@ macro_rules! gc_shared_tests {
             // see a record or a cell that outlived its namespace, which
             // `binding-records` and `cells` do not count (GC_DESIGN §3.3).
             // Each backend is compared with itself. Under zeal too, which
-            // collects at every outermost safe point.
+            // collects at every outermost safe point. The macro variant's
+            // release rests on #872's early links (4b.10 PR-1b), pending
+            // merge: without them it reads 600 namespaces more at 800 on
+            // both backends (measured on `main` at `3c4aa637`).
             for (variant, form) in [("plain", PLAIN_STREAM_FORM), ("macro", MACRO_STREAM_FORM)] {
                 assert_released(variant, stringify!($eval), $eval, form, false);
                 assert_released(variant, stringify!($eval_zeal), $eval_zeal, form, true);
@@ -1655,7 +1658,11 @@ macro_rules! gc_shared_tests {
             // and a released unit makes the call an error. The old
             // namespace is held while they are (`held`, one above `base`)
             // and goes once they are dropped (`dropped`): nothing else
-            // keeps it. Under zeal too.
+            // keeps it. Under zeal too. It rests on #872's early links
+            // (4b.10 PR-1b), and on the tree-walker on #837's question 1
+            // (a), its read through the record its `CpsExpr` carries, both
+            // pending: without #872, `dropped` reads 1 (measured on `main`
+            // at `3c4aa637`).
             assert_gc_and_zeal_eval_to(
                 r#"
                 (import (scheme base) (patina debug))
@@ -1759,12 +1766,18 @@ macro_rules! gc_shared_tests {
                 "(define (secret x) (list 'old x)) \
                  (define-syntax m (syntax-rules () ((_ x) (secret x))))",
             );
+            let generated_old = steady(
+                "f defgen",
+                "(scheme base)",
+                "(define (f x) (list 'old x)) (define-syntax defgen (syntax-rules () \
+                 ((_ name) (define-syntax name (syntax-rules () ((_ y) (f y)))))))",
+            );
             let importer_old = steady("f", "(scheme base)", "(define (f x) (list 'old x))");
             let user = "(define-library (tmp user) (export g) (import (scheme base) (tmp steady)) \
                         (begin (define (g) (f 1))))\n(import (tmp user))";
             let continuation_use = "(if (procedure? holder) (holder 42))\n\
                                     (set! out holder)\n(set! holder #f)";
-            let rows: [(&str, String, &str, String, String, &str); 7] = [
+            let rows: [(&str, String, &str, String, String, &str); 8] = [
                 // A kept environment specifier holds its own namespace, and
                 // through its import records over the old values, which
                 // reach the old code, the old library's. The old macro
@@ -1813,6 +1826,22 @@ macro_rules! gc_shared_tests {
                     importer_old.replace("'old", "'new"),
                     format!("(set! out (list (g)))\n{user}\n(set! out (cons (g) out))"),
                     "(((new 1) (old 1)) 1 0)",
+                ),
+                // A macro the old library's generator defined holds that
+                // library's namespace in `foreign_expansions` while the
+                // macro lives. Expanded after the redefinition, its
+                // template's `f` reads the re-pointed import, the new
+                // library's. This pins `foreign_expansions` counted among a
+                // replaced namespace's holders, pending the owner's ruling
+                // on #837's first PR; its alternative, an edge that keeps
+                // only binding locations, flips `held` to 0.
+                (
+                    "generated-macro",
+                    generated_old.clone(),
+                    "(defgen gm)",
+                    generated_old.replace("'old", "'new"),
+                    "(set! out (gm 1))\n(define gm 0)".to_string(),
+                    "((new 1) 1 0)",
                 ),
                 // A macro-introduced definition, which the program cannot
                 // name and which stays until 5c (start decision 8), links

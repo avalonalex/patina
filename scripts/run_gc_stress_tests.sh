@@ -334,8 +334,8 @@ fi
 # counts and minimums re-pinned 2026-11-16 for #838's three shared tests of
 # a redefined library's release, and each file's test of a library body
 # whose code quotes its own procedure, which raised the counts at 16 from
-# 25199 to 38881 on the VM and from 46913 to 81475 on the tree-walker, and
-# without stress from 6264 to 17074 and from 21898 to 53560, nearly all
+# 25199 to 39118 on the VM and from 46913 to 82199 on the tree-walker, and
+# without stress from 6264 to 17266 and from 21898 to 54236, nearly all
 # their zeal halves: both counts without stress had passed their minimums,
 # so gc_vm's minimum is half its count at 16, and gc_tree_walker's, whose
 # count without stress is above that half, midway between its two counts,
@@ -347,8 +347,8 @@ TARGETS=(
     "ephemerons 16 289 30"                    # 5738 (204)
     "escape_from_primitive 16 3669 19"        # 9789 (94)
     "finished_forms_release_code 16 2040 12"  # 4057 (15)
-    "gc_tree_walker 16 67517 38"              # 81475 (53560)
-    "gc_vm 16 19440 51"                       # 38881 (17074)
+    "gc_tree_walker 16 68217 38"              # 82199 (54236)
+    "gc_vm 16 19559 51"                       # 39118 (17266)
     "host_environments 16 58646 31"           # 117298 (754)
     "hygiene_matrix 16 11136 18"              # 21790 (6)
     "interpreter_api 16 138 28"               # 3050 (4)

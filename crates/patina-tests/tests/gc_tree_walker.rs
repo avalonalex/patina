@@ -163,10 +163,11 @@ fn a_library_body_s_code_quoting_its_own_procedure_is_released() {
     // R-D's program (#838's audit), whose answer on the VM, `(3 1 1)`, is
     // a residual (`gc_vm.rs`'s
     // `a_library_body_s_code_quoting_its_own_procedure_keeps_it_loaded`,
-    // #866). Here `g` is a closure of the library's namespace whose body
-    // quotes `f`, and nothing outside the old namespace holds either, so
-    // after the redefinition the old namespace goes, and with it the one
-    // the first `environment` made: one namespace under `base` at `held`
-    // and at `dropped`. Under zeal too.
+    // #866). Here `g`, which the library's namespace holds, is a closure
+    // of the namespace the `environment` made, and its body quotes `f`;
+    // nothing outside the old namespace holds either, so after the
+    // redefinition the old namespace goes, and with it the one the first
+    // `environment` made: one namespace under `base` at `held` and at
+    // `dropped`. Under zeal too.
     assert_gc_and_zeal_eval_to(&library_body_quoting_its_own_procedure(), "(3 -1 -1)");
 }
