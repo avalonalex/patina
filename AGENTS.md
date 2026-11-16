@@ -96,8 +96,11 @@ but omits those external comparisons.
 
 `.github/workflows/ci.yml` is the source of truth for the full gate. It skips
 pushes and pull requests whose changes are confined to `PRD/`; mixed changes
-run the full gate. See `docs/TEST_ORGANIZATION.md`, "CI trigger scope", for
-GitHub's path-filter limits and required-check considerations.
+run the full gate. A pull request in a GitHub stack (`gh stack link`) runs its
+jobs only at the stack's bottom and top; one in the middle is covered by the
+top's run and by its own local gate. See `docs/TEST_ORGANIZATION.md`, "CI
+trigger scope", for GitHub's path-filter limits, the stack rule and
+required-check considerations.
 
 | Job | What it runs |
 |---|---|
