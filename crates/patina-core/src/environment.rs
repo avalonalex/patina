@@ -1387,8 +1387,8 @@ impl Environment {
     /// mutably here: a test in this crate that holds it passes the account
     /// itself, to `Environment::namespace`.
     ///
-    /// Nothing roots the namespace it answers but its caller: the
-    /// workspace's owners are the machine (the global), the library registry
+    /// Nothing roots the namespace it answers but its caller and, while it
+    /// lives, the code compiled in it: the workspace's owners are the machine (the global), the library registry
     /// (a library's) and the heap object of an environment specifier. A host
     /// holds one with `Heap::hold_namespace`, evaluates and defines in it
     /// through that handle (`Backend::eval_in`, `define_in`), and keeps

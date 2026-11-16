@@ -400,7 +400,8 @@ impl VmBackend {
                       namespace, or one `Heap::hold_namespace` held), and the records the code \
                       uses are held by its unit, which its frame, a marked closure or the running \
                       code reports, and which holds and traces the namespace it was linked in. A \
-                      raw namespace that nothing roots between calls, reached through the \
+                      namespace that nothing roots between calls (a `with_heap` namespace, or a \
+                      host namespace whose handles were all dropped), reached through the \
                       deprecated `eval` or `eval_with_source_map`, or through `eval_in` over a \
                       handle taken again after a collection that ran while no handle held it, is \
                       none of these (#857)"

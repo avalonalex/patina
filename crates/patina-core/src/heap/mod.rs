@@ -867,8 +867,9 @@ impl Heap {
     /// handle holds a namespace (#831's ruling on question 1, #835). Raw, as
     /// `Heap` is. Keep the handle for as long as the namespace is in use: a
     /// collection while no handle holds a namespace nothing else roots (one
-    /// `Environment::with_heap` made) frees what is bound there, and holding
-    /// it again does not bring that back (#857, #839).
+    /// `Environment::with_heap` made, or a host namespace whose handles were
+    /// all dropped) frees what is bound there, and holding it again does not
+    /// bring that back (#857, #839).
     pub fn hold_namespace(&self, env: Rc<crate::environment::Environment>) -> OwnedEnvironment {
         self.assert_own(&env);
         assert!(
@@ -923,7 +924,13 @@ impl Heap {
         )))
     }
 
-    /// The environment `handle` holds. Panics as [`Heap::held`] does.
+    /// The environment `handle` holds. The handle roots it, not this `Rc`:
+    /// keep the handle while the environment is in use. A collection while
+    /// no handle holds a namespace that nothing else roots (one
+    /// `Environment::with_heap` made, or a host namespace whose handles were
+    /// all dropped) frees what is bound there, and holding this `Rc` again
+    /// with [`Heap::hold_namespace`] does not bring that back (#857, #839).
+    /// Panics as [`Heap::held`] does.
     pub fn held_environment(
         &self,
         handle: &OwnedEnvironment,
