@@ -167,8 +167,8 @@ environment through `CompiledMacro.foreign_expansions`, which early binding
 reads for the record a later expansion links. A replacement would release
 nothing where the template names a procedure of the generator's library,
 since its closure keeps the namespace anyway, and would need every name a
-later expansion asks about, so 4b.11's audit lists the edge among a
-replaced namespace's holders and a later narrowing can trim it
+later expansion asks about, so §8 lists the edge among a replaced
+namespace's holders and a later narrowing can trim it
 (`PRD/GC_PRD.md` §17.2). A host namespace (#835), the
 namespace `Interpreter::new_environment` answers, whose parent is the global
 namespace, is traced as any namespace is, and has one table more: its
@@ -822,7 +822,8 @@ record (below).
   the exporter's cell, and nothing keeps the exporter's namespace for it
   (`an_importer_holds_the_cell_and_not_the_library`), which is what releases
   a replaced library's namespace where nothing else holds it
-  (`gc_namespace_bytes.rs`'s `a_replaced_library_with_a_procedure_is_released`).
+  (`gc_namespace_bytes.rs`'s `a_replaced_library_with_a_procedure_is_released`;
+  §8 lists every holder of a replaced namespace, #838).
   Three holders keep a cell's word outside the roots, unbranded. A
   `Library` clone's copies of the registry's words are sound only while the
   registry entry or a record keeps the cell. The desugarer's declaration
@@ -923,7 +924,7 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 | `pending_escape` | **yes** | Pinned. Value parked while crossing a Rust re-entry boundary; multiple values otherwise travel in ordinary registers as heap values |
 | `scratch_args` | yes | Pinned. Empty at every safe point: `mem::take`n while a primitive call holds it, and emptied when the call is done (since #639: the last call's arguments had stayed in it, and a dead key passed to `make-ephemeron` survived a `(gc)`). Rooting it is free and future-proof |
 | `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | Pinned until stage 4e makes them heap data. `tag`/`handler`/`before`/`after` values, and a wind record's `handlers` — the stack of its own `dynamic-wind` call, which its thunks run under and which nothing else holds once the live stack has moved on (`types/continuation.rs`). An `ExceptionHandler` is one procedure now — it used to also carry the wind depth `raise` unwound to, which no raise path needs since Track L families 22/28 |
-| `code_store[*].constants` | **yes** | Pinned until stage 4e makes them a descriptor's. The constants only: the store never traces a unit's link table (`CodeObject::links`), which would keep every record a live unit links, and through a procedure's own record the unit itself, for good (4b's start decision 3's gate, `finished_forms_release_code.rs`' `a_redefined_library_s_recursive_procedures_let_their_units_go`). Kept while a frame, a captured continuation or a live closure can run the code; a finished form's code is released with its constants (#338). `(gc-stats)`'s `code-units` counts the units loaded (§6, #836) |
+| `code_store[*].constants` | **yes** | Pinned until stage 4e makes them a descriptor's. The constants only: the store never traces a unit's link table (`CodeObject::links`), which would keep every record a live unit links, and through a procedure's own record the unit itself, for good (4b's start decision 3's gate, `finished_forms_release_code.rs`' `a_redefined_library_s_recursive_procedures_let_their_units_go`). Kept while a frame, a captured continuation or a live closure can run the code; a finished form's code is released with its constants (#338), and, where a constant is a procedure of a library whose namespace holds a closure of the same unit, the unit and that namespace for good (R-D, #838's audit, §8; #866). `(gc-stats)`'s `code-units` counts the units loaded (§6, #836) |
 | `globals` | **yes** | `env`: the program's environment, during a library's load as after it (#823). `saved_globals`, which held the environments a load's swap set aside so that a library body under it could collect (#677), went with the swap |
 | `continuation_store` / `delimited_continuation_store` | **weak** (since #19) | `VmContinuation` snapshots hold full `registers` copies and frames, each with its closure, all slots as the live ones are, and its code, reported by id as a live frame's is (#836), and wind/prompt/handler stacks, pinned as theirs are (`types/continuation.rs:83,:185`). Heap-side `VmContinuationRef { id, bytes }` is opaque (its `bytes` charges the snapshot to the trigger, §6); only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_ids` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
 | `tracer` | yes | Pinned: `StepTracer.pre_regs`/`pre_all_regs`, copies of registers for display (`crates/patina-vm/src/tracer.rs`) |
@@ -1487,7 +1488,10 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   row), so a closure that only the constants of a unit the same collection
   lets go reach (code `eval` compiled from a datum holding a procedure) is
   marked by it, and keeps its own unit until the next collection, one more
-  for each such link: the count after a collection can include such units,
+  for each such link — unless the procedure's namespace holds a closure of
+  the unit that holds the constant, which closes a cycle through the roots,
+  and then for good (R-D, §8, #866): the count after a collection can
+  include such units,
   and the steady-state driver reads it after `(gc) (gc)`. The reading
   form's own unit is counted. The tree-walker loads no code, and reads 0,
   never `#f`. A trigger the GC mode does not use reads `#f`.
@@ -1621,7 +1625,9 @@ last closure, so what only the constants of a unit this collection lets go
 reach is marked by it, counted in its L and freed by the next: a datum
 `eval` compiled into a procedure's code, or a procedure held as a
 constant, which keeps its own unit, and that unit's namespace, one
-collection more (§6's `code-units`). Where such constants outweigh the
+collection more (§6's `code-units`), or for good where that namespace
+holds a closure of the unit whose constant it is (R-D, §8; #866's fix ends
+both). Where such constants outweigh the
 rest of what a cycle allocates, 2·L passes what was allocated and the
 threshold follows the garbage as it did the namespaces: code `eval`
 compiles from a datum quoting a fresh 1,000-element vector, called and
@@ -2306,6 +2312,62 @@ the running code holds reads through its table, which is what lets a
 collection keep a placeholder only while such a holder lives: a check build
 asserts that every unit a collection kept had its table traced
 (`VmState::release_dead_code`).
+
+**A replaced library's namespace (#614, #838).** `define-library` of a
+name already loaded replaces the registry's entry
+(`LibraryRegistry::register_or_replace`, the one replacement path), which
+drops the old `Library`, its namespace's `Rc` and its export cells, and the
+program's `import` re-points its import records to the new cells. What is
+left of the old library is a cycle only the collector reaches: on the VM,
+a slot's record → its cell → a closure → its code id → its unit's link
+table → the namespace (above); on the tree-walker, a slot's record → its
+cell → a closure → its environment; for a macro, a slot's record → its
+cell → the `Macro` → `CompiledMacro.definition_env`. The sweep tombstones
+the unmarked closures and macros, and on the VM the code release then lets
+the unit go with the namespace's last `Rc`. #838's audit holds every
+holder of a replaced namespace to SD3 in two tests. A namespace may be
+kept only by a value or code taken from the old library: a closure, a
+continuation whose frames run its code, a live macro object, a unit
+something can still run, a live generated macro's `foreign_expansions`
+(§3.3), and through their records over values that reach its code, a kept
+environment specifier's namespace or an importing library not yet
+redefined; a host's `Owned` handle on such a value is one too. A record or
+a cell keeps a namespace only through the value in its cell, when that
+value reaches the old library's code (a procedure, a macro, a
+continuation, or a structure, promise or parameter that holds one): a
+cell's owner word is the fixnum `env_id << 4`, which names no namespace,
+so a record and a cell over plain data keep nothing but themselves (§3.3,
+§4.7). Four shapes keep a replaced namespace past the program's last use,
+each with an owner. A relinked variable alias (`AliasHome::Env`) names it
+for as long as the alias, which is never removed (R-A, until #837's
+second PR removes variable aliases). A keyword alias's record reaches a
+macro the replaced library defined, and so its `definition_env`, and a
+keyword alias reached through a parent, an alias or a scoped definition
+holds `AliasHome::Env` (R-B, #837's question 4; one whose relinked keyword
+the library imports keeps no namespace, but each relinked instance leaves
+an alias entry, a spelling and a record, which only that question's (a)
+removes). A macro-introduced top-level definition, kept until 5c (start
+decision 8), whose code links one of the old library's bindings whose
+value reaches its code (R-C, 5c). On the VM, a library whose body keeps
+code quoting one of its own procedures: the code store traces a loaded
+unit's constants in every collection (§5.2), so the procedure, its unit,
+the namespace, the closure of the quoting unit in the namespace's slot and
+that unit are a cycle through the roots, kept for good (R-D, #866, pending
+the owner's ruling on #838's question 2; the tree-walker releases it). The
+tests that hold it: `gc_shared_tests!`'s `a_redefined_library_is_released`
+(#614's program 1 and its macro variant, every count flat across 600
+redefinitions), `a_value_from_a_replaced_library_still_runs` and
+`a_replaced_library_lives_only_as_long_as_its_holders` (the audit's rows,
+R-A's and R-C's among them); R-D's pins, `gc_vm`'s
+`a_library_body_s_code_quoting_its_own_procedure_keeps_it_loaded` and
+`gc_tree_walker`'s `a_library_body_s_code_quoting_its_own_procedure_is_released`;
+`gc_namespace_bytes.rs`'s `a_replaced_library_with_a_procedure_is_released`;
+`finished_forms_release_code.rs`'
+`a_redefined_library_s_recursive_procedures_let_their_units_go`; and
+`macro_definition_env.rs`'s
+`an_early_link_keeps_the_old_library_binding_across_a_redefinition`,
+`a_keyword_aliass_record_still_keeps_its_macros_definition_namespace` (R-B)
+and `a_keyword_alias_to_an_imported_keyword_releases_the_replaced_library`.
 
 **At the end of a heap's life.** Until #704 an environment held the heap it
 allocates in (`Environment.heap`, a `SharedHeap`), so every heap → env edge
