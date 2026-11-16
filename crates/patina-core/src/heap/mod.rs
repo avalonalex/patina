@@ -884,8 +884,15 @@ impl Heap {
     /// tree-walker `Evaluator`, whose global is a frame keeps running
     /// (#839; question 4 (b), ruled 2026-11-16). What
     /// `Backend::global_namespace` answers. Not an interface: it loses its
-    /// frame branch, or goes, at 5e.
+    /// frame branch, or goes, at 5e. Deprecated with the holder its frame
+    /// branch reaches, since it holds any environment of the heap as that
+    /// one does: a host holds a namespace with [`Heap::hold_namespace`].
     #[doc(hidden)]
+    #[deprecated(
+        note = "workspace-internal: `Backend::global_namespace`'s route, which holds a frame global \
+                through the deprecated holder until stage 5e; hold a namespace with \
+                `hold_namespace` (#839)"
+    )]
     #[allow(
         deprecated,
         reason = "a frame global is held through the deprecated holder until it goes at stage 5e \

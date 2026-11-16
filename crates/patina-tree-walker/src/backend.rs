@@ -390,6 +390,11 @@ impl Backend for TreeWalker {
     /// the default does: `Evaluator::global_env` is a pub field a host can
     /// set to a frame, which is held through the deprecated holder until
     /// stage 5e (question 4 (b) on #839, ruled 2026-11-16).
+    #[allow(
+        deprecated,
+        reason = "a frame global (a pub `Evaluator` field) is held through the deprecated holder \
+                  until stage 5e, question 4 (b) (#839)"
+    )]
     fn global_namespace(&self) -> OwnedEnvironment {
         self.evaluator
             .heap

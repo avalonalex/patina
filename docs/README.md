@@ -174,7 +174,7 @@ types promised signatures name, and the raw types a host reaches from them:
 | `patina_core::CoreExprKind` | inside | `CoreExpr`'s `kind` |
 | `patina_frontend::error::FrontendError`, `patina_macros::MacroError` | inside | through `PipelineError` (legacy-pipeline) |
 | `patina_core::Library` | type inside, members raw | `ApplyContext::load_scheme_library` answers one; its exports are cells (#834) |
-| `patina_core::Heap` | raw | `SharedHeap` stands for it, and `backend().heap()` reaches it; `hold_environment` is deprecated (#831), until 5e, for `hold_namespace`, which takes only a namespace; `new_host_namespace` makes the host namespace `new_environment()` answers, held (#835); the `#[doc(hidden)]` `hold_global` holds a backend's global, a frame through the deprecated holder until 5e (#839); `held_environment` is the raw route the notes of `Backend::global_env` and `Interpreter`'s `global_env()` and `raw_environment()` name |
+| `patina_core::Heap` | raw | `SharedHeap` stands for it, and `backend().heap()` reaches it; `hold_environment` is deprecated (#831), until 5e, for `hold_namespace`, which takes only a namespace; `new_host_namespace` makes the host namespace `new_environment()` answers, held (#835); the `#[doc(hidden)]` `hold_global` holds a backend's global, a frame through the deprecated holder until 5e, and is deprecated with that holder, since it holds any environment of the heap as that one does (#839); `held_environment` is the raw route the notes of `Backend::global_env` and `Interpreter`'s `global_env()` and `raw_environment()` name |
 | `patina_core::NamespaceView` | raw | no promised signature names it; implemented over binding records (#834) |
 | `patina_core::BindingCell` | raw | a location's token: `Library.exports`' values, and what `Cx::new_declaration_cell` (`#[doc(hidden)]`) answers and `Cx::import_cell_in_frame` takes; unbranded, so held only while the registry entry, a record or the context that made it keeps it (#834) |
 | `patina_core::IntroducedRecord` | raw | what `Environment::introduced_records` answers, for 5c and the tests (#834) |
@@ -191,9 +191,10 @@ A change to an inside item takes four steps:
    what to do. #831's five are each pinned by a `compile_fail` doctest under
    `#![deny(deprecated)]`, beside a twin that compiles with the replacement
    (on `Interpreter::new_environment` and `Interpreter::heap`), and so are
-   S1's eight (#839): `Backend`'s six on `Interpreter::backend`, with the
-   handle methods through a generic bound and `dyn Backend`, and
-   `Interpreter`'s `global_env` and `raw_environment` on themselves.
+   S1's nine (#839): `Backend`'s six on `Interpreter::backend`, with the
+   handle methods through a generic bound and `dyn Backend`,
+   `Interpreter`'s `global_env` and `raw_environment` on themselves, and
+   `Heap::hold_global` on `Interpreter::new_environment`.
    A required trait method deprecated for callers stays required of its
    implementors until it is removed. rustc does not warn an implementation
    of a deprecated method, but it warns a call of one, an implementation's

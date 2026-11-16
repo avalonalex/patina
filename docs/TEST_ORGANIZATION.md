@@ -891,6 +891,7 @@ and `raw_environment` sit on each, beside a twin calling `lookup` or
 | interpreter | `Interpreter::new_environment` | a call of `Heap::hold_environment` under `#![deny(deprecated)]` (#831) | a lint error, no code |
 | interpreter | `Interpreter::new_environment` | a call of `Cx::hold_environment` under `#![deny(deprecated)]` (#831) | a lint error, no code |
 | interpreter | `Interpreter::new_environment` | a call of `Cx::track_environment` under `#![deny(deprecated)]` (#831) | a lint error, no code |
+| interpreter | `Interpreter::new_environment` | a call of `Heap::hold_global`, `Backend::global_namespace`'s route, under `#![deny(deprecated)]` (#839) | a lint error, no code |
 | interpreter | `Interpreter::heap` | a call of `Interpreter::heap` under `#![deny(deprecated)]` (#831) | a lint error, no code |
 | interpreter | `Interpreter::backend` | a call of `Backend::eval`, `eval_global`, `eval_with_source_map`, `define`, `call` or `global_env` under `#![deny(deprecated)]`, one pin each (#839) | a lint error, no code |
 | interpreter | `Interpreter::backend` | an implementor whose `global_namespace` is written over `self.global_env()` under `#![deny(deprecated)]`; its twins, an implementor of the required methods and one overriding the four handle methods from its fields, compile (#839) | a lint error, no code |

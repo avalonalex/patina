@@ -1262,6 +1262,20 @@ impl<B: Backend> Interpreter<B> {
     ///     interp.new_environment()
     /// }
     /// ```
+    ///
+    /// And `Heap::hold_global`, `Backend::global_namespace`'s route, which
+    /// holds any environment of the heap as `hold_environment` does, a frame
+    /// through it until 5e (#839):
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use std::rc::Rc;
+    /// use patina_interpreter::{Backend, Environment, Interpreter, OwnedEnvironment};
+    /// fn host_environment<B: Backend>(interp: &mut Interpreter<B>) -> OwnedEnvironment {
+    ///     let parent = Rc::new(Environment::with_heap(interp.backend().heap()));
+    ///     interp.backend().heap().borrow().hold_global(parent)
+    /// }
+    /// ```
     pub fn new_environment(&self) -> OwnedEnvironment {
         let global = self.backend.global_namespace();
         let heap = self.backend.heap().borrow();
