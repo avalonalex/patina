@@ -220,3 +220,31 @@ fn a_nested_include_resolves_relative_to_the_including_file() {
     );
     assert_program_eval_to(&program, "found");
 }
+
+/// A program's relative `include` resolves beside the program's file, which
+/// only the source map the entry passes to `Backend::eval_in` names: a
+/// backend that evaluated without it would look in the cwd (#839). Through a
+/// program and through a single form, on both backends.
+#[test]
+fn a_programs_relative_include_resolves_beside_the_program() {
+    let dir = TempDir::new().expect("temp dir");
+    std::fs::write(dir.path().join("helper.scm"), "(define helper-value 42)")
+        .expect("write helper");
+    let main = scratch_path(&dir, "main.scm");
+    let program = "(include \"helper.scm\") helper-value";
+    let form = "(begin (include \"helper.scm\") helper-value)";
+
+    let vm = vm_interpreter();
+    let (value, _) = vm.eval_program_with_source_name_owned(program, &main);
+    assert_eq!(vm.display_tagged(value.expect("VM program")), "42");
+    let vm = vm_interpreter();
+    let (value, _) = vm.eval_str_with_source_name_owned(form, &main);
+    assert_eq!(vm.display_tagged(value.expect("VM form")), "42");
+
+    let tw = tree_walker_interpreter();
+    let (value, _) = tw.eval_program_with_source_name_owned(program, &main);
+    assert_eq!(tw.display_tagged(value.expect("tree-walker program")), "42");
+    let tw = tree_walker_interpreter();
+    let (value, _) = tw.eval_str_with_source_name_owned(form, &main);
+    assert_eq!(tw.display_tagged(value.expect("tree-walker form")), "42");
+}

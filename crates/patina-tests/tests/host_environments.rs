@@ -254,7 +254,9 @@ fn a_held_raw_namespace_keeps_its_bindings_across_a_collection() {
 #[test]
 fn a_tree_walker_whose_global_is_a_frame_runs_until_5e() {
     let mut evaluator = patina_interpreter::Evaluator::new();
-    evaluator.global_env = Rc::new(Environment::child_frame(Rc::clone(&evaluator.global_env)));
+    let namespace = Rc::clone(&evaluator.global_env);
+    let frame = Rc::new(Environment::child_frame(Rc::clone(&namespace)));
+    evaluator.global_env = Rc::clone(&frame);
     let interp = patina_interpreter::TreeWalkInterpreter::from_evaluator(evaluator);
     interp
         .backend()
@@ -263,6 +265,23 @@ fn a_tree_walker_whose_global_is_a_frame_runs_until_5e() {
         .eval_program_owned("(import (scheme base)) (define x 40) (+ x 2)")
         .unwrap();
     assert_eq!(interp.display_tagged(&answer), "42");
+    // The handle holds the frame itself, and the program defined in it, not
+    // in the namespace beneath: a `global_namespace` that walked up to the
+    // nearest namespace would answer 42 too.
+    let heap = interp.backend().heap().clone();
+    let global = interp.backend().global_namespace();
+    let held = heap.borrow().held_environment(&global);
+    assert!(Rc::ptr_eq(&held, &frame), "the handle holds the frame");
+    assert!(
+        frame.local_names(&heap).iter().any(|name| name == "x"),
+        "the program defined `x` in the frame"
+    );
+    assert!(
+        patina_core::NamespaceView::of(&namespace)
+            .get(&heap, "x")
+            .is_none(),
+        "the program defined `x` in the namespace beneath the frame"
+    );
 }
 
 /// The handle forms evaluate in a host environment: its definitions and
