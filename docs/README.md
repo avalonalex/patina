@@ -141,7 +141,7 @@ What `patina-interpreter` exports, at its root unless a module is named:
 | `GcCounts` | inside | `gc_stats()`'s; `#[non_exhaustive]`, so a later field is additive |
 | `HeapProbe` | raw, `#[doc(hidden)]` | `heap_probe()`'s, for the teardown tests |
 | `InterpreterError<E>`, `ProgramOutcome`, `WithSourceMap<T>`, `PrimSpec` | inside | |
-| `AsValue` | inside, sealed | its `#[doc(hidden)]` `value_in` names `Heap`, so is raw, as is its `#[doc(hidden)]` `with_owned` (#839) |
+| `AsValue` | inside, sealed | its `#[doc(hidden)]` `value_in` names `Heap`, so is raw, as is its `#[doc(hidden)]` `with_owned`, kept off the vtable (`Self: Sized`) so that the trait stays dyn-compatible (#839) |
 | `format_write_tagged`, `format_display_tagged`, `format_interpreter_error`, `format_parse_error_with_source`, `format_error_with_source`, `format_backend_error_with_source`, `HasSourceLocation` | inside | the first two take `&SharedHeap`; `Interpreter`'s `display_tagged()` and `display_notation()` take a handle instead |
 | `Owned`, `OwnedEnvironment` | inside, opaque | `new_environment()`'s holds a host namespace, a namespace whose parent is the global one (#835); the deprecated holders hold any of the heap's until 5e |
 | `SharedHeap`, `new_shared_heap` | inside as names | the alias's definition, `Rc<RefCell<Heap>>`, and what its `borrow()` reaches are raw; 5e deletes the `RefCell` |

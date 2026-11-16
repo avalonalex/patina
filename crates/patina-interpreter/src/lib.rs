@@ -327,6 +327,13 @@ pub type WithSourceMap<T> = (T, Rc<RefCell<SourceMap>>);
 /// [`Interpreter::define`] and [`Interpreter::define_in`] bind: a bare
 /// [`TaggedValue`], or a handle, [`Owned`] (by value or by reference), which
 /// the interpreter that made it reads.
+///
+/// Dyn-compatible, as it was before #839 added `with_owned`, which a
+/// `where Self: Sized` bound keeps off the vtable:
+///
+/// ```
+/// fn shown(_: &dyn patina_interpreter::AsValue) {}
+/// ```
 pub trait AsValue: sealed::Sealed {
     /// The value, read from `heap`.
     #[doc(hidden)]
@@ -335,9 +342,12 @@ pub trait AsValue: sealed::Sealed {
     /// Run `f` with a handle on the value: a handle passes through as it is,
     /// and a bare word is held on `heap` for the call, so a handle argument
     /// claims no second entry (#839). The heap is not borrowed while `f`
-    /// runs.
+    /// runs. Not on the trait's vtable (`Self: Sized`), so that `AsValue`
+    /// stays dyn-compatible; `define` and `define_in` take `impl AsValue`.
     #[doc(hidden)]
-    fn with_owned<R>(&self, heap: &SharedHeap, f: impl FnOnce(&Owned) -> R) -> R;
+    fn with_owned<R>(&self, heap: &SharedHeap, f: impl FnOnce(&Owned) -> R) -> R
+    where
+        Self: Sized;
 }
 
 mod sealed {
@@ -352,7 +362,10 @@ impl AsValue for TaggedValue {
         *self
     }
 
-    fn with_owned<R>(&self, heap: &SharedHeap, f: impl FnOnce(&Owned) -> R) -> R {
+    fn with_owned<R>(&self, heap: &SharedHeap, f: impl FnOnce(&Owned) -> R) -> R
+    where
+        Self: Sized,
+    {
         let owned = heap.borrow().hold(*self);
         f(&owned)
     }
@@ -363,7 +376,10 @@ impl AsValue for Owned {
         heap.held(self)
     }
 
-    fn with_owned<R>(&self, _: &SharedHeap, f: impl FnOnce(&Owned) -> R) -> R {
+    fn with_owned<R>(&self, _: &SharedHeap, f: impl FnOnce(&Owned) -> R) -> R
+    where
+        Self: Sized,
+    {
         f(self)
     }
 }
@@ -373,7 +389,10 @@ impl AsValue for &Owned {
         heap.held(self)
     }
 
-    fn with_owned<R>(&self, _: &SharedHeap, f: impl FnOnce(&Owned) -> R) -> R {
+    fn with_owned<R>(&self, _: &SharedHeap, f: impl FnOnce(&Owned) -> R) -> R
+    where
+        Self: Sized,
+    {
         f(self)
     }
 }
