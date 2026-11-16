@@ -389,7 +389,7 @@ impl Backend for TreeWalker {
     /// Holds the evaluator's global environment through `hold_global`, as
     /// the default does: `Evaluator::global_env` is a pub field a host can
     /// set to a frame, which is held through the deprecated holder until
-    /// stage 5e (question 4 (b) on #839, pending the owner's ruling).
+    /// stage 5e (question 4 (b) on #839, ruled 2026-11-16).
     fn global_namespace(&self) -> OwnedEnvironment {
         self.evaluator
             .heap

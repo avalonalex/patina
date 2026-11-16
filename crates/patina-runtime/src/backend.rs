@@ -57,7 +57,7 @@ use std::rc::Rc;
 /// provides the ones the trait requires (`eval` and `global_env`, with
 /// `heap`, which is not deprecated) until stage 5e removes them; the
 /// provided ones it may override. S1's four names stay at 5e (question 5
-/// (a) on #839, pending the owner's ruling), so an implementor migrates once
+/// (a) on #839, ruled 2026-11-16), so an implementor migrates once
 /// (owner decision, 2026-10-21, #710).
 ///
 /// rustc does not warn an implementation of a deprecated method. It warns
@@ -244,8 +244,8 @@ pub trait Backend {
     /// by calling the deprecated methods, which warn there as anywhere;
     /// reading and making handles goes through `heap()`, the raw layer, which
     /// changes at stage 5e. An implementor that wants nothing raw keeps this
-    /// default. The parameter list is question 1 (a) on #839, pending the
-    /// owner's ruling.
+    /// default. The parameter list is question 1 (a) on #839, ruled
+    /// 2026-11-16.
     #[allow(
         deprecated,
         reason = "the default reaches the old methods until stage 5e (#839)"
@@ -326,8 +326,8 @@ pub trait Backend {
     /// (made with the deprecated `Environment::with_parent`) gets a handle on
     /// the frame, through the deprecated holder; from 5e, when the deprecated
     /// holders go, the handle holds a namespace, as `OwnedEnvironment`'s own
-    /// documentation says (question 4 (b) on #839, pending the owner's
-    /// ruling). An implementor that overrides this writes it from its own
+    /// documentation says (question 4 (b) on #839, ruled 2026-11-16). An
+    /// implementor that overrides this writes it from its own
     /// state (`heap().borrow().hold_namespace(..)` of its global), not over
     /// `global_env()`, which warns there as anywhere. Panics on a global of
     /// another heap.
@@ -620,7 +620,7 @@ mod tests {
 
     /// Until stage 5e a backend whose global environment is a frame gets a
     /// handle on the frame, through the deprecated holder (question 4 (b) on
-    /// #839, pending the owner's ruling; under (a) this panics instead).
+    /// #839, ruled 2026-11-16).
     #[test]
     fn global_namespace_holds_a_frame_global_until_5e() {
         let mut backend = MockBackend::new();

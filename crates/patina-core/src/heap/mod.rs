@@ -882,7 +882,7 @@ impl Heap {
     /// a namespace through [`Heap::hold_namespace`], and until stage 5e a
     /// frame through the deprecated holder, so that a host backend, or a
     /// tree-walker `Evaluator`, whose global is a frame keeps running
-    /// (#839; question 4 (b), pending the owner's ruling). What
+    /// (#839; question 4 (b), ruled 2026-11-16). What
     /// `Backend::global_namespace` answers. Not an interface: it loses its
     /// frame branch, or goes, at 5e.
     #[doc(hidden)]

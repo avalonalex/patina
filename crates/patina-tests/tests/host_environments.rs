@@ -216,7 +216,8 @@ fn backend_eval_evaluates_in_the_environment_it_is_given() {
 /// collects outside it, with the handle kept throughout (#839). The handle
 /// roots what is bound in the namespace, and only while it lives: a host
 /// that drops it and holds the same `Rc` again after a collection reads
-/// freed slots (`with_heap`'s documentation; question 3 on #839).
+/// freed slots (`with_heap`'s documentation; question 3 (a) on #839, ruled
+/// 2026-11-16).
 fn held_raw_namespace<B: Backend>(interp: Interpreter<B>) -> String {
     interp.eval_program_owned(PRELUDE).unwrap();
     let heap = interp.backend().heap().clone();
@@ -248,8 +249,8 @@ fn a_held_raw_namespace_keeps_its_bindings_across_a_collection() {
 
 /// A tree-walker whose `Evaluator::global_env`, a pub field, is a frame
 /// runs programs as before S1: `global_namespace` holds the frame through
-/// the deprecated holder until stage 5e (question 4 (b) on #839, pending the
-/// owner's ruling; under (a) it panics, "a handle holds only a namespace").
+/// the deprecated holder until stage 5e (question 4 (b) on #839, ruled
+/// 2026-11-16).
 #[test]
 fn a_tree_walker_whose_global_is_a_frame_runs_until_5e() {
     let mut evaluator = patina_interpreter::Evaluator::new();

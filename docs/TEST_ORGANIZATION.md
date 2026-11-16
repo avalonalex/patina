@@ -1147,11 +1147,12 @@ namespace since #835, to rooting what is bound in it, on both backends
   It shows that a namespace's handle roots its bindings across a collection;
   dropping the handle and holding the same `Rc` again after the collection
   reads freed slots on both backends, which `with_heap`'s documentation
-  forbids, so it is not #857's acceptance test (question 3 on #839);
+  forbids, so it is not #857's acceptance test (question 3 (a) on #839,
+  ruled 2026-11-16);
 - a tree-walker whose `Evaluator::global_env`, a pub field, is a frame
   (`a_tree_walker_whose_global_is_a_frame_runs_until_5e`, #839): it runs a
   program as before S1, `global_namespace` holding the frame through the
-  deprecated holder until 5e (question 4 (b), pending the owner's ruling);
+  deprecated holder until 5e (question 4 (b), ruled 2026-11-16);
 - `eval_str_in` and `eval_program_in`: a definition kept across a collection
   while the environment's code runs, an import bound in it alone, an error,
   and a continuation's escape;
