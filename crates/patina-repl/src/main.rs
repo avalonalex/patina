@@ -445,10 +445,18 @@ where
 {
     let backend = interp.backend();
     let input = patina_runtime::Port::stdin();
+    // A datum leaves its read bare, a word in a Rust local, until the form's
+    // closure holds it: a window that rests on where the safe points are, so
+    // it is asserted (AGENTS.md). Each read's end opens the scope, and the
+    // next read or the hold closes it; a read that ends the run leaves it
+    // open until this function returns, and nothing evaluates in between.
+    let unheld = RefCell::new(None::<patina_core::AssertNoGc>);
     // Each form is read in a context on the backend's heap, made for the
     // read: the run keeps no heap of its own (#707).
     let with_cx = |read: &mut dyn for<'gc> FnMut(&mut patina_core::Cx<'gc>)| {
-        patina_core::NoGcScope::with_cx(backend.heap(), |cx| read(cx))
+        unheld.borrow_mut().take();
+        patina_core::NoGcScope::with_cx(backend.heap(), |cx| read(cx));
+        *unheld.borrow_mut() = Some(patina_core::AssertNoGc::new(backend.heap()));
     };
     // The global namespace, and each form's datum through its evaluation,
     // held for the run (#839).
@@ -464,9 +472,10 @@ where
         keep_going,
         |datum, source_map| {
             // The datum arrives bare from a read that evaluated nothing since,
-            // so it is live (`Backend`'s first rule); from here its handle
-            // roots it.
+            // so it is live (`Backend`'s first rule), as `unheld`'s scope
+            // asserts; from here its handle roots it, and the scope closes.
             backend.heap().borrow().set_held(&held, datum);
+            unheld.borrow_mut().take();
             // The crate allows the re-entry rule (its Cargo.toml); this driver
             // loop states its reason anyway, as `Interpreter::run_forms` does.
             #[expect(
