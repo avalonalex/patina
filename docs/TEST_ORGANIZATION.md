@@ -1014,9 +1014,17 @@ the four on both identity backends, with a fresh name for `define_in`, and
 data read in the interpreter's context. The script runs the consumer with no
 `-D warnings`, so only these `deny` scopes make a deprecation fatal there.
 `patina-tests/tests/host_calls.rs` holds `Interpreter::call`, which reaches
-`Backend::call_owned`, on both backends.
+`Backend::call_owned`, on both backends, and one row of the deprecated
+`Backend::call`, promised until 5e, which nothing else runs on the real
+backends since S1 (#839).
+`include_syntax.rs`'s `a_programs_relative_include_resolves_beside_the_program`
+holds the source map an entry passes to `Backend::eval_in`: it alone names
+the program's file, so a relative `include` that resolves beside the program
+fails on either backend if `eval_in` drops it (#839).
 `legacy_embedding.rs` pins the three corrected convenience-API discrepancies,
-legacy error categories and effects before a read error. These are fixed
+legacy error categories and effects before a read error, and
+`StandardPipeline`'s refusal of an environment of another heap, which it
+read as its own before S1 (#839). These are fixed
 embedding cases for [#589](https://github.com/avalonalex/patina/issues/589),
 not a separate equivalence generator. Both backend examples and the rustdoc
 examples should also run when this API changes.
@@ -1154,7 +1162,9 @@ namespace since #835, to rooting what is bound in it, on both backends
 - a tree-walker whose `Evaluator::global_env`, a pub field, is a frame
   (`a_tree_walker_whose_global_is_a_frame_runs_until_5e`, #839): it runs a
   program as before S1, `global_namespace` holding the frame through the
-  deprecated holder until 5e (question 4 (b), ruled 2026-11-16);
+  deprecated holder until 5e (question 4 (b), ruled 2026-11-16), and checks
+  that the handle holds the frame itself and that the program defined in
+  it, not in the namespace beneath, which answers the program's 42 too;
 - `eval_str_in` and `eval_program_in`: a definition kept across a collection
   while the environment's code runs, an import bound in it alone, an error,
   and a continuation's escape;
@@ -1341,7 +1351,9 @@ parent, and the global `car` stays the primitive; and the same through a
 VM, which adopts the read-through record the code compiled there links, and
 never writes through it into the global binding (#836, #852).
 `Interpreter::define` and `define_in` reach the backend through
-`Backend::define_in` (#839), which the VM overrides with the same marking.
+`Backend::define_in` (#839), which the VM overrides with the same marking;
+the global case also runs through the deprecated `Backend::define`,
+promised until 5e, which must mark the same way.
 Without the VM's `Backend::define` and `define_in` the VM's code calls the
 primitive, which is what a write to
 the environment itself still does. A definition marks the primitive by the
