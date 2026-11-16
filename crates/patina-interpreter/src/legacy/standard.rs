@@ -60,7 +60,8 @@ impl Default for StandardPipeline {
 impl Pipeline for StandardPipeline {
     #[expect(
         clippy::disallowed_methods,
-        reason = "the deprecated adapter over `Interpreter::eval_str_in_env`: holds nothing"
+        reason = "the deprecated adapter over `Interpreter::eval_str_in_env`: holds the \
+                  environment's handle, which roots it through the call, and nothing else"
     )]
     fn eval(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<TaggedValue> {
         let env = self.hold(env)?;
@@ -73,7 +74,8 @@ impl Pipeline for StandardPipeline {
 
     #[expect(
         clippy::disallowed_methods,
-        reason = "the deprecated adapter over `Interpreter::eval_program_in_env`: holds nothing"
+        reason = "the deprecated adapter over `Interpreter::eval_program_in_env`: holds the \
+                  environment's handle, which roots it through the call, and nothing else"
     )]
     fn eval_program(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<TaggedValue> {
         let env = self.hold(env)?;

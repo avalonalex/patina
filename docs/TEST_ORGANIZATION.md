@@ -1006,9 +1006,9 @@ For `Backend`'s handle methods (#839) it has two host backends: the
 host-supplied `LiteralBackend` implements only the required methods and takes
 every default, its `impl` under `#[deny(deprecated)]`, which pins from
 outside the workspace that an implementation draws no warning; and
-`HandleBackend`, the state at 5e, implements only the four handle methods,
-its old ones `unreachable!`, and runs the interpreter's entries, so no entry
-reaches an old method. `handle_methods`, under `#[deny(deprecated)]`, calls
+`HandleBackend`, the state at 5e, implements `heap` and the four handle
+methods (over `LiteralBackend`'s), its old ones `unreachable!`, and runs the
+interpreter's entries, so no entry reaches an old method of its own. `handle_methods`, under `#[deny(deprecated)]`, calls
 the four on both identity backends, with a fresh name for `define_in`, and
 `scheme_handle_methods` on each Patina backend the features build, with
 data read in the interpreter's context. The script runs the consumer with no

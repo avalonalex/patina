@@ -48,7 +48,8 @@ use std::rc::Rc;
 /// use patina_runtime::Backend;
 ///
 /// let backend = TreeWalker::new();
-/// let expr = backend.heap().borrow().hold(parse("(+ 1 2 3)"));
+/// let datum = parse("(+ 1 2 3)"); // a read borrows the heap: not under `borrow()`
+/// let expr = backend.heap().borrow().hold(datum);
 /// let result = backend.eval_in(&backend.global_namespace(), &expr, None).unwrap();
 /// ```
 pub struct TreeWalker {

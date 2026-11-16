@@ -3317,8 +3317,8 @@ fn dispatch_one_instruction(
 /// no cell for, the `StoreGlobal` handler's by name (`store_global_cold`),
 /// calls this, since it writes the binding `get` finds, which may be a
 /// parent's or an alias's. A definition, the `Define` handler's or a host's through
-/// `Backend::define`, goes through [`define_global`], which marks by the
-/// environment's own binding. The import machinery in both this file and
+/// `Backend::define_in` or the deprecated `define`, goes through
+/// [`define_global`], which marks by the environment's own binding. The import machinery in both this file and
 /// `backend.rs` does the same job through `import_export` (PRD P8.1), which
 /// compares the value before with the value after, since what an import
 /// installs is a binding rather than a value they hold. Rebinding a name to
@@ -3337,8 +3337,8 @@ fn mark_if_shadowing_primitive(
 }
 
 /// Define `name` as `value` in `env`: the `Define` handler's body, and a
-/// host's definition through `Backend::define`, which marks as a program's
-/// does (#673).
+/// host's definition through `Backend::define_in` or the deprecated
+/// `define`, which marks as a program's does (#673).
 ///
 /// A definition writes `env`'s own binding of the name, and a fast path
 /// compiled in `env` stands on no other: `resolve_primitive_calls` leaves a

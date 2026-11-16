@@ -258,7 +258,8 @@ fn main() {
     let host = Interpreter::new(LiteralBackend::new());
     assert_eq!(host.eval_program("40 42").unwrap().as_fixnum(), Some(42));
     assert!(host.eval_program("42 (").is_err());
-    // `Backend::define`'s default, which a host-supplied backend takes.
+    // `Backend::define_in`'s default, over `define`'s, which a host-supplied
+    // backend takes.
     host.define("answer", TaggedValue::fixnum(42));
     let answer = host.lookup("answer").expect("`answer` is bound");
     assert_eq!(host.raw_value(&answer).as_fixnum(), Some(42));

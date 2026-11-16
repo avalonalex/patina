@@ -455,8 +455,8 @@ enum FormsEnd<E> {
 /// everything bound in it until the handle is dropped (#620, #835). [`Interpreter::define_in`] and
 /// [`Interpreter::lookup_in`] bind and read in it, and
 /// [`Interpreter::eval_str_in`] and [`Interpreter::eval_program_in`]
-/// evaluate in it, on either backend. Every entry reaches the backend
-/// through its handle methods (#839): the global namespace by a handle
+/// evaluate in it, on either backend. Every evaluation and binding entry
+/// reaches the backend through its handle methods (#839): the global namespace by a handle
 /// `global_namespace` answers for the call, and each form's datum held
 /// through its evaluation. `global_env` and `raw_environment`, which
 /// answered the environments raw, are deprecated.
@@ -578,7 +578,9 @@ impl<B: Backend> Interpreter<B> {
     )]
     #[expect(
         clippy::disallowed_methods,
-        reason = "a wrapper over `eval_str_in_env` in the global environment: holds nothing"
+        reason = "a wrapper over `eval_str_in_env` in the global environment: holds the global \
+                  namespace's temporary handle, which roots it through the call, and nothing \
+                  else"
     )]
     pub fn eval_str(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
         self.eval_str_in_env(input, "<eval>", &self.backend.global_namespace())
@@ -594,7 +596,9 @@ impl<B: Backend> Interpreter<B> {
     )]
     #[expect(
         clippy::disallowed_methods,
-        reason = "a wrapper over `eval_str_in_env` in the global environment: holds nothing"
+        reason = "a wrapper over `eval_str_in_env` in the global environment: holds the global \
+                  namespace's temporary handle, which roots it through the call, and nothing \
+                  else"
     )]
     pub fn eval_str_with_source_name(
         &self,
@@ -654,7 +658,9 @@ impl<B: Backend> Interpreter<B> {
     )]
     #[expect(
         clippy::disallowed_methods,
-        reason = "a wrapper over `eval_str_in_env` in the global environment: holds nothing"
+        reason = "a wrapper over `eval_str_in_env` in the global environment: holds the global \
+                  namespace's temporary handle, which roots it through the call, and nothing \
+                  else"
     )]
     pub fn eval_str_tracked(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
         self.eval_str_in_env(input, "<eval>", &self.backend.global_namespace())

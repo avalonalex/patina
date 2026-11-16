@@ -28,21 +28,21 @@ use std::rc::Rc;
 /// - VM: Bytecode compilation and stack-based execution
 /// - JIT: Native code generation with LLVM/Cranelift
 ///
-/// Each backend must provide, until stage 5e:
+/// Each backend must provide its heap (`heap`) and a backend-specific error
+/// type, and until stage 5e also:
 /// 1. Expression evaluation in a given environment (`eval`)
 /// 2. Its global environment (`global_env`), which callers reach through
 ///    the handle `global_namespace` answers
-/// 3. Its heap (`heap`), and a backend-specific error type
 ///
 /// # Words
 ///
 /// The trait's methods are inside the embedding API's promise, changing only
 /// by #601's convention (#831, `docs/README.md`, "Changing the embedding
-/// API"). Their words are the raw layer: they take and answer `TaggedValue`s,
-/// bare words that root nothing, and environments as `&Rc<Environment>`,
-/// whose methods are raw. A host calls the `Interpreter`'s methods instead,
-/// which keep values in handles (#605). A caller of these keeps two rules,
-/// which both machines keep:
+/// API"). The old methods' words are the raw layer: they take and answer
+/// `TaggedValue`s, bare words that root nothing, and environments as
+/// `&Rc<Environment>`, whose methods are raw. A host calls the
+/// `Interpreter`'s methods instead, which keep values in handles (#605). A
+/// caller of these keeps two rules, which both machines keep:
 /// - **A word passed in is live** in the backend's heap: an immediate, or an
 ///   object nothing has freed since it was made, as a datum just read in a
 ///   context is, or as a handle's word is while the handle lives.
@@ -54,8 +54,8 @@ use std::rc::Rc;
 /// `define_in`, `call_owned` and `global_namespace`, which take and answer
 /// `Owned` and `OwnedEnvironment` and root what they name through the call.
 /// The old methods are deprecated for callers. An implementor still
-/// provides the ones the trait requires (`eval` and `global_env`, with
-/// `heap`, which is not deprecated) until stage 5e removes them; the
+/// provides `eval` and `global_env`, which the trait requires until stage
+/// 5e removes them (`heap` stays required and is not deprecated); the
 /// provided ones it may override. S1's four names stay at 5e (question 5
 /// (a) on #839, ruled 2026-11-16), so an implementor migrates once
 /// (owner decision, 2026-10-21, #710).
@@ -323,7 +323,7 @@ pub trait Backend {
     /// environment. A fresh handle each call.
     ///
     /// Until stage 5e, a host backend whose global environment is a frame
-    /// (made with the deprecated `Environment::with_parent`) gets a handle on
+    /// (as the deprecated `Environment::with_parent` makes) gets a handle on
     /// the frame, through the deprecated holder; from 5e, when the deprecated
     /// holders go, the handle holds a namespace, as `OwnedEnvironment`'s own
     /// documentation says (question 4 (b) on #839, ruled 2026-11-16). An
