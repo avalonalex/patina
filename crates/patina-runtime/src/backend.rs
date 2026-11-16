@@ -81,6 +81,11 @@ pub trait Backend {
     /// # Returns
     ///
     /// The resulting TaggedValue, or a backend-specific error.
+    #[deprecated(
+        note = "use `eval_in`, which takes a handle on the namespace and on the datum and answers \
+                a handle; an implementor still provides this until stage 5e, and writes an \
+                override of `eval_in` from its own state, not by calling this (#839)"
+    )]
     fn eval(&self, expr: TaggedValue, env: &Rc<Environment>) -> Result<TaggedValue, Self::Error>;
 
     /// Get a reference to the global environment
@@ -89,6 +94,12 @@ pub trait Backend {
     /// - REPL (evaluating top-level expressions)
     /// - Library loading (defining exports in global scope)
     /// - Introspection (listing defined variables)
+    #[deprecated(
+        note = "use `global_namespace()` for a handle, and `Heap::held_environment` on it (through \
+                `heap()`, the raw layer) for the environment; an implementor still provides this \
+                until stage 5e, and writes an override of `global_namespace` from its own state, \
+                not by calling this (#839)"
+    )]
     fn global_env(&self) -> &Rc<Environment>;
 
     /// The heap the backend's values live on, and its environments'. An
@@ -100,6 +111,11 @@ pub trait Backend {
     ///
     /// This is equivalent to `self.eval(expr, self.global_env())` but provided
     /// as a convenience for the common case of top-level evaluation.
+    #[deprecated(note = "use `eval_in` with `global_namespace()` (#839)")]
+    #[allow(
+        deprecated,
+        reason = "the default reaches the old methods until stage 5e (#839)"
+    )]
     #[expect(
         clippy::disallowed_methods,
         reason = "holds `global`, a clone of the backend's global environment, which the backend \
@@ -125,6 +141,11 @@ pub trait Backend {
                   stale keys (docs/GC_DESIGN.md §9.1), which misattribute a diagnostic and free \
                   nothing"
     )]
+    #[deprecated(note = "use `eval_in` with `Some(source_map)` (#839)")]
+    #[allow(
+        deprecated,
+        reason = "the default reaches the old method until stage 5e (#839)"
+    )]
     fn eval_with_source_map(
         &self,
         expr: TaggedValue,
@@ -148,6 +169,10 @@ pub trait Backend {
     /// `Interpreter::define` and `Interpreter::define_in`;
     /// `Environment::define` and `Environment::set` are the raw layer, which
     /// write the binding and nothing else.
+    #[deprecated(
+        note = "use `define_in`, which takes handles and marks a rebound primitive as this does \
+                (#673, #839)"
+    )]
     fn define(&self, env: &Rc<Environment>, name: &str, value: TaggedValue) {
         patina_core::NamespaceView::of(env).define(self.heap(), name, value);
     }
@@ -162,6 +187,11 @@ pub trait Backend {
     /// environment, so it depends on what `quote` is bound to there. Both
     /// machines apply without consulting a binding: they build the
     /// application as `CoreExpr`, not as a datum to expand.
+    #[deprecated(note = "use `call_owned`, which takes and answers handles (#839)")]
+    #[allow(
+        deprecated,
+        reason = "the default reaches the old method until stage 5e (#839)"
+    )]
     fn call(&self, f: TaggedValue, args: &[TaggedValue]) -> Result<TaggedValue, Self::Error> {
         let mut words = Vec::with_capacity(args.len() + 1);
         words.push(f);
@@ -202,6 +232,10 @@ pub trait Backend {
     /// changes at stage 5e. An implementor that wants nothing raw keeps this
     /// default. The parameter list is question 1 (a) on #839, pending the
     /// owner's ruling.
+    #[allow(
+        deprecated,
+        reason = "the default reaches the old methods until stage 5e (#839)"
+    )]
     fn eval_in(
         &self,
         env: &OwnedEnvironment,
@@ -230,6 +264,10 @@ pub trait Backend {
     /// as a program's `define` there does: [`Self::define`] over handles, so
     /// the VM marks the primitive it rebinds (#673). Evaluates nothing.
     /// Panics on a handle from another heap.
+    #[allow(
+        deprecated,
+        reason = "the default reaches the old methods until stage 5e (#839)"
+    )]
     fn define_in(&self, env: &OwnedEnvironment, name: &str, value: &Owned) {
         let (env, value) = {
             let heap = self.heap().borrow();
@@ -243,6 +281,10 @@ pub trait Backend {
     /// handles. A driver entry, as `eval_in` is; the handles root the callee
     /// and its arguments through the call. Panics on a handle from another
     /// heap.
+    #[allow(
+        deprecated,
+        reason = "the default reaches the old methods until stage 5e (#839)"
+    )]
     fn call_owned(&self, f: &Owned, args: &[Owned]) -> Result<Owned, Self::Error> {
         let (callee, operands) = {
             let heap = self.heap().borrow();
@@ -275,6 +317,10 @@ pub trait Backend {
     /// state (`heap().borrow().hold_namespace(..)` of its global), not over
     /// `global_env()`, which warns there as anywhere. Panics on a global of
     /// another heap.
+    #[allow(
+        deprecated,
+        reason = "the default reaches the old methods until stage 5e (#839)"
+    )]
     fn global_namespace(&self) -> OwnedEnvironment {
         let global = Rc::clone(self.global_env());
         self.heap().borrow().hold_global(global)
@@ -286,6 +332,11 @@ pub trait Backend {
     clippy::disallowed_methods,
     reason = "unit tests of the trait's default methods against a mock backend that evaluates \
               nothing"
+)]
+#[allow(
+    deprecated,
+    reason = "the old methods' defaults are tested, and the mocks implement and delegate to them, \
+              until stage 5e (#839)"
 )]
 mod tests {
     use super::*;

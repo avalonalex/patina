@@ -1289,6 +1289,37 @@ impl<B: Backend> Interpreter<B> {
     /// [`Interpreter::global_env`]. A frame built over it is refused by the
     /// VM, as one over the global environment is (#835). Panics on a handle
     /// another interpreter made.
+    ///
+    /// Deprecated (#839): the handle forms read, bind and evaluate in a host
+    /// environment, and `backend().eval_in` evaluates a datum there; what
+    /// none of them covers is the raw layer, which `Heap::held_environment`
+    /// reaches through `backend().heap()`.
+    ///
+    /// ```
+    /// #![deny(deprecated)]
+    /// use patina_interpreter::{Backend, Interpreter, Owned};
+    /// fn read<B: Backend>(interp: &Interpreter<B>) -> Option<Owned> {
+    ///     let env = interp.new_environment();
+    ///     interp.lookup_in(&env, "car")
+    /// }
+    /// ```
+    ///
+    /// Its own call:
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use patina_interpreter::{Backend, Interpreter, Owned};
+    /// fn read<B: Backend>(interp: &Interpreter<B>) -> Option<Owned> {
+    ///     let env = interp.new_environment();
+    ///     let _ = interp.raw_environment(&env);
+    ///     None
+    /// }
+    /// ```
+    #[deprecated(
+        note = "use `lookup_in`, `define_in`, `eval_str_in` or `eval_program_in`, or \
+                `backend().eval_in`; `Heap::held_environment`, through `backend().heap()`, is the \
+                raw layer (#839)"
+    )]
     pub fn raw_environment(&self, env: &OwnedEnvironment) -> Rc<Environment> {
         self.backend.heap().borrow().held_environment(env)
     }
@@ -1368,6 +1399,35 @@ impl<B: Backend> Interpreter<B> {
     /// before a host writes over a primitive's name goes on calling the
     /// primitive (#673). [`Interpreter::define`] binds through the backend,
     /// which turns it off.
+    ///
+    /// Deprecated (#839): [`Interpreter::lookup`] and [`Interpreter::define`]
+    /// read and bind globals, and `backend().global_namespace()` answers a
+    /// handle on the global namespace; `Heap::held_environment` on it,
+    /// through `backend().heap()`, is the raw layer.
+    ///
+    /// ```
+    /// #![deny(deprecated)]
+    /// use patina_interpreter::{Backend, Interpreter, Owned};
+    /// fn read<B: Backend>(interp: &Interpreter<B>) -> Option<Owned> {
+    ///     interp.lookup("car")
+    /// }
+    /// ```
+    ///
+    /// Its own call:
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use patina_interpreter::{Backend, Interpreter, Owned};
+    /// fn read<B: Backend>(interp: &Interpreter<B>) -> Option<Owned> {
+    ///     let _ = interp.global_env();
+    ///     None
+    /// }
+    /// ```
+    #[deprecated(
+        note = "use `lookup` and `define` for globals, or `backend().global_namespace()` for a \
+                handle; `Heap::held_environment` on it, through `backend().heap()`, is the raw \
+                layer (#839)"
+    )]
     pub fn global_env(&self) -> Rc<Environment> {
         let global = self.backend.global_namespace();
         self.backend.heap().borrow().held_environment(&global)
@@ -1544,6 +1604,249 @@ impl<B: Backend> Interpreter<B> {
     /// setup (`new`, `with_fs`, `Default`, the search paths and
     /// `bootstrap_error`), and `backend().heap()` reaches
     /// [`Heap`](patina_core::Heap)'s raw methods (#831).
+    ///
+    /// Four of the trait's methods take and answer handles (S1, #839):
+    /// `eval_in`, `define_in`, `call_owned` and `global_namespace`, provided
+    /// over the old ones, which are deprecated for callers. They compile
+    /// under `#![deny(deprecated)]`, through a generic bound and through
+    /// `dyn Backend`, which keeps the trait dyn-compatible:
+    ///
+    /// ```
+    /// #![deny(deprecated)]
+    /// use patina_interpreter::{Backend, EvalError, Interpreter, Owned, TaggedValue};
+    /// fn handles<B: Backend>(interp: &Interpreter<B>) -> Result<Owned, B::Error> {
+    ///     let backend = interp.backend();
+    ///     let global = backend.global_namespace();
+    ///     let datum = backend.heap().borrow().hold(TaggedValue::fixnum(42));
+    ///     backend.define_in(&global, "answer", &datum);
+    ///     let value = backend.eval_in(&global, &datum, None)?;
+    ///     backend.call_owned(&value, &[])
+    /// }
+    /// fn through_dyn(backend: &dyn Backend<Error = EvalError>) -> Result<Owned, EvalError> {
+    ///     let global = backend.global_namespace();
+    ///     let datum = backend.heap().borrow().hold(TaggedValue::fixnum(42));
+    ///     backend.define_in(&global, "answer", &datum);
+    ///     let value = backend.eval_in(&global, &datum, None)?;
+    ///     backend.call_owned(&value, &[])
+    /// }
+    /// ```
+    ///
+    /// Each deprecated method is pinned below under `#![deny(deprecated)]`,
+    /// beside a twin that compiles. A pin and its twin share their
+    /// scaffolding, which calls nothing deprecated: the raw environment
+    /// through `Heap::held_environment` of `global_namespace()`, the raw
+    /// layer, and a word and a source map. So each pin fails for its own
+    /// call alone.
+    ///
+    /// ```
+    /// #![deny(deprecated)]
+    /// use std::{cell::RefCell, rc::Rc};
+    /// use patina_interpreter::{Backend, Interpreter, SourceMap, TaggedValue};
+    /// fn new<B: Backend>(interp: &Interpreter<B>) {
+    ///     let backend = interp.backend();
+    ///     let global = backend.global_namespace();
+    ///     let env = backend.heap().borrow().held_environment(&global);
+    ///     let word = TaggedValue::fixnum(42);
+    ///     let map = Rc::new(RefCell::new(SourceMap::new()));
+    ///     let datum = backend.heap().borrow().hold(word);
+    ///     let _ = backend.eval_in(&global, &datum, None);
+    ///     let _ = backend.eval_in(&global, &datum, Some(&map));
+    ///     backend.define_in(&global, "answer", &datum);
+    ///     let _ = backend.call_owned(&datum, &[]);
+    ///     drop(env);
+    /// }
+    /// ```
+    ///
+    /// `Backend::eval`:
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use std::{cell::RefCell, rc::Rc};
+    /// use patina_interpreter::{Backend, Interpreter, SourceMap, TaggedValue};
+    /// fn old<B: Backend>(interp: &Interpreter<B>) {
+    ///     let backend = interp.backend();
+    ///     let global = backend.global_namespace();
+    ///     let env = backend.heap().borrow().held_environment(&global);
+    ///     let word = TaggedValue::fixnum(42);
+    ///     let map = Rc::new(RefCell::new(SourceMap::new()));
+    ///     let _ = backend.eval(word, &env);
+    ///     drop(map);
+    /// }
+    /// ```
+    ///
+    /// `Backend::eval_global`:
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use std::{cell::RefCell, rc::Rc};
+    /// use patina_interpreter::{Backend, Interpreter, SourceMap, TaggedValue};
+    /// fn old<B: Backend>(interp: &Interpreter<B>) {
+    ///     let backend = interp.backend();
+    ///     let global = backend.global_namespace();
+    ///     let env = backend.heap().borrow().held_environment(&global);
+    ///     let word = TaggedValue::fixnum(42);
+    ///     let map = Rc::new(RefCell::new(SourceMap::new()));
+    ///     let _ = backend.eval_global(word);
+    ///     drop((env, map));
+    /// }
+    /// ```
+    ///
+    /// `Backend::eval_with_source_map`:
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use std::{cell::RefCell, rc::Rc};
+    /// use patina_interpreter::{Backend, Interpreter, SourceMap, TaggedValue};
+    /// fn old<B: Backend>(interp: &Interpreter<B>) {
+    ///     let backend = interp.backend();
+    ///     let global = backend.global_namespace();
+    ///     let env = backend.heap().borrow().held_environment(&global);
+    ///     let word = TaggedValue::fixnum(42);
+    ///     let map = Rc::new(RefCell::new(SourceMap::new()));
+    ///     let _ = backend.eval_with_source_map(word, &env, &map);
+    /// }
+    /// ```
+    ///
+    /// `Backend::define`:
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use std::{cell::RefCell, rc::Rc};
+    /// use patina_interpreter::{Backend, Interpreter, SourceMap, TaggedValue};
+    /// fn old<B: Backend>(interp: &Interpreter<B>) {
+    ///     let backend = interp.backend();
+    ///     let global = backend.global_namespace();
+    ///     let env = backend.heap().borrow().held_environment(&global);
+    ///     let word = TaggedValue::fixnum(42);
+    ///     let map = Rc::new(RefCell::new(SourceMap::new()));
+    ///     backend.define(&env, "answer", word);
+    ///     drop(map);
+    /// }
+    /// ```
+    ///
+    /// `Backend::call`:
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use std::{cell::RefCell, rc::Rc};
+    /// use patina_interpreter::{Backend, Interpreter, SourceMap, TaggedValue};
+    /// fn old<B: Backend>(interp: &Interpreter<B>) {
+    ///     let backend = interp.backend();
+    ///     let global = backend.global_namespace();
+    ///     let env = backend.heap().borrow().held_environment(&global);
+    ///     let word = TaggedValue::fixnum(42);
+    ///     let map = Rc::new(RefCell::new(SourceMap::new()));
+    ///     let _ = backend.call(word, &[]);
+    ///     drop((env, map));
+    /// }
+    /// ```
+    ///
+    /// `Backend::global_env`:
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use std::{cell::RefCell, rc::Rc};
+    /// use patina_interpreter::{Backend, Interpreter, SourceMap, TaggedValue};
+    /// fn old<B: Backend>(interp: &Interpreter<B>) {
+    ///     let backend = interp.backend();
+    ///     let global = backend.global_namespace();
+    ///     let env = backend.heap().borrow().held_environment(&global);
+    ///     let word = TaggedValue::fixnum(42);
+    ///     let map = Rc::new(RefCell::new(SourceMap::new()));
+    ///     let _ = backend.global_env();
+    ///     drop((env, word, map));
+    /// }
+    /// ```
+    ///
+    /// An implementor sees none of this: rustc does not warn an
+    /// implementation of a deprecated method, so a backend that implements
+    /// the methods the trait requires (`eval`, `global_env` and `heap`, the
+    /// first two until stage 5e) compiles under `#![deny(deprecated)]`, and so
+    /// does one that also overrides the four handle methods from its own
+    /// state:
+    ///
+    /// ```
+    /// #![deny(deprecated)]
+    /// use std::{cell::RefCell, rc::Rc};
+    /// use patina_interpreter::{
+    ///     Backend, Environment, EvalError, Owned, OwnedEnvironment, SharedHeap, SourceMap,
+    ///     TaggedValue,
+    /// };
+    /// struct Required(Rc<Environment>, SharedHeap);
+    /// impl Backend for Required {
+    ///     type Error = EvalError;
+    ///     fn eval(&self, datum: TaggedValue, _: &Rc<Environment>) -> Result<TaggedValue, EvalError> {
+    ///         Ok(datum)
+    ///     }
+    ///     fn global_env(&self) -> &Rc<Environment> {
+    ///         &self.0
+    ///     }
+    ///     fn heap(&self) -> &SharedHeap {
+    ///         &self.1
+    ///     }
+    /// }
+    /// struct Overriding(Rc<Environment>, SharedHeap);
+    /// impl Backend for Overriding {
+    ///     type Error = EvalError;
+    ///     fn eval(&self, datum: TaggedValue, _: &Rc<Environment>) -> Result<TaggedValue, EvalError> {
+    ///         Ok(datum)
+    ///     }
+    ///     fn global_env(&self) -> &Rc<Environment> {
+    ///         &self.0
+    ///     }
+    ///     fn heap(&self) -> &SharedHeap {
+    ///         &self.1
+    ///     }
+    ///     fn eval_in(
+    ///         &self,
+    ///         _: &OwnedEnvironment,
+    ///         expr: &Owned,
+    ///         _: Option<&Rc<RefCell<SourceMap>>>,
+    ///     ) -> Result<Owned, EvalError> {
+    ///         let heap = self.1.borrow();
+    ///         Ok(heap.hold(heap.held(expr)))
+    ///     }
+    ///     fn define_in(&self, env: &OwnedEnvironment, name: &str, value: &Owned) {
+    ///         let (env, value) = {
+    ///             let heap = self.1.borrow();
+    ///             (heap.held_environment(env), heap.held(value))
+    ///         };
+    ///         env.define(&self.1, name.to_string(), value);
+    ///     }
+    ///     fn call_owned(&self, f: &Owned, _: &[Owned]) -> Result<Owned, EvalError> {
+    ///         let heap = self.1.borrow();
+    ///         Ok(heap.hold(heap.held(f)))
+    ///     }
+    ///     fn global_namespace(&self) -> OwnedEnvironment {
+    ///         self.1.borrow().hold_namespace(Rc::clone(&self.0))
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// It warns a call of one, in an implementation too: a handle method
+    /// written over `self.global_env()` fails under `#![deny(deprecated)]`.
+    ///
+    /// ```compile_fail
+    /// #![deny(deprecated)]
+    /// use std::rc::Rc;
+    /// use patina_interpreter::{Backend, Environment, EvalError, OwnedEnvironment, SharedHeap, TaggedValue};
+    /// struct OverGlobalEnv(Rc<Environment>, SharedHeap);
+    /// impl Backend for OverGlobalEnv {
+    ///     type Error = EvalError;
+    ///     fn eval(&self, datum: TaggedValue, _: &Rc<Environment>) -> Result<TaggedValue, EvalError> {
+    ///         Ok(datum)
+    ///     }
+    ///     fn global_env(&self) -> &Rc<Environment> {
+    ///         &self.0
+    ///     }
+    ///     fn heap(&self) -> &SharedHeap {
+    ///         &self.1
+    ///     }
+    ///     fn global_namespace(&self) -> OwnedEnvironment {
+    ///         self.1.borrow().hold_namespace(Rc::clone(self.global_env()))
+    ///     }
+    /// }
+    /// ```
     pub fn backend(&self) -> &B {
         &self.backend
     }

@@ -77,14 +77,18 @@ fn every_nameable_entry_is_matched() {
     };
 
     // patina-runtime
+    #[allow(deprecated)]
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |b: &VmBackend, env: &Rc<Environment>| b.eval(TaggedValue::NULL, env);
+    #[allow(deprecated)]
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |b: &VmBackend| b.eval_global(TaggedValue::NULL);
+    #[allow(deprecated)]
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |b: &VmBackend, env: &Rc<Environment>, map: &Rc<RefCell<crate::SourceMap>>| {
         b.eval_with_source_map(TaggedValue::NULL, env, map)
     };
+    #[allow(deprecated)]
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |b: &VmBackend| b.call(TaggedValue::NULL, &[]);
     // the handle methods (#839)

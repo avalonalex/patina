@@ -401,6 +401,11 @@ impl Backend for TreeWalker {
     clippy::disallowed_methods,
     reason = "unit tests evaluate through `Backend` from outside any loop, as an embedder does"
 )]
+#[allow(
+    deprecated,
+    reason = "the tests reach the global environment and evaluate in a raw frame through the old \
+              methods until stage 5e (#839)"
+)]
 mod tests {
     use super::*;
 

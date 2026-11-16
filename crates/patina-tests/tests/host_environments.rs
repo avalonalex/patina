@@ -22,6 +22,12 @@
 //! `eval` and `load` through an environment specifier a host made over one,
 //! and a host primitive's `Step::Eval` or `ApplyContext::eval_expr` in one.
 
+#![allow(
+    deprecated,
+    reason = "#620's tests and the raw frames run through the old `Backend` methods beside the \
+              handle methods, and introspect through `Interpreter::global_env` and \
+              `raw_environment`, until stage 5e (#839)"
+)]
 #![expect(
     clippy::disallowed_macros,
     reason = "HOST_FRAME: the raw frame or host namespace a host primitive of the test evaluates \
