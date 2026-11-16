@@ -250,7 +250,19 @@ impl<'a> CpsTransformer<'a> {
                 self.transform_apply(func, args, k, expr.source.clone())
             }
 
-            CoreExprKind::Set { var, scopes, value } => {
+            CoreExprKind::Set {
+                var,
+                scopes,
+                value,
+                link,
+            } => {
+                // `CpsExpr` carries no link until 4b.10's switch, which adds
+                // its field and copies this one (#837); nothing links an
+                // assignment before then.
+                debug_assert!(
+                    link.is_none(),
+                    "a linked assignment reached the CPS transform before its CpsExpr field (#837)"
+                );
                 // Transform: (set! var value)
                 // Into: evaluate value, do set!, continue with unspecified
 
@@ -382,10 +394,17 @@ impl<'a> CpsTransformer<'a> {
     fn transform_trivial(&self, expr: &CoreExpr) -> CpsExpr {
         let mut result = match &expr.kind {
             CoreExprKind::Literal(v) => CpsExpr::new(CpsExprKind::Literal(self.literals.word(*v))),
-            CoreExprKind::Var { name, scopes } => CpsExpr::new(CpsExprKind::Var {
-                name: name.clone(),
-                scopes: scopes.clone(),
-            }),
+            CoreExprKind::Var { name, scopes, link } => {
+                // As `Set`'s link above (#837).
+                debug_assert!(
+                    link.is_none(),
+                    "a linked reference reached the CPS transform before its CpsExpr field (#837)"
+                );
+                CpsExpr::new(CpsExprKind::Var {
+                    name: name.clone(),
+                    scopes: scopes.clone(),
+                })
+            }
             CoreExprKind::Quote(v) => CpsExpr::new(CpsExprKind::Literal(self.literals.word(*v))),
             CoreExprKind::Lambda {
                 params,
@@ -642,10 +661,7 @@ mod tests {
     }
 
     fn make_var(name: &str) -> CoreExpr {
-        CoreExpr::new(CoreExprKind::Var {
-            name: name.into(),
-            scopes: ScopeSet::new(),
-        })
+        CoreExpr::new(CoreExprKind::var(name.into(), ScopeSet::new()))
     }
 
     /// The transform and the tree it builds both grow their stack: code far

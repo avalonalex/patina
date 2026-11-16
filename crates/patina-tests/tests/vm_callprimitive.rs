@@ -367,3 +367,80 @@ fn arity_error_message_parity() {
         .to_string();
     assert!(err.contains("car"), "unexpected message: {err}");
 }
+
+/// A library whose macro's template calls `car`, which the library imports
+/// from `(scheme base)` as the program does.
+const CARLIB: &str = "(define-library (t carlib)
+  (export first-of)
+  (import (scheme base))
+  (begin (define-syntax first-of (syntax-rules () ((_ x) (car x))))))
+(import (scheme base) (t carlib))
+";
+
+/// A template's `car` and the program's own `car` in one procedure stay two
+/// operands (#837's `OperandKey`): once the program defines `car`, the
+/// template's still reads the library's binding and the program's reads
+/// the program's, `(1 mine)` on both backends. chibi 0.12 and Gauche
+/// 0.9.15 answer `(1 1)`, inlining the program's `car` too: that is #603's
+/// latitude (`DIVERGENCES.tsv`'s `stdlib/rebinding.scm` rows), where
+/// Patina's own `car` follows the name. An implementation that gave both
+/// operands the template's binding would also answer `(1 1)`, so this is
+/// not to be "corrected" to the oracles' answer.
+#[test]
+fn a_linked_and_an_own_operand_of_one_spelling_stay_apart() {
+    let program = format!(
+        "{CARLIB}(define (g p) (list (first-of p) (car p)))
+(define before (g '(1 2)))
+(define (car x) 'mine)
+(list before (g '(1 2)))"
+    );
+    let expected = "((1 1) (1 mine))";
+    assert_eq!(eval(&program), expected, "VM");
+    assert_eq!(
+        common::eval_program_tree_walker(&program),
+        expected,
+        "tree-walker"
+    );
+}
+
+/// A template's call of `car`, compiled before the program defines `car`,
+/// takes `car`'s fast path, and after the definition still answers the
+/// library's `car` (deoptimized, through what the reference is bound to).
+/// A template expanded after the definition reaches the library's `car`
+/// too, by an ordinary call. The fast path is asserted on the code
+/// `compile_for_inspection` answers for `g`, an inline `Car`; which operand
+/// it names (the linked record's, `car@linked`) is the switch's to assert.
+#[test]
+fn an_early_bound_primitive_keeps_its_fast_path() {
+    let interp = Interpreter::new(patina_vm::VmBackend::new());
+    interp
+        .eval_program_owned(CARLIB)
+        .expect("the library and the import");
+    let inspected = interp
+        .backend()
+        .compile_for_inspection("(define (g p) (first-of p))")
+        .expect("compiles");
+    let (_, nested) = &inspected.units()[0];
+    assert!(
+        nested[0]
+            .instructions
+            .iter()
+            .any(|instr| matches!(instr, patina_vm::types::Instruction::Car { .. })),
+        "the template's car is inlined"
+    );
+
+    let program = format!(
+        "{CARLIB}(define (g p) (first-of p))
+(define before (g '(1 2)))
+(define (car x) 'mine)
+(define (g2 p) (first-of p))
+(list before (g '(1 2)) (g2 '(1 2)) (car '(1 2)))"
+    );
+    let expected = "(1 1 1 mine)";
+    assert_eq!(eval(&program), expected, "VM");
+    assert_eq!(
+        common::eval_program_tree_walker(&program),
+        expected,
+        "tree-walker"
+    );
+}

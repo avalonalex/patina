@@ -1690,12 +1690,22 @@ impl<'a> Desugarer<'a> {
                 expr.map_children(|child| settle(child, bound, introduced))
             });
             match &mut settled.kind {
-                CoreExprKind::Var { name, scopes } => {
+                // A link stays where the rebuild carried it: nothing links a
+                // reference until 4b.10's switch, which has settling take a
+                // link back where it puts a spelling back today (#837).
+                CoreExprKind::Var { name, scopes, link } => {
+                    debug_assert!(link.is_none(), "settled before 4b.10's links (#837)");
                     if let Some(original) = written(name, scopes) {
                         *name = original;
                     }
                 }
-                CoreExprKind::Set { var, scopes, .. } => {
+                CoreExprKind::Set {
+                    var,
+                    scopes,
+                    link,
+                    value: _,
+                } => {
+                    debug_assert!(link.is_none(), "settled before 4b.10's links (#837)");
                     if let Some(original) = written(var, scopes) {
                         *var = original;
                     }
@@ -2166,7 +2176,7 @@ impl<'a> Desugarer<'a> {
         {
             let scopes = ScopeSet::new();
             self.reject_syntax_as_value(&name, &scopes, cx)?;
-            return Ok(CoreExpr::new(CoreExprKind::Var { name, scopes }));
+            return Ok(CoreExpr::new(CoreExprKind::var(name, scopes)));
         }
 
         // Identifier - variable reference with scopes (for hygiene)
@@ -2175,7 +2185,8 @@ impl<'a> Desugarer<'a> {
             let name = self
                 .early_bound(&name, &scopes, by_name, cx)
                 .unwrap_or(name);
-            return Ok(CoreExpr::new(CoreExprKind::Var { name, scopes }));
+            // Linked by 4b.10's switch (#837); renamed to an alias until then.
+            return Ok(CoreExpr::new(CoreExprKind::linked_var(name, scopes, None)));
         }
 
         // Native heap types - self-evaluating literals
@@ -2741,11 +2752,8 @@ impl<'a> Desugarer<'a> {
 
         let value = self.desugar_expression(args_vec[1], cx)?;
 
-        let mut expr = CoreExpr::new(CoreExprKind::Set {
-            var: name,
-            scopes,
-            value: Rc::new(value),
-        });
+        // Linked by 4b.10's switch (#837); renamed to an alias until then.
+        let mut expr = CoreExpr::new(CoreExprKind::linked_set(name, scopes, Rc::new(value), None));
         expr.source = self.lookup_source(var_tv, cx);
         Ok(expr)
     }
@@ -4029,9 +4037,10 @@ mod tests {
         with_desugarer(|desugarer, cx| {
             let x = sym("x", cx);
             let result = desugarer.desugar_tagged(x, cx).unwrap();
-            if let CoreExprKind::Var { name, scopes } = &result.kind {
+            if let CoreExprKind::Var { name, scopes, link } = &result.kind {
                 assert_eq!(name.as_ref(), "x");
                 assert!(scopes.is_empty());
+                assert_eq!(*link, None);
             } else {
                 panic!("Expected Var, got {:?}", result);
             }
@@ -4188,9 +4197,16 @@ mod tests {
             // (set! x 42)
             let list = make_list(&[sym("set!", cx), sym("x", cx), Value::fixnum(42)], cx);
             let result = desugarer.desugar_tagged(list, cx).unwrap();
-            if let CoreExprKind::Set { var, scopes, value } = &result.kind {
+            if let CoreExprKind::Set {
+                var,
+                scopes,
+                value,
+                link,
+            } = &result.kind
+            {
                 assert_eq!(var.as_ref(), "x");
                 assert!(scopes.is_empty());
+                assert_eq!(*link, None);
                 assert!(
                     matches!(&value.kind, CoreExprKind::Literal(v) if v.as_immediate() == Some(TaggedValue::fixnum(42)))
                 );

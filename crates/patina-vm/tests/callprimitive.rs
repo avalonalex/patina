@@ -14,10 +14,7 @@ use patina_vm::types::instruction::{ControlForm, Instruction};
 use std::rc::Rc;
 
 fn var(name: &str) -> CoreExpr {
-    CoreExpr::new(CoreExprKind::Var {
-        name: Rc::from(name),
-        scopes: Default::default(),
-    })
+    CoreExpr::new(CoreExprKind::var(Rc::from(name), Default::default()))
 }
 
 fn lit(n: i64) -> CoreExpr {
@@ -392,11 +389,11 @@ fn effectful_arg_falls_back_to_staged_temps() {
     // `(+ x (begin (set! x 99) 1))`: a non-atomic argument forces the whole
     // call back onto staged temps so left-to-right evaluation order (and
     // the value of x the add sees) is unchanged from the unoptimized form.
-    let set_x = CoreExpr::new(CoreExprKind::Set {
-        var: Rc::from("x"),
-        scopes: Default::default(),
-        value: Rc::new(lit(99)),
-    });
+    let set_x = CoreExpr::new(CoreExprKind::set(
+        Rc::from("x"),
+        Default::default(),
+        Rc::new(lit(99)),
+    ));
     let instrs = compile_all_instructions(&lambda(
         vec!["x"],
         vec![app(

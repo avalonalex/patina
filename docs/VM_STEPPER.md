@@ -60,6 +60,10 @@ Key:
 - `pc=0` — program counter before execution
 - `r1[1]` — frame-relative register r1 at absolute index 1
 - `(base=0 regs=4)` — this frame's register window: registers[0..4]
+- `globals[+]` — a global operand, by the spelling its unit's link table
+  holds; `globals[car@linked]`, an operand the desugarer linked to a binding
+  record (#837), pinned in the table and read through that record, never by
+  its spelling, and likewise `car@linked(r0)` for an inline primitive's
 
 ### Example: Nested function call
 

@@ -1612,6 +1612,54 @@ datum's pair to being let go of by the next `(gc)` within its run, and in
 collection the driver runs at a safe point, which the run reaches by
 allocating.
 
+**A template reference's link (#837, 4b.10).** An early-bound template
+reference will be bound to a binding record, a `Link` in its form's pool,
+rather than renamed to an alias spelling. The first step, inert, adds the
+link to core, `CoreExpr` and the VM, and tests each part with links built by
+hand: core's `early_link_tests` (only an import is linked early, a location
+under two names, one record per name, the link outliving a definition over
+the use site's import and following a re-point of the definition
+environment's record, the frame-import fallback),
+`binding_hit_finds_what_binding_location_locates`, which checks each
+shape's location against one computed without the walk, and
+`binding_location_checks_the_heap_it_borrows`; the pool's
+`a_collection_keeps_a_pooled_links_record` sentinel and
+`a_link_read_through_another_pool_panics`, whose other pool has an entry
+at the link's index; `core_expr.rs`'s size pin (`CoreExprKind` stays 112
+bytes), its rebuild test and `an_unquoted_link_survives_a_rebuild`
+(`map_unquoted` carries the link); `patina-ir`'s
+`the_walk_hands_each_visit_its_link` (`ExprVisitor`); `link_table.rs`'s
+pinned-entry tests (`link_in` skips one, on a relink too; `read_cold`
+never reads one by name; `assignee_never_resolves_a_pinned_read_through_record`,
+a table made by hand around the check build's refusal, for the release
+build's path; its sentinel; and
+`a_check_build_refuses_a_pinned_record_of_the_wrong_kind`, which CI's
+controls line picks up by its prefix); `alpha_rename`'s
+`a_linked_reference_is_passed_through_unresolved`; pass 5's three tests of
+`OperandKey` and pinned indices; `primitive_calls`'
+`a_linked_callee_is_keyed_and_judged_by_its_record`; `vm_state`'s
+`a_linked_operand_reads_and_writes_its_record_not_its_spelling`, which also
+collects between compile and load with the library's namespace dropped,
+and `a_pinned_operand_over_an_unbound_cell_never_falls_back_to_its_spelling`,
+which reaches `store_global_cold`'s refusal through a record over an
+`UNBOUND` cell that only `Cx::unbound_link_for_tests` (`test-support`)
+makes; and `backend.rs`'s `compile_for_inspection` test and
+`each_form_is_handed_over_before_a_later_form_fails` (`--dump` prints the
+forms before one that fails). What programs answer
+through a template's references across forms is pinned before the switch,
+on both backends: `macro_definition_env.rs`'s
+`a_generated_macros_private_reference_survives_a_collection_and_a_program_definition`,
+`a_template_reference_reads_the_library_inside_a_frame_binding_of_its_spelling`,
+`an_unquoted_template_reference_stays_linked` (the unquote's emission and
+`quasiquote_lower`'s copy),
+`an_unquoted_template_reference_in_a_form_settling_rebuilds_stays_linked`
+(settling's rebuild through `QuasiTemplate::map_unquoted`) and
+`an_early_link_keeps_the_old_library_binding_across_a_redefinition`, and
+`vm_callprimitive.rs`'s `a_linked_and_an_own_operand_of_one_spelling_stay_apart`
+and `an_early_bound_primitive_keeps_its_fast_path`, which also asserts the
+template's inline `Car` on the code `compile_for_inspection` answers. Both
+targets' stress counts were re-pinned for them.
+
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):
 the variable that sets the mode did not reach the process, or the program

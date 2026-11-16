@@ -896,7 +896,8 @@ Notes on the cells that are not a plain yes:
 - **A restored frame resolves its globals through its code's link table.** A
   continuation restores frames, not environments, so a frame reads, stores
   and defines the bindings of the namespace its code was compiled in through
-  the table its unit linked there at load (#836), wherever it is restored,
+  the table its unit linked there at load (#836), or, for a pinned entry,
+  the record pass 5 preset in it (#837), wherever it is restored,
   closure or none. Top-level code runs with no closure wherever it was
   compiled — a program's form, a library's body form, a host namespace's
   form (`push_top_frame`) — and so do the stubs, and `MakeClosure` reads

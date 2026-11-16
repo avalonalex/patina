@@ -637,6 +637,54 @@ impl<'gc> Cx<'gc> {
         ns.import_alias(self.heap, name, mint)
     }
 
+    /// The record an early-bound reference to `name` links when `ns` is
+    /// its macro's environment, branded by this context, and the location
+    /// of its cell (#837; `Environment::early_link`, the owner's ruling
+    /// E1): the record `ns`'s own walk finds for the name, or a fresh one
+    /// over a frame's import, which allocates. `None` where the walk finds
+    /// nothing or a frame's own binding. Pool the handle
+    /// ([`LiteralPool::add_link`](crate::LiteralPool::add_link)) before the
+    /// context closes: nothing roots it until then but the context, beneath
+    /// which nothing collects. Raw: names `NamespaceView`.
+    #[inline]
+    pub fn early_link(
+        &mut self,
+        ns: NamespaceView<'_>,
+        name: &str,
+    ) -> Option<(BindingLocation, crate::Linkable<'gc>)> {
+        let (location, link) = ns.env().early_link(self.heap, name)?;
+        Some((location, crate::Linkable::new(link)))
+    }
+
+    /// A record over a fresh free cell holding `UNBOUND`, branded by this
+    /// context, for a backend's tests (#837): a pinned operand over it is
+    /// one no early link makes, and reaches the cold paths that refuse to
+    /// read or write a pinned entry by name (the VM's `store_global_cold`),
+    /// which no record a program can link reaches. Pool it as
+    /// [`early_link`](Self::early_link)'s. Only with `test-support`.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn unbound_link_for_tests(&mut self) -> crate::Linkable<'gc> {
+        let mut heap = self.heap.borrow_mut();
+        let cell = crate::BindingCell::free(&mut heap, TaggedValue::UNBOUND);
+        let record = crate::binding_record::Record::new(&mut heap, cell);
+        crate::Linkable::new(crate::BindingLink::new(record))
+    }
+
+    /// Whether `name` is `ns`'s import of `location` (#837;
+    /// `Environment::imports_location`): a slot of its own over a cell it
+    /// does not own, at `location`. `false` for a frame. Raw: names
+    /// `NamespaceView`.
+    #[inline]
+    pub fn imports_location(
+        &self,
+        ns: NamespaceView<'_>,
+        name: &str,
+        location: &BindingLocation,
+    ) -> bool {
+        ns.env().imports_location(self.heap, name, location)
+    }
+
     /// Import `library`'s `export` into `ns` as `name`
     /// ([`Library::import_into`]): the library's binding, not a copy. Raw:
     /// names `NamespaceView`.

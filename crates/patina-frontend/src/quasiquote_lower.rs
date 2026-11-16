@@ -145,10 +145,19 @@ fn lower_expr_inner(expr: &CoreExpr, cx: &Lowering<'_>) -> Result<CoreExpr, Quas
             else_: Rc::new(lower_expr(else_, cx)?),
         },
 
-        CoreExprKind::Set { var, scopes, value } => CoreExprKind::Set {
+        // Every `Set` of every form is rebuilt here, before either backend:
+        // the link is carried, or the assignment would be resolved by name
+        // again (#837).
+        CoreExprKind::Set {
+            var,
+            scopes,
+            value,
+            link,
+        } => CoreExprKind::Set {
             var: var.clone(),
             scopes: scopes.clone(),
             value: Rc::new(lower_expr(value, cx)?),
+            link: *link,
         },
 
         CoreExprKind::Begin(exprs) => CoreExprKind::Begin(each(exprs)?),
@@ -177,7 +186,8 @@ fn lower_expr_inner(expr: &CoreExpr, cx: &Lowering<'_>) -> Result<CoreExpr, Quas
             expr: Rc::new(lower_expr(inner, cx)?),
         },
 
-        // Leaf nodes: no lowering needed
+        // Leaf nodes: no lowering needed. Each is cloned whole, a `Var`'s
+        // link with it (#837).
         CoreExprKind::Literal(_)
         | CoreExprKind::Var { .. }
         | CoreExprKind::Quote(_)

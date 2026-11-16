@@ -298,7 +298,17 @@ fi
 # and tail-calls, whose unit only the running code reports at the callee's
 # entry, which raised the counts by 155 collections at 16 on the VM and 122
 # without stress, and by 421 and 388 on the tree-walker, nearly all its
-# zeal halves, the minimums left)
+# zeal halves, the minimums left; and macro_definition_env's and
+# vm_callprimitive's test counts re-pinned 2026-11-13 for 4b.10's tests
+# (#837) of what programs answer through a template's references across
+# forms, which pass before and after its links: four in
+# macro_definition_env, which raised its count at 16 from 33641 to 33931
+# and without stress from 67 to 75, and two in vm_callprimitive, from 1174
+# to 1318, and 0 without stress, the minimums left; then, for the review's
+# follow-up, a fifth in macro_definition_env, a form settling rebuilds,
+# which raised its count at 16 to 34001 and left it at 75 without stress,
+# and vm_callprimitive's fast-path test's look at the code it compiles,
+# which raised its count at 16 to 1350, the minimums left)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -312,10 +322,10 @@ TARGETS=(
     "hygiene_matrix 16 11136 17"              # 21652 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
-    "macro_definition_env 16 16626 19"        # 33641 (67): see the header
+    "macro_definition_env 16 16626 24"        # 34001 (75): see the header
     "owned_handles 16 62714 9"                # 125648 (14)
     "rooted_loading 16 371 6"                 # 1269 (10)
-    "vm_callprimitive 16 545 18"              # 1174 (0)
+    "vm_callprimitive 16 545 20"              # 1350 (0)
     "scheme_suite 4096 1534 11"               # 10230 (363): see the header
 )
 
