@@ -1469,7 +1469,41 @@ the CLI, a library whose procedure refers to itself, redefined and imported
 again, is counted and charged after two `(gc)`s as it was before the
 redefinition, on both backends
 (`a_replaced_library_with_a_procedure_is_released`, the steady-state lane's
-`library-stream` shape). The heap's list of placeholder stores holds no
+`library-stream` shape).
+
+#614's gate (#838, start decision 12 on #782) is three tests in
+`gc_shared_tests!`, on both backends and under zeal.
+`a_redefined_library_is_released` redefines #614's program 1 and its
+macro variant 800 times each and reads, at 200 and at 800, every count of
+what lives (objects, `namespaces`, `cells`, `binding-records`,
+`code-units`, `symbols`, and the pair, vector and string arenas, which see
+a record or cell that outlived its namespace), each exactly where it was,
+and `external-bytes` within 16 KiB, where one kept namespace a cycle would
+read 600 more namespaces; under zeal it also asserts more collections than
+one a cycle. `a_value_from_a_replaced_library_still_runs` keeps the old
+`f` and a procedure that expanded the old macro across a redefinition and
+two `(gc)`s: both run the old code, in the debug-poison build where a
+freed record, cell or closure panics; the namespace is counted while they
+are held and goes when they are dropped.
+`a_replaced_library_lives_only_as_long_as_its_holders` is the holder
+audit's table (`docs/GC_DESIGN.md` §8), one program a row reading the
+namespaces held after the redefinition and after the holder is dropped: a
+kept environment specifier, in which the old macro still expands; a
+continuation running the old code, and one holding only the program's
+frame; an importing library not yet redefined; a macro-introduced
+definition over a plain value; and two residual rows, which pin what is
+not released today and name what flips them (a macro-introduced
+definition linking an old procedure, until 5c; a relinked variable alias,
+until #837's second PR). R-D, the VM's loaded units' constants keeping a
+replaced library whose body keeps code quoting its own procedure (#866,
+pending the owner's ruling on #838's question 2), is pinned by a test in
+each backend's file: `gc_vm`'s
+`a_library_body_s_code_quoting_its_own_procedure_keeps_it_loaded` and
+`gc_tree_walker`'s `a_library_body_s_code_quoting_its_own_procedure_is_released`.
+Each test was shown failing under a build that keeps the replaced library
+and under one that releases it at the replacement.
+
+The heap's list of placeholder stores holds no
 namespace (#836): 200 procedures `eval`'d in fresh specifiers, each reading
 a name nothing binds, which the VM links to a placeholder in that
 namespace's store, leave `namespaces` and `external-bytes` where they were
@@ -2203,8 +2237,12 @@ placeholder tests, whose drop test's zeal half runs 100 `eval`s; `gc_vm`
 20510 times since later that day, with #836's tests of code that runs
 after its namespace's other holders have died; 6142 and 21510 times since
 that PR's review added two more; 6264 and 21898 times since 2026-11-12,
-with its test of a procedure that drops itself and tail-calls), which their
-minimums must stay above.
+with its test of a procedure that drops itself and tail-calls; 17074 and
+53560 times since 2026-11-16, with #838's three shared tests of a redefined
+library's release and each file's test of R-D, whose zeal halves redefine
+a library 800 times each, so the stress lane's minimum rule takes the
+tree-walker's minimum midway between its two counts), which their minimums
+must stay above.
 `vm_interpreter_adaptive` names the adaptive threshold the same way, for a
 test of the pacing itself, which stress and zeal replace.
 

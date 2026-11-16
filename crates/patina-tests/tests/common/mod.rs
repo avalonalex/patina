@@ -1496,6 +1496,393 @@ macro_rules! gc_shared_tests {
             );
         }
 
+        // #614's gate (#838, start decision 12 on #782): a redefined
+        // library's namespace lives only as long as a value or code taken
+        // from it. `register_or_replace` drops the replaced `Library`, and
+        // what is left of it is a cycle only the collector reaches — on the
+        // VM through the unit whose link table holds the namespace, on the
+        // tree-walker through a closure's environment, for a macro through
+        // its `definition_env` — which the sweep and the VM's code release
+        // end. `docs/GC_DESIGN.md` §8 lists the holders.
+
+        /// #614's program 1, one cycle of it: the library is redefined,
+        /// imported again and called.
+        const PLAIN_STREAM_FORM: &str = "(define-library (tmp steady) (export f) \
+            (import (scheme base)) (begin (define (f x) (+ x 1))))\n\
+            (import (tmp steady))\n(f 1)\n";
+
+        /// #614's macro variant, one cycle: the library also exports a
+        /// macro whose template names `f`, and the cycle uses the macro.
+        const MACRO_STREAM_FORM: &str = "(define-library (tmp steady) (export f m) \
+            (import (scheme base)) (begin (define (f x) (+ x 1)) \
+            (define-syntax m (syntax-rules () ((_ x) (f x))))))\n\
+            (import (tmp steady))\n(m 1)\n";
+
+        /// The keys [`release_readings`] reads, in the order it writes them.
+        const RELEASE_KEYS: [&str; 11] = [
+            "live objects",
+            "namespaces",
+            "cells",
+            "binding-records",
+            "code-units",
+            "symbols",
+            "external-bytes",
+            "live pairs",
+            "live vectors",
+            "live strings",
+            "live-bytes",
+        ];
+
+        /// Run `form` 200 times, read [`RELEASE_KEYS`], run it 600 times
+        /// more and read them again, with `eval`; answer both readings and
+        /// the collections the run made.
+        ///
+        /// The readings allocate nothing that survives: the first
+        /// `(gc-stats)` interns the keys' symbols before either reading,
+        /// and each reading writes fixnums into one vector made before the
+        /// first (a vector made at each would show at the second as one
+        /// more vector and 112 bytes). Each reading's `(gc) (gc)` is
+        /// written where it runs, outside `keys!`.
+        fn release_readings(eval: fn(&str) -> String, form: &str) -> (Vec<i64>, Vec<i64>, i64) {
+            let program = format!(
+                r#"(import (scheme base) (patina debug))
+                   (gc-stats)
+                   (define r (make-vector 32 0))
+                   (define (keys! at)
+                     (let ((s (gc-stats)))
+                       (define (key k) (cdr (assq k s)))
+                       (define (live all free) (- (key all) (key free)))
+                       (vector-set! r at (live 'objects 'free-objects))
+                       (vector-set! r (+ at 1) (key 'namespaces))
+                       (vector-set! r (+ at 2) (key 'cells))
+                       (vector-set! r (+ at 3) (key 'binding-records))
+                       (vector-set! r (+ at 4) (key 'code-units))
+                       (vector-set! r (+ at 5) (key 'symbols))
+                       (vector-set! r (+ at 6) (key 'external-bytes))
+                       (vector-set! r (+ at 7) (live 'pairs 'free-pairs))
+                       (vector-set! r (+ at 8) (live 'vectors 'free-vectors))
+                       (vector-set! r (+ at 9) (live 'strings 'free-strings))
+                       (vector-set! r (+ at 10) (key 'live-bytes))))
+                   {first}(gc) (gc) (keys! 0)
+                   {rest}(gc) (gc) (keys! 16)
+                   (append (vector->list r) (list (cdr (assq 'collections (gc-stats)))))"#,
+                first = form.repeat(200),
+                rest = form.repeat(600),
+            );
+            let all = integers(eval, &program);
+            assert_eq!(all.len(), 33, "expected 32 slots and a count, got {all:?}");
+            (
+                all[0..RELEASE_KEYS.len()].to_vec(),
+                all[16..16 + RELEASE_KEYS.len()].to_vec(),
+                all[32],
+            )
+        }
+
+        /// Assert that the 600 cycles of `form` between
+        /// [`release_readings`]' two readings left every counted key where
+        /// it was, under `eval`, named `mode`; under zeal, that `eval`
+        /// collected at more places than one a cycle and the program's
+        /// `(gc)`s.
+        fn assert_released(variant: &str, mode: &str, eval: fn(&str) -> String, form: &str, zeal: bool) {
+            let (at_200, at_800, collections) = release_readings(eval, form);
+            let show = |reading: &[i64]| {
+                RELEASE_KEYS
+                    .iter()
+                    .zip(reading)
+                    .map(|(key, n)| format!("{key} {n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let report = format!(
+                "\n{variant} variant under {mode}, 200 and 800 cycles of\n{form}\
+                 at 200: {}\nat 800: {}\n{collections} collections",
+                show(&at_200),
+                show(&at_800)
+            );
+            for (i, key) in RELEASE_KEYS.iter().enumerate() {
+                let delta = at_800[i] - at_200[i];
+                match *key {
+                    // One namespace charges about 32 KB, so one kept
+                    // namespace fails; the bound absorbs a table stepping
+                    // its capacity.
+                    "external-bytes" => assert!(
+                        delta.abs() < 16 * 1024,
+                        "external bytes moved {delta} across 600 redefinitions{report}"
+                    ),
+                    // Printed, not asserted.
+                    "live-bytes" => {}
+                    _ => assert_eq!(
+                        delta, 0,
+                        "{key} moved {delta} across 600 redefinitions{report}"
+                    ),
+                }
+            }
+            if zeal {
+                assert!(
+                    collections > 800 + 4,
+                    "zeal collected no more than one a cycle and the program's (gc)s{report}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_redefined_library_is_released() {
+            // #614's program 1 and its macro variant, each redefining the
+            // library 800 times: between the readings at 200 and at 800,
+            // every count of what lives — objects, namespaces, cells,
+            // binding records, code units, symbols, and the pair, vector
+            // and string arenas — is exactly where it was, and the external
+            // bytes within 16 KiB, where one kept namespace a cycle would
+            // read 600 namespaces and about 19 MB more. The arena counts
+            // see a record or a cell that outlived its namespace, which
+            // `binding-records` and `cells` do not count (GC_DESIGN §3.3).
+            // Each backend is compared with itself. Under zeal too, which
+            // collects at every outermost safe point.
+            for (variant, form) in [("plain", PLAIN_STREAM_FORM), ("macro", MACRO_STREAM_FORM)] {
+                assert_released(variant, stringify!($eval), $eval, form, false);
+                assert_released(variant, stringify!($eval_zeal), $eval_zeal, form, true);
+            }
+        }
+
+        #[test]
+        fn a_value_from_a_replaced_library_still_runs() {
+            // `old` is the first `(tmp steady)`'s `f`, and `h` a procedure
+            // that expanded the first library's `m`, so it links the first
+            // `f`'s record early (#837). After the redefinition and two
+            // collections both still run the old code, while `f` and `m`
+            // name the new library's: in a debug or check build a freed
+            // record, cell or closure panics where it is used (#621, #625),
+            // and a released unit makes the call an error. The old
+            // namespace is held while they are (`held`, one above `base`)
+            // and goes once they are dropped (`dropped`): nothing else
+            // keeps it. Under zeal too.
+            assert_gc_and_zeal_eval_to(
+                r#"
+                (import (scheme base) (patina debug))
+                (define base 0) (define held 0) (define dropped 0)
+                (define old #f) (define h #f) (define out #f)
+                (define-library (tmp steady) (export f m) (import (scheme base))
+                  (begin (define (f x) (list 'old x))
+                         (define-syntax m (syntax-rules () ((_ x) (f x))))))
+                (import (tmp steady))
+                (gc) (gc) (set! base (cdr (assq 'namespaces (gc-stats))))
+                (set! old f)
+                (set! h (lambda () (m 1)))
+                (define-library (tmp steady) (export f m) (import (scheme base))
+                  (begin (define (f x) (list 'new x))
+                         (define-syntax m (syntax-rules () ((_ x) (f x))))))
+                (import (tmp steady))
+                (gc) (gc) (set! held (cdr (assq 'namespaces (gc-stats))))
+                (set! out (list (old 0) (h) (f 2) (m 3)))
+                (set! old #f) (set! h #f)
+                (gc) (gc) (set! dropped (cdr (assq 'namespaces (gc-stats))))
+                (append out (list (- held base) (- dropped base)))
+                "#,
+                "((old 0) (old 1) (new 2) (new 3) 1 0)",
+            );
+        }
+
+        /// The program of one row of
+        /// `a_replaced_library_lives_only_as_long_as_its_holders`: `define`
+        /// the libraries, read `base`, `take` the holder, `redefine`, read
+        /// `held`, `use_and_drop` the holder, read `dropped`. Each reading
+        /// is `(gc) (gc)` where it runs, so the text's count of them is the
+        /// run's, which the zeal check counts.
+        fn holder_program(define: &str, take: &str, redefine: &str, use_and_drop: &str) -> String {
+            format!(
+                r#"(import (scheme base) (scheme eval) (patina debug))
+                   (gc-stats)
+                   (define base 0) (define held 0) (define dropped 0)
+                   (define holder #f) (define out #f)
+                   {define}
+                   (gc) (gc) (set! base (cdr (assq 'namespaces (gc-stats))))
+                   {take}
+                   {redefine}
+                   (gc) (gc) (set! held (cdr (assq 'namespaces (gc-stats))))
+                   {use_and_drop}
+                   (gc) (gc) (set! dropped (cdr (assq 'namespaces (gc-stats))))
+                   (list out (- held base) (- dropped base))"#
+            )
+        }
+
+        /// `(tmp steady)` exporting `exports` with `body`, and its import.
+        fn steady(exports: &str, imports: &str, body: &str) -> String {
+            format!(
+                "(define-library (tmp steady) (export {exports}) (import {imports}) \
+                 (begin {body}))\n(import (tmp steady))"
+            )
+        }
+
+        #[test]
+        fn a_replaced_library_lives_only_as_long_as_its_holders() {
+            // #838's holder audit, executable (GC_DESIGN §8): each row takes
+            // one holder of the first `(tmp steady)`, redefines the library,
+            // reads `held`, uses the holder once, so that a stale reference
+            // panics in a debug or check build, drops it, and reads
+            // `dropped`. Each answers `(out held dropped)`, the last two
+            // counted in namespaces above `base`. A holder that keeps the
+            // old namespace only while the program holds it reads one or
+            // two at `held` and none at `dropped`; one that is no holder
+            // reads none at either. Under zeal too.
+            //
+            // The two residual rows pin what is not released today, each
+            // with the issue or stage that flips it; that PR updates the
+            // row's expectation.
+            let kept_specifier_old = steady(
+                "f m",
+                "(scheme base)",
+                "(define secret (list 'old)) (define (f x) (cons x secret)) \
+                 (define-syntax m (syntax-rules () ((_ x) (f x))))",
+            );
+            let kept_continuation = steady(
+                "f",
+                "(scheme base)",
+                "(define (f x) (car (list (call/cc (lambda (k) k)))))",
+            );
+            let program_continuation =
+                steady("f", "(scheme base)", "(define (f x) (call/cc (lambda (k) k)))");
+            let records_only = steady(
+                "f defh",
+                "(scheme base)",
+                "(define f 5) (define-syntax defh (syntax-rules () ((_ name) \
+                 (begin (define (hidden) f) (define (name) (hidden))))))",
+            );
+            let hidden_procedure = steady(
+                "f defh",
+                "(scheme base)",
+                "(define (f x) (+ x 1)) (define-syntax defh (syntax-rules () ((_ name) \
+                 (begin (define (hidden) (f 1)) (define (name) (hidden))))))",
+            );
+            let relink_variable_old = steady(
+                "m",
+                "(scheme base)",
+                "(define (secret x) (list 'old x)) \
+                 (define-syntax m (syntax-rules () ((_ x) (secret x))))",
+            );
+            let importer_old = steady("f", "(scheme base)", "(define (f x) (list 'old x))");
+            let user = "(define-library (tmp user) (export g) (import (scheme base) (tmp steady)) \
+                        (begin (define (g) (f 1))))\n(import (tmp user))";
+            let continuation_use = "(if (procedure? holder) (holder 42))\n\
+                                    (set! out holder)\n(set! holder #f)";
+            let rows: [(&str, String, &str, String, String, &str); 7] = [
+                // A kept environment specifier holds its own namespace, and
+                // through its import records over the old values, which
+                // reach the old code, the old library's. The old macro
+                // expands after the replacement and the collections, and a
+                // macro over it too: a lost `definition_env` trace that
+                // freed the old namespace's records would panic here.
+                (
+                    "kept-specifier",
+                    kept_specifier_old.clone(),
+                    "(set! holder (environment '(tmp steady) \
+                     '(only (scheme base) let define-syntax syntax-rules)))",
+                    kept_specifier_old.replace("'old", "'new"),
+                    "(set! out (list (eval '(f 0) holder) (eval '(m 0) holder) \
+                     (eval '(let () (define-syntax m2 (syntax-rules () ((_ x) (m x)))) (m2 7)) \
+                     holder)))\n(set! holder #f)"
+                        .to_string(),
+                    "(((0 old) (0 old) (7 old)) 2 0)",
+                ),
+                // A continuation captured inside the old `f`, whose frames
+                // run its code. Calling it re-enters the form that took it,
+                // which rebinds `holder` to 42 and goes on after it.
+                (
+                    "kept-continuation",
+                    kept_continuation.clone(),
+                    "(set! holder (f 1))",
+                    kept_continuation.clone(),
+                    continuation_use.to_string(),
+                    "(42 1 0)",
+                ),
+                // The same with `f` tail-calling `call/cc`: the continuation
+                // holds only the program's frame.
+                (
+                    "program-continuation",
+                    program_continuation.clone(),
+                    "(set! holder (f 1))",
+                    program_continuation.clone(),
+                    continuation_use.to_string(),
+                    "(42 0 0)",
+                ),
+                // A library that imports the old `(tmp steady)` and is not
+                // itself redefined keeps it, until it is.
+                (
+                    "library-importer",
+                    format!("{importer_old}\n{user}"),
+                    "",
+                    importer_old.replace("'old", "'new"),
+                    format!("(set! out (list (g)))\n{user}\n(set! out (cons (g) out))"),
+                    "(((new 1) (old 1)) 1 0)",
+                ),
+                // A macro-introduced definition, which the program cannot
+                // name and which stays until 5c (start decision 8), links
+                // the old `f`'s record. A record and a cell over a value
+                // that reaches no old code never keep the namespace.
+                (
+                    "records-only",
+                    records_only.clone(),
+                    "(defh pub)",
+                    records_only.clone(),
+                    "(set! out (pub))\n(set! pub #f)".to_string(),
+                    "(5 0 0)",
+                ),
+                // Residual R-C, until 5c (GC_PRD §17.5's 5c row): the same
+                // where `f` is a procedure, so the introduced `hidden`, kept
+                // by the retention of introduced definitions, keeps the old
+                // library's code through its link, and with it the
+                // namespace, after the program dropped `pub`. 5c's release
+                // of introduced definitions flips `dropped` to 0.
+                (
+                    "hidden-procedure",
+                    hidden_procedure.clone(),
+                    "(defh pub)",
+                    hidden_procedure.clone(),
+                    "(set! out (pub))\n(set! pub #f)".to_string(),
+                    "(2 1 1)",
+                ),
+                // Residual R-A, until #837's second PR, which removes
+                // variable aliases: the program's procedure reads the old
+                // library's private `secret` through a relink alias, which
+                // keeps the namespace after the procedure is dropped. That
+                // PR flips `dropped` to 0.
+                (
+                    "relink-variable",
+                    relink_variable_old.clone(),
+                    "(set! holder (lambda () (m 1)))",
+                    relink_variable_old.replace("'old", "'new"),
+                    "(set! out (holder))\n(set! holder #f)".to_string(),
+                    "((old 1) 1 1)",
+                ),
+            ];
+            for (name, define, take, redefine, use_and_drop, expected) in &rows {
+                let program = holder_program(define, take, redefine, use_and_drop);
+                let program = format!("; {name}\n{program}");
+                assert_gc_and_zeal_eval_to(&program, expected);
+            }
+        }
+
+        /// R-D's program (#838's audit; #866), which the backends answer
+        /// differently, so each backend's file pins its own answer: a
+        /// library whose body keeps code quoting one of its own procedures
+        /// — `g`, compiled by `eval` from a datum holding `f` — is
+        /// redefined as a plain library, and the program reads, in
+        /// namespaces above `base`, what is held after the redefinition
+        /// and after a call of the new `f`.
+        fn library_body_quoting_its_own_procedure() -> String {
+            holder_program(
+                &steady(
+                    "f",
+                    "(scheme base) (scheme eval)",
+                    "(define (f x) (+ x 1)) \
+                     (define g (eval (list 'lambda '() (list 'quote f)) \
+                     (environment '(scheme base))))",
+                ),
+                "",
+                &steady("f", "(scheme base)", "(define (f x) (+ x 2))"),
+                "(set! out (f 1))",
+            )
+        }
+
         #[test]
         fn a_parameter_s_converter_reads_its_namespace_after_a_collection() {
             // The converter is a closure compiled in the specifier's
