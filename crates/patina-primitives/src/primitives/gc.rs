@@ -108,7 +108,10 @@
 //!   does not bind yet, and each weak read-through record a host namespace's
 //!   unit linked over one, until the collection after no code links it or a
 //!   definition or an import adopts it (#836). Not the heap's one by-name
-//!   record.
+//!   record, nor a record a keyword's macro-expansion alias holds once the
+//!   namespace whose slot or scoped entry it was has dropped (#837, R6): the
+//!   alias keeps it, and its cell, which `cells` counts only while a live
+//!   namespace's record names it as its own.
 //! - `cells` (#834): the cells of their own the live namespaces' records name
 //!   now, a placeholder's own `UNBOUND` cell among them (#836). Not counted:
 //!   a frame's imports, a free cell (an export with no binding behind it, a

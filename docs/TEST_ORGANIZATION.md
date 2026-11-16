@@ -1723,8 +1723,15 @@ by name, as before R6; and `macro_definition_env.rs`'s
 pins what R6 leaves: after a redefinition and two collections the old
 library's namespace is alive when an expansion left an alias to its
 private macro, through the macro's `definition_env`, and gone when none
-did (#837's question 4 decides whether it flips). `macro_definition_env`'s
-stress count was re-pinned.
+did (#837's question 4 decides whether it flips); with the record
+`#[trace(skip)]` the namespace goes, so it is also an end-to-end sentinel
+for the record's trace. Its twin
+`a_keyword_alias_to_an_imported_keyword_releases_the_replaced_library`
+pins what R6 releases: where the library imports the keyword, the old
+namespace goes while the alias stays, and with every alias read by name it
+stayed. `environment.rs`'s `an_alias_entrys_size_is_watched` pins the
+alias entry at 80 bytes. `macro_definition_env`'s stress count was
+re-pinned.
 
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):
