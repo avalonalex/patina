@@ -865,7 +865,10 @@ impl Heap {
     /// what is bound in it until the handle is dropped (#620). Panics on a
     /// frame or a frame of temporaries, as on another heap's environment: a
     /// handle holds a namespace (#831's ruling on question 1, #835). Raw, as
-    /// `Heap` is.
+    /// `Heap` is. Keep the handle for as long as the namespace is in use: a
+    /// collection while no handle holds a namespace nothing else roots (one
+    /// `Environment::with_heap` made) frees what is bound there, and holding
+    /// it again does not bring that back (#857, #839).
     pub fn hold_namespace(&self, env: Rc<crate::environment::Environment>) -> OwnedEnvironment {
         self.assert_own(&env);
         assert!(

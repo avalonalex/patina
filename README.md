@@ -71,8 +71,18 @@ without adding another parser or evaluation loop.
 **Backend** - Handles evaluation of parsed expressions:
 ```rust
 trait Backend {
+    // Required until stage 5e, and deprecated for callers:
     fn eval(&self, expr: TaggedValue, env: &Rc<Environment>)
         -> Result<TaggedValue, Self::Error>;
+    fn global_env(&self) -> &Rc<Environment>;
+    // Required:
+    fn heap(&self) -> &SharedHeap;
+    // Provided, over handles (#839):
+    fn eval_in(&self, env: &OwnedEnvironment, expr: &Owned,
+        source_map: Option<&Rc<RefCell<SourceMap>>>) -> Result<Owned, Self::Error>;
+    fn define_in(&self, env: &OwnedEnvironment, name: &str, value: &Owned);
+    fn call_owned(&self, f: &Owned, args: &[Owned]) -> Result<Owned, Self::Error>;
+    fn global_namespace(&self) -> OwnedEnvironment;
 }
 ```
 
@@ -301,12 +311,13 @@ constructors and `Heap::track_environment` are raw, outside the promise
 **Migration for a host that evaluates in a frame:** the VM now refuses one
 ([#835](https://github.com/avalonalex/patina/issues/835)). A raw frame, or a
 frame under a host namespace, handed to `Backend::eval` or
-`eval_with_source_map`, or to `eval_str_in` or `eval_program_in` through the
-deprecated `Heap::hold_environment` or `Cx::hold_environment`, answers an
+`eval_with_source_map`, or to `eval_str_in`, `eval_program_in` or
+`Backend::eval_in` through the deprecated `Heap::hold_environment` or
+`Cx::hold_environment`, answers an
 error naming its kind, and loads and binds nothing; the VM used to evaluate
 in it by name. The tree-walker still evaluates in one by name, and
-`Backend::define`, so `define_in` on a held frame, still writes one on either
-backend. Evaluate in the host namespace `new_environment()` answers instead.
+`Backend::define` and `define_in`, so `Interpreter::define_in` on a held
+frame, still write one on either backend. Evaluate in the host namespace `new_environment()` answers instead.
 For a frame of the global namespace that means what the frame meant: what is
 defined in it stays in it, and every other name resolves in the global
 namespace. A frame under a host namespace has no equivalent on the VM, since
@@ -367,12 +378,30 @@ evaluating, where a call of `(gc-stats)` may itself collect, and each but
 The `Backend` trait under the interpreter is inside the embedding API's
 promise ([Changing the embedding API](docs/README.md#changing-the-embedding-api)):
 its methods change only by deprecation, with a replacement beside the old
-form. Its words are the raw layer: its methods take and answer bare
-`TaggedValue`s, by the rules its documentation gives. Later in stage 4b of the
-collector's redesign it gains handle methods as provided defaults, so an
-implementor gets no warning, and the bare-word methods are deprecated for
-callers and stay required of implementors until stage 5e (`PRD/GC_PRD.md`
-§11.5). `Interpreter::heap()` is deprecated for the typed methods above
+form. Since stage 4b of the collector's redesign (S1,
+[#839](https://github.com/avalonalex/patina/issues/839)) it has four handle
+methods, provided as defaults over the old ones: `eval_in`, `define_in`,
+`call_owned` and `global_namespace`, which take and answer `Owned` and
+`OwnedEnvironment`. The bare-word methods (`eval`, `eval_global`,
+`eval_with_source_map`, `define`, `call` and `global_env`) are deprecated for
+callers, and `eval` and `global_env` stay required of implementors until
+stage 5e (`PRD/GC_PRD.md` §11.5); `heap()` stays required and undeprecated,
+the raw route. rustc does not warn an implementation of a deprecated method,
+so an implementor that only implements sees nothing until the removal,
+which the notes announce. It warns a call of one, in an implementation too:
+a wrapper that delegates `eval` or `global_env` to another backend, or a new
+method written over `self.global_env()`. An implementor writes the new
+methods from its own state, through `heap()`, the raw layer, which changes
+at 5e (one that wants nothing raw keeps the defaults), and a wrapper allows
+`deprecated` on its delegating bodies until 5e. Adding provided methods can
+still touch an implementor: an inherent method of one of the four names
+shadows the trait's on its concrete type, and another trait in scope with
+a method of the same name makes a call ambiguous.
+`Interpreter::global_env()` and `raw_environment()` are deprecated too
+([#839](https://github.com/avalonalex/patina/issues/839)): `lookup`,
+`define`, the `_in` forms and `backend().global_namespace()` replace them,
+and `Heap::held_environment`, through `backend().heap()`, is the raw
+route. `Interpreter::heap()` is deprecated for the typed methods above
 ([#831](https://github.com/avalonalex/patina/issues/831)); what they do not
 cover is the raw layer, which `backend().heap()` reaches.
 
@@ -412,8 +441,9 @@ directory, use the installed executable-relative layout, or set
 library lookup and `backend().bootstrap_error()` reporting still apply.
 
 **Migration from the old convenience API:** replace `SimpleInterpreter::new()`
-with an explicit constructor above. Both interpreters provide `global_env()`,
-`display_tagged()`, and `set_command_line()`. Tree-walker-specific `evaluator()`
+with an explicit constructor above. Both interpreters provide `lookup()`,
+`define()`, `backend().global_namespace()`, `display_tagged()`, and
+`set_command_line()`. Tree-walker-specific `evaluator()`
 access remains on `TreeWalkInterpreter`; portable code uses `backend()`.
 `new_vm_with_fs` and `new_tree_walker_with_fs` accept a host filesystem.
 

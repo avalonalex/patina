@@ -2128,8 +2128,9 @@ tree-walker's `run_trampoline`, every function that starts one (`eval_cps`,
 `across_reentry`, the tree-walker has no such boundary), its library loading,
 and `eval`'s expansion (`expand_for_eval`, `eval_step`), which loads the
 libraries a datum imports while `resumable_step` holds a primitive's state and
-the step's stacks; `Backend::eval`, `eval_global`, `eval_with_source_map` and
-`call`; `Interpreter::eval_*` and `call` (#710), and the deprecated `Pipeline`
+the step's stacks; `Backend::eval_in` and `call_owned` (#839), and the
+deprecated `Backend::eval`, `eval_global`, `eval_with_source_map` and `call`,
+until 5e; `Interpreter::eval_*` and `call` (#710), and the deprecated `Pipeline`
 and `SimpleInterpreter` adapters; and the frame constructors,
 `Environment::with_parent` (deprecated, #831), `child_frame` (its twin for
 the workspace's callers) and `for_temporaries` (#681), since an environment

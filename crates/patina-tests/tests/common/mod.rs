@@ -388,7 +388,7 @@ enum Mode {
 
 /// Run `code` on one backend, capturing either its value or its error.
 ///
-/// Generic over `B: Backend` — `global_env()` is on the trait and
+/// Generic over `B: Backend` — `global_namespace()` is on the trait and
 /// `display_tagged` is the same writer for both backends, so one body serves
 /// the tree-walker and the VM.
 fn run_on<B: Backend>(interp: Interpreter<B>, code: &str, mode: Mode) -> Outcome

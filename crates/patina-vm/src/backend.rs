@@ -282,8 +282,8 @@ impl VmBackend {
     /// A frame is refused with an error naming its kind
     /// ([`Environment::frame_kind`], #835): a raw frame, or a frame under a
     /// host namespace, handed to `Backend::eval` or `eval_with_source_map`,
-    /// or to a handle form through the deprecated `Heap::hold_environment`
-    /// or `Cx::hold_environment`.
+    /// or to a handle form (`eval_in` included, #839) through the deprecated
+    /// `Heap::hold_environment` or `Cx::hold_environment`.
     /// The kind is asked first, so a refused frame neither loads a library
     /// nor binds an import. The global namespace, a host namespace and a
     /// parentless namespace (a library's, a specifier's) run as before. The
@@ -393,14 +393,17 @@ impl VmBackend {
         #[expect(
             clippy::disallowed_methods,
             reason = "the backend's top level, outermost, so the run may collect. Holds the form's \
-                      datum, not read after the call; the form's constants are in the loaded \
-                      unit, which the code store roots while it runs. `env` is the global \
-                      environment, which the machine's `globals` hold, or a host namespace, which \
-                      its `OwnedEnvironment` holds, and the records the code uses are held by its \
-                      unit, which its frame, a marked closure or the running code reports, and \
-                      which holds and traces the namespace it was linked in. A raw namespace that \
-                      nothing roots between calls (`Environment::with_heap`) is none of these: \
-                      #857's hole, outside #601's promise, which this run does not widen"
+                      datum, not read after the call, which a caller of `eval_in` holds besides; \
+                      the form's constants are in the loaded unit, which the code store roots \
+                      while it runs. `env` is the global environment, which the machine's \
+                      `globals` hold, or a namespace the caller's handle holds (`eval_in`: a host \
+                      namespace, or one `Heap::hold_namespace` held), and the records the code \
+                      uses are held by its unit, which its frame, a marked closure or the running \
+                      code reports, and which holds and traces the namespace it was linked in. A \
+                      raw namespace that nothing roots between calls, reached through the \
+                      deprecated `eval` or `eval_with_source_map`, or through `eval_in` over a \
+                      handle taken again after a collection that ran while no handle held it, is \
+                      none of these (#857)"
         )]
         let result = execute(&mut state, unit);
         state.release_unit_if_unused(top_id);
@@ -422,8 +425,10 @@ impl VmBackend {
         // The application's literals, rooted until its code is loaded, as a
         // form's are (#705, #869).
         let literals = patina_core::LiteralPool::new(&heap.borrow());
-        // SAFETY: the words are a host's handles' (`Interpreter::call`),
-        // which root them, on this backend's heap.
+        // SAFETY: the words are live by `Backend`'s first rule, on this
+        // backend's heap: read from the caller's handles on `call_owned`,
+        // which root them through the call, or, on the deprecated `call`,
+        // the caller's obligation (`Backend`'s "# Words").
         let (callee, operands) = unsafe {
             let callee = literals.add_word(f);
             let operands: Vec<_> = args.iter().map(|&arg| literals.add_word(arg)).collect();

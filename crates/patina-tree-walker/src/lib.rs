@@ -21,7 +21,8 @@
 //! use patina_runtime::Backend;
 //!
 //! let backend = TreeWalker::new();
-//! let result = backend.eval_global(expr)?;
+//! let expr = backend.heap().borrow().hold(datum);
+//! let result = backend.eval_in(&backend.global_namespace(), &expr, None)?;
 //! ```
 #![expect(
     clippy::disallowed_macros,

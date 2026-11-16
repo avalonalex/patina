@@ -57,8 +57,9 @@
 //!   (`new`, `with_fs`, `TreeWalker::from_evaluator`, `Default`, the search
 //!   paths and `bootstrap_error`), which is inside; and the evaluator's pub
 //!   fields;
-//! - [`Interpreter::global_env`] and [`Interpreter::raw_environment`]: an
-//!   `Environment`, whose methods are raw;
+//! - [`Interpreter::global_env`] and [`Interpreter::raw_environment`],
+//!   deprecated (#839): an `Environment`, whose methods are raw;
+//!   `backend().heap()`'s `held_environment` reaches one from a handle;
 //! - [`Interpreter::raw_value`]: a bare `TaggedValue`, valid until the next
 //!   evaluation.
 //!
@@ -417,8 +418,9 @@ enum FormsEnd<E> {
 /// whatever comes to occupy its slot (#605). The `eval_*_owned` methods
 /// answer a handle, [`Owned`], instead, which roots its value until the
 /// handle is dropped; [`Interpreter::lookup`] answers one for a global, and
-/// [`Interpreter::define`] binds a global to one, through the backend, so
-/// that code compiled before the definition calls the new value (#673). The
+/// [`Interpreter::define`] binds a global to one, through the backend's
+/// `define_in`, so that code compiled before the definition calls the new
+/// value (#673). The
 /// interpreter that made a handle reads it ([`Interpreter::display_tagged`],
 /// [`Interpreter::raw_value`]), and any other panics on it. The `eval_*`
 /// methods that answer a bare value are deprecated.
@@ -434,7 +436,11 @@ enum FormsEnd<E> {
 /// everything bound in it until the handle is dropped (#620, #835). [`Interpreter::define_in`] and
 /// [`Interpreter::lookup_in`] bind and read in it, and
 /// [`Interpreter::eval_str_in`] and [`Interpreter::eval_program_in`]
-/// evaluate in it, on either backend.
+/// evaluate in it, on either backend. Every entry reaches the backend
+/// through its handle methods (#839): the global namespace by a handle
+/// `global_namespace` answers for the call, and each form's datum held
+/// through its evaluation. `global_env` and `raw_environment`, which
+/// answered the environments raw, are deprecated.
 ///
 /// The `_owned` suffix is temporary. At stage 5e of the collector's redesign
 /// (`PRD/GC_PRD.md`, decision 13) the bare methods go and the plain names
@@ -1282,11 +1288,9 @@ impl<B: Backend> Interpreter<B> {
     }
 
     /// The environment `env` holds, raw (a host namespace when it came from
-    /// [`new_environment`](Self::new_environment)), for a call the handle
-    /// forms do not cover, such as `Backend::eval`. The handle roots it, not
+    /// [`new_environment`](Self::new_environment)). The handle roots it, not
     /// this `Rc`: keep the handle while the environment is in use, and read
-    /// a value from it, or write one, as raw, as with
-    /// [`Interpreter::global_env`]. A frame built over it is refused by the
+    /// a value from it, or write one, as raw. A frame built over it is refused by the
     /// VM, as one over the global environment is (#835). Panics on a handle
     /// another interpreter made.
     ///
@@ -1434,8 +1438,9 @@ impl<B: Backend> Interpreter<B> {
     }
 
     /// The heap the interpreter's values live on, raw: an environment keeps
-    /// no handle to its heap (#704), so a host that read it through
-    /// [`Interpreter::global_env`] reads it here. Keep values across an
+    /// no handle to its heap (#704), so a host that reads one raw, through
+    /// `backend().global_namespace()` and `Heap::held_environment`, reads
+    /// it here. Keep values across an
     /// evaluation in handles ([`Owned`]), not in words read off it.
     ///
     /// Deprecated (#831). Its uses have typed replacements:
@@ -1598,8 +1603,8 @@ impl<B: Backend> Interpreter<B> {
     /// This allows access to backend-specific functionality that's not
     /// part of the generic `Backend` trait. The `Backend` trait's methods are
     /// inside the embedding API's promise, changing only by #601's
-    /// convention, but their words are the raw layer (#605): they take and
-    /// answer bare `TaggedValue`s and environments, which nothing roots
+    /// convention. The old ones' words are the raw layer (#605): they take
+    /// and answer bare `TaggedValue`s and environments, which nothing roots
     /// between calls. A backend's own inherent methods are raw, but for its
     /// setup (`new`, `with_fs`, `Default`, the search paths and
     /// `bootstrap_error`), and `backend().heap()` reaches

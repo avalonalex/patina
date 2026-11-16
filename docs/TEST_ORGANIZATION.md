@@ -844,12 +844,17 @@ the four routes to a host's environment that #831 deprecated are the
 exception: they sit on their replacement, `Interpreter::new_environment`,
 which core's doctests cannot reach, beside one twin that calls it.
 `Interpreter::heap`'s pin sits on `heap`, beside a twin that calls
-`gc_stats()`.
+`gc_stats()`. S1's pins of `Backend`'s six deprecated methods (#839) sit on
+`Interpreter::backend`, beside one twin that calls the four handle methods
+over the same scaffolding, a twin through a generic bound and
+`dyn Backend`, and the implementor's pins; those of `Interpreter::global_env`
+and `raw_environment` sit on each, beside a twin calling `lookup` or
+`lookup_in`.
 
 **Purpose:** pin what the compiler must refuse. That covers the brand of
 `PRD/GC_PRD.md` §11.3 (#703, #709), the store funnel's seal (#708), the
-`Trace` derive's checks (#686) and the deprecations #831 made by #601's
-convention.
+`Trace` derive's checks (#686) and the deprecations #831 and #839 made by
+#601's convention, and what an implementor of `Backend` sees of the latter.
 - **Each case** is a `compile_fail` doctest with its error code pinned,
   beside a positive twin: the same code with the violation removed, which
   compiles.
@@ -887,6 +892,11 @@ convention.
 | interpreter | `Interpreter::new_environment` | a call of `Cx::hold_environment` under `#![deny(deprecated)]` (#831) | a lint error, no code |
 | interpreter | `Interpreter::new_environment` | a call of `Cx::track_environment` under `#![deny(deprecated)]` (#831) | a lint error, no code |
 | interpreter | `Interpreter::heap` | a call of `Interpreter::heap` under `#![deny(deprecated)]` (#831) | a lint error, no code |
+| interpreter | `Interpreter::backend` | a call of `Backend::eval`, `eval_global`, `eval_with_source_map`, `define`, `call` or `global_env` under `#![deny(deprecated)]`, one pin each (#839) | a lint error, no code |
+| interpreter | `Interpreter::backend` | an implementor whose `global_namespace` is written over `self.global_env()` under `#![deny(deprecated)]`; its twins, an implementor of the required methods and one overriding the four handle methods from its fields, compile (#839) | a lint error, no code |
+| interpreter | `Interpreter::backend` | none: the handle methods through a generic bound and through `&dyn Backend` compile under `#![deny(deprecated)]`, so a provided method that is not dyn-compatible fails here (#839) | — |
+| interpreter | `Interpreter::global_env` | a call of `Interpreter::global_env` under `#![deny(deprecated)]` (#839) | a lint error, no code |
+| interpreter | `Interpreter::raw_environment` | a call of `Interpreter::raw_environment` under `#![deny(deprecated)]` (#839) | a lint error, no code |
 
 `patina-compat` has none of its own. It reads in words inside its own context
 (`sexp::parse_all`), and none of its API takes or answers a value.
@@ -985,10 +995,24 @@ The consumer covers malformed input (#329), library/macro imports, macro and
 runtime diagnostics with source positions, multiple/cyclic result formatting,
 host command lines, the handle forms (#605), a host's definition over a
 primitive's name and `Backend::define`'s default on the host-supplied backend
-(#673), old pipeline module paths with a child environment, whose heap value
-is read back after a collection outside it (#620), and `heap()`'s
+(#673), `Backend`'s handle methods (#839), old pipeline module paths with a
+child environment, whose heap value is read back after a collection outside
+it (#620), and `heap()`'s
 replacements (`gc_stats()`, `take_interrupt()`, `display_notation()` and the
 teardown probe) on each backend and on the host-supplied one (#831).
+For `Backend`'s handle methods (#839) it has two host backends: the
+host-supplied `LiteralBackend` implements only the required methods and takes
+every default, its `impl` under `#[deny(deprecated)]`, which pins from
+outside the workspace that an implementation draws no warning; and
+`HandleBackend`, the state at 5e, implements only the four handle methods,
+its old ones `unreachable!`, and runs the interpreter's entries, so no entry
+reaches an old method. `handle_methods`, under `#[deny(deprecated)]`, calls
+the four on both identity backends, with a fresh name for `define_in`, and
+`scheme_handle_methods` on each Patina backend the features build, with
+data read in the interpreter's context. The script runs the consumer with no
+`-D warnings`, so only these `deny` scopes make a deprecation fatal there.
+`patina-tests/tests/host_calls.rs` holds `Interpreter::call`, which reaches
+`Backend::call_owned`, on both backends.
 `legacy_embedding.rs` pins the three corrected convenience-API discrepancies,
 legacy error categories and effects before a read error. These are fixed
 embedding cases for [#589](https://github.com/avalonalex/patina/issues/589),
@@ -1106,11 +1130,28 @@ namespace since #835, to rooting what is bound in it, on both backends
 
 - a value the host binds, across a program that collects outside the
   environment;
-- a definition the program makes in the environment through `Backend::eval`;
-- #620's table through `Backend::eval` and `eval_with_source_map`: a read, a
-  closure and a definition in the environment, which the VM ran in the global
-  environment until it ran the code as a closure over the one it was given,
-  and now runs as a top-level frame whose unit is linked in it (#836);
+- a definition the program makes in the environment through `Backend::eval`,
+  and through `Backend::eval_in` over handles (#839);
+- #620's table through `Backend::eval`, `eval_with_source_map` and
+  `eval_in` with no source map and with one (#839), each route binding `f`
+  with `Interpreter::define` of a handle, so only the evaluation differs: a
+  read, a closure and a definition in the environment, which the VM ran in
+  the global environment until it ran the code as a closure over the one it
+  was given, and now runs as a top-level frame whose unit is linked in it
+  (#836);
+- #857's program on `Backend`'s handle methods
+  (`a_held_raw_namespace_keeps_its_bindings_across_a_collection`, #839): a
+  namespace made with `Environment::with_heap` and held with
+  `Heap::hold_namespace`, bound in through `define_in` and read through
+  `eval_in` after a program that collects, with its handle kept throughout.
+  It shows that a namespace's handle roots its bindings across a collection;
+  dropping the handle and holding the same `Rc` again after the collection
+  reads freed slots on both backends, which `with_heap`'s documentation
+  forbids, so it is not #857's acceptance test (question 3 on #839);
+- a tree-walker whose `Evaluator::global_env`, a pub field, is a frame
+  (`a_tree_walker_whose_global_is_a_frame_runs_until_5e`, #839): it runs a
+  program as before S1, `global_namespace` holding the frame through the
+  deprecated holder until 5e (question 4 (b), pending the owner's ruling);
 - `eval_str_in` and `eval_program_in`: a definition kept across a collection
   while the environment's code runs, an import bound in it alone, an error,
   and a continuation's escape;
@@ -1209,16 +1250,18 @@ through; a second leaves them there.
 The VM's refusal of a frame adds one more (#835), where the backends
 diverge: `a_raw_frame_is_refused_by_the_vm`. A raw frame of the global
 namespace, one of a host namespace and a frame of temporaries are each given
-`Backend::eval`, an `import` by `eval_with_source_map`, and `eval_str_in` and
-`eval_program_in` through the deprecated `Heap::hold_environment`. On the VM
+`Backend::eval`, an `import` by `eval_with_source_map`, and `eval_str_in`,
+`eval_program_in` and `Backend::eval_in` (#839) through the deprecated
+`Heap::hold_environment`. On the VM
 each answers an error naming the frame's kind, not a panic; the refused
 `import` binds nothing, and a `define-library` refused in the global
 namespace's frame loads nothing, so a later global `import` of it fails.
 After each refusal the next form evaluates. The tree-walker evaluates in each
 frame by name, as both backends did before the refusal, and its answers are
 pinned at the base's (e392fe3d). Each frame is also given `Backend::define`,
-which answers no `Result` and writes the frame itself on both backends, a
-frame of temporaries included, binding nothing in the global namespace. The
+and through its handle `define_in` (#839), which answer no `Result` and
+write the frame itself on both backends, a frame of temporaries included,
+binding nothing in the global namespace. The
 test fails when the VM evaluates a frame, when it asks the kind only after a
 `define-library` or an `import`, and when either backend's `Backend::define`
 skips a frame or writes the global namespace instead.
@@ -1293,8 +1336,11 @@ imports `(scheme base)` itself, and in one that reaches `car` through its
 parent, and the global `car` stays the primitive; and the same through a
 `define` form evaluated in the host environment, a compiled `Define` on the
 VM, which adopts the read-through record the code compiled there links, and
-never writes through it into the global binding (#836, #852). Without the VM's
-`Backend::define` the VM's code calls the primitive, which is what a write to
+never writes through it into the global binding (#836, #852).
+`Interpreter::define` and `define_in` reach the backend through
+`Backend::define_in` (#839), which the VM overrides with the same marking.
+Without the VM's `Backend::define` and `define_in` the VM's code calls the
+primitive, which is what a write to
 the environment itself still does. A definition marks the primitive by the
 environment's own binding only, so a host environment's `car` leaves the
 global `car`'s fast path alone:
@@ -1562,8 +1608,10 @@ three paced collections, each leaving L within 1 MiB of the L before the
 loop and the threshold at the 8 MiB floor, where the sweep's L put the
 first 7 MiB above and the threshold at 14 MiB. The other drops fifty held
 procedures and requires the L one `(gc)` leaves to be the L a second
-leaves, to the byte, collecting only at `(gc)`, at the adaptive threshold
-and in the environment's mode; all three fail without the settle, under
+leaves, to the byte, each read in a form of the same shape, since the form
+being evaluated keeps its datum (#839, where the second form's shorter
+datum read 208 bytes less), collecting only at `(gc)`, at the adaptive
+threshold and in the environment's mode; all three fail without the settle, under
 the stress lane's variable too, since nothing allocates between the drop
 and the `(gc)`, and only under zeal, which collects before the `(gc)`
 does, the third holds the settled readings either way. Those two cover the
@@ -1795,6 +1843,11 @@ namespace goes while the alias stays, and with every alias read by name it
 stayed. `environment.rs`'s `an_alias_entrys_size_is_watched` pins the
 alias entry at 80 bytes. `macro_definition_env`'s stress count was
 re-pinned.
+
+S1's tests (#839) re-pinned `host_environments`'s stress count: two tests
+more, and the `eval_in` routes its #620 tests and raw frames gained. The
+other targets' counts stayed where they were, a handle allocating nothing in
+the arenas.
 
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):

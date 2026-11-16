@@ -48,8 +48,8 @@ use std::rc::Rc;
 /// use patina_runtime::Backend;
 ///
 /// let backend = TreeWalker::new();
-/// let expr = parse("(+ 1 2 3)");
-/// let result = backend.eval_global(&expr).unwrap();
+/// let expr = backend.heap().borrow().hold(parse("(+ 1 2 3)"));
+/// let result = backend.eval_in(&backend.global_namespace(), &expr, None).unwrap();
 /// ```
 pub struct TreeWalker {
     evaluator: Rc<Evaluator>,
@@ -231,8 +231,10 @@ impl TreeWalker {
         // The application's literals, rooted until its run returns, as a
         // form's are (#705, #869).
         let literals = patina_core::LiteralPool::new(&self.evaluator.heap.borrow());
-        // SAFETY: the words are a host's handles' (`Interpreter::call`),
-        // which root them, on this backend's heap.
+        // SAFETY: the words are live by `Backend`'s first rule, on this
+        // backend's heap: read from the caller's handles on `call_owned`,
+        // which root them through the call, or, on the deprecated `call`,
+        // the caller's obligation (`Backend`'s "# Words").
         let (callee, operands) = unsafe {
             let callee = literals.add_word(f);
             let operands: Vec<_> = args.iter().map(|&arg| literals.add_word(arg)).collect();

@@ -126,20 +126,22 @@ on its questions on 2026-11-05:
   without a deprecated twin.
 - A type a promised signature names that the tables leave out, as one an
   inside `Cx` method or `CoreExprKind` names, is inside.
-- Inside promises a signature, not a root. `Backend`'s methods and
+- Inside promises a signature, not a root. `Backend`'s old methods and
   `Interpreter`'s `global_env()`, `raw_environment()` and `raw_value()` take
   or answer bare words and environments, which nothing roots between calls
-  (#605); `Backend`'s keep the rules its "# Words" section gives.
+  (#605); `Backend`'s keep the rules its "# Words" section gives. The first
+  two of `Interpreter`'s, and `Backend`'s old methods, are deprecated since
+  S1 (#839), which gave `Backend` four handle methods.
 
 What `patina-interpreter` exports, at its root unless a module is named:
 
 | Item | Side | Note |
 |------|------|------|
-| `Interpreter<B>`; `VmInterpreter` (vm), `TreeWalkInterpreter` (tree-walker) | inside | the bare-value `eval_*` methods are deprecated (#605), and `heap()` (#831) for `gc_stats()`, `take_interrupt()`, `display_notation()` and the routes its note names; the `#[doc(hidden)]` `heap_probe()` is raw |
+| `Interpreter<B>`; `VmInterpreter` (vm), `TreeWalkInterpreter` (tree-walker) | inside | the bare-value `eval_*` methods are deprecated (#605), and `heap()` (#831) for `gc_stats()`, `take_interrupt()`, `display_notation()` and the routes its note names; `global_env()` and `raw_environment()` are deprecated (#839) for `lookup`, `define`, the `_in` forms and `backend().global_namespace()`; the `#[doc(hidden)]` `heap_probe()` is raw |
 | `GcCounts` | inside | `gc_stats()`'s; `#[non_exhaustive]`, so a later field is additive |
 | `HeapProbe` | raw, `#[doc(hidden)]` | `heap_probe()`'s, for the teardown tests |
 | `InterpreterError<E>`, `ProgramOutcome`, `WithSourceMap<T>`, `PrimSpec` | inside | |
-| `AsValue` | inside, sealed | its `#[doc(hidden)]` `value_in` names `Heap`, so is raw |
+| `AsValue` | inside, sealed | its `#[doc(hidden)]` `value_in` names `Heap`, so is raw, as is its `#[doc(hidden)]` `with_owned` (#839) |
 | `format_write_tagged`, `format_display_tagged`, `format_interpreter_error`, `format_parse_error_with_source`, `format_error_with_source`, `format_backend_error_with_source`, `HasSourceLocation` | inside | the first two take `&SharedHeap`; `Interpreter`'s `display_tagged()` and `display_notation()` take a handle instead |
 | `Owned`, `OwnedEnvironment` | inside, opaque | `new_environment()`'s holds a host namespace, a namespace whose parent is the global one (#835); the deprecated holders hold any of the heap's until 5e |
 | `SharedHeap`, `new_shared_heap` | inside as names | the alias's definition, `Rc<RefCell<Heap>>`, and what its `borrow()` reaches are raw; 5e deletes the `RefCell` |
@@ -149,7 +151,7 @@ What `patina-interpreter` exports, at its root unless a module is named:
 | `LexError`, `ParseError`, `DesugarError`, `Lexer`, `Parser` | inside | |
 | `Desugarer` | raw | |
 | `prune_freed_locations` | inside, deprecated | a no-op, until 5e (#643) |
-| `Backend` | inside | its methods change by the convention, and its words keep the "# Words" rules |
+| `Backend` | inside | its methods change by the convention, and its words keep the "# Words" rules; `eval_in`, `define_in`, `call_owned` and `global_namespace` take and answer handles, provided over the old methods, which are deprecated for callers, `eval` and `global_env` staying required of implementors until 5e; `heap` is required and not deprecated (S1, #839) |
 | `Environment` | type inside, members raw | `with_parent` is deprecated (#831) and goes at 5e; the workspace builds its frames with the `#[doc(hidden)]` `child_frame`, on #622's list; `for_temporaries` is hidden too; `namespace_root`, the nearest namespace, is raw as `root` is (#835); `frame_kind`, which names a frame's kind for the VM's refusal and answers `None` for a namespace, is hidden and raw (#835) |
 | `Procedure` | raw | a heap payload no promised signature names; 4f changes its `CpsLambda` arm |
 | `Prim`, `ApplyContext`, `CallArgs`, `HostPrimitives`, `PrimClass`, `ResumableStart`, `ResumableResume`, `Step` | inside | `Prim` is `CxHandler`, and `CallArgs` a `smallvec::SmallVec` |
@@ -172,7 +174,7 @@ types promised signatures name, and the raw types a host reaches from them:
 | `patina_core::CoreExprKind` | inside | `CoreExpr`'s `kind` |
 | `patina_frontend::error::FrontendError`, `patina_macros::MacroError` | inside | through `PipelineError` (legacy-pipeline) |
 | `patina_core::Library` | type inside, members raw | `ApplyContext::load_scheme_library` answers one; its exports are cells (#834) |
-| `patina_core::Heap` | raw | `SharedHeap` stands for it, and `backend().heap()` reaches it; `hold_environment` is deprecated (#831), until 5e, for `hold_namespace`, which takes only a namespace; `new_host_namespace` makes the host namespace `new_environment()` answers, held (#835) |
+| `patina_core::Heap` | raw | `SharedHeap` stands for it, and `backend().heap()` reaches it; `hold_environment` is deprecated (#831), until 5e, for `hold_namespace`, which takes only a namespace; `new_host_namespace` makes the host namespace `new_environment()` answers, held (#835); the `#[doc(hidden)]` `hold_global` holds a backend's global, a frame through the deprecated holder until 5e (#839); `held_environment` is the raw route the notes of `Backend::global_env` and `Interpreter`'s `global_env()` and `raw_environment()` name |
 | `patina_core::NamespaceView` | raw | no promised signature names it; implemented over binding records (#834) |
 | `patina_core::BindingCell` | raw | a location's token: `Library.exports`' values, and what `Cx::new_declaration_cell` (`#[doc(hidden)]`) answers and `Cx::import_cell_in_frame` takes; unbranded, so held only while the registry entry, a record or the context that made it keeps it (#834) |
 | `patina_core::IntroducedRecord` | raw | what `Environment::introduced_records` answers, for 5c and the tests (#834) |
@@ -188,7 +190,17 @@ A change to an inside item takes four steps:
    its replacement. Existing callers then compile, with a warning that says
    what to do. #831's five are each pinned by a `compile_fail` doctest under
    `#![deny(deprecated)]`, beside a twin that compiles with the replacement
-   (on `Interpreter::new_environment` and `Interpreter::heap`).
+   (on `Interpreter::new_environment` and `Interpreter::heap`), and so are
+   S1's eight (#839): `Backend`'s six on `Interpreter::backend`, with the
+   handle methods through a generic bound and `dyn Backend`, and
+   `Interpreter`'s `global_env` and `raw_environment` on themselves.
+   A required trait method deprecated for callers stays required of its
+   implementors until it is removed. rustc does not warn an implementation
+   of a deprecated method, but it warns a call of one, an implementation's
+   own included; an implementor that only implements sees nothing until the
+   removal, which the deprecation note announces. `Interpreter::backend`
+   pins both: an implementor compiles under `deny`, and one whose new
+   method calls `self.global_env()` does not.
 3. **Move the internal callers, and allow the rest:** an internal caller with
    an undeprecated route moves to it rather than taking an allow, as #831's
    callers of `heap()` moved to its replacements or to `backend().heap()`,

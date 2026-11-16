@@ -12,7 +12,9 @@
 //!
 //! - Evaluating expressions in a given environment
 //! - Managing its own internal state (stack, registers, etc.)
-//! - Providing access to the global environment for introspection
+//! - Providing a handle on its global namespace (`global_namespace`); the
+//!   environment itself is the raw layer, through `heap()` and
+//!   `Heap::held_environment`
 
 use crate::Environment;
 use patina_core::{Owned, OwnedEnvironment, SourceMap, TaggedValue};
@@ -26,10 +28,11 @@ use std::rc::Rc;
 /// - VM: Bytecode compilation and stack-based execution
 /// - JIT: Native code generation with LLVM/Cranelift
 ///
-/// Each backend must provide:
-/// 1. Expression evaluation in a given environment
-/// 2. Access to the global environment (for REPL, introspection)
-/// 3. A backend-specific error type
+/// Each backend must provide, until stage 5e:
+/// 1. Expression evaluation in a given environment (`eval`)
+/// 2. Its global environment (`global_env`), which callers reach through
+///    the handle `global_namespace` answers
+/// 3. Its heap (`heap`), and a backend-specific error type
 ///
 /// # Words
 ///
@@ -46,13 +49,24 @@ use std::rc::Rc;
 /// - **A word answered holds until the next evaluation,** which may collect.
 ///   Keep it in a handle (`Heap::hold`) to keep it past that.
 ///
-/// These are the trait's only words until S1 (4b.12, #839; `PRD/GC_PRD.md`
-/// §11.5), which follows 4b's link tables. S1 adds handle methods beside
-/// them as provided defaults (`eval_in`, `define_in`, `call_owned` and
-/// `global_namespace`), and deprecates the old methods for callers (4b's
-/// start decision 6 on #782). An implementor still provides the old methods
-/// the trait requires, until stage 5e removes them, so it migrates once
+/// S1 (4b.12, #839; `PRD/GC_PRD.md` §11.5; 4b's start decision 6 on #782)
+/// added handle methods beside them as provided defaults: `eval_in`,
+/// `define_in`, `call_owned` and `global_namespace`, which take and answer
+/// `Owned` and `OwnedEnvironment` and root what they name through the call.
+/// The old methods are deprecated for callers. An implementor still
+/// provides the ones the trait requires (`eval` and `global_env`, with
+/// `heap`, which is not deprecated) until stage 5e removes them; the
+/// provided ones it may override. S1's four names stay at 5e (question 5
+/// (a) on #839, pending the owner's ruling), so an implementor migrates once
 /// (owner decision, 2026-10-21, #710).
+///
+/// rustc does not warn an implementation of a deprecated method. It warns
+/// a call of one, in an implementation too: a wrapper that delegates `eval`
+/// or `global_env` to another backend, or a new method written over
+/// `self.global_env()`. An implementor writes the new methods from its own
+/// state, through `heap()`, the raw layer, which changes at 5e (an
+/// implementor that wants nothing raw keeps the defaults), and a wrapper
+/// allows `deprecated` on its delegating bodies until 5e.
 pub trait Backend {
     /// Backend-specific error type
     ///
@@ -88,12 +102,12 @@ pub trait Backend {
     )]
     fn eval(&self, expr: TaggedValue, env: &Rc<Environment>) -> Result<TaggedValue, Self::Error>;
 
-    /// Get a reference to the global environment
+    /// The global environment: the namespace top-level forms, library
+    /// exports' imports and introspection use.
     ///
-    /// This is needed for:
-    /// - REPL (evaluating top-level expressions)
-    /// - Library loading (defining exports in global scope)
-    /// - Introspection (listing defined variables)
+    /// Deprecated for callers, and required of implementors until stage 5e
+    /// (#839): a caller takes a handle from [`Self::global_namespace`], and
+    /// reads the environment, raw, with `Heap::held_environment` on it.
     #[deprecated(
         note = "use `global_namespace()` for a handle, and `Heap::held_environment` on it (through \
                 `heap()`, the raw layer) for the environment; an implementor still provides this \
