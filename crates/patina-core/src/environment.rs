@@ -171,8 +171,9 @@ enum AliasHome {
     /// identity. Not an optimisation: an `Rc<Environment>` pointing at the
     /// environment that owns the table is a cycle refcounting can never
     /// break, so a self-alias would pin that environment — and its heap —
-    /// for the process. It also saves an `Rc` clone and drop on every alias
-    /// hit. A target in the holder is always this, a keyword included.
+    /// for the process. It also saves an `Rc` clone and drop on the paths
+    /// that clone the entry ([`Environment::alias_target`]'s callers). A
+    /// target in the holder is always this, a keyword included.
     Holder,
     /// In another environment, read there by name or by identity: a
     /// variable, until 4b.10's second PR, or a keyword the own-table rule
@@ -2731,10 +2732,11 @@ impl Environment {
             if let Some(tv) = env.local_value(heap, name) {
                 return Some(tv);
             }
-            // Follow a macro-expansion alias into the environment the macro was
-            // defined in. Checked after real bindings so a local definition always
-            // wins, and before the parent so the alias is not shadowed by an
-            // unrelated outer binding of the same (unique) name.
+            // Follow a macro-expansion alias to its target: the binding record
+            // it holds, or the environment it names. Checked after real
+            // bindings so a local definition always wins, and before the
+            // parent so the alias is not shadowed by an unrelated outer
+            // binding of the same (unique) name.
             if env.has_aliases.get()
                 && let Some(found) = env.get_through_alias(heap, name)
             {
@@ -3138,8 +3140,12 @@ impl Environment {
 
     /// Resolve a macro-expansion alias installed here, if any.
     ///
-    /// The emptiness check matters: this sits on every global lookup that falls
-    /// through to a parent, and almost every environment has no aliases at all.
+    /// Clones the entry. The hot walks (`get`, `set` and the scoped
+    /// fallbacks) read it in place through
+    /// [`get_through_alias`](Self::get_through_alias) and
+    /// [`set_through_alias`](Self::set_through_alias) instead; this serves
+    /// the rest, as `binding_hit` and `name_reaches_binding_of`. The
+    /// emptiness check matters: almost every environment has no aliases.
     fn alias_target(&self, name: &str) -> Option<AliasTarget> {
         let aliases = self.alias_bindings.borrow();
         if aliases.is_empty() {
@@ -3152,9 +3158,11 @@ impl Environment {
     /// installed: `Some` of [`AliasTarget::get`]'s answer.
     ///
     /// Out of line, and reading the entry in place rather than cloning it,
-    /// so that the walks that check for an alias at every step — `get` and
-    /// `resolve_with_scopes`, the tree-walker's hottest — carry neither the
-    /// entry nor its read in their own frames (#837). The table's shared
+    /// so that the tree-walker's hottest walks that check for an alias at
+    /// every step — `get` and `get_scoped_fallback`, beneath
+    /// `resolve_with_scopes` — carry neither the entry nor its read in their
+    /// own frames (#837). `binding_hit` and `name_reaches_binding_of` still
+    /// clone it, through [`alias_target`](Self::alias_target). The table's shared
     /// borrow is held across the read, which may borrow it again (a target
     /// in the holder) but never mutably: only an install does.
     #[inline(never)]

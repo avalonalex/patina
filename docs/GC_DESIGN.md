@@ -145,7 +145,9 @@ environment it was defined in, so a replaced library's namespace stays
 while an alias to a keyword defined in it does (#837's question 4,
 `macro_definition_env.rs`'s
 `a_keyword_aliass_record_still_keeps_its_macros_definition_namespace`).
-One whose relinked keyword it imports goes: the record is its import over
+One whose relinked keyword it imports goes, where nothing else keeps it
+(a relinked variable's alias, code compiled against it, or
+`foreign_expansions`): the record is its import over
 the exporter's cell, and the macro's `definition_env` the exporter's
 namespace (`a_keyword_alias_to_an_imported_keyword_releases_the_replaced_library`).
 So a record can outlive the namespace whose slot or scoped entry it was,
