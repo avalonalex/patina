@@ -1659,9 +1659,11 @@ macro_rules! gc_shared_tests {
             // `binding-records` and `cells` do not count (GC_DESIGN §3.3).
             // Each backend is compared with itself. Under zeal too, which
             // collects at every outermost safe point. The macro variant's
-            // release rests on #872's early links (4b.10 PR-1b), pending
-            // merge: without them it reads 600 namespaces more at 800 on
-            // both backends (measured on `main` at `3c4aa637`).
+            // release rests on #872's early links (4b.10 PR-1b), and on the
+            // tree-walker on #837's question 1 (a), its read through the
+            // record its `CpsExpr` carries, both pending: without #872 it
+            // reads 600 namespaces more at 800 on both backends (measured
+            // on `main` at `3c4aa637`).
             for (variant, form) in [("plain", PLAIN_STREAM_FORM), ("macro", MACRO_STREAM_FORM)] {
                 assert_released(variant, stringify!($eval), $eval, form, false);
                 assert_released(variant, stringify!($eval_zeal), $eval_zeal, form, true);

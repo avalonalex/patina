@@ -1514,8 +1514,11 @@ the three shared tests on both backends (`a_redefined_library_is_released`
 by 600 namespaces, the others at `dropped`) and the tree-walker's R-D pin;
 the one that releases it fails `a_value_from_a_replaced_library_still_runs`
 and the table on both backends at the old value's first call, and on the
-VM `a_redefined_library_is_released` and the R-D pin only through
-`release_dead_code`'s check-build assertion. The macro half of
+VM the R-D pin, which reads `(3 -1 -1)` in the release `gc-check` build.
+In a debug build the VM's R-D pin and `a_redefined_library_is_released`
+panic first, on `release_dead_code`'s `debug_assert!` that a freed
+closure's code still counts a live closure; `gc-check` compiles that out,
+and `a_redefined_library_is_released` passes there. The macro half of
 `a_redefined_library_is_released`, which the plain half's failure hides
 under the build that keeps the library, fails on
 `main` before #872 (`3c4aa637`) by 600 namespaces on both backends, and
