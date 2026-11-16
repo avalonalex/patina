@@ -1837,9 +1837,7 @@ to 1.05× (`pin`, beside SS1; K17, and the owner's ruling R9 on #782):
 `hidden-define`'s from its re-baseline, 225 bytes on the VM and 97 on the
 tree-walker since #833, re-pinned by the owner at 257 and 129 for the
 binding records' 32 bytes a cycle (#834, its question 2);
-`library-stream`'s, whose SS1 passes since #834, at about 90.84 bytes, so
-that its 1.05× is SS1's bound per cycle at its N until 4b.11 promotes the
-clause (question 4); and `unbound-ref`'s from the 4b PR that first moves it
+and `unbound-ref`'s from the 4b PR that first moves it
 (R9), #836's linking at load: 84.35 bytes on the tree-walker, 1.00× its
 reading before (84.4), since the placeholder a compiled reference to an
 unbound name links is dropped once no code links it, and 101.55 on the VM,
@@ -1854,7 +1852,7 @@ The REPL rows declare SS1, SS4 and SS5,
 since their growth shows in L and the counts and their footprints are the
 deferred library loads' high-water (#616); the server and churn rows declare
 SS2 as well. A clause a row fails today is marked red in the runner's table
-with the issue or stage that fixes it — #614, #616, #656, stage 4e, stage
+with the issue or stage that fixes it — #616, #656, stage 4e, stage
 5c — and is reported, not failed; a red clause that passes is called out for
 promotion. A mark names one clause, or one clause on one backend
 (`SS1/vm`), and SS5's by its key (`SS5:symbols`), so that it silences no
@@ -1869,9 +1867,10 @@ the lane began, and on the tree-walker since #833 counted the retention it
 already had, a re-baseline under its pins; so are its `SS5:cells` and
 `SS5:binding-records`, which grow one a cycle on both backends since #834
 counted each expansion's record and cell, a re-baseline under R1 on #782.
-`library-stream`'s SS1, red for #614, passes since #834, an importer
-holding the library's cell and not its namespace, and is called out for
-promotion, which 4b.11 makes.) Every run is
+`library-stream`'s SS1, red for #614 until #834 released it, an importer
+holding the library's cell and not its namespace, was promoted by #838, its
+pin with it: a green SS1 holds the row at its bound per cycle, which the
+pin's 1.05× equalled at its N.) Every run is
 watched: a timeout, a non-zero exit or a missing reading fails the row,
 whatever its marks, and the resident-size cap fails it too, except on a row
 with a clause marked red on that backend, where a cap hit is reported red,

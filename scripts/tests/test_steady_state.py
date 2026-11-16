@@ -199,14 +199,21 @@ class Clauses(unittest.TestCase):
         self.assertEqual(rows['unbound-ref'].pin, {'vm': 101.55, 'tree-walker': 84.35})
         self.assertIn('pin', rows['unbound-ref'].checks())
 
-    def test_library_stream_s_pin_is_ss1_s_bound(self):
-        # Its SS1 passes since #834; until 4b.11 promotes it, the pin's 1.05x
-        # is SS1's bound per cycle at the row's N (question 4 on #834).
+    def test_library_stream_is_promoted(self):
+        # Its SS1 passes since #834 and #838 promoted it (start decision 12 on
+        # #782): no mark, and no pin, since a green SS1 holds the row at its
+        # bound, which the pin's 1.05x equalled (question 4 on #834).
         row = next(row for row in steady.ROWS if row.name == 'library-stream')
-        self.assertEqual(row.red_reason('SS1', 'vm'), '#614')
+        self.assertEqual(steady.mark_errors(row), [])
+        self.assertEqual(row.red, {})
+        self.assertIsNone(row.pin)
+        self.assertNotIn('pin', row.checks())
+        self.assertEqual(row.clauses, steady.REPL)
         for backend in steady.BACKENDS:
-            self.assertAlmostEqual(steady.PIN_TOLERANCE * row.pin[backend], steady.leak_floor(row.n[backend]))
-        self.assertIn('pin', row.checks())
+            for check in row.checks():
+                self.assertIsNone(row.red_reason(check, backend), (check, backend))
+        # No row carries #614's mark any more.
+        self.assertFalse([r.name for r in steady.ROWS if '#614' in r.red.values()])
 
     def test_the_pacer_s_row_runs_per_pr(self):
         # `env-lambda` is the row a pacer that follows dead namespaces fails
