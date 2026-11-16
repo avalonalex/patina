@@ -168,7 +168,8 @@ reads for the record a later expansion links. A replacement would release
 nothing where the template names a procedure of the generator's library,
 since its closure keeps the namespace anyway, and would need every name a
 later expansion asks about, so §8 lists the edge among a replaced
-namespace's holders and a later narrowing can trim it
+namespace's holders (pending the owner's ruling on #837's first PR) and a
+later narrowing can trim it
 (`PRD/GC_PRD.md` §17.2). A host namespace (#835), the
 namespace `Interpreter::new_environment` answers, whose parent is the global
 namespace, is traced as any namespace is, and has one table more: its
@@ -1488,13 +1489,13 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   row), so a closure that only the constants of a unit the same collection
   lets go reach (code `eval` compiled from a datum holding a procedure) is
   marked by it, and keeps its own unit until the next collection, one more
-  for each such link — unless the procedure's namespace holds a closure of
-  the unit that holds the constant, which closes a cycle through the roots,
-  and then for good (R-D, §8, #866): the count after a collection can
-  include such units,
-  and the steady-state driver reads it after `(gc) (gc)`. The reading
-  form's own unit is counted. The tree-walker loads no code, and reads 0,
-  never `#f`. A trigger the GC mode does not use reads `#f`.
+  for each such link: the count after a collection can include such units,
+  and the steady-state driver reads it after `(gc) (gc)`. Where the
+  procedure's namespace holds a closure of the unit whose constant it is,
+  that unit is never let go: the constant, the procedure's unit, the
+  namespace and the closure are a cycle through the roots, kept for good
+  (R-D, §8; #866's fix ends it). The reading form's own unit is counted.
+  The tree-walker loads no code, and reads 0, never `#f`. A trigger the GC mode does not use reads `#f`.
   `minors` and `majors` count collections by kind: every one is a major
   until a nursery.
   For a tree-walker closure, the first four count the estimate of the frame
@@ -1625,13 +1626,14 @@ last closure, so what only the constants of a unit this collection lets go
 reach is marked by it, counted in its L and freed by the next: a datum
 `eval` compiled into a procedure's code, or a procedure held as a
 constant, which keeps its own unit, and that unit's namespace, one
-collection more (§6's `code-units`), or for good where that namespace
-holds a closure of the unit whose constant it is (R-D, §8; #866's fix ends
-both). Where such constants outweigh the
-rest of what a cycle allocates, 2·L passes what was allocated and the
-threshold follows the garbage as it did the namespaces: code `eval`
-compiles from a datum quoting a fresh 1,000-element vector, called and
-dropped, has its paced collections 8.0, 15.8 and 30.6 MiB apart on the
+collection more (§6's `code-units`). Where that namespace holds a closure
+of the unit whose constant it is, that unit is never let go: the constant,
+the procedure's unit, the namespace and the closure are a cycle through
+the roots, kept for good (R-D, §8; #866's fix ends it). Where such
+constants outweigh the rest of what a cycle allocates, 2·L passes what
+was allocated and the threshold follows the garbage as it did the
+namespaces: code `eval` compiles from a datum quoting a fresh
+1,000-element vector, called and dropped, has its paced collections 8.0, 15.8 and 30.6 MiB apart on the
 VM, with L at 7.9, 15.3 and 29.6 MiB, where the tree-walker's come every
 8.0 MiB with L at 0.2 (the steady-state lane's `const-lambda`, measured
 2026-11-11). The lag is older than the linking at load, which reads the
@@ -2325,13 +2327,16 @@ cell → a closure → its environment; for a macro, a slot's record → its
 cell → the `Macro` → `CompiledMacro.definition_env`. The sweep tombstones
 the unmarked closures and macros, and on the VM the code release then lets
 the unit go with the namespace's last `Rc`. #838's audit holds every
-holder of a replaced namespace to SD3 in two tests. A namespace may be
-kept only by a value or code taken from the old library: a closure, a
-continuation whose frames run its code, a live macro object, a unit
-something can still run, a live generated macro's `foreign_expansions`
-(§3.3), and through their records over values that reach its code, a kept
-environment specifier's namespace or an importing library not yet
-redefined; a host's `Owned` handle on such a value is one too. A record or
+holder of a replaced namespace to SD3's two criteria, one for the
+namespace and one for its records and cells. A namespace may be kept only
+by a value or code taken from the old library: a closure, a continuation
+whose frames run its code, a live macro object, a unit something can
+still run, a live generated macro's `foreign_expansions` (§3.3; counted
+pending the owner's ruling on #837's first PR, whose alternative keeps
+only binding locations), and through their records over values that reach
+its code, a kept environment specifier's namespace or an importing library
+not yet redefined; a host's `Owned` handle on such a value is one too,
+which the audit allows and no test of a replaced library pins. A record or
 a cell keeps a namespace only through the value in its cell, when that
 value reaches the old library's code (a procedure, a macro, a
 continuation, or a structure, promise or parameter that holds one): a
@@ -2358,7 +2363,7 @@ tests that hold it: `gc_shared_tests!`'s `a_redefined_library_is_released`
 (#614's program 1 and its macro variant, every count flat across 600
 redefinitions), `a_value_from_a_replaced_library_still_runs` and
 `a_replaced_library_lives_only_as_long_as_its_holders` (the audit's rows,
-R-A's and R-C's among them); R-D's pins, `gc_vm`'s
+the generated macro's, R-A's and R-C's among them); R-D's pins, `gc_vm`'s
 `a_library_body_s_code_quoting_its_own_procedure_keeps_it_loaded` and
 `gc_tree_walker`'s `a_library_body_s_code_quoting_its_own_procedure_is_released`;
 `gc_namespace_bytes.rs`'s `a_replaced_library_with_a_procedure_is_released`;
