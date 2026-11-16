@@ -1278,7 +1278,7 @@ mod tests {
         assert_eq!(&**code.links.name(car), "car");
         assert!(code.links.pinned().is_empty(), "nothing links yet");
         assert!(code.links.namespace().is_none(), "never loaded");
-        assert!(backend.global_env().get(&backend.heap, "g").is_none());
+        assert!(backend.global_env.get(&backend.heap, "g").is_none());
         backend
             .disasm_source("(car '(1 2))")
             .expect("prints what it compiles");

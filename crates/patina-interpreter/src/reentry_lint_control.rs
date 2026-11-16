@@ -103,7 +103,7 @@ fn every_nameable_entry_is_matched() {
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |i: &Vm| i.eval_str_with_source_name_owned("", "");
     #[expect(clippy::disallowed_methods, reason = "positive control")]
-    let _ = |i: &Vm, env: &Rc<Environment>| i.eval_str_in_env("", "", env);
+    let _ = |i: &Vm, env: &crate::OwnedEnvironment| i.eval_str_in_env("", "", env);
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |i: &Vm| i.eval_program_owned("");
     #[expect(clippy::disallowed_methods, reason = "positive control")]
@@ -113,7 +113,7 @@ fn every_nameable_entry_is_matched() {
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |i: &Vm, fold_case: &mut bool| i.eval_program_with_fold_case_owned("", "", fold_case);
     #[expect(clippy::disallowed_methods, reason = "positive control")]
-    let _ = |i: &Vm, fold_case: &mut bool, env: &Rc<Environment>| {
+    let _ = |i: &Vm, fold_case: &mut bool, env: &crate::OwnedEnvironment| {
         i.eval_program_in_env("", "", fold_case, env)
     };
     #[expect(clippy::disallowed_methods, reason = "positive control")]

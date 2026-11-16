@@ -330,6 +330,13 @@ pub trait AsValue: sealed::Sealed {
     /// The value, read from `heap`.
     #[doc(hidden)]
     fn value_in(&self, heap: &patina_core::Heap) -> TaggedValue;
+
+    /// Run `f` with a handle on the value: a handle passes through as it is,
+    /// and a bare word is held on `heap` for the call, so a handle argument
+    /// claims no second entry (#839). The heap is not borrowed while `f`
+    /// runs.
+    #[doc(hidden)]
+    fn with_owned<R>(&self, heap: &SharedHeap, f: impl FnOnce(&Owned) -> R) -> R;
 }
 
 mod sealed {
@@ -343,17 +350,30 @@ impl AsValue for TaggedValue {
     fn value_in(&self, _: &patina_core::Heap) -> TaggedValue {
         *self
     }
+
+    fn with_owned<R>(&self, heap: &SharedHeap, f: impl FnOnce(&Owned) -> R) -> R {
+        let owned = heap.borrow().hold(*self);
+        f(&owned)
+    }
 }
 
 impl AsValue for Owned {
     fn value_in(&self, heap: &patina_core::Heap) -> TaggedValue {
         heap.held(self)
     }
+
+    fn with_owned<R>(&self, _: &SharedHeap, f: impl FnOnce(&Owned) -> R) -> R {
+        f(self)
+    }
 }
 
 impl AsValue for &Owned {
     fn value_in(&self, heap: &patina_core::Heap) -> TaggedValue {
         heap.held(self)
+    }
+
+    fn with_owned<R>(&self, _: &SharedHeap, f: impl FnOnce(&Owned) -> R) -> R {
+        f(self)
     }
 }
 
@@ -517,12 +537,12 @@ impl<B: Backend> Interpreter<B> {
     ) -> WithSourceMap<Result<Owned, InterpreterError<B::Error>>> {
         #[expect(
             clippy::disallowed_methods,
-            reason = "`eval_str_in_env` in the global environment: holds nothing across it, and \
-                      holds the value it answers before anything can collect"
+            reason = "`eval_str_in_env` in the global namespace, which the temporary handle roots \
+                      through the call: holds nothing else across it, and it answers a handle"
         )]
         let (result, source_map) =
-            self.eval_str_in_env(input, source_name, self.backend.global_env());
-        (result.map(|value| self.hold(value)), source_map)
+            self.eval_str_in_env(input, source_name, &self.backend.global_namespace());
+        (result, source_map)
     }
 
     /// Evaluate a string containing one Scheme expression, answering its
@@ -536,8 +556,9 @@ impl<B: Backend> Interpreter<B> {
         reason = "a wrapper over `eval_str_in_env` in the global environment: holds nothing"
     )]
     pub fn eval_str(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
-        self.eval_str_in_env(input, "<eval>", self.backend.global_env())
+        self.eval_str_in_env(input, "<eval>", &self.backend.global_namespace())
             .0
+            .map(|value| self.raw_value(&value))
     }
 
     /// [`Interpreter::eval_str_with_source_name_owned`], answering the value
@@ -555,15 +576,17 @@ impl<B: Backend> Interpreter<B> {
         input: &str,
         source_name: &str,
     ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
-        self.eval_str_in_env(input, source_name, self.backend.global_env())
+        let (result, source_map) =
+            self.eval_str_in_env(input, source_name, &self.backend.global_namespace());
+        (result.map(|value| self.raw_value(&value)), source_map)
     }
 
     fn eval_str_in_env(
         &self,
         input: &str,
         source_name: &str,
-        env: &Rc<Environment>,
-    ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
+        env: &OwnedEnvironment,
+    ) -> WithSourceMap<Result<Owned, InterpreterError<B::Error>>> {
         let heap = self.backend.heap();
         let source_map = Rc::new(RefCell::new(SourceMap::new()));
         let mut parser =
@@ -571,27 +594,30 @@ impl<B: Backend> Interpreter<B> {
                 Ok(p) => p,
                 Err(e) => return (Err(e.into()), source_map),
             };
-        let expr = patina_core::NoGcScope::with_cx(heap, |cx| {
+        // The datum is held from inside the context it was read in, so no
+        // bare word of it leaves the context (#839).
+        let datum = patina_core::NoGcScope::with_cx(heap, |cx| {
             let expr = parser.parse(cx)?;
             parser.skip_rest(cx)?;
-            Ok::<_, ParseError>(expr.tagged())
+            Ok::<_, ParseError>(cx.hold(expr))
         });
-        let expr = match expr {
-            Ok(e) => e,
+        let datum = match datum {
+            Ok(datum) => datum,
             Err(e) => return (Err(e.into()), source_map),
         };
         drop(parser);
         #[expect(
             clippy::disallowed_methods,
-            reason = "the outermost entry, so the backend's loop may collect. Holds the source \
-                      map, keyed by raw bits it never dereferences, which owns no Scheme value: \
-                      a collection can only leave it stale keys (docs/GC_DESIGN.md §9.1), which \
-                      misattribute a diagnostic and free nothing. The parser is dropped and the \
-                      datum is not read after the call"
+            reason = "the outermost entry, so the backend's loop may collect. The datum's handle \
+                      and the namespace's, the caller's, root them through the call, and the \
+                      answer is a handle. Holds the source map, keyed by raw bits it never \
+                      dereferences, which owns no Scheme value: a collection can only leave it \
+                      stale keys (docs/GC_DESIGN.md §9.1), which misattribute a diagnostic and \
+                      free nothing. The parser is dropped"
         )]
         let result = self
             .backend
-            .eval_with_source_map(expr, env, &source_map)
+            .eval_in(env, &datum, Some(&source_map))
             .map_err(InterpreterError::Backend);
         (result, source_map)
     }
@@ -606,8 +632,9 @@ impl<B: Backend> Interpreter<B> {
         reason = "a wrapper over `eval_str_in_env` in the global environment: holds nothing"
     )]
     pub fn eval_str_tracked(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
-        self.eval_str_in_env(input, "<eval>", self.backend.global_env())
+        self.eval_str_in_env(input, "<eval>", &self.backend.global_namespace())
             .0
+            .map(|value| self.raw_value(&value))
     }
 
     /// Evaluate multiple expressions from a string, and answer a handle on
@@ -653,7 +680,12 @@ impl<B: Backend> Interpreter<B> {
         source_name: &str,
         fold_case: &mut bool,
     ) -> WithSourceMap<Result<Owned, InterpreterError<B::Error>>> {
-        self.eval_program_in_env(input, source_name, fold_case, self.backend.global_env())
+        self.eval_program_in_env(
+            input,
+            source_name,
+            fold_case,
+            &self.backend.global_namespace(),
+        )
     }
 
     fn eval_program_in_env(
@@ -661,7 +693,7 @@ impl<B: Backend> Interpreter<B> {
         input: &str,
         source_name: &str,
         fold_case: &mut bool,
-        env: &Rc<Environment>,
+        env: &OwnedEnvironment,
     ) -> WithSourceMap<Result<Owned, InterpreterError<B::Error>>> {
         let (value, end, source_map) =
             self.run_forms(input, source_name, fold_case, env, |error, _| Some(error));
@@ -761,7 +793,7 @@ impl<B: Backend> Interpreter<B> {
             input,
             "<eval>",
             &mut false,
-            self.backend.global_env(),
+            &self.backend.global_namespace(),
             |error, _| {
                 eprintln!("Error: {}", error);
                 patina_runtime::exit_status::exit_if_interrupted();
@@ -833,7 +865,7 @@ impl<B: Backend> Interpreter<B> {
             input,
             source_name,
             &mut false,
-            self.backend.global_env(),
+            &self.backend.global_namespace(),
             |error, source_map| {
                 eval_errors += 1;
                 patina_runtime::exit_status::note_error_reported();
@@ -901,14 +933,17 @@ impl<B: Backend> Interpreter<B> {
         input: &str,
         source_name: &str,
         fold_case: &mut bool,
-        env: &Rc<Environment>,
+        env: &OwnedEnvironment,
         mut on_error: impl FnMut(B::Error, &SourceMap) -> Option<B::Error>,
     ) -> (Owned, FormsEnd<B::Error>, Rc<RefCell<SourceMap>>) {
         let heap = self.backend.heap();
         // The last value, held across each later form by a handle: it is the
         // answer when every later form fails, so a collection in one must not
         // free it (#605).
-        let value = heap.borrow().hold(TaggedValue::UNSPECIFIED);
+        let mut value = heap.borrow().hold(TaggedValue::UNSPECIFIED);
+        // The form being evaluated, held from inside the context it is read
+        // in through its evaluation, by one handle for the program (#839).
+        let datum = heap.borrow().hold(TaggedValue::UNSPECIFIED);
         let source_map = Rc::new(RefCell::new(SourceMap::new()));
         let mut parser = match Parser::new_with_source_map_and_fold_case(
             input,
@@ -925,22 +960,25 @@ impl<B: Backend> Interpreter<B> {
             }
         };
         loop {
-            let datum = patina_core::NoGcScope::with_cx(heap, |cx| {
-                parser.parse_next(cx).map(|datum| datum.map(|d| d.tagged()))
+            let read = patina_core::NoGcScope::with_cx(heap, |cx| {
+                parser
+                    .parse_next(cx)
+                    .map(|read| read.map(|d| cx.set_held(&datum, d)))
             });
             *fold_case = parser.read_state().fold_case;
-            match datum {
+            match read {
                 #[expect(
                     clippy::disallowed_methods,
                     reason = "the outermost entry, so the backend's loop may collect. The parser \
                               holds no heap value between data (a datum's labels live only while \
                               it is read), and the heap's provenance is not a root, pruned by \
-                              sweep. `value`, \
-                              the last result, is held across the form by a handle, which roots \
-                              it (#605)"
+                              sweep. The datum's handle and the namespace's, the caller's, root \
+                              them through the call (#839); `value`, the last result, is held \
+                              across the form by a handle, which roots it (#605), and the answer \
+                              is a handle"
                 )]
-                Ok(Some(expr)) => match self.backend.eval_with_source_map(expr, env, &source_map) {
-                    Ok(result) => heap.borrow().set_held(&value, result),
+                Ok(Some(())) => match self.backend.eval_in(env, &datum, Some(&source_map)) {
+                    Ok(result) => value = result,
                     Err(error) => {
                         let stop = on_error(error, &source_map.borrow());
                         if let Some(error) = stop {
@@ -970,7 +1008,9 @@ impl<B: Backend> Interpreter<B> {
     /// # }
     /// ```
     pub fn lookup(&self, name: &str) -> Option<Owned> {
-        let value = NamespaceView::of(self.backend.global_env()).get(self.backend.heap(), name)?;
+        let global = self.backend.global_namespace();
+        let env = self.backend.heap().borrow().held_environment(&global);
+        let value = NamespaceView::of(&env).get(self.backend.heap(), name)?;
         Some(self.hold(value))
     }
 
@@ -993,9 +1033,10 @@ impl<B: Backend> Interpreter<B> {
     /// # }
     /// ```
     pub fn define(&self, name: &str, value: impl AsValue) {
-        let global = self.backend.global_env();
-        let value = value.value_in(&self.backend.heap().borrow());
-        self.backend.define(global, name, value);
+        let global = self.backend.global_namespace();
+        value.with_owned(self.backend.heap(), |value| {
+            self.backend.define_in(&global, name, value)
+        });
     }
 
     /// Run `f` with a mutation context on the interpreter's heap, to read,
@@ -1102,16 +1143,14 @@ impl<B: Backend> Interpreter<B> {
     /// }
     /// ```
     pub fn call(&mut self, f: &Owned, args: &[Owned]) -> Result<Owned, InterpreterError<B::Error>> {
-        let callee = self.raw_value(f);
-        let operands: Vec<TaggedValue> = args.iter().map(|arg| self.raw_value(arg)).collect();
         #[expect(
             clippy::disallowed_methods,
-            reason = "the outermost entry, so the backend's run may collect. Holds the callee's \
-                      and the arguments' words, not read after the call: the host's handles \
-                      root them through it"
+            reason = "the outermost entry, so the backend's run may collect. Holds nothing but the \
+                      host's handles, which root the callee and its arguments through it, and \
+                      the answer is a handle"
         )]
-        let value = self.backend.call(callee, &operands);
-        Ok(self.hold(value.map_err(InterpreterError::Backend)?))
+        let value = self.backend.call_owned(f, args);
+        value.map_err(InterpreterError::Backend)
     }
 
     /// The value `handle` holds, raw: a bare `TaggedValue`, valid until the
@@ -1218,21 +1257,18 @@ impl<B: Backend> Interpreter<B> {
     /// }
     /// ```
     pub fn new_environment(&self) -> OwnedEnvironment {
-        self.backend
-            .heap()
-            .borrow()
-            .new_host_namespace(self.backend.global_env())
+        let global = self.backend.global_namespace();
+        let heap = self.backend.heap().borrow();
+        heap.new_host_namespace(&heap.held_environment(&global))
     }
 
     /// Bind `name` to `value` in the host environment `env`, as a program's
     /// `define` there does: [`Interpreter::define`] for a host environment.
     /// Panics on a handle another interpreter made.
     pub fn define_in(&self, env: &OwnedEnvironment, name: &str, value: impl AsValue) {
-        let (env, value) = {
-            let heap = self.backend.heap().borrow();
-            (heap.held_environment(env), value.value_in(&heap))
-        };
-        self.backend.define(&env, name, value);
+        value.with_owned(self.backend.heap(), |value| {
+            self.backend.define_in(env, name, value)
+        });
     }
 
     /// The value bound to `name` in the host environment `env`, or in the
@@ -1240,7 +1276,8 @@ impl<B: Backend> Interpreter<B> {
     /// `None` when neither does. Panics on a handle another interpreter
     /// made.
     pub fn lookup_in(&self, env: &OwnedEnvironment, name: &str) -> Option<Owned> {
-        let value = NamespaceView::of(&self.raw_environment(env)).get(self.backend.heap(), name)?;
+        let env = self.backend.heap().borrow().held_environment(env);
+        let value = NamespaceView::of(&env).get(self.backend.heap(), name)?;
         Some(self.hold(value))
     }
 
@@ -1268,15 +1305,13 @@ impl<B: Backend> Interpreter<B> {
         env: &OwnedEnvironment,
         input: &str,
     ) -> Result<Owned, InterpreterError<B::Error>> {
-        let env = self.raw_environment(env);
         #[expect(
             clippy::disallowed_methods,
             reason = "`eval_str_in_env` in the host environment, which its handle roots: holds \
-                      nothing across it, and holds the value it answers before anything can \
-                      collect"
+                      nothing across it, and it answers a handle"
         )]
-        let (result, _) = self.eval_str_in_env(input, "<eval>", &env);
-        result.map(|value| self.hold(value))
+        let (result, _) = self.eval_str_in_env(input, "<eval>", env);
+        result
     }
 
     /// Evaluate every form of a program in the host environment `env`, and
@@ -1306,13 +1341,12 @@ impl<B: Backend> Interpreter<B> {
         env: &OwnedEnvironment,
         input: &str,
     ) -> Result<Owned, InterpreterError<B::Error>> {
-        let env = self.raw_environment(env);
         #[expect(
             clippy::disallowed_methods,
             reason = "`eval_program_in_env` in the host environment, which its handle roots: holds \
                       nothing across it"
         )]
-        let (result, _) = self.eval_program_in_env(input, "<eval>", &mut false, &env);
+        let (result, _) = self.eval_program_in_env(input, "<eval>", &mut false, env);
         result
     }
 
@@ -1335,7 +1369,8 @@ impl<B: Backend> Interpreter<B> {
     /// primitive (#673). [`Interpreter::define`] binds through the backend,
     /// which turns it off.
     pub fn global_env(&self) -> Rc<Environment> {
-        self.backend.global_env().clone()
+        let global = self.backend.global_namespace();
+        self.backend.heap().borrow().held_environment(&global)
     }
 
     /// The heap the interpreter's values live on, raw: an environment keeps

@@ -1,8 +1,8 @@
 //! Legacy tree-walker adapter over the common interpreter.
 #![allow(deprecated)]
 
-use super::{EvaluationStrategy, Pipeline, PipelineResult};
-use crate::{Environment, Evaluator, TaggedValue, TreeWalkInterpreter};
+use super::{EvaluationStrategy, Pipeline, PipelineError, PipelineResult};
+use crate::{Environment, Evaluator, OwnedEnvironment, TaggedValue, TreeWalkInterpreter};
 use std::rc::Rc;
 
 /// Compatibility adapter for the historical tree-walker pipeline.
@@ -35,13 +35,19 @@ impl StandardPipeline {
 
     /// Have the heap trace `env`, which the caller holds by its own `Rc`, for
     /// as long as anything holds it: nothing else roots an environment a host
-    /// built between calls (#620). An environment of another heap, which this
-    /// adapter never supported, is left as it was.
-    fn track(&self, env: &Rc<Environment>) {
+    /// built between calls (#620). Then hold it for the call, through the
+    /// deprecated holder, since a host's environment here is in practice a
+    /// frame, which the tree-walker evaluates by name (#839). An environment
+    /// of another heap, which this adapter never supported, is refused.
+    fn hold(&self, env: &Rc<Environment>) -> PipelineResult<OwnedEnvironment> {
         let heap = patina_runtime::Backend::heap(self.interpreter.backend()).borrow();
-        if env.heap_id() == heap.id() {
-            heap.track_environment(env);
+        if env.heap_id() != heap.id() {
+            return Err(PipelineError::Configuration(
+                "an environment of another heap".to_string(),
+            ));
         }
+        heap.track_environment(env);
+        Ok(heap.hold_environment(Rc::clone(env)))
     }
 }
 
@@ -57,10 +63,11 @@ impl Pipeline for StandardPipeline {
         reason = "the deprecated adapter over `Interpreter::eval_str_in_env`: holds nothing"
     )]
     fn eval(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<TaggedValue> {
-        self.track(env);
+        let env = self.hold(env)?;
         self.interpreter
-            .eval_str_in_env(code, "<eval>", env)
+            .eval_str_in_env(code, "<eval>", &env)
             .0
+            .map(|value| self.interpreter.raw_value(&value))
             .map_err(Into::into)
     }
 
@@ -69,9 +76,9 @@ impl Pipeline for StandardPipeline {
         reason = "the deprecated adapter over `Interpreter::eval_program_in_env`: holds nothing"
     )]
     fn eval_program(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<TaggedValue> {
-        self.track(env);
+        let env = self.hold(env)?;
         self.interpreter
-            .eval_program_in_env(code, "<eval>", &mut false, env)
+            .eval_program_in_env(code, "<eval>", &mut false, &env)
             .0
             .map(|value| self.interpreter.raw_value(&value))
             .map_err(Into::into)

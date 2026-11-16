@@ -450,12 +450,23 @@ where
     let with_cx = |read: &mut dyn for<'gc> FnMut(&mut patina_core::Cx<'gc>)| {
         patina_core::NoGcScope::with_cx(backend.heap(), |cx| read(cx))
     };
+    // The global namespace, and each form's datum through its evaluation,
+    // held for the run (#839).
+    let global = backend.global_namespace();
+    let held = backend
+        .heap()
+        .borrow()
+        .hold(patina_core::TaggedValue::UNSPECIFIED);
     run_program_stream(
         &input,
         with_cx,
         "<stdin>",
         keep_going,
         |datum, source_map| {
+            // The datum arrives bare from a read that evaluated nothing since,
+            // so it is live (`Backend`'s first rule); from here its handle
+            // roots it.
+            backend.heap().borrow().set_held(&held, datum);
             // The crate allows the re-entry rule (its Cargo.toml); this driver
             // loop states its reason anyway, as `Interpreter::run_forms` does.
             #[expect(
@@ -464,10 +475,11 @@ where
                           `run_program_stream` holds the reader, whose unread text and tokens \
                           are not heap values, the input port (a Rust handle), and the source \
                           map, keyed by raw bits it never dereferences and pruned of freed \
-                          slots before each read (docs/GC_DESIGN.md §9.1). The datum is not \
-                          read after the call"
+                          slots before each read (docs/GC_DESIGN.md §9.1). The datum's handle \
+                          and the global namespace's root them through the call, and the \
+                          answer, a handle, is dropped"
             )]
-            let evaluated = backend.eval_with_source_map(datum, backend.global_env(), source_map);
+            let evaluated = backend.eval_in(&global, &held, Some(source_map));
             evaluated.map(|_| ()).map_err(|e| {
                 let diagnostic = e.diagnostic();
                 patina_runtime::exit_status::note_if_interrupt(&diagnostic);

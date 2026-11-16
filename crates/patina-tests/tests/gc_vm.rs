@@ -396,7 +396,9 @@ fn a_collection_at_a_call_leaves_the_namespaces_its_code_release_drops_out_of_l(
     // returns: `external-bytes` is down by the fifty namespaces, and the L
     // that `(gc)` left is what a second `(gc)` leaves, to the byte. The
     // sweep's L, read before the release, was the fifty namespaces above
-    // it.
+    // it. Each reading is taken in a form of the same shape, since the form
+    // being evaluated keeps its datum (#839): `l2`'s fill changes nothing,
+    // the vector being all `#f` already.
     //
     // Collecting only where `(gc)` asks, that `(gc)` is the collection
     // that finds them dead, as it is at the adaptive threshold, which 1.6
@@ -429,7 +431,7 @@ fn a_collection_at_a_call_leaves_the_namespaces_its_code_release_drops_out_of_l(
         (set! e0 (stat 'external-bytes))
         (set! l1 (begin (vector-fill! held #f) (gc) (stat 'live-bytes)))
         (set! e1 (stat 'external-bytes))
-        (set! l2 (begin (gc) (stat 'live-bytes)))
+        (set! l2 (begin (vector-fill! held #f) (gc) (stat 'live-bytes)))
         (list (> (- e0 e1) 1000000) (>= (- l0 l2) (- e0 e1)) (- l1 l2))
         "#;
     assert_eq!(eval_program_vm_gc_off(code), "(#t #t 0)");
