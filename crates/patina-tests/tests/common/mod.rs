@@ -1875,9 +1875,9 @@ macro_rules! gc_shared_tests {
                 // macro lives. Expanded after the redefinition, its
                 // template's `f` reads the re-pointed import, the new
                 // library's. This pins `foreign_expansions` counted among a
-                // replaced namespace's holders, pending the owner's ruling
-                // on #837's first PR; its alternative, an edge that keeps
-                // only binding locations, flips `held` to 0.
+                // replaced namespace's holders, by the owner's ruling of
+                // 2026-11-16 on #837's first PR; the alternative, an edge
+                // that keeps only binding locations, would read `held` 0.
                 (
                     "generated-macro",
                     generated_old.clone(),

@@ -1559,14 +1559,14 @@ continuation running the old code, and one holding only the program's
 frame; an importing library not yet redefined; a macro-introduced
 definition over a plain value; a macro the old library's generator
 defined, whose `foreign_expansions` keeps the old namespace while the
-macro lives (counted, pending the owner's ruling on #837's first PR, whose
-alternative, keeping only binding locations, flips its `held` to 0); and
+macro lives (counted, by the owner's ruling of 2026-11-16 on #837's first
+PR; the alternative, keeping only binding locations, would read `held` 0); and
 two residual rows, which pin what is not released today and name what
 flips them (a macro-introduced definition linking an old procedure, until
 5c; a relinked variable alias, until #837's second PR). R-D, the VM's
 loaded units' constants keeping a replaced library whose body keeps code
-quoting its own procedure (#866, pending the owner's ruling on #838's
-question 2), is pinned by a test in each backend's file: `gc_vm`'s
+quoting its own procedure (#866, which owns the fix by the owner's ruling
+(a) of 2026-11-16 on #838's question 2), is pinned by a test in each backend's file: `gc_vm`'s
 `a_library_body_s_code_quoting_its_own_procedure_keeps_it_loaded` and
 `gc_tree_walker`'s `a_library_body_s_code_quoting_its_own_procedure_is_released`.
 Each test was shown failing under a build that keeps the replaced library
@@ -1849,7 +1849,8 @@ by name, as before R6; and `macro_definition_env.rs`'s
 pins what R6 leaves: after a redefinition and two collections the old
 library's namespace is alive when an expansion left an alias to its
 private macro, through the macro's `definition_env`, and gone when none
-did (#837's question 4 decides whether it flips); with the record
+did (#837's question 4, ruled (a) on 2026-11-16, flips it when keyword
+aliases travel with the syntax); with the record
 `#[trace(skip)]` the namespace goes, so it is also an end-to-end sentinel
 for the record's trace. Its twin
 `a_keyword_alias_to_an_imported_keyword_releases_the_replaced_library`

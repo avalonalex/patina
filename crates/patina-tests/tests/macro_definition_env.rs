@@ -1064,8 +1064,8 @@ fn the_old_library_namespace_after_a_redefinition<B: patina_runtime::Backend>(
 /// macro's `definition_env`, the old namespace. With no expansion before the
 /// redefinition there is no alias, and the namespace goes, so the alias is
 /// what keeps it. This pins the edge the design forecast; it flips when
-/// question 4 takes (a), keyword aliases travelling with the syntax, or (c),
-/// a macro's definition environment narrowed to the records it reads.
+/// keyword aliases travel with the syntax, the owner's ruling (a) of
+/// 2026-11-16 on question 4.
 #[test]
 fn a_keyword_aliass_record_still_keeps_its_macros_definition_namespace() {
     let kept = (true, vec![("keyword", 0)]);

@@ -142,8 +142,9 @@ every variable target until 4b.10's second PR, keeps the edge to its
 environment. Such an alias names no environment directly, but the record
 reaches its cell and the macro, and the macro's `definition_env` is the
 environment it was defined in, so a replaced library's namespace stays
-while an alias to a keyword defined in it does (#837's question 4,
-`macro_definition_env.rs`'s
+while an alias to a keyword defined in it does (until keyword aliases
+travel with the syntax, the owner's ruling (a) of 2026-11-16 on #837's
+question 4; `macro_definition_env.rs`'s
 `a_keyword_aliass_record_still_keeps_its_macros_definition_namespace`).
 One whose relinked keyword it imports goes, where nothing else keeps it
 (a relinked variable's alias, code compiled against it, or
@@ -168,7 +169,7 @@ reads for the record a later expansion links. A replacement would release
 nothing where the template names a procedure of the generator's library,
 since its closure keeps the namespace anyway, and would need every name a
 later expansion asks about, so §8 lists the edge among a replaced
-namespace's holders (pending the owner's ruling on #837's first PR) and a
+namespace's holders (the owner's ruling of 2026-11-16 on #837's first PR) and a
 later narrowing can trim it
 (`PRD/GC_PRD.md` §17.2). A host namespace (#835), the
 namespace `Interpreter::new_environment` answers, whose parent is the global
@@ -2333,8 +2334,8 @@ namespace and one for its records and cells. A namespace may be kept only
 by a value or code taken from the old library: a closure, a continuation
 whose frames run its code, a live macro object, a unit something can
 still run, a live generated macro's `foreign_expansions` (§3.3; counted
-pending the owner's ruling on #837's first PR, whose alternative keeps
-only binding locations), and through their records over values that reach
+by the owner's ruling of 2026-11-16 on #837's first PR, over an edge that
+keeps only binding locations), and through their records over values that reach
 its code, a kept environment specifier's namespace or an importing library
 not yet redefined; a host's `Owned` handle on such a value is one too,
 which the audit allows and no test of a replaced library pins. A record or
@@ -2349,17 +2350,18 @@ for as long as the alias, which is never removed (R-A, until #837's
 second PR removes variable aliases). A keyword alias's record reaches a
 macro the replaced library defined, and so its `definition_env`, and a
 keyword alias reached through a parent, an alias or a scoped definition
-holds `AliasHome::Env` (R-B, #837's question 4; one whose relinked keyword
+holds `AliasHome::Env` (R-B, until keyword aliases travel with the syntax,
+#837's question 4, ruled (a) on 2026-11-16; one whose relinked keyword
 the library imports keeps no namespace, but each relinked instance leaves
-an alias entry, a spelling and a record, which only that question's (a)
-removes). A macro-introduced top-level definition, kept until 5c (start
+an alias entry, a spelling and a record, which that change removes too). A macro-introduced top-level definition, kept until 5c (start
 decision 8), whose code links one of the old library's bindings whose
 value reaches its code (R-C, 5c). On the VM, a library whose body keeps
 code quoting one of its own procedures: the code store traces a loaded
 unit's constants in every collection (§5.2), so the procedure, its unit,
 the namespace, the closure of the quoting unit in the namespace's slot and
-that unit are a cycle through the roots, kept for good (R-D, #866, pending
-the owner's ruling on #838's question 2; the tree-walker releases it). The
+that unit are a cycle through the roots, kept for good (R-D, #866, which
+owns the fix by the owner's ruling (a) of 2026-11-16 on #838's question 2;
+the tree-walker releases it). The
 tests that hold it: `gc_shared_tests!`'s `a_redefined_library_is_released`
 (#614's program 1 and its macro variant, every count flat across 600
 redefinitions), `a_value_from_a_replaced_library_still_runs` and

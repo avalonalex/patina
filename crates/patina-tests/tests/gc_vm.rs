@@ -537,10 +537,9 @@ fn a_library_body_s_code_quoting_its_own_procedure_keeps_it_loaded() {
     // tree-walker's answer is `(3 -1 -1)`: both go, and with them the
     // namespace the first `environment` made for nothing else. #866's fix,
     // tracing a unit's constants by code id as its link table is, flips
-    // this to the tree-walker's answer; that PR updates it. This rests on
-    // the owner's ruling on #838's question 2, still pending; under its
-    // (b), 4b.11's PR fixes R-D and this pin reads `(3 -1 -1)`. Under zeal
-    // too.
+    // this to the tree-walker's answer; that PR updates it. The owner's
+    // ruling (a) of 2026-11-16 on #838's question 2 leaves the fix to #866.
+    // Under zeal too.
     assert_gc_and_zeal_eval_to(&library_body_quoting_its_own_procedure(), "(3 1 1)");
 }
 
