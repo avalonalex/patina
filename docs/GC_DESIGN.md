@@ -132,8 +132,19 @@ record, so that its cell and value are marked as the pairs they are; each
 cell a frame imports; and one kind of edge that leaves the parent chain, an
 `Rc<Environment>` in a side table rather than a value in a slot: a
 macro-expansion alias into the environment the macro was defined in
-(relinking's and keywords'; early binding made none in any table since
-4b.10, which links the binding's record instead, #837). An
+(relinking's; early binding made none in any table since 4b.10, which
+links the binding's record instead, #837). A keyword's alias holds its
+target's binding record instead, a pair the trace reports as a value,
+where the target namespace binds the keyword in its own tables (its slot
+for the name, or its scoped entry at exactly the alias's scopes; the
+owner's ruling R6, `AliasHome::Keyword`); any other keyword target, and
+every variable target until 4b.10's second PR, keeps the edge to its
+environment. Such an alias names no environment directly, but the record
+reaches its cell and the macro, and the macro's `definition_env` is the
+environment it was defined in, so a replaced library's namespace stays
+while an alias to one of its keywords does (#837's question 4,
+`macro_definition_env.rs`'s
+`a_keyword_aliass_record_still_keeps_its_macros_definition_namespace`). An
 import is no such edge: it is the exporter's cell, which the importer's
 record names, or a frame's import table holds, and which the trace marks
 like any value, so an importer keeps the cell and not the library's

@@ -1701,6 +1701,31 @@ holds both outcomes the scope trace records for one. The stress counts of
 `macro_definition_env`, `vm_callprimitive`, `hygiene_matrix` and
 `scheme_suite` were re-pinned.
 
+The third step has a keyword's relink alias hold its target's record
+(R6) where the target namespace binds the keyword in its own tables.
+`environment.rs`'s `alias_home_tests` take one test per arm of that rule,
+read through `Environment::alias_homes_for_tests` (`test-support`), which
+names each alias's home and counts the environments its entry's trace
+reports: a keyword in the target's slot and one at exactly the alias's
+scopes are held by their records, each read, written and located against
+the namespace's own read across a redefinition (and, for the slot, an
+import over it); a keyword reached through a host namespace's parent, a
+name-visible scoped keyword, a keyword reached through the target's alias
+and a keyword a frame binds keep their environment; a variable keeps its
+environment and a target in the holder is the holder; and a keyword target
+asked for repeatedly gets one alias (`remembered_relink`'s `Keyword` arm).
+`gc_edge_tests::environment_edges` holds the record as a sentinel, shown
+failing with the record `#[trace(skip)]`.
+`a_keyword_alias_names_no_environment_directly`, in core and in
+`macro_definition_env.rs` on both backends, failed with every alias read
+by name, as before R6; and `macro_definition_env.rs`'s
+`a_keyword_aliass_record_still_keeps_its_macros_definition_namespace`
+pins what R6 leaves: after a redefinition and two collections the old
+library's namespace is alive when an expansion left an alias to its
+private macro, through the macro's `definition_env`, and gone when none
+did (#837's question 4 decides whether it flips). `macro_definition_env`'s
+stress count was re-pinned.
+
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):
 the variable that sets the mode did not reach the process, or the program
