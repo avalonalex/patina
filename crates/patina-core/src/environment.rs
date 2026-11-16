@@ -120,15 +120,30 @@ impl std::ops::DerefMut for ScopedTable {
     }
 }
 
-/// Where a macro-expansion alias points: the environment holding the real
-/// binding, the name it has there, and — for a definition reachable only
-/// under its scopes — the scope set that is its identity.
+/// Where a macro-expansion alias points: where the real binding is
+/// ([`AliasHome`]), the name it has there, and — for a definition reachable
+/// only under its scopes — the scope set that is its identity.
 ///
-/// `env` is `None` for the environment holding the alias. Not an
-/// optimisation: an `Rc<Environment>` pointing at the environment that owns
-/// the table is a cycle refcounting can never break, so a self-alias would
-/// pin that environment — and its heap — for the process. It also saves an
-/// `Rc` clone and drop on every alias hit.
+/// **A keyword's alias holds its target's record** (#837, the owner's
+/// ruling R6), where the target environment is a namespace that binds the
+/// keyword in its own tables: the record of its slot for the name, for an
+/// alias with no scopes, or of its scoped entry at exactly the alias's
+/// scopes, whose value is a macro when the alias is installed
+/// ([`Environment::relink_alias`], which the desugarer reaches through
+/// `Cx::relink_alias`). Such an alias names no environment
+/// ([`AliasHome::Keyword`]). The record reads what the by-name read it
+/// replaces answered, whatever the namespace binds later, without an
+/// argument about what that is: a name with a slot is read from the slot
+/// before any alias or scoped entry ([`Environment::get`]'s order), a
+/// slot's record is re-pointed and never replaced, a scoped read with
+/// scopes was always the entry at exactly them, in the namespace's own
+/// table, and an entry keeps its record across a redefinition
+/// (`insert_scoped_record`). Every other target keeps its environment, and
+/// is read there by name or by identity as before ([`AliasHome::Holder`],
+/// [`AliasHome::Env`]): a variable, until 4b.10's second PR; a keyword the
+/// namespace reaches through its parent, through an alias or as a
+/// name-visible scoped definition, which a later definition could move the
+/// by-name read away from; and a keyword a frame binds.
 ///
 /// `scopes` is what lets an alias name a *binding* rather than a spelling
 /// (#408). A definition a macro introduced is stored by the tree-walker under
@@ -144,16 +159,50 @@ impl std::ops::DerefMut for ScopedTable {
 /// below, so that what an alias means is stated once.
 #[derive(Debug, Clone, Trace)]
 struct AliasTarget {
-    env: Option<Rc<Environment>>,
+    home: AliasHome,
     name: Rc<str>,
     scopes: Option<ScopeSet>,
 }
 
+/// Where an [`AliasTarget`]'s binding is.
+#[derive(Debug, Clone, Trace)]
+enum AliasHome {
+    /// In the environment holding the alias, read there by name or by
+    /// identity. Not an optimisation: an `Rc<Environment>` pointing at the
+    /// environment that owns the table is a cycle refcounting can never
+    /// break, so a self-alias would pin that environment — and its heap —
+    /// for the process. It also saves an `Rc` clone and drop on every alias
+    /// hit. A target in the holder is always this, a keyword included.
+    Holder,
+    /// In another environment, read there by name or by identity: a
+    /// variable, until 4b.10's second PR, or a keyword the own-table rule
+    /// ([`AliasTarget`]) does not take as a record. No program has reached
+    /// this arm with a keyword a frame binds: a same-root shadow of a
+    /// top-level keyword does not relink, and a host namespace binds in its
+    /// own tables or reaches its parent's (#837). A unit test builds it.
+    Env(Rc<Environment>),
+    /// A keyword a namespace binds in its own tables (R6): the record of its
+    /// slot for the name, or of its scoped entry at exactly the alias's
+    /// scopes. Names no environment.
+    Keyword {
+        record: Record,
+        #[trace(
+            skip,
+            reason = "the target namespace's id, which `remembered_relink` compares; ids are never reused"
+        )]
+        env_id: u64,
+    },
+}
+
 impl AliasTarget {
-    /// The environment the target is in, given the one `holder` holding the
-    /// alias.
-    fn env<'a>(&'a self, holder: &'a Environment) -> &'a Environment {
-        self.env.as_deref().unwrap_or(holder)
+    /// The id of the environment the target is in, as a [`RelinkKey`]
+    /// names it.
+    fn env_id(&self, holder: &Environment) -> u64 {
+        match &self.home {
+            AliasHome::Holder => holder.env_id(),
+            AliasHome::Env(env) => env.env_id(),
+            AliasHome::Keyword { env_id, .. } => *env_id,
+        }
     }
 
     // The scopes are a definition's *identity*, which resolution chose when
@@ -163,23 +212,49 @@ impl AliasTarget {
     // definition is there, at a candidate list per read — and would fall back
     // by name if it ever were not, reading and writing a plain binding of the
     // spelling where a dangling plain alias answers nothing.
+    //
+    // A keyword's record is read, stored into and located as the slot or
+    // the entry it is in would be, under the heap borrowed with the
+    // holder's check that it is the one the values live on: the holder and
+    // the target namespace are on one heap.
 
     fn get(&self, holder: &Environment, heap: &RefCell<Heap>) -> Option<TaggedValue> {
-        let env = self.env(holder);
+        let env = match &self.home {
+            AliasHome::Keyword { record, .. } => {
+                return Some(record.value(&holder.borrow_read(heap)));
+            }
+            AliasHome::Holder => holder,
+            AliasHome::Env(env) => env,
+        };
         match &self.scopes {
             None => env.get(heap, &self.name),
             Some(scopes) => env.scoped_definition_value(heap, &self.name, scopes),
         }
     }
 
-    /// `Err` carries the name, as [`Environment::set`]'s does.
+    /// `Err` carries the name, as [`Environment::set`]'s does. A keyword's
+    /// record is stored into at the site the slot's or the entry's own
+    /// write logs.
     fn set(
         &self,
         holder: &Environment,
         heap: &RefCell<Heap>,
         value: TaggedValue,
     ) -> Result<(), String> {
-        let env = self.env(holder);
+        let env = match &self.home {
+            AliasHome::Keyword { record, .. } => {
+                let site = match self.scopes {
+                    None => Site::EnvSetSlot,
+                    Some(_) => Site::EnvSetScoped,
+                };
+                let mut heap = holder.borrow_write(heap);
+                let cell = record.cell(&heap);
+                cell.store(&mut heap, value, site);
+                return Ok(());
+            }
+            AliasHome::Holder => holder,
+            AliasHome::Env(env) => env,
+        };
         match &self.scopes {
             None => env.set(heap, &self.name, value),
             Some(scopes) => env.set_scoped_definition(heap, &self.name, scopes, value),
@@ -188,7 +263,11 @@ impl AliasTarget {
 
     /// Where the target is, as [`Environment::binding_hit`] answers it.
     fn hit(&self, holder: &Environment) -> Option<BindingHit> {
-        let env = self.env(holder);
+        let env = match &self.home {
+            AliasHome::Keyword { record, .. } => return Some(BindingHit::Record(*record)),
+            AliasHome::Holder => holder,
+            AliasHome::Env(env) => env,
+        };
         match &self.scopes {
             None => env.binding_hit(&self.name),
             Some(scopes) => env.scoped_definition_hit(&self.name, scopes),
@@ -3067,6 +3146,46 @@ impl Environment {
         aliases.get(name).cloned()
     }
 
+    /// Each macro-expansion alias here, sorted by spelling, for the tests
+    /// of what a keyword alias holds (#837, R6): its spelling, what it
+    /// names as its home — `"holder"`, `"env"` or `"keyword"`
+    /// ([`AliasHome`]) — and how many environments the alias entry's own
+    /// trace reports to a collector. Only with `test-support`.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn alias_homes_for_tests(&self) -> Vec<(String, &'static str, usize)> {
+        /// Counts the environments it is given, and ignores the rest.
+        struct Envs(usize);
+        impl crate::SlotVisitor for Envs {
+            fn slot(&mut self, _: &Cell<TaggedValue>) {}
+            fn pinned(&mut self, _: TaggedValue) {}
+            fn env(&mut self, _: &Rc<Environment>) {
+                self.0 += 1;
+            }
+            fn continuation(&mut self, _: &Rc<crate::CpsContinuation>) {}
+            fn cont_env(&mut self, _: &crate::cont_value::ContEnv) {}
+            fn expr_literals(&mut self, _: &crate::cps_expr::CpsExpr) {}
+            fn code(&mut self, _: u64) {}
+        }
+        let mut homes: Vec<(String, &'static str, usize)> = self
+            .alias_bindings
+            .borrow()
+            .iter()
+            .map(|(alias, target)| {
+                let home = match target.home {
+                    AliasHome::Holder => "holder",
+                    AliasHome::Env(_) => "env",
+                    AliasHome::Keyword { .. } => "keyword",
+                };
+                let mut envs = Envs(0);
+                (alias, target).trace(&mut envs);
+                (alias.to_string(), home, envs.0)
+            })
+            .collect();
+        homes.sort();
+        homes
+    }
+
     /// Record that a macro-introduced top-level definition of `name`, at
     /// `scopes`, was renamed to the global `renamed_to`.
     ///
@@ -3212,13 +3331,19 @@ impl Environment {
     ///
     /// Keyed by `alias`, so a second install under the same name replaces the
     /// first.
+    ///
+    /// Takes no heap, so it cannot tell a keyword from a variable: the
+    /// alias names `target_env` and reads it by name, whatever the target
+    /// is. The desugarer's relinking goes through
+    /// [`relink_alias`](Self::relink_alias), which holds a keyword's record.
     pub fn define_alias(
         &self,
         alias: impl Into<Rc<str>>,
         target_env: Rc<Environment>,
         target_name: Rc<str>,
     ) {
-        self.install_alias(alias.into(), target_env, target_name, None);
+        let home = self.by_name_home(target_env);
+        self.install_alias(alias.into(), home, target_name, None);
     }
 
     /// [`define_alias`] to the definition [`introduced_definition`] found:
@@ -3254,7 +3379,8 @@ impl Environment {
         target_name: Rc<str>,
         scopes: ScopeSet,
     ) {
-        self.install_alias(alias.into(), target_env, target_name, Some(scopes));
+        let home = self.by_name_home(target_env);
+        self.install_alias(alias.into(), home, target_name, Some(scopes));
     }
 
     /// The alias here for the binding of `name` in `target_env` — the one
@@ -3294,10 +3420,19 @@ impl Environment {
     /// desugarer's speculative body scan works in a frame, which it drops with
     /// whatever was minted there.
     ///
+    /// An alias it installs to a keyword `target_env` binds in its own
+    /// tables holds the keyword's record, and names no environment (#837,
+    /// R6; [`AliasTarget`]). `heap` is the one its values live on, which
+    /// says what is a macro, and which the target namespace's step borrows
+    /// shared to read it: the desugarer passes its context's
+    /// (`Cx::relink_alias`), beneath which nothing collects, so the record
+    /// reaches the alias table with no collection between.
+    ///
     /// [`define_alias`]: Self::define_alias
     /// [`define_scoped_alias`]: Self::define_scoped_alias
     pub fn relink_alias(
         &self,
+        heap: &RefCell<Heap>,
         target_env: Rc<Environment>,
         name: Rc<str>,
         scopes: Option<ScopeSet>,
@@ -3326,7 +3461,8 @@ impl Environment {
                 break candidate;
             }
         };
-        self.install_alias(Rc::clone(&alias), target_env, key.1.clone(), key.2.clone());
+        let home = self.relink_home(heap, target_env, &key.1, key.2.as_ref());
+        self.install_alias(Rc::clone(&alias), home, key.1.clone(), key.2.clone());
         let rare = self.rare.get_or_init(Box::default);
         let grew = {
             let mut table = rare.relink_aliases.borrow_mut();
@@ -3348,6 +3484,7 @@ impl Environment {
     /// [`define_alias_to_introduced`]: Self::define_alias_to_introduced
     pub fn relink_alias_to_introduced(
         &self,
+        heap: &RefCell<Heap>,
         home: Rc<Environment>,
         name: Rc<str>,
         found: IntroducedDefinition,
@@ -3356,10 +3493,10 @@ impl Environment {
     ) -> Rc<str> {
         match found {
             IntroducedDefinition::Renamed(renamed) => {
-                self.relink_alias(home, renamed, None, mention, mint)
+                self.relink_alias(heap, home, renamed, None, mention, mint)
             }
             IntroducedDefinition::Scoped(scopes) => {
-                self.relink_alias(home, name, Some(scopes), mention, mint)
+                self.relink_alias(heap, home, name, Some(scopes), mention, mint)
             }
         }
     }
@@ -3371,11 +3508,7 @@ impl Environment {
         let (target_id, name, scopes, _) = key;
         let still = self.local_slot(&alias).is_none()
             && self.alias_target(&alias).is_some_and(|target| {
-                target
-                    .env
-                    .as_ref()
-                    .map_or(self.env_id(), |env| env.env_id())
-                    == *target_id
+                target.env_id(self) == *target_id
                     && target.name == *name
                     && target.scopes == *scopes
             });
@@ -3390,21 +3523,82 @@ impl Environment {
         still.then_some(alias)
     }
 
+    /// Where an alias here to a binding of `target_env` finds it when it is
+    /// read by name or by identity: here, or in `target_env`. A target that
+    /// is this environment is [`AliasHome::Holder`]: see there.
+    fn by_name_home(&self, target_env: Rc<Environment>) -> AliasHome {
+        if target_env.env_id() == self.env_id() {
+            AliasHome::Holder
+        } else {
+            AliasHome::Env(target_env)
+        }
+    }
+
+    /// Where a relink alias here to `name` in `target_env`, under `scopes`,
+    /// finds its binding (#837, R6): the target's record, for a keyword
+    /// `target_env` binds in its own tables
+    /// ([`own_keyword_record`](Self::own_keyword_record)), and otherwise
+    /// [`by_name_home`](Self::by_name_home)'s answer. See [`AliasTarget`]
+    /// for why only a namespace's own tables.
+    fn relink_home(
+        &self,
+        heap: &RefCell<Heap>,
+        target_env: Rc<Environment>,
+        name: &str,
+        scopes: Option<&ScopeSet>,
+    ) -> AliasHome {
+        if target_env.env_id() != self.env_id()
+            && let Some(record) = target_env.own_keyword_record(heap, name, scopes)
+        {
+            return AliasHome::Keyword {
+                record,
+                env_id: target_env.env_id(),
+            };
+        }
+        self.by_name_home(target_env)
+    }
+
+    /// This namespace's own record for `name`, where it binds a keyword
+    /// there (#837, R6): the record of its slot for the name, with no
+    /// `scopes`, or of its scoped entry at exactly `scopes`, when what the
+    /// record's cell holds is a macro. `None` for a frame, for a name
+    /// bound otherwise or not in those tables — reached through the
+    /// parent, an alias or the name-only view of a scoped definition — and
+    /// for a variable. Borrows `heap` shared, as the namespace step reads.
+    fn own_keyword_record(
+        &self,
+        heap: &RefCell<Heap>,
+        name: &str,
+        scopes: Option<&ScopeSet>,
+    ) -> Option<Record> {
+        if !self.is_namespace() {
+            return None;
+        }
+        let record = match scopes {
+            None => self.local_record(name)?,
+            Some(scopes) => match self.scoped_definition_hit(name, scopes)? {
+                BindingHit::Record(record) => record,
+                BindingHit::FrameImport(_) | BindingHit::Frame(_) => return None,
+            },
+        };
+        let heap = self.borrow_read(heap);
+        heap.get_macro(record.value(&heap))
+            .is_some()
+            .then_some(record)
+    }
+
     fn install_alias(
         &self,
         alias: Rc<str>,
-        target_env: Rc<Environment>,
+        home: AliasHome,
         name: Rc<str>,
         scopes: Option<ScopeSet>,
     ) {
-        // A target that is this environment is stored as `None`: see
-        // `AliasTarget`.
-        let env = (target_env.env_id() != self.env_id()).then_some(target_env);
         self.has_aliases.set(true);
         let grew = {
             let mut aliases = self.alias_bindings.borrow_mut();
             let capacity = self.is_namespace().then(|| aliases.capacity());
-            aliases.insert(alias, AliasTarget { env, name, scopes });
+            aliases.insert(alias, AliasTarget { home, name, scopes });
             capacity.is_some_and(|capacity| aliases.capacity() != capacity)
         };
         if grew {
@@ -4343,7 +4537,7 @@ impl Environment {
                     return Ok(true);
                 };
                 let renamed = env.introduced_global(name, &chosen);
-                return Ok(target.env.is_none()
+                return Ok(matches!(target.home, AliasHome::Holder)
                     && target.scopes.is_none()
                     && renamed.is_some_and(|r| r == target.name));
             }
@@ -7979,8 +8173,8 @@ mod layout_tests {
 
 /// Every edge the collector follows out of an environment, each to a value
 /// nothing else reaches (#623): a plain binding, a scoped one, the binding an
-/// alias forwards to (#38), a frame's imported cell (#834), and the parent's
-/// binding. The environment is built by a struct literal, so a new field
+/// alias forwards to (#38), through its environment and through a keyword's
+/// record (#837), a frame's imported cell (#834), and the parent's binding. The environment is built by a struct literal, so a new field
 /// breaks this test as well as `for_each_gc_edge`; the reads before the
 /// collection show the literal is the environment the API would build.
 #[cfg(test)]
@@ -8000,6 +8194,10 @@ mod gc_edge_tests {
         let plain = s.pair(&mut h, "Environment.bindings");
         let scoped = s.vector(&mut h, "Environment.scoped_bindings");
         let aliased = s.string(&mut h, "Environment.alias_bindings");
+        let keyword = s.pair(
+            &mut h,
+            "Environment.alias_bindings: AliasHome::Keyword.record's cell",
+        );
         let imported = s.object(&mut h, "Environment.rare: RareTables.frame_imports");
         let specifier = s.object(&mut h, "Environment.rare: RareTables.specifier");
         let inherited = s.pair(&mut h, "Environment.parent");
@@ -8026,12 +8224,30 @@ mod gc_edge_tests {
                 visible_by_name: true,
             }],
         );
+        // A keyword alias's record (#837, R6), over its cell, whose
+        // namespace is dropped: the alias entry alone reaches the value.
+        let (keyword_record, keyword_env) = {
+            let library = Rc::new(Environment::with_heap(&heap));
+            library.define(&heap, "kw", keyword);
+            (library.local_record("kw").unwrap(), library.env_id())
+        };
         let mut aliases = AliasBindings::default();
         aliases.insert(
             Rc::from("alias"),
             AliasTarget {
-                env: Some(Rc::clone(&alias_target)),
+                home: AliasHome::Env(Rc::clone(&alias_target)),
                 name: Rc::from("private"),
+                scopes: None,
+            },
+        );
+        aliases.insert(
+            Rc::from("keyword-alias"),
+            AliasTarget {
+                home: AliasHome::Keyword {
+                    record: keyword_record,
+                    env_id: keyword_env,
+                },
+                name: Rc::from("kw"),
                 scopes: None,
             },
         );
@@ -8071,6 +8287,7 @@ mod gc_edge_tests {
             Some(scoped)
         );
         assert_eq!(env.get(&heap, "alias"), Some(aliased));
+        assert_eq!(env.get(&heap, "keyword-alias"), Some(keyword));
         assert_eq!(env.get(&heap, "exported"), Some(imported));
         assert_eq!(env.get(&heap, "inherited"), Some(inherited));
         let env = Rc::new(env);
@@ -8289,6 +8506,7 @@ mod relink_alias_tests {
             Rc::<str>::from(format!("helper.{}", minted.get()))
         };
         let first = program.relink_alias(
+            &heap,
             Rc::clone(&library),
             "helper".into(),
             None,
@@ -8297,6 +8515,7 @@ mod relink_alias_tests {
         );
         for _ in 0..100 {
             let again = program.relink_alias(
+                &heap,
                 Rc::clone(&library),
                 "helper".into(),
                 None,
@@ -8323,6 +8542,7 @@ mod relink_alias_tests {
             Rc::<str>::from(format!("alias.{}", minted.get()))
         };
         let helper = program.relink_alias(
+            &heap,
             Rc::clone(&library),
             "helper".into(),
             None,
@@ -8330,6 +8550,7 @@ mod relink_alias_tests {
             &mut mint,
         );
         let other = program.relink_alias(
+            &heap,
             Rc::clone(&library),
             "other".into(),
             None,
@@ -8338,6 +8559,7 @@ mod relink_alias_tests {
         );
         // The same spelling in another environment is another target.
         let elsewhere_helper = program.relink_alias(
+            &heap,
             Rc::clone(&elsewhere),
             "helper".into(),
             None,
@@ -8362,6 +8584,7 @@ mod relink_alias_tests {
             Rc::<str>::from(format!("tmp.{}", minted.get()))
         };
         let by_name = program.relink_alias(
+            &heap,
             Rc::clone(&library),
             "tmp".into(),
             None,
@@ -8369,6 +8592,7 @@ mod relink_alias_tests {
             &mut mint,
         );
         let at_a = program.relink_alias(
+            &heap,
             Rc::clone(&library),
             "tmp".into(),
             Some(a.clone()),
@@ -8376,6 +8600,7 @@ mod relink_alias_tests {
             &mut mint,
         );
         let at_b = program.relink_alias(
+            &heap,
             Rc::clone(&library),
             "tmp".into(),
             Some(b),
@@ -8385,6 +8610,7 @@ mod relink_alias_tests {
         assert_eq!(minted.get(), 3, "{by_name} {at_a} {at_b}");
         assert_eq!(
             program.relink_alias(
+                &heap,
                 Rc::clone(&library),
                 "tmp".into(),
                 Some(a),
@@ -8410,6 +8636,7 @@ mod relink_alias_tests {
             Rc::<str>::from(format!("helper.{}", minted.get()))
         };
         let as_written = program.relink_alias(
+            &heap,
             Rc::clone(&library),
             "helper".into(),
             None,
@@ -8417,6 +8644,7 @@ mod relink_alias_tests {
             &mut mint,
         );
         let as_generated = program.relink_alias(
+            &heap,
             Rc::clone(&library),
             "helper".into(),
             None,
@@ -8428,6 +8656,7 @@ mod relink_alias_tests {
         // Each mention keeps its own from then on, and both reach the helper.
         assert_eq!(
             program.relink_alias(
+                &heap,
                 Rc::clone(&library),
                 "helper".into(),
                 None,
@@ -8457,6 +8686,7 @@ mod relink_alias_tests {
             Rc::<str>::from(format!("helper.{}", minted.get()))
         };
         let alias = program.relink_alias(
+            &heap,
             Rc::clone(&library),
             "helper".into(),
             None,
@@ -8487,6 +8717,7 @@ mod relink_alias_tests {
             Rc::<str>::from(format!("helper.{}", minted.get()))
         };
         let alias = program.relink_alias(
+            &heap,
             Rc::clone(&library),
             "helper".into(),
             None,
@@ -8517,6 +8748,7 @@ mod relink_alias_tests {
             Rc::<str>::from(format!("helper.{}", minted.get()))
         };
         let alias = host.relink_alias(
+            &heap,
             Rc::clone(&library),
             "helper".into(),
             None,
@@ -8541,6 +8773,7 @@ mod relink_alias_tests {
         let (library, program) = library_and_program(&heap);
         let mut mint = || Rc::<str>::from("helper.1");
         let alias = program.relink_alias(
+            &heap,
             Rc::clone(&library),
             "helper".into(),
             None,
@@ -8558,6 +8791,7 @@ mod relink_alias_tests {
         let store = program.weak_entries().expect("the store");
         store.insert(alias, forged);
         program.relink_alias(
+            &heap,
             Rc::clone(&library),
             "helper".into(),
             None,
@@ -8576,6 +8810,7 @@ mod relink_alias_tests {
             Rc::<str>::from(format!("helper.{}", minted.get()))
         };
         let first = program.relink_alias(
+            &heap,
             Rc::clone(&library),
             "helper".into(),
             None,
@@ -8585,6 +8820,7 @@ mod relink_alias_tests {
         // `helper.1` is a legal identifier: the program binds it itself.
         program.define(&heap, Rc::clone(&first), n(99));
         let second = program.relink_alias(
+            &heap,
             Rc::clone(&library),
             "helper".into(),
             None,
@@ -8598,6 +8834,7 @@ mod relink_alias_tests {
         // And the replacement is the one remembered from then on.
         assert_eq!(
             program.relink_alias(
+                &heap,
                 Rc::clone(&library),
                 "helper".into(),
                 None,
@@ -8619,6 +8856,7 @@ mod relink_alias_tests {
             Rc::<str>::from(format!("alias.{}", minted.get()))
         };
         let rooted = program.relink_alias(
+            &heap,
             Rc::clone(&library),
             "helper".into(),
             None,
@@ -8629,6 +8867,7 @@ mod relink_alias_tests {
         let frame = Rc::new(Environment::child_frame(Rc::clone(&body)));
         assert_eq!(
             frame.relink_alias(
+                &heap,
                 Rc::clone(&library),
                 "helper".into(),
                 None,
@@ -8645,6 +8884,7 @@ mod relink_alias_tests {
         assert_eq!(frame.get(&heap, &rooted), Some(n(1)));
         // A target the root has not aliased is minted into the frame alone.
         let own = frame.relink_alias(
+            &heap,
             Rc::clone(&library),
             "other".into(),
             None,
@@ -8654,6 +8894,279 @@ mod relink_alias_tests {
         assert_eq!(minted.get(), 2);
         assert!(program.alias_target(&own).is_none());
         assert_eq!(frame.get(&heap, &own), Some(n(2)));
+    }
+}
+
+/// What a relink alias names as its home (#837, R6; [`AliasTarget`]): a
+/// keyword's record only where the target namespace binds the keyword in
+/// its own tables — its slot for the name, or its scoped entry at exactly
+/// the alias's scopes — and its environment everywhere else. One test per
+/// arm, each also reading, writing and locating through the alias against
+/// what the target's own read answers, and following a redefinition.
+#[cfg(test)]
+mod alias_home_tests {
+    use super::*;
+    use crate::compiled_macro::CompiledMacro;
+    use crate::heap::new_shared_heap;
+    use crate::scope::{ScopeId, ScopeSet};
+    use std::collections::{HashMap, HashSet};
+
+    fn n(i: i64) -> TaggedValue {
+        TaggedValue::fixnum(i)
+    }
+
+    /// A fresh macro value, named `name`.
+    fn a_macro(heap: &SharedHeap, name: &str) -> TaggedValue {
+        let compiled = CompiledMacro {
+            name: Rc::from(name),
+            rules: vec![],
+            max_pvars: 0,
+            definition_scopes: ScopeSet::new(),
+            template_symbols: HashSet::new(),
+            inherited_identifiers: HashMap::new(),
+            definition_env: None,
+            foreign_expansions: vec![],
+        };
+        heap.borrow_mut().alloc_macro(Rc::new(compiled), vec![])
+    }
+
+    /// The alias `program` holds for `name` in `target`, under `scopes`,
+    /// relinked as the desugarer relinks one.
+    fn relinked(
+        heap: &SharedHeap,
+        program: &Environment,
+        target: &Rc<Environment>,
+        name: &str,
+        scopes: Option<ScopeSet>,
+    ) -> Rc<str> {
+        let spelling: Rc<str> = Rc::from(format!("{name}.alias.{}", target.env_id()));
+        program.relink_alias(
+            heap,
+            Rc::clone(target),
+            Rc::from(name),
+            scopes,
+            &ScopeSet::new(),
+            || Rc::clone(&spelling),
+        )
+    }
+
+    /// What `program` names as `alias`'s home, and how many environments
+    /// the alias entry's trace reports.
+    fn home_of(program: &Environment, alias: &str) -> (&'static str, usize) {
+        let homes = program.alias_homes_for_tests();
+        let (_, home, envs) = homes
+            .into_iter()
+            .find(|(spelling, _, _)| spelling == alias)
+            .unwrap_or_else(|| panic!("no alias `{alias}`"));
+        (home, envs)
+    }
+
+    /// A keyword in the target namespace's slot: the alias holds the
+    /// slot's record, names no environment, and reads, writes and locates
+    /// what the namespace's own read does — across a redefinition, which
+    /// stores into the record's cell, and an import over it, which
+    /// re-points the record.
+    #[test]
+    fn a_keyword_in_the_targets_slot_is_held_by_its_record() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        let first = a_macro(&heap, "kw");
+        library.define(&heap, "kw", first);
+        let program = Rc::new(Environment::with_heap(&heap));
+        let alias = relinked(&heap, &program, &library, "kw", None);
+        assert_eq!(home_of(&program, &alias), ("keyword", 0));
+        assert_eq!(program.get(&heap, &alias), Some(first));
+        assert_eq!(
+            program.binding_location(&heap, &alias),
+            library.binding_location(&heap, "kw")
+        );
+
+        let second = a_macro(&heap, "kw");
+        library.define(&heap, "kw", second);
+        assert_eq!(program.get(&heap, &alias), Some(second), "a redefinition");
+
+        let elsewhere = Rc::new(Environment::with_heap(&heap));
+        let third = a_macro(&heap, "kw");
+        elsewhere.define(&heap, "kw", third);
+        share(&heap, &library, "kw", &elsewhere, "kw");
+        assert_eq!(program.get(&heap, &alias), Some(third), "an import over it");
+        assert_eq!(
+            program.binding_location(&heap, &alias),
+            library.binding_location(&heap, "kw")
+        );
+
+        // A write through the alias is the slot's.
+        program.set(&heap, &alias, n(7)).unwrap();
+        assert_eq!(library.get(&heap, "kw"), Some(n(7)));
+        assert_eq!(elsewhere.get(&heap, "kw"), Some(n(7)), "one location");
+    }
+
+    /// A keyword at exactly the alias's scopes in the target namespace's
+    /// scoped table (a splice's private keyword, #424): the alias holds
+    /// the entry's record, which a redefinition at those scopes stores into
+    /// and another entry of the spelling leaves alone.
+    #[test]
+    fn a_keyword_at_exactly_the_aliass_scopes_is_held_by_its_record() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        let identity = ScopeSet::singleton(ScopeId::fresh());
+        let first = a_macro(&heap, "kw");
+        library.define_with_scopes(&heap, "kw", identity.clone(), first);
+        let program = Rc::new(Environment::with_heap(&heap));
+        let alias = relinked(&heap, &program, &library, "kw", Some(identity.clone()));
+        assert_eq!(home_of(&program, &alias), ("keyword", 0));
+        assert_eq!(program.get(&heap, &alias), Some(first));
+        assert_eq!(
+            program.binding_location(&heap, &alias),
+            library.scoped_definition_location(&heap, "kw", &identity)
+        );
+
+        let second = a_macro(&heap, "kw");
+        library.define_with_scopes(&heap, "kw", identity.clone(), second);
+        let other = ScopeSet::singleton(ScopeId::fresh());
+        library.define_with_scopes(&heap, "kw", other, a_macro(&heap, "kw"));
+        library.define(&heap, "kw", a_macro(&heap, "kw"));
+        assert_eq!(program.get(&heap, &alias), Some(second));
+        assert_eq!(
+            library.scoped_definition_value(&heap, "kw", &identity),
+            Some(second)
+        );
+
+        program.set(&heap, &alias, n(8)).unwrap();
+        assert_eq!(
+            library.scoped_definition_value(&heap, "kw", &identity),
+            Some(n(8))
+        );
+    }
+
+    /// A keyword a host namespace reaches through its parent, the global
+    /// namespace: the host binds nothing of its own, so the alias names the
+    /// host and reads it by name, and a later host definition of the
+    /// spelling moves it, as it moved the by-name read before.
+    #[test]
+    fn a_keyword_reached_through_the_targets_parent_keeps_its_environment() {
+        let heap = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(&heap));
+        let inherited = a_macro(&heap, "kw");
+        global.define(&heap, "kw", inherited);
+        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
+        let program = Rc::new(Environment::with_heap(&heap));
+        let alias = relinked(&heap, &program, &host, "kw", None);
+        assert_eq!(home_of(&program, &alias), ("env", 1));
+        assert_eq!(program.get(&heap, &alias), Some(inherited));
+
+        let own = a_macro(&heap, "kw");
+        host.define(&heap, "kw", own);
+        assert_eq!(program.get(&heap, &alias), Some(own));
+    }
+
+    /// A keyword the target namespace reaches as the name-only view of a
+    /// scoped definition, which a later visible definition of the spelling
+    /// would move: the alias keeps its environment.
+    #[test]
+    fn a_name_visible_scoped_keyword_keeps_its_environment() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        let visible = a_macro(&heap, "kw");
+        library.define_scoped_definition(
+            &heap,
+            "kw",
+            ScopeSet::singleton(ScopeId::fresh()),
+            visible,
+        );
+        let program = Rc::new(Environment::with_heap(&heap));
+        let alias = relinked(&heap, &program, &library, "kw", None);
+        assert_eq!(home_of(&program, &alias), ("env", 1));
+        assert_eq!(program.get(&heap, &alias), Some(visible));
+        assert_eq!(library.get(&heap, "kw"), Some(visible));
+    }
+
+    /// A keyword the target namespace reaches through an alias of its own:
+    /// the alias keeps its environment.
+    #[test]
+    fn a_keyword_reached_through_the_targets_alias_keeps_its_environment() {
+        let heap = new_shared_heap();
+        let elsewhere = Rc::new(Environment::with_heap(&heap));
+        let keyword = a_macro(&heap, "kw");
+        elsewhere.define(&heap, "kw", keyword);
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define_alias("kw", Rc::clone(&elsewhere), Rc::from("kw"));
+        let program = Rc::new(Environment::with_heap(&heap));
+        let alias = relinked(&heap, &program, &library, "kw", None);
+        assert_eq!(home_of(&program, &alias), ("env", 1));
+        assert_eq!(program.get(&heap, &alias), Some(keyword));
+    }
+
+    /// A keyword a frame binds, built directly: no program reached this
+    /// shape (`AliasHome::Env`). The alias keeps the frame.
+    #[test]
+    fn a_keyword_a_frame_binds_keeps_its_environment() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        let frame = Rc::new(Environment::child_frame(Rc::clone(&library)));
+        let keyword = a_macro(&heap, "kw");
+        frame.define(&heap, "kw", keyword);
+        let program = Rc::new(Environment::with_heap(&heap));
+        let alias = relinked(&heap, &program, &frame, "kw", None);
+        assert_eq!(home_of(&program, &alias), ("env", 1));
+        assert_eq!(program.get(&heap, &alias), Some(keyword));
+    }
+
+    /// A variable in the target's slot keeps its environment until 4b.10's
+    /// second PR, and a target in the holder is the holder, keyword or not.
+    #[test]
+    fn a_variable_keeps_its_environment_and_the_holder_stays_the_holder() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "v", n(1));
+        let program = Rc::new(Environment::with_heap(&heap));
+        let variable = relinked(&heap, &program, &library, "v", None);
+        assert_eq!(home_of(&program, &variable), ("env", 1));
+        assert_eq!(program.get(&heap, &variable), Some(n(1)));
+
+        let keyword = a_macro(&heap, "kw");
+        program.define(&heap, "kw", keyword);
+        let own = relinked(&heap, &program, &program, "kw", None);
+        assert_eq!(home_of(&program, &own), ("holder", 0));
+        assert_eq!(program.get(&heap, &own), Some(keyword));
+    }
+
+    /// One keyword target asked for repeatedly gets one alias
+    /// (`remembered_relink`'s `Keyword` arm, #611), and a keyword of the
+    /// same spelling in another namespace gets its own.
+    #[test]
+    fn one_keyword_target_asked_for_repeatedly_gets_one_alias() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "kw", a_macro(&heap, "kw"));
+        let other = Rc::new(Environment::with_heap(&heap));
+        other.define(&heap, "kw", a_macro(&heap, "kw"));
+        let program = Rc::new(Environment::with_heap(&heap));
+        let minted = Cell::new(0);
+        let mut mint = || {
+            minted.set(minted.get() + 1);
+            Rc::<str>::from(format!("kw.{}", minted.get()))
+        };
+        let mut ask = |target: &Rc<Environment>| {
+            program.relink_alias(
+                &heap,
+                Rc::clone(target),
+                "kw".into(),
+                None,
+                &ScopeSet::new(),
+                &mut mint,
+            )
+        };
+        let first = ask(&library);
+        for _ in 0..100 {
+            assert_eq!(ask(&library), first);
+        }
+        let elsewhere = ask(&other);
+        assert_ne!(elsewhere, first);
+        assert_eq!(ask(&other), elsewhere);
+        assert_eq!(minted.get(), 2, "an alias per target, not per expansion");
+        assert_eq!(home_of(&program, &first), ("keyword", 0));
+        assert_eq!(home_of(&program, &elsewhere), ("keyword", 0));
     }
 }
 

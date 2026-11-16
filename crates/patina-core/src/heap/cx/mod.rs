@@ -624,6 +624,44 @@ impl<'gc> Cx<'gc> {
         ns.copy_binding(self.heap, name, staging, staged_name)
     }
 
+    /// The relink alias in `ns` to `name` in `target_env`, under `scopes`,
+    /// as the macro's mention `mention` renames it
+    /// ([`NamespaceView::relink_alias`]): the one remembered for the target,
+    /// or a fresh one `mint` offers. An alias it installs to a keyword
+    /// `target_env` binds in its own tables holds the keyword's record (#837,
+    /// R6), read with this context's heap: the record reaches the alias
+    /// table beneath the context, where nothing collects. Raw: names
+    /// `NamespaceView`.
+    #[inline]
+    pub fn relink_alias(
+        &mut self,
+        ns: NamespaceView<'_>,
+        target_env: Rc<Environment>,
+        name: Rc<str>,
+        scopes: Option<ScopeSet>,
+        mention: &ScopeSet,
+        mint: impl FnMut() -> Rc<str>,
+    ) -> Rc<str> {
+        ns.relink_alias(self.heap, target_env, name, scopes, mention, mint)
+    }
+
+    /// [`relink_alias`](Self::relink_alias) to the definition
+    /// [`introduced_definition`](Self::introduced_definition) found in
+    /// `home` ([`NamespaceView::relink_alias_to_introduced`]). Raw: names
+    /// `NamespaceView`.
+    #[inline]
+    pub fn relink_alias_to_introduced(
+        &mut self,
+        ns: NamespaceView<'_>,
+        home: Rc<Environment>,
+        name: Rc<str>,
+        found: IntroducedDefinition,
+        mention: &ScopeSet,
+        mint: impl FnMut() -> Rc<str>,
+    ) -> Rc<str> {
+        ns.relink_alias_to_introduced(self.heap, home, name, found, mention, mint)
+    }
+
     /// The record an early-bound reference to `name` links when `ns` is
     /// its macro's environment, branded by this context, and the location
     /// of its cell (#837; `Environment::early_link`, the owner's ruling
