@@ -548,8 +548,10 @@ fn control_forms_compile_to_their_sequence() {
 
 #[test]
 fn control_forms_follow_the_binding_under_another_name() {
-    // What a renamed import, or the alias early binding gives a library
-    // template's reference, looks like to the compiler.
+    // What a renamed import looks like to the compiler: a primitive under
+    // another name (an early-bound template reference, since #837, is a
+    // linked operand instead, tested by `vm_callprimitive.rs`'s
+    // `an_early_bound_primitive_keeps_its_fast_path`).
     let state = state_with_control_forms();
     let cwv = state
         .global_env()

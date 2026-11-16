@@ -446,8 +446,8 @@ compiled before it, where chibi and Gauche leave no name
 (`expansion/template-references.scm`'s last two rows).
 
 **Where** matters more than it looks. Relinking only records that the
-expansion came from another program or library; the name is changed where the
-desugarer *emits a reference or an assignment* (`Desugarer::early_bound`), not
+expansion came from another program or library; the reference is linked where
+the desugarer *emits a reference or an assignment* (`Desugarer::early_bound`), not
 in the expansion's syntax where relinking's other aliases are made. A first
 version did it in the syntax, and an identifier there is not yet known to be a
 reference: it was a `case` datum, a `let` binder, a `define` target, data

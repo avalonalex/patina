@@ -1535,7 +1535,7 @@ impl<'a> Desugarer<'a> {
     /// `name.N`: a name a program could read, and define over to change
     /// code compiled before (#837's question 3). The reference keeps its
     /// scopes, which is what lets `settle_early_bindings` take a decision
-    /// back, and what the tree-walker tests for before it asks for a link.
+    /// back, and which a linked node must have (C4).
     ///
     /// Cost, measured 2026-09-19 against `main`, best of 9 interleaved: 2–4% on
     /// 12,000 expansions of templates that each call a dozen imported

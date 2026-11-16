@@ -910,8 +910,9 @@ mod tests {
     /// linked through the library namespace's record, while the program's
     /// environment binds `f` to something else, which neither touches. A
     /// link to a cell holding `UNBOUND` answers an undefined variable named
-    /// by the written spelling, on the read and on the write, and stores
-    /// nothing.
+    /// by the written spelling, on the read and on the write, and leaves the
+    /// program's `f` alone (that the cell stays `UNBOUND` is
+    /// `binding_record.rs`'s test).
     #[test]
     fn a_linked_node_reads_and_writes_its_record_not_its_spelling() {
         use patina_core::{LiteralPool, NamespaceView, NoGcScope};
@@ -935,7 +936,7 @@ mod tests {
         let cps = CpsEvaluator::new(&evaluator);
         // Read both ways a node is read: as a trivial argument
         // (`eval_trivial_tagged`, `Halt`'s) and as the step itself (the step
-        // loop's own `Var` arm). Each tests the link at its call (#837).
+        // loop's `LinkedVar | LinkedSet` arm, through `step_linked`) (#837).
         let read = |link| {
             let var = || CpsExprKind::linked_var(Rc::from("f"), scopes.clone(), Some(link));
             let as_argument = cps.eval(&CpsExpr::new(CpsExprKind::Halt(CpsExpr::rc(var()))));

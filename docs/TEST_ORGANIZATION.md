@@ -1678,7 +1678,7 @@ program binds the spelling to something else, and whose link to an
 `binding_record.rs`'s `a_links_write_stores_into_its_records_cell_unless_unbound`;
 and `gc_census.rs`'s `a_linked_assignment_names_its_records_cell`, which
 holds a linked `set!`'s store to the funnel on both backends: logged at
-`env_set_slot_value` with the cell as holder. The matrix found a store that
+`env_set_slot_value` with a holder. The mutation matrix found a store that
 bypassed the funnel caught by nothing else.
 The switch's own tests failed before it and pass after, on both backends:
 `macro_definition_env.rs`'s `an_early_bound_reference_mints_no_spelling`
@@ -1695,8 +1695,11 @@ which can pass vacuously in a process that has minted many aliases first, so
 they were shown failing with the file run alone. `scope_trace.rs`'s grammar
 tests hold the `via=early-link` record, and
 `relink_alias_tests::minting_skips_a_name_already_bound` keeps the one
-property of the deleted `import_alias_tests` no other test had.
-`macro_definition_env`'s stress count was re-pinned for its three tests.
+property of the deleted `import_alias_tests` no other test had, and
+`hygiene_matrix.rs`'s `the_trace_says_how_an_early_bound_reference_ended`
+holds both outcomes the scope trace records for one. The stress counts of
+`macro_definition_env`, `vm_callprimitive`, `hygiene_matrix` and
+`scheme_suite` were re-pinned.
 
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):

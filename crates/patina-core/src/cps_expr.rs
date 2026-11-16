@@ -357,7 +357,7 @@ pub enum CpsExprKind {
     /// without, C4). Its payload is behind one `Rc`, so that the variant
     /// adds one field to the kind's drop glue, clone and trace, as `Halt`
     /// does, rather than three: a payload in place cost the tree-walker's
-    /// workloads 0.1–0.3% in instructions, which the `Rc` takes back
+    /// workloads 0.2–0.4% in instructions, which the `Rc` takes back
     /// (measured 2026-11-15). Traced by the derive, through the `Rc`,
     /// so a closure's or a continuation's body, and the trampoline's step,
     /// keep the record while they hold the node.
@@ -369,8 +369,9 @@ pub enum CpsExprKind {
     LinkedSet(Rc<LinkedAssign>),
 }
 
-/// A [`CpsExprKind::LinkedVar`]'s payload (#837). Made only by
-/// [`CpsExprKind::linked_var`], which refuses one without scopes (C4).
+/// A [`CpsExprKind::LinkedVar`]'s payload (#837). Made by
+/// [`CpsExprKind::linked_var`], which refuses one without scopes (C4); its
+/// fields are public, so the constructor, not the type, holds C4.
 #[derive(Debug, Trace)]
 pub struct LinkedRef {
     /// The spelling, for an error and the display; never resolved.
@@ -386,8 +387,9 @@ pub struct LinkedRef {
 /// visitor walks a node once however many paths reach it.
 impl crate::heap::trace::TraceThroughRc for LinkedRef {}
 
-/// A [`CpsExprKind::LinkedSet`]'s payload (#837). Made only by
-/// [`CpsExprKind::linked_set`], which refuses one without scopes (C4).
+/// A [`CpsExprKind::LinkedSet`]'s payload (#837). Made by
+/// [`CpsExprKind::linked_set`], which refuses one without scopes (C4); its
+/// fields are public, so the constructor, not the type, holds C4.
 #[derive(Debug, Trace)]
 pub struct LinkedAssign {
     /// The spelling, for an error and the display; never resolved.
