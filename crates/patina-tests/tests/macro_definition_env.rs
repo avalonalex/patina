@@ -1015,18 +1015,21 @@ fn a_keyword_alias_names_no_environment_directly() {
 }
 
 /// Whether the library namespace `m` was defined in is alive after the
-/// library is redefined and imported again and two collections run, with
-/// `(m 1)` expanded before the redefinition or not, and the program's
-/// aliases for `priv` then. The namespace is watched through `m`'s macro,
-/// whose definition environment it is, by a `Weak` taken before the
-/// redefinition.
+/// library `lib` (`(t kw)`) is redefined and imported again and two
+/// collections run, with `(m 1)` expanded before the redefinition or not,
+/// and the program's aliases for `priv` then. `setup` is what the first
+/// program defines before `lib`, and is not redefined. The namespace is
+/// watched through `m`'s macro, whose definition environment it is, by a
+/// `Weak` taken before the redefinition.
 fn the_old_library_namespace_after_a_redefinition<B: patina_runtime::Backend>(
     interp: patina_interpreter::Interpreter<B>,
+    setup: &str,
+    lib: &str,
     expand: bool,
 ) -> (bool, Vec<(&'static str, usize)>) {
     interp
         .eval_program_owned(&format!(
-            "{KEYWORD_LIB}(import (scheme base) (patina debug) (t kw))\n{}",
+            "{setup}{lib}(import (scheme base) (patina debug) (t kw))\n{}",
             if expand { "(m 1)" } else { "" }
         ))
         .expect("the library and the import");
@@ -1044,7 +1047,7 @@ fn the_old_library_namespace_after_a_redefinition<B: patina_runtime::Backend>(
         )
     };
     interp
-        .eval_program_owned(&format!("{KEYWORD_LIB}(import (t kw))\n(gc) (gc)"))
+        .eval_program_owned(&format!("{lib}(import (t kw))\n(gc) (gc)"))
         .expect("the redefinition, the import and the collections");
     let homes = aliases_of_priv(&interp)
         .into_iter()
@@ -1053,8 +1056,10 @@ fn the_old_library_namespace_after_a_redefinition<B: patina_runtime::Backend>(
     (old.upgrade().is_some(), homes)
 }
 
-/// R6 alone does not release a replaced library's namespace (#837's
-/// question 4, #614's keyword variant): the program's keyword alias is never
+/// R6 alone does not release a replaced library's namespace whose own
+/// keyword an expansion relinked (#837's question 4, #614's keyword
+/// variant; the next test is the imported keyword's case, which R6 does
+/// release): the program's keyword alias is never
 /// removed, and its record reaches its cell, the private macro, and the
 /// macro's `definition_env`, the old namespace. With no expansion before the
 /// redefinition there is no alias, and the namespace goes, so the alias is
@@ -1067,15 +1072,79 @@ fn a_keyword_aliass_record_still_keeps_its_macros_definition_namespace() {
     let released = (false, Vec::new());
     assert_eq!(
         [
-            the_old_library_namespace_after_a_redefinition(common::vm_interpreter(), true),
-            the_old_library_namespace_after_a_redefinition(common::tree_walker_interpreter(), true),
-            the_old_library_namespace_after_a_redefinition(common::vm_interpreter(), false),
+            the_old_library_namespace_after_a_redefinition(
+                common::vm_interpreter(),
+                "",
+                KEYWORD_LIB,
+                true
+            ),
             the_old_library_namespace_after_a_redefinition(
                 common::tree_walker_interpreter(),
+                "",
+                KEYWORD_LIB,
+                true
+            ),
+            the_old_library_namespace_after_a_redefinition(
+                common::vm_interpreter(),
+                "",
+                KEYWORD_LIB,
+                false
+            ),
+            the_old_library_namespace_after_a_redefinition(
+                common::tree_walker_interpreter(),
+                "",
+                KEYWORD_LIB,
                 false
             ),
         ],
         [kept.clone(), kept, released.clone(), released],
         "[VM and tree-walker with the expansion, VM and tree-walker without]"
+    );
+}
+
+/// A library like [`KEYWORD_LIB`] whose `priv` is imported from another
+/// library, [`PRIV_LIB`], which is defined once.
+const IMPORTED_KEYWORD_LIB: &str = "(define-library (t kw)
+  (export m)
+  (import (scheme base) (t kw-priv))
+  (begin
+    (define-syntax m (syntax-rules () ((_ x) (priv x))))))
+";
+
+/// The library [`IMPORTED_KEYWORD_LIB`] imports `priv` from.
+const PRIV_LIB: &str = "(define-library (t kw-priv)
+  (export priv)
+  (import (scheme base))
+  (begin
+    (define-syntax priv (syntax-rules () ((_ x) (+ x 1))))))
+";
+
+/// What R6 releases: a replaced library whose relinked keyword it imports.
+/// The program's alias holds `(t kw)`'s record for `priv`, an import record
+/// over `(t kw-priv)`'s cell, whose macro's definition environment is
+/// `(t kw-priv)`; nothing it reaches leads back to the old `(t kw)`, which
+/// goes while the alias stays. Before R6 the alias named the old `(t kw)`
+/// and kept it, as it keeps a library whose own keyword it relinks (the
+/// test above).
+#[test]
+fn a_keyword_alias_to_an_imported_keyword_releases_the_replaced_library() {
+    let released = (false, vec![("keyword", 0)]);
+    assert_eq!(
+        [
+            the_old_library_namespace_after_a_redefinition(
+                common::vm_interpreter(),
+                PRIV_LIB,
+                IMPORTED_KEYWORD_LIB,
+                true
+            ),
+            the_old_library_namespace_after_a_redefinition(
+                common::tree_walker_interpreter(),
+                PRIV_LIB,
+                IMPORTED_KEYWORD_LIB,
+                true
+            ),
+        ],
+        [released.clone(), released],
+        "[VM, tree-walker]"
     );
 }

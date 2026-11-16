@@ -3604,6 +3604,10 @@ impl Environment {
         name: &str,
         scopes: Option<&ScopeSet>,
     ) -> Option<Record> {
+        // Redundant today, and stated where the rule is: a frame's
+        // `local_record` is `None`, and its scoped hit is never a `Record`,
+        // so no test can fail on this line (the frame arm's test pins the
+        // answer, not the check).
         if !self.is_namespace() {
             return None;
         }
@@ -8202,14 +8206,26 @@ mod layout_tests {
             "Environment grew to {size} bytes; measure the tree-walker before raising this"
         );
     }
+
+    /// A macro-expansion alias's entry, which a namespace's alias table
+    /// charges per bucket: 64 bytes until a keyword's home held its record
+    /// and its target's id (#837, R6; the design's risk P4), 80 since. Pinned
+    /// exactly so that a change either way is seen and charged knowingly.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn an_alias_entrys_size_is_watched() {
+        assert_eq!(std::mem::size_of::<super::AliasTarget>(), 80);
+        assert_eq!(std::mem::size_of::<super::AliasHome>(), 24);
+    }
 }
 
 /// Every edge the collector follows out of an environment, each to a value
 /// nothing else reaches (#623): a plain binding, a scoped one, the binding an
 /// alias forwards to (#38), through its environment and through a keyword's
-/// record (#837), a frame's imported cell (#834), and the parent's binding. The environment is built by a struct literal, so a new field
-/// breaks this test as well as `for_each_gc_edge`; the reads before the
-/// collection show the literal is the environment the API would build.
+/// record (#837), a frame's imported cell (#834), and the parent's binding.
+/// The environment is built by a struct literal, so a new field breaks this
+/// test as well as `for_each_gc_edge`; the reads before the collection show
+/// the literal is the environment the API would build.
 #[cfg(test)]
 mod gc_edge_tests {
     use super::*;
