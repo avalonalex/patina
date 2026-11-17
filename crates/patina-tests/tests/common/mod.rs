@@ -1755,9 +1755,9 @@ macro_rules! gc_shared_tests {
             // two at `held` and none at `dropped`; one that is no holder
             // reads none at either. Under zeal too.
             //
-            // The two residual rows pin what is not released today, each
-            // with the issue or stage that flips it; that PR updates the
-            // row's expectation.
+            // The one residual row pins what is not released today, with
+            // the stage that flips it; that PR updates the row's
+            // expectation.
             let kept_specifier_old = steady(
                 "f m",
                 "(scheme base)",
@@ -1912,18 +1912,21 @@ macro_rules! gc_shared_tests {
                     "(set! out (pub))\n(set! pub #f)".to_string(),
                     "(2 1 1)",
                 ),
-                // Residual R-A, until #837's second PR, which removes
-                // variable aliases: the program's procedure reads the old
-                // library's private `secret` through a relink alias, which
-                // keeps the namespace after the procedure is dropped. That
-                // PR flips `dropped` to 0.
+                // The program's procedure reads the old library's private
+                // `secret` through the link its expansion of `m` was
+                // relinked to: the code holds the record, the record its
+                // cell, the cell the private closure, and the closure the
+                // namespace. Nothing else does, so the namespace goes with
+                // the procedure. It was residual R-A until #837's second
+                // PR: the expansion left an alias in the program, which
+                // kept the namespace for good, and `dropped` read 1.
                 (
                     "relink-variable",
                     relink_variable_old.clone(),
                     "(set! holder (lambda () (m 1)))",
                     relink_variable_old.replace("'old", "'new"),
                     "(set! out (holder))\n(set! holder #f)".to_string(),
-                    "((old 1) 1 1)",
+                    "((old 1) 1 0)",
                 ),
             ];
             for (name, define, take, redefine, use_and_drop, expected) in &rows {

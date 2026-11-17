@@ -2039,8 +2039,8 @@ program's definition of the spelling a generated macro carries moves no
 expansion of it, before or after), `a_generated_definer_run_twice_keeps_two_keywords`
 (a carried binder is bound at its scopes in each run, where the second run
 redefined the first's keyword; Gauche's answer, and no longer chibi's:
-`relinked-names.scm` has the row, the one row of that file that failed
-before the switch, and the register's note chibi's answer) and
+`relinked-names.scm` has the row, the first of that file's rows that
+failed before the switch, and the register's note chibi's answer) and
 `a_generated_macro_carries_a_relink_of_each_kind` (a namespace's slot, an
 introduced definition and a splice's keyword in one macro object, read
 back through `Cx::macro_relinks`; a check build refuses a record no link
@@ -2068,6 +2068,60 @@ local binding of the relinked spelling compared first; and identifiers
 the table does not answer compared as before), and the desugarer's
 `a_scans_table_reads_the_forms_and_keeps_its_own`. No stress count
 moved: they are unit tests of crates the stress lane does not run.
+
+The switch itself: relinking installs no alias and interns nothing. The
+spelling it gives a mention is a function of the macro's environment, the
+name and the mention, kept clear of the names the macro's own templates
+write, and is bound nowhere; the identifier means its record in the
+form's table, and in the relinks of a generated macro that keeps it. The
+desugarer's `a_relinked_spelling_is_a_function_of_its_mention_clear_of_what_is_taken`
+and `a_spelling_is_taken_by_the_macros_own_names_and_by_the_expansions`
+are the function's unit tests. Every test that needs the spelling reads
+it from an expansion (a quoting macro of the library's, since a relinked
+identifier used as data keeps it) and none computes it.
+`expansion/relinked-names.scm` gains six rows, forty-nine in all, of which
+chibi by hand answers forty-one: the leaked spelling `eval`uated is
+unbound; a definition of it captures no earlier code; an assignment to it
+is refused and the library's variable is what it was; a form headed by a
+private keyword's is no macro use (#873); a program's identifier of the
+spelling does not match a generated macro's relinked literal; and a
+relinked identifier does not match a literal a program spelled so. Each
+row is written to be right under both readings of the leak, since chibi
+and Gauche answer the written name there: the file's comment above the
+rows says how. `macro_definition_env.rs`'s
+`a_relinked_spelling_is_no_name_in_the_programs_text` is the same in a
+program's own text, where an assignment to a private keyword's spelling
+is an error about an undefined name and no longer one about a macro;
+`a_template_that_writes_the_relinked_spelling_unbound_reads_nothing`
+writes a template that names its private `secret` beside four hundred
+unbound `secret.k` around a spelling it has read, checks from the
+library's own leak that the range met it, and wants the private one to
+read 42 and every other to be unbound (it runs alone in a child process:
+the numbers come from counters the process shares, and the file's other
+tests take thousands between two of its forms); and the three keyword
+tests of the first PR are flipped, as it said they would be:
+`a_relinked_keyword_leaves_no_alias` (the spelling is nothing `get`
+answers and no slot, and the namespace's names and records are as they
+were), `a_relinked_keyword_keeps_no_definition_namespace` (a replaced
+library whose own keyword an expansion relinked is released, with the
+expansion or without) and
+`a_relinked_imported_keyword_leaves_nothing_of_the_replaced_library`.
+`a_definition_over_an_alias_does_not_capture_the_next_expansion`, which
+scanned the namespace for the alias, went; its successor landed with the
+first step. `hygiene_matrix.rs`'s
+`a_program_identifier_spelled_as_a_relinked_literal_does_not_match` is
+the literal rows in one namespace, which no oracle's `eval` can stage,
+and `every_relinking_writes_a_record_of_its_target`'s raw frame reads its
+own `x` now: a mention with no record is left as written, where the alias
+read the macro's frame. The holder audit's `relink-variable` row reads
+`((old 1) 1 0)`: the code that expanded the macro is what holds the old
+library, and nothing does once it is dropped.
+`script_running.rs`'s `a_library_cannot_export_a_relinked_spelling`
+replaces #846's test: the spelling, read from a run, and `secret.0` to
+`secret.15` are each refused as not defined. The stress counts of
+`macro_definition_env`, `hygiene_matrix` and `scheme_suite` were
+re-pinned for the tests; the switch moved no count of a target whose
+tests it left alone.
 
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):

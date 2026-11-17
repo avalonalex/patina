@@ -66,7 +66,7 @@ impl Declarations {
 
     /// Use the ordinary environment resolver, including its scope ordering and
     /// ambiguity checks. The views are never captured by compiled macros or
-    /// runtime aliases; those retain the real, live environments.
+    /// relinked links; those name the real, live environments' records.
     ///
     /// Through a shared context: the view is a frame, whose binds and
     /// imports take no borrow and allocate nothing (#834).

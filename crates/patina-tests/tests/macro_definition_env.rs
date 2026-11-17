@@ -584,43 +584,6 @@ fn repeated_evals_of_a_guard_form_add_no_symbols() {
     assert_eq!(symbols(1000), symbols(3000), "[VM, tree-walker]");
 }
 
-/// An alias is an ordinary spelling, so a program can define over it. The
-/// next expansion must not reach that definition: it gets a new alias.
-fn defining_over_the_alias<B: patina_runtime::Backend>(
-    interp: patina_interpreter::Interpreter<B>,
-) -> (String, String) {
-    interp
-        .eval_program(&format!(
-            "{PRIVATE_HELPER}(import (scheme base) (t m)) (define first (via-private 1))"
-        ))
-        .unwrap();
-    let env = interp.global_env();
-    let spelling = (0..100_000)
-        .map(|k| format!("private-helper.{k}"))
-        .find(|spelling| env.get(interp.backend().heap(), spelling).is_some())
-        .expect("relinking aliased the private helper");
-    interp
-        .eval_program(&format!("(define ({spelling} x) 'mine)"))
-        .unwrap();
-    let second = interp.eval_str("(via-private 2)").unwrap();
-    let own = interp.eval_str(&format!("({spelling} 0)")).unwrap();
-    (interp.display_tagged(second), interp.display_tagged(own))
-}
-
-#[test]
-fn a_definition_over_an_alias_does_not_capture_the_next_expansion() {
-    assert_eq!(
-        defining_over_the_alias(common::vm_interpreter()),
-        ("2".to_string(), "mine".to_string()),
-        "VM"
-    );
-    assert_eq!(
-        defining_over_the_alias(common::tree_walker_interpreter()),
-        ("2".to_string(), "mine".to_string()),
-        "tree-walker"
-    );
-}
-
 /// A library whose macros read and assign its private `secret`, use its
 /// private keyword `priv` as a value, and tell the spelling a template's
 /// `secret` has in an expansion: `(spell-secret)` hands it to a quoting
@@ -687,6 +650,271 @@ fn a_definition_of_a_relinked_spelling_captures_nothing() {
         expected,
         "tree-walker"
     );
+}
+
+/// A library whose macros read its private `secret`, expand its private
+/// keyword `priv`, and tell the spelling a template's `secret` and `priv`
+/// have in an expansion.
+const NO_NAME: &str = "(define-library (t noname)
+  (export get-secret spell-secret use-priv spell-priv)
+  (import (scheme base))
+  (begin
+    (define secret 42)
+    (define-syntax priv (syntax-rules () ((_ x) (list 'priv x))))
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax get-secret (syntax-rules () ((_) secret)))
+    (define-syntax spell-secret (syntax-rules () ((_) (quote-it secret))))
+    (define-syntax use-priv (syntax-rules () ((_ x) (priv x))))
+    (define-syntax spell-priv (syntax-rules () ((_) (quote-it priv))))))
+(import (scheme base) (t noname))
+(define (h) (get-secret))
+(use-priv 1)
+";
+
+/// What `source` answers, or `error` with its message.
+fn answer_or_error<B: patina_runtime::Backend>(
+    interp: &patina_interpreter::Interpreter<B>,
+    source: &str,
+) -> Result<String, String>
+where
+    B::Error: std::fmt::Display,
+{
+    match interp.eval_str_owned(source) {
+        Ok(value) => Ok(interp.display_tagged(&value)),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// The spelling relinking gives a template identifier is no name in a
+/// program's text (#837, #873). The program reads each spelling from an
+/// expansion and writes it: as a reference, as an assignment's target, as
+/// the head of a form, for the library's private variable and for its
+/// private keyword. Each is an error about a name that is not defined, and
+/// the library's variable and keyword are what they were. chibi 0.12 and
+/// Gauche 0.9.15 answer the same for a name the program wrote and bound
+/// nowhere. Until the switch the spelling was an alias in the program's
+/// namespace: the reference read 42, the assignment wrote the library's
+/// variable, the form expanded the library's private macro, and assigning
+/// the keyword's spelling was refused as an assignment to a macro.
+fn writing_the_relinked_spellings<B: patina_runtime::Backend>(
+    interp: patina_interpreter::Interpreter<B>,
+) -> Vec<String>
+where
+    B::Error: std::fmt::Display,
+{
+    interp.eval_program_owned(NO_NAME).expect("the library");
+    let spelling_of = |speller: &str, written: &str| {
+        let spelling = answer_or_error(&interp, speller).expect("spells");
+        assert!(
+            spelling.starts_with(written) && spelling != written,
+            "the spelling relinking gave `{written}`, read from an expansion: {spelling}"
+        );
+        spelling
+    };
+    let secret = spelling_of("(spell-secret)", "secret");
+    let keyword = spelling_of("(spell-priv)", "priv");
+    let refused = |source: String| match answer_or_error(&interp, &source) {
+        Ok(answer) => format!("answered {answer}"),
+        Err(message) => {
+            assert!(
+                !message.contains("is a macro"),
+                "{source} was refused as a keyword: {message}"
+            );
+            "refused".to_string()
+        }
+    };
+    vec![
+        refused(secret.clone()),
+        refused(format!("(set! {secret} 'hacked)")),
+        answer_or_error(&interp, "(list (h) (get-secret))").expect("reads"),
+        refused(format!("({keyword} 2)")),
+        refused(format!("(set! {keyword} 0)")),
+        answer_or_error(&interp, "(use-priv 3)").expect("expands"),
+    ]
+}
+
+#[test]
+fn a_relinked_spelling_is_no_name_in_the_programs_text() {
+    let expected = [
+        "refused", "refused", "(42 42)", "refused", "refused", "(priv 3)",
+    ];
+    assert_eq!(
+        writing_the_relinked_spellings(common::vm_interpreter()),
+        expected,
+        "VM"
+    );
+    assert_eq!(
+        writing_the_relinked_spellings(common::tree_walker_interpreter()),
+        expected,
+        "tree-walker"
+    );
+}
+
+/// How many names a collision library's template writes that are spelled
+/// as relinking might spell its private `secret`.
+const COLLISION_RANGE: usize = 400;
+
+/// Set in the child [`alone_in_a_process`] runs.
+const ALONE: &str = "PATINA_MDE_ALONE_IN_A_PROCESS";
+
+/// Whether this process is the one the test `test` has to itself. If it is
+/// not, the test is run in a child that is, alone and on one thread, the
+/// child must pass, and the caller has nothing left to do.
+///
+/// For a test that writes a range of names around a number it read and
+/// needs the next library's number to fall in the range: the numbers come
+/// from counters the whole process shares, and the other tests of this
+/// file, on their threads, take thousands between two forms of one test.
+fn alone_in_a_process(test: &str) -> bool {
+    if std::env::var_os(ALONE).is_some() {
+        return true;
+    }
+    let child = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .env(ALONE, "1")
+        .args(["--exact", test, "--test-threads=1"])
+        .output()
+        .expect("run the child");
+    assert!(
+        child.status.success(),
+        "{test}, alone in a process: {}\n{}{}",
+        child.status,
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+    false
+}
+
+/// The number a leaked spelling of `secret` starts with after its dot: the
+/// part that tells one library's spelling from another's. Read only to
+/// write a range of names around it and to check the range was wide enough;
+/// what follows it is not read.
+fn number_after_secret(spelling: &str) -> usize {
+    let digits: String = spelling
+        .strip_prefix("secret.")
+        .unwrap_or_else(|| panic!("{spelling} is no spelling of `secret`"))
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits
+        .parse()
+        .unwrap_or_else(|_| panic!("{spelling} has no number after `secret.`"))
+}
+
+/// A library whose one template writes its private `secret` beside every
+/// name `secret.k` for `k` in a range that starts where a library defined
+/// just before it had its spelling, so that one of them is the spelling
+/// relinking would give the private `secret` if nothing kept it clear of
+/// the template's own names. `definitions` is what the library defines and
+/// exports under those names, if anything. The program reads each `secret.k`
+/// in a procedure of its own, under a `guard`. Answers what the template's
+/// `secret` read and what each `secret.k` read, having checked from the
+/// library's own leaked spelling that its number fell in the range.
+fn a_template_writing_the_relinked_spelling<B: patina_runtime::Backend>(
+    interp: &patina_interpreter::Interpreter<B>,
+    bound: bool,
+) -> (String, Vec<String>)
+where
+    B::Error: std::fmt::Display,
+{
+    interp
+        .eval_program_owned(
+            "(define-library (t first)
+  (export spell-first)
+  (import (scheme base))
+  (begin
+    (define secret 'first)
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax spell-first (syntax-rules () ((_) (quote-it secret))))))
+(import (scheme base) (t first))",
+        )
+        .expect("the first library");
+    let first = number_after_secret(&answer_or_error(interp, "(spell-first)").expect("spells"));
+    let names: Vec<String> = (first..=first + COLLISION_RANGE)
+        .map(|k| format!("secret.{k}"))
+        .collect();
+    let (exports, definitions) = if bound {
+        (
+            names.join(" "),
+            names
+                .iter()
+                .map(|name| format!("(define {name} '{name})"))
+                .collect::<Vec<_>>()
+                .join("\n    "),
+        )
+    } else {
+        (String::new(), String::new())
+    };
+    let thunks = names
+        .iter()
+        .map(|name| format!("(lambda () {name})"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    interp
+        .eval_program_owned(&format!(
+            "(define-library (t collide)
+  (export both spell-second {exports})
+  (import (scheme base))
+  (begin
+    (define secret 42)
+    {definitions}
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax spell-second (syntax-rules () ((_) (quote-it secret))))
+    (define-syntax both (syntax-rules () ((_) (list secret (list {thunks})))))))
+(import (only (t collide) both spell-second))
+(define read (both))"
+        ))
+        .expect("the collision library");
+    let second = number_after_secret(&answer_or_error(interp, "(spell-second)").expect("spells"));
+    assert!(
+        (first..=first + COLLISION_RANGE).contains(&second),
+        "the range missed the library's spelling: {second} is not in {first}..={}",
+        first + COLLISION_RANGE
+    );
+    let private = answer_or_error(interp, "(car read)").expect("the template's secret");
+    let written = (0..names.len())
+        .map(|k| {
+            answer_or_error(
+                interp,
+                &format!("(guard (e (#t 'unbound)) ((list-ref (cadr read) {k})))"),
+            )
+            .expect("a guarded read")
+        })
+        .collect();
+    (private, written)
+}
+
+/// A template that writes a name spelled as relinking would spell its
+/// private `secret`, a name bound nowhere, reads nothing by it: the private
+/// `secret` reads the library's 42 and every `secret.k` is unbound, as
+/// chibi 0.12 and Gauche 0.9.15 answer for a template's unbound name. The
+/// template's own text carries its expansion's scope as the relinked
+/// identifier does, so relinking spells the private one clear of the names
+/// the template writes (`relink_spelling`'s `taken`). Until the switch the
+/// spelling was an alias, a name, and the `secret.k` that met it read 42.
+#[test]
+fn a_template_that_writes_the_relinked_spelling_unbound_reads_nothing() {
+    if !alone_in_a_process("a_template_that_writes_the_relinked_spelling_unbound_reads_nothing") {
+        return;
+    }
+    fn check<B: patina_runtime::Backend>(interp: patina_interpreter::Interpreter<B>, backend: &str)
+    where
+        B::Error: std::fmt::Display,
+    {
+        let (private, written) = a_template_writing_the_relinked_spelling(&interp, false);
+        assert_eq!(private, "42", "{backend}");
+        let bound: Vec<(usize, &String)> = written
+            .iter()
+            .enumerate()
+            .filter(|(_, read)| *read != "unbound")
+            .collect();
+        assert!(
+            bound.is_empty(),
+            "{backend}: names the template wrote, by their place in the range, read {bound:?}"
+        );
+        assert_eq!(written.len(), COLLISION_RANGE + 1, "{backend}");
+    }
+    check(common::vm_interpreter(), "VM");
+    check(common::tree_walker_interpreter(), "tree-walker");
 }
 
 /// A generated macro carries the spelling relinking gave its template's
@@ -1461,87 +1689,117 @@ fn a_minted_spelling_defined_by_the_program_leaves_earlier_code_alone() {
     );
 }
 
-// ─── Keyword aliases hold their target's record (#837, R6) ──────────────────
+// ─── A relinked keyword leaves nothing behind (#837, question 4 (a)) ────────
 //
-// A library macro whose template names a private macro (`priv`) gets a
-// relink alias in the program, `priv.N`. Since 4b.10's PR-1c the alias holds
-// the private keyword's binding record, not the library's namespace.
+// A library macro whose template names a private macro (`priv`) relinks it:
+// the identifier travels with its target's record in the form's table, and
+// in a generated macro's relinks. Until #837's second PR the expansion left
+// an alias in the program, `priv.N`, over the private keyword's record,
+// which kept the keyword's macro and so the library's namespace for good.
+// Nothing is installed now, and each test below failed before the switch.
 
-/// A library whose exported `m` expands to its private macro `priv`.
+/// A library whose exported `m` expands to its private macro `priv`, and
+/// whose `spell-priv` tells the spelling a template's `priv` has in an
+/// expansion (a relinked identifier used as data keeps it).
 const KEYWORD_LIB: &str = "(define-library (t kw)
-  (export m)
+  (export m spell-priv)
   (import (scheme base))
   (begin
     (define-syntax priv (syntax-rules () ((_ x) (+ x 1))))
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax spell-priv (syntax-rules () ((_) (quote-it priv))))
     (define-syntax m (syntax-rules () ((_ x) (priv x))))))
 ";
 
-/// The program namespace's aliases for `priv`: each spelling, its home and
-/// how many environments the alias entry's own trace reports.
-fn aliases_of_priv<B: patina_runtime::Backend>(
+/// Whether `spelling` is a name of the program's namespace: something
+/// `get` answers, or a slot.
+fn is_a_name<B: patina_runtime::Backend>(
     interp: &patina_interpreter::Interpreter<B>,
-) -> Vec<(String, &'static str, usize)> {
-    interp
-        .global_env()
-        .alias_homes_for_tests()
-        .into_iter()
-        .filter(|(spelling, _, _)| spelling.starts_with("priv."))
-        .collect()
+    spelling: &str,
+) -> bool {
+    let env = interp.global_env();
+    env.get(interp.backend().heap(), spelling).is_some() || env.local_slot(spelling).is_some()
 }
 
-/// After `(m 1)`, the expansion's alias for `priv` and its answer.
-fn a_keyword_alias_after_an_expansion<B: patina_runtime::Backend>(
-    interp: patina_interpreter::Interpreter<B>,
-) -> (String, Vec<(&'static str, usize)>) {
-    let answer = interp
-        .eval_program_owned(&format!(
-            "{KEYWORD_LIB}(import (scheme base) (t kw))\n(m 1)"
-        ))
-        .expect("the library, the import and the expansion");
-    let homes = aliases_of_priv(&interp)
-        .into_iter()
-        .map(|(_, home, envs)| (home, envs))
-        .collect();
-    (interp.display_tagged(&answer), homes)
-}
-
-/// The keyword alias an expansion of `m` leaves in the program is one, holds
-/// `priv`'s record, and its entry's own trace reports no environment: a
-/// collection reaches the library's namespace through it, if at all, only
-/// through what the record reaches (the next test). Before R6 the alias
-/// named the library's namespace, an edge its trace reported.
-#[test]
-fn a_keyword_alias_names_no_environment_directly() {
-    let expected = ("2".to_string(), vec![("keyword", 0)]);
-    assert_eq!(
-        [
-            a_keyword_alias_after_an_expansion(common::vm_interpreter()),
-            a_keyword_alias_after_an_expansion(common::tree_walker_interpreter()),
-        ],
-        [expected.clone(), expected],
-        "[VM, tree-walker]"
+/// The spelling relinking gives `(t kw)`'s `priv`, read from an expansion.
+fn spelling_of_priv<B: patina_runtime::Backend>(
+    interp: &patina_interpreter::Interpreter<B>,
+) -> String {
+    let spelling = interp.display_tagged(interp.eval_str_owned("(spell-priv)").expect("spells"));
+    assert!(
+        spelling.starts_with("priv") && spelling != "priv",
+        "the spelling relinking gave `priv`, read from an expansion: {spelling}"
     );
+    spelling
+}
+
+/// `(m 1)`'s answer, whether the spelling its `priv` was given is a name of
+/// the program's afterwards, and the program's names and records before the
+/// expansion and after it.
+fn a_relinked_keyword_after_an_expansion<B: patina_runtime::Backend>(
+    interp: patina_interpreter::Interpreter<B>,
+) -> (String, bool, NamesAndRecords, NamesAndRecords) {
+    interp
+        .eval_program_owned(&format!("{KEYWORD_LIB}(import (scheme base) (t kw))"))
+        .expect("the library and the import");
+    let before = names_and_records(&interp);
+    let answer = interp.eval_program_owned("(m 1)").expect("the expansion");
+    let answer = interp.display_tagged(&answer);
+    let after = names_and_records(&interp);
+    let spelling = spelling_of_priv(&interp);
+    (answer, is_a_name(&interp, &spelling), before, after)
+}
+
+/// An expansion of `m` leaves no alias for `priv` in the program: the
+/// spelling the expansion gave it is nothing `get` answers and no slot, and
+/// the namespace's names, its placeholders and the count of binding records
+/// are what they were before the expansion. Before the switch the spelling
+/// was an alias, which `get` answered with the private macro.
+#[test]
+fn a_relinked_keyword_leaves_no_alias() {
+    for (backend, (answer, named, before, after)) in [
+        (
+            "VM",
+            a_relinked_keyword_after_an_expansion(common::vm_interpreter()),
+        ),
+        (
+            "tree-walker",
+            a_relinked_keyword_after_an_expansion(common::tree_walker_interpreter()),
+        ),
+    ] {
+        assert_eq!(answer, "2", "{backend}");
+        assert!(!named, "{backend}: the relinked spelling is a name");
+        assert_eq!(after, before, "{backend}: the program's names and records");
+    }
 }
 
 /// Whether the library namespace `m` was defined in is alive after the
 /// library `lib` (`(t kw)`) is redefined and imported again and two
 /// collections run, with `(m 1)` expanded before the redefinition or not,
-/// and the program's aliases for `priv` then. `setup` is what the first
-/// program defines before `lib`, and is not redefined. The namespace is
-/// watched through `m`'s macro, whose definition environment it is, by a
-/// `Weak` taken before the redefinition.
+/// and whether the spelling that expansion gave `priv` is a name of the
+/// program's then. `setup` is what the first program defines before `lib`,
+/// and is not redefined. The namespace is watched through `m`'s macro,
+/// whose definition environment it is, by a `Weak` taken before the
+/// redefinition.
+///
+/// The expansion, the redefinition and the reading are separate top-level
+/// forms: a form's pool roots the records it pooled, a relinked keyword's
+/// among them, until the form is loaded (the VM) or has run (the
+/// tree-walker), so a reading inside the expanding form would say nothing
+/// of what is kept afterwards.
 fn the_old_library_namespace_after_a_redefinition<B: patina_runtime::Backend>(
     interp: patina_interpreter::Interpreter<B>,
     setup: &str,
     lib: &str,
     expand: bool,
-) -> (bool, Vec<(&'static str, usize)>) {
+) -> (bool, bool) {
     interp
         .eval_program_owned(&format!(
             "{setup}{lib}(import (scheme base) (patina debug) (t kw))\n{}",
             if expand { "(m 1)" } else { "" }
         ))
         .expect("the library and the import");
+    let spelling = expand.then(|| spelling_of_priv(&interp));
     let old = {
         let env = interp.global_env();
         let heap = interp.backend().heap();
@@ -1558,27 +1816,20 @@ fn the_old_library_namespace_after_a_redefinition<B: patina_runtime::Backend>(
     interp
         .eval_program_owned(&format!("{lib}(import (t kw))\n(gc) (gc)"))
         .expect("the redefinition, the import and the collections");
-    let homes = aliases_of_priv(&interp)
-        .into_iter()
-        .map(|(_, home, envs)| (home, envs))
-        .collect();
-    (old.upgrade().is_some(), homes)
+    let named = spelling.is_some_and(|spelling| is_a_name(&interp, &spelling));
+    (old.upgrade().is_some(), named)
 }
 
-/// R6 alone does not release a replaced library's namespace whose own
-/// keyword an expansion relinked (#837's question 4, #614's keyword
-/// variant; the next test is the imported keyword's case, which R6 does
-/// release): the program's keyword alias is never
-/// removed, and its record reaches its cell, the private macro, and the
-/// macro's `definition_env`, the old namespace. With no expansion before the
-/// redefinition there is no alias, and the namespace goes, so the alias is
-/// what keeps it. This pins the edge the design forecast; it flips when
-/// keyword aliases travel with the syntax, the owner's ruling (a) of
-/// 2026-11-16 on question 4.
+/// A replaced library's namespace whose own keyword an expansion relinked
+/// is released (#837's question 4 (a), #614's keyword variant, R-B): the
+/// keyword's record was in the expanding form's pool only, the emitted code
+/// names nothing of it, and nothing is left in the program under the
+/// spelling. With the expansion or without, the namespace goes. Until the
+/// switch the program's alias kept the record, its cell, the private macro
+/// and the macro's `definition_env`, the old namespace, for good.
 #[test]
-fn a_keyword_aliass_record_still_keeps_its_macros_definition_namespace() {
-    let kept = (true, vec![("keyword", 0)]);
-    let released = (false, Vec::new());
+fn a_relinked_keyword_keeps_no_definition_namespace() {
+    let released = (false, false);
     assert_eq!(
         [
             the_old_library_namespace_after_a_redefinition(
@@ -1606,7 +1857,7 @@ fn a_keyword_aliass_record_still_keeps_its_macros_definition_namespace() {
                 false
             ),
         ],
-        [kept.clone(), kept, released.clone(), released],
+        [released; 4],
         "[VM and tree-walker with the expansion, VM and tree-walker without]"
     );
 }
@@ -1614,9 +1865,11 @@ fn a_keyword_aliass_record_still_keeps_its_macros_definition_namespace() {
 /// A library like [`KEYWORD_LIB`] whose `priv` is imported from another
 /// library, [`PRIV_LIB`], which is defined once.
 const IMPORTED_KEYWORD_LIB: &str = "(define-library (t kw)
-  (export m)
+  (export m spell-priv)
   (import (scheme base) (t kw-priv))
   (begin
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax spell-priv (syntax-rules () ((_) (quote-it priv))))
     (define-syntax m (syntax-rules () ((_ x) (priv x))))))
 ";
 
@@ -1628,16 +1881,16 @@ const PRIV_LIB: &str = "(define-library (t kw-priv)
     (define-syntax priv (syntax-rules () ((_ x) (+ x 1))))))
 ";
 
-/// What R6 releases: a replaced library whose relinked keyword it imports.
-/// The program's alias holds `(t kw)`'s record for `priv`, an import record
-/// over `(t kw-priv)`'s cell, whose macro's definition environment is
-/// `(t kw-priv)`; nothing it reaches leads back to the old `(t kw)`, which
-/// goes while the alias stays. Before R6 the alias named the old `(t kw)`
-/// and kept it, as it keeps a library whose own keyword it relinks (the
-/// test above).
+/// A replaced library whose relinked keyword it imports is released too,
+/// and nothing stays in the program for it. The expansion's table entry
+/// was `(t kw)`'s record for `priv`, an import record over `(t kw-priv)`'s
+/// cell, whose macro's definition environment is `(t kw-priv)`; nothing it
+/// reached led back to the old `(t kw)`, and nothing holds it now. Until
+/// the switch the old `(t kw)` went and the alias stayed, with a symbol, a
+/// pair and two table entries for each redefinition (#614's `relinkki`).
 #[test]
-fn a_keyword_alias_to_an_imported_keyword_releases_the_replaced_library() {
-    let released = (false, vec![("keyword", 0)]);
+fn a_relinked_imported_keyword_leaves_nothing_of_the_replaced_library() {
+    let released = (false, false);
     assert_eq!(
         [
             the_old_library_namespace_after_a_redefinition(
@@ -1653,7 +1906,7 @@ fn a_keyword_alias_to_an_imported_keyword_releases_the_replaced_library() {
                 true
             ),
         ],
-        [released.clone(), released],
+        [released; 2],
         "[VM, tree-walker]"
     );
 }

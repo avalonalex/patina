@@ -406,7 +406,19 @@ fi
 # 167767, and 761 without; hygiene_matrix's trace test's fourth program
 # raised its count at 16 to 22310, its test count left; and
 # relinked-names.scm's row for the generated definer raised scheme_suite's
-# at 4096 to 10652 and left it at 385 without; the minimums left)
+# at 4096 to 10652 and left it at 385 without; the minimums left; and for
+# the switch itself, from which relinking installs no alias and interns
+# nothing: macro_definition_env's test count for one more (the alias scan
+# of a definition over the spelling went, its successor having landed with
+# the first step; a relinked spelling is no name in a program's text; a
+# template that writes it unbound reads nothing, which runs alone in a
+# child for the range it writes), which raised its count at 16 to 36200,
+# and to 115 without; hygiene_matrix's for a program's identifier spelled
+# as a relinked literal, to 22388, and 6 without; and six rows of
+# relinked-names.scm raised scheme_suite's at 4096 to 10653 and left it at
+# 385 without; the minimums left. The switch moved no count of a target
+# whose tests it left alone: gc_vm, gc_tree_walker, host_environments and
+# vm_callprimitive read as they did)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -417,14 +429,14 @@ TARGETS=(
     "gc_tree_walker 16 70005 40"              # 84050 (55960)
     "gc_vm 16 19868 53"                       # 39737 (17762)
     "host_environments 16 83806 35"           # 167767 (761)
-    "hygiene_matrix 16 11136 20"              # 22310 (6)
+    "hygiene_matrix 16 11136 21"              # 22388 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
-    "macro_definition_env 16 16626 40"        # 35302 (113): see the header
+    "macro_definition_env 16 16626 41"        # 36200 (115): see the header
     "owned_handles 16 62714 9"                # 125648 (14)
     "rooted_loading 16 371 6"                 # 1269 (10)
     "vm_callprimitive 16 545 22"              # 1669 (0)
-    "scheme_suite 4096 1534 11"               # 10652 (385): see the header
+    "scheme_suite 4096 1534 11"               # 10653 (385): see the header
 )
 
 OUT=$(mktemp -d)

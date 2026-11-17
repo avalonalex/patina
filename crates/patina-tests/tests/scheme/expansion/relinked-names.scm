@@ -31,6 +31,12 @@
 ;;   generated, and is bound at its own scopes in each run, where it was
 ;;   bound by name and the second run redefined the first's keyword,
 ;;   `(two 3)`. Gauche answers as asserted; chibi does not (below).
+;; - The six rows under "The spelling is no name". Until the switch the
+;;   spelling a relinked identifier was given was an alias in the using
+;;   namespace, a name a program could read, assign, expand, define over
+;;   and match as a literal. In the file's order the rows answered `(42
+;;   42)`, `(mine 42)`, `(assigned hacked)`, `((leak-kw 1) (leak-kw 9)
+;;   (leak-kw 3))`, `(matched matched other other)` and `(hit miss)`.
 ;;
 ;; ── Why this file needs libraries, and what that costs ─────────────────────
 ;;
@@ -38,14 +44,14 @@
 ;; defined in libraries inline. **chibi 0.12 cannot run this file** — it does
 ;; not take `define-library` in a script; `expansion/template-references.scm`
 ;; has the measurement — and is registered `*` / `incomplete` in
-;; `DIVERGENCES.tsv`. Gauche 0.9.15 runs it and answers all forty-three
+;; `DIVERGENCES.tsv`. Gauche 0.9.15 runs it and answers all forty-nine
 ;; rows as asserted.
 ;;
 ;; Every row was also run under chibi 0.12 with the libraries as `.sld`
 ;; files and the rest of this file as the program (2026-11-16; the second
-;; batch's four rows, the definer row, and the whole file again,
-;; 2026-11-17). It agrees on thirty-five of the forty-three. The eight it
-;; does not are seven of the nine rows on a keyword an expansion introduces
+;; batch's four rows, the definer row, the six rows on the spelling, and
+;; the whole file again, 2026-11-17). It agrees on forty-one of the
+;; forty-nine. The eight it does not are seven of the nine rows on a keyword an expansion introduces
 ;; under its library's private spelling, and the generated definer's row;
 ;; the comment above those rows counts them. chibi's
 ;; top-level `define-syntax` lands on the *library's* keyword, so the
@@ -418,11 +424,12 @@
 ;; First in the file, while the program binds no `secret`. The private
 ;; `secret` reads the library's 42, and every exported `secret.k` its own
 ;; value: the second element lists the ones that did not. A spot check: the
-;; spelling a relinked `secret` is given is numbered by a counter of the
-;; process, so the row meets one of the forty only while that counter is
-;; under forty, as when this file is run alone; the suite's driver runs it
-;; after other files, past all forty. The exhaustive check is a Rust test
-;; of #837's second PR.
+;; spelling a relinked `secret` is given is a matter of the implementation,
+;; and a library's text is written before anything could tell it, so
+;; whether one of the forty meets it depends on what ran before this file.
+;; The sure checks are Rust tests, which read the spelling from an
+;; expansion and write a range of names around it
+;; (`macro_definition_env.rs`).
 (define collided (collide-all))
 
 (test-equal "a template's own name spelled like a relinked one reads its own value"
@@ -687,6 +694,159 @@
 (test-equal "a generated definer run twice keeps two keywords"
   '(((one 1) (lib-dd-priv 2)) ((one 3) (two 4) (lib-dd-priv 5)))
   (list dd-first (list (dd-g 3) (dd-g2 4) (use-dd-priv 5))))
+
+;; ─── The spelling is no name ────────────────────────────────────────────────
+
+;; The rows the switch added (the header lists what each answered before).
+;;
+;; A relinked identifier is given a spelling of its own in the expansion,
+;; and a program can learn it: a quoting macro handed the identifier
+;; answers that spelling as a symbol, where chibi and Gauche answer the name
+;; the template wrote (an open defect of its own: a relinked identifier as
+;; data keeps the spelling relinking gave it). `(spell-…)` is that leak.
+;; The rows then use the symbol as a program would a name, through `eval`,
+;; and want what every implementation answers for a name the program bound
+;; nowhere: the spelling is bound nowhere either.
+;;
+;; **Each row is right under both readings of the leak.** Under chibi and
+;; Gauche the symbol is the written name, so each row has a private name of
+;; its own, which the program binds nowhere in this file, before or after:
+;; a row that left `leak-defined` defined would otherwise make the next
+;; row's assignment succeed there. The two literal rows bind the written
+;; name to something of another library's, `(probe leaknames)`, where it
+;; would otherwise be unbound, since chibi and Gauche disagree on a
+;; literal against an unbound name of its spelling (the header's last
+;; paragraph before "Staging").
+;;
+;; The first four rows `eval` in `(interaction-environment)`. That is this
+;; program's top level under Patina and chibi and another module under
+;; Gauche (`gosh -r7` runs a script in `r7rs.user` and answers `user`), so
+;; the rows ask it for nothing the program defined. The two literal rows
+;; need a macro in the environment they `eval` in, and take it from a
+;; library through `(environment …)`, which all three stage alike. The
+;; shape those two cannot stage, a program's own identifier and the
+;; generated macro in **one** namespace, is a Rust test
+;; (`a_program_identifier_spelled_as_a_relinked_literal_does_not_match`,
+;; `hygiene_matrix.rs`).
+(define-library (probe leak)
+  (export get-leak-read spell-leak-read
+          get-leak-defined spell-leak-defined
+          get-leak-assigned spell-leak-assigned
+          use-leak-kw spell-leak-kw
+          def-leak-matcher use-leak-lit spell-leak-lit
+          feed-leak spell-leak-fed)
+  (import (scheme base))
+  (begin
+    (define leak-read 42)
+    (define leak-defined 42)
+    (define leak-assigned 42)
+    (define leak-lit 'the-library-binding)
+    (define leak-fed 'the-library-binding)
+    (define-syntax leak-kw (syntax-rules () ((_ x) (list 'leak-kw x))))
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax get-leak-read (syntax-rules () ((_) leak-read)))
+    (define-syntax spell-leak-read
+      (syntax-rules () ((_) (quote-it leak-read))))
+    (define-syntax get-leak-defined (syntax-rules () ((_) leak-defined)))
+    (define-syntax spell-leak-defined
+      (syntax-rules () ((_) (quote-it leak-defined))))
+    (define-syntax get-leak-assigned (syntax-rules () ((_) leak-assigned)))
+    (define-syntax spell-leak-assigned
+      (syntax-rules () ((_) (quote-it leak-assigned))))
+    (define-syntax use-leak-kw (syntax-rules () ((_ x) (leak-kw x))))
+    (define-syntax spell-leak-kw (syntax-rules () ((_) (quote-it leak-kw))))
+    (define-syntax def-leak-matcher
+      (syntax-rules ()
+        ((_ name)
+         (define-syntax name
+           (syntax-rules (leak-lit)
+             ((_ leak-lit) 'matched)
+             ((_ anything) 'other))))))
+    (define-syntax use-leak-lit (syntax-rules () ((_ m) (m leak-lit))))
+    (define-syntax spell-leak-lit (syntax-rules () ((_) (quote-it leak-lit))))
+    (define-syntax feed-leak (syntax-rules () ((_ k) (k leak-fed))))
+    (define-syntax spell-leak-fed
+      (syntax-rules () ((_) (quote-it leak-fed))))))
+
+;; Another library's bindings of the two literal names.
+(define-library (probe leaknames)
+  (export leak-lit leak-fed)
+  (import (scheme base))
+  (begin
+    (define leak-lit 'another-librarys)
+    (define leak-fed 'another-librarys)))
+
+;; A library that runs `(probe leak)`'s generator: `leak-match`'s literal
+;; is `(probe leak)`'s private `leak-lit`, relinked here, and
+;; `leak-lit-spelling` is the spelling it was given here.
+(define-library (probe leakuser)
+  (export leak-match leak-lit-spelling)
+  (import (scheme base) (probe leak))
+  (begin
+    (def-leak-matcher leak-match)
+    (define leak-lit-spelling (spell-leak-lit))))
+
+(import (scheme eval) (scheme repl) (probe leak) (probe leakuser))
+
+(test-equal "a relinked template reference leaves no name behind"
+  '(no-such-name 42)
+  (list (guard (e (#t 'no-such-name))
+          (eval (spell-leak-read) (interaction-environment)))
+        (get-leak-read)))
+
+;; `read-leak-defined` expanded the getter before the spelling is defined.
+(define (read-leak-defined) (get-leak-defined))
+(eval (list 'define (spell-leak-defined) ''mine) (interaction-environment))
+
+(test-equal "nor a name whose definition captures earlier code"
+  '(42 42)
+  (list (read-leak-defined) (get-leak-defined)))
+
+(test-equal "nor one an assignment reaches"
+  '(refused 42)
+  (list (guard (e (#t 'refused))
+          (eval (list 'set! (spell-leak-assigned) ''hacked)
+                (interaction-environment))
+          'assigned)
+        (get-leak-assigned)))
+
+;; #873.
+(test-equal "a relinked keyword leaves no name behind"
+  '((leak-kw 1) no-such-keyword (leak-kw 3))
+  (list (use-leak-kw 1)
+        (guard (e (#t 'no-such-keyword))
+          (eval (list (spell-leak-kw) 9) (interaction-environment)))
+        (use-leak-kw 3)))
+
+;; `leak-match` and the spelling its literal was given come from
+;; `(probe leakuser)`. The library's own mention matches; the spelling as a
+;; program writes it, the written name bound by another library, and a
+;; number do not.
+(define leak-matching (environment '(probe leakuser) '(probe leaknames)))
+
+(test-equal "a program's identifier spelled as a relinked literal does not match it"
+  '(matched other other other)
+  (list (use-leak-lit leak-match)
+        (eval (list 'leak-match leak-lit-spelling) leak-matching)
+        (eval '(leak-match leak-lit) leak-matching)
+        (eval '(leak-match 7) leak-matching)))
+
+;; The other direction: a macro whose literal is spelled as the library's
+;; relinked `leak-fed`, handed the library's own. The spelling is read in
+;; the environment the macro is then defined and used in.
+(define leak-feeding
+  (environment '(scheme base) '(probe leak) '(probe leaknames)))
+(define leak-fed-spelling (eval '(spell-leak-fed) leak-feeding))
+
+(test-equal "nor does a relinked identifier match a literal a program spelled so"
+  '(miss miss)
+  (eval (list 'let-syntax
+              (list (list 'leak-k
+                          (list 'syntax-rules (list leak-fed-spelling)
+                                (list (list '_ leak-fed-spelling) ''hit)
+                                '((_ x) 'miss))))
+              '(list (feed-leak leak-k) (leak-k 7)))
+        leak-feeding))
 
 ;; ─── A definition an expansion produces beside a reference ──────────────────
 

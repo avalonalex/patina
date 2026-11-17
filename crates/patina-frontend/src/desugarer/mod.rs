@@ -231,60 +231,88 @@ fn stamp_expansion_source<'gc>(
     }
 }
 
-/// The aliases one expansion's relinking installs, keyed by spelling, and
-/// the scope that says which occurrences they apply to.
-struct Renames<'a, 'gc> {
-    aliases: &'a HashMap<Rc<str>, Aliases<'gc>>,
+/// The spellings one expansion's relinking gave, keyed by the spelling the
+/// template wrote, and the scope that says which occurrences they apply to.
+struct Renames<'a> {
+    aliases: &'a HashMap<Rc<str>, Aliases>,
     /// The expansion's own scope — see `MacroExpansion::scope`.
     expansion_scope: ScopeId,
     /// The pairs and vectors the rewrite is inside (`rewrite_refs`).
     open: RefCell<OpenNodes>,
 }
 
-/// The aliases made for one spelling.
-enum Aliases<'gc> {
+/// The spellings relinking gave the mentions of one written spelling.
+enum Aliases {
     /// The macro mentions the spelling under one identity, so every
     /// occurrence the expansion introduced is that mention. All a written
     /// macro has, and the usual case for a generated one.
-    Sole(Value<'gc>),
+    Sole(Rc<str>),
     /// The macro mentions it under several, which only a generated macro can
     /// (`CompiledMacro::inherited_identifiers`), and they need not mean one
-    /// binding. Each identity that was aliased, as the scopes the mention
+    /// binding. Each identity that was relinked, as the scopes the mention
     /// carries in the template — an occurrence in the expansion carries those
-    /// and the expansion's scope — with its own alias.
-    PerIdentity(Vec<(ScopeSet, Value<'gc>)>),
+    /// and the expansion's scope — with its own spelling.
+    PerIdentity(Vec<(ScopeSet, Rc<str>)>),
 }
 
-/// Monotonic counter for the unique names given to definition-environment
-/// aliases. Never reused, so an alias cannot collide with a user binding or
-/// with an alias from another expansion.
-fn next_alias_id() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    NEXT.fetch_add(1, Ordering::Relaxed)
+/// `name` as relinking spells the mention `identity` of it by a macro defined
+/// in `def_env` (#837): `name.<environment id>`, then `-<scope id>` for each
+/// scope the mention carries, then `.<environment id>` again for as long as
+/// `taken` has the candidate.
+///
+/// A function, and nothing remembers what it answered: the spelling is bound
+/// nowhere and interned nowhere, so it is no name to any reader. It is what
+/// tells a relinked identifier from the others that carry its expansion's
+/// scope, in the form's table (`EarlyBinding::relinked`), and only the
+/// macro's own templates write those: `taken` is what keeps it clear of the
+/// names they write and of the spellings the same expansion has already
+/// given, so that within one expansion a spelling means one binding. Across
+/// expansions the table's guard separates them, and nothing compares the
+/// spellings of two.
+///
+/// Paired with [`is_quote_spelling`], the only reader of the shape.
+fn relink_spelling(
+    name: &str,
+    def_env: &Environment,
+    identity: &ScopeSet,
+    taken: impl Fn(&str) -> bool,
+) -> Rc<str> {
+    use std::fmt::Write;
+    let id = def_env.env_id();
+    let mut spelling = format!("{name}.{id}");
+    for scope in identity.iter() {
+        let _ = write!(spelling, "-{}", scope.0);
+    }
+    while taken(&spelling) {
+        let _ = write!(spelling, ".{id}");
+    }
+    Rc::from(spelling)
 }
 
-/// The name to give an alias for `name`. Paired with [`alias_base`], which
-/// is the only reader of the shape: keeping the two together is what stops
-/// a change here from silently making relinked heads unrecognisable there.
-fn alias_name(name: &str) -> String {
-    format!("{name}.{}", next_alias_id())
+/// Whether relinking may not give `candidate` to a mention of `compiled`'s
+/// (`relink_spelling`'s `taken`): it is a name the macro's own templates
+/// write, or one an enclosing expansion put in them, either of which the
+/// expansion introduces under its own scope as it does the mention; or it
+/// is one of the spellings `given` to another mention in this expansion.
+fn spelling_is_taken(
+    compiled: &patina_core::CompiledMacro,
+    given: &[Rc<str>],
+    candidate: &str,
+) -> bool {
+    compiled.template_symbols.contains(candidate)
+        || compiled.inherited_identifiers.contains_key(candidate)
+        || given.iter().any(|spelling| &**spelling == candidate)
 }
 
-/// The name an alias was made from, if `spelling` is one.
-fn alias_base(spelling: &str) -> Option<&str> {
-    let (base, id) = spelling.rsplit_once('.')?;
-    (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())).then_some(base)
-}
-
-/// Is this spelling `quote`, or an alias made from it?
+/// Is this spelling `quote`, or one relinking gave a `quote`?
 ///
 /// The cheap half of the head test: answered from a `&str` the caller
 /// already has, so the environment lookup in
 /// [`Desugarer::head_resolves_to_quote`] is reached only for a head that
-/// could be `quote` at all.
+/// could be `quote` at all. A filter: a name a program wrote that starts so
+/// passes it, and the resolution decides.
 fn is_quote_spelling(name: &str) -> bool {
-    name == "quote" || alias_base(name) == Some("quote")
+    name == "quote" || name.starts_with("quote.")
 }
 
 /// The spelling a head must have for `(apply f args)` to be lowered to
@@ -400,6 +428,18 @@ struct Relinked {
     /// The spelling the template wrote, for the emitted node and for
     /// messages.
     written: Rc<str>,
+}
+
+/// One mention relinking decides (`Desugarer::note_relinked`): the spelling
+/// a macro's templates wrote, under one of the identities they mention it
+/// by, in one expansion.
+struct Mention<'a> {
+    /// The expansion's scope, the guard of its entries in the form's table.
+    guard: ScopeId,
+    /// The spelling the templates wrote.
+    name: &'a Rc<str>,
+    /// The scopes the mention carries in the template.
+    identity: &'a ScopeSet,
 }
 
 /// A relinked reference a form emitted (`EarlyBinding::relinked_emits`).
@@ -939,8 +979,10 @@ impl<'a> Desugarer<'a> {
     /// desugared from its original text, and expanded again, with every name
     /// found here bound. That is one extra expansion per macro use at a body's
     /// top level, and it keeps this a pre-pass — nothing it does is visible
-    /// except the names. Source stamping is skipped; relinking stays in the
-    /// scan's isolated environment so library-private syntax is recognized.
+    /// except the names. Source stamping is skipped; what the scan's
+    /// expansions relink goes in a table of the scan's own
+    /// (`EarlyBinding::for_scan`), so library-private syntax is recognized
+    /// and nothing of it reaches the form.
     /// An expansion that fails is ignored, since the dispatch
     /// that desugars the form expands it again and reports the failure.
     ///
@@ -1073,7 +1115,6 @@ impl<'a> Desugarer<'a> {
                     expansion.form,
                     expansion.scope,
                     &compiled_macro,
-                    Some(&self.env),
                     cx,
                 );
                 let mut found = Vec::new();
@@ -1560,11 +1601,18 @@ impl<'a> Desugarer<'a> {
     ///
     /// A `syntax-rules` template may name a helper private to the library that
     /// defines the macro. The expansion carries only the bare name, so at the
-    /// use site it compiles to a global load that is not there. Each such name
-    /// gets a uniquely-named alias in the use site's global environment
-    /// pointing back at the definition environment: one per target, which
-    /// later expansions reuse (`Environment::relink_alias`, #611), where each
-    /// expansion used to mint its own and leave it behind.
+    /// use site it would compile to a global load that is not there. Each
+    /// such mention is *relinked*: the identifiers the expansion introduced
+    /// for it are given a spelling of their own (`relink_spelling`), and the
+    /// form's table says they mean the record of the binding the macro's
+    /// own environment has for the name (`note_relinked`, #837). Nothing is
+    /// installed in any environment and nothing is interned: the spelling is
+    /// bound nowhere, so it is no name to a program, and what the
+    /// identifiers mean travels with them, in the form's table and, across
+    /// forms, in the macro object of a generated macro that keeps one
+    /// (`relinks_carried_by`, `put_back_carried`). Until #837's second PR
+    /// each got an alias in the use site's global environment instead, a
+    /// name a program could read and define over.
     ///
     /// The definition binding wins whenever the two environments disagree
     /// (R7RS 4.3.2), so a use-site binding of the same name does not displace
@@ -1583,21 +1631,25 @@ impl<'a> Desugarer<'a> {
     ///
     /// A written macro mentions a name under one identity, its definition
     /// scopes. A generated one can mention it under several, so the decision
-    /// and the alias are per identity ([`Aliases`]).
+    /// and the spelling are per identity ([`Aliases`]).
     ///
-    /// Each mention that gets an alias also gets an entry in the form's
-    /// table (#837, `note_relinked`): the record of the binding it means,
-    /// asked of the macro's own environment (`Cx::relink_link`, the owner's
-    /// ruling E1), under the expansion's scope and the alias's spelling.
-    /// `resolve_reference` answers an identifier of the expansion from the
-    /// table before its spelling, so a reference among them is emitted as a
-    /// link to that record and the alias is no longer what it reads by.
+    /// The record is asked of the macro's own environment
+    /// (`Cx::relink_link`, the owner's ruling E1) and entered under the
+    /// expansion's scope and the spelling. `resolve_reference` answers an
+    /// identifier of the expansion from the table before its spelling: a
+    /// reference among them is emitted as a link to that record, a head as
+    /// the keyword the record holds, and the literal matcher compares the
+    /// record's location.
+    ///
+    /// A mention this macro carries from an earlier expansion, already in
+    /// the table, is not relinked again by its name: it keeps its spelling
+    /// and its record, whatever the macro's environment has since defined
+    /// under that spelling.
     fn link_definition_env_refs<'gc>(
         &self,
         expanded: Value<'gc>,
         expansion_scope: ScopeId,
         compiled_macro: &patina_core::CompiledMacro,
-        scan_env: Option<&Rc<Environment>>,
         cx: &mut FormCx<'_, 'gc>,
     ) -> Value<'gc> {
         let Some(def_env) = compiled_macro.definition_env.as_ref() else {
@@ -1627,20 +1679,10 @@ impl<'a> Desugarer<'a> {
         // keeps the tree walk to a map lookup per leaf, and skips it entirely
         // when nothing needs relinking — which is the usual outcome, since
         // `let`, `cond` and friends only reference primitives.
-        //
-        // Aliases must land in the environment the code will actually be
-        // resolved in. `self.env` may be a transient child created for a
-        // `let-syntax` or internal-define body and dropped when desugaring
-        // ends, so walk to the root of the chain. The preliminary definition
-        // scan instead supplies its private environment: no speculative alias
-        // or expansion identity may reach the real program.
-        let target_env = scan_env.cloned().unwrap_or_else(|| self.env.root());
-        // Its alias installs go through the context, over the namespace
-        // view, a frame's as a namespace's: the view asserts no kind, and the
-        // context's heap says which target is a keyword, whose record the
-        // alias holds (#837, R6).
-        let target = NamespaceView::of(&target_env);
         let mut renames: HashMap<Rc<str>, Aliases> = HashMap::new();
+        // The spellings this call has given, which no other mention of it
+        // may be given (`relink_spelling`'s `taken`).
+        let mut given: Vec<Rc<str>> = Vec::new();
         // Each name once: the written ones, then those only an enclosing
         // expansion put here. A name can be both.
         let names = template_symbols.iter().chain(
@@ -1673,7 +1715,7 @@ impl<'a> Desugarer<'a> {
             // Measured 2026-09-19 over every suite file, the compat corpus
             // and both Larceny lanes, some 34,000 decisions: none differs
             // from what the value comparison decided, so this costs no
-            // expansion an alias it did not have. It decides differently only
+            // expansion a relinking it did not have. It decides differently only
             // where two bindings hold equal values — which is the defect. Nor
             // does asking cost more than comparing did: 12,000 expansions of
             // a library macro, a 16-library start-up and chibi's suite all
@@ -1712,7 +1754,7 @@ impl<'a> Desugarer<'a> {
             let one_identity = identities.len() == 1;
 
             // A name the definition site bound *lexically* is not free, and
-            // aliasing it would defeat the binding it actually names.
+            // relinking it would defeat the binding it actually names.
             //
             // `get` is the name-only view of the environment and deliberately
             // skips local variables, so it cannot tell `(let ((f …)) …)` around
@@ -1722,14 +1764,14 @@ impl<'a> Desugarer<'a> {
             // shadows the by-name view here, and ordinary set-of-scopes
             // resolution is what should decide the reference. Without this, a
             // `let-syntax` transformer's `(f x)` inside `(let ((f …)) …)` was
-            // aliased to whatever `f` the enclosing program happened to define
+            // relinked to whatever `f` the enclosing program happened to define
             // — Larceny's `base` measured it as `number->string`.
             //
             // An empty scope set *is* the name-only view, so the top-level
             // and library case — the common one — answers without a walk.
             //
             // An ambiguous answer is also a disagreement: it has not
-            // identified a binding, so there is none to alias to.
+            // identified a binding, so there is none to relink to.
             //
             // The question is asked of the *binding*, not of its value
             // (`Environment::name_reaches_binding_of`). It compared values
@@ -1741,30 +1783,30 @@ impl<'a> Desugarer<'a> {
             // of the generator introduced — and two such definitions
             // routinely start out equal (`(define count 0)`). Compared by
             // value they read as one binding, so both generated macros were
-            // aliased onto whichever the name alone reaches and bumped a
+            // relinked onto whichever the name alone reaches and bumped a
             // single counter from outside the library; and once the values
             // diverged the same use was refused, so what a program answered
-            // depended on what it had already run. An alias *by name* can
-            // only point at what the name alone reaches, so a mention that
-            // means another binding never gets one: it gets an alias to the
+            // depended on what it had already run. A target *by name* can
+            // only be what the name alone reaches, so a mention that means
+            // another binding never gets one: it is relinked to the
             // binding itself where the last paragraph below can name it, and
             // is otherwise left to scoped resolution rather than answered
             // with the wrong one. Re-audit if internal defines' scoped
             // bindings ever become relink targets.
             //
-            // Decided per identity, and each identity that passes gets an
-            // alias of its own, because a generated macro can mention one
+            // Decided per identity, and each identity that passes gets a
+            // spelling of its own, because a generated macro can mention one
             // spelling as two different things: `(let ((tmp 'local)) (list
             // tmp arg))` with the library's own `tmp` arriving through `arg`
             // holds a `tmp` the generator introduced, which the template
-            // binds, and a `tmp` with no scopes, which is free. One alias for
+            // binds, and a `tmp` with no scopes, which is free. One name for
             // the spelling renamed both alike and the `let` captured the free
             // one — `(local local)` where chibi and Gauche answer `(local
             // lib)`. A written macro cannot do that (everything written in it
-            // shares its definition scopes), which is why one alias per name
-            // was enough before #402.
+            // shares its definition scopes), which is why one per name was
+            // enough before #402.
             //
-            // **A mention that means another binding gets an alias to *that*
+            // **A mention that means another binding is relinked to *that*
             // binding, where it is a top-level definition a macro introduced**
             // (#408). Leaving it to scoped resolution was the right refusal
             // and not an answer: the use site is another library or a
@@ -1777,7 +1819,7 @@ impl<'a> Desugarer<'a> {
             // definition the mention's scopes select and how the backend
             // holds it; a lexical binding is still left alone, for the
             // reason above.
-            let mut made: Vec<(ScopeSet, Value<'gc>)> = Vec::new();
+            let mut made: Vec<(ScopeSet, Rc<str>)> = Vec::new();
             for identity in identities {
                 // A macro exported from a splice can refer to a private local
                 // keyword. Its scopes identify a real expansion-time binding,
@@ -1796,24 +1838,20 @@ impl<'a> Desugarer<'a> {
                             name,
                             RelinkTarget::ScopedKeyword(&scopes),
                         );
-                        let alias = cx.relink_alias(
-                            target,
-                            home,
-                            name.clone(),
-                            Some(scopes),
-                            identity,
-                            || Rc::from(alias_name(name)),
-                        );
-                        self.note_relinked(
-                            expansion_scope,
-                            name,
-                            &alias,
+                        if let Some(spelling) = self.note_relinked(
+                            Mention {
+                                guard: expansion_scope,
+                                name,
+                                identity,
+                            },
+                            compiled_macro,
+                            &mut given,
                             RelinkKind::ScopedKeyword,
                             linkable,
                             cx,
-                        );
-                        let symbol = cx.intern_symbol(&alias);
-                        made.push((identity.clone(), symbol));
+                        ) {
+                            made.push((identity.clone(), spelling));
+                        }
                     }
                     continue;
                 }
@@ -1822,6 +1860,16 @@ impl<'a> Desugarer<'a> {
                         // The name is the binding. Nothing to do where the use
                         // site's is the same one, or where it reaches nothing.
                         Ok(true) if def_location.is_none() || same_by_name => continue,
+                        // Nor for a mention the form's table already
+                        // answers: an identifier an earlier expansion
+                        // relinked, which this macro carries with its record
+                        // (`put_back_carried` ran before the expansion). It
+                        // keeps its spelling and its scopes and means that
+                        // record. That its spelling is also a name here, one
+                        // the macro's own environment has since defined, is
+                        // a definition of the program's, and no binding of
+                        // the identifier's (#837).
+                        Ok(true) if self.early.relinked(name, identity).is_some() => continue,
                         Ok(true) => None,
                         Ok(false) => {
                             match cx.introduced_definition(
@@ -1834,7 +1882,7 @@ impl<'a> Desugarer<'a> {
                                     let home = def_env.root();
                                     // Inside the library that holds it, scoped
                                     // resolution already sees it.
-                                    if Rc::ptr_eq(&home, &target_env) {
+                                    if Rc::ptr_eq(&home, &self.env.root()) {
                                         continue;
                                     }
                                     Some((home, found))
@@ -1844,10 +1892,6 @@ impl<'a> Desugarer<'a> {
                         }
                         Err(_) => continue,
                     };
-                // One alias per target, however many expansions ask (#611):
-                // a remembered one is reused, and its symbol is already
-                // interned.
-                let mint = || Rc::from(alias_name(name));
                 // The target's record (#837), asked of the real definition
                 // environment, never of its declarations view: a
                 // declaration's cell is a location of this form's
@@ -1866,26 +1910,24 @@ impl<'a> Desugarer<'a> {
                         ),
                     ),
                 };
-                let alias = match alias_to {
-                    None => {
-                        cx.relink_alias(target, def_env.clone(), name.clone(), None, identity, mint)
-                    }
-                    Some((home, found)) => cx.relink_alias_to_introduced(
-                        target,
-                        home,
-                        name.clone(),
-                        found,
+                if let Some(spelling) = self.note_relinked(
+                    Mention {
+                        guard: expansion_scope,
+                        name,
                         identity,
-                        mint,
-                    ),
-                };
-                self.note_relinked(expansion_scope, name, &alias, kind, linkable, cx);
-                let symbol = cx.intern_symbol(&alias);
-                made.push((identity.clone(), symbol));
+                    },
+                    compiled_macro,
+                    &mut given,
+                    kind,
+                    linkable,
+                    cx,
+                ) {
+                    made.push((identity.clone(), spelling));
+                }
             }
             let aliases = match made.as_slice() {
                 [] => continue,
-                [(_, symbol)] if one_identity => Aliases::Sole(*symbol),
+                [(_, spelling)] if one_identity => Aliases::Sole(Rc::clone(spelling)),
                 _ => Aliases::PerIdentity(made),
             };
             renames.insert(name.clone(), aliases);
@@ -1901,15 +1943,18 @@ impl<'a> Desugarer<'a> {
         self.rewrite_refs(expanded, &renames, 0, cx)
     }
 
-    /// Enter in the form's table what relinking gave one mention (#837): the
-    /// identifiers the expansion whose scope is `guard` introduced under
-    /// `spelling` mean the record `linkable` names, which is pooled here,
-    /// beneath the context that found it, and which the pool roots from
-    /// here on. `resolve_reference` answers them from the table.
+    /// Relink one mention (#837): spell it (`relink_spelling`, clear of the
+    /// names `compiled_macro`'s templates write and of the spellings `given`
+    /// in this call), and enter in the form's table that the identifiers the
+    /// mention's expansion introduced under that spelling mean the record
+    /// `linkable` names, which is pooled here, beneath the context that
+    /// found it, and which the pool roots from here on. `resolve_reference`
+    /// answers them from the table; the spelling is bound nowhere. Answers
+    /// the spelling, for `rewrite_refs` to give the mention's occurrences.
     ///
     /// A target with no record (`linkable` is `None`: a frame's own
-    /// variable, which no program makes a relink target) gets no entry, and
-    /// the identifier is read through its spelling as before.
+    /// variable, which no program makes a relink target) gets no entry and
+    /// no spelling: the mention is left as its template wrote it.
     ///
     /// Every relinking writes its record to the scope trace, with or
     /// without a link: a keyword and a binder are never emitted as a
@@ -1917,25 +1962,41 @@ impl<'a> Desugarer<'a> {
     /// given, and of a target that had no record.
     fn note_relinked(
         &self,
-        guard: ScopeId,
-        written: &Rc<str>,
-        spelling: &Rc<str>,
+        mention: Mention<'_>,
+        compiled_macro: &patina_core::CompiledMacro,
+        given: &mut Vec<Rc<str>>,
         kind: RelinkKind,
         linkable: Option<patina_core::Linkable<'_>>,
         cx: &FormCx<'_, '_>,
-    ) {
-        patina_core::scope_trace::relink(written, spelling, guard, kind, linkable.is_some());
-        if let Some(linkable) = linkable {
-            let link = cx.literals.add_link(linkable);
-            self.early.relink(
-                guard,
-                Rc::clone(spelling),
-                Relinked {
-                    link,
-                    written: Rc::clone(written),
-                },
-            );
-        }
+    ) -> Option<Rc<str>> {
+        let Mention {
+            guard,
+            name,
+            identity,
+        } = mention;
+        let Some(linkable) = linkable else {
+            patina_core::scope_trace::relink(name, name, guard, kind, false);
+            return None;
+        };
+        let def_env = compiled_macro
+            .definition_env
+            .as_ref()
+            .expect("a relinking macro has a definition environment");
+        let spelling = relink_spelling(name, def_env, identity, |candidate| {
+            spelling_is_taken(compiled_macro, given, candidate)
+        });
+        patina_core::scope_trace::relink(name, &spelling, guard, kind, true);
+        given.push(Rc::clone(&spelling));
+        let link = cx.literals.add_link(linkable);
+        self.early.relink(
+            guard,
+            Rc::clone(&spelling),
+            Relinked {
+                link,
+                written: Rc::clone(name),
+            },
+        );
+        Some(spelling)
     }
 
     /// The use site's own name for the *location* a template's variable
@@ -1955,12 +2016,13 @@ impl<'a> Desugarer<'a> {
     ///
     /// **Called where a reference or an assignment is emitted, and nowhere
     /// else.** A first version renamed the identifier in the expansion's
-    /// *syntax*, where relinking's other aliases are made, and review found
+    /// *syntax*, where relinking renames, and review found
     /// what that costs when it happens to every imported name rather than to
     /// the rare one that needs relinking: whether a template's `car` is a
     /// reference is not known until it is resolved. It was a `case` datum
     /// (`((+) …)` stopped matching), a `let` binder (capturing another
-    /// expansion's alias), a `define` target, data handed to a quoting macro,
+    /// expansion's renamed reference), a `define` target, data handed to a
+    /// quoting macro,
     /// and `cond-expand`'s `not` — five silent wrong answers, none of which a
     /// lane caught, all pinned now in `expansion/imported-names-in-templates.scm`.
     /// Here the position is known: this *is* a variable reference.
@@ -1976,8 +2038,9 @@ impl<'a> Desugarer<'a> {
     ///   definition a macro introduced — so it is headed for the by-name view.
     ///   (`by_name`: the resolution that refused syntax as a value already
     ///   knows, and a second one per reference was a measurable cost.)
-    /// - By name it reaches, from here and from the namespace whose alias it
-    ///   takes (`import_of`), the very location the macro's own environment
+    /// - By name it reaches, from here and from the namespace above it
+    ///   that imports it (`import_of`), the very location the macro's own
+    ///   environment
     ///   reaches: an import of the use site's that is the binding the
     ///   template meant.
     ///
@@ -1986,8 +2049,9 @@ impl<'a> Desugarer<'a> {
     /// its `Var`, and renaming the reference changed what the program did:
     /// `apply` (#443), `call/cc` and `call-with-current-continuation` (#441),
     /// and `call-with-values` and `dynamic-wind` (#442). Each recogniser now
-    /// asks what the name is bound to, so the alias is recognised as the name
-    /// is. A new fast path has to do the same, or this binding defeats it:
+    /// asks what the name is bound to, so a linked reference is recognised
+    /// as the name is. A new fast path has to do the same, or this binding
+    /// defeats it:
     /// on the VM `primitive_calls` asks a linked callee's record (#837).
     ///
     /// The answer is a link (#837): the reference keeps its spelling and its
@@ -2226,8 +2290,9 @@ impl<'a> Desugarer<'a> {
         settle(&expr, &introduced, &relinked_emits)
     }
 
-    /// The alias for `tv`, if it is a reference *this expansion introduced*
-    /// and the definition site's binding for its spelling was aliased.
+    /// The spelling relinking gave `tv`, if it is an identifier *this
+    /// expansion introduced* and the definition site's binding for its
+    /// spelling was relinked.
     ///
     /// Only an identifier carrying the expansion's scope qualifies. The
     /// expander puts that scope on everything the template introduced and on
@@ -2243,15 +2308,15 @@ impl<'a> Desugarer<'a> {
     fn introduced_alias<'gc>(
         &self,
         tv: Value<'gc>,
-        renames: &Renames<'_, 'gc>,
+        renames: &Renames<'_>,
         cx: &mut FormCx<'_, 'gc>,
-    ) -> Option<Value<'gc>> {
+    ) -> Option<Rc<str>> {
         let (name, scopes) = cx.get_identifier_data(tv)?;
         if !scopes.contains(&renames.expansion_scope) {
             return None;
         }
         match renames.aliases.get(&*name)? {
-            Aliases::Sole(alias) => Some(*alias),
+            Aliases::Sole(alias) => Some(Rc::clone(alias)),
             // Which mention this occurrence is: the output flip added the
             // expansion's scope to what the template held, and nothing else
             // has touched it yet.
@@ -2260,15 +2325,15 @@ impl<'a> Desugarer<'a> {
                 aliases
                     .iter()
                     .find(|(mention, _)| *mention == identity)
-                    .map(|(_, alias)| *alias)
+                    .map(|(_, alias)| Rc::clone(alias))
             }
         }
     }
 
     /// Does this list head *resolve* to `quote`?
     ///
-    /// Asked by resolution, not spelling, because after relinking a head can
-    /// be spelled `quote.7` and still be `quote`, and under an import that
+    /// Asked by resolution, not spelling, because after relinking a head is
+    /// spelled otherwise and is still `quote`, and under an import that
     /// rebinds `quote` a head spelled `quote` can be a macro. Reached only
     /// for a head [`is_quote_spelling`] admits — that test is answered from
     /// a `&str` the caller already holds, so an ordinary call pays neither
@@ -2297,7 +2362,7 @@ impl<'a> Desugarer<'a> {
     fn rewrite_form<'gc>(
         &self,
         tv: Value<'gc>,
-        renames: &Renames<'_, 'gc>,
+        renames: &Renames<'_>,
         quote_depth: u32,
         cx: &mut FormCx<'_, 'gc>,
     ) -> Value<'gc> {
@@ -2334,9 +2399,10 @@ impl<'a> Desugarer<'a> {
         // symbol the leaf rule leaves alone, and its `,(helper x)` is
         // reached.
         if quote_depth == 0 && head_spelled_quote && self.head_resolves_to_quote(car, cx) {
-            let Some(renamed) = self.introduced_alias(car, renames, cx) else {
+            let renamed = self.rewrite_refs(car, renames, 0, cx);
+            if renamed == car {
                 return tv;
-            };
+            }
             return cx.alloc_pair(renamed, cdr);
         }
 
@@ -2405,7 +2471,7 @@ impl<'a> Desugarer<'a> {
     fn rewrite_refs<'gc>(
         &self,
         tv: Value<'gc>,
-        renames: &Renames<'_, 'gc>,
+        renames: &Renames<'_>,
         quote_depth: u32,
         cx: &mut FormCx<'_, 'gc>,
     ) -> Value<'gc> {
@@ -2434,22 +2500,21 @@ impl<'a> Desugarer<'a> {
         let Some(alias) = self.introduced_alias(tv, renames, cx) else {
             return tv;
         };
-        // The renamed occurrence keeps the scopes it had. Each target has one
-        // alias however many expansions use it (#611), so the spelling no
-        // longer tells two expansions apart; their scopes do, as they do for
-        // any other identifier. Stripped, as they were while every expansion
-        // minted its own alias, one expansion's binder of a library's private
-        // name captured the same name free in another expansion nested inside
-        // it: `(m (m 0))` answered `(lib (local 0))` where chibi and Gauche
-        // answer `(lib (lib 0))` (`macro_definition_env.rs`).
+        // The renamed occurrence keeps the scopes it had: the expansion's is
+        // what makes it the relinked identifier, in the form's table, and
+        // the spelling does not tell two expansions of one macro apart
+        // (`relink_spelling`); their scopes do, as they do for any other
+        // identifier. Stripped, one expansion's binder of a library's
+        // private name captured the same name free in another expansion
+        // nested inside it: `(m (m 0))` answered `(lib (local 0))` where
+        // chibi and Gauche answer `(lib (lib 0))`
+        // (`macro_definition_env.rs`).
         let scopes = cx
             .get_identifier_data(tv)
             .map(|(_, scopes)| scopes)
             .unwrap_or_default();
-        let name: Rc<str> =
-            Rc::from(&*cx.get_symbol_or_identifier_name(alias).expect("alias name"));
         let source = cx.source(tv);
-        let copy = cx.alloc_identifier(name, scopes);
+        let copy = cx.alloc_identifier(alias, scopes);
         if let Some(source) = source {
             cx.record_source(copy, source);
         }
@@ -2464,7 +2529,7 @@ impl<'a> Desugarer<'a> {
     fn rewrite_vector<'gc>(
         &self,
         tv: Value<'gc>,
-        renames: &Renames<'_, 'gc>,
+        renames: &Renames<'_>,
         quote_depth: u32,
         cx: &mut FormCx<'_, 'gc>,
     ) -> Value<'gc> {
@@ -2878,7 +2943,6 @@ impl<'a> Desugarer<'a> {
                 expanded_tagged,
                 expansion_scope,
                 &compiled_macro,
-                None,
                 cx,
             );
 
@@ -3644,7 +3708,7 @@ impl<'a> Desugarer<'a> {
                 import(&set, &self.env, cx)?;
             }
             // A later macro reference may now reach a different imported
-            // location. Keep already-emitted aliases, but refresh lookups.
+            // location. Keep the links already emitted, but refresh lookups.
             self.early.imports.borrow_mut().clear();
             return Ok(CoreExpr::new(CoreExprKind::Literal(Lit::UNSPECIFIED)));
         }
@@ -4497,6 +4561,81 @@ mod tests {
     /// Intern a symbol
     fn sym<'gc>(name: &str, cx: &mut Cx<'gc>) -> Value<'gc> {
         cx.intern_symbol(name)
+    }
+
+    // =========================================================================
+    // The spelling relinking gives a mention
+    // =========================================================================
+
+    /// `relink_spelling` (#837) answers a spelling that is not the written
+    /// one and starts with it, the same each time it is asked, another for
+    /// another mention of the name and for another environment, and one
+    /// `taken` does not have. The test reads the shape nowhere: it compares
+    /// answers.
+    #[test]
+    fn a_relinked_spelling_is_a_function_of_its_mention_clear_of_what_is_taken() {
+        with_desugarer(|d, _| {
+            let env = Rc::clone(d.desugarer.env());
+            let other_env = Environment::with_heap(&patina_core::new_shared_heap());
+            let (bare, scoped) = (ScopeSet::new(), ScopeSet::singleton(ScopeId::fresh()));
+            let free = |_: &str| false;
+
+            let first = relink_spelling("secret", &env, &bare, free);
+            assert!(first.starts_with("secret.") && &*first != "secret");
+            assert_eq!(first, relink_spelling("secret", &env, &bare, free));
+            let second_mention = relink_spelling("secret", &env, &scoped, free);
+            assert_ne!(first, second_mention, "two mentions of one name");
+            assert!(second_mention.starts_with("secret."));
+            assert_ne!(
+                first,
+                relink_spelling("secret", &other_env, &bare, free),
+                "two environments"
+            );
+            assert_ne!(first, relink_spelling("other", &env, &bare, free));
+
+            // A taken candidate is passed over, as often as it takes.
+            let second = relink_spelling("secret", &env, &bare, |candidate| candidate == &*first);
+            assert_ne!(first, second);
+            assert!(second.starts_with("secret."));
+            let third = relink_spelling("secret", &env, &bare, |candidate| {
+                candidate == &*first || candidate == &*second
+            });
+            assert!(third != first && third != second);
+            assert!(third.starts_with("secret."));
+
+            // What a `quote` is given passes the filter in front of the
+            // head test, as `quote` itself does and another name does not.
+            assert!(is_quote_spelling("quote"));
+            assert!(is_quote_spelling(&relink_spelling(
+                "quote", &env, &scoped, free
+            )));
+            assert!(!is_quote_spelling(&first));
+            assert!(!is_quote_spelling("quotes"));
+        });
+    }
+
+    /// What relinking may not spell a mention (`spelling_is_taken`): a name
+    /// the macro's templates write, a name an enclosing expansion put in
+    /// them, and a spelling already given in the same expansion. Each alone
+    /// takes a candidate, and nothing else does.
+    #[test]
+    fn a_spelling_is_taken_by_the_macros_own_names_and_by_the_expansions() {
+        let compiled = patina_core::CompiledMacro {
+            name: Rc::from("m"),
+            rules: Vec::new(),
+            max_pvars: 0,
+            definition_scopes: ScopeSet::new(),
+            template_symbols: HashSet::from([Rc::from("written")]),
+            inherited_identifiers: HashMap::from([(Rc::from("inherited"), vec![ScopeSet::new()])]),
+            definition_env: None,
+            foreign_expansions: Vec::new(),
+        };
+        let given: [Rc<str>; 1] = [Rc::from("given")];
+        assert!(spelling_is_taken(&compiled, &[], "written"));
+        assert!(spelling_is_taken(&compiled, &[], "inherited"));
+        assert!(!spelling_is_taken(&compiled, &[], "given"));
+        assert!(spelling_is_taken(&compiled, &given, "given"));
+        assert!(!spelling_is_taken(&compiled, &given, "free"));
     }
 
     // =========================================================================

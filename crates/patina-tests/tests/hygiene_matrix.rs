@@ -1520,6 +1520,89 @@ fn a_definition_over_an_import_is_not_a_library_macros_literal() {
     }
 }
 
+/// An identifier a program writes with the spelling relinking gave a
+/// library's private literal is not that literal (#837), in either
+/// direction. `(hm leaked-literal)`'s `def-matcher` makes a macro in the
+/// program whose literal is the library's private `lit`, relinked; its
+/// `feed` hands the library's `lit` to a macro of the program's; and
+/// `spell-lit` tells the spelling. The program writes that spelling as the
+/// generated macro's argument, and as the literal of a macro of its own
+/// that `feed` uses:
+///
+/// - `(g <spelling>)` is `other`: the program's identifier is bound
+///   nowhere, and the literal means the library's binding.
+/// - `(feed k)` is `miss`: `k`'s literal is the program's unbound name, and
+///   what `feed` hands it is the library's binding.
+///
+/// The controls beside them: the library's own mention matches the
+/// generated macro's literal (`matched`), and the program's `lit`, another
+/// binding, does not. chibi 0.12 and Gauche 0.9.15 answer `other` and
+/// `miss` for a name the program wrote and bound nowhere against a
+/// library's private binding of another spelling, which is what the
+/// relinked spelling is to them.
+///
+/// Until the switch the spelling was an alias in the program's namespace,
+/// so the program's identifier reached the library's location by name:
+/// `matched` and `hit`.
+#[test]
+fn a_program_identifier_spelled_as_a_relinked_literal_does_not_match() {
+    fn check<B: patina_runtime::Backend>(
+        interp: patina_interpreter::Interpreter<B>,
+    ) -> [String; 2] {
+        let show = |source: &str| {
+            let value = interp
+                .eval_str_owned(source)
+                .unwrap_or_else(|_| panic!("{source} failed"));
+            interp.display_tagged(&value)
+        };
+        interp
+            .eval_program_owned(
+                "(define-library (hm leaked-literal)
+  (import (scheme base))
+  (export def-matcher feed use-lit spell-lit)
+  (begin
+    (define lit 'the-library-binding)
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax spell-lit (syntax-rules () ((_) (quote-it lit))))
+    (define-syntax def-matcher
+      (syntax-rules ()
+        ((_ name)
+         (define-syntax name
+           (syntax-rules (lit) ((_ lit) 'matched) ((_ anything) 'other))))))
+    (define-syntax use-lit (syntax-rules () ((_ m) (m lit))))
+    (define-syntax feed (syntax-rules () ((_ k) (k lit))))))
+(import (scheme base) (hm leaked-literal))
+(define lit 'the-programs)
+(def-matcher g)",
+            )
+            .expect("the library and the generated macro");
+        let spelling = show("(spell-lit)");
+        assert!(
+            spelling.starts_with("lit") && spelling != "lit",
+            "the spelling relinking gave `lit`, read from an expansion: {spelling}"
+        );
+        interp
+            .eval_program_owned(&format!(
+                "(define-syntax k (syntax-rules ({spelling}) ((_ {spelling}) 'hit) ((_ x) 'miss)))"
+            ))
+            .expect("the program's macro");
+        [
+            show(&format!("(list (use-lit g) (g {spelling}) (g lit) (g 7))")),
+            show("(list (feed k) (k lit) (k 7))"),
+        ]
+    }
+    let expected = [
+        "(matched other other other)".to_string(),
+        "(miss miss miss)".to_string(),
+    ];
+    assert_eq!(check(common::vm_interpreter()), expected, "VM");
+    assert_eq!(
+        check(common::tree_walker_interpreter()),
+        expected,
+        "tree-walker"
+    );
+}
+
 /// A binding with an import's value but its own location still matches the
 /// exporting library's literal (#450). The original fixture exported a
 /// macro-introduced global by its bare name, which #427 deliberately makes
@@ -1982,8 +2065,12 @@ const RELINK_RECORD_PROGRAMS: &[(&str, &str, &str, &str, &str)] = &[
 /// own variable, built through the frame API on the tree-walker. A macro
 /// defined in the frame `outer` names its variable `x`, and is used in a
 /// frame beneath it that has an `x` of its own. `Environment::relink_record`
-/// answers no record for a frame's variable, so the mention gets no link.
-/// The answer is what the mention reads without one.
+/// answers no record for a frame's variable, so the mention gets no link
+/// and no spelling: it is left as the template wrote it, and reads what the
+/// use site's scoped resolution finds for the name, the frame's own `x`.
+/// (While relinking installed an alias the mention read the macro's frame
+/// through it, `outer`: the one answer that needed the alias, and one only
+/// the raw frame API reaches.)
 #[allow(
     deprecated,
     reason = "a raw frame is what makes a relink target with no record: `with_parent` goes at \
@@ -2025,9 +2112,11 @@ fn a_relink_target_with_no_record() -> String {
 ///   `RESOLVE … via=relink` record names its spelling: this record is what
 ///   a check of the spellings relinking gave reads.
 /// - **none** (the tree-walker): a raw frame's own variable, which has no
-///   record ([`a_relink_target_with_no_record`]): `record=none`. No program
-///   reaches one, and a lane that reads its traces for `record=none` relies
-///   on this case to know the record would be written.
+///   record ([`a_relink_target_with_no_record`]): `record=none`, and the
+///   spelling the record gives is the written one, since the mention is
+///   left as it was. No program reaches one, and a lane that reads its
+///   traces for `record=none` relies on this case to know the record would
+///   be written.
 ///
 /// In each, a spelling a record gives is one the trace then resolves at
 /// `phase=desugar`: it is read from the record, never computed. (Not every
@@ -2039,9 +2128,9 @@ fn every_relinking_writes_a_record_of_its_target() {
     if let Ok(case) = std::env::var(RELINK_RECORD_CASE) {
         let (name, backend) = case.split_once('/').expect("<case>/<backend>");
         if name == "none" {
-            // Without a link the mention is read through the name relinking
-            // gave it in the use site, which reads the macro's frame.
-            assert_eq!(a_relink_target_with_no_record(), "outer");
+            // Without a link the mention is left as written, and is the
+            // use site's own `x`.
+            assert_eq!(a_relink_target_with_no_record(), "inner");
             return;
         }
         let &(_, source, expected, _, _) = RELINK_RECORD_PROGRAMS
@@ -2083,7 +2172,11 @@ fn every_relinking_writes_a_record_of_its_target() {
                 "{what}: {record}"
             );
             let spelling = trace_field(record, "spelling");
-            assert_ne!(spelling, format!("{written:?}"), "{what}: {record}");
+            assert_eq!(
+                spelling == format!("{written:?}"),
+                case == "none",
+                "{what}: only a mention with no record keeps its spelling: {record}"
+            );
             if trace.lines().any(|line| {
                 line.starts_with("RESOLVE ")
                     && trace_field(line, "phase") == "desugar"
