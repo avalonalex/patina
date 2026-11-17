@@ -289,34 +289,73 @@ fn a_set_through_a_host_namespace_marks_the_primitive_it_replaces() {
     );
 }
 
-/// Re-pointing an alias does not write the binding it previously reached,
-/// so no shadow mark is set and a fast path must never trust that alias.
-/// Found in review of #442 for `call-with-values` and ordinary primitives.
-/// The original Scheme fixture used bare-name access to an introduced
-/// global, removed by #427. Install and re-point aliases directly to keep
-/// testing the compiler's alias guard independently of that old policy.
+/// A private binding that holds a primitive is never a fast path, before
+/// its library re-points it or after (#837; found in review of #442 for
+/// `call-with-values` and ordinary primitives, when the shape was an
+/// alias a test installed by hand). `(t repoint)` keeps `car` under the
+/// private name `h` and `call-with-values` under `k`, and its macros call
+/// each; the program has procedures of its own by those names, so each
+/// template call is relinked. The operand is the library's variable,
+/// whatever it holds: an ordinary load and call, with no inline `Car`, no
+/// `CallPrimitive` and no control sequence, so that the library's
+/// assignment is what the next call runs.
 #[test]
-fn a_re_pointed_alias_is_never_a_fast_path() {
-    use patina_runtime::Backend;
-
-    let interp = common::vm_interpreter();
-    let env = interp.backend().global_env();
-    env.define_alias("helper", env.clone(), "call-with-values".into());
-    env.define_alias("h2", env.clone(), "car".into());
+fn a_re_pointed_private_binding_is_never_a_fast_path() {
+    const REPOINT: &str = "(define-library (t repoint)
+  (export call-h call-k repoint!)
+  (import (scheme base))
+  (begin
+    (define h car)
+    (define k call-with-values)
+    (define (repoint!) (set! h cdr) (set! k (lambda (p c) 'second)))
+    (define-syntax call-h (syntax-rules () ((_ p) (h p))))
+    (define-syntax call-k (syntax-rules () ((_ p c) (k p c))))))
+(import (scheme base) (t repoint))
+(define (h p) 'the-programs)
+(define (k p c) 'the-programs)
+";
+    let interp = Interpreter::new(patina_vm::VmBackend::new());
     interp
-        .eval_program(
-            "(define (f) (helper (lambda () 1) (lambda (x) (list 'cwv x)))) \
-             (define (g) (h2 '(1 2))) \
-             (define (second p c) 'second)",
-        )
-        .unwrap();
-    env.define_alias("helper", env.clone(), "second".into());
-    env.define_alias("h2", env.clone(), "cdr".into());
+        .eval_program_owned(REPOINT)
+        .expect("the library and the program's own h and k");
+    let g = operands(
+        &interp
+            .backend()
+            .compile_for_inspection("(define (g) (call-h '(1 2)))")
+            .expect("compiles"),
+    );
+    assert_eq!(g.loads, ["h@linked"], "the callee's operand");
     assert_eq!(
-        interp
-            .eval_program("(equal? (list (f) (g)) '(second (2)))")
-            .unwrap(),
-        patina_core::TaggedValue::TRUE
+        (g.calls, g.inline_cars, g.primitive_calls, g.control),
+        (1, 0, 0, 0),
+        "a private name for car is an ordinary call"
+    );
+    let f = operands(
+        &interp
+            .backend()
+            .compile_for_inspection("(define (f) (call-k (lambda () 1) (lambda (x) x)))")
+            .expect("compiles"),
+    );
+    assert_eq!(f.loads, ["k@linked"], "the callee's operand");
+    assert_eq!(
+        (f.calls, f.control),
+        (1, 0),
+        "a private name for call-with-values is an ordinary call"
+    );
+
+    let program = format!(
+        "{REPOINT}(define (f) (call-k (lambda () 1) (lambda (x) (list 'cwv x))))
+(define (g) (call-h '(1 2)))
+(define before (list (f) (g)))
+(repoint!)
+(list before (f) (g) (h 0) (k 0 0))"
+    );
+    let expected = "(((cwv 1) 1) second (2) the-programs the-programs)";
+    assert_eq!(eval(&program), expected, "VM");
+    assert_eq!(
+        common::eval_program_tree_walker(&program),
+        expected,
+        "tree-walker"
     );
 }
 
@@ -426,14 +465,21 @@ fn car_operands(inspected: &patina_vm::backend::Inspected) -> Vec<String> {
 
 /// The operand of each `LoadGlobal` and `StoreGlobal` among `code`'s and
 /// its lambdas' instructions, as the disassembler prints it
-/// ([`car_operands`]), and whether the code calls, inlines `car`, or calls
-/// a primitive by its id.
+/// ([`car_operands`]), and whether the code calls, inlines `car`, calls a
+/// primitive by its id, applies (`Apply`, `TailApply`), or runs a control
+/// form's sequence (`call-with-values`'s or `dynamic-wind`'s instructions,
+/// or the guard in front of them).
 struct Operands {
     loads: Vec<String>,
     stores: Vec<String>,
+    /// The link-table entry of each pinned operand, load or store, beside
+    /// what it prints.
+    pinned: Vec<(String, String)>,
     calls: usize,
     inline_cars: usize,
     primitive_calls: usize,
+    applies: usize,
+    control: usize,
 }
 
 fn operands(inspected: &patina_vm::backend::Inspected) -> Operands {
@@ -441,9 +487,12 @@ fn operands(inspected: &patina_vm::backend::Inspected) -> Operands {
     let mut found = Operands {
         loads: Vec::new(),
         stores: Vec::new(),
+        pinned: Vec::new(),
         calls: 0,
         inline_cars: 0,
         primitive_calls: 0,
+        applies: 0,
+        control: 0,
     };
     for (top, nested) in inspected.units() {
         for code in std::iter::once(top).chain(nested) {
@@ -456,12 +505,25 @@ fn operands(inspected: &patina_vm::backend::Inspected) -> Operands {
                 }
             };
             for instr in &code.instructions {
+                if let Instruction::LoadGlobal { link, .. } | Instruction::StoreGlobal { link, .. } =
+                    instr
+                    && code.links.is_pinned(*link)
+                {
+                    found.pinned.push((printed(*link), format!("{link:?}")));
+                }
                 match instr {
                     Instruction::LoadGlobal { link, .. } => found.loads.push(printed(*link)),
                     Instruction::StoreGlobal { link, .. } => found.stores.push(printed(*link)),
                     Instruction::Call { .. } | Instruction::TailCall { .. } => found.calls += 1,
                     Instruction::Car { .. } => found.inline_cars += 1,
                     Instruction::CallPrimitive { .. } => found.primitive_calls += 1,
+                    Instruction::Apply { .. } | Instruction::TailApply { .. } => {
+                        found.applies += 1;
+                    }
+                    Instruction::CallWithValues { .. }
+                    | Instruction::TailCallWithValues { .. }
+                    | Instruction::PushWind { .. }
+                    | Instruction::JumpUnlessShadowed { .. } => found.control += 1,
                     _ => {}
                 }
             }
@@ -534,6 +596,132 @@ fn a_relinked_operand_is_printed_as_its_template_wrote_it() {
 (list (g2 '(1 2)) (w 7) (car '(1 2)) secret)"
     );
     let expected = "(1 7 mine program)";
+    assert_eq!(eval(&program), expected, "VM");
+    assert_eq!(
+        common::eval_program_tree_walker(&program),
+        expected,
+        "tree-walker"
+    );
+}
+
+/// The code of three relinked references where a call has a path of its
+/// own (#837; the answers are rows of `expansion/relinked-names.scm`):
+///
+/// - **`apply`.** `(apply f xs)` is lowered to an `Apply` where its head is
+///   the `apply` primitive. A template's `apply`, used by a program that
+///   has defined an `apply` of its own, is relinked: an ordinary `Call` of
+///   the loaded operand, and no `Apply` or `TailApply`. Bound early, in a
+///   program that has not, it is lowered.
+/// - **`call-with-values`.** The same for the control form's sequence:
+///   none for a relinked callee, and the sequence where it is bound early.
+/// - **An assignment beside a call of one binding.** In one form, a call
+///   bound early (the program imports the name), then the program's
+///   definition of the spelling, which is only declared when the rest is
+///   desugared, and after it a relinked assignment and a relinked call.
+///   The early-bound and the relinked operands are two pinned entries of
+///   the one record, and the relinked assignment and call share one.
+#[test]
+fn a_relinked_reference_takes_no_call_path_of_its_own() {
+    const LIBRARIES: &str = "(define-library (t paths)
+  (export apply-of values-of sc-proc call-sc set-sc!)
+  (import (scheme base))
+  (begin
+    (define (sc-proc x) (list 'lib x))
+    (define-syntax call-sc (syntax-rules () ((_ x) (sc-proc x))))
+    (define-syntax set-sc! (syntax-rules () ((_ v) (set! sc-proc v))))
+    (define-syntax apply-of (syntax-rules () ((_ f xs) (apply f xs))))
+    (define-syntax values-of (syntax-rules () ((_ p c) (call-with-values p c))))))
+(import (scheme base) (t paths))
+";
+    let inspect = |interp: &Interpreter<patina_vm::VmBackend>, form: &str| {
+        operands(
+            &interp
+                .backend()
+                .compile_for_inspection(form)
+                .expect("compiles"),
+        )
+    };
+    let apply_form = "(define (a) (apply-of + '(1 2)))";
+    let values_form = "(define (v) (values-of (lambda () 1) (lambda (x) x)))";
+
+    // Bound early: the program shares the library's `apply` and
+    // `call-with-values`.
+    let early = Interpreter::new(patina_vm::VmBackend::new());
+    early.eval_program_owned(LIBRARIES).expect("the library");
+    let applied = inspect(&early, apply_form);
+    assert_eq!((applied.applies, applied.calls), (1, 0), "an early apply");
+    assert!(
+        inspect(&early, values_form).control > 0,
+        "an early sequence"
+    );
+
+    // Relinked: the program has its own.
+    let relinked = Interpreter::new(patina_vm::VmBackend::new());
+    relinked
+        .eval_program_owned(&format!(
+            "{LIBRARIES}(define (apply f xs) 'program)
+(define (call-with-values p c) 'program)"
+        ))
+        .expect("the library and the program's own procedures");
+    let applied = inspect(&relinked, apply_form);
+    assert!(
+        applied.loads.contains(&"apply@linked".to_string()),
+        "{:?}",
+        applied.loads
+    );
+    assert_eq!(
+        (applied.applies, applied.calls),
+        (0, 1),
+        "a relinked apply is an ordinary call"
+    );
+    let values = inspect(&relinked, values_form);
+    assert_eq!(values.loads, ["call-with-values@linked"]);
+    assert_eq!(
+        (values.control, values.calls),
+        (0, 1),
+        "a relinked call-with-values has no sequence"
+    );
+
+    // An early-bound call, the program's definition, and a relinked
+    // assignment and call, in one form.
+    let both = inspect(
+        &early,
+        "(begin (define early (call-sc 1))
+                (define (sc-proc x) 'mine)
+                (define later (begin (set-sc! car) (call-sc '(2)))))",
+    );
+    let of_the_binding: Vec<&(String, String)> = both
+        .pinned
+        .iter()
+        .filter(|(printed, _)| printed == "sc-proc@linked")
+        .collect();
+    assert_eq!(
+        of_the_binding.len(),
+        3,
+        "an early call, a relinked assignment and a relinked call: {:?}",
+        both.pinned
+    );
+    assert_ne!(
+        of_the_binding[0].1, of_the_binding[1].1,
+        "the early-bound and the relinked operand are two entries"
+    );
+    assert_eq!(
+        of_the_binding[1].1, of_the_binding[2].1,
+        "the relinked assignment and call share one"
+    );
+    assert_eq!(both.stores, ["sc-proc@linked"], "the relinked assignment");
+
+    let program = format!(
+        "{LIBRARIES}(define (apply f xs) 'program)
+(define (call-with-values p c) 'program)
+(define (a) (apply-of + '(1 2)))
+(define (v) (values-of (lambda () 1) (lambda (x) (list 'cwv x))))
+(begin (define early (call-sc 1))
+       (define (sc-proc x) 'mine)
+       (define later (begin (set-sc! car) (call-sc '(2)))))
+(list (a) (v) early later (sc-proc 0) (apply + '(1)) (call-with-values 1 2))"
+    );
+    let expected = "(3 (cwv 1) (lib 1) 2 mine program program)";
     assert_eq!(eval(&program), expected, "VM");
     assert_eq!(
         common::eval_program_tree_walker(&program),

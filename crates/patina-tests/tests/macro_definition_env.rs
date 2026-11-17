@@ -667,8 +667,13 @@ const NO_NAME: &str = "(define-library (t noname)
     (define-syntax use-priv (syntax-rules () ((_ x) (priv x))))
     (define-syntax spell-priv (syntax-rules () ((_) (quote-it priv))))))
 (import (scheme base) (t noname))
-(define (h) (get-secret))
+";
+
+/// Expansions of `(t noname)`'s macros at top level and in a procedure.
+const NO_NAME_EXPANSIONS: &str = "(define (h) (get-secret))
 (use-priv 1)
+(get-secret)
+(define (k) (use-priv 2))
 ";
 
 /// What `source` answers, or `error` with its message.
@@ -702,7 +707,9 @@ fn writing_the_relinked_spellings<B: patina_runtime::Backend>(
 where
     B::Error: std::fmt::Display,
 {
-    interp.eval_program_owned(NO_NAME).expect("the library");
+    interp
+        .eval_program_owned(&format!("{NO_NAME}{NO_NAME_EXPANSIONS}"))
+        .expect("the library and the expansions");
     let spelling_of = |speller: &str, written: &str| {
         let spelling = answer_or_error(&interp, speller).expect("spells");
         assert!(
@@ -750,9 +757,176 @@ fn a_relinked_spelling_is_no_name_in_the_programs_text() {
     );
 }
 
+/// After expansions of `(t noname)`'s macros, at top level and in a
+/// procedure: whether the spelling relinking gave the private `secret` or
+/// the private `priv` is a name of the program's, and every name the
+/// program's namespace lists that starts as one of them would.
+fn names_relinking_left<B: patina_runtime::Backend>(
+    interp: patina_interpreter::Interpreter<B>,
+) -> (bool, bool, Vec<String>)
+where
+    B::Error: std::fmt::Display,
+{
+    interp
+        .eval_program_owned(&format!("{NO_NAME}{NO_NAME_EXPANSIONS}"))
+        .expect("the library and the expansions");
+    let secret = answer_or_error(&interp, "(spell-secret)").expect("spells");
+    let keyword = answer_or_error(&interp, "(spell-priv)").expect("spells");
+    assert!(
+        secret.starts_with("secret") && secret != "secret",
+        "{secret}"
+    );
+    assert!(
+        keyword.starts_with("priv") && keyword != "priv",
+        "{keyword}"
+    );
+    let env = interp.global_env();
+    let heap = interp.backend().heap();
+    let mut listed: Vec<String> = env
+        .local_names(heap)
+        .into_iter()
+        .chain(env.get_all_names(heap))
+        .chain(env.weak_entry_names_for_tests())
+        .filter(|name| name.starts_with("secret.") || name.starts_with("priv."))
+        .collect();
+    listed.sort();
+    listed.dedup();
+    (
+        is_a_name(&interp, &secret),
+        is_a_name(&interp, &keyword),
+        listed,
+    )
+}
+
+/// A relinked reference mints no spelling in the program (#837's
+/// acceptance): after expansions at top level and in a procedure, the
+/// spelling the expansions gave the library's private variable and its
+/// private keyword is nothing `get` answers and no slot, and the program's
+/// namespace lists no name that starts `secret.` or `priv.`. Before the
+/// switch each spelling was an alias, which `get` answered.
+#[test]
+fn a_relinked_reference_mints_no_spelling() {
+    let none = (false, false, Vec::<String>::new());
+    assert_eq!(names_relinking_left(common::vm_interpreter()), none, "VM");
+    assert_eq!(
+        names_relinking_left(common::tree_walker_interpreter()),
+        none,
+        "tree-walker"
+    );
+}
+
+/// A relinked expansion leaves the program's names as they were: the
+/// namespace's `local_names`, `bindings` and `get_all_names`, its
+/// placeholders, the count of binding records and what the namespace has
+/// charged for its tables, before the first expansions of `(t noname)`'s
+/// macros, which define nothing, and after them. Before the switch the
+/// expansions installed two aliases, and the namespace charged for the
+/// table that held them.
+fn a_relinked_expansion_leaves<B: patina_runtime::Backend>(
+    interp: patina_interpreter::Interpreter<B>,
+) -> [(NamesAndRecords, Option<usize>); 2] {
+    interp.eval_program_owned(NO_NAME).expect("the library");
+    let read = |interp: &patina_interpreter::Interpreter<B>| {
+        interp.eval_program_owned("(gc)").expect("collects");
+        (
+            names_and_records(interp),
+            interp.global_env().charged_bytes(),
+        )
+    };
+    // `(patina debug)`'s import is part of the baseline.
+    interp
+        .eval_program_owned("(import (patina debug))")
+        .expect("the import");
+    let before = read(&interp);
+    interp
+        .eval_program_owned(
+            "(get-secret) (list (use-priv 1)) ((lambda () (list (get-secret) (use-priv 2))))",
+        )
+        .expect("the expansions");
+    [before, read(&interp)]
+}
+
+#[test]
+fn a_relinked_expansion_leaves_the_programs_names_alone() {
+    let [vm_before, vm_after] = a_relinked_expansion_leaves(common::vm_interpreter());
+    let [tw_before, tw_after] = a_relinked_expansion_leaves(common::tree_walker_interpreter());
+    assert_eq!(
+        [vm_after, tw_after],
+        [vm_before, tw_before],
+        "[VM, tree-walker]"
+    );
+}
+
+/// Only an identifier of the expansion is the relinked one. The program
+/// defines a macro of its own whose template writes the very spelling an
+/// expansion gave the library's private `secret`, and uses it in the same
+/// form as the library's macro, whose expansion's entry for that spelling
+/// is then in the form's table. The table answers an identifier only if it
+/// carries the scope of the expansion that relinked it, and the program's
+/// macro's does not: its reference is unbound, and after the program
+/// defines the spelling, the program's own, while the library's macro
+/// reads 42 throughout. Before the switch the spelling was an alias in the
+/// program's namespace, and the program's macro read 42 through it.
+fn a_programs_template_writing_the_spelling<B: patina_runtime::Backend>(
+    interp: patina_interpreter::Interpreter<B>,
+) -> [String; 2]
+where
+    B::Error: std::fmt::Display,
+{
+    interp
+        .eval_program_owned(&format!("{NO_NAME}{NO_NAME_EXPANSIONS}"))
+        .expect("the library and the expansions");
+    let spelling = answer_or_error(&interp, "(spell-secret)").expect("spells");
+    assert!(spelling.starts_with("secret") && spelling != "secret");
+    interp
+        .eval_program_owned(&format!(
+            "(define-syntax mine (syntax-rules () ((_) {spelling})))"
+        ))
+        .expect("the program's macro");
+    let unbound = answer_or_error(
+        &interp,
+        "(list (get-secret) (guard (e (#t 'unbound)) (mine)) (get-secret))",
+    )
+    .expect("one form");
+    interp
+        .eval_program_owned(&format!("(define {spelling} 'own)"))
+        .expect("the program's definition");
+    let own =
+        answer_or_error(&interp, "(list (get-secret) (mine) (get-secret) (h))").expect("one form");
+    [unbound, own]
+}
+
+#[test]
+fn only_an_identifier_of_the_expansion_is_the_relinked_one() {
+    let expected = ["(42 unbound 42)".to_string(), "(42 own 42 42)".to_string()];
+    assert_eq!(
+        a_programs_template_writing_the_spelling(common::vm_interpreter()),
+        expected,
+        "VM"
+    );
+    assert_eq!(
+        a_programs_template_writing_the_spelling(common::tree_walker_interpreter()),
+        expected,
+        "tree-walker"
+    );
+}
+
 /// How many names a collision library's template writes that are spelled
 /// as relinking might spell its private `secret`.
 const COLLISION_RANGE: usize = 400;
+
+/// What the names a collision library's template writes are.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum WrittenNames {
+    /// Bound nowhere.
+    Unbound,
+    /// The library's own variables, which the program does not import: each
+    /// is relinked, as the private `secret` is.
+    Private,
+    /// The library's variables, which the program imports: each is one
+    /// binding on both sides, and is left as the template wrote it.
+    Shared,
+}
 
 /// Set in the child [`alone_in_a_process`] runs.
 const ALONE: &str = "PATINA_MDE_ALONE_IN_A_PROCESS";
@@ -804,14 +978,14 @@ fn number_after_secret(spelling: &str) -> usize {
 /// name `secret.k` for `k` in a range that starts where a library defined
 /// just before it had its spelling, so that one of them is the spelling
 /// relinking would give the private `secret` if nothing kept it clear of
-/// the template's own names. `definitions` is what the library defines and
-/// exports under those names, if anything. The program reads each `secret.k`
-/// in a procedure of its own, under a `guard`. Answers what the template's
+/// the template's own names. `names` says what those names are to the
+/// library and to the program. The program reads each `secret.k` in a
+/// procedure of its own, under a `guard`. Answers what the template's
 /// `secret` read and what each `secret.k` read, having checked from the
 /// library's own leaked spelling that its number fell in the range.
 fn a_template_writing_the_relinked_spelling<B: patina_runtime::Backend>(
     interp: &patina_interpreter::Interpreter<B>,
-    bound: bool,
+    names_are: WrittenNames,
 ) -> (String, Vec<String>)
 where
     B::Error: std::fmt::Display,
@@ -832,7 +1006,9 @@ where
     let names: Vec<String> = (first..=first + COLLISION_RANGE)
         .map(|k| format!("secret.{k}"))
         .collect();
-    let (exports, definitions) = if bound {
+    let (exports, definitions) = if names_are == WrittenNames::Unbound {
+        (String::new(), String::new())
+    } else {
         (
             names.join(" "),
             names
@@ -841,8 +1017,11 @@ where
                 .collect::<Vec<_>>()
                 .join("\n    "),
         )
+    };
+    let import = if names_are == WrittenNames::Shared {
+        "(t collide)"
     } else {
-        (String::new(), String::new())
+        "(only (t collide) both spell-second)"
     };
     let thunks = names
         .iter()
@@ -860,7 +1039,7 @@ where
     (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
     (define-syntax spell-second (syntax-rules () ((_) (quote-it secret))))
     (define-syntax both (syntax-rules () ((_) (list secret (list {thunks})))))))
-(import (only (t collide) both spell-second))
+(import {import})
 (define read (both))"
         ))
         .expect("the collision library");
@@ -900,7 +1079,8 @@ fn a_template_that_writes_the_relinked_spelling_unbound_reads_nothing() {
     where
         B::Error: std::fmt::Display,
     {
-        let (private, written) = a_template_writing_the_relinked_spelling(&interp, false);
+        let (private, written) =
+            a_template_writing_the_relinked_spelling(&interp, WrittenNames::Unbound);
         assert_eq!(private, "42", "{backend}");
         let bound: Vec<(usize, &String)> = written
             .iter()
@@ -915,6 +1095,58 @@ fn a_template_that_writes_the_relinked_spelling_unbound_reads_nothing() {
     }
     check(common::vm_interpreter(), "VM");
     check(common::tree_walker_interpreter(), "tree-walker");
+}
+
+/// A template that writes names spelled as relinking would spell its
+/// private `secret`, each a variable of the library's own, reads its own
+/// value by each and the library's 42 by `secret`, as chibi 0.12 and
+/// Gauche 0.9.15 answer (`expansion/relinked-names.scm`'s first row is the
+/// same over forty names, which meet the spelling only by chance). Twice:
+/// with the names imported by the program, so that each is one binding on
+/// both sides and is left as written, where relinking has to spell the
+/// private `secret` clear of what the template writes; and with the names
+/// private to the library, so that each is relinked too, where it also has
+/// to spell each mention clear of what it has given another in the same
+/// expansion. Before the switch the alias's mint skipped a spelling the
+/// use site bound, and the first passed for that reason.
+#[test]
+fn a_template_that_writes_the_relinked_spelling_reads_its_own() {
+    if !alone_in_a_process("a_template_that_writes_the_relinked_spelling_reads_its_own") {
+        return;
+    }
+    fn check<B: patina_runtime::Backend>(
+        interp: patina_interpreter::Interpreter<B>,
+        names_are: WrittenNames,
+        backend: &str,
+    ) where
+        B::Error: std::fmt::Display,
+    {
+        let (private, written) = a_template_writing_the_relinked_spelling(&interp, names_are);
+        assert_eq!(private, "42", "{backend}, {names_are:?}");
+        assert_eq!(written.len(), COLLISION_RANGE + 1, "{backend}");
+        let wrong: Vec<(usize, &String)> = written
+            .iter()
+            .enumerate()
+            .filter(|(_, read)| !read.starts_with("secret."))
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{backend}, {names_are:?}: names that did not read their own value, by their place \
+             in the range: {wrong:?}"
+        );
+        let mut distinct = written.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(
+            distinct.len(),
+            written.len(),
+            "{backend}, {names_are:?}: two names read one value"
+        );
+    }
+    for names_are in [WrittenNames::Shared, WrittenNames::Private] {
+        check(common::vm_interpreter(), names_are, "VM");
+        check(common::tree_walker_interpreter(), names_are, "tree-walker");
+    }
 }
 
 /// A generated macro carries the spelling relinking gave its template's
@@ -1132,15 +1364,16 @@ fn a_relinked_keyword_used_as_a_value_is_named_as_written() {
     }
 }
 
-/// One alias per target means two expansions of a macro share a spelling for
-/// its private name, so the spelling cannot keep them apart: here the outer
+/// Two expansions of a macro are given one spelling for its private name
+/// (the spelling is a function of the macro's environment, the name and
+/// the mention), so the spelling cannot keep them apart: here the outer
 /// expansion's `let` binds `helper` and the inner expansion, nested in its
 /// body, mentions the library's `helper` free. The renamed occurrences keep
 /// their scopes, which do keep them apart. chibi 0.12 and Gauche 0.9.15 both
 /// answer `(lib (lib 0))` and `(lib (lib (lib 0)))`, measured 2026-10-08;
 /// with the spelling alone, both backends answered `(lib (local 0))`.
 #[test]
-fn nested_expansions_sharing_an_alias_do_not_capture_each_other() {
+fn nested_expansions_sharing_a_spelling_do_not_capture_each_other() {
     let program = "(define-library (t n)
   (export m)
   (import (scheme base))
@@ -1284,6 +1517,62 @@ fn a_macro_generated_across_two_libraries_reaches_the_first() {
         [expected.clone(), expected],
         "[VM, tree-walker]"
     );
+    assert_eq!(
+        [
+            a_middle_library_defining_the_carried_spelling(common::vm_interpreter()),
+            a_middle_library_defining_the_carried_spelling(common::tree_walker_interpreter()),
+        ],
+        ["(42 middle)", "(42 middle)"],
+        "[VM, tree-walker]"
+    );
+}
+
+/// The same where the middle library itself defines the spelling the
+/// generated macro carries. `get-b` is made in `(t genb2)` by `(t gena2)`'s
+/// generator, so its template's `secret` was relinked there and the macro
+/// carries the identifier with `(t gena2)`'s record. `(t genb2)` also
+/// defines a variable under that very spelling, which the test reads from
+/// an expansion and writes into the library's text. Expanded in the
+/// program, `get-b` reads `(t gena2)`'s 42: the carried identifier means
+/// its record, and its spelling being a name of the macro's own
+/// environment is a definition of that library's, which `get-own` reads.
+/// Relinked by that name it would read `middle`.
+fn a_middle_library_defining_the_carried_spelling<B: patina_runtime::Backend>(
+    interp: patina_interpreter::Interpreter<B>,
+) -> String
+where
+    B::Error: std::fmt::Display,
+{
+    interp
+        .eval_program_owned(
+            "(define-library (t gena2)
+  (export mk spell)
+  (import (scheme base))
+  (begin
+    (define secret 42)
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax spell (syntax-rules () ((_) (quote-it secret))))
+    (define-syntax mk
+      (syntax-rules ()
+        ((_ name) (define-syntax name (syntax-rules () ((_) secret))))))))
+(import (scheme base) (t gena2))",
+        )
+        .expect("the first library");
+    let spelling = answer_or_error(&interp, "(spell)").expect("spells");
+    assert!(spelling.starts_with("secret") && spelling != "secret");
+    interp
+        .eval_program_owned(&format!(
+            "(define-library (t genb2)
+  (export get-b get-own)
+  (import (scheme base) (t gena2))
+  (begin
+    (define {spelling} 'middle)
+    (define (get-own) {spelling})
+    (mk get-b)))
+(import (t genb2))"
+        ))
+        .expect("the middle library");
+    answer_or_error(&interp, "(list (get-b) (get-own))").expect("reads")
 }
 
 /// A redefinition: `get-old`, a macro the first `(t redef)`'s generator
@@ -1546,6 +1835,281 @@ fn an_early_link_keeps_the_old_library_binding_across_a_redefinition() {
         [expected.clone(), expected],
         "[VM, tree-walker]"
     );
+}
+
+// ─── The same four, for a relinked reference (#837) ─────────────────────────
+//
+// The tests above are of a template reference to a name both sides import,
+// which is bound early. These are their twins for a reference to a name
+// private to the library, which is relinked: the identifier is renamed in
+// the expansion and means its record in the form's table. Each passed
+// before the switch too, through the alias.
+
+/// The library `call-f` and its kin come from here: `f` is private.
+const PRIVATE_F: &str = "(define-library (t priv-f)
+  (export call-f quasi-f quasi-def)
+  (import (scheme base))
+  (begin
+    (define (f) 'lib-f)
+    (define-syntax call-f (syntax-rules () ((_) (f))))
+    (define-syntax quasi-f (syntax-rules () ((_) `(,(f)))))
+    (define-syntax quasi-def
+      (syntax-rules ()
+        ((_ name) (begin (define tmp 0) (define (name) `(,(f) ,tmp))))))))
+(import (scheme base) (t priv-f))
+(define (f) 'mine)
+";
+
+/// A use-site binding of the relinked reference's written spelling never
+/// captures it: inside `(let ((f …)) (call-f))` the expansion's `f` is the
+/// library's, at top level and inside a procedure.
+#[test]
+fn a_relinked_reference_reads_the_library_inside_a_frame_binding_of_its_spelling() {
+    let program = format!(
+        "{PRIVATE_F}(define (h) (let ((f (lambda () 'local))) (call-f)))
+(list (let ((f 'local)) (call-f)) (h))"
+    );
+    let expected = "(lib-f lib-f)".to_string();
+    assert_eq!(
+        on_both_backends(&program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// An unquoted expression of a template is ordinary code, relinked like
+/// the rest: the desugarer's emission of an unquoted expression and the
+/// quasiquote lowering's copy of it both keep the link.
+#[test]
+fn an_unquoted_relinked_reference_stays_linked() {
+    let program = format!("{PRIVATE_F}(define (h) (quasi-f))\n(list (h) (f))");
+    let expected = "((lib-f) mine)".to_string();
+    assert_eq!(
+        on_both_backends(&program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// The same, in a form whose expansion also introduces a definition
+/// (`tmp`), so that settling walks it and rebuilds it node by node: the
+/// relinked reference in the unquote, which is no reference to a
+/// definition the form introduced, keeps its link through the rebuild.
+#[test]
+fn an_unquoted_relinked_reference_in_a_form_settling_rebuilds_stays_linked() {
+    let program = format!("{PRIVATE_F}(quasi-def h)\n(list (h) (f))");
+    let expected = "((lib-f 0) mine)".to_string();
+    assert_eq!(
+        on_both_backends(&program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// A procedure that expanded a library macro over a private procedure
+/// keeps the record it was relinked to when the library is redefined and
+/// imported again and two collections run: `h` answers the old `f`, a
+/// fresh expansion the new one. Under the stress lane and in a release
+/// `gc-check` build a freed record or cell panics.
+#[test]
+fn a_relinked_link_keeps_the_old_library_binding_across_a_redefinition() {
+    let library = |answer: &str| {
+        format!(
+            "(define-library (t redef-priv)
+  (export m)
+  (import (scheme base))
+  (begin
+    (define (f) '{answer})
+    (define-syntax m (syntax-rules () ((_ x) (list (f) x))))))
+"
+        )
+    };
+    let program = format!(
+        "{}(import (scheme base) (patina debug) (t redef-priv))
+(define (h) (m 1))
+{}(import (t redef-priv))
+(gc) (gc)
+(list (h) (m 2))",
+        library("old-f"),
+        library("new-f")
+    );
+    let expected = "((old-f 1) (new-f 2))".to_string();
+    assert_eq!(
+        on_both_backends(&program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// A library with a private `settled`, a getter of it, and macros that
+/// expand to a definition of that spelling beside references to it.
+const SETTLE: &str = "(define-library (t settle)
+  (export beside beside-two get-settled m-produced)
+  (import (scheme base))
+  (begin
+    (define settled 42)
+    (define-syntax get-settled (syntax-rules () ((_) settled)))
+    (define-syntax beside
+      (syntax-rules ()
+        ((_ v) (begin (define settled 'introduced) (define v settled)))))
+    (define-syntax beside-two
+      (syntax-rules ()
+        ((_ v) (begin (define settled 'introduced)
+                      (define v (list settled (get-settled) settled))))))
+    (define (ev? n) 'lib-ev)
+    (define (od? n) 'lib-od)
+    (define-syntax m-produced
+      (syntax-rules ()
+        ((_ x)
+         (begin
+           (define (ev? n) (if (= n 0) 'even (od? (- n 1))))
+           (define (od? n) (if (= n 0) 'odd (ev? (- n 1))))
+           (ev? x)))))))
+(import (scheme base) (t settle))
+";
+
+/// A relinked reference beside a definition its own expansion produces
+/// into a body means that definition. When the body is desugared nothing
+/// selects the reference (the body's scan drops the names an expansion
+/// introduced), so the form's table answers it and it is emitted as a link
+/// to the *library's* binding; settling takes the link back at the form's
+/// end, where the form is known to have introduced a definition of that
+/// spelling at scopes the reference carries, and gives the node the
+/// spelling the definition has. chibi 0.12 and Gauche 0.9.15 answer each
+/// program the same.
+///
+/// - beside a reference, with the library's own getter after it;
+/// - a forward reference between two produced procedures, in a `let` body
+///   and in a procedure's;
+/// - in a `lambda` body;
+/// - two expansions' mentions of one written name in one produced form:
+///   `beside-two`'s own `settled`, twice, which are the definition's, and
+///   the `settled` its use of `get-settled` expands to, which is given the
+///   same spelling by another expansion and is the library's. Settling
+///   tells them apart by the scopes each carries.
+#[test]
+fn a_relinked_reference_beside_a_definition_its_expansion_produces_into_a_body() {
+    for (program, expected) in [
+        (
+            "(define (f) (beside w) (list w (get-settled)))\n(f)",
+            "(introduced 42)",
+        ),
+        (
+            "(define (g) (m-produced 4))\n(list (let () (m-produced 5)) (g))",
+            "(odd even)",
+        ),
+        ("((lambda (k) (m-produced k)) 3)", "odd"),
+        (
+            "(define (f) (beside-two w) (list w (get-settled)))\n(f)",
+            "((introduced 42 introduced) 42)",
+        ),
+    ] {
+        let program = format!("{SETTLE}{program}");
+        assert_eq!(
+            on_both_backends(&program),
+            [expected.to_string(), expected.to_string()],
+            "[VM, tree-walker] {program}"
+        );
+    }
+}
+
+/// The same templates at top level, where settling has nothing to do: the
+/// produced definition is declared at its scopes before the reference
+/// beside it is resolved, so the reference is selected by its scopes and
+/// the table is never asked.
+#[test]
+fn a_relinked_reference_beside_a_definition_its_expansion_produces_at_top_level() {
+    for (program, expected) in [
+        ("(beside v)\n(list v (get-settled))", "(introduced 42)"),
+        (
+            "(beside-two v)\n(list v (get-settled))",
+            "((introduced 42 introduced) 42)",
+        ),
+    ] {
+        let program = format!("{SETTLE}{program}");
+        assert_eq!(
+            on_both_backends(&program),
+            [expected.to_string(), expected.to_string()],
+            "[VM, tree-walker] {program}"
+        );
+    }
+}
+
+/// A library whose macro expands to a body headed by a private definer,
+/// a keyword the program cannot name and has a procedure of its own
+/// spelled like.
+const SCAN: &str = "(define-library (t scan)
+  (export with-private get-shown spell-definer)
+  (import (scheme base))
+  (begin
+    (define shown 'lib-shown)
+    (define-syntax get-shown (syntax-rules () ((_) shown)))
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax spell-definer (syntax-rules () ((_) (quote-it def-private))))
+    (define-syntax def-private
+      (syntax-rules () ((_ name value) (define name value))))
+    (define-syntax with-private
+      (syntax-rules ()
+        ((_ name value body)
+         (let () (def-private name value) body))))))
+(import (scheme base) (t scan))
+(define (shown) 'the-programs)
+(define (def-private . args) 'the-programs)
+";
+
+/// A body is scanned for the definitions its macro uses produce before it
+/// is desugared, and the scan expands those uses. Here the body is one a
+/// library macro's expansion wrote, and its first form is headed by a
+/// keyword private to the library, which that expansion relinked: the
+/// scan reads the enclosing form's table beneath its own, finds the
+/// keyword, expands it and sees the definition, so the body's reference
+/// to the defined name is bound to it. At top level and in a procedure.
+#[test]
+fn a_body_scan_sees_the_enclosing_expansions_relinked_keywords() {
+    let program = format!(
+        "{SCAN}(list (with-private x 1 (list x (get-shown)))
+      ((lambda () (with-private y 2 (+ y 1))))
+      (def-private 1 2))"
+    );
+    let expected = "((1 lib-shown) 3 the-programs)".to_string();
+    assert_eq!(
+        on_both_backends(&program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// What a body scan's expansions relink goes in a table of the scan's own
+/// and is dropped with it: after forms whose bodies were scanned, the
+/// spelling the private definer was given is no name of the program's, and
+/// the program's names and records are what they were. Until the switch
+/// the scan's relinking installed its aliases in a frame of its own, which
+/// it dropped, and the real desugar's in the program's namespace, which
+/// kept them.
+#[test]
+fn a_body_scan_leaves_no_relinked_name_behind() {
+    fn check<B: patina_runtime::Backend>(interp: patina_interpreter::Interpreter<B>, backend: &str)
+    where
+        B::Error: std::fmt::Display,
+    {
+        interp.eval_program_owned(SCAN).expect("the library");
+        let before = names_and_records(&interp);
+        let answer = answer_or_error(
+            &interp,
+            "(list (with-private x 1 x) ((lambda () (with-private y 2 (+ y 1)))))",
+        )
+        .expect("the bodies");
+        assert_eq!(answer, "(1 3)", "{backend}");
+        assert_eq!(names_and_records(&interp), before, "{backend}");
+        let spelling = answer_or_error(&interp, "(spell-definer)").expect("spells");
+        assert!(
+            spelling.starts_with("def-private") && spelling != "def-private",
+            "{backend}: {spelling}"
+        );
+        assert!(!is_a_name(&interp, &spelling), "{backend}: {spelling}");
+    }
+    check(common::vm_interpreter(), "VM");
+    check(common::tree_walker_interpreter(), "tree-walker");
 }
 
 // ─── The switch: an early-bound reference links, and mints nothing (#837) ───

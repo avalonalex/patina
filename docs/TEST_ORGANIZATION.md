@@ -2123,6 +2123,70 @@ replaces #846's test: the spelling, read from a run, and `secret.0` to
 re-pinned for the tests; the switch moved no count of a target whose
 tests it left alone.
 
+The rest of the switch's tests pin what it leaves, and rewrite what still
+passes under names that say what is tested now. **Nothing is left in a
+namespace**: `macro_definition_env.rs`'s
+`a_relinked_reference_mints_no_spelling` (after expansions at top level
+and in a procedure the spelling given a private variable or keyword is
+nothing `get` answers and no slot, and the namespace lists no name that
+starts as one would), `a_relinked_expansion_leaves_the_programs_names_alone`
+(its names three ways, its placeholders, the binding records and what it
+has charged for its tables, before the first expansions and after),
+`a_body_scan_leaves_no_relinked_name_behind`, and `host_environments.rs`'s
+`a_relinked_expansion_in_a_host_namespace_leaves_the_global_names_alone`.
+**Only an identifier of the expansion is the relinked one**:
+`only_an_identifier_of_the_expansion_is_the_relinked_one` (a macro of the
+program's whose template writes the very spelling, used in the same form
+as the library's, reads the program's own or nothing);
+`a_template_that_writes_the_relinked_spelling_reads_its_own`, the bound
+twins of the range test, with the names shared with the program and with
+them private to the library, where relinking must also keep the spellings
+of one expansion apart; and the middle-library case of
+`a_macro_generated_across_two_libraries_reaches_the_first`, whose middle
+library itself defines the spelling the generated macro carries. **The
+shapes that pass before and after**: the relinked twins of the four
+early-link tests (`a_relinked_reference_reads_the_library_inside_a_frame_binding_of_its_spelling`,
+`an_unquoted_relinked_reference_stays_linked`,
+`an_unquoted_relinked_reference_in_a_form_settling_rebuilds_stays_linked`,
+`a_relinked_link_keeps_the_old_library_binding_across_a_redefinition`);
+`a_relinked_reference_beside_a_definition_its_expansion_produces_into_a_body`
+(beside a reference, a forward reference, in a `lambda` body, and two
+expansions' mentions of one written name of which settling takes back
+only its own) and its top-level twin, where settling has nothing to do;
+`a_body_scan_sees_the_enclosing_expansions_relinked_keywords`; and
+`hygiene_matrix.rs`'s `a_generated_macros_relinked_literal_still_matches`,
+`a_relinked_else_is_conds_else` and
+`relinked_literals_from_two_libraries_are_one_binding`, each answered the
+same by chibi and Gauche. **The code**: `vm_callprimitive.rs`'s
+`a_re_pointed_private_binding_is_never_a_fast_path` (#837's own program: a
+library's private names for `car` and `call-with-values`, re-pointed by
+the library, in place of the test that installed an alias by hand) and
+`a_relinked_reference_takes_no_call_path_of_its_own` (a relinked `apply`
+is a `Call`, a relinked `call-with-values` has no sequence, and an
+early-bound call beside a relinked assignment and call of one binding are
+two pinned entries); `vm_link_tables.rs`'s
+`a_relinked_store_marks_the_primitive_it_replaces`, in place of the store
+through an alias, and `a_store_writes_the_namespace_its_unit_was_linked_in`,
+renamed. **Release** (`gc_shared_tests!`, both backends, under zeal too):
+`a_redefined_library_is_released` gains #614's `relinkv`, `relinkk` and
+`relinkki`, every count flat across 600 redefinitions, `symbols` among
+them; the holder audit gains `relink-keyword` and
+`relink-keyword-imported` (no holder at either reading),
+`generated-macro-private` and `generated-macro-literal` (the generated
+macro holds the old library while the program binds it, the second
+through its carried relink alone), thirteen rows in all, each taking its
+holder in a top-level form of its own;
+`a_relinked_procedure_from_a_replaced_library_still_runs` is the relinked
+twin of `a_value_from_a_replaced_library_still_runs`; and
+`a_replaced_library_s_procedure_reads_a_relinked_private_after_a_collection`
+is the test of a store and a read by name through an alias, renamed for
+the link it now goes through. `nested_expansions_sharing_a_spelling_do_not_capture_each_other`
+is renamed too. Each test that says "before the switch" was run against
+the desugarer of the commit before it. The stress counts of
+`macro_definition_env`, `hygiene_matrix`, `host_environments`,
+`vm_callprimitive`, `gc_vm` and `gc_tree_walker` were re-pinned, the last
+two with their minimums, which the release variants moved.
+
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):
 the variable that sets the mode did not reach the process, or the program

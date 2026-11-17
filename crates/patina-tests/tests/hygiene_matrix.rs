@@ -1520,6 +1520,81 @@ fn a_definition_over_an_import_is_not_a_library_macros_literal() {
     }
 }
 
+/// The libraries of the three relinked-literal tests below. `(hm lit-a)`'s
+/// generator makes a macro whose literal is `else`, its `use-else` hands a
+/// macro the library's own `else`, and its `via-cond` hands one to `cond`.
+/// `(hm lit-b)` hands a macro its own mention of `else`. Both import
+/// `else` from `(scheme base)`, and the program defines an `else` of its
+/// own, so every one of those mentions is relinked where it is expanded.
+const RELINKED_LITERALS: &str = "(define-library (hm lit-a)
+  (export def-else-matcher use-else via-cond)
+  (import (scheme base))
+  (begin
+    (define-syntax def-else-matcher
+      (syntax-rules ()
+        ((_ name)
+         (define-syntax name
+           (syntax-rules (else) ((_ else) 'lit) ((_ x) 'other))))))
+    (define-syntax use-else (syntax-rules () ((_ g) (g else))))
+    (define-syntax via-cond (syntax-rules () ((_ x) (cond (#f 1) (else x)))))))
+(define-library (hm lit-b)
+  (export hand-else)
+  (import (scheme base))
+  (begin
+    (define-syntax hand-else (syntax-rules () ((_ g) (g else))))))
+(import (scheme base) (hm lit-a) (hm lit-b))
+(define else #f)
+(def-else-matcher g)
+";
+
+/// A generated macro's relinked literal still matches (#837). `g` is made
+/// in a program that defines its own `else`, so its literal is the
+/// library's `else`, relinked, and travels with `g` as a carried record.
+/// In a later form, at top level and in a procedure, the program's `else`
+/// is another binding (`other`) and the library's own mention is the
+/// literal (`lit`). chibi 0.12 and Gauche 0.9.15 answer the same, measured
+/// 2026-11-17. The matcher compares the two identifiers' records by
+/// location; while relinking installed an alias it compared what the two
+/// spellings reached by name.
+#[test]
+fn a_generated_macros_relinked_literal_still_matches() {
+    let program = format!(
+        "{RELINKED_LITERALS}(define (h) (list (g else) (use-else g)))
+(list (g else) (use-else g) (h))"
+    );
+    for vm in [true, false] {
+        assert_eq!(answer(&program, vm), "(other lit (other lit))");
+    }
+}
+
+/// A relinked `else` handed to `cond` is `cond`'s `else`: `via-cond`'s
+/// template writes `(cond (#f 1) (else x))` in a library that imports both
+/// from `(scheme base)`, and is used by a program that defines `else`. The
+/// template's `else` is relinked to the library's import, which is the
+/// cell `cond`'s literal names, so the clause is the else clause. chibi
+/// 0.12 and Gauche 0.9.15 answer 7 and 8.
+#[test]
+fn a_relinked_else_is_conds_else() {
+    let program = format!("{RELINKED_LITERALS}(define (h) (via-cond 8))\n(list (via-cond 7) (h))");
+    for vm in [true, false] {
+        assert_eq!(answer(&program, vm), "(7 8)");
+    }
+}
+
+/// Relinked literals from two libraries are one binding. `g`'s literal is
+/// `(hm lit-a)`'s `else`, and `hand-else` hands it `(hm lit-b)`'s: two
+/// identifiers relinked by two libraries' expansions, spelled differently,
+/// whose records are two imports of `(scheme base)`'s one cell. They match
+/// by that location. chibi 0.12 and Gauche 0.9.15 answer `lit`.
+#[test]
+fn relinked_literals_from_two_libraries_are_one_binding() {
+    let program =
+        format!("{RELINKED_LITERALS}(define (h) (hand-else g))\n(list (hand-else g) (h))");
+    for vm in [true, false] {
+        assert_eq!(answer(&program, vm), "(lit lit)");
+    }
+}
+
 /// An identifier a program writes with the spelling relinking gave a
 /// library's private literal is not that literal (#837), in either
 /// direction. `(hm leaked-literal)`'s `def-matcher` makes a macro in the

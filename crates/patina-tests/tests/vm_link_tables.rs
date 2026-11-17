@@ -105,43 +105,45 @@ fn library_and_toplevel_sites_use_their_own_environments() {
 }
 
 #[test]
-fn a_store_by_name_marks_the_primitive_it_replaces() {
-    // `car-alias` is an alias in the global namespace, as a macro expansion
-    // installs one, to the namespace's own `car`: the table of the unit that
-    // assigns it links the heap's by-name record, so the store goes by name
-    // (`store_global_cold`), through the alias into `car`'s binding. It must
-    // mark the primitive it replaces before it writes, as a linked store
-    // does, or `f`'s compiled `car` site keeps calling the primitive (#836).
-    use patina_runtime::Backend;
-
-    let interp = common::vm_interpreter();
-    let global = interp.backend().global_namespace();
-    let env = interp.backend().heap().borrow().held_environment(&global);
-    env.define_alias("car-alias", env.clone(), "car".into());
-    let answer = interp
-        .eval_program_owned(
-            "(define (f x) (car x)) \
-             (define before (f '(1 2))) \
-             (set! car-alias (lambda (x) 'replaced)) \
-             (list before (f '(1 2)) (car '(3)))",
-        )
-        .unwrap();
-    assert_eq!(interp.display_tagged(&answer), "(1 replaced replaced)");
+fn a_relinked_store_marks_the_primitive_it_replaces() {
+    // `(t replacer)`'s macro assigns the `car` its library imports. The
+    // program does not import `car`, so the template's `car` is relinked
+    // where the program expands it (#837): the store's operand is a pinned
+    // entry over `(t replacer)`'s record for `car`, an import of the cell
+    // every importer of `(scheme base)` shares. The store must mark the
+    // primitive it replaces before it writes, as any linked store does, or
+    // `(t user)`'s compiled `car` site keeps calling the primitive (#836).
+    // Until #837's second PR the store went by name, through an alias in
+    // the program's namespace, and the by-name path had its own mark.
+    let program = "(define-library (t replacer)
+           (export replace-car!)
+           (import (scheme base))
+           (begin (define-syntax replace-car! (syntax-rules () ((_ v) (set! car v))))))
+         (define-library (t user)
+           (export f)
+           (import (scheme base))
+           (begin (define (f x) (car x))))
+         (import (except (scheme base) car) (t replacer) (t user))
+         (define before (f '(1 2)))
+         (replace-car! (lambda (x) 'replaced))
+         (list before (f '(1 2)))";
+    assert_eq!(eval(program), "(1 replaced)");
 }
 
 #[test]
-fn a_store_by_name_writes_the_namespace_its_unit_was_linked_in() {
-    // A store the table resolves no cell for goes by name
-    // (`store_global_cold`) in the namespace the unit was linked in, which
-    // is not the program's for a library's unit or for one compiled in an
-    // environment specifier's namespace (#836).
+fn a_store_writes_the_namespace_its_unit_was_linked_in() {
+    // A unit's stores are resolved in the namespace the unit was linked
+    // in, which is not the program's for a library's unit or for one
+    // compiled in an environment specifier's namespace (#836).
     //
     // `(probe b)`'s `step` expands `(probe a)`'s macro, whose template
     // assigns `counter`, a binding private to `(probe a)`: the expansion
-    // installs an alias for it in `(probe b)`'s namespace, so `step`'s unit
-    // links the by-name record and its store goes by name, through that
-    // alias. The program's namespace has no such alias, and a store by name
-    // there would find nothing to assign.
+    // relinks it, so `step`'s unit pins `counter`'s record and stores
+    // through it (#837), whatever namespace runs the call. Until #837's
+    // second PR the expansion installed an alias in `(probe b)`'s
+    // namespace and the store went by name through it, in the namespace
+    // the unit was linked in; the program's has no such name, and a store
+    // by name there would have found nothing to assign.
     assert_eq!(
         eval(
             "(define-library (probe a)
@@ -162,6 +164,8 @@ fn a_store_by_name_writes_the_namespace_its_unit_was_linked_in() {
         ),
         "(assigned 2)"
     );
+    // A store the table resolves no cell for goes by name
+    // (`store_global_cold`), in the namespace the unit was linked in.
     // `zzz-836` is bound in the program's namespace alone. The specifier's
     // namespace does not bind it, so the `set!` compiled there links a
     // placeholder and stores by name in that namespace: an error, and the

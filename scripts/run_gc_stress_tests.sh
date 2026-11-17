@@ -418,7 +418,25 @@ fi
 # relinked-names.scm raised scheme_suite's at 4096 to 10653 and left it at
 # 385 without; the minimums left. The switch moved no count of a target
 # whose tests it left alone: gc_vm, gc_tree_walker, host_environments and
-# vm_callprimitive read as they did)
+# vm_callprimitive read as they did; and six targets re-pinned that day for
+# the rest of the switch's tests: gc_vm's and gc_tree_walker's test counts
+# for the relinked twin of a value kept from a replaced library, and their
+# shared tests' three relinking variants of a redefined library's release
+# (800 redefinitions each, under zeal too) and four holder rows, which
+# raised the counts at 16 from 39737 to 58197 and from 84050 to 129201 and
+# without stress from 17762 to 31094 and from 55960 to 95958: both counts
+# without stress are above half their counts at 16, so each minimum is
+# midway between its two counts; macro_definition_env's test count for
+# twelve (no spelling minted, the program's names left alone, only an
+# identifier of the expansion, a template writing bound names around the
+# spelling, the four relinked twins of the early-link tests, a definition
+# an expansion produces into a body and at top level, and the body scan's
+# two), which raised its count at 16 to 39531, and to 127 without;
+# hygiene_matrix's for three relinked-literal tests, to 22610, and 6
+# without; host_environments's for a relinked expansion in a host
+# namespace, to 167847, and to 765 without; and vm_callprimitive's for the
+# code of a relinked apply, call-with-values and assignment, to 1893, and 0
+# without; those four minimums left)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -426,16 +444,16 @@ TARGETS=(
     "ephemerons 16 289 30"                    # 5738 (204)
     "escape_from_primitive 16 3669 19"        # 9789 (94)
     "finished_forms_release_code 16 2040 12"  # 4057 (15)
-    "gc_tree_walker 16 70005 40"              # 84050 (55960)
-    "gc_vm 16 19868 53"                       # 39737 (17762)
-    "host_environments 16 83806 35"           # 167767 (761)
-    "hygiene_matrix 16 11136 21"              # 22388 (6)
+    "gc_tree_walker 16 112579 41"             # 129201 (95958)
+    "gc_vm 16 44645 54"                       # 58197 (31094)
+    "host_environments 16 83806 36"           # 167847 (765)
+    "hygiene_matrix 16 11136 24"              # 22610 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
-    "macro_definition_env 16 16626 41"        # 36200 (115): see the header
+    "macro_definition_env 16 16626 53"        # 39531 (127): see the header
     "owned_handles 16 62714 9"                # 125648 (14)
     "rooted_loading 16 371 6"                 # 1269 (10)
-    "vm_callprimitive 16 545 22"              # 1669 (0)
+    "vm_callprimitive 16 545 23"              # 1893 (0)
     "scheme_suite 4096 1534 11"               # 10653 (385): see the header
 )
 
