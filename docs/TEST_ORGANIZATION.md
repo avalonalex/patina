@@ -1865,6 +1865,34 @@ more, and the `eval_in` routes its #620 tests and raw frames gained. The
 other targets' counts stayed where they were, a handle allocating nothing in
 the arenas.
 
+The second PR (#837) starts with a scoreboard: the relinking shapes no
+lane held, each a row that passed before the PR, on both backends, and
+must pass after it. `expansion/relinked-names.scm` has thirty-eight (a
+generated macro over a private variable or keyword, in the form that made
+it and in later ones, through one level and two; a reference beside the
+program's definition of its spelling, in one form and across forms; a
+relinked assignment; a definer of introduced state; a template's own
+binder of the spelling; a keyword an expansion introduces under a relinked
+spelling, in one expansion, through a generated macro, run twice, compiled
+first, of a private variable's spelling and across a second library; a
+definition an expansion produces into a body beside a reference to it, and
+at top level; a generated macro's relinked literal; and a template that
+itself writes forty names spelled like a relinked one). Gauche answers all
+thirty-eight as asserted; chibi, run by hand with the libraries as files,
+thirty, and the file's header and its `*` row in `DIVERGENCES.tsv` record
+the eight. `expansion/splicing-libraries.scm` gains the row for a keyword
+a splice's frame binds, read in a procedure compiled later. The shapes no
+oracle can stage are Rust tests: `macro_definition_env.rs`'s
+`a_macro_generated_through_three_levels_reaches_the_private_variable`,
+`a_macro_generated_across_two_libraries_reaches_the_first` and
+`generated_macros_keep_the_library_they_were_made_from_across_a_redefinition`,
+and `gc_shared_tests!`'s
+`a_generated_macros_literal_survives_its_librarys_redefinition`, on both
+backends and under zeal, a macro whose only mention of its library's
+private binding is a pattern literal. The stress counts of
+`macro_definition_env`, `gc_vm`, `gc_tree_walker` and `scheme_suite` were
+re-pinned.
+
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):
 the variable that sets the mode did not reach the process, or the program
