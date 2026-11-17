@@ -715,7 +715,7 @@ impl<'gc> Cx<'gc> {
     /// form's link to a macro object that will carry it
     /// ([`alloc_macro_with_relinks`](Self::alloc_macro_with_relinks)).
     /// Panics, as [`LiteralPool::link`] does, on a link of another pool.
-    /// Raw: names `LiteralPool`, `Link` and `Linkable`.
+    /// Raw: names `Linkable`.
     #[inline]
     #[track_caller]
     pub fn linkable(&self, pool: &LiteralPool, link: Link) -> crate::Linkable<'gc> {

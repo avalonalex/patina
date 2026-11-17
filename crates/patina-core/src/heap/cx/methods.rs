@@ -112,13 +112,13 @@ impl<'gc> Cx<'gc> {
         self.brand(r)
     }
 
-    /// [`Heap::alloc_macro_with_relinks`](crate::Heap::alloc_macro_with_relinks)
-    /// on this context's heap (#837): a generated macro that carries
-    /// `relinks`, the relinked identifiers among `literals`, each with the
-    /// record its generator's expansion relinked it to
+    /// [`alloc_macro`](Self::alloc_macro) for a generated macro that
+    /// carries `relinks` (#837), the relinked identifiers among `literals`,
+    /// each with the record its generator's expansion relinked it to
     /// ([`Cx::linkable`] brands a form's pooled link for one). The object
     /// holds the records from here on, so they outlive the form's pool. A
-    /// check build refuses a record no link may name. Raw: names `Carried`.
+    /// check build refuses a record no link may name, and a handle early
+    /// binding branded. Raw: names `Carried`.
     #[inline]
     pub fn alloc_macro_with_relinks(
         &mut self,

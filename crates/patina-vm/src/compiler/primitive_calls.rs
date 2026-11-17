@@ -59,8 +59,8 @@ pub struct PrimitiveCallMap {
     /// Keyed on the binding, not on the spelling, since #442: a program's
     /// own `call-with-values` is a call of the program's procedure, and an
     /// import renamed, or a library template's reference early binding
-    /// links (#438, #837), still gets the sequence: a linked one by its
-    /// record's value.
+    /// links (#438, #837), still gets the sequence: an early-bound one by
+    /// its record's value. A relinked one never does.
     pub control: FxHashMap<OperandKey, ControlForm>,
 }
 
@@ -199,8 +199,8 @@ pub fn resolve_primitive_calls(
         // environment's own, so the site deoptimizes as theirs do.
         let val = match link {
             // A relinked callee (#837's second PR) is an ordinary call: a
-            // private or an introduced binding, whose fast paths are not
-            // this change's to give. A rule of scope, not of soundness: a
+            // private or an introduced binding, whose fast paths #837
+            // leaves as they were. A rule of scope, not of soundness: a
             // record's read changes only by a write the shadow marks see,
             // as above. Making one eligible is deleting this arm and
             // `OperandKey::Relinked`.
@@ -500,10 +500,10 @@ mod tests {
         );
     }
 
-    /// A machine with its primitives, `call-with-values` bound as the
-    /// library loader binds it, a library that imports the global `car`
-    /// and `call-with-values`, and a pool: what the two tests below link
-    /// against.
+    /// A machine with its primitives, `call-with-values` and
+    /// `dynamic-wind` bound as the library loader binds them, a library
+    /// that imports the global `car`, `length` and those two, and a pool:
+    /// what the two tests below link against.
     fn with_importer() -> (
         crate::runtime::VmState,
         std::rc::Rc<patina_core::environment::Environment>,
@@ -513,14 +513,16 @@ mod tests {
         let mut state = crate::runtime::VmState::on_a_fresh_heap();
         state.install_primitives();
         let heap = state.heap().clone();
-        state.global_env().define_primitive(
-            &heap,
-            "call-with-values",
-            patina_core::Arity::Exact(2),
-            vec!["patina".into(), "internal".into(), "control".into()],
-        );
+        for (name, arity) in [("call-with-values", 2), ("dynamic-wind", 3)] {
+            state.global_env().define_primitive(
+                &heap,
+                name,
+                patina_core::Arity::Exact(arity),
+                vec!["patina".into(), "internal".into(), "control".into()],
+            );
+        }
         let importer = std::rc::Rc::new(Environment::with_heap(&heap));
-        for name in ["car", "call-with-values"] {
+        for name in ["car", "length", "call-with-values", "dynamic-wind"] {
             let cell = state.global_env().cell_of(&heap, name).unwrap();
             importer.import_cell(&heap, name, cell);
         }
@@ -578,11 +580,12 @@ mod tests {
     }
 
     /// A callee relinking linked is no fast path (#837's second PR),
-    /// whatever its record's cell holds: over the record an early-bound
-    /// `car` gets the inline opcode through and an early-bound
-    /// `call-with-values` its instruction sequence, the relinked callee is
+    /// whatever its record's cell holds: over the records an early-bound
+    /// `car` gets the inline opcode through, an early-bound `length` its
+    /// `CallPrimitive`, and an early-bound `call-with-values` and
+    /// `dynamic-wind` their instruction sequences, the relinked callee is
     /// in neither map, and pass 5 compiles each call through it to a load
-    /// of its pinned operand and a `Call`.
+    /// of its pinned operand and a `Call`, or a `TailCall` for the last.
     #[test]
     fn a_relinked_callee_is_no_fast_path() {
         use super::OperandKey;
@@ -592,28 +595,37 @@ mod tests {
 
         let (state, importer, literals) = with_importer();
         let heap = state.heap().clone();
-        let early_car = link_to(&heap, &importer, "car", &literals);
-        let early_cwv = link_to(&heap, &importer, "call-with-values", &literals);
-        let relinked_car = relink_to(&heap, &importer, "car", &literals);
-        let relinked_cwv = relink_to(&heap, &importer, "call-with-values", &literals);
+        const CALLEES: [(&str, usize); 4] = [
+            ("car", 1),
+            ("length", 1),
+            ("call-with-values", 2),
+            ("dynamic-wind", 3),
+        ];
+        let early = CALLEES.map(|(name, arity)| {
+            let link = link_to(&heap, &importer, name, &literals);
+            (name, link, arity)
+        });
+        let relinked = CALLEES.map(|(name, arity)| {
+            let link = relink_to(&heap, &importer, name, &literals);
+            (name, link, arity)
+        });
         let key = |name: &str, link| {
             OperandKey::of(&Rc::from(name), Some(LinkedOperand::of(&literals, link)))
         };
 
-        // The positive control: the same two records, early-bound, are a
-        // primitive call and a control form.
-        let early = a_lambda_calling(&[("car", early_car, 1), ("call-with-values", early_cwv, 2)]);
-        let map = primitive_calls_of(&state, &literals, &early);
-        assert!(map.by_name.contains_key(&key("car", early_car)));
-        assert!(
-            map.control
-                .contains_key(&key("call-with-values", early_cwv))
-        );
+        // The positive control: the same four records, early-bound, are
+        // two primitive calls, one inline and one not, and two control
+        // forms.
+        let map = primitive_calls_of(&state, &literals, &a_lambda_calling(&early));
+        for (name, link, _) in &early[..2] {
+            assert!(map.by_name.contains_key(&key(name, *link)), "{name}");
+        }
+        for (name, link, _) in &early[2..] {
+            assert!(map.control.contains_key(&key(name, *link)), "{name}");
+        }
 
-        let relinked = a_lambda_calling(&[
-            ("car", relinked_car, 1),
-            ("call-with-values", relinked_cwv, 2),
-        ]);
+        let relinked_car = relinked[0].1;
+        let relinked = a_lambda_calling(&relinked);
         let map = primitive_calls_of(&state, &literals, &relinked);
         assert!(
             map.by_name.is_empty() && map.control.is_empty(),
@@ -644,7 +656,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(loads, ["car", "call-with-values"]);
+        assert_eq!(loads, CALLEES.map(|(name, _)| name));
         let calls = code
             .instructions
             .iter()
@@ -655,7 +667,7 @@ mod tests {
                 )
             })
             .count();
-        assert_eq!(calls, 2, "each an ordinary call");
+        assert_eq!(calls, CALLEES.len(), "each an ordinary call");
         assert!(
             !code.instructions.iter().any(|instr| matches!(
                 instr,

@@ -714,7 +714,7 @@ pub enum IntroducedDefinition {
 
 /// How a relinked mention's target is named (#837's second PR): what the
 /// desugarer's relinking found the mention to mean in its macro's
-/// definition environment, for [`Environment::relink_record`] to answer
+/// definition environment, for `Environment::relink_record` to answer
 /// with a record. Raw: the desugarer's and the backends' link plumbing.
 #[derive(Debug, Clone, Copy)]
 pub enum RelinkTarget<'a> {

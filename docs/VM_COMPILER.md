@@ -418,15 +418,16 @@ into the unit's link table, `CodeObject::links` (`patina_core::LinkTable`).
   spelling resolve to one binding, or, for an operand the desugarer linked,
   its record and what linked it: `Record` for early binding, `Relinked`
   for relinking. A linked `car` and the unit's own `car` get two indices,
-  both spelled `car` in the table; two pool entries over one record get
-  one; an early-bound and a relinked operand over one record get two,
-  pinned to the same record.
+  both spelled `car` in the table; two pool entries of one kind over one
+  record get one; an early-bound and a relinked operand over one record
+  get two, pinned to the same record.
   `primitive_calls`' map is keyed the same way. A callee early binding
   linked is eligible for `CallPrimitive`, an inline opcode or a control
   sequence by its record's value, never its spelling's binding. A callee
   relinking linked is never eligible: `resolve_primitive_calls` skips it
-  ahead of reading its record, so it compiles to `LoadGlobal` and `Call`
-  whatever its record's cell holds. That is a rule of scope, not of
+  ahead of reading its record, so it compiles to `LoadGlobal` and `Call`,
+  or `TailCall` in tail position, whatever its record's cell holds. That
+  is a rule of scope, not of
   soundness, and making one eligible later is deleting the skip and
   `OperandKey::Relinked`.
 - **One table per unit.** The table exists only once the whole unit is

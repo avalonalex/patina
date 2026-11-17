@@ -383,7 +383,7 @@ impl BindingLink {
 
     /// What the binding holds now: record → cell → value, two loads, as
     /// `LinkTable::get` reads it; `None` where the cell holds `UNBOUND`,
-    /// which only a record of a kind no early link names (a placeholder, a
+    /// which only a record of a kind no link names (a placeholder, a
     /// read-through record, the by-name record) does.
     #[inline(always)]
     pub fn value(self, heap: &Heap) -> Option<TaggedValue> {
@@ -506,12 +506,10 @@ pub struct CarriedRelink {
     /// The spelling the identifier has in this macro.
     #[trace(skip, reason = "a spelling")]
     spelling: Rc<str>,
-    /// The scope of the expansion that relinked it, which every copy of
-    /// the identifier carries.
+    /// The scope of the expansion that relinked it.
     #[trace(skip, reason = "a scope id")]
     guard: ScopeId,
-    /// The spelling the generator's template wrote, for the node a
-    /// reference is emitted as and for messages.
+    /// The spelling the generator's template wrote.
     #[trace(skip, reason = "a spelling")]
     written: Rc<str>,
     /// The record it was relinked to.

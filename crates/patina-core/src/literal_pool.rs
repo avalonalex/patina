@@ -115,7 +115,7 @@ impl fmt::Display for Lit {
 /// What linked a reference (#837): early binding, whose operand keeps its
 /// fast paths, or relinking, whose operand is an ordinary call whatever its
 /// record's cell holds. A [`Link`] carries it from the context that found
-/// the record ([`Linkable::kind`]) to the backend that compiles the
+/// the record (`Linkable::kind`) to the backend that compiles the
 /// reference; only the VM's compiler reads it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum LinkKind {

@@ -868,7 +868,8 @@ record (below).
   every build once its slot is reused, so a holder of keys keeps every
   object it keys live while it holds the key (the owner's rulings of
   2026-11-03 on #782). Since 4b.10 the holders are one compilation's maps
-  (`OperandKey::Record`, in `primitive_calls` and pass 5), whose pool roots
+  (`OperandKey::Record` and `OperandKey::Relinked`, in `primitive_calls`
+  and pass 5), whose pool roots
   every record they key for the maps' whole life, and which die before it
   (#837's W11). `RareTables::import_aliases`, which keyed imported cells
   and dropped a key as its alias's record was re-pointed (`forget_alias`),
@@ -2695,7 +2696,11 @@ Each literal is a `Lit` (`crates/patina-core/src/literal_pool.rs`):
   answers a `BindingLink` for a backend to copy into its code (the VM's
   pass 2, into a pinned entry of the unit's link table) and asserts the
   pool's id in every build; `LiteralPool::value` takes a `Lit`, so a record
-  never reaches a program as a value. The desugarer makes one for each
+  never reaches a program as a value. A `Link` also says what linked it
+  (`LinkKind`, the top bit of its index, so a pool holds fewer than 2^31
+  entries, literals and links together); `Cx::linkable` brands a pooled
+  link again beneath a context. Nothing makes a relinked one yet: #837's
+  second PR's desugarer does. The desugarer makes one for each
   early-bound reference since 4b.10's switch; the tree-walker's CPS
   transform copies it into the `CpsExpr`, which then holds the record
   itself (§4.4).

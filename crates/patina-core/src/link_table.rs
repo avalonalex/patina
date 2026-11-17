@@ -94,8 +94,9 @@ pub struct LinkTable {
     /// is read by name, the heap's by-name record `(cell . BY_NAME)` over a
     /// free cell holding `UNBOUND`. `UNBOUND` until linked, but for a
     /// pinned entry (#837), which holds from the table's making the record
-    /// an early link names: a namespace's slot or scoped entry record, or
-    /// E1's fresh record over a frame's import's cell. Cells, so the
+    /// an early or a relinked link names: a namespace's slot or scoped
+    /// entry record, E1's fresh record over a frame's import's cell, or a
+    /// relink's snapshot record of a frame's keyword. Cells, so the
     /// collector is shown each where it lives (#682).
     entries: Box<[Cell<TaggedValue>]>,
     /// The spellings, in the order pass 5 first emitted an operand naming
@@ -234,9 +235,10 @@ impl LinkTable {
     /// A pinned entry (#837) is left as [`LinkTable::with_links`] made it,
     /// on the first link and on a relink. A debug or `gc-check` build checks
     /// here, where the table first becomes readable, under `load_unit`'s
-    /// window, that each pinned record is one an early link names — a
-    /// namespace's slot or scoped entry record, or E1's fresh record over a
-    /// frame's import's cell — and not a placeholder, a read-through record
+    /// window, that each pinned record is one an early or a relinked link
+    /// names — a namespace's slot or scoped entry record, E1's fresh record
+    /// over a frame's import's cell, or a relink's snapshot record of a
+    /// frame's keyword — and not a placeholder, a read-through record
     /// or the by-name record: the linked read finds
     /// `UNBOUND` through those, and the cold paths refuse a pinned entry,
     /// so it would answer unbound for good instead of following an
@@ -440,14 +442,14 @@ impl LinkTable {
 pub struct Assignee(BindingCell);
 
 /// A check build's failure: a pinned entry holds a placeholder, a
-/// read-through record or the by-name record, none of which an early link
-/// names (#837).
+/// read-through record or the by-name record, none of which an early or a
+/// relinked link names (#837).
 #[cold]
 #[inline(never)]
 fn pinned_record_of_the_wrong_kind(name: &str) -> ! {
     panic!(
         "a pinned link-table entry for {name:?} holds a placeholder, a read-through record \
-         or the by-name record, which no early link names (#837)"
+         or the by-name record, which no early or relinked link names (#837)"
     );
 }
 

@@ -17,8 +17,9 @@ Each `CallFrame` owns a register window: a contiguous slice of a shared
 no hash lookup). Global variables are linked once per distinct name when a
 code unit loads (an operand the desugarer linked has an entry of its own,
 preset by pass 5 with its record and left alone at load, #837, whether
-early binding linked it or relinking, which the compiler keeps apart and
-gives no fast path), and read by index through the unit's link table
+early binding linked it or relinking; the compiler keeps the two apart and
+gives a relinked one no fast path), and read by index through the unit's
+link table
 (#836). A
 name lookup is left to `Define`; to the cold read or store of a name not yet
 bound; to every read and store of a name its namespace reaches by an alias

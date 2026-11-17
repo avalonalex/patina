@@ -1504,8 +1504,7 @@ impl Heap {
 
     /// Allocate a macro object: `body`, and the `literals` its patterns and
     /// templates name by index (#718). It carries no relinks, whatever its
-    /// body: [`alloc_macro_with_relinks`](Self::alloc_macro_with_relinks)
-    /// makes one that does.
+    /// body: `Cx::alloc_macro_with_relinks` makes one that does.
     pub fn alloc_macro(
         &mut self,
         body: Rc<crate::compiled_macro::CompiledMacro>,
