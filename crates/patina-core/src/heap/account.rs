@@ -1041,10 +1041,12 @@ mod tests {
     use super::*;
 
     /// Every object is charged a slot, so the slot's size is a cost of
-    /// every flonum, closure and identifier: 72 bytes, the largest
-    /// payload's 64 and the tag, measured at 8e3fc0bc. A macro object's
-    /// carried relinks (#837) took its payload from 24 bytes to 40, under
-    /// that, and a carried relink is 48, which `payload_bytes` charges per
+    /// every flonum, closure and identifier: 72 bytes, measured at
+    /// 8e3fc0bc and here. That is the largest payload, an exception's
+    /// kind, message and irritants at 24 bytes each, with the variant's
+    /// tag in a niche; an identifier's is 64. A macro object's carried
+    /// relinks (#837) took its payload from 24 bytes to 40, under both,
+    /// and a carried relink is 48, which `payload_bytes` charges per
     /// relink. Pinned exactly, so that a payload that moves the slot is
     /// seen and measured before it is accepted.
     #[test]
