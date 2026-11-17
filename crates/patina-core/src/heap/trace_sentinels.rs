@@ -66,8 +66,10 @@ fn env_holding_on(held: &mut Heap, value: TaggedValue) -> Rc<Environment> {
 }
 
 /// A macro object, every edge: each literal of the vector its patterns and
-/// templates name by index (#718), its body's `definition_env` (#38) and
-/// each of two `foreign_expansions` environments (#462).
+/// templates name by index (#718), its body's `definition_env` (#38), each
+/// of two `foreign_expansions` environments (#462), and a carried relink's
+/// record (#837), in no slot and reachable only through the object: a
+/// record over a free cell that holds the sentinel.
 #[test]
 fn compiled_macro_fields() {
     let shared = new_shared_heap();
@@ -83,6 +85,11 @@ fn compiled_macro_fields() {
     let definition_value = s.pair(h, "CompiledMacro.definition_env");
     let foreign_first = s.vector(h, "CompiledMacro.foreign_expansions[0]");
     let foreign_second = s.string(h, "CompiledMacro.foreign_expansions[1]");
+    let carried = s.pair(
+        h,
+        "HeapObjectData::Macro.relinks[0].link: a carried relink's",
+    );
+    let relinks = vec![carried_relink(h, carried)];
     drop(heap);
 
     let rule = |pattern, template| CompiledRule {
@@ -116,9 +123,86 @@ fn compiled_macro_fields() {
     };
 
     let mut heap = shared.borrow_mut();
-    let root = heap.alloc_macro(Rc::new(compiled), literals);
+    let root = heap.alloc_macro_with_relinks(Rc::new(compiled), literals, relinks);
     collect_from(&mut heap, &[root]);
     s.assert_survived(&heap);
+}
+
+/// A carried relink over a fresh record over a fresh free cell that holds
+/// `value`: three pairs' worth of edge, none in any slot.
+fn carried_relink(h: &mut Heap, value: TaggedValue) -> crate::binding_record::CarriedRelink {
+    use crate::binding_record::{BindingCell, BindingLink, CarriedRelink, Record};
+    let cell = BindingCell::free(h, value);
+    let record = Record::new(h, cell);
+    CarriedRelink::new(
+        Rc::from("secret.1"),
+        ScopeId(7),
+        Rc::from("secret"),
+        BindingLink::new(record),
+    )
+}
+
+/// A macro's carried relinks live exactly as long as the macro (#837):
+/// while it is rooted, the record, its cell and the value the cell holds
+/// are kept, and the object reads them back; once it is unreachable, the
+/// same sweep frees all three with it. So the edge cannot keep a replaced
+/// library's binding past the last macro that carries it. A macro made by
+/// `alloc_macro` carries none.
+#[test]
+fn a_macros_relinks_die_with_the_macro() {
+    let shared = new_shared_heap();
+    let mut heap = shared.borrow_mut();
+    let h = &mut *heap;
+    let compiled = || {
+        Rc::new(CompiledMacro {
+            name: Rc::from("m"),
+            rules: vec![],
+            max_pvars: 0,
+            definition_scopes: ScopeSet::new(),
+            template_symbols: HashSet::new(),
+            inherited_identifiers: HashMap::new(),
+            definition_env: None,
+            foreign_expansions: vec![],
+        })
+    };
+    let held = h.alloc_pair(TaggedValue::fixnum(7), TaggedValue::NULL);
+    let relink = carried_relink(h, held);
+    let link = relink.link();
+    let root = h.alloc_macro_with_relinks(compiled(), vec![], vec![relink]);
+    let plain = h.alloc_macro(compiled(), vec![]);
+    assert!(h.macro_relinks(plain).is_empty());
+    assert!(h.macro_relinks(held).is_empty(), "no macro, no relinks");
+
+    let collect = |h: &mut Heap, roots: &[TaggedValue]| {
+        MarkSweepCollector::new()
+            .collect(
+                h,
+                &[&Only(|visitor: &mut dyn SlotVisitor| {
+                    for &value in roots {
+                        visitor.pinned(value);
+                    }
+                })],
+            )
+            .last_swept
+    };
+    let swept = collect(h, &[root]);
+    assert_eq!(
+        (swept.pairs, swept.objects),
+        (0, 1),
+        "the macro is rooted: only the plain one is swept"
+    );
+    let carried = h.macro_relinks(root);
+    assert_eq!(carried.len(), 1);
+    assert_eq!(carried[0].link(), link);
+    assert_eq!(&**carried[0].spelling(), "secret.1");
+    assert_eq!(link.value(h), Some(held));
+
+    let swept = collect(h, &[]);
+    assert_eq!(
+        (swept.pairs, swept.objects),
+        (3, 1),
+        "the macro was swept, and its relink's record, cell and value with it"
+    );
 }
 
 /// Tracing `foreign_expansions` keeps an environment no longer than its

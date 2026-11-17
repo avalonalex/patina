@@ -310,8 +310,16 @@ impl HeapObjectData {
                 code_id: _,
                 free_vars,
             } => free_vars.capacity() * VALUE_BYTES,
-            // The literals are the object's own; the body is a shared `Rc`.
-            HeapObjectData::Macro { body: _, literals } => literals.len() * VALUE_BYTES,
+            // The literals and the carried relinks (#837) are the object's
+            // own; the body is a shared `Rc`.
+            HeapObjectData::Macro {
+                body: _,
+                literals,
+                relinks,
+            } => {
+                literals.len() * VALUE_BYTES
+                    + relinks.len() * size_of::<crate::binding_record::CarriedRelink>()
+            }
             HeapObjectData::VmContinuationRef { id: _, bytes }
             | HeapObjectData::VmDelimitedContinuationRef { id: _, bytes } => *bytes,
             // Nothing outside the slot. A port's slot holds its `PortTable`
@@ -1031,6 +1039,20 @@ impl Heap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every object is charged a slot, so the slot's size is a cost of
+    /// every flonum, closure and identifier: 72 bytes, the largest
+    /// payload's 64 and the tag, measured at 8e3fc0bc. A macro object's
+    /// carried relinks (#837) took its payload from 24 bytes to 40, under
+    /// that, and a carried relink is 48, which `payload_bytes` charges per
+    /// relink. Pinned exactly, so that a payload that moves the slot is
+    /// seen and measured before it is accepted.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn the_object_slots_size_is_watched() {
+        assert_eq!(OBJECT_SLOT_BYTES, 72);
+        assert_eq!(size_of::<crate::binding_record::CarriedRelink>(), 48);
+    }
 
     /// The per-owner counts (#834) move only with the events that name
     /// them, through a handle and with no heap borrow, and a namespace's

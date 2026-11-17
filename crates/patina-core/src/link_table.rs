@@ -1173,6 +1173,105 @@ mod tests {
         }
     }
 
+    /// A macro object's carried relink (#837) is held to the same kinds,
+    /// where the object is allocated: a check build refuses one over a
+    /// record of `kind`, naming the kind and the spelling, before it makes
+    /// the object. Here, beside the pinned entry's refusal, since a
+    /// carried record is pinned in some later unit's table, and both ask
+    /// `Record::refused_as_a_link`. A record of the plain kind is taken.
+    fn assert_a_carried_relink_is_refused(
+        heap: &crate::heap::SharedHeap,
+        record: Record,
+        kind: &str,
+    ) {
+        use crate::binding_record::CarriedRelink;
+        use crate::compiled_macro::CompiledMacro;
+        use std::collections::{HashMap, HashSet};
+
+        let compiled = || {
+            Rc::new(CompiledMacro {
+                name: Rc::from("m"),
+                rules: vec![],
+                max_pvars: 0,
+                definition_scopes: crate::ScopeSet::new(),
+                template_symbols: HashSet::new(),
+                inherited_identifiers: HashMap::new(),
+                definition_env: None,
+                foreign_expansions: vec![],
+            })
+        };
+        let relink = |record| {
+            CarriedRelink::new(
+                Rc::from("secret.1"),
+                crate::ScopeId(7),
+                Rc::from("secret"),
+                BindingLink::new(record),
+            )
+        };
+        let bytes = heap.borrow().live_bytes();
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            heap.borrow_mut()
+                .alloc_macro_with_relinks(compiled(), vec![], vec![relink(record)]);
+        }))
+        .expect_err(kind);
+        let message = panic_message(&*refused).unwrap_or_default();
+        assert!(
+            message.contains(&format!(
+                "a macro's carried relink for \"secret.1\" holds {kind}"
+            )),
+            "{kind}: {message}"
+        );
+        assert_eq!(
+            heap.borrow().live_bytes(),
+            bytes,
+            "{kind}: refused before the object is made"
+        );
+        let ns = Rc::new(Environment::with_heap(heap));
+        ns.define(heap, "x", n(1));
+        let plain = ns.local_record("x").unwrap();
+        let mac =
+            heap.borrow_mut()
+                .alloc_macro_with_relinks(compiled(), vec![], vec![relink(plain)]);
+        assert_eq!(heap.borrow().macro_relinks(mac).len(), 1);
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    fn a_check_build_refuses_a_carried_placeholder() {
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        let placeholder = ns.link_record(&heap, "later").unwrap();
+        assert_a_carried_relink_is_refused(&heap, placeholder, "a placeholder");
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    fn a_check_build_refuses_a_carried_read_through_record() {
+        let heap = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(&heap));
+        global.define(&heap, "x", n(1));
+        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
+        let read_through = host.link_record(&heap, "x").unwrap();
+        assert_a_carried_relink_is_refused(&heap, read_through, "a read-through record");
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    fn a_check_build_refuses_the_carried_by_name_record() {
+        let heap = new_shared_heap();
+        let by_name = Record::from_word(heap.borrow_mut().by_name_record());
+        assert_a_carried_relink_is_refused(&heap, by_name, "the by-name record");
+    }
+
     /// A table is traced once an epoch (#836): the first ask in an epoch
     /// answers that it was not traced yet and records it, every later one
     /// in that epoch that it was, and a new epoch starts again. `traced_in`

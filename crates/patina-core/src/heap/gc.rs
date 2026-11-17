@@ -1831,10 +1831,19 @@ impl<'h> GcVisitor<'h> {
                     self.visit_env(env);
                 }
             },
-            HeapObjectData::Macro { body, literals } => {
+            HeapObjectData::Macro {
+                body,
+                literals,
+                relinks,
+            } => {
                 body.as_ref().trace(self);
                 for &literal in literals.iter() {
                     self.visit(literal);
+                }
+                // Each carried relink's record (#837), through its derived
+                // trace, which names its wordless fields as skipped.
+                for relink in relinks.iter() {
+                    relink.trace(self);
                 }
             }
             HeapObjectData::Record {

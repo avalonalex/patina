@@ -711,7 +711,9 @@ impl<'gc> Cx<'gc> {
     /// pool is alive, so it roots the record, and the handle cannot outlive
     /// the context, beneath which nothing collects. For reading what a
     /// link's record holds ([`linked_value`](Self::linked_value),
-    /// [`linked_location`](Self::linked_location)).
+    /// [`linked_location`](Self::linked_location)) and for handing a
+    /// form's link to a macro object that will carry it
+    /// ([`alloc_macro_with_relinks`](Self::alloc_macro_with_relinks)).
     /// Panics, as [`LiteralPool::link`] does, on a link of another pool.
     /// Raw: names `LiteralPool`, `Link` and `Linkable`.
     #[inline]

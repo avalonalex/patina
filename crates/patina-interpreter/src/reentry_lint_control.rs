@@ -257,6 +257,9 @@ const SHARED_PAYLOADS: &[&str] = &[
     "EnvironmentSpecifier.env",
     "Identifier.name",
     "Library.0",
+    // Its `relinks` (#837) are shared, immutable state of the same kind:
+    // each `CarriedRelink` holds two `Rc<str>` spellings inside a struct of
+    // its own, which the scan below does not read into.
     "Macro.body",
     "MutableCell.0",
     "Parameter.values",

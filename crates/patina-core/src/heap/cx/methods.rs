@@ -112,6 +112,45 @@ impl<'gc> Cx<'gc> {
         self.brand(r)
     }
 
+    /// [`Heap::alloc_macro_with_relinks`](crate::Heap::alloc_macro_with_relinks)
+    /// on this context's heap (#837): a generated macro that carries
+    /// `relinks`, the relinked identifiers among `literals`, each with the
+    /// record its generator's expansion relinked it to
+    /// ([`Cx::linkable`] brands a form's pooled link for one). The object
+    /// holds the records from here on, so they outlive the form's pool. A
+    /// check build refuses a record no link may name. Raw: names `Carried`.
+    #[inline]
+    pub fn alloc_macro_with_relinks(
+        &mut self,
+        body: Rc<crate::compiled_macro::CompiledMacro>,
+        literals: Vec<Value<'gc>>,
+        relinks: Vec<crate::Carried<'gc>>,
+    ) -> Value<'gc> {
+        let r = self.heap.borrow_mut().alloc_macro_with_relinks(
+            body,
+            literals.into_iter().map(Value::tagged).collect(),
+            relinks
+                .into_iter()
+                .map(crate::Carried::into_stored)
+                .collect(),
+        );
+        self.brand(r)
+    }
+
+    /// The relinked identifiers the macro object `mac` carries (#837), each
+    /// record branded by this context, of `LinkKind::Relinked`: the macro
+    /// is live in it, so the records it holds are. Empty, without
+    /// allocating, for a macro that carries none and for a value that is no
+    /// macro. Raw: names `Carried`.
+    #[inline]
+    pub fn macro_relinks(&self, mac: Value<'gc>) -> Vec<crate::Carried<'gc>> {
+        let heap = self.heap.borrow();
+        heap.macro_relinks(mac.tagged())
+            .iter()
+            .map(crate::CarriedRelink::branded)
+            .collect()
+    }
+
     /// [`Heap::alloc_pair`](crate::Heap::alloc_pair) on this context's heap.
     #[inline]
     pub fn alloc_pair(&mut self, car: Value<'gc>, cdr: Value<'gc>) -> Value<'gc> {

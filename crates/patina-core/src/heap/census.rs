@@ -32,7 +32,13 @@ pub(super) fn object_info(data: &HeapObjectData) -> (Variant, usize, u64) {
         }
         H::Procedure(_) => (7, 0, 16),
         H::Port(_) => (8, 0, 16),
-        H::Macro { literals, .. } => (9, literals.len(), 16 + 8 * literals.len() as u64),
+        // Its literals and its carried relinks' records (#837), a word each.
+        H::Macro {
+            literals, relinks, ..
+        } => {
+            let n = literals.len() + relinks.len();
+            (9, n, 16 + 8 * n as u64)
+        }
         H::RecordType(_) => (10, 0, 16),
         H::Record { fields, .. } => {
             let n = fields.borrow().len();
