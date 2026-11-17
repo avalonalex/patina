@@ -306,6 +306,27 @@ impl Record {
         heap.adopt_record(self.0, cell.0);
     }
 
+    /// Why this record is none a link may name, or `None` for one it may
+    /// (#837): a placeholder, a read-through record and the heap's by-name
+    /// record each hold `UNBOUND` where the linked read looks, so a pinned
+    /// operand over one, or a macro's carried relink, would answer unbound
+    /// for good instead of following an adoption. Every record a namespace's
+    /// slot or scoped entry holds, and every fresh record over a cell
+    /// (`Environment::early_link`, `Environment::relink_record`), may be
+    /// linked. What a check build's `LinkTable::link_in` and
+    /// `Heap::alloc_macro_with_relinks` refuse by.
+    pub(crate) fn refused_as_a_link(self, heap: &Heap) -> Option<&'static str> {
+        if self.is_placeholder(heap) {
+            Some("a placeholder")
+        } else if self.parent_record(heap).is_some() {
+            Some("a read-through record")
+        } else if self.is_by_name(heap) {
+            Some("the by-name record")
+        } else {
+            None
+        }
+    }
+
     /// The record's identity: its word less a check build's generation
     /// stamp. Compared, never dereferenced: a record made in a swept
     /// record's slot has the swept record's key in every build, so a holder

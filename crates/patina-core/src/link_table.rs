@@ -273,15 +273,12 @@ impl LinkTable {
         );
     }
 
-    /// A check build's refusal of a pinned record of a kind no early link
-    /// names (#837): see [`LinkTable::link_in`].
+    /// A check build's refusal of a pinned record of a kind no early or
+    /// relinked link names (#837): see [`LinkTable::link_in`].
     fn check_pinned(&self, heap: &Heap) {
         for &k in self.pinned.iter() {
             let record = Record::from_word(self.entries[k as usize].get());
-            if record.is_placeholder(heap)
-                || record.parent_record(heap).is_some()
-                || record.is_by_name(heap)
-            {
+            if record.refused_as_a_link(heap).is_some() {
                 pinned_record_of_the_wrong_kind(&self.names[k as usize]);
             }
         }

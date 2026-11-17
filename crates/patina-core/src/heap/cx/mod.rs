@@ -160,11 +160,11 @@ use num_rational::BigRational;
 use super::mutator::Mutator;
 use super::{Heap, HeapObjectData, PromiseState};
 use crate::compiled_macro::{CompiledMacro, LiteralId};
-use crate::environment::{BindingLocation, Environment, IntroducedDefinition};
+use crate::environment::{BindingLocation, Environment, IntroducedDefinition, RelinkTarget};
 use crate::error::{ExceptionKind, SourceLocation};
 use crate::instance::Instance;
 use crate::library::Library;
-use crate::literal_pool::LinkKind;
+use crate::literal_pool::{Link, LinkKind, LiteralPool};
 use crate::namespace_view::NamespaceView;
 use crate::port::Port;
 use crate::record_type::RecordTypeDescriptor;
@@ -680,6 +680,64 @@ impl<'gc> Cx<'gc> {
     ) -> Option<(BindingLocation, crate::Linkable<'gc>)> {
         let (location, link) = ns.env().early_link(self.heap, name)?;
         Some((location, crate::Linkable::new(link, LinkKind::Early)))
+    }
+
+    /// The record a relinked mention of `name` links (#837's second PR;
+    /// `Environment::relink_record`, the owner's ruling E1), branded by
+    /// this context, of [`LinkKind::Relinked`]: `ns` is the environment
+    /// `target` is asked of, the macro's real definition environment for
+    /// [`RelinkTarget::ByName`], never a declarations view of it, and for
+    /// the others the environment that holds the definition. `None` where
+    /// the target has no record (a frame's own variable, the VM's renamed
+    /// global before its `Define` has run, an identity nobody holds), and
+    /// the mention is left as written. A frame's import and a frame's
+    /// keyword are answered by a fresh record, which allocates. Pool the
+    /// handle ([`LiteralPool::add_link`](crate::LiteralPool::add_link))
+    /// before the context closes, as [`early_link`](Self::early_link)'s.
+    /// Raw: names `NamespaceView`, `RelinkTarget` and `Linkable`.
+    #[inline]
+    pub fn relink_link(
+        &mut self,
+        ns: NamespaceView<'_>,
+        name: &str,
+        target: RelinkTarget<'_>,
+    ) -> Option<crate::Linkable<'gc>> {
+        let link = ns.env().relink_record(self.heap, name, target)?;
+        Some(crate::Linkable::new(link, LinkKind::Relinked))
+    }
+
+    /// A pooled link as a handle of this context again (#837): the record
+    /// `link` stands for in `pool`, of the link's kind. Sound because the
+    /// pool is alive, so it roots the record, and the handle cannot outlive
+    /// the context, beneath which nothing collects. For reading what a
+    /// link's record holds ([`linked_value`](Self::linked_value),
+    /// [`linked_location`](Self::linked_location)).
+    /// Panics, as [`LiteralPool::link`] does, on a link of another pool.
+    /// Raw: names `LiteralPool`, `Link` and `Linkable`.
+    #[inline]
+    #[track_caller]
+    pub fn linkable(&self, pool: &LiteralPool, link: Link) -> crate::Linkable<'gc> {
+        crate::Linkable::new(pool.link(link), link.kind())
+    }
+
+    /// What `link`'s record holds now (#837): record → cell → value, as a
+    /// linked read reads it. `None` where the cell holds `UNBOUND`, which
+    /// no record a link names does. Raw: names `Linkable`.
+    #[inline]
+    pub fn linked_value(&self, link: crate::Linkable<'gc>) -> Option<Value<'gc>> {
+        let value = link.link().value(&self.heap.borrow())?;
+        Some(self.brand(value))
+    }
+
+    /// Where `link`'s record's cell is (#837), as
+    /// [`binding_location`](Self::binding_location) names a namespace's
+    /// binding or an import, so that the two compare: an import is its
+    /// exporter's cell. Computed when asked and held across nothing: a
+    /// cell's word is an identity only beneath the context that read it
+    /// (the rulings of 2026-11-03). Raw: names `Linkable`.
+    #[inline]
+    pub fn linked_location(&self, link: crate::Linkable<'gc>) -> BindingLocation {
+        link.link().record().cell(&self.heap.borrow()).location()
     }
 
     /// A record over a fresh free cell holding `UNBOUND`, branded by this
