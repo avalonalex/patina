@@ -30,23 +30,23 @@
 ;;
 ;; Every row was also run under chibi 0.12 with the libraries as `.sld`
 ;; files and the rest of this file as the program (2026-11-16). It agrees on
-;; thirty of the thirty-eight. The eight it does not, each of which says so
-;; where it stands:
+;; thirty-one of the thirty-eight. The seven it does not are seven of the
+;; nine rows on a keyword an expansion introduces under its library's
+;; private spelling, each of which says so where it stands. chibi's
+;; top-level `define-syntax` lands on the *library's* keyword, so the
+;; library's own macro and every earlier generated macro expand the newest
+;; definition: `((introduced 2) (introduced 3))`, `((one 4) (one 5))`,
+;; `((one 6) (one 7))`, `((two 8) (two 8) ((one 6) (one 7)))`, `((late 9)
+;; (late 9) (late 9))`, `((from-l3-again 1) (from-l3-again 2)
+;; (from-l3-again 3))` and `((from-l3-again 4) (from-l3-again 5))`, in the
+;; file's order. Gauche keeps each expansion's keyword its own, as Patina
+;; does, and it is the arbiter of these rows.
 ;;
-;; - "a template's assignment writes the library's private variable": chibi
-;;   answers `(3 1 program)`: a procedure inside the library reads another
-;;   value than the template's expansions wrote, and the template's own read
-;;   in the next row agrees again. No claim about why.
-;; - Seven of the nine rows on a keyword an expansion introduces under its
-;;   library's private spelling. chibi's top-level `define-syntax` lands on
-;;   the *library's* keyword, so the library's own macro and every earlier
-;;   generated macro expand the newest definition: `((introduced 2)
-;;   (introduced 3))`, `((one 4) (one 5))`, `((one 6) (one 7))`, `((two 8)
-;;   (two 8) ((one 6) (one 7)))`, `((late 9) (late 9) (late 9))`,
-;;   `((from-l3-again 1) (from-l3-again 2) (from-l3-again 3))` and
-;;   `((from-l3-again 4) (from-l3-again 5))`, in the file's order. Gauche
-;;   keeps each expansion's keyword its own, as Patina does, and it is the
-;;   arbiter of these rows.
+;; A row that writes the library's variable and then reads it through
+;; another path does the two in a `let*`, never as two operands of one call:
+;; the order operands are evaluated in is unspecified (R7RS 4.1.3), chibi
+;; takes them right to left where Gauche and Patina take them left to right,
+;; and a row that leaned on the order would score that and not the write.
 ;;
 ;; Left out because chibi and Gauche disagree with each other: a generated
 ;; macro's private literal against the same spelling written by a program
@@ -62,7 +62,11 @@
 ;; imported only after the first one's rows; and the `else` rows are last,
 ;; since the program's definition of `else` is the program's for good.
 
-(import (scheme base) (srfi 64))
+;; `(scheme char)` is imported for the rows that define `char-upcase` and
+;; `char-downcase`: the program and `(probe casing)` both import the two,
+;; and a program's definition over a name both sides import is the shape
+;; those rows hold.
+(import (scheme base) (scheme char) (srfi 64))
 
 ;; ─── The libraries ──────────────────────────────────────────────────────────
 
@@ -164,11 +168,12 @@
 
 ;; And a generated macro whose template assigns one.
 (define-library (probe genset)
-  (export gen-set bump-nested!)
+  (export gen-set bump-nested! read-nested)
   (import (scheme base))
   (begin
     (define secret 42)
     (define (bump-nested!) (set! secret (+ secret 1)))
+    (define (read-nested) secret)
     (define-syntax gen-set
       (syntax-rules ()
         ((_ name)
@@ -336,7 +341,12 @@
 
 ;; First in the file, while the program binds no `secret`. The private
 ;; `secret` reads the library's 42, and every exported `secret.k` its own
-;; value: the second element lists the ones that did not.
+;; value: the second element lists the ones that did not. A spot check: the
+;; spelling a relinked `secret` is given is numbered by a counter of the
+;; process, so the row meets one of the forty only while that counter is
+;; under forty, as when this file is run alone; the suite's driver runs it
+;; after other files, past all forty. The exhaustive check is a Rust test
+;; of #837's second PR.
 (define collided (collide-all))
 
 (test-equal "a template's own name spelled like a relinked one reads its own value"
@@ -430,10 +440,12 @@
 (bump-secret!)
 (define (twice) (bump-secret!) (bump-secret!) (read-secret))
 
-;; chibi 0.12 answers `(3 1 program)`: the header has it.
+;; The template's write, then the library's own read of what it wrote, in
+;; that order (the header says why they are sequenced).
 (test-equal "a template's assignment writes the library's private variable"
   '(3 3 program)
-  (list (twice) (lib-read) secret))
+  (let* ((template (twice)) (library (lib-read)))
+    (list template library secret)))
 
 (test-equal "and under a local binding of the spelling"
   '(local 4)
@@ -441,16 +453,21 @@
 
 (gen-set put!)
 
+;; `put!` reads back through the identifier that wrote, so each row also
+;; reads the variable from inside the library: a write that landed anywhere
+;; but the library's `secret` would show there.
 (test-equal "a generated macro's assignment writes it too"
-  '(7 program)
-  (list (put! 7) secret))
+  '(7 7 program)
+  (let* ((wrote (put! 7)) (library (read-nested)))
+    (list wrote library secret)))
 
 (bump-nested!)
 (define (put-later v) (put! v))
 
 (test-equal "and in a procedure compiled later"
-  '(9 program)
-  (list (put-later 9) secret))
+  '(8 9 9 program)
+  (let* ((before (read-nested)) (wrote (put-later 9)) (library (read-nested)))
+    (list before wrote library secret)))
 
 ;; ─── Introduced definitions ─────────────────────────────────────────────────
 

@@ -781,7 +781,8 @@ fn a_macro_generated_across_two_libraries_reaches_the_first() {
 /// is redefined, imported again and two collections run, while a macro
 /// made then and a fresh expansion of `m` read the new one's, which the
 /// new `bump!` has assigned. Neither oracle redefines a library so (Gauche
-/// 0.9.15 keeps the one module and answers `new` throughout; chibi 0.12
+/// 0.9.15 keeps the one module and answers the new library's value
+/// throughout, `new` and then `(bumped new)` for all four; chibi 0.12
 /// takes no `define-library` in a script), so it is a Rust test and not a
 /// suite row. A scoreboard row of #837's second PR, run under the stress
 /// lane and in a release `gc-check` build too, where a freed record or

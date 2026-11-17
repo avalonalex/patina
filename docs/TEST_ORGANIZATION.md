@@ -1879,8 +1879,8 @@ definition an expansion produces into a body beside a reference to it, and
 at top level; a generated macro's relinked literal; and a template that
 itself writes forty names spelled like a relinked one). Gauche answers all
 thirty-eight as asserted; chibi, run by hand with the libraries as files,
-thirty, and the file's header and its `*` row in `DIVERGENCES.tsv` record
-the eight. `expansion/splicing-libraries.scm` gains the row for a keyword
+thirty-one, and the file's header and its `*` row in `DIVERGENCES.tsv`
+record the seven. `expansion/splicing-libraries.scm` gains the row for a keyword
 a splice's frame binds, read in a procedure compiled later. The shapes no
 oracle can stage are Rust tests: `macro_definition_env.rs`'s
 `a_macro_generated_through_three_levels_reaches_the_private_variable`,
