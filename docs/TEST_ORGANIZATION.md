@@ -1936,8 +1936,10 @@ the payload grew) and `a_macros_relinks_are_charged_and_counted_live` (48
 bytes a relink at allocation, and live with the macro). The census's
 count of a relink as a word of the object is
 `a_macros_relinks_are_words_of_the_object`, in core's lib tests with the
-`gc-census` feature, which no CI lane runs: the census's own lane runs
-programs, and no program makes a relink before the second PR. The VM: `primitive_calls.rs`'s `a_relinked_callee_is_no_fast_path`
+`gc-census` feature, which CI's census step runs beside the census's own
+lane (`cargo test -p patina-core --lib --features gc-census --
+heap::census::`): that lane runs programs, and no program makes a relink
+before the second PR. The VM: `primitive_calls.rs`'s `a_relinked_callee_is_no_fast_path`
 (over the records an early-bound `car` gets its inline opcode through, an
 early-bound `length` its `CallPrimitive` and an early-bound
 `call-with-values` and `dynamic-wind` their sequences, the relinked callee
