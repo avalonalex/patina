@@ -14,8 +14,8 @@
 //!
 //! See VM_COMPILER.md §Pass 3.
 
+use super::LinkedOperand;
 use super::pass2_closure::{ClosedExpr, ClosedExprKind};
-use patina_core::BindingLink;
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
@@ -77,7 +77,7 @@ pub enum TailedExprKind {
     /// A global, by spelling or by the record linked (#837).
     GlobalRef {
         name: Symbol,
-        link: Option<BindingLink>,
+        link: Option<LinkedOperand>,
     },
 
     /// Read value out of a `MutableCell` held in a local register.
@@ -113,7 +113,7 @@ pub enum TailedExprKind {
     SetGlobal {
         var: Symbol,
         value: Box<TailedExpr>,
-        link: Option<BindingLink>,
+        link: Option<LinkedOperand>,
     },
 
     Begin(Vec<TailedExpr>),

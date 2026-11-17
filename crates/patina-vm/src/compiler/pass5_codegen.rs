@@ -24,9 +24,9 @@
 //!
 //! See VM_COMPILER.md §Pass 5.
 
-use super::OperandKey;
 use super::pass4_registers::{AllocatedExpr, CaptureSource, RegExpr, RegExprKind, RegLambda};
 use super::primitive_calls::{InlineOp, PrimitiveCallMap, ResolvedPrimitive};
+use super::{LinkedOperand, OperandKey};
 use crate::error::CompileError;
 use crate::types::code_object::{Arity, CodeObject, CodeObjectId};
 use crate::types::instruction::{ControlForm, Instruction, TestOp};
@@ -66,8 +66,9 @@ struct Codegen {
 /// The unit's global operands as pass 5 emits them (#836): each distinct
 /// spelling's or linked record's [`LinkIdx`] (#837), given in the order the
 /// first operand naming it is emitted, so the same unit always gets the
-/// same indices. Becomes the unit's one [`LinkTable`] once every member is
-/// compiled.
+/// same indices. An early-bound and a relinked operand over one record are
+/// two keys ([`OperandKey`]) and two entries, pinned to the same record.
+/// Becomes the unit's one [`LinkTable`] once every member is compiled.
 #[derive(Default)]
 struct UnitLinks {
     index: FxHashMap<OperandKey, LinkIdx>,
@@ -123,10 +124,14 @@ impl Codegen {
         }
     }
 
-    /// The link index of the global `name`, linked to `link` where the
-    /// desugarer linked it (#837), given now if no operand of the unit has
-    /// named it (or linked its record) yet.
-    fn link(&mut self, name: &Symbol, link: Option<BindingLink>) -> Result<LinkIdx, CompileError> {
+    /// The link index of the global `name`, linked as `link` says where
+    /// the desugarer linked it (#837), given now if no operand of the unit
+    /// has named it (or linked its record the same way) yet.
+    fn link(
+        &mut self,
+        name: &Symbol,
+        link: Option<LinkedOperand>,
+    ) -> Result<LinkIdx, CompileError> {
         let links = &mut self.links;
         let key = OperandKey::of(name, link);
         if let Some(&k) = links.index.get(&key) {
@@ -140,7 +145,7 @@ impl Codegen {
         })?;
         links.index.insert(key, k);
         links.names.push(Rc::clone(name));
-        links.links.push(link);
+        links.links.push(link.map(|operand| operand.link));
         Ok(k)
     }
 

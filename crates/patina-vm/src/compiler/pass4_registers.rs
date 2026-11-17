@@ -27,9 +27,9 @@
 //!
 //! See VM_COMPILER.md §Pass 4.
 
+use super::LinkedOperand;
 use super::pass3_tail::{TailedExpr, TailedExprKind, TailedLambda};
 use crate::compiler::pass1_analysis::NodeId;
-use patina_core::BindingLink;
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
@@ -98,7 +98,7 @@ pub enum RegExprKind {
     /// record the desugarer linked (#837).
     GlobalRef {
         name: Symbol,
-        link: Option<BindingLink>,
+        link: Option<LinkedOperand>,
     },
 
     /// Read value out of a `MutableCell` held in a local register.
@@ -135,7 +135,7 @@ pub enum RegExprKind {
     SetGlobal {
         name: Symbol,
         value: Box<RegExpr>,
-        link: Option<BindingLink>,
+        link: Option<LinkedOperand>,
     },
 
     Begin(Vec<RegExpr>),
