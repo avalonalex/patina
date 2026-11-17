@@ -394,7 +394,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs`):
 | `MutableCell` | inner value |
 | `VmClosure` | each of `free_vars` + queues `code_id` for `trace_code_ids`, unless retired (#836); no environment: its unit's link table holds the namespace, traced by that id |
 | `Procedure` | captured env (`visit_env`) + **body-expression literals** (§4.4) |
-| `Macro` | each of its `literals`, which its patterns and templates name by index (#718, §9.6); and its body, `CompiledMacro`: `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623; the registry also roots each while its library is registered, and since #834 nothing else need once a redefinition replaces it, since an importer holds the library's cells and not its environment (`CompiledMacro`'s derived trace, #686) |
+| `Macro` | each of its `literals`, which its patterns and templates name by index (#718, §9.6); each of its `relinks`' records (#837, §9.6: `CarriedRelink`'s derived trace, its spellings and scope id skipped by name); and its body, `CompiledMacro`: `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623; the registry also roots each while its library is registered, and since #834 nothing else need once a redefinition replaces it, since an importer holds the library's cells and not its environment (`CompiledMacro`'s derived trace, #686) |
 | `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` — each record's before/after thunks and the handler stack it captured at its `dynamic-wind` call (`WindRecord`'s derived trace, the one tracing point for a record wherever it sits: a stack, a continuation, a prompt frame, or a `DynamicWindSetup`/`Jump` cont value), `exception_handlers`, `prompt_stack` — each frame's handler and the continuation below it (derived; the tag is a plain `Rc` struct), `captured_cont_env` (deduplicated worklist), `resume` (`ContValue`'s derived trace), body literals (§4.4) |
 | `EnvironmentSpecifier` | `visit_env(env)` |
 | `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id, the two kinds sharing the heap's ids; the payload in `VmState`'s side tables is traced only for recorded ids, via the `RootProvider::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5). VM code ids — a marked closure's, each frame's code's (`FrameCode`), the running code's (`RunningCode`) — are recorded in a set of their own, since a `VmState` mints them from 0 too, and broadcast through `RootProvider::trace_code_ids` in the same fixpoint, which traces each one's unit's link table (#836) |
@@ -1046,7 +1046,7 @@ expansion runs in (§7; point C of `PRD/GC_PRD.md` §11.3).
 | `HandleTable.by_name` | `heap/handles.rs` | The heap's by-name record (#836, `Heap::by_name_record`): the record a VM unit's link table links for a name its namespace reaches by an alias or a visible scoped definition, read by name (§4.7). Made once, the first time a link needs it, and rooted here for the heap's life, so that an entry naming it never names a freed pair whatever the tables traced; `None` on a heap no such link was made on, as on every tree-walker heap. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason. Uncounted. Pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
 | A compilation's `LiteralPool` | `crates/patina-core/src/literal_pool.rs` | The heap literals of the form being compiled, from its expansion until the code that holds them is traced in its own right (§9.7, #705, #869): registered with the heap's root set for the pool's life, its entries reported as slots. The VM's `load_unit` takes the pool and drops it once the code store holds the unit, before the form runs; the tree-walker's `eval_in_env_with` once the form's run returns; and a `Step::Eval`'s is retired to a slot on the heap's `Instance` (`Evaluator::retire_pool`, at most one), released by the next retirement, the start of the driver's next collection, before it marks, or a run's return (§7). So it never holds more than one form's quoted text |
-| Macro literals and environments | `heap/mod.rs`, `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: the literals the object holds (§9.6), and its body's `definition_env` and each `foreign_expansions` environment (§4.3) |
+| Macro literals, relinks and environments | `heap/mod.rs`, `binding_record.rs`, `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: the literals the object holds (§9.6); the record of each relinked identifier it carries (`HeapObjectData::Macro.relinks`, #837, §9.6), with the record's cell and the value the cell holds; and its body's `definition_env` and each `foreign_expansions` environment (§4.3). Pinned by the sentinel test `compiled_macro_fields`, whose carried record is in no slot and reachable only through the object, shown failing with the arm's `relinks` line deleted and again with `CarriedRelink::link` marked `skip`; `a_macros_relinks_die_with_the_macro` pins that the edge lasts exactly as long as the macro |
 | In-flight `ExceptionObject.irritants` | `crates/patina-core/src/error.rs:44` | Lives in a propagating `Err` on the Rust stack; covered by deferral (GC never runs during unwinding — safe points are at loop tops, not in error paths) |
 
 ### 5.4 A new field, variant or root provider (#623)
@@ -2634,6 +2634,24 @@ held a `SharedHeap` clone for them. Now no `CompiledMacro` holds a word or a
 heap, so one held anywhere, cloned or outliving its object, names nothing a
 collection can free, and a context can read a literal as a `Value` without
 the raw-word API.
+
+The object holds a second vector for the same reason (#837):
+`relinks: Box<[CarriedRelink]>`, the relinked identifiers among its
+literals, each the identifier's key (its spelling in the macro, the scope of
+the expansion that relinked it, the spelling its generator's template wrote)
+with the binding record it was relinked to. Key and record are one
+structure in the object, so there are no two halves to keep in step and a
+`CompiledMacro` gains no field. The record is the one word; the object's
+trace reaches it through `CarriedRelink`'s derived trace, and it lives
+exactly as long as the macro. A context writes them with
+`Cx::alloc_macro_with_relinks` and reads them back branded with
+`Cx::macro_relinks`; `alloc_macro` makes an object with none, and an empty
+vector allocates nothing. A check build refuses a carried record that is a
+placeholder, a read-through record or the by-name record
+(`Record::refused_as_a_link`), as `LinkTable::link_in` refuses a pinned
+one. The byte account charges a relink its 48 bytes, and the object's slot
+is 72 bytes as before (`the_object_slots_size_is_watched`). Nothing makes
+one yet: #837's second PR's desugarer does.
 
 ### 9.7 The `CoreExpr` literal pool
 

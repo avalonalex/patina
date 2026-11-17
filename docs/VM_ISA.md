@@ -195,11 +195,14 @@ definition over an import or an import over a definition re-points the
 record, never the entry, so a linked read always sees the current binding.
 The table is invisible to the ISA: operands, semantics and error behavior are
 as they were. The hot paths read nothing of the table but the entry; the cold
-paths read the operand's name (§3). An entry pass 5 pinned to the record an
-early-bound operand links (#837; `VM_COMPILER.md` §10.5) is the exception:
+paths read the operand's name (§3). An entry pass 5 pinned to the record a
+linked operand names (#837; `VM_COMPILER.md` §10.5) is the exception:
 `link_in` leaves it, and the cold read and store never go by its name, so
 a read or store that its record cannot answer is the unbound-variable
-error.
+error. A pinned entry is an early-bound operand's or a relinked one's. The
+two read and store alike; they differ only at compile time, where a
+relinked callee takes no fast path (`VM_COMPILER.md` §10.5). The desugarer
+makes early-bound ones today, and relinked ones with #837's second PR.
 
 ### 4.2 MutableCell Operations
 

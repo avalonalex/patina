@@ -1893,6 +1893,44 @@ private binding is a pattern literal. The stress counts of
 `macro_definition_env`, `gc_vm`, `gc_tree_walker` and `scheme_suite` were
 re-pinned.
 
+The same PR's plumbing is inert: nothing calls it but its tests, which
+build each part by hand. The pool's
+`a_link_keeps_its_kind_through_the_pool` (an early and a relinked link of
+one record are two links, each read from its own entry, and neither kind
+shows in what a link prints). `environment.rs`'s `relink_link_tests`, one
+case per kind of relink target (`Environment::relink_record`): a
+namespace's slot, one record however often it is asked for; an import; a
+definition over the import, which the link follows; a name reached through
+a host namespace's parent, where the next ask after a host definition
+links the host's record and the earlier link is the parent's still; a
+frame's import, a fresh record at each ask; a frame's keyword by name, a
+snapshot record, and a frame's variable, nothing; a keyword at scopes, in
+a namespace's table and in a frame's; the VM's renamed global, `None`
+until its `Define` has run and never the bare spelling's; the
+tree-walker's scoped entry, the one at exactly the scopes among two runs'
+and a plain binding, and an identity nobody holds; and the context's
+`relink_link`, `linkable`, `linked_value` and `linked_location`. Each
+record is asked `Record::refused_as_a_link` and pinned in a link table,
+whose `link_in` refuses a placeholder, a read-through record or the
+by-name record in a check build. The macro object's carried relinks:
+`trace_sentinels.rs`'s `compiled_macro_fields` gains a carried record in no
+slot, reachable only through the object, shown failing with the trace
+arm's `relinks` line deleted and again with `CarriedRelink::link` marked
+`skip`; `a_macros_relinks_die_with_the_macro` (the record, its cell and
+its value are kept while the macro is rooted and swept with it);
+`link_table.rs`'s `a_check_build_refuses_a_carried_placeholder`,
+`a_check_build_refuses_a_carried_read_through_record` and
+`a_check_build_refuses_the_carried_by_name_record`, which CI's controls
+line picks up by their prefix; and `account.rs`'s
+`the_object_slots_size_is_watched` (72 bytes, as before the payload
+grew). The VM: `primitive_calls.rs`'s `a_relinked_callee_is_no_fast_path`
+(over the records an early-bound `car` gets its inline opcode through and
+an early-bound `call-with-values` its sequence, the relinked callee is in
+neither map and compiles to a load of its pinned operand and a call) and
+`a_relinked_and_an_early_operand_of_one_record_stay_apart` (two keys, two
+pinned entries of one record, in either order). No stress count moved for
+them: they are unit tests of crates the stress lane does not run.
+
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):
 the variable that sets the mode did not reach the process, or the program
