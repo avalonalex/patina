@@ -1893,8 +1893,12 @@ private binding is a pattern literal. The stress counts of
 `macro_definition_env`, `gc_vm`, `gc_tree_walker` and `scheme_suite` were
 re-pinned.
 
-The same PR's plumbing is inert: nothing calls it but its tests, which
-build each part by hand. The pool's
+The same PR's plumbing makes no relinked link in any program. Part of it
+is on every program's path already: the VM compiler reads each link's
+kind, and a macro object is allocated with no relinks, which the
+collector's arm then loops over. What makes a relinked link or stores a
+relink is called by nothing but its tests, which build each part by hand.
+The pool's
 `a_link_keeps_its_kind_through_the_pool` (an early and a relinked link of
 one record are two links, each read from its own entry, and neither kind
 shows in what a link prints). `environment.rs`'s `relink_link_tests`, one
@@ -2205,7 +2209,7 @@ macOS's allocator settings, every variable named `Malloc…` (#862); the
 comparison, Criterion, census and steady-state runners drop the same. The
 Claude desktop app starts its sessions with `MallocNanoZone=0`, which on
 macOS 27.2 turns off the system allocator's per-thread cache. Measured
-2026-11-17, the tree-walker's workloads then count 8.5–9.8% more
+2026-11-17, the tree-walker's workloads then count 7.5–9.8% more
 instructions (`tw-port-churn` 1%), and each run of a binary lands on one of
 several counts up to 1.3% apart, how often on each changing with the
 binary's code signature: copies of one build that differ in nothing else

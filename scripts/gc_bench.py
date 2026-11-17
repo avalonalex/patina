@@ -373,7 +373,7 @@ def descriptor_limit(workload):
 # named `Malloc...` (malloc(3), ENVIRONMENT), and a caller's reached every run
 # (#862). The Claude desktop app starts its sessions with `MallocNanoZone=0`,
 # which on macOS 27.2 turns off the allocator's per-thread cache. Under it,
-# measured 2026-11-17, the tree-walker's workloads counted 8.5-9.8% more
+# measured 2026-11-17, the tree-walker's workloads counted 7.5-9.8% more
 # instructions (`tw-port-churn` 1%), and each run of a binary landed on one
 # of several counts up to 1.3% apart, how often on each changing with the
 # binary's code signature, so with every build, whatever it changed. A run

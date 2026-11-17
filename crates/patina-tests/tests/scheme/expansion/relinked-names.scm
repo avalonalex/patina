@@ -32,7 +32,7 @@
 ;; files and the rest of this file as the program (2026-11-16). It agrees on
 ;; thirty-one of the thirty-eight. The seven it does not are seven of the
 ;; nine rows on a keyword an expansion introduces under its library's
-;; private spelling, each of which says so where it stands. chibi's
+;; private spelling; the comment above those rows counts them. chibi's
 ;; top-level `define-syntax` lands on the *library's* keyword, so the
 ;; library's own macro and every earlier generated macro expand the newest
 ;; definition: `((introduced 2) (introduced 3))`, `((one 4) (one 5))`,
