@@ -12,7 +12,11 @@
 ;; assignment; introduced state; a keyword an expansion introduces under a
 ;; relinked spelling; a definition an expansion produces into a body beside
 ;; a reference to it; a generated macro's relinked literal; a template that
-;; itself writes a name spelled like a relinked one. `hygiene_matrix.rs`
+;; itself writes a name spelled like a relinked one; and, in a second batch
+;; that also passed when it was written, a template's own internal
+;; definitions of the private spellings and a relinked reference where a
+;; call has a fast path (`apply`, an assignment beside calls of one binding,
+;; a private name for `call-with-values` or `dynamic-wind`). `hygiene_matrix.rs`
 ;; scores the first two families and, by its own assertion, none of the
 ;; rest. The same shapes with a collection or a library redefinition between
 ;; the steps, which no oracle can stage, are Rust tests
@@ -25,12 +29,13 @@
 ;; defined in libraries inline. **chibi 0.12 cannot run this file** — it does
 ;; not take `define-library` in a script; `expansion/template-references.scm`
 ;; has the measurement — and is registered `*` / `incomplete` in
-;; `DIVERGENCES.tsv`. Gauche 0.9.15 runs it and answers all thirty-eight rows
+;; `DIVERGENCES.tsv`. Gauche 0.9.15 runs it and answers all forty-two rows
 ;; as asserted.
 ;;
 ;; Every row was also run under chibi 0.12 with the libraries as `.sld`
-;; files and the rest of this file as the program (2026-11-16). It agrees on
-;; thirty-one of the thirty-eight. The seven it does not are seven of the
+;; files and the rest of this file as the program (2026-11-16; the second
+;; batch's four rows, and the whole file again, 2026-11-17). It agrees on
+;; thirty-five of the forty-two. The seven it does not are seven of the
 ;; nine rows on a keyword an expansion introduces under its library's
 ;; private spelling; the comment above those rows counts them. chibi's
 ;; top-level `define-syntax` lands on the *library's* keyword, so the
@@ -274,13 +279,21 @@
         ((_ v) (begin (define settled 'introduced) (define v settled)))))))
 
 ;; Mutually recursive definitions and their use as one expansion, the library
-;; having private procedures of both spellings.
+;; having private procedures of both spellings: produced into the body the
+;; use is in, and as the internal definitions of a body the template writes.
 (define-library (probe fwd)
-  (export m-produced)
+  (export m-produced m-direct)
   (import (scheme base))
   (begin
     (define (ev? n) 'lib-ev)
     (define (od? n) 'lib-od)
+    (define-syntax m-direct
+      (syntax-rules ()
+        ((_ x)
+         (let ()
+           (define (ev? n) (if (= n 0) 'even (od? (- n 1))))
+           (define (od? n) (if (= n 0) 'odd (ev? (- n 1))))
+           (ev? x)))))
     (define-syntax m-produced
       (syntax-rules ()
         ((_ x)
@@ -288,6 +301,38 @@
            (define (ev? n) (if (= n 0) 'even (od? (- n 1))))
            (define (od? n) (if (= n 0) 'odd (ev? (- n 1))))
            (ev? x)))))))
+
+;; A template whose head is `apply`, a call the desugarer has a lowering for.
+(define-library (probe applying)
+  (export apply-of)
+  (import (scheme base))
+  (begin
+    (define-syntax apply-of (syntax-rules () ((_ f xs) (apply f xs))))))
+
+;; A procedure the library exports, which one template calls and another
+;; assigns.
+(define-library (probe setcall)
+  (export sc-proc call-sc set-sc! read-sc)
+  (import (scheme base))
+  (begin
+    (define (sc-proc x) (list 'lib x))
+    (define (read-sc) sc-proc)
+    (define-syntax call-sc (syntax-rules () ((_ x) (sc-proc x))))
+    (define-syntax set-sc! (syntax-rules () ((_ v) (set! sc-proc v))))))
+
+;; Private names for `call-with-values` and `dynamic-wind`, which the library
+;; can point elsewhere.
+(define-library (probe control)
+  (export values-of wind-of repoint-control!)
+  (import (scheme base))
+  (begin
+    (define cwv-proc call-with-values)
+    (define wind-proc dynamic-wind)
+    (define (repoint-control!)
+      (set! cwv-proc (lambda (producer consumer) 'second))
+      (set! wind-proc (lambda (before thunk after) 'third)))
+    (define-syntax values-of (syntax-rules () ((_ a b) (cwv-proc a b))))
+    (define-syntax wind-of (syntax-rules () ((_ a b c) (wind-proc a b c))))))
 
 ;; Generated macros with a literal: the library's private variable `lit`,
 ;; its private variable `priv-lit` (which the program binds nothing of), and
@@ -332,8 +377,9 @@
 
 (import (probe collide) (probe getter) (probe later) (probe casing)
         (probe mint) (probe setter) (probe genset) (probe intro)
-        (probe shadow) (probe kwgen) (probe kwintro) (probe settle) (probe fwd) (probe litguard) (probe litonly)
-        (probe litgen))
+        (probe shadow) (probe kwgen) (probe kwintro) (probe settle) (probe fwd)
+        (probe applying) (probe setcall) (probe control)
+        (probe litguard) (probe litonly) (probe litgen))
 
 (test-begin "relinked-names")
 
@@ -624,6 +670,67 @@
 (test-equal "and into a lambda body"
   'odd
   ((lambda (k) (m-produced k)) 3))
+
+;; The same definitions as the internal definitions of a body the template
+;; itself writes: the template's own binders of the private spellings, and
+;; its references to them.
+(test-equal "a template's own internal definitions of the private spellings"
+  'odd
+  (m-direct 5))
+
+;; ─── A relinked reference where a call has a fast path ──────────────────────
+
+;; `(apply f xs)` is lowered by the desugarer where its head is the `apply`
+;; primitive. The program's definition is in a form of its own, before the
+;; expansions, so the template's `apply` is relinked in each of them, and it
+;; is the library's all the same.
+(define (apply f xs) 'program)
+(define (apply-later) (apply-of + '(1 2)))
+
+(test-equal "a template's apply is the library's past the program's definition"
+  '(3 7 program)
+  (list (apply-later) (apply-of + '(3 4)) (apply + '(1 2))))
+
+;; One binding, reached three ways. The program imports `sc-proc`, so the
+;; first two calls are bound early; then, in one form, a call bound early,
+;; the program's definition of the spelling, and after it a relinked
+;; assignment and a relinked call; and in a later form a procedure that
+;; assigns and calls, relinked both. Every template's `sc-proc` is the
+;; library's variable: each write is sequenced before the reads (the header
+;; says why), and the procedure compiled first and the library's own read
+;; see it.
+(define sc-first (call-sc 1))
+(define (sc-early x) (call-sc x))
+(begin
+  (define sc-in-form (call-sc 2))
+  (define (sc-proc x) 'mine)
+  (define sc-after
+    (let* ((wrote (set-sc! (lambda (y) (list 'new y)))) (called (call-sc 3)))
+      called)))
+(define (sc-late x)
+  (let* ((wrote (set-sc! (lambda (y) (list 'newer y)))) (called (call-sc x)))
+    called))
+
+(test-equal "a relinked assignment beside calls bound early and late, of one binding"
+  '((lib 1) (lib 2) (new 3) (new 4) (newer 5) (newer 6) (newer 7) mine)
+  (let* ((early (sc-early 4)) (late (sc-late 5)) (early-again (sc-early 6)))
+    (list sc-first sc-in-form sc-after early late early-again ((read-sc) 7)
+          (sc-proc 8))))
+
+;; The library holds `call-with-values` and `dynamic-wind` under private
+;; names, and the program has procedures of those names. A template's call
+;; is the library's variable, whatever it holds: the primitive, and then
+;; what the library assigns.
+(define (cwv-proc a b) 'program)
+(define (wind-proc a b c) 'program)
+(define (values-later) (values-of (lambda () 1) (lambda (x) (list 'cwv x))))
+(define (wind-later) (wind-of (lambda () #f) (lambda () 'dw) (lambda () #f)))
+(define control-before (list (values-later) (wind-later)))
+(repoint-control!)
+
+(test-equal "a private name for call-with-values or dynamic-wind is the library's variable"
+  '(((cwv 1) dw) second third program program)
+  (list control-before (values-later) (wind-later) (cwv-proc 1 2) (wind-proc 1 2 3)))
 
 ;; ─── A generated macro's relinked literal ───────────────────────────────────
 

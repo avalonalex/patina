@@ -2095,6 +2095,56 @@ macro_rules! gc_shared_tests {
         }
 
         #[test]
+        fn a_generated_macro_keeps_a_splices_keyword_across_its_librarys_redefinition() {
+            // `generated` is made by the first `(tmp splice)`'s generator
+            // and mentions that library's `helper`, a keyword private to
+            // a splice: bound at the splice's scopes in the library's
+            // namespace, and reached by nothing a program writes. The
+            // library is then redefined and imported again, two
+            // collections run, and `generated` is expanded at top level
+            // and in a procedure: it still expands the first library's
+            // keyword, where a macro the new generator makes expands the
+            // new one's. Each step is a top-level form of its own. A
+            // scoreboard row of #837's second PR, the third target that
+            // holds a relinked scoped keyword: a freed record, cell or
+            // macro panics where it is read in a debug or check build
+            // (#621). Under zeal too. Neither oracle redefines a library
+            // so, and Gauche 0.9.15 has no `(srfi 188)`.
+            let library = |value: &str| {
+                format!(
+                    "(define-library (tmp splice)
+                       (import (scheme base) (srfi 188))
+                       (export make-answer)
+                       (begin
+                         (splicing-let-syntax
+                             ((helper (syntax-rules () ((_ x) (list '{value} x)))))
+                           (define-syntax make-answer
+                             (syntax-rules ()
+                               ((_ name)
+                                (define-syntax name
+                                  (syntax-rules () ((_ x) (helper x))))))))))"
+                )
+            };
+            assert_gc_and_zeal_eval_to(
+                &format!(
+                    "(import (scheme base) (patina debug))
+                     {}
+                     (import (tmp splice))
+                     (make-answer generated)
+                     {}
+                     (import (tmp splice))
+                     (gc) (gc)
+                     (define (later) (generated 2))
+                     (make-answer generated-new)
+                     (list (generated 1) (later) (generated-new 3))",
+                    library("old"),
+                    library("new")
+                ),
+                "((old 1) (old 2) (new 3))",
+            );
+        }
+
+        #[test]
         fn a_replaced_library_s_procedure_reads_by_name_through_its_namespace_after_a_collection(
         ) {
             // `old-step` is the first `(r836 stepper)`'s `step`, whose body

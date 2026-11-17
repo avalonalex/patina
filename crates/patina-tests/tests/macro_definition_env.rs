@@ -825,6 +825,102 @@ fn generated_macros_keep_the_library_they_were_made_from_across_a_redefinition()
     );
 }
 
+/// A definer of introduced state, across forms and collections: each run
+/// of `(t intro)`'s `def-counter` introduces a `count` of its own beside
+/// the library's plain `count`, and the getter and bumper it generates
+/// name that one. The program has a `count` too. A procedure compiled
+/// before the program's definition, and procedures compiled after it and
+/// after collections, read and assign each run's own state; a run of the
+/// definer in the program has another. Every write and the reads after it
+/// are sequenced. chibi 0.12 (the library as a file) and Gauche 0.9.15
+/// answer the same without the collections (2026-11-17). A scoreboard row
+/// of #837's second PR, the second target that holds a relinked reference
+/// to an introduced definition (`expansion/relinked-names.scm` has the
+/// first): it passed before the switch and must after.
+#[test]
+fn a_definers_introduced_state_is_read_and_assigned_from_procedures_compiled_later() {
+    let program = "(define-library (t intro)
+  (export get1 bump1! get2 bump2! plain-count def-counter)
+  (import (scheme base))
+  (begin
+    (define count 100)
+    (define (plain-count) count)
+    (define-syntax def-counter
+      (syntax-rules ()
+        ((_ getter bumper)
+         (begin
+           (define count 0)
+           (define-syntax getter (syntax-rules () ((_) count)))
+           (define-syntax bumper (syntax-rules () ((_) (set! count (+ count 1)))))))))
+    (def-counter get1 bump1!)
+    (def-counter get2 bump2!)))
+(import (scheme base) (patina debug) (t intro))
+(define (early) (bump1!) (get1))
+(define count 'program)
+(gc) (gc)
+(define (later) (bump2!) (list (get1) (get2)))
+(gc)
+(define first (let* ((a (early)) (b (later))) (list a b)))
+(def-counter get3 bump3!)
+(gc) (gc)
+(define (later3) (bump3!) (bump1!) (list (get1) (get2) (get3) (plain-count) count))
+(let* ((c (later3)) (d (early))) (list first c d))";
+    let expected = "((1 (1 1)) (2 1 1 100 program) 3)".to_string();
+    assert_eq!(
+        on_both_backends(program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// Private keywords of a splice, across forms and collections: `(t
+/// splice)` keeps `helper` under a `splicing-let-syntax` and the recursive
+/// `step` under a `splicing-letrec-syntax`, each bound at the splice's
+/// scopes in the library's namespace and named by nothing a program can
+/// write. Its own macro `answer` and the macros its generators make in the
+/// program expand them, in the form after two collections and in a
+/// procedure under a `let-syntax` of the spelling, past the program's own
+/// `helper`. chibi 0.12 answers the same with the library as a file and
+/// without the collections (2026-11-17); Gauche 0.9.15 has no `(srfi
+/// 188)`. A scoreboard row of #837's second PR, the second target that
+/// holds a relinked scoped keyword (`expansion/splicing-libraries.scm` has
+/// the first): it passed before the switch and must after.
+#[test]
+fn a_splices_private_keywords_are_expanded_from_later_forms() {
+    let program = "(define-library (t splice)
+  (import (scheme base) (srfi 188))
+  (export answer make-answer make-countdown)
+  (begin
+    (splicing-let-syntax ((helper (syntax-rules () ((_ x) (list 'helped x)))))
+      (define-syntax answer (syntax-rules () ((_ x) (helper x))))
+      (define-syntax make-answer
+        (syntax-rules ()
+          ((_ name) (define-syntax name (syntax-rules () ((_ x) (helper x))))))))
+    (splicing-letrec-syntax
+        ((step (syntax-rules () ((_ 0) 70) ((_ n) (step 0)))))
+      (define-syntax make-countdown
+        (syntax-rules ()
+          ((_ name) (define-syntax name (syntax-rules () ((_) (step 1))))))))))
+(import (scheme base) (patina debug) (t splice))
+(define-syntax helper (syntax-rules () ((_ x) 'the-programs)))
+(make-answer generated)
+(make-countdown countdown)
+(gc) (gc)
+(define first (list (answer 1) (generated 2) (countdown) (helper 3)))
+(define (later)
+  (let-syntax ((step (syntax-rules () ((_ n) 'local))))
+    (list (answer 4) (generated 5) (countdown) (step 6))))
+(gc)
+(list first (later))";
+    let expected =
+        "(((helped 1) (helped 2) 70 the-programs) ((helped 4) (helped 5) 70 local))".to_string();
+    assert_eq!(
+        on_both_backends(program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
 /// The library `call-f` comes from: an exported `f` its template calls.
 const CALL_F: &str = "(define-library (t lib-f)
   (export call-f f)

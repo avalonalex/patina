@@ -1867,7 +1867,7 @@ the arenas.
 
 The second PR (#837) starts with a scoreboard: the relinking shapes no
 lane held, each a row that passed before the PR, on both backends, and
-must pass after it. `expansion/relinked-names.scm` has thirty-eight (a
+must pass after it. `expansion/relinked-names.scm` began with thirty-eight (a
 generated macro over a private variable or keyword, in the form that made
 it and in later ones, through one level and two; a reference beside the
 program's definition of its spelling, in one form and across forms; a
@@ -1877,11 +1877,12 @@ spelling, in one expansion, through a generated macro, run twice, compiled
 first, of a private variable's spelling and across a second library; a
 definition an expansion produces into a body beside a reference to it, and
 at top level; a generated macro's relinked literal; and a template that
-itself writes forty names spelled like a relinked one). Gauche answers all
-thirty-eight as asserted; chibi, run by hand with the libraries as files,
-thirty-one, and the file's header and its `*` row in `DIVERGENCES.tsv`
+itself writes forty names spelled like a relinked one). Gauche answers
+every row as asserted; chibi, run by hand with the libraries as files,
+all but seven, and the file's header and its `*` row in `DIVERGENCES.tsv`
 record the seven. `expansion/splicing-libraries.scm` gains the row for a keyword
-a splice's frame binds, read in a procedure compiled later. The shapes no
+a splice binds at its scopes in its library's namespace, read in a
+procedure compiled later. The shapes no
 oracle can stage are Rust tests: `macro_definition_env.rs`'s
 `a_macro_generated_through_three_levels_reaches_the_private_variable`,
 `a_macro_generated_across_two_libraries_reaches_the_first` and
@@ -1892,6 +1893,34 @@ backends and under zeal, a macro whose only mention of its library's
 private binding is a pattern literal. The stress counts of
 `macro_definition_env`, `gc_vm`, `gc_tree_walker` and `scheme_suite` were
 re-pinned.
+
+A second batch followed the plumbing and precedes the switch, since a
+mutation run over the first found two kinds of relink target each held by
+one row: with relinking to a scoped keyword off, only
+`splicing-libraries.scm` failed, and with relinking to an introduced
+definition off, only `relinked-names.scm`. Each kind is now held in more
+than one test target. An introduced definition:
+`macro_definition_env.rs`'s
+`a_definers_introduced_state_is_read_and_assigned_from_procedures_compiled_later`.
+A scoped keyword: a second row of `splicing-libraries.scm` (a recursive
+keyword under `splicing-letrec-syntax` that a generated macro carries into
+later forms), `macro_definition_env.rs`'s
+`a_splices_private_keywords_are_expanded_from_later_forms`, and
+`gc_shared_tests!`'s
+`a_generated_macro_keeps_a_splices_keyword_across_its_librarys_redefinition`,
+on both backends and under zeal. Every target a program's relinking
+reaches is a namespace's record: instrumented over every suite file, the
+workspace's tests, chibi's suite and the compat corpus on both backends,
+the desugarer asks for a slot's or an import's record by name, a scoped
+keyword's entry and an introduced definition's, each in a namespace, and
+never for a frame's keyword or a frame's import, which only the core
+tests of `Environment::relink_record` build. `relinked-names.scm` gains
+four rows, forty-two in all, of which chibi by hand answers thirty-five: a
+template's own internal definitions of the private spellings; a template's
+`apply` past the program's definition of `apply`; a relinked assignment
+beside calls of one binding bound early and late; and a private name for
+`call-with-values` or `dynamic-wind`, which the library re-points. The
+same four stress counts were re-pinned.
 
 The same PR's plumbing makes no relinked link in any program. Part of it
 is on every program's path already: the VM compiler reads each link's
