@@ -193,7 +193,8 @@ jobs:
     # pinned entry (#837) over a placeholder, a read-through record or the
     # by-name record, which no early or relinked link names, refused by
     # link_in before it links, and a macro object's carried relink over each
-    # of the three, refused where the object is allocated (all
+    # of the three, refused where the object is allocated, and one whose
+    # handle early binding branded, refused where a context stores it (all
     # link_table::tests::).
     #
     # The defer balance is the one check every build carries, so its control

@@ -2646,10 +2646,12 @@ trace reaches it through `CarriedRelink`'s derived trace, and it lives
 exactly as long as the macro. A context writes them with
 `Cx::alloc_macro_with_relinks` and reads them back branded with
 `Cx::macro_relinks`; `alloc_macro` makes an object with none, and an empty
-vector allocates nothing. A check build refuses a carried record that is a
+vector allocates nothing. The context's is the one way in from outside
+core: `Heap`'s allocator for one is core's own, since a `CarriedRelink` is
+an unbranded record. A check build refuses a carried record that is a
 placeholder, a read-through record or the by-name record
 (`Record::refused_as_a_link`), as `LinkTable::link_in` refuses a pinned
-one. The byte account charges a relink its 48 bytes, and the object's slot
+one, and a `Carried` whose handle early binding branded. The byte account charges a relink its 48 bytes, and the object's slot
 is 72 bytes as before (`the_object_slots_size_is_watched`). Nothing makes
 one yet: #837's second PR's desugarer does.
 
@@ -2763,7 +2765,9 @@ from growing.
   payload can be a plain field, as `VmClosure.free_vars` is. The ephemeron is
   the exception, while the mark phase breaks it under `&Heap`. The scan reads
   each payload's type as written, so a type that wraps one in a struct of its
-  own is beyond it.
+  own is beyond it unless the scan is told of the struct (`SHARED_WRAPPERS`),
+  as it is of `CarriedRelink`, whose two spellings put `Macro.relinks` on the
+  list (#837).
 
 The last two are tests in
 `crates/patina-interpreter/src/reentry_lint_control.rs`, each with a positive

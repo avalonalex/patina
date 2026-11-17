@@ -135,7 +135,7 @@ pub enum LinkKind {
 /// `Link`. The top bit of `index` is the link's [`LinkKind`], so two links
 /// of one entry's index that differ in kind are not equal; the rest is its
 /// place in the pool.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Link {
     pool: NonZeroU32,
     index: u32,
@@ -160,6 +160,15 @@ impl Link {
     #[inline]
     fn slot(self) -> u32 {
         self.index & !RELINKED_BIT
+    }
+}
+
+/// Its pool, its place there and its kind, as a pooled [`Lit`] prints its
+/// own: the place without the kind's bit, which a derived `Debug` would
+/// print as part of the index (entry 0, relinked, as 2147483648).
+impl fmt::Debug for Link {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Link(#{}.{}, {:?})", self.pool, self.slot(), self.kind())
     }
 }
 
@@ -464,6 +473,17 @@ mod tests {
                 "#<link 2>".to_string()
             )
         );
+        // `Debug` names the pool, the place and the kind, and never the
+        // kind's bit as part of the place.
+        let debug = |link: Link, place: u32, kind: &str| {
+            assert_eq!(
+                format!("{link:?}"),
+                format!("Link(#{}.{place}, {kind})", link.pool)
+            );
+        };
+        debug(early, 0, "Early");
+        debug(relinked, 1, "Relinked");
+        debug(relinked_x, 2, "Relinked");
         assert_eq!(pool.len(), 3);
         assert_eq!(
             std::mem::size_of::<Option<Link>>(),

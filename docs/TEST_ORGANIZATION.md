@@ -1918,12 +1918,23 @@ slot, reachable only through the object, shown failing with the trace
 arm's `relinks` line deleted and again with `CarriedRelink::link` marked
 `skip`; `a_macros_relinks_die_with_the_macro` (the record, its cell and
 its value are kept while the macro is rooted and swept with it);
-`link_table.rs`'s `a_check_build_refuses_a_carried_placeholder`,
-`a_check_build_refuses_a_carried_read_through_record` and
-`a_check_build_refuses_the_carried_by_name_record`, which CI's controls
-line picks up by their prefix; and `account.rs`'s
-`the_object_slots_size_is_watched` (72 bytes, as before the payload
-grew). The VM: `primitive_calls.rs`'s `a_relinked_callee_is_no_fast_path`
+`a_macros_relinks_cross_a_context_and_a_collection` (the same edge as a
+safe crate stores and reads it: a frame keyword's snapshot and a library's
+slot record go in through `Cx::alloc_macro_with_relinks`, and after two
+collections with the macro as the only root come back through
+`Cx::macro_relinks` with their keys, relinked, each reading what it
+held); `link_table.rs`'s `a_check_build_refuses_a_carried_placeholder`,
+`a_check_build_refuses_a_carried_read_through_record`,
+`a_check_build_refuses_the_carried_by_name_record` and
+`a_check_build_refuses_a_carried_early_link`, which CI's controls line
+picks up by their prefix, each held to having allocated nothing; and
+`account.rs`'s `the_object_slots_size_is_watched` (72 bytes, as before
+the payload grew) and `a_macros_relinks_are_charged_and_counted_live` (48
+bytes a relink at allocation, and live with the macro). The census's
+count of a relink as a word of the object is
+`a_macros_relinks_are_words_of_the_object`, in core's lib tests with the
+`gc-census` feature, which no CI lane runs: the census's own lane runs
+programs, and no program makes a relink before the second PR. The VM: `primitive_calls.rs`'s `a_relinked_callee_is_no_fast_path`
 (over the records an early-bound `car` gets its inline opcode through and
 an early-bound `call-with-values` its sequence, the relinked callee is in
 neither map and compiles to a load of its pinned operand and a call) and

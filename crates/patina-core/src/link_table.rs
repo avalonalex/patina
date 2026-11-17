@@ -1280,6 +1280,77 @@ mod tests {
         assert_a_carried_relink_is_refused(&heap, by_name, "the by-name record");
     }
 
+    /// A macro carries relinked identifiers only (#837): a check build
+    /// refuses a `Carried` whose handle early binding branded, naming the
+    /// spelling, where a context stores it (`Carried::into_stored`), and
+    /// makes no object. `Carried`'s fields are public, so the handle may
+    /// be any a context answered; stored, `Cx::macro_relinks` would read it
+    /// back as relinked, and the reference it was copied for would lose the
+    /// fast paths early binding keeps. The same record relinked is taken.
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    fn a_check_build_refuses_a_carried_early_link() {
+        use crate::binding_record::Carried;
+        use crate::compiled_macro::CompiledMacro;
+        use crate::environment::RelinkTarget;
+        use crate::literal_pool::LinkKind;
+        use crate::namespace_view::NamespaceView;
+        use std::collections::{HashMap, HashSet};
+
+        let compiled = || {
+            Rc::new(CompiledMacro {
+                name: Rc::from("m"),
+                rules: vec![],
+                max_pvars: 0,
+                definition_scopes: crate::ScopeSet::new(),
+                template_symbols: HashSet::new(),
+                inherited_identifiers: HashMap::new(),
+                definition_env: None,
+                foreign_expansions: vec![],
+            })
+        };
+        fn carried(link: crate::Linkable<'_>) -> Carried<'_> {
+            Carried {
+                spelling: Rc::from("secret.1"),
+                guard: crate::ScopeId(7),
+                written: Rc::from("secret"),
+                link,
+            }
+        }
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        ns.define(&heap, "secret", n(1));
+        let bytes = heap.borrow().bytes_allocated();
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::NoGcScope::with_cx(&heap, |cx| {
+                let (_, early) = cx.early_link(NamespaceView::of(&ns), "secret").unwrap();
+                assert_eq!(early.kind(), LinkKind::Early);
+                cx.alloc_macro_with_relinks(compiled(), vec![], vec![carried(early)]);
+            })
+        }))
+        .expect_err("an early-bound handle");
+        let message = panic_message(&*refused).unwrap_or_default();
+        assert!(
+            message.contains("a macro's carried relink for \"secret.1\" holds an early-bound link"),
+            "{message}"
+        );
+        assert_eq!(
+            heap.borrow().bytes_allocated(),
+            bytes,
+            "refused before the object is made"
+        );
+        crate::NoGcScope::with_cx(&heap, |cx| {
+            let relinked = cx
+                .relink_link(NamespaceView::of(&ns), "secret", RelinkTarget::ByName)
+                .unwrap();
+            let mac = cx.alloc_macro_with_relinks(compiled(), vec![], vec![carried(relinked)]);
+            assert_eq!(cx.macro_relinks(mac).len(), 1);
+        });
+    }
+
     /// A table is traced once an epoch (#836): the first ask in an epoch
     /// answers that it was not traced yet and records it, every later one
     /// in that epoch that it was, and a new epoch starts again. `traced_in`

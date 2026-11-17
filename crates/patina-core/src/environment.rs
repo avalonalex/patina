@@ -2927,6 +2927,11 @@ impl Environment {
         name: &str,
         target: RelinkTarget<'_>,
     ) -> Option<BindingLink> {
+        // The arms that answer a slot's or an entry's record borrow no
+        // heap, so nothing else would notice another heap's context here,
+        // which would brand the record for a heap it is not on.
+        #[cfg(debug_assertions)]
+        self.check_heap(&heap.borrow());
         let hit = match target {
             RelinkTarget::ByName => self.binding_hit(name)?,
             RelinkTarget::Introduced(IntroducedDefinition::Renamed(global)) => {
@@ -6970,6 +6975,21 @@ mod relink_link_tests {
         });
         library.set(&heap, "helper", n(2)).unwrap();
         assert_eq!(pool.len(), 2);
+    }
+
+    /// A relink is asked with the environment's own heap: a debug build
+    /// refuses another's, in the arms that answer a record without
+    /// borrowing the heap too, where nothing else would notice and a
+    /// context would brand a record of another heap.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore = "needs a debug build")]
+    #[should_panic(expected = "a namespace step with another heap's borrow")]
+    fn a_relink_is_asked_with_the_environments_own_heap() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "helper", n(1));
+        let other = new_shared_heap();
+        library.relink_record(&other, "helper", RelinkTarget::ByName);
     }
 
     /// `Cx::linked_value` answers nothing for a record whose cell holds

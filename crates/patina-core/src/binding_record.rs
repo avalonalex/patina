@@ -494,10 +494,13 @@ impl std::fmt::Debug for Linkable<'_> {
 /// halves in step. The record is the one edge: the collector traces it
 /// through the macro object, for as long as the macro lives.
 ///
-/// Opaque outside this crate, as [`BindingLink`] is: a safe crate makes one
-/// from a [`Carried`] a context branded (`Cx::alloc_macro_with_relinks`),
-/// and reads one back as a `Carried` (`Cx::macro_relinks`). Raw: the
-/// desugarer's link plumbing.
+/// Opaque outside this crate, as [`BindingLink`] is, and stored only by
+/// it: a safe crate makes one from a [`Carried`] a context branded
+/// (`Cx::alloc_macro_with_relinks`, the one way into a macro object from
+/// outside core), and reads one back as a `Carried` (`Cx::macro_relinks`).
+/// The raw layer can clone one out of a live macro object's payload
+/// (`HeapObjectData::Macro`), as it can any word, and can do nothing with
+/// it. Raw: the desugarer's link plumbing.
 #[derive(Clone, Debug, Trace)]
 pub struct CarriedRelink {
     /// The spelling the identifier has in this macro.
@@ -574,15 +577,26 @@ pub struct Carried<'gc> {
 impl Carried<'_> {
     /// This relink as a macro object holds it, its brand dropped: the
     /// caller stores it in a macro object beneath the context that branded
-    /// it.
+    /// it. A check build refuses an early-bound handle, which
+    /// `Cx::macro_relinks` would read back as relinked: `Carried`'s fields
+    /// are public, so the handle may be any a context branded.
     pub(crate) fn into_stored(self) -> CarriedRelink {
-        debug_assert_eq!(
-            self.link.kind(),
-            LinkKind::Relinked,
-            "a macro carries relinked identifiers, never an early-bound one"
-        );
+        if crate::heap::GC_CHECK && self.link.kind() != LinkKind::Relinked {
+            carried_an_early_link(&self.spelling);
+        }
         CarriedRelink::new(self.spelling, self.guard, self.written, self.link.link())
     }
+}
+
+/// A check build's failure: an early-bound handle stored as a macro's
+/// carried relink (`Carried::into_stored`).
+#[cold]
+#[inline(never)]
+fn carried_an_early_link(spelling: &str) -> ! {
+    panic!(
+        "a macro's carried relink for {spelling:?} holds an early-bound link: a macro \
+         carries relinked identifiers only (#837)"
+    );
 }
 
 /// A check build's failure: a read-through record read as a record of its

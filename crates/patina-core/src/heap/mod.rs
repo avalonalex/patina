@@ -1525,7 +1525,13 @@ impl Heap {
     /// its unit's link table, where the linked read would find `UNBOUND`
     /// through any of the three for good. No record `Cx::relink_link`
     /// answers is one.
-    pub fn alloc_macro_with_relinks(
+    ///
+    /// Core's alone: a `CarriedRelink` is an unbranded record, live only
+    /// while something roots it, so the one way to store one from outside
+    /// this crate is `Cx::alloc_macro_with_relinks`, whose `Carried` a
+    /// context branded. The caller here keeps each record live until the
+    /// object holds it.
+    pub(crate) fn alloc_macro_with_relinks(
         &mut self,
         body: Rc<crate::compiled_macro::CompiledMacro>,
         literals: Vec<TaggedValue>,
@@ -1534,8 +1540,11 @@ impl Heap {
         if GC_CHECK {
             literals.iter().for_each(|&l| check_storable(l, "macro"));
             for relink in &relinks {
+                // The read of the record's flags is what holds it to a live
+                // record of a kind a link names; its word is a pair's, never
+                // a retired register's, so `check_storable` has nothing to
+                // ask of it.
                 let record = relink.link().record();
-                check_storable(record.word(), "macro");
                 if let Some(kind) = record.refused_as_a_link(self) {
                     carried_record_of_the_wrong_kind(relink.spelling(), kind);
                 }
