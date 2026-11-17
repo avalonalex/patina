@@ -1177,7 +1177,8 @@ mod tests {
 
     /// A macro object's carried relink (#837) is held to the same kinds,
     /// where the object is allocated: a check build refuses one over a
-    /// record of `kind`, naming the kind and the spelling, before it makes
+    /// record of `kind`, wherever it stands among the object's relinks,
+    /// naming the kind and the spelling, before it makes
     /// the object: the heap has allocated nothing more when the refusal
     /// unwinds (`bytes_allocated`, which every allocation moves; the live
     /// bytes are the last collection's and would read 0 either way). Here,
@@ -1214,27 +1215,35 @@ mod tests {
                 BindingLink::new(record),
             )
         };
-        let bytes = heap.borrow().bytes_allocated();
-        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            heap.borrow_mut()
-                .alloc_macro_with_relinks(compiled(), vec![], vec![relink(record)]);
-        }))
-        .expect_err(kind);
-        let message = panic_message(&*refused).unwrap_or_default();
-        assert!(
-            message.contains(&format!(
-                "a macro's carried relink for \"secret.1\" holds {kind}"
-            )),
-            "{kind}: {message}"
-        );
-        assert_eq!(
-            heap.borrow().bytes_allocated(),
-            bytes,
-            "{kind}: refused before the object is made"
-        );
         let ns = Rc::new(Environment::with_heap(heap));
         ns.define(heap, "x", n(1));
         let plain = ns.local_record("x").unwrap();
+        // Alone, and after and before a record that is taken: every relink
+        // is asked, wherever it stands among them.
+        let bytes = heap.borrow().bytes_allocated();
+        for relinks in [
+            vec![relink(record)],
+            vec![relink(plain), relink(record)],
+            vec![relink(record), relink(plain)],
+        ] {
+            let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                heap.borrow_mut()
+                    .alloc_macro_with_relinks(compiled(), vec![], relinks);
+            }))
+            .expect_err(kind);
+            let message = panic_message(&*refused).unwrap_or_default();
+            assert!(
+                message.contains(&format!(
+                    "a macro's carried relink for \"secret.1\" holds {kind}"
+                )),
+                "{kind}: {message}"
+            );
+            assert_eq!(
+                heap.borrow().bytes_allocated(),
+                bytes,
+                "{kind}: refused before the object is made"
+            );
+        }
         let mac =
             heap.borrow_mut()
                 .alloc_macro_with_relinks(compiled(), vec![], vec![relink(plain)]);

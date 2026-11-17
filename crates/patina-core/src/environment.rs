@@ -6930,7 +6930,9 @@ mod relink_link_tests {
     /// `Cx::linked_value` and `Cx::linked_location` to read what the
     /// record holds and where its cell is, which is where the binding is
     /// by name. An early link of the same binding is the same record, of
-    /// the other kind.
+    /// the other kind. The context asks for the target it is given: the
+    /// spelling's keyword at scopes, and a definition a macro introduced
+    /// as each backend holds it, are records of their own.
     #[test]
     fn a_context_brands_a_relink_and_reads_a_pooled_one_back() {
         use crate::literal_pool::{LinkKind, LiteralPool};
@@ -6939,6 +6941,13 @@ mod relink_link_tests {
         let heap = new_shared_heap();
         let library = Rc::new(Environment::with_heap(&heap));
         library.define(&heap, "helper", n(1));
+        // The spelling as three other targets, each a record of its own: a
+        // keyword at scopes, which is also the entry a tree-walker's
+        // introduced definition is, and the VM's renamed global.
+        let identity = scopes(&[1]);
+        let keyword = a_macro(&heap, "helper");
+        library.define_with_scopes(&heap, "helper", identity.clone(), keyword);
+        library.define(&heap, "helper.g1", n(7));
         let pool = LiteralPool::new(&heap.borrow());
         crate::NoGcScope::with_cx(&heap, |cx| {
             let ns = NamespaceView::of(&library);
@@ -6972,6 +6981,25 @@ mod relink_link_tests {
                 cx.relink_link(ns, "missing", RelinkTarget::ByName)
                     .is_none()
             );
+
+            // The context asks for the target it was given, never for the
+            // name alone.
+            let scoped = IntroducedDefinition::Scoped(identity.clone());
+            let renamed = IntroducedDefinition::Renamed("helper.g1".into());
+            for (target, holds) in [
+                (RelinkTarget::ScopedKeyword(&identity), keyword),
+                (RelinkTarget::Introduced(&scoped), keyword),
+                (RelinkTarget::Introduced(&renamed), n(7)),
+            ] {
+                let other = cx.relink_link(ns, "helper", target).expect("a record");
+                assert_eq!(other.kind(), LinkKind::Relinked, "{target:?}");
+                assert_ne!(other.link(), found.link(), "{target:?}");
+                assert_eq!(
+                    cx.linked_value(other).map(|v| v.tagged()),
+                    Some(holds),
+                    "{target:?}"
+                );
+            }
         });
         library.set(&heap, "helper", n(2)).unwrap();
         assert_eq!(pool.len(), 2);
@@ -7081,6 +7109,7 @@ mod relink_link_tests {
     /// is the record of the entry at exactly the chosen scopes, among two
     /// runs' entries and a plain binding of the spelling. An identity the
     /// library does not hold links nothing: never the spelling's record.
+    /// Nor does a raw frame root's entry, a variable's or a keyword's.
     #[test]
     fn the_tree_walkers_scoped_entry_links_its_record_never_the_spellings() {
         let heap = new_shared_heap();
@@ -7121,6 +7150,19 @@ mod relink_link_tests {
         let found = IntroducedDefinition::Scoped(scopes(&[3]));
         assert_eq!(
             frame.relink_record(&heap, "count", RelinkTarget::Introduced(&found)),
+            None
+        );
+        // Nor a keyword it holds there, which a `ScopedKeyword` target
+        // links by a snapshot.
+        frame.define_with_scopes(&heap, "kw", scopes(&[4]), a_macro(&heap, "kw"));
+        let found = IntroducedDefinition::Scoped(scopes(&[4]));
+        assert!(
+            frame
+                .relink_record(&heap, "kw", RelinkTarget::ScopedKeyword(&scopes(&[4])))
+                .is_some()
+        );
+        assert_eq!(
+            frame.relink_record(&heap, "kw", RelinkTarget::Introduced(&found)),
             None
         );
     }

@@ -496,6 +496,14 @@ mod tests {
             LinkKind::Relinked
         );
         assert_eq!(Linkable::new(x, LinkKind::Early).kind(), LinkKind::Early);
+        // And prints it, after its record.
+        for kind in [LinkKind::Early, LinkKind::Relinked] {
+            let shown = format!("{:?}", Linkable::new(x, kind));
+            assert!(
+                shown.starts_with("Linkable(") && shown.ends_with(&format!(", {kind:?})")),
+                "{shown}"
+            );
+        }
     }
 
     /// Dropping the pool unregisters it: what it held is no longer live

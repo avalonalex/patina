@@ -213,7 +213,8 @@ fn a_macros_relinks_die_with_the_macro() {
 /// collections have run with the macro as the only root, come back branded
 /// by a second context (`Cx::macro_relinks`) with the spellings and the
 /// guard they were stored with, in order, of kind `Relinked`, each reading
-/// what its record held. One pooled from there is a relinked link that
+/// what its record held, and the object's literal beside them. One pooled
+/// from there is a relinked link that
 /// `Cx::linkable` reads back at the same location. A macro that carries
 /// none, and a value that is no macro, answer none. The trace arm deleted,
 /// or `CarriedRelink::link` skipped, and the first read is of a freed
@@ -267,7 +268,7 @@ fn a_macros_relinks_cross_a_context_and_a_collection() {
                 link: slot,
             },
         ];
-        let carrying = cx.alloc_macro_with_relinks(compiled("g"), vec![], relinks);
+        let carrying = cx.alloc_macro_with_relinks(compiled("g"), vec![Value::fixnum(5)], relinks);
         let plain = cx.alloc_macro_with_relinks(compiled("p"), vec![], vec![]);
         (carrying.tagged(), plain.tagged())
     });
@@ -312,6 +313,12 @@ fn a_macros_relinks_cross_a_context_and_a_collection() {
         assert_eq!(again.link(), back[1].link.link());
         assert_eq!(cx.linked_location(again), cx.linked_location(back[1].link));
 
+        assert_eq!(
+            cx.macro_literal(carrying, crate::LiteralId::new(0))
+                .map(|v| v.tagged()),
+            Some(TaggedValue::fixnum(5)),
+            "its literals are stored beside its relinks"
+        );
         assert!(cx.macro_relinks(plain).is_empty(), "a macro with none");
         assert!(cx.macro_relinks(held).is_empty(), "nor the keyword's");
         let fixnum = cx.linked_value(back[1].link).unwrap();

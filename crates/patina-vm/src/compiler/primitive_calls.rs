@@ -684,7 +684,9 @@ mod tests {
     /// keeps its inline opcode and the relinked one is a call, and two
     /// entries of the unit's link table, both pinned, both reading the one
     /// record. Sharing a key would give the two sites one answer: both the
-    /// fast path, or neither.
+    /// fast path, or neither. An assignment's operand is keyed by its
+    /// link's kind as a reference's is, and a control form's sequence is
+    /// found by the operand's own key, as a primitive call's is.
     #[test]
     fn a_relinked_and_an_early_operand_of_one_record_stay_apart() {
         use super::OperandKey;
@@ -746,5 +748,111 @@ mod tests {
             assert_eq!((inline.len(), loaded.len()), (1, 1));
             assert_ne!(inline[0], loaded[0], "each its own entry");
         }
+
+        // An assignment is an operand too, of its link's kind: a relinked
+        // `set!` stores through the entry a relinked reference to the
+        // record loads, and an early-bound `set!` through the early-bound
+        // reference's, and one of each kind are two entries.
+        let compiled = |expr: &patina_core::core_expr::CoreExpr| {
+            let (_, mut nested) = crate::compiler::compile_with_qq_resolving(
+                expr,
+                &literals,
+                &heap,
+                state.global_env(),
+                state.primitive_registry(),
+            )
+            .unwrap();
+            nested.remove(0)
+        };
+        for (assigned, called, entries) in [
+            (relinked, relinked, 1),
+            (early, early, 1),
+            (relinked, early, 2),
+            (early, relinked, 2),
+        ] {
+            let code = compiled(&a_lambda_assigning_then_calling("car", assigned, called));
+            assert_eq!(code.links.names().len(), entries);
+            assert_eq!(code.links.pinned().len(), entries, "every entry pinned");
+            let stores = code
+                .instructions
+                .iter()
+                .filter(|instr| matches!(instr, Instruction::StoreGlobal { .. }))
+                .count();
+            assert_eq!(stores, 1, "the assignment stores through its entry");
+        }
+
+        // And a control form: the early-bound `call-with-values` keeps its
+        // sequence, behind its one guard, and the relinked one over the
+        // same record is a call, in either order.
+        let early = link_to(&heap, &importer, "call-with-values", &literals);
+        let relinked = relink_to(&heap, &importer, "call-with-values", &literals);
+        assert_eq!(literals.link(early), literals.link(relinked), "one record");
+        let key = |link| {
+            OperandKey::of(
+                &Rc::from("call-with-values"),
+                Some(LinkedOperand::of(&literals, link)),
+            )
+        };
+        for calls in [
+            [
+                ("call-with-values", early, 2),
+                ("call-with-values", relinked, 2),
+            ],
+            [
+                ("call-with-values", relinked, 2),
+                ("call-with-values", early, 2),
+            ],
+        ] {
+            let expr = a_lambda_calling(&calls);
+            let map = primitive_calls_of(&state, &literals, &expr);
+            assert!(map.control.contains_key(&key(early)));
+            assert!(!map.control.contains_key(&key(relinked)));
+            assert_eq!((map.control.len(), map.by_name.len()), (1, 0));
+
+            let code = compiled(&expr);
+            let guards = code
+                .instructions
+                .iter()
+                .filter(|instr| matches!(instr, Instruction::JumpUnlessShadowed { .. }))
+                .count();
+            assert_eq!(guards, 1, "one sequence, the early-bound operand's");
+            let names: Vec<&str> = code.links.names().iter().map(|name| &**name).collect();
+            assert_eq!(names, ["call-with-values", "call-with-values"]);
+            assert_eq!(code.links.pinned().len(), 2, "both pinned");
+        }
+    }
+
+    /// `(lambda (p) (begin (set! name p) (name p)))`, the assignment
+    /// linked by `assigned` and the callee by `called`.
+    fn a_lambda_assigning_then_calling(
+        name: &str,
+        assigned: patina_core::Link,
+        called: patina_core::Link,
+    ) -> patina_core::core_expr::CoreExpr {
+        use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
+        use patina_core::{ScopeId, ScopeSet};
+        use std::rc::Rc;
+
+        let scopes = ScopeSet::from_iter([ScopeId(500)]);
+        let p = || CoreExpr::new(CoreExprKind::var(Rc::from("p"), ScopeSet::new()));
+        let assignment = CoreExpr::new(CoreExprKind::linked_set(
+            Rc::from(name),
+            scopes.clone(),
+            Rc::new(p()),
+            Some(assigned),
+        ));
+        let call = CoreExpr::new(CoreExprKind::App {
+            func: Rc::new(CoreExpr::new(CoreExprKind::linked_var(
+                Rc::from(name),
+                scopes,
+                Some(called),
+            ))),
+            args: vec![p()],
+        });
+        CoreExpr::new(CoreExprKind::Lambda {
+            params: Formals::Fixed(vec![ScopedParam::simple(Rc::from("p"))]),
+            body: vec![CoreExpr::new(CoreExprKind::Begin(vec![assignment, call]))],
+            binding_scopes: Rc::new(ScopeSet::new()),
+        })
     }
 }

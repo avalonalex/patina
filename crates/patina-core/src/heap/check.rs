@@ -809,4 +809,29 @@ mod tests {
             heap.alloc_vm_closure(0, vec![TaggedValue::fixnum(1), TaggedValue::DEAD_SLOT]);
         }
     );
+
+    control!(
+        /// A macro object's literals (#718), through the allocator that
+        /// also takes its carried relinks (#837).
+        a_macro_literal_that_is_a_retired_register_panics,
+        "store of a retired register into a macro",
+        {
+            use crate::compiled_macro::CompiledMacro;
+            use std::collections::{HashMap, HashSet};
+            use std::rc::Rc;
+
+            let body = Rc::new(CompiledMacro {
+                name: Rc::from("m"),
+                rules: vec![],
+                max_pvars: 0,
+                definition_scopes: crate::ScopeSet::new(),
+                template_symbols: HashSet::new(),
+                inherited_identifiers: HashMap::new(),
+                definition_env: None,
+                foreign_expansions: vec![],
+            });
+            let mut heap = Heap::new();
+            heap.alloc_macro(body, vec![TaggedValue::fixnum(1), TaggedValue::DEAD_SLOT]);
+        }
+    );
 }
