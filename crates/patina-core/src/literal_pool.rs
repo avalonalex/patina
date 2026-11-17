@@ -33,7 +33,9 @@
 //! [`LiteralPool::add_link`], from a [`Linkable`] a context found, and read
 //! only by [`LiteralPool::link`], which answers a [`BindingLink`] for a
 //! backend to copy into its code. [`LiteralPool::value`] takes a [`Lit`],
-//! which no link is, so a record never reaches a program as a value.
+//! which no link is, so a record never reaches a program as a value. A link
+//! also says what linked it ([`LinkKind`]): early binding, or relinking,
+//! whose operand a backend keeps off its fast paths.
 
 use std::cell::Cell;
 use std::fmt;
@@ -110,23 +112,62 @@ impl fmt::Display for Lit {
     }
 }
 
+/// What linked a reference (#837): early binding, whose operand keeps its
+/// fast paths, or relinking, whose operand is an ordinary call whatever its
+/// record's cell holds. A [`Link`] carries it from the context that found
+/// the record ([`Linkable::kind`]) to the backend that compiles the
+/// reference; only the VM's compiler reads it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum LinkKind {
+    /// A template's reference to a binding the use site imported too
+    /// (`Cx::early_link`).
+    Early,
+    /// A template's reference to a binding the use site cannot name, or
+    /// means something else by (`Cx::relink_link`).
+    Relinked,
+}
+
 /// A binding record a `CoreExpr` links (#837): an entry of its
 /// compilation's [`LiteralPool`], kept apart from [`Lit`] so that
 /// [`LiteralPool::value`] can never hand a record to a program as a value.
 /// Its representation is private, and only [`LiteralPool::add_link`] makes
 /// one. The pool's number is never 0, so an `Option<Link>` is the size of a
-/// `Link`.
+/// `Link`. The top bit of `index` is the link's [`LinkKind`], so two links
+/// of one entry's index that differ in kind are not equal; the rest is its
+/// place in the pool.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Link {
     pool: NonZeroU32,
     index: u32,
 }
 
+/// The bit of [`Link`]'s `index` that is set for a relinked link. A pool
+/// holds fewer than this many entries (`LiteralPool::push`).
+const RELINKED_BIT: u32 = 1 << 31;
+
+impl Link {
+    /// What linked the reference.
+    #[inline]
+    pub fn kind(self) -> LinkKind {
+        if self.index & RELINKED_BIT == 0 {
+            LinkKind::Early
+        } else {
+            LinkKind::Relinked
+        }
+    }
+
+    /// The entry's place in its pool: `index` without the kind.
+    #[inline]
+    fn slot(self) -> u32 {
+        self.index & !RELINKED_BIT
+    }
+}
+
 /// An entry writes as its place in its pool, as a pooled [`Lit`] does: a
-/// `CoreExpr`'s `Display` cannot reach the heap.
+/// `CoreExpr`'s `Display` cannot reach the heap. The kind is not written.
 impl fmt::Display for Link {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "#<link {}>", self.index)
+        write!(f, "#<link {}>", self.slot())
     }
 }
 
@@ -190,22 +231,33 @@ impl LiteralPool {
         })
     }
 
-    /// A new slot holding `word`, and its index.
+    /// A new slot holding `word`, and its index, which leaves the top bit
+    /// clear for a [`Link`]'s kind.
     fn push(&self, word: TaggedValue) -> u32 {
         let index = self.entries.0.with_mut(|slots| {
             slots.push(Cell::new(word));
             slots.len() - 1
         });
-        u32::try_from(index).expect("a form quotes and links fewer than 2^32 entries")
+        let index = u32::try_from(index).unwrap_or(u32::MAX);
+        assert!(
+            index < RELINKED_BIT,
+            "a form quotes and links fewer than 2^31 entries"
+        );
+        index
     }
 
-    /// `link` as an entry of this compilation, rooted from here on (#837).
-    /// Safe: the brand ties the handle to a live context, as
-    /// [`LiteralPool::add`]'s `Value` is.
+    /// `link` as an entry of this compilation, rooted from here on (#837),
+    /// of the handle's kind. Safe: the brand ties the handle to a live
+    /// context, as [`LiteralPool::add`]'s `Value` is.
     pub fn add_link(&self, link: Linkable<'_>) -> Link {
+        let slot = self.push(link.link().record().word());
+        let kind = match link.kind() {
+            LinkKind::Early => 0,
+            LinkKind::Relinked => RELINKED_BIT,
+        };
         Link {
             pool: self.id,
-            index: self.push(link.link().record().word()),
+            index: slot | kind,
         }
     }
 
@@ -222,7 +274,7 @@ impl LiteralPool {
         let word = self
             .entries
             .0
-            .with(|slots| slots[link.index as usize].get());
+            .with(|slots| slots[link.slot() as usize].get());
         BindingLink::new(Record::from_word(word))
     }
 
@@ -285,7 +337,7 @@ impl RootProvider for EntriesRoot {
 
 #[cfg(test)]
 mod tests {
-    use super::{Link, Lit, LiteralPool};
+    use super::{Link, LinkKind, Lit, LiteralPool};
     use crate::binding_record::{BindingLink, Linkable};
     use crate::environment::Environment;
     use crate::heap::gc::{Collector, MarkSweepCollector};
@@ -333,7 +385,7 @@ mod tests {
             ns.define(&heap, "x", value);
             ns.local_record("x").expect("x's record")
         };
-        let link = pool.add_link(Linkable::new(BindingLink::new(record)));
+        let link = pool.add_link(Linkable::new(BindingLink::new(record), LinkKind::Early));
         assert_eq!(pool.len(), 1);
         collect(&mut heap.borrow_mut());
         sentinels.assert_survived(&heap.borrow());
@@ -363,12 +415,67 @@ mod tests {
         ns.define(&heap, "x", TaggedValue::fixnum(1));
         ns.define(&heap, "y", TaggedValue::fixnum(2));
         let record = ns.local_record("x").unwrap();
-        let link = one.add_link(Linkable::new(BindingLink::new(record)));
-        let other = two.add_link(Linkable::new(BindingLink::new(
-            ns.local_record("y").unwrap(),
-        )));
+        let link = one.add_link(Linkable::new(BindingLink::new(record), LinkKind::Early));
+        let other = two.add_link(Linkable::new(
+            BindingLink::new(ns.local_record("y").unwrap()),
+            LinkKind::Early,
+        ));
         assert_eq!(other.index, link.index, "an entry at the same index");
         two.link(link);
+    }
+
+    /// A link carries what linked it (#837) from the handle to the pool's
+    /// reader and no further: the pool answers the same record for an
+    /// early and a relinked link of it, each from its own entry, the two
+    /// links are not equal, and neither kind shows in what a link prints.
+    /// A relinked link whose kind bit was read as part of its index would
+    /// name an entry the pool does not have.
+    #[test]
+    fn a_link_keeps_its_kind_through_the_pool() {
+        let heap = new_shared_heap();
+        let pool = LiteralPool::new(&heap.borrow());
+        let ns = std::rc::Rc::new(Environment::with_heap(&heap));
+        ns.define(&heap, "x", TaggedValue::fixnum(1));
+        ns.define(&heap, "y", TaggedValue::fixnum(2));
+        let (x, y) = (
+            BindingLink::new(ns.local_record("x").unwrap()),
+            BindingLink::new(ns.local_record("y").unwrap()),
+        );
+        let early = pool.add_link(Linkable::new(x, LinkKind::Early));
+        let relinked = pool.add_link(Linkable::new(y, LinkKind::Relinked));
+        let relinked_x = pool.add_link(Linkable::new(x, LinkKind::Relinked));
+        assert_eq!(
+            (early.kind(), relinked.kind(), relinked_x.kind()),
+            (LinkKind::Early, LinkKind::Relinked, LinkKind::Relinked)
+        );
+        assert_eq!(pool.link(early), x);
+        assert_eq!(pool.link(relinked), y, "the kind is no part of the index");
+        assert_eq!(pool.link(relinked_x), x);
+        assert_ne!(early, relinked_x, "one record, two kinds, two links");
+        assert_eq!(
+            (
+                early.to_string(),
+                relinked.to_string(),
+                relinked_x.to_string()
+            ),
+            (
+                "#<link 0>".to_string(),
+                "#<link 1>".to_string(),
+                "#<link 2>".to_string()
+            )
+        );
+        assert_eq!(pool.len(), 3);
+        assert_eq!(
+            std::mem::size_of::<Option<Link>>(),
+            8,
+            "the kind takes no room"
+        );
+        // The handle says its kind too, for the pool to copy.
+        assert_eq!(
+            Linkable::new(x, LinkKind::Relinked).kind(),
+            LinkKind::Relinked
+        );
+        assert_eq!(Linkable::new(x, LinkKind::Early).kind(), LinkKind::Early);
     }
 
     /// Dropping the pool unregisters it: what it held is no longer live

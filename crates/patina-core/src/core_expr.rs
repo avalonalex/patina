@@ -697,14 +697,14 @@ mod tests {
     fn a_link_displays_and_survives_a_rebuild() {
         use crate::binding_record::{BindingLink, Linkable};
         use crate::environment::Environment;
-        use crate::literal_pool::LiteralPool;
+        use crate::literal_pool::{LinkKind, LiteralPool};
 
         let heap = crate::heap::new_shared_heap();
         let pool = LiteralPool::new(&heap.borrow());
         let ns = Rc::new(Environment::with_heap(&heap));
         ns.define(&heap, "f", TaggedValue::fixnum(1));
         let record = ns.local_record("f").unwrap();
-        let link = pool.add_link(Linkable::new(BindingLink::new(record)));
+        let link = pool.add_link(Linkable::new(BindingLink::new(record), LinkKind::Early));
         let scopes = ScopeSet::from_iter([crate::scope::ScopeId(3)]);
 
         let var = CoreExprKind::linked_var("f".into(), scopes.clone(), Some(link));
@@ -744,14 +744,14 @@ mod tests {
     fn an_unquoted_link_survives_a_rebuild() {
         use crate::binding_record::{BindingLink, Linkable};
         use crate::environment::Environment;
-        use crate::literal_pool::LiteralPool;
+        use crate::literal_pool::{LinkKind, LiteralPool};
 
         let heap = crate::heap::new_shared_heap();
         let pool = LiteralPool::new(&heap.borrow());
         let ns = Rc::new(Environment::with_heap(&heap));
         ns.define(&heap, "f", TaggedValue::fixnum(1));
         let record = ns.local_record("f").unwrap();
-        let link = pool.add_link(Linkable::new(BindingLink::new(record)));
+        let link = pool.add_link(Linkable::new(BindingLink::new(record), LinkKind::Early));
         let scopes = ScopeSet::from_iter([crate::scope::ScopeId(3)]);
         let template = CoreExpr::new(CoreExprKind::Quasiquote(QuasiTemplate::Build(
             QuasiConstructor::List,

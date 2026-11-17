@@ -164,6 +164,7 @@ use crate::environment::{BindingLocation, Environment, IntroducedDefinition};
 use crate::error::{ExceptionKind, SourceLocation};
 use crate::instance::Instance;
 use crate::library::Library;
+use crate::literal_pool::LinkKind;
 use crate::namespace_view::NamespaceView;
 use crate::port::Port;
 use crate::record_type::RecordTypeDescriptor;
@@ -678,7 +679,7 @@ impl<'gc> Cx<'gc> {
         name: &str,
     ) -> Option<(BindingLocation, crate::Linkable<'gc>)> {
         let (location, link) = ns.env().early_link(self.heap, name)?;
-        Some((location, crate::Linkable::new(link)))
+        Some((location, crate::Linkable::new(link, LinkKind::Early)))
     }
 
     /// A record over a fresh free cell holding `UNBOUND`, branded by this
@@ -693,7 +694,7 @@ impl<'gc> Cx<'gc> {
         let mut heap = self.heap.borrow_mut();
         let cell = crate::BindingCell::free(&mut heap, TaggedValue::UNBOUND);
         let record = crate::binding_record::Record::new(&mut heap, cell);
-        crate::Linkable::new(crate::BindingLink::new(record))
+        crate::Linkable::new(crate::BindingLink::new(record), LinkKind::Early)
     }
 
     /// Whether `name` is `ns`'s import of `location` (#837;

@@ -46,6 +46,7 @@
 use crate::Trace;
 use crate::census::Site;
 use crate::heap::Heap;
+use crate::literal_pool::LinkKind;
 use crate::tagged_value::TaggedValue;
 
 /// What a cell of the namespace numbered `env_id` holds in its second word:
@@ -425,16 +426,20 @@ impl BindingLink {
 #[derive(Clone, Copy)]
 pub struct Linkable<'gc> {
     link: BindingLink,
+    /// What found the record: early binding or relinking, which the pool
+    /// copies into the [`Link`](crate::Link) it answers.
+    kind: LinkKind,
     _brand: crate::value::Brand<'gc>,
 }
 
 impl<'gc> Linkable<'gc> {
-    /// `link`, branded `'gc`. The caller holds a context of that brand, and
-    /// the record is live in it.
+    /// `link`, found by `kind`, branded `'gc`. The caller holds a context
+    /// of that brand, and the record is live in it.
     #[inline]
-    pub(crate) fn new(link: BindingLink) -> Self {
+    pub(crate) fn new(link: BindingLink, kind: LinkKind) -> Self {
         Linkable {
             link,
+            kind,
             _brand: std::marker::PhantomData,
         }
     }
@@ -444,11 +449,17 @@ impl<'gc> Linkable<'gc> {
     pub(crate) fn link(self) -> BindingLink {
         self.link
     }
+
+    /// What linked the reference (#837).
+    #[inline]
+    pub(crate) fn kind(self) -> LinkKind {
+        self.kind
+    }
 }
 
 impl std::fmt::Debug for Linkable<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Linkable({:?})", self.link)
+        write!(f, "Linkable({:?}, {:?})", self.link, self.kind)
     }
 }
 
