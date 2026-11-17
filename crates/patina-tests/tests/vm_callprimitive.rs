@@ -542,6 +542,50 @@ fn a_relinked_operand_is_printed_as_its_template_wrote_it() {
     );
 }
 
+/// A generated macro carries the records its generator's expansion
+/// relinked (#837): `get`, which a library's `def-getter` made in one
+/// form, is expanded in later ones, and its template's reference to the
+/// library's private `secret` compiles to a load of the linked operand
+/// there too, `secret@linked`, where it was read by the name relinking
+/// gave it. The library assigns the variable in between, and the
+/// program has a `secret` of its own.
+#[test]
+fn a_generated_macros_carried_reference_is_a_linked_operand() {
+    let library = "(define-library (t carried)
+  (export def-getter bump!)
+  (import (scheme base))
+  (begin
+    (define secret 42)
+    (define (bump!) (set! secret (+ secret 1)))
+    (define-syntax def-getter
+      (syntax-rules ()
+        ((_ name) (define-syntax name (syntax-rules () ((_) secret))))))))
+(import (scheme base) (t carried))
+(define secret 'program)
+(def-getter get)
+";
+    let interp = Interpreter::new(patina_vm::VmBackend::new());
+    interp
+        .eval_program_owned(library)
+        .expect("the library, the import and the generated macro");
+    let later = operands(
+        &interp
+            .backend()
+            .compile_for_inspection("(define (h) (get))")
+            .expect("compiles"),
+    );
+    assert_eq!(later.loads, ["secret@linked"], "the carried reference");
+
+    let program = format!("{library}(define (h) (get))\n(bump!)\n(list (h) (get) secret)");
+    let expected = "(43 43 program)";
+    assert_eq!(eval(&program), expected, "VM");
+    assert_eq!(
+        common::eval_program_tree_walker(&program),
+        expected,
+        "tree-walker"
+    );
+}
+
 /// A template's `car` and the program's own `car` in one procedure stay two
 /// operands (#837's `OperandKey`): once the program defines `car`, the
 /// template's still reads the library's binding and the program's reads

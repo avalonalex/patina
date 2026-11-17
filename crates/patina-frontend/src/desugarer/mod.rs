@@ -472,6 +472,14 @@ impl EarlyBinding {
         Rc::clone(&self.relinked.borrow()[&guard][name].written)
     }
 
+    /// Whether the table has an entry for `spelling` under `guard`.
+    fn has_relinked(&self, guard: ScopeId, spelling: &str) -> bool {
+        self.relinked
+            .borrow()
+            .get(&guard)
+            .is_some_and(|spellings| spellings.contains_key(spelling))
+    }
+
     /// Record that the expansion whose scope is `guard` relinked an
     /// identifier it spelled `spelling`.
     fn relink(&self, guard: ScopeId, spelling: Rc<str>, relinked: Relinked) {
@@ -483,6 +491,15 @@ impl EarlyBinding {
         self.any_relinked.set(true);
     }
 }
+
+/// What `Desugarer::compile_syntax_rules_tagged` answers: a transformer's
+/// compiled body, the literals its rules name by index, and the relinked
+/// identifiers among them, each with its record (#837).
+type CompiledTransformer<'gc> = (
+    patina_macros::CompiledMacro,
+    Vec<Value<'gc>>,
+    Vec<patina_core::Carried<'gc>>,
+);
 
 /// How a reference was answered (`Desugarer::resolve_reference`). `Copy`:
 /// every reference takes one back, and none of them should drop a string
@@ -1009,6 +1026,7 @@ impl<'a> Desugarer<'a> {
                 }
             }
             Some(SyntaxRef::Macro(mac, compiled_macro)) => {
+                self.put_back_carried(mac, &compiled_macro, cx);
                 let Ok(expansion) = self.expand_macro(mac, &compiled_macro, tv, cx) else {
                     return;
                 };
@@ -1385,6 +1403,119 @@ impl<'a> Desugarer<'a> {
         }
     }
 
+    /// Put back, for the form being desugared, what the macro `mac` carries
+    /// from the form that made it. Called before `mac` is expanded, since
+    /// the expansion's literal matching reads both.
+    ///
+    /// - A macro a foreign generator defined carries that generator's
+    ///   expansion scope on its template's references, and the record that
+    ///   the expansion was foreign did not outlive the form that ran the
+    ///   generator. It is put back, so that those references are bound
+    ///   early here as they were there (#446).
+    /// - A generated macro carries the identifiers its generator's
+    ///   expansion relinked, each with the record it was relinked to
+    ///   (#837, `relinks_carried_by`). Each goes back in the form's table
+    ///   under its own guard and spelling, pooled in this form's pool, so
+    ///   that the identifier means in this form what it meant in the one
+    ///   that relinked it. An entry the form already has is left: it is
+    ///   the same one, put back by an earlier expansion of the macro or
+    ///   made by the generator's own expansion in this form.
+    ///
+    /// A written macro carries neither, and pays two emptiness tests.
+    fn put_back_carried<'gc>(
+        &self,
+        mac: Value<'gc>,
+        compiled: &patina_core::CompiledMacro,
+        cx: &FormCx<'_, 'gc>,
+    ) {
+        if !compiled.foreign_expansions.is_empty() {
+            let mut foreign = self.early.foreign.borrow_mut();
+            for (scope, env) in &compiled.foreign_expansions {
+                foreign.entry(*scope).or_insert_with(|| Rc::clone(env));
+            }
+        }
+        for carried in cx.macro_relinks(mac) {
+            if self.early.has_relinked(carried.guard, &carried.spelling) {
+                continue;
+            }
+            // Pooled beneath the context that read it out of the macro,
+            // which is what its brand allows: the pool roots the record
+            // for the rest of the form.
+            let link = cx.literals.add_link(carried.link);
+            self.early.relink(
+                carried.guard,
+                carried.spelling,
+                Relinked {
+                    link,
+                    written: carried.written,
+                },
+            );
+        }
+    }
+
+    /// The relinked identifiers among `literals`, the words a macro being
+    /// compiled holds, each with the record the form's table has for it
+    /// (#837): what the macro object carries to the forms that expand it
+    /// (`put_back_carried`), where this form's table is gone.
+    ///
+    /// The literals, not the identifiers its templates inherited: a
+    /// relinked identifier in a generated macro's literals list or pattern
+    /// is compared by binding at each later match and is in no template,
+    /// and the macro object's literals hold every word the macro holds
+    /// (#718), each identifier as itself. A macro compiled in a later form
+    /// from a carried identifier carries it on, under the guard it has had
+    /// since it was relinked.
+    ///
+    /// Empty, without a walk, in a form that relinked nothing.
+    fn relinks_carried_by<'gc>(
+        &self,
+        literals: &[Value<'gc>],
+        cx: &FormCx<'_, 'gc>,
+    ) -> Vec<patina_core::Carried<'gc>> {
+        let mut carried: Vec<patina_core::Carried<'gc>> = Vec::new();
+        if !self.early.any_relinked.get() {
+            return carried;
+        }
+        for &literal in literals {
+            let Some((name, scopes)) = cx.get_identifier_data(literal) else {
+                continue;
+            };
+            if scopes.is_empty() {
+                continue;
+            }
+            let Some((guard, link)) = self.early.relinked(&name, &scopes) else {
+                continue;
+            };
+            if carried
+                .iter()
+                .any(|seen| seen.guard == guard && seen.spelling == name)
+            {
+                continue;
+            }
+            carried.push(patina_core::Carried {
+                written: self.early.written(guard, &name),
+                spelling: name,
+                guard,
+                link: cx.linkable(cx.literals, link),
+            });
+        }
+        carried
+    }
+
+    /// The macro object of a transformer `compile_syntax_rules_tagged`
+    /// compiled: with the relinks it carries where it carries any (#837).
+    fn alloc_compiled_macro<'gc>(
+        compiled: CompiledTransformer<'gc>,
+        cx: &mut FormCx<'_, 'gc>,
+    ) -> Value<'gc> {
+        let (compiled, literals, relinks) = compiled;
+        if relinks.is_empty() {
+            cx.alloc_macro(Rc::new(compiled), literals)
+        } else {
+            cx.alloc_macro_with_relinks(Rc::new(compiled), literals, relinks)
+        }
+    }
+
     /// Rewrite a macro expansion's free identifiers so they resolve where the
     /// macro was defined.
     ///
@@ -1430,17 +1561,6 @@ impl<'a> Desugarer<'a> {
         scan_env: Option<&Rc<Environment>>,
         cx: &mut FormCx<'_, 'gc>,
     ) -> Value<'gc> {
-        // A macro a foreign generator defined carries that generator's
-        // expansion scope on its template's references, and the record that
-        // the expansion was foreign did not outlive the form that ran the
-        // generator. Put it back for this form, so that those references are
-        // bound early here as they were there (#446).
-        if !compiled_macro.foreign_expansions.is_empty() {
-            let mut foreign = self.early.foreign.borrow_mut();
-            for (scope, env) in &compiled_macro.foreign_expansions {
-                foreign.entry(*scope).or_insert_with(|| Rc::clone(env));
-            }
-        }
         let Some(def_env) = compiled_macro.definition_env.as_ref() else {
             return expanded;
         };
@@ -2679,6 +2799,8 @@ impl<'a> Desugarer<'a> {
             // Save call-site source location before expansion
             let call_site_source = self.lookup_source(list, cx);
 
+            self.put_back_carried(mac, &compiled_macro, cx);
+
             let patina_macros::MacroExpansion {
                 form: expanded_tagged,
                 scope: expansion_scope,
@@ -2919,7 +3041,7 @@ impl<'a> Desugarer<'a> {
 
             if let Some((macro_name, binder_scopes, transformer_tv)) = define_syntax_info {
                 // Compile the macro immediately
-                let (compiled_macro, literals) = self.compile_syntax_rules_tagged(
+                let compiled = self.compile_syntax_rules_tagged(
                     transformer_tv,
                     cx,
                     macro_name.clone(),
@@ -2938,7 +3060,7 @@ impl<'a> Desugarer<'a> {
                               which the collector traces"
                 )]
                 let new_env = Rc::new(Environment::child_frame(current_env.clone()));
-                let tv = cx.alloc_macro(Rc::new(compiled_macro), literals);
+                let tv = Self::alloc_compiled_macro(compiled, cx);
                 current_desugarer.define_syntax_binding(
                     &new_env,
                     macro_name,
@@ -3370,7 +3492,7 @@ impl<'a> Desugarer<'a> {
         // Compile macro immediately and install in environment
         let env = &self.env;
 
-        let (compiled_macro, literals) = self.compile_syntax_rules_tagged(
+        let compiled = self.compile_syntax_rules_tagged(
             args_vec[1],
             cx,
             name.clone(),
@@ -3379,7 +3501,7 @@ impl<'a> Desugarer<'a> {
         )?;
 
         // Install in environment
-        let tv = cx.alloc_macro(Rc::new(compiled_macro), literals);
+        let tv = Self::alloc_compiled_macro(compiled, cx);
         self.define_syntax_binding(env, name, binder_scopes, tv, cx);
 
         Ok(CoreExpr::new(CoreExprKind::Literal(Lit::UNSPECIFIED)))
@@ -3672,8 +3794,8 @@ impl<'a> Desugarer<'a> {
         } else {
             Rc::new(Environment::child_frame(env.clone()))
         };
-        for (name, binder_scopes, (compiled_macro, literals)) in macro_bindings {
-            let tv = cx.alloc_macro(Rc::new(compiled_macro), literals);
+        for (name, binder_scopes, compiled) in macro_bindings {
+            let tv = Self::alloc_compiled_macro(compiled, cx);
             // Bound at the binder's scopes *as written* plus this form's —
             // Racket's rule for a binder — where a binder written in source
             // carries none of its own and stands in the scopes accumulated
@@ -4118,8 +4240,10 @@ impl<'a> Desugarer<'a> {
     // =========================================================================
 
     /// Compile a syntax-rules transformer with scope-based
-    /// hygiene: its body, and the literals its rules name by index, which
-    /// its macro object holds (`Heap::alloc_macro`, #718).
+    /// hygiene: its body, the literals its rules name by index, which
+    /// its macro object holds (`Heap::alloc_macro`, #718), and the relinked
+    /// identifiers among them with their records, which it carries
+    /// (`relinks_carried_by`, #837).
     fn compile_syntax_rules_tagged<'gc>(
         &self,
         transformer_tv: Value<'gc>,
@@ -4127,7 +4251,7 @@ impl<'a> Desugarer<'a> {
         name: Rc<str>,
         env: &Rc<Environment>,
         scopes: &ScopeSet,
-    ) -> Result<(patina_macros::CompiledMacro, Vec<Value<'gc>>)> {
+    ) -> Result<CompiledTransformer<'gc>> {
         use patina_macros::Compiler;
 
         let list = utils::list_to_vec_tagged(transformer_tv, cx)?;
@@ -4198,7 +4322,8 @@ impl<'a> Desugarer<'a> {
         // escaping transformer must retain the live environment, not its view.
         compiled.definition_env = Some(env.clone());
         compiled.foreign_expansions = self.foreign_expansions_carried_by(&compiled);
-        Ok((compiled, literals))
+        let relinks = self.relinks_carried_by(&literals, cx);
+        Ok((compiled, literals, relinks))
     }
 
     /// The foreign expansions (`EarlyBinding::foreign`) whose scopes the

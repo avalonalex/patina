@@ -1750,13 +1750,15 @@ const RELINK_TRACE_CASE: &str = "PATINA_HYGIENE_RELINK_TRACE_CASE";
 
 /// The library and imports of
 /// [`the_trace_says_how_a_relinked_reference_ended`]: `get-secret` reads
-/// and `set-secret!` assigns the library's private `secret`, and `beside`
-/// produces a definition of the private spelling `settled` beside a
-/// reference to it.
+/// and `set-secret!` assigns the library's private `secret`, `def-getter`
+/// defines a macro that reads it, and `beside` produces a definition of
+/// the private spelling `settled` beside a reference to it.
 const RELINKED: &str = "(define-library (hm relinked)\n  (import (scheme base))\n  \
-                        (export get-secret set-secret! beside get-settled)\n  (begin\n    \
+                        (export get-secret set-secret! def-getter beside get-settled)\n  (begin\n    \
                         (define secret 42)\n    \
                         (define-syntax get-secret (syntax-rules () ((_) secret)))\n    \
+                        (define-syntax def-getter\n      (syntax-rules ()\n        \
+                        ((_ name) (define-syntax name (syntax-rules () ((_) secret))))))\n    \
                         (define-syntax set-secret! (syntax-rules () ((_ v) (set! secret v))))\n    \
                         (define settled 'library)\n    \
                         (define-syntax get-settled (syntax-rules () ((_) settled)))\n    \
@@ -1786,6 +1788,12 @@ const RELINK_TRACE_PROGRAMS: &[(&str, &str, &str, &str)] = &[
         "(introduced library)",
         "settled",
     ),
+    (
+        "carried",
+        "(define secret 'program)\n(def-getter get)\n(define (h) (get))\n(list (h) secret)",
+        "(42 program)",
+        "secret",
+    ),
 ];
 
 /// What `PATINA_SCOPE_TRACE` says of a reference relinking linked (#837,
@@ -1797,6 +1805,10 @@ const RELINK_TRACE_PROGRAMS: &[(&str, &str, &str, &str)] = &[
 ///   reference after it: the tree-walker reads the link and the VM's
 ///   renamer passes the node through.
 /// - **assigned** (`set-secret!`'s target): the same with `op=set`.
+/// - **carried** (a macro `def-getter` made in one form, expanded in a
+///   later one): the same as **linked**. The identifier was relinked by
+///   the generator's expansion, a form earlier, and the generated macro
+///   carries its record with it.
 /// - **settled** (`beside`'s reference to `settled`, expanded into a body
 ///   beside the definition of `settled` its own expansion produces): the
 ///   desugar record under the written spelling, and then the backend's own

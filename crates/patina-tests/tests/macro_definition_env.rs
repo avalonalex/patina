@@ -664,11 +664,14 @@ fn defining_the_relinked_spelling<B: patina_runtime::Backend>(
     interp
         .eval_program(&format!("(define {spelling} 'mine)"))
         .unwrap();
-    let after = interp
-        .eval_str("(let* ((bumped (b)) (read (h))) (list read (get-secret)))")
-        .unwrap();
-    let own = interp.eval_str(&spelling).unwrap();
-    [interp.display_tagged(after), interp.display_tagged(own)]
+    // Each answer is shown before the next evaluation, which may collect.
+    let after = interp.display_tagged(
+        interp
+            .eval_str("(let* ((bumped (b)) (read (h))) (list read (get-secret)))")
+            .unwrap(),
+    );
+    let own = interp.display_tagged(interp.eval_str(&spelling).unwrap());
+    [after, own]
 }
 
 #[test]
@@ -681,6 +684,200 @@ fn a_definition_of_a_relinked_spelling_captures_nothing() {
     );
     assert_eq!(
         defining_the_relinked_spelling(common::tree_walker_interpreter()),
+        expected,
+        "tree-walker"
+    );
+}
+
+/// A generated macro carries the spelling relinking gave its template's
+/// `secret`, and the program then defines that spelling. A procedure that
+/// expanded the macro before the definition, an expansion after it and a
+/// procedure compiled after it all read the library's variable: the
+/// generated macro carries the record with the identifier, and nothing
+/// reads the spelling by name. chibi 0.12 and Gauche 0.9.15 answer
+/// `(42 42 42)` for a name the program defines. Before #837's second PR a
+/// carried identifier was read by name, and all three answered `mine`.
+fn defining_a_carried_spelling<B: patina_runtime::Backend>(
+    interp: patina_interpreter::Interpreter<B>,
+) -> [String; 2] {
+    interp
+        .eval_program(
+            "(define-library (t gm)
+  (export def-getter)
+  (import (scheme base))
+  (begin
+    (define secret 42)
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax def-getter
+      (syntax-rules ()
+        ((_ name spell)
+         (begin
+           (define-syntax name (syntax-rules () ((_) secret)))
+           (define-syntax spell (syntax-rules () ((_) (quote-it secret))))))))))
+(import (scheme base) (t gm))
+(def-getter get spell)
+(define (early) (get))",
+        )
+        .unwrap();
+    let spelling = interp.display_tagged(interp.eval_str("(spell)").unwrap());
+    assert!(
+        spelling.starts_with("secret") && spelling != "secret",
+        "the spelling the generated macro carries, read from an expansion: {spelling}"
+    );
+    interp
+        .eval_program(&format!("(define {spelling} 'mine) (define (late) (get))"))
+        .unwrap();
+    // Each answer is shown before the next evaluation, which may collect.
+    let read = interp.display_tagged(interp.eval_str("(list (early) (get) (late))").unwrap());
+    let own = interp.display_tagged(interp.eval_str(&spelling).unwrap());
+    [read, own]
+}
+
+#[test]
+fn a_definition_of_a_carried_spelling_captures_no_later_expansion() {
+    let expected = ["(42 42 42)".to_string(), "mine".to_string()];
+    assert_eq!(
+        defining_a_carried_spelling(common::vm_interpreter()),
+        expected,
+        "VM"
+    );
+    assert_eq!(
+        defining_a_carried_spelling(common::tree_walker_interpreter()),
+        expected,
+        "tree-walker"
+    );
+}
+
+/// A generated definer run twice keeps two keywords. `(t defdef)`'s
+/// `def-definer` makes a definer in the program whose template defines a
+/// keyword spelled as the library's private `priv`, at top level, and a
+/// macro that uses it. The binder was relinked with its references when
+/// the definer was generated, so each run of the definer binds it at its
+/// own scopes, and each generated macro expands the keyword of its own
+/// run: `(one 3)` and `(two 4)`, with the library's own macro still
+/// `lib-priv`. Gauche 0.9.15 answers the same. chibi 0.12 answers
+/// `((one 1) (one 2))` and `((two 3) (two 4) (two 5))`: its top-level
+/// `define-syntax` lands on the library's own keyword, so every user of
+/// the spelling expands the newest definition. Before #837's second PR
+/// the carried binder was bound by name, the second run redefined the
+/// first's keyword, and Patina answered `(two 3)` too.
+#[test]
+fn a_generated_definer_run_twice_keeps_two_keywords() {
+    let program = "(define-library (t defdef)
+  (export def-definer use-priv)
+  (import (scheme base))
+  (begin
+    (define-syntax priv (syntax-rules () ((_ x) (list 'lib-priv x))))
+    (define-syntax use-priv (syntax-rules () ((_ x) (priv x))))
+    (define-syntax def-definer
+      (syntax-rules ()
+        ((_ d)
+         (define-syntax d
+           (syntax-rules ()
+             ((_ n tag)
+              (begin (define-syntax priv (syntax-rules () ((_ y) (list 'tag y))))
+                     (define-syntax n (syntax-rules () ((_ y) (priv y)))))))))))))
+(import (scheme base) (t defdef))
+(def-definer d)
+(d g one)
+(define first (list (g 1) (use-priv 2)))
+(d g2 two)
+(define (later) (list (g 3) (g2 4) (use-priv 5)))
+(list first (later))";
+    let expected = "(((one 1) (lib-priv 2)) ((one 3) (two 4) (lib-priv 5)))".to_string();
+    assert_eq!(
+        on_both_backends(program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// A generated macro that carries three relinks, one of each kind of
+/// target: `read`, which `(t three)`'s `make-reader` makes in the program,
+/// mentions the library's private variable `secret` (a namespace's slot),
+/// the `count` the library's definer introduced beside the plain `count`
+/// (an introduced definition), and `helper`, a keyword private to a
+/// splice (a scoped keyword). The program has a `secret`, a `count` and a
+/// `helper` of its own. `read` is expanded in forms after the one that
+/// made it, at top level and in a procedure, past collections and an
+/// assignment by the library, and reads all three of the library's. Its
+/// macro object holds the three records, each under the spelling its
+/// template wrote. chibi 0.12 answers the same with the library as a file
+/// and without the collections (2026-11-17); Gauche 0.9.15 has no `(srfi
+/// 188)`. Run in a release `gc-check` build too, where a record no link
+/// may name is refused at every one of the three.
+fn three_carried_relinks<B: patina_runtime::Backend>(
+    interp: patina_interpreter::Interpreter<B>,
+) -> (String, Vec<String>) {
+    let answer = interp
+        .eval_program(
+            "(define-library (t three)
+  (import (scheme base) (srfi 188))
+  (export make-reader bump! plain-count)
+  (begin
+    (define secret 42)
+    (define count 100)
+    (define (plain-count) count)
+    (define (bump!) (set! secret (+ secret 1)))
+    (define-syntax def-state
+      (syntax-rules ()
+        ((_ maker)
+         (begin
+           (define count 0)
+           (splicing-let-syntax ((helper (syntax-rules () ((_ x) (list 'helped x)))))
+             (define-syntax maker
+               (syntax-rules ()
+                 ((_ name)
+                  (define-syntax name
+                    (syntax-rules ()
+                      ((_) (begin (set! count (+ count 1))
+                                  (helper (list secret count))))))))))))))
+    (def-state make-reader)))
+(import (scheme base) (patina debug) (t three))
+(define secret 'program)
+(define count 'program)
+(define-syntax helper (syntax-rules () ((_ x) 'the-programs)))
+(make-reader read)
+(gc) (gc)
+(define first (read))
+(define (later) (read))
+(bump!)
+(gc)
+(let* ((second (later)) (third (read)))
+  (list first second third (plain-count) secret count (helper 0)))",
+        )
+        .unwrap();
+    let answer = interp.display_tagged(answer);
+    let global = interp.global_env();
+    let mut written = patina_core::NoGcScope::with_cx(interp.backend().heap(), |cx| {
+        let read = cx.lookup(&global, "read").expect("the generated macro");
+        cx.macro_relinks(read)
+            .iter()
+            .map(|carried| carried.written.to_string())
+            .collect::<Vec<_>>()
+    });
+    written.sort();
+    (answer, written)
+}
+
+#[test]
+fn a_generated_macro_carries_a_relink_of_each_kind() {
+    let expected = (
+        "((helped (42 1)) (helped (43 2)) (helped (43 3)) 100 program program the-programs)"
+            .to_string(),
+        vec![
+            "count".to_string(),
+            "helper".to_string(),
+            "secret".to_string(),
+        ],
+    );
+    assert_eq!(
+        three_carried_relinks(common::vm_interpreter()),
+        expected,
+        "VM"
+    );
+    assert_eq!(
+        three_carried_relinks(common::tree_walker_interpreter()),
         expected,
         "tree-walker"
     );

@@ -2653,8 +2653,12 @@ an unbranded record. A check build refuses a carried record that is a
 placeholder, a read-through record or the by-name record
 (`Record::refused_as_a_link`), as `LinkTable::link_in` refuses a pinned
 one, and a `Carried` whose handle early binding branded. The byte account charges a relink its 48 bytes, and the object's slot
-is 72 bytes as before (`the_object_slots_size_is_watched`). Nothing makes
-one yet: #837's second PR's desugarer does.
+is 72 bytes as before (`the_object_slots_size_is_watched`). The desugarer
+makes one for each relinked identifier among the literals of a macro it
+compiles (`Desugarer::relinks_carried_by`), which only a generated macro
+has, and puts each back in the table of a form that expands the macro,
+pooled there, before the expansion (`put_back_carried`), since #837's
+second PR.
 
 ### 9.7 The `CoreExpr` literal pool
 

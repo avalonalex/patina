@@ -5,8 +5,9 @@
 ;; in the expansion, and what that spelling is bound to is the subject here.
 ;;
 ;; **This file is a scoreboard, landed before the change it scores** (#837's
-;; second PR). Every row passed when it was written, on both backends, and
-;; says "nothing about this shape changes": the rows are the relinking
+;; second PR). Every row but those the switch added (listed below) passed
+;; when it was written, on both backends, and says "nothing about this
+;; shape changes": the rows are the relinking
 ;; shapes that no lane held — a generated macro over a private variable or
 ;; keyword, in the form that made it and in later ones; a relinked
 ;; assignment; introduced state; a keyword an expansion introduces under a
@@ -23,29 +24,39 @@
 ;; (`macro_definition_env.rs`, `gc_shared_tests!`), and the splicing one is a
 ;; row of `expansion/splicing-libraries.scm`.
 ;;
+;; **The rows the switch added failed before it**, each on both backends:
+;;
+;; - "a generated definer run twice keeps two keywords": the definer's
+;;   binder of the private spelling was relinked when the definer was
+;;   generated, and is bound at its own scopes in each run, where it was
+;;   bound by name and the second run redefined the first's keyword,
+;;   `(two 3)`. Gauche answers as asserted; chibi does not (below).
+;;
 ;; ── Why this file needs libraries, and what that costs ─────────────────────
 ;;
 ;; Relinking applies to a macro from *another* library, so the macros are
 ;; defined in libraries inline. **chibi 0.12 cannot run this file** — it does
 ;; not take `define-library` in a script; `expansion/template-references.scm`
 ;; has the measurement — and is registered `*` / `incomplete` in
-;; `DIVERGENCES.tsv`. Gauche 0.9.15 runs it and answers all forty-two rows
-;; as asserted.
+;; `DIVERGENCES.tsv`. Gauche 0.9.15 runs it and answers all forty-three
+;; rows as asserted.
 ;;
 ;; Every row was also run under chibi 0.12 with the libraries as `.sld`
 ;; files and the rest of this file as the program (2026-11-16; the second
-;; batch's four rows, and the whole file again, 2026-11-17). It agrees on
-;; thirty-five of the forty-two. The seven it does not are seven of the
-;; nine rows on a keyword an expansion introduces under its library's
-;; private spelling; the comment above those rows counts them. chibi's
+;; batch's four rows, the definer row, and the whole file again,
+;; 2026-11-17). It agrees on thirty-five of the forty-three. The eight it
+;; does not are seven of the nine rows on a keyword an expansion introduces
+;; under its library's private spelling, and the generated definer's row;
+;; the comment above those rows counts them. chibi's
 ;; top-level `define-syntax` lands on the *library's* keyword, so the
 ;; library's own macro and every earlier generated macro expand the newest
 ;; definition: `((introduced 2) (introduced 3))`, `((one 4) (one 5))`,
 ;; `((one 6) (one 7))`, `((two 8) (two 8) ((one 6) (one 7)))`, `((late 9)
 ;; (late 9) (late 9))`, `((from-l3-again 1) (from-l3-again 2)
-;; (from-l3-again 3))` and `((from-l3-again 4) (from-l3-again 5))`, in the
-;; file's order. Gauche keeps each expansion's keyword its own, as Patina
-;; does, and it is the arbiter of these rows.
+;; (from-l3-again 3))`, `((from-l3-again 4) (from-l3-again 5))` and, for the
+;; generated definer, `(((one 1) (one 2)) ((two 3) (two 4) (two 5)))`, in
+;; the file's order. Gauche keeps each expansion's keyword its own, as
+;; Patina does, and it is the arbiter of these rows.
 ;;
 ;; A row that writes the library's variable and then reads it through
 ;; another path does the two in a `let*`, never as two operands of one call:
@@ -267,6 +278,24 @@
          (begin (define-syntax kw-secret (syntax-rules () ((_) 'introduced-kw)))
                 (define-syntax name (syntax-rules () ((_) (kw-secret))))))))))
 
+;; A generator of definers: the definer it makes in the program defines a
+;; keyword spelled as this library's private `dd-priv`, at top level, and a
+;; macro that uses it.
+(define-library (probe defdef)
+  (export def-definer use-dd-priv)
+  (import (scheme base))
+  (begin
+    (define-syntax dd-priv (syntax-rules () ((_ x) (list 'lib-dd-priv x))))
+    (define-syntax use-dd-priv (syntax-rules () ((_ x) (dd-priv x))))
+    (define-syntax def-definer
+      (syntax-rules ()
+        ((_ d)
+         (define-syntax d
+           (syntax-rules ()
+             ((_ n tag)
+              (begin (define-syntax dd-priv (syntax-rules () ((_ y) (list 'tag y))))
+                     (define-syntax n (syntax-rules () ((_ y) (dd-priv y)))))))))))))
+
 ;; A definition of the private spelling beside a reference to it.
 (define-library (probe settle)
   (export beside get-settled)
@@ -377,7 +406,8 @@
 
 (import (probe collide) (probe getter) (probe later) (probe casing)
         (probe mint) (probe setter) (probe genset) (probe intro)
-        (probe shadow) (probe kwgen) (probe kwintro) (probe settle) (probe fwd)
+        (probe shadow) (probe kwgen) (probe kwintro) (probe defdef)
+        (probe settle) (probe fwd)
         (probe applying) (probe setcall) (probe control)
         (probe litguard) (probe litonly) (probe litgen))
 
@@ -641,6 +671,22 @@
 (test-equal "and in a procedure of that root"
   '((from-l3 4) (from-l3-again 5))
   (cross-in-proc))
+
+;; A definer the library's generator makes in the program, run twice. Its
+;; binder of `dd-priv` was relinked with its references when the definer
+;; was generated, so each run binds a keyword of its own, at that run's
+;; scopes, and each generated macro expands its own run's. Gauche 0.9.15
+;; answers as asserted; chibi 0.12, whose `define-syntax` lands on the
+;; library's keyword, `(((one 1) (one 2)) ((two 3) (two 4) (two 5)))`. One
+;; of the rows the switch added (the header lists them).
+(def-definer dd)
+(dd dd-g one)
+(define dd-first (list (dd-g 1) (use-dd-priv 2)))
+(dd dd-g2 two)
+
+(test-equal "a generated definer run twice keeps two keywords"
+  '(((one 1) (lib-dd-priv 2)) ((one 3) (two 4) (lib-dd-priv 5)))
+  (list dd-first (list (dd-g 3) (dd-g2 4) (use-dd-priv 5))))
 
 ;; ─── A definition an expansion produces beside a reference ──────────────────
 

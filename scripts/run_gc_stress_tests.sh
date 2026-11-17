@@ -395,7 +395,18 @@ fi
 # written), from 34917 to 35062, and 107 without; and host_environments's
 # for code compiled before a host's nearer definition, from 167613 to
 # 167687, and 761 without; the minimums left. The step itself moved no
-# count: gc_vm, gc_tree_walker and scheme_suite read as they did)
+# count: gc_vm, gc_tree_walker and scheme_suite read as they did; and the
+# same re-pinned that day for its second step, a generated macro carrying
+# its relinks across forms: vm_callprimitive's test count for the carried
+# reference's operand, which raised its count at 16 to 1669, and 0
+# without; macro_definition_env's for three (a definition of a carried
+# spelling, a generated definer run twice, a relink of each kind in one
+# macro), to 35302, and from 107 to 113 without; host_environments's for
+# the keyword a generated macro carried past a host's definition, to
+# 167767, and 761 without; hygiene_matrix's trace test's fourth program
+# raised its count at 16 to 22310, its test count left; and
+# relinked-names.scm's row for the generated definer raised scheme_suite's
+# at 4096 to 10652 and left it at 385 without; the minimums left)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -405,15 +416,15 @@ TARGETS=(
     "finished_forms_release_code 16 2040 12"  # 4057 (15)
     "gc_tree_walker 16 70005 40"              # 84050 (55960)
     "gc_vm 16 19868 53"                       # 39737 (17762)
-    "host_environments 16 83806 34"           # 167687 (761)
-    "hygiene_matrix 16 11136 20"              # 22238 (6)
+    "host_environments 16 83806 35"           # 167767 (761)
+    "hygiene_matrix 16 11136 20"              # 22310 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
-    "macro_definition_env 16 16626 37"        # 35062 (107): see the header
+    "macro_definition_env 16 16626 40"        # 35302 (113): see the header
     "owned_handles 16 62714 9"                # 125648 (14)
     "rooted_loading 16 371 6"                 # 1269 (10)
-    "vm_callprimitive 16 545 21"              # 1565 (0)
-    "scheme_suite 4096 1534 11"               # 10650 (385): see the header
+    "vm_callprimitive 16 545 22"              # 1669 (0)
+    "scheme_suite 4096 1534 11"               # 10652 (385): see the header
 )
 
 OUT=$(mktemp -d)

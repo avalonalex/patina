@@ -1145,6 +1145,82 @@ fn code_compiled_before_a_hosts_nearer_definition_keeps_the_record_it_linked() {
     );
 }
 
+/// The same for a keyword a generated macro carries (#837; the owner's
+/// ruling on question 4, that a keyword's target travels with the
+/// syntax). The host namespace `first` defines `def-user`, which makes a
+/// macro whose template uses the keyword `kw`, which `first` reaches in
+/// the global namespace. The host binds `def-user` in a second host
+/// namespace, which has a `kw` of its own, so each expansion there relinks
+/// the template's `kw`. `user-before` is generated while `first` still
+/// reaches the global `kw`; then `first` defines a `kw` of its own.
+/// `user-before` carries the global namespace's record and expands the
+/// global keyword still; a macro generated after the definition carries
+/// `first`'s. Until #837's second PR a carried keyword was read by name
+/// through `first` at each expansion, and `user-before` expanded
+/// `first`'s keyword once that was defined
+/// (`alias_home_tests::a_keyword_reached_through_the_targets_parent_keeps_its_environment`).
+fn carried_before_a_nearer_definition<B: Backend>(interp: Interpreter<B>) -> [String; 2] {
+    interp
+        .eval_program_owned(
+            "(import (scheme base))
+             (define-syntax kw (syntax-rules () ((_ x) (list 'global x))))",
+        )
+        .unwrap();
+    let first = interp.new_environment();
+    interp
+        .eval_program_in(
+            &first,
+            "(define-syntax def-user
+               (syntax-rules ()
+                 ((_ name) (define-syntax name (syntax-rules () ((_ x) (kw x)))))))",
+        )
+        .unwrap();
+    let second = interp.new_environment();
+    let def_user = interp.lookup_in(&first, "def-user").expect("the macro");
+    interp.define_in(&second, "def-user", &def_user);
+    interp
+        .eval_program_in(
+            &second,
+            "(define-syntax kw (syntax-rules () ((_ x) (list 'second x))))
+             (def-user user-before)",
+        )
+        .unwrap();
+    let shown = |source: &str| {
+        let value = interp.eval_str_in(&second, source).unwrap();
+        interp.display_tagged(&value)
+    };
+    let before = shown("(list (user-before 1) (kw 2))");
+    interp
+        .eval_program_in(
+            &first,
+            "(define-syntax kw (syntax-rules () ((_ x) (list 'first x))))",
+        )
+        .unwrap();
+    interp
+        .eval_program_in(&second, "(def-user user-after)")
+        .unwrap();
+    let after = shown("(list (user-before 3) (user-after 4) (kw 5))");
+    [before, after]
+}
+
+#[test]
+fn a_generated_macro_keeps_the_keyword_it_carried_past_a_hosts_nearer_definition() {
+    let expected = [
+        "((global 1) (second 2))".to_string(),
+        "((global 3) (first 4) (second 5))".to_string(),
+    ];
+    assert_eq!(
+        carried_before_a_nearer_definition(vm_interpreter()),
+        expected,
+        "VM"
+    );
+    assert_eq!(
+        carried_before_a_nearer_definition(tree_walker_interpreter()),
+        expected,
+        "tree-walker"
+    );
+}
+
 /// A read of a name nothing binds makes no binding record (#834, critique
 /// E3): a bare reference the backend misses, a reference from compiled code
 /// that misses when it runs, and a host's lookup. Nor does a host's lookup

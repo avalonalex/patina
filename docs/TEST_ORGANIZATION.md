@@ -1927,8 +1927,9 @@ landed, and its tests build each part by hand. Part of it was on every
 program's path from the start: the VM compiler reads each link's kind,
 and a macro object is allocated with no relinks, which the collector's
 arm then loops over. The desugarer makes a relinked link for every mention
-an expansion relinks since the switch's first step (below). What stores a
-relink is called by nothing but its tests.
+an expansion relinks since the switch's first step, and stores a relink
+in each generated macro that keeps a relinked identifier since its second
+(both below).
 The pool's
 `a_link_keeps_its_kind_through_the_pool` (an early and a relinked link of
 one record are two links, each read from its own entry, and neither kind
@@ -1973,8 +1974,8 @@ count of a relink as a word of the object is
 `a_macros_relinks_are_words_of_the_object`, in core's lib tests with the
 `gc-census` feature, which CI's census step runs beside the census's own
 lane (`cargo test -p patina-core --lib --features gc-census --
-heap::census::`): that lane runs programs, and no program makes a relink
-before the second PR. The VM: `primitive_calls.rs`'s `a_relinked_callee_is_no_fast_path`
+heap::census::`): that lane runs programs, which need not make a relink.
+The VM: `primitive_calls.rs`'s `a_relinked_callee_is_no_fast_path`
 (over the records an early-bound `car` gets its inline opcode through, an
 early-bound `length` its `CallPrimitive` and an early-bound
 `call-with-values` and `dynamic-wind` their sequences, the relinked callee
@@ -2020,6 +2021,35 @@ without the host API reaches either. The stress counts of
 `hygiene_matrix`, `vm_callprimitive`, `macro_definition_env` and
 `host_environments` were re-pinned for the tests; the step itself moved
 none.
+
+Its second step carries the records across forms: a macro compiled in a
+form takes the table's entries for the relinked identifiers among its
+literals into its object, and each later expansion of it puts them back
+in its form's table before matching. With the alias still installed a
+carried identifier the table does not answer is read by name, so the
+across-forms tests that existed pass without the step, and these are the
+ones that fail without it. `hygiene_matrix.rs`'s
+`the_trace_says_how_a_relinked_reference_ended` gains a generated macro
+expanded in a later form, whose reference ends `via=relink`.
+`vm_callprimitive.rs`'s
+`a_generated_macros_carried_reference_is_a_linked_operand`
+(`secret@linked` in the later form's code). `macro_definition_env.rs`'s
+`a_definition_of_a_carried_spelling_captures_no_later_expansion` (a
+program's definition of the spelling a generated macro carries moves no
+expansion of it, before or after), `a_generated_definer_run_twice_keeps_two_keywords`
+(a carried binder is bound at its scopes in each run, where the second run
+redefined the first's keyword; Gauche's answer, and no longer chibi's:
+`relinked-names.scm` has the row, the one row of that file that failed
+before the switch, and the register's note chibi's answer) and
+`a_generated_macro_carries_a_relink_of_each_kind` (a namespace's slot, an
+introduced definition and a splice's keyword in one macro object, read
+back through `Cx::macro_relinks`; a check build refuses a record no link
+may name at each of the three). `host_environments.rs`'s
+`a_generated_macro_keeps_the_keyword_it_carried_past_a_hosts_nearer_definition`
+is the keyword half of the host-namespace pin: a macro generated before
+the host's definition expands the global keyword still, and one generated
+after it the host's. The same four stress counts and `scheme_suite`'s
+were re-pinned.
 
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):
