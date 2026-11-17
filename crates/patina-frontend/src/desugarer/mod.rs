@@ -386,6 +386,9 @@ struct EarlyBinding {
     /// reference back to the spelling its definition has
     /// (`Desugarer::settle_early_bindings`).
     relinked_emits: RefCell<Vec<RelinkedEmit>>,
+    /// The form a body scan runs inside (`for_scan`), whose relinked
+    /// identifiers the scan reads beneath its own; `None` for a form's own.
+    outer: Option<Rc<EarlyBinding>>,
 }
 
 /// What one expansion's relinking gave one spelling (#837).
@@ -452,32 +455,68 @@ impl EarlyBinding {
     /// expansion, whose scope it has carried since, and an expansion that
     /// emitted it again relinked its own mentions under spellings of their
     /// own. Asserted in debug builds.
+    ///
+    /// A body scan's table is asked first, then the form's it runs inside.
     fn relinked(&self, name: &str, scopes: &ScopeSet) -> Option<(ScopeId, Link)> {
-        let table = self.relinked.borrow();
-        let mut answers = scopes.iter().filter_map(|scope| {
-            let entry = table.get(scope)?.get(name)?;
-            Some((*scope, entry.link))
-        });
-        let found = answers.next();
-        debug_assert!(
-            found.is_none() || answers.next().is_none(),
-            "two expansions of one form relinked `{name}` at {scopes}"
-        );
-        found
+        let found = {
+            let table = self.relinked.borrow();
+            let mut answers = scopes.iter().filter_map(|scope| {
+                let entry = table.get(scope)?.get(name)?;
+                Some((*scope, entry.link))
+            });
+            let found = answers.next();
+            debug_assert!(
+                found.is_none() || answers.next().is_none(),
+                "two expansions of one form relinked `{name}` at {scopes}"
+            );
+            found
+        };
+        found.or_else(|| self.outer.as_ref()?.relinked(name, scopes))
     }
 
     /// The spelling the template wrote for the entry
     /// [`relinked`](Self::relinked) answered under `guard`.
     fn written(&self, guard: ScopeId, name: &str) -> Rc<str> {
-        Rc::clone(&self.relinked.borrow()[&guard][name].written)
+        let own = self
+            .relinked
+            .borrow()
+            .get(&guard)
+            .and_then(|spellings| spellings.get(name))
+            .map(|entry| Rc::clone(&entry.written));
+        own.unwrap_or_else(|| {
+            self.outer
+                .as_ref()
+                .expect("the entry `relinked` answered")
+                .written(guard, name)
+        })
     }
 
-    /// Whether the table has an entry for `spelling` under `guard`.
+    /// Whether the table, or the form's a scan runs inside, has an entry
+    /// for `spelling` under `guard`.
     fn has_relinked(&self, guard: ScopeId, spelling: &str) -> bool {
         self.relinked
             .borrow()
             .get(&guard)
             .is_some_and(|spellings| spellings.contains_key(spelling))
+            || self
+                .outer
+                .as_ref()
+                .is_some_and(|outer| outer.has_relinked(guard, spelling))
+    }
+
+    /// What a body scan inside the form `outer` remembers (#837): a table
+    /// of its own, empty, for the scan's expansions, which are thrown away
+    /// with it, over the form's, which the scan reads and never writes. So
+    /// a body whose forms are headed by a keyword the enclosing expansion
+    /// relinked is scanned as it will be desugared, and nothing speculative
+    /// reaches the real form.
+    fn for_scan(outer: &Rc<EarlyBinding>) -> Rc<EarlyBinding> {
+        let scan = EarlyBinding {
+            outer: Some(Rc::clone(outer)),
+            ..EarlyBinding::default()
+        };
+        scan.any_relinked.set(outer.any_relinked.get());
+        Rc::new(scan)
     }
 
     /// Record that the expansion whose scope is `guard` relinked an
@@ -932,7 +971,7 @@ impl<'a> Desugarer<'a> {
             Rc::new(Environment::child_frame(self.env.clone())),
             self.current_scopes.clone(),
         );
-        probe.early = Rc::default();
+        probe.early = EarlyBinding::for_scan(&self.early);
         probe.declarations = Rc::new(RefCell::new(self.declarations.borrow().clone()));
         let mut names = Vec::new();
         for tv in body_tvs {
@@ -4458,6 +4497,83 @@ mod tests {
     /// Intern a symbol
     fn sym<'gc>(name: &str, cx: &mut Cx<'gc>) -> Value<'gc> {
         cx.intern_symbol(name)
+    }
+
+    // =========================================================================
+    // The form's table of relinked identifiers
+    // =========================================================================
+
+    /// A body scan's table (#837, `EarlyBinding::for_scan`) answers the
+    /// entries of the form it runs inside, and keeps its own to itself: the
+    /// scan's expansions are thrown away, and what they relinked must not
+    /// reach the form.
+    #[test]
+    fn a_scans_table_reads_the_forms_and_keeps_its_own() {
+        with_desugarer(|d, cx| {
+            let env = Rc::clone(d.desugarer.env());
+            let mut link_of = |name: &str, value: i64| {
+                cx.define(
+                    NamespaceView::of(&env),
+                    Rc::from(name),
+                    Value::fixnum(value),
+                );
+                let record = cx
+                    .relink_link(NamespaceView::of(&env), name, RelinkTarget::ByName)
+                    .expect("a namespace's slot has a record");
+                d.literals.add_link(record)
+            };
+            let (secret, other) = (link_of("secret", 1), link_of("other", 2));
+            let (form_guard, scan_guard) = (ScopeId::fresh(), ScopeId::fresh());
+            let at = |guard: ScopeId| ScopeSet::singleton(guard);
+
+            let form = Rc::new(EarlyBinding::default());
+            form.relink(
+                form_guard,
+                Rc::from("secret.1"),
+                Relinked {
+                    link: secret,
+                    written: Rc::from("secret"),
+                },
+            );
+            let scan = EarlyBinding::for_scan(&form);
+            assert!(scan.any_relinked.get(), "the form's flag is the scan's");
+            assert_eq!(
+                scan.relinked("secret.1", &at(form_guard)),
+                Some((form_guard, secret)),
+                "the scan answers the form's entry"
+            );
+            assert_eq!(&*scan.written(form_guard, "secret.1"), "secret");
+            assert!(scan.has_relinked(form_guard, "secret.1"));
+            assert_eq!(scan.relinked("secret.1", &at(scan_guard)), None);
+
+            scan.relink(
+                scan_guard,
+                Rc::from("other.2"),
+                Relinked {
+                    link: other,
+                    written: Rc::from("other"),
+                },
+            );
+            assert_eq!(
+                scan.relinked("other.2", &at(scan_guard)),
+                Some((scan_guard, other))
+            );
+            assert_eq!(&*scan.written(scan_guard, "other.2"), "other");
+            assert_eq!(
+                form.relinked("other.2", &at(scan_guard)),
+                None,
+                "the scan's entry does not reach the form"
+            );
+            assert!(!form.has_relinked(scan_guard, "other.2"));
+            assert!(form.relinked_emits.borrow().is_empty());
+
+            let idle = EarlyBinding::for_scan(&Rc::new(EarlyBinding::default()));
+            assert!(
+                !idle.any_relinked.get(),
+                "a scan in a form that relinked nothing starts with nothing"
+            );
+            assert_eq!(idle.relinked("secret.1", &at(form_guard)), None);
+        });
     }
 
     // =========================================================================

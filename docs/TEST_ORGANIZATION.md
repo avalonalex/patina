@@ -2051,6 +2051,24 @@ the host's definition expands the global keyword still, and one generated
 after it the host's. The same four stress counts and `scheme_suite`'s
 were re-pinned.
 
+Its third step gives the two readers that still went by a name the form's
+table: the literal matcher, which compares a relinked identifier by the
+location of its record's cell, or by one heap object where the two sides
+are spelled differently or both relinked, after local bindings and before
+any name; and the body scan, whose table is empty and reads the
+enclosing form's beneath it. With the alias installed the end-to-end
+literal and scan rows answer through it, so the step's own tests are
+unit tests: `matcher/literal.rs`'s `relinked_tests`, one case for each
+row of the rule over a hand-made table (two relinked identifiers by
+location under one spelling and two, by one heap object in two cells,
+and two cells that both hold `0` apart; a relinked identifier against a
+name at the record's location, a program's own binding of the spelling
+and an unbound name, on either side, for one spelling and for two; a
+local binding of the relinked spelling compared first; and identifiers
+the table does not answer compared as before), and the desugarer's
+`a_scans_table_reads_the_forms_and_keeps_its_own`. No stress count
+moved: they are unit tests of crates the stress lane does not run.
+
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):
 the variable that sets the mode did not reach the process, or the program
