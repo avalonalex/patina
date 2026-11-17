@@ -430,7 +430,7 @@ def run_one(binary, workload, backend, config, prepared, out, timeout, budget):
     footprint; or an error."""
     program, args, stdin, cwd, check = prepared
     stem = out / f'{run_name(workload["name"], backend)}-{config}'
-    env = {k: v for k, v in os.environ.items() if not k.startswith('PATINA_')}
+    env = gc_bench.run_environment()
     env.update(PATINA_ISOLATED_LIBRARIES='1', PATINA_GC_CENSUS='1', PATINA_GC_CENSUS_OUT=f'{stem}.txt',
                PATINA_GC_CENSUS_LOG=f'{stem}.csv', PATINA_GC_LOG=f'{stem}.gc.csv')
     if CONFIGS[config]:

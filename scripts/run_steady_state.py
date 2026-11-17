@@ -484,7 +484,10 @@ def run_once(binary, row, backend, n, timeout, cap_mib, scratch):
     else:
         args = [a.replace('{scratch}', scratch) for a in row.args]
         cmd += [str(STEADY / row.program), str(n)] + args
-    env = {k: v for k, v in os.environ.items() if not k.startswith('PATINA_')}
+    # Neither the caller's interpreter settings nor its allocator's
+    # (macOS's `Malloc...` variables, which move SS4's times and the
+    # resident size; scripts/gc_bench.py's ALLOCATOR_SETTINGS, #862).
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('PATINA_', 'Malloc'))}
     start = time.monotonic()
     child = subprocess.Popen(cmd, cwd=STEADY, env=env, stdin=stdin, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True)

@@ -16,6 +16,15 @@ from unittest import mock
 SOURCE = Path(__file__).resolve().parents[2]
 
 
+def recording(name):
+    """Source for a fake command: it appends `name` and the allocator
+    settings its environment carries to FAKE_ROOT's allocator-settings.jsonl."""
+    return f'''import json as _json, os as _os, pathlib as _pathlib
+with _pathlib.Path(_os.environ['FAKE_ROOT'], 'allocator-settings.jsonl').open('a') as _log:
+    _log.write(_json.dumps([{name!r}, sorted(k for k in _os.environ if k.startswith('Malloc'))]) + '\\n')
+'''
+
+
 class BenchmarkRunners(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -82,7 +91,7 @@ print({'empty': '', 'nan': 'BENCH_OK nan', 'zero': 'BENCH_OK 0', 'negative': 'BE
 
     def command(self, name, body):
         path = self.bin / name
-        path.write_text('#!/usr/bin/env python3\n' + body)
+        path.write_text('#!/usr/bin/env python3\n' + recording(name) + body)
         path.chmod(0o755)
 
     def run_script(self, script='run_benchmarks.sh', *args, mode='ok', env=None):
@@ -176,7 +185,7 @@ print({'empty': '', 'nan': 'BENCH_OK nan', 'zero': 'BENCH_OK 0', 'negative': 'BE
         binary = root / 'target/release/patina'
         binary.parent.mkdir(parents=True, exist_ok=True)
         binary.write_text(f'''#!/usr/bin/env python3
-import json, os, pathlib, sys
+{recording('gc run')}import json, os, pathlib, sys
 exe = pathlib.Path(__file__).absolute()
 with pathlib.Path(os.environ['FAKE_ROOT'], 'gc-calls.jsonl').open('a') as log:
     log.write(json.dumps({{'root': {str(root)!r}, 'argv': sys.argv[1:], 'pad': len(os.environ['PATINA_BENCH_PAD']),
@@ -283,7 +292,7 @@ sys.exit(status)
         descriptor limit, and writes one small summary and its two logs."""
         binary = self.root / 'target/gc-census/release/patina'
         binary.parent.mkdir(parents=True)
-        binary.write_text('''#!/usr/bin/env python3
+        binary.write_text('#!/usr/bin/env python3\n' + recording('census run') + '''
 import json, os, pathlib, resource, sys
 with pathlib.Path(os.environ['FAKE_ROOT'], 'census-calls.jsonl').open('a') as log:
     log.write(json.dumps({'stress': os.environ.get('PATINA_GC_STRESS'), 'census': os.environ['PATINA_GC_CENSUS'],
@@ -513,6 +522,52 @@ print({'answer-by-stress': os.environ.get('PATINA_GC_STRESS', 'default'),
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('names a tree-walker run', result.stderr)
         self.assertFalse((self.root / 'census-calls.jsonl').exists())
+
+    # ------------------------------------------- the caller's environment
+
+    # Two of macOS's allocator settings, each of which turns off the
+    # allocator's per-thread cache there (#862); elsewhere, two variables.
+    ALLOCATOR_SETTINGS = {'MallocNanoZone': '0', 'MallocXzoneThreadCaching': '0'}
+
+    def allocator_settings(self, name):
+        """What each run of the fake command `name` found of the caller's
+        allocator settings."""
+        log = (self.root / 'allocator-settings.jsonl').read_text().splitlines()
+        return [found for command, found in map(json.loads, log) if command == name]
+
+    def assert_runs_without_allocator_settings(self, script, *args, measured):
+        """`script`, started with ALLOCATOR_SETTINGS in its environment, hands
+        none of them to a run of the fake commands `measured`."""
+        result = self.run_script(script, *args, env=self.ALLOCATOR_SETTINGS)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # The control: the caller had them. git, which the runner asks for
+        # the revision and measures nothing with, inherits them.
+        self.assertIn(sorted(self.ALLOCATOR_SETTINGS), self.allocator_settings('git'))
+        for name in measured:
+            runs = self.allocator_settings(name)
+            self.assertTrue(runs, f'{name} never ran')
+            self.assertEqual([found for found in runs if found], [], name)
+
+    def test_a_gc_run_gets_none_of_the_caller_s_allocator_settings(self):
+        self.gc_setup()
+        self.assert_runs_without_allocator_settings(
+            'run_gc_benchmarks.sh', '--workload', 'escape1000', '--rounds', '2', '--base', str(self.base),
+            measured=['gc run'])
+        self.assertEqual(len(self.allocator_settings('gc run')), 6)
+
+    def test_a_census_run_gets_none_of_the_caller_s_allocator_settings(self):
+        self.census_binary()
+        self.assert_runs_without_allocator_settings(
+            'run_gc_census.sh', '--workload', 'deeprec', '--config', 'default', '--jobs', '1',
+            measured=['census run'])
+
+    def test_a_timed_run_gets_none_of_the_caller_s_allocator_settings(self):
+        # The comparison's interpreter, and Cargo, under which Criterion
+        # times its benchmarks.
+        self.assert_runs_without_allocator_settings(
+            'bench_compare.sh', '--quick', '--filter', 'r7rs/fib/20', measured=['patina', 'cargo'])
+        (self.root / 'allocator-settings.jsonl').unlink()
+        self.assert_runs_without_allocator_settings('run_benchmarks.sh', '--quick', measured=['cargo'])
 
 
 class GcArithmetic(unittest.TestCase):

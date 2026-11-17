@@ -2200,6 +2200,20 @@ VM's cycles depend on where the stack lands. Ten rounds is the default.
 The whole default set, 73 measurements, takes about 2 minutes a round on
 one build here; a comparison takes three times that.
 
+A run inherits the caller's environment without `PATINA_*` and without
+macOS's allocator settings, every variable named `Malloc…` (#862); the
+comparison, Criterion, census and steady-state runners drop the same. The
+Claude desktop app starts its sessions with `MallocNanoZone=0`, which on
+macOS 27.2 turns off the system allocator's per-thread cache. Measured
+2026-11-17, the tree-walker's workloads then count 8.5–9.8% more
+instructions (`tw-port-churn` 1%), and each run of a binary lands on one of
+several counts up to 1.3% apart, how often on each changing with the
+binary's code signature: copies of one build that differ in nothing else
+read a workload up to 0.7% apart. The harness's readings recorded before
+that date for #837's stack (#875, #878, #881), its baseline at 791b7c5a
+among them, were taken under the variable, and none is comparable with a
+reading taken since.
+
 ```bash
 ./scripts/run_gc_benchmarks.sh --rounds 3                    # this build, every set
 ./scripts/run_gc_benchmarks.sh --base main --set gbs         # main/branch/main
