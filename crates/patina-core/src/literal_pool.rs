@@ -145,6 +145,21 @@ pub struct Link {
 /// holds fewer than this many entries (`LiteralPool::push`).
 const RELINKED_BIT: u32 = 1 << 31;
 
+/// `index` as an entry's place in its pool, which leaves the top bit clear
+/// for a [`Link`]'s kind: refused, in every build, once it would reach the
+/// bit, where the link would read back as a relinked link of another
+/// entry. Apart from `LiteralPool::push` so that a test can ask it: a pool
+/// of 2^31 entries is 16 GiB of words.
+#[inline]
+fn place_of(index: usize) -> u32 {
+    let index = u32::try_from(index).unwrap_or(u32::MAX);
+    assert!(
+        index < RELINKED_BIT,
+        "a form quotes and links fewer than 2^31 entries"
+    );
+    index
+}
+
 impl Link {
     /// What linked the reference.
     #[inline]
@@ -247,12 +262,7 @@ impl LiteralPool {
             slots.push(Cell::new(word));
             slots.len() - 1
         });
-        let index = u32::try_from(index).unwrap_or(u32::MAX);
-        assert!(
-            index < RELINKED_BIT,
-            "a form quotes and links fewer than 2^31 entries"
-        );
-        index
+        place_of(index)
     }
 
     /// `link` as an entry of this compilation, rooted from here on (#837),
@@ -503,6 +513,21 @@ mod tests {
                 shown.starts_with("Linkable(") && shown.ends_with(&format!(", {kind:?})")),
                 "{shown}"
             );
+        }
+    }
+
+    /// A pool's place leaves the kind's bit clear, in every build: the
+    /// last place below the bit is given, and the first that would reach
+    /// it, and any past a `u32`, is refused, since a link there would read
+    /// back as a relinked link of another entry. No test can fill a pool
+    /// that far, so the bound is asked of the place alone.
+    #[test]
+    fn a_pools_place_leaves_the_kinds_bit_clear() {
+        assert_eq!(super::place_of(0), 0);
+        assert_eq!(super::place_of((1 << 31) - 1), (1 << 31) - 1);
+        for index in [1usize << 31, (1 << 31) + 1, u32::MAX as usize, usize::MAX] {
+            let refused = std::panic::catch_unwind(|| super::place_of(index));
+            assert!(refused.is_err(), "{index}");
         }
     }
 
