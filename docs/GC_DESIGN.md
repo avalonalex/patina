@@ -2699,10 +2699,13 @@ Each literal is a `Lit` (`crates/patina-core/src/literal_pool.rs`):
   never reaches a program as a value. A `Link` also says what linked it
   (`LinkKind`, the top bit of its index, so a pool holds fewer than 2^31
   entries, literals and links together); `Cx::linkable` brands a pooled
-  link again beneath a context. Nothing makes a relinked one yet: #837's
-  second PR's desugarer does. The desugarer makes one for each
-  early-bound reference since 4b.10's switch; the tree-walker's CPS
-  transform copies it into the `CpsExpr`, which then holds the record
+  link again beneath a context. The desugarer makes one for each
+  early-bound reference since 4b.10's switch, and one for each mention
+  an expansion relinks since #837's second PR
+  (`Desugarer::note_relinked`), whether or not the mention is ever
+  emitted as a reference: a keyword's is read at desugar time and
+  leaves the pool with the form. The tree-walker's CPS transform copies
+  an emitted reference's into the `CpsExpr`, which then holds the record
   itself (§4.4).
 - **Tests.** `a_collection_keeps_a_pooled_literal` and
   `a_collection_keeps_a_pooled_links_record` are the sentinels, and

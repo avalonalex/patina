@@ -424,6 +424,124 @@ fn car_operands(inspected: &patina_vm::backend::Inspected) -> Vec<String> {
     operands
 }
 
+/// The operand of each `LoadGlobal` and `StoreGlobal` among `code`'s and
+/// its lambdas' instructions, as the disassembler prints it
+/// ([`car_operands`]), and whether the code calls, inlines `car`, or calls
+/// a primitive by its id.
+struct Operands {
+    loads: Vec<String>,
+    stores: Vec<String>,
+    calls: usize,
+    inline_cars: usize,
+    primitive_calls: usize,
+}
+
+fn operands(inspected: &patina_vm::backend::Inspected) -> Operands {
+    use patina_vm::types::Instruction;
+    let mut found = Operands {
+        loads: Vec::new(),
+        stores: Vec::new(),
+        calls: 0,
+        inline_cars: 0,
+        primitive_calls: 0,
+    };
+    for (top, nested) in inspected.units() {
+        for code in std::iter::once(top).chain(nested) {
+            let printed = |link| {
+                let spelling = code.links.name(link);
+                if code.links.is_pinned(link) {
+                    format!("{spelling}@linked")
+                } else {
+                    spelling.to_string()
+                }
+            };
+            for instr in &code.instructions {
+                match instr {
+                    Instruction::LoadGlobal { link, .. } => found.loads.push(printed(*link)),
+                    Instruction::StoreGlobal { link, .. } => found.stores.push(printed(*link)),
+                    Instruction::Call { .. } | Instruction::TailCall { .. } => found.calls += 1,
+                    Instruction::Car { .. } => found.inline_cars += 1,
+                    Instruction::CallPrimitive { .. } => found.primitive_calls += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    found
+}
+
+/// A relinked reference is a linked operand under the spelling its
+/// template wrote (#837), where it was an ordinary entry under the
+/// spelling relinking gave it (`car.N`, `secret.N`): the code
+/// `compile_for_inspection` answers, the path `(vm-compile …)` and
+/// `--dump` print, reads `car@linked` and `secret@linked`.
+///
+/// `g2` is compiled after the program defines `car`, so the template's
+/// `car` is relinked, not bound early: its call is an ordinary `Call` of
+/// the loaded operand, with no inline `Car` and no `CallPrimitive`,
+/// whatever the record's cell holds. `w` assigns the library's private
+/// `secret` through a template: a `StoreGlobal` of the linked operand.
+#[test]
+fn a_relinked_operand_is_printed_as_its_template_wrote_it() {
+    let interp = Interpreter::new(patina_vm::VmBackend::new());
+    interp
+        .eval_program_owned(&format!(
+            "{CARLIB}(define-library (t secretlib)
+  (export set-secret! get-secret)
+  (import (scheme base))
+  (begin
+    (define secret 42)
+    (define-syntax get-secret (syntax-rules () ((_) secret)))
+    (define-syntax set-secret! (syntax-rules () ((_ v) (set! secret v))))))
+(import (t secretlib))
+(define (car x) 'mine)"
+        ))
+        .expect("the libraries, the imports and the program's car");
+    let call = operands(
+        &interp
+            .backend()
+            .compile_for_inspection("(define (g2 p) (first-of p))")
+            .expect("compiles"),
+    );
+    assert_eq!(call.loads, ["car@linked"], "the callee's operand");
+    assert_eq!(
+        (call.calls, call.inline_cars, call.primitive_calls),
+        (1, 0, 0),
+        "a relinked callee is an ordinary call"
+    );
+    let store = operands(
+        &interp
+            .backend()
+            .compile_for_inspection("(define (w v) (set-secret! v) (get-secret))")
+            .expect("compiles"),
+    );
+    assert_eq!(store.stores, ["secret@linked"], "the assignment's operand");
+    assert_eq!(store.loads, ["secret@linked"], "the read's operand");
+
+    let program = format!(
+        "{CARLIB}(define-library (t secretlib)
+  (export set-secret! get-secret)
+  (import (scheme base))
+  (begin
+    (define secret 42)
+    (define-syntax get-secret (syntax-rules () ((_) secret)))
+    (define-syntax set-secret! (syntax-rules () ((_ v) (set! secret v))))))
+(import (t secretlib))
+(define (car x) 'mine)
+(define secret 'program)
+(define (g2 p) (first-of p))
+(define (w v) (set-secret! v) (get-secret))
+(list (g2 '(1 2)) (w 7) (car '(1 2)) secret)"
+    );
+    let expected = "(1 7 mine program)";
+    assert_eq!(eval(&program), expected, "VM");
+    assert_eq!(
+        common::eval_program_tree_walker(&program),
+        expected,
+        "tree-walker"
+    );
+}
+
 /// A template's `car` and the program's own `car` in one procedure stay two
 /// operands (#837's `OperandKey`): once the program defines `car`, the
 /// template's still reads the library's binding and the program's reads

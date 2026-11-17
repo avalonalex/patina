@@ -1744,6 +1744,359 @@ fn the_trace_says_how_an_early_bound_reference_ended() {
     }
 }
 
+/// Set when this test binary runs itself as the child of
+/// [`the_trace_says_how_a_relinked_reference_ended`]: `<program>/<backend>`.
+const RELINK_TRACE_CASE: &str = "PATINA_HYGIENE_RELINK_TRACE_CASE";
+
+/// The library and imports of
+/// [`the_trace_says_how_a_relinked_reference_ended`]: `get-secret` reads
+/// and `set-secret!` assigns the library's private `secret`, and `beside`
+/// produces a definition of the private spelling `settled` beside a
+/// reference to it.
+const RELINKED: &str = "(define-library (hm relinked)\n  (import (scheme base))\n  \
+                        (export get-secret set-secret! beside get-settled)\n  (begin\n    \
+                        (define secret 42)\n    \
+                        (define-syntax get-secret (syntax-rules () ((_) secret)))\n    \
+                        (define-syntax set-secret! (syntax-rules () ((_ v) (set! secret v))))\n    \
+                        (define settled 'library)\n    \
+                        (define-syntax get-settled (syntax-rules () ((_) settled)))\n    \
+                        (define-syntax beside\n      (syntax-rules ()\n        \
+                        ((_ v) (begin (define settled 'introduced) (define v settled)))))))\n\
+                        (import (scheme base) (hm relinked))\n";
+
+/// The programs of [`the_trace_says_how_a_relinked_reference_ended`]: its
+/// name, its source after [`RELINKED`], its answer, and the spelling the
+/// template wrote for the reference the test follows.
+const RELINK_TRACE_PROGRAMS: &[(&str, &str, &str, &str)] = &[
+    (
+        "linked",
+        "(define secret 'program)\n(define (h) (get-secret))\n(list (h) secret)",
+        "(42 program)",
+        "secret",
+    ),
+    (
+        "assigned",
+        "(define secret 'program)\n(define (w) (set-secret! 7))\n(w)\n(list (get-secret) secret)",
+        "(7 program)",
+        "secret",
+    ),
+    (
+        "settled",
+        "(define (f) (beside w) w)\n(list (f) (get-settled))",
+        "(introduced library)",
+        "settled",
+    ),
+];
+
+/// What `PATINA_SCOPE_TRACE` says of a reference relinking linked (#837,
+/// `docs/MACRO_SYSTEM.md`), on each backend:
+///
+/// - **linked** (`get-secret`'s reference in a procedure): one
+///   `phase=desugar … via=relink op=get` record under the spelling the
+///   template wrote, `secret`, and no record of a backend's for the same
+///   reference after it: the tree-walker reads the link and the VM's
+///   renamer passes the node through.
+/// - **assigned** (`set-secret!`'s target): the same with `op=set`.
+/// - **settled** (`beside`'s reference to `settled`, expanded into a body
+///   beside the definition of `settled` its own expansion produces): the
+///   desugar record under the written spelling, and then the backend's own
+///   resolution of the reference, `via=scoped`, since settling took the
+///   link back at the form's end and gave the reference the spelling its
+///   definition has, `phase=compile` on the VM and `phase=run` on the
+///   tree-walker.
+///
+/// The trace's sink is read once per process, so each program and backend
+/// runs in a child process, as in
+/// [`the_trace_says_how_an_early_bound_reference_ended`].
+#[test]
+fn the_trace_says_how_a_relinked_reference_ended() {
+    if let Ok(case) = std::env::var(RELINK_TRACE_CASE) {
+        let (program, backend) = case.split_once('/').expect("<program>/<backend>");
+        let &(_, source, expected, _) = RELINK_TRACE_PROGRAMS
+            .iter()
+            .find(|(name, _, _, _)| *name == program)
+            .expect("a program");
+        assert_eq!(
+            answer(&format!("{RELINKED}{source}"), backend == "vm"),
+            expected
+        );
+        return;
+    }
+    for &(program, _, _, written) in RELINK_TRACE_PROGRAMS {
+        for backend in ["vm", "tree-walker"] {
+            let what = format!("{program} on the {backend}");
+            let trace = traced_child(
+                "the_trace_says_how_a_relinked_reference_ended",
+                RELINK_TRACE_CASE,
+                &format!("{program}/{backend}"),
+                &what,
+            );
+            let op = if program == "assigned" { "set" } else { "get" };
+            let resolves: Vec<&str> = trace
+                .lines()
+                .filter(|line| line.starts_with("RESOLVE ") && line.ends_with(&format!(" op={op}")))
+                .collect();
+            let relinked: Vec<usize> = (0..resolves.len())
+                .filter(|&i| resolves[i].contains(&format!(" via=relink op={op}")))
+                .collect();
+            // `settled` also expands `get-settled`, after the procedure:
+            // the reference it follows is the first.
+            let expected = if program == "settled" { 2 } else { 1 };
+            assert_eq!(
+                relinked.len(),
+                expected,
+                "{what}: relinked references: {:#?}",
+                relinked.iter().map(|&i| resolves[i]).collect::<Vec<_>>()
+            );
+            let at = relinked[0];
+            assert_eq!(trace_field(resolves[at], "phase"), "desugar", "{what}");
+            assert_eq!(
+                trace_field(resolves[at], "name"),
+                format!("{written:?}"),
+                "{what}: the record names the spelling the template wrote"
+            );
+            assert_eq!(trace_field(resolves[at], "cands"), "0", "{what}");
+            let reference = trace_field(resolves[at], "ref");
+            let after: Vec<&str> = resolves[at + 1..]
+                .iter()
+                .copied()
+                .filter(|line| trace_field(line, "ref") == reference)
+                .collect();
+            let phase = if backend == "vm" { "compile" } else { "run" };
+            match program {
+                "settled" => {
+                    assert_eq!(after.len(), 1, "{what}: {resolves:#?}");
+                    assert_eq!(trace_field(after[0], "phase"), phase, "{what}: {after:?}");
+                    assert_eq!(trace_field(after[0], "via"), "scoped", "{what}: {after:?}");
+                    // The definition is named by the spelling relinking
+                    // gave, which the reference has again: read from the
+                    // trace, never computed.
+                    let minted = trace_field(after[0], "name");
+                    assert!(
+                        minted.starts_with("\"settled") && minted != "\"settled\"",
+                        "{what}: settled under the written spelling: {after:?}"
+                    );
+                }
+                _ => assert!(after.is_empty(), "{what}: resolved again: {after:#?}"),
+            }
+        }
+    }
+}
+
+/// The scope trace of this test binary run as a child with `variable` set
+/// to `case`, for the test `test`, which must pass in it.
+fn traced_child(test: &str, variable: &str, case: &str, what: &str) -> String {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let trace_path = dir.path().join("trace.txt");
+    let child = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .env(variable, case)
+        .env("PATINA_SCOPE_TRACE", &trace_path)
+        .args(["--exact", test, "--test-threads=1"])
+        .output()
+        .expect("run the child");
+    assert!(
+        child.status.success(),
+        "{what}: the child failed: {}\n{}{}",
+        child.status,
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+    let trace = std::fs::read_to_string(&trace_path).expect("the scope trace");
+    assert!(
+        trace.starts_with("RUN pid="),
+        "{what}: the trace did not run"
+    );
+    trace
+}
+
+/// The value of the field `key` of a trace record.
+fn trace_field(line: &str, key: &str) -> String {
+    let start = line
+        .find(&format!(" {key}="))
+        .unwrap_or_else(|| panic!("no {key} in {line}"))
+        + key.len()
+        + 2;
+    line[start..].split(' ').next().unwrap_or("").to_string()
+}
+
+/// Set when this test binary runs itself as the child of
+/// [`every_relinking_writes_a_record_of_its_target`]: `<case>/<backend>`.
+const RELINK_RECORD_CASE: &str = "PATINA_HYGIENE_RELINK_RECORD_CASE";
+
+/// The programs of [`every_relinking_writes_a_record_of_its_target`], one
+/// for each kind of target relinking names: the case, the program, its
+/// answer, the name the template wrote, and the kind the record says.
+const RELINK_RECORD_PROGRAMS: &[(&str, &str, &str, &str, &str)] = &[
+    (
+        "byname",
+        "(define-library (hm rec-name)\n  (import (scheme base))\n  (export get-secret)\n  \
+         (begin (define secret 42)\n    \
+         (define-syntax get-secret (syntax-rules () ((_) secret)))))\n\
+         (import (scheme base) (hm rec-name))\n(define (h) (get-secret))\n(h)",
+        "42",
+        "secret",
+        "byname",
+    ),
+    (
+        "introduced",
+        "(define-library (hm rec-intro)\n  (import (scheme base))\n  (export get1 bump1!)\n  \
+         (begin (define count 100)\n    \
+         (define-syntax def-counter\n      (syntax-rules ()\n        ((_ getter bumper)\n         \
+         (begin (define count 0)\n                \
+         (define-syntax getter (syntax-rules () ((_) count)))\n                \
+         (define-syntax bumper\n                  \
+         (syntax-rules () ((_) (set! count (+ count 1)))))))))\n    \
+         (def-counter get1 bump1!)))\n\
+         (import (scheme base) (hm rec-intro))\n(bump1!)\n(get1)",
+        "1",
+        "count",
+        "introduced",
+    ),
+    // A keyword, which is never emitted as a reference: its record is the
+    // only one the trace has of the spelling relinking gave it.
+    (
+        "scoped-keyword",
+        "(define-library (hm rec-splice)\n  (import (scheme base) (srfi 188))\n  (export answer)\n  \
+         (begin (splicing-let-syntax ((helper (syntax-rules () ((_) 53))))\n    \
+         (define-syntax answer (syntax-rules () ((_) (helper)))))))\n\
+         (import (scheme base) (hm rec-splice))\n(answer)",
+        "53",
+        "helper",
+        "scoped-keyword",
+    ),
+];
+
+/// A relink target with no record, which no program makes: a raw frame's
+/// own variable, built through the frame API on the tree-walker. A macro
+/// defined in the frame `outer` names its variable `x`, and is used in a
+/// frame beneath it that has an `x` of its own. `Environment::relink_record`
+/// answers no record for a frame's variable, so the mention gets no link.
+/// The answer is what the mention reads without one.
+#[allow(
+    deprecated,
+    reason = "a raw frame is what makes a relink target with no record: `with_parent` goes at \
+              stage 5e (#831)"
+)]
+fn a_relink_target_with_no_record() -> String {
+    use patina_interpreter::{Backend, Environment};
+    use std::rc::Rc;
+    let interp = common::tree_walker_interpreter();
+    interp.eval_program("(import (scheme base))").unwrap();
+    let heap = interp.backend().heap().clone();
+    let outer = Rc::new(Environment::with_parent(interp.global_env()));
+    let inner = Rc::new(Environment::with_parent(Rc::clone(&outer)));
+    let symbol = |name: &str| heap.borrow_mut().intern_symbol(name);
+    outer.define(&heap, "x", symbol("outer"));
+    inner.define(&heap, "x", symbol("inner"));
+    let held_outer = heap.borrow().hold_environment(Rc::clone(&outer));
+    let held_inner = heap.borrow().hold_environment(Rc::clone(&inner));
+    interp
+        .eval_str_in(
+            &held_outer,
+            "(define-syntax read-x (syntax-rules () ((_) x)))",
+        )
+        .unwrap();
+    let read = interp.eval_str_in(&held_inner, "(read-x)").unwrap();
+    interp.display_tagged(&read)
+}
+
+/// Every relinking writes a `RELINK` record to the scope trace (#837): the
+/// name the template wrote, the spelling the mention was given, the scope
+/// of the expansion that relinked it, the kind of target, and whether the
+/// target had a record to link. One program for each kind, on each
+/// backend:
+///
+/// - **byname**: a library's private variable, `target=byname`.
+/// - **introduced**: a definer's introduced state, `target=introduced`.
+/// - **scoped-keyword**: a splice's private keyword, `target=scoped-keyword`.
+///   A keyword is expanded and never emitted as a reference, so no
+///   `RESOLVE … via=relink` record names its spelling: this record is what
+///   a check of the spellings relinking gave reads.
+/// - **none** (the tree-walker): a raw frame's own variable, which has no
+///   record ([`a_relink_target_with_no_record`]): `record=none`. No program
+///   reaches one, and a lane that reads its traces for `record=none` relies
+///   on this case to know the record would be written.
+///
+/// In each, a spelling a record gives is one the trace then resolves at
+/// `phase=desugar`: it is read from the record, never computed. (Not every
+/// record's: a body is scanned for the definitions its macro uses produce
+/// before it is desugared, the scan's expansions are relinked too, under
+/// spellings of their own, and thrown away.)
+#[test]
+fn every_relinking_writes_a_record_of_its_target() {
+    if let Ok(case) = std::env::var(RELINK_RECORD_CASE) {
+        let (name, backend) = case.split_once('/').expect("<case>/<backend>");
+        if name == "none" {
+            // Without a link the mention is read through the name relinking
+            // gave it in the use site, which reads the macro's frame.
+            assert_eq!(a_relink_target_with_no_record(), "outer");
+            return;
+        }
+        let &(_, source, expected, _, _) = RELINK_RECORD_PROGRAMS
+            .iter()
+            .find(|(case, _, _, _, _)| *case == name)
+            .expect("a program");
+        assert_eq!(answer(source, backend == "vm"), expected);
+        return;
+    }
+    let mut cases: Vec<(&str, &str, &str, &str)> = Vec::new();
+    for &(case, _, _, written, kind) in RELINK_RECORD_PROGRAMS {
+        cases.push((case, "vm", written, kind));
+        cases.push((case, "tree-walker", written, kind));
+    }
+    cases.push(("none", "tree-walker", "x", "byname"));
+    for (case, backend, written, kind) in cases {
+        let what = format!("{case} on the {backend}");
+        let trace = traced_child(
+            "every_relinking_writes_a_record_of_its_target",
+            RELINK_RECORD_CASE,
+            &format!("{case}/{backend}"),
+            &what,
+        );
+        let records: Vec<&str> = trace
+            .lines()
+            .filter(|line| {
+                line.starts_with("RELINK ") && trace_field(line, "name") == format!("{written:?}")
+            })
+            .collect();
+        assert!(!records.is_empty(), "{what}: no record of `{written}`");
+        let answered = if case == "none" { "none" } else { "linked" };
+        let mut resolved = 0;
+        for record in &records {
+            assert_eq!(trace_field(record, "phase"), "desugar", "{what}: {record}");
+            assert_eq!(trace_field(record, "target"), kind, "{what}: {record}");
+            assert_eq!(trace_field(record, "record"), answered, "{what}: {record}");
+            assert!(
+                trace_field(record, "guard").starts_with('S'),
+                "{what}: {record}"
+            );
+            let spelling = trace_field(record, "spelling");
+            assert_ne!(spelling, format!("{written:?}"), "{what}: {record}");
+            if trace.lines().any(|line| {
+                line.starts_with("RESOLVE ")
+                    && trace_field(line, "phase") == "desugar"
+                    && trace_field(line, "name") == spelling
+            }) {
+                resolved += 1;
+            }
+        }
+        assert!(
+            resolved > 0,
+            "{what}: nothing resolved a spelling relinking gave: {records:#?}"
+        );
+        // Every record of the run says whether its target had a record.
+        let none = trace
+            .lines()
+            .filter(|line| line.starts_with("RELINK ") && line.ends_with(" record=none"))
+            .count();
+        assert_eq!(
+            none > 0,
+            case == "none",
+            "{what}: {none} relinkings with no record"
+        );
+    }
+}
+
 /// A generated macro whose generator *also introduced the definition it
 /// mentions*, beside a plain definition of the same spelling, reaches the
 /// introduced one across a library boundary — `introduced`, as chibi 0.12 and

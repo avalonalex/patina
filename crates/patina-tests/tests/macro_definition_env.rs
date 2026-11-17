@@ -621,6 +621,92 @@ fn a_definition_over_an_alias_does_not_capture_the_next_expansion() {
     );
 }
 
+/// A library whose macros read and assign its private `secret`, use its
+/// private keyword `priv` as a value, and tell the spelling a template's
+/// `secret` has in an expansion: `(spell-secret)` hands it to a quoting
+/// macro, and a relinked identifier used as data keeps the spelling
+/// relinking gave it. A test that needs that spelling reads it so, and
+/// never computes it.
+const LEAK: &str = "(define-library (t leak)
+  (export get-secret bump-secret! spell-secret priv-as-a-value)
+  (import (scheme base))
+  (begin
+    (define secret 42)
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax spell-secret (syntax-rules () ((_) (quote-it secret))))
+    (define-syntax get-secret (syntax-rules () ((_) secret)))
+    (define-syntax bump-secret! (syntax-rules () ((_) (set! secret (+ secret 1)))))
+    (define-syntax priv (syntax-rules () ((_ x) x)))
+    (define-syntax priv-as-a-value (syntax-rules () ((_) (list priv))))))
+(import (scheme base) (t leak))
+";
+
+/// The spelling relinking gives a template's `secret` is no name the code
+/// already compiled reads: `h` and `b` expanded `get-secret` and
+/// `bump-secret!` before the program defined that spelling, and still read
+/// and assign the library's variable, as does an expansion after the
+/// definition; the program's definition is the program's own. chibi 0.12
+/// and Gauche 0.9.15 answer the same for a name the program defines.
+/// Before #837's second PR `h` read by name, and answered `mine`.
+fn defining_the_relinked_spelling<B: patina_runtime::Backend>(
+    interp: patina_interpreter::Interpreter<B>,
+) -> [String; 2] {
+    interp
+        .eval_program(&format!(
+            "{LEAK}(define (h) (get-secret)) (define (b) (bump-secret!))"
+        ))
+        .unwrap();
+    let spelling = interp.display_tagged(interp.eval_str("(spell-secret)").unwrap());
+    assert!(
+        spelling.starts_with("secret") && spelling != "secret",
+        "the spelling relinking gave `secret`, read from an expansion: {spelling}"
+    );
+    interp
+        .eval_program(&format!("(define {spelling} 'mine)"))
+        .unwrap();
+    let after = interp
+        .eval_str("(let* ((bumped (b)) (read (h))) (list read (get-secret)))")
+        .unwrap();
+    let own = interp.eval_str(&spelling).unwrap();
+    [interp.display_tagged(after), interp.display_tagged(own)]
+}
+
+#[test]
+fn a_definition_of_a_relinked_spelling_captures_nothing() {
+    let expected = ["(43 43)".to_string(), "mine".to_string()];
+    assert_eq!(
+        defining_the_relinked_spelling(common::vm_interpreter()),
+        expected,
+        "VM"
+    );
+    assert_eq!(
+        defining_the_relinked_spelling(common::tree_walker_interpreter()),
+        expected,
+        "tree-walker"
+    );
+}
+
+/// A desugar-time error that names a relinked identifier names it as its
+/// template wrote it: the library's private keyword `priv` used as a
+/// value is refused as `priv`, where the message read `priv.N`, the
+/// spelling relinking gave it.
+#[test]
+fn a_relinked_keyword_used_as_a_value_is_named_as_written() {
+    let program = format!("{LEAK}(priv-as-a-value)");
+    for (backend, message) in [
+        ("VM", common::try_eval_program_vm(&program).unwrap_err()),
+        (
+            "tree-walker",
+            common::try_eval_program_tree_walker(&program).unwrap_err(),
+        ),
+    ] {
+        assert!(
+            message.contains("invalid use of syntax as a value: `priv` is a macro"),
+            "{backend}: {message}"
+        );
+    }
+}
+
 /// One alias per target means two expansions of a macro share a spelling for
 /// its private name, so the spelling cannot keep them apart: here the outer
 /// expansion's `let` binds `helper` and the inner expansion, nested in its

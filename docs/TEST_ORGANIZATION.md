@@ -1922,11 +1922,13 @@ beside calls of one binding bound early and late; and a private name for
 `call-with-values` or `dynamic-wind`, which the library re-points. The
 same four stress counts were re-pinned.
 
-The same PR's plumbing makes no relinked link in any program. Part of it
-is on every program's path already: the VM compiler reads each link's
-kind, and a macro object is allocated with no relinks, which the
-collector's arm then loops over. What makes a relinked link or stores a
-relink is called by nothing but its tests, which build each part by hand.
+The same PR's plumbing made no relinked link in any program when it
+landed, and its tests build each part by hand. Part of it was on every
+program's path from the start: the VM compiler reads each link's kind,
+and a macro object is allocated with no relinks, which the collector's
+arm then loops over. The desugarer makes a relinked link for every mention
+an expansion relinks since the switch's first step (below). What stores a
+relink is called by nothing but its tests.
 The pool's
 `a_link_keeps_its_kind_through_the_pool` (an early and a relinked link of
 one record are two links, each read from its own entry, and neither kind
@@ -1983,6 +1985,41 @@ keyed by its link's kind as a reference's is; and an early-bound
 `call-with-values` keeping its sequence beside a relinked one over the
 same record). No stress count moved for
 them: they are unit tests of crates the stress lane does not run.
+
+The switch's first step makes the desugarer link what relinking renames:
+each relinked mention's record goes in a table of the form, and a
+reference the table answers is emitted as a link under the spelling its
+template wrote, while the alias is still installed beside it.
+`hygiene_matrix.rs`'s `the_trace_says_how_a_relinked_reference_ended`
+(a read and an assignment end `via=relink` under the written spelling and
+no backend resolves them after; one beside a definition its own expansion
+produces into a body is settled, and the backend's record follows under
+the spelling the definition has) and
+`every_relinking_writes_a_record_of_its_target` (a `RELINK` record for a
+library's private variable, a definer's introduced state and a splice's
+keyword, which is never emitted as a reference; and `record=none` for a
+raw frame's own variable, a target with no record that only the frame API
+makes, so that a lane read for `record=none` is known to write it).
+`vm_callprimitive.rs`'s
+`a_relinked_operand_is_printed_as_its_template_wrote_it` (`car@linked`
+loaded and called by an ordinary `Call`, `secret@linked` stored and read).
+`macro_definition_env.rs`'s
+`a_definition_of_a_relinked_spelling_captures_nothing` (a procedure
+compiled before a program's definition of the spelling relinking gave a
+template's `secret` reads and assigns the library's still; the spelling is
+read from an expansion, never computed) and
+`a_relinked_keyword_used_as_a_value_is_named_as_written`.
+`host_environments.rs`'s
+`code_compiled_before_a_hosts_nearer_definition_keeps_the_record_it_linked`
+and core's
+`a_visible_scoped_definition_links_its_entry_until_a_slot_is_defined` pin
+the two places a linked record departs from a read by name, a name
+reached through a host namespace's parent and a name-visible scoped
+definition, each of which later gains a nearer binding: no program
+without the host API reaches either. The stress counts of
+`hygiene_matrix`, `vm_callprimitive`, `macro_definition_env` and
+`host_environments` were re-pinned for the tests; the step itself moved
+none.
 
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):

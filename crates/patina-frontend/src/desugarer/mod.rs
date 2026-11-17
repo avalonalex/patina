@@ -76,9 +76,12 @@ pub use error::{DesugarError, Result};
 
 use crate::source_map::SourceMap;
 use patina_core::error::SourceLocation;
+use patina_core::scope_trace::RelinkKind;
 use patina_core::source_document::ExpansionChain;
 use patina_core::walk::OpenNodes;
-use patina_core::{CoreForm, Cx, Link, Lit, LiteralPool, NamespaceView, Value};
+use patina_core::{
+    CoreForm, Cx, Link, LinkKind, Lit, LiteralPool, NamespaceView, RelinkTarget, Value,
+};
 use patina_ir::{CoreExpr, CoreExprKind};
 use patina_macros::IdentifierKey;
 use patina_macros::macro_expander::utils::list_to_vec_with_tail;
@@ -367,11 +370,54 @@ struct EarlyBinding {
     imports: RefCell<FxHashMap<u64, FxHashMap<Rc<str>, ImportOf>>>,
     /// The definitions this form's expansions introduced: name, and scopes.
     introduced: RefCell<Vec<(Rc<str>, ScopeSet)>>,
+    /// The identifiers this form's expansions relinked (#837): the scope of
+    /// the expansion that relinked each, its guard, then the spelling the
+    /// identifier was given there. An identifier is one of them only if it
+    /// carries the guard, which the expander puts on what a template
+    /// introduced and on nothing a use site wrote, and is spelled so. Pool
+    /// indices and names, never a handle; emptied by `finish_form`.
+    relinked: RefCell<FxHashMap<ScopeId, FxHashMap<Rc<str>, Relinked>>>,
+    /// Whether `relinked` holds anything: the test in front of every lookup
+    /// of it, so that a form that relinks nothing pays one load for each.
+    any_relinked: Cell<bool>,
+    /// The relinked references this form emitted: the spelling the template
+    /// wrote, which the emitted node carries, the occurrence's scopes, and
+    /// the spelling relinking gave it. What settling needs to give a
+    /// reference back to the spelling its definition has
+    /// (`Desugarer::settle_early_bindings`).
+    relinked_emits: RefCell<Vec<RelinkedEmit>>,
 }
 
-/// What `Desugarer::settle_early_bindings` reads of a finished form: the
-/// definitions it introduced, and whether it linked a reference early.
-type FinishedForm = (Vec<(Rc<str>, ScopeSet)>, bool);
+/// What one expansion's relinking gave one spelling (#837).
+#[derive(Clone)]
+struct Relinked {
+    /// The link to the target's record, in this form's pool
+    /// (`LinkKind::Relinked`).
+    link: Link,
+    /// The spelling the template wrote, for the emitted node and for
+    /// messages.
+    written: Rc<str>,
+}
+
+/// A relinked reference a form emitted (`EarlyBinding::relinked_emits`).
+struct RelinkedEmit {
+    /// The spelling the template wrote, which the node carries.
+    written: Rc<str>,
+    /// The occurrence's scopes.
+    scopes: ScopeSet,
+    /// The spelling relinking gave it.
+    spelling: Rc<str>,
+}
+
+/// What `Desugarer::settle_early_bindings` reads of a finished form.
+struct FinishedForm {
+    /// The definitions it introduced: name, and scopes.
+    introduced: Vec<(Rc<str>, ScopeSet)>,
+    /// Whether it linked a reference early.
+    linked: bool,
+    /// The relinked references it emitted.
+    relinked_emits: Vec<RelinkedEmit>,
+}
 
 impl EarlyBinding {
     /// Whether no form is in progress — what `desugar_tagged` finds on entry.
@@ -380,17 +426,75 @@ impl EarlyBinding {
             && !self.linked.get()
             && self.imports.borrow().is_empty()
             && self.introduced.borrow().is_empty()
+            && self.relinked.borrow().is_empty()
+            && !self.any_relinked.get()
+            && self.relinked_emits.borrow().is_empty()
     }
 
     /// Forget the form, handing back what settling it needs.
     fn finish_form(&self) -> FinishedForm {
         self.foreign.borrow_mut().clear();
         self.imports.borrow_mut().clear();
-        (
-            std::mem::take(&mut *self.introduced.borrow_mut()),
-            self.linked.replace(false),
-        )
+        self.relinked.borrow_mut().clear();
+        self.any_relinked.set(false);
+        FinishedForm {
+            introduced: std::mem::take(&mut *self.introduced.borrow_mut()),
+            linked: self.linked.replace(false),
+            relinked_emits: std::mem::take(&mut *self.relinked_emits.borrow_mut()),
+        }
     }
+
+    /// The guard and the pooled link of the identifier `name` at `scopes`,
+    /// if an expansion of this form relinked it (#837): the entry under the
+    /// **oldest** scope the identifier carries that has the spelling.
+    ///
+    /// At most one of its scopes has it: the identifier was renamed by one
+    /// expansion, whose scope it has carried since, and an expansion that
+    /// emitted it again relinked its own mentions under spellings of their
+    /// own. Asserted in debug builds.
+    fn relinked(&self, name: &str, scopes: &ScopeSet) -> Option<(ScopeId, Link)> {
+        let table = self.relinked.borrow();
+        let mut answers = scopes.iter().filter_map(|scope| {
+            let entry = table.get(scope)?.get(name)?;
+            Some((*scope, entry.link))
+        });
+        let found = answers.next();
+        debug_assert!(
+            found.is_none() || answers.next().is_none(),
+            "two expansions of one form relinked `{name}` at {scopes}"
+        );
+        found
+    }
+
+    /// The spelling the template wrote for the entry
+    /// [`relinked`](Self::relinked) answered under `guard`.
+    fn written(&self, guard: ScopeId, name: &str) -> Rc<str> {
+        Rc::clone(&self.relinked.borrow()[&guard][name].written)
+    }
+
+    /// Record that the expansion whose scope is `guard` relinked an
+    /// identifier it spelled `spelling`.
+    fn relink(&self, guard: ScopeId, spelling: Rc<str>, relinked: Relinked) {
+        self.relinked
+            .borrow_mut()
+            .entry(guard)
+            .or_default()
+            .insert(spelling, relinked);
+        self.any_relinked.set(true);
+    }
+}
+
+/// How a reference was answered (`Desugarer::resolve_reference`). `Copy`:
+/// every reference takes one back, and none of them should drop a string
+/// for it.
+#[derive(Clone, Copy)]
+enum Reached {
+    /// A binding whose scopes select it.
+    Scoped,
+    /// Its spelling, in the environment.
+    ByName,
+    /// The record an expansion of this form relinked it to (#837), pooled.
+    Relinked(Link),
 }
 
 /// Where definitions in a splicing syntax form belong. Its keyword scopes
@@ -1071,49 +1175,95 @@ impl<'a> Desugarer<'a> {
         &self,
         name: &str,
         scopes: &ScopeSet,
-        cx: &Cx<'gc>,
+        cx: &FormCx<'_, 'gc>,
     ) -> Result<Option<SyntaxRef<'gc>>> {
         self.resolve_reference(name, scopes, cx)
             .map(|(syntax, _)| syntax)
     }
 
-    /// [`resolve_syntax`], also saying whether the name was answered **by its
-    /// spelling** rather than by a binding whose scopes select it — which is
-    /// the first thing early binding asks of a reference (`early_bound`), and
-    /// which this one resolution already knows.
+    /// [`resolve_syntax`], also saying how the name was answered
+    /// ([`Reached`]): by a binding whose scopes select it, **by its
+    /// spelling**, which is the first thing early binding asks of a
+    /// reference (`early_bound`), or by the record an expansion of this form
+    /// relinked it to (#837).
+    ///
+    /// The order is the rule. A binding whose scopes select the identifier
+    /// comes first, as it always has: a template's own binder of a
+    /// relinked spelling, a definition already declared at its scopes, a
+    /// keyword an expansion defined (`define_syntax_binding`). Where none
+    /// does, the form's table is asked before the spelling, and only for
+    /// an identifier that carries scopes of its own, since only an
+    /// identifier a template introduced can be a relinked one
+    /// (`EarlyBinding::relinked`). So the spelling relinking gave an
+    /// identifier names nothing to this resolution: a program's own
+    /// definition of that spelling is the program's, and does not capture
+    /// the reference. A keyword's record answers its macro or its
+    /// core-syntax marker, as a binding would.
     ///
     /// [`resolve_syntax`]: Self::resolve_syntax
     fn resolve_reference<'gc>(
         &self,
         name: &str,
         scopes: &ScopeSet,
-        cx: &Cx<'gc>,
-    ) -> Result<(Option<SyntaxRef<'gc>>, bool)> {
+        cx: &FormCx<'_, 'gc>,
+    ) -> Result<(Option<SyntaxRef<'gc>>, Reached)> {
         // A reference written in source carries no scopes of its own, but it is
         // not therefore at top level: the scopes it stands in are the ones the
         // desugarer has accumulated on the way here. Passing those is what lets
         // an enclosing binder be *seen* rather than merely vetoed by spelling,
         // and so what orders an inner keyword ahead of an outer variable. A
         // macro-introduced reference already carries its own and keeps them.
-        let scopes = if scopes.is_empty() {
+        let own = scopes;
+        let scopes = if own.is_empty() {
             &self.current_scopes
         } else {
-            scopes
+            own
         };
-        let (value, selected) = cx
+        let (mut value, selected) = cx
             .resolve_with_scopes(&self.expansion_env(&self.env, cx), name, scopes)
-            .map_err(|e| DesugarError::AmbiguousReference(e.to_string()))?;
-        let by_name = !selected;
+            .map_err(|mut ambiguous| {
+                if let Some(written) = self.written_spelling(name, own) {
+                    ambiguous.name = written.to_string();
+                }
+                DesugarError::AmbiguousReference(ambiguous.to_string())
+            })?;
+        let mut reached = if selected {
+            Reached::Scoped
+        } else {
+            Reached::ByName
+        };
+        if !selected
+            && !own.is_empty()
+            && self.early.any_relinked.get()
+            && let Some((_, link)) = self.early.relinked(name, own)
+        {
+            // The pool is this form's, so the link is one of its entries,
+            // and its record is live beneath the form's context.
+            value = cx.linked_value(cx.linkable(cx.literals, link));
+            reached = Reached::Relinked(link);
+        }
         let Some(tv) = value else {
-            return Ok((None, by_name));
+            return Ok((None, reached));
         };
         if let Some(form) = cx.get_core_syntax(tv) {
-            return Ok((Some(SyntaxRef::CoreSyntax(form)), by_name));
+            return Ok((Some(SyntaxRef::CoreSyntax(form)), reached));
         }
         Ok((
             cx.get_macro(tv).map(|body| SyntaxRef::Macro(tv, body)),
-            by_name,
+            reached,
         ))
+    }
+
+    /// The spelling a template wrote for the identifier `name` at `scopes`,
+    /// if an expansion of this form relinked it (#837): what a message
+    /// names it by, since the spelling relinking gave it is no name a
+    /// program wrote.
+    fn written_spelling(&self, name: &str, scopes: &ScopeSet) -> Option<Rc<str>> {
+        if scopes.is_empty() || !self.early.any_relinked.get() {
+            return None;
+        }
+        let (guard, _) = self.early.relinked(name, scopes)?;
+        Some(self.early.written(guard, name))
     }
 
     /// Reject a reference to syntax where a value is expected.
@@ -1129,22 +1279,88 @@ impl<'a> Desugarer<'a> {
     /// Quoted data never reaches here (it desugars to a literal), and neither
     /// do `syntax-rules` patterns and templates, which the macro expander
     /// handles.
-    fn reject_syntax_as_value(&self, name: &str, scopes: &ScopeSet, cx: &Cx<'_>) -> Result<()> {
+    fn reject_syntax_as_value(
+        &self,
+        name: &str,
+        scopes: &ScopeSet,
+        cx: &FormCx<'_, '_>,
+    ) -> Result<()> {
         self.checked_reference(name, scopes, cx).map(|_| ())
     }
 
-    /// [`reject_syntax_as_value`], handing back whether the reference was
-    /// answered by its spelling — the one resolution serving both that check
-    /// and early binding.
+    /// [`reject_syntax_as_value`], handing back how the reference was
+    /// answered — the one resolution serving that check, early binding and
+    /// a relinked reference's link.
     ///
     /// [`reject_syntax_as_value`]: Self::reject_syntax_as_value
-    fn checked_reference(&self, name: &str, scopes: &ScopeSet, cx: &Cx<'_>) -> Result<bool> {
+    fn checked_reference(
+        &self,
+        name: &str,
+        scopes: &ScopeSet,
+        cx: &FormCx<'_, '_>,
+    ) -> Result<Reached> {
         match self.resolve_reference(name, scopes, cx)? {
-            (None, by_name) => Ok(by_name),
-            (Some(found), _) => Err(DesugarError::InvalidSyntax(format!(
-                "invalid use of syntax as a value: `{name}` is {}",
-                found.describe()
-            ))),
+            (None, reached) => Ok(reached),
+            (Some(found), _) => {
+                // A relinked identifier is named as its template wrote it.
+                let written = self.written_spelling(name, scopes);
+                Err(DesugarError::InvalidSyntax(format!(
+                    "invalid use of syntax as a value: `{}` is {}",
+                    written.as_deref().unwrap_or(name),
+                    found.describe()
+                )))
+            }
+        }
+    }
+
+    /// The name and the link a reference to `name` at `scopes`, or an
+    /// assignment of it, is emitted with, having refused syntax where a
+    /// value is expected.
+    ///
+    /// A reference relinking linked (#837) carries **the spelling its
+    /// template wrote** and the link to the record of its macro's binding:
+    /// a linked node's name is what a backend prints, in an error, a
+    /// disassembly and the trace, and never what it reads by. Early binding
+    /// is not asked about it. Any other reference keeps its name, and is
+    /// bound early where `early_bound` says so.
+    fn linked_reference(
+        &self,
+        name: Rc<str>,
+        scopes: &ScopeSet,
+        op: patina_core::scope_trace::Op,
+        cx: &mut FormCx<'_, '_>,
+    ) -> Result<(Rc<str>, Option<Link>)> {
+        match self.checked_reference(&name, scopes, cx)? {
+            Reached::Relinked(link) => {
+                let (guard, _) = self
+                    .early
+                    .relinked(&name, scopes)
+                    .expect("the entry the resolution answered");
+                let written = self.early.written(guard, &name);
+                self.early.relinked_emits.borrow_mut().push(RelinkedEmit {
+                    written: Rc::clone(&written),
+                    scopes: scopes.clone(),
+                    spelling: name,
+                });
+                // After this neither backend resolves the reference, so
+                // this is where the trace says how it was bound, unless
+                // settling takes the link back at the form's end
+                // (`settle_early_bindings`).
+                patina_core::scope_trace::resolve(
+                    &written,
+                    scopes,
+                    0,
+                    None,
+                    op,
+                    patina_core::scope_trace::Outcome::Relink,
+                );
+                Ok((written, Some(link)))
+            }
+            reached => {
+                let by_name = matches!(reached, Reached::ByName);
+                let link = self.early_bound(&name, scopes, by_name, op, cx);
+                Ok((name, link))
+            }
         }
     }
 
@@ -1198,6 +1414,14 @@ impl<'a> Desugarer<'a> {
     /// A written macro mentions a name under one identity, its definition
     /// scopes. A generated one can mention it under several, so the decision
     /// and the alias are per identity ([`Aliases`]).
+    ///
+    /// Each mention that gets an alias also gets an entry in the form's
+    /// table (#837, `note_relinked`): the record of the binding it means,
+    /// asked of the macro's own environment (`Cx::relink_link`, the owner's
+    /// ruling E1), under the expansion's scope and the alias's spelling.
+    /// `resolve_reference` answers an identifier of the expansion from the
+    /// table before its spelling, so a reference among them is emitted as a
+    /// link to that record and the alias is no longer what it reads by.
     fn link_definition_env_refs<'gc>(
         &self,
         expanded: Value<'gc>,
@@ -1406,6 +1630,13 @@ impl<'a> Desugarer<'a> {
                         .flatten()
                         != Some(scopes.clone())
                     {
+                        // The keyword's record, asked of the environment
+                        // that holds it (#837).
+                        let linkable = cx.relink_link(
+                            NamespaceView::of(&home),
+                            name,
+                            RelinkTarget::ScopedKeyword(&scopes),
+                        );
                         let alias = cx.relink_alias(
                             target,
                             home,
@@ -1413,6 +1644,14 @@ impl<'a> Desugarer<'a> {
                             Some(scopes),
                             identity,
                             || Rc::from(alias_name(name)),
+                        );
+                        self.note_relinked(
+                            expansion_scope,
+                            name,
+                            &alias,
+                            RelinkKind::ScopedKeyword,
+                            linkable,
+                            cx,
                         );
                         let symbol = cx.intern_symbol(&alias);
                         made.push((identity.clone(), symbol));
@@ -1450,6 +1689,24 @@ impl<'a> Desugarer<'a> {
                 // a remembered one is reused, and its symbol is already
                 // interned.
                 let mint = || Rc::from(alias_name(name));
+                // The target's record (#837), asked of the real definition
+                // environment, never of its declarations view: a
+                // declaration's cell is a location of this form's
+                // desugaring, not the cell the definition will have.
+                let (kind, linkable) = match &alias_to {
+                    None => (
+                        RelinkKind::ByName,
+                        cx.relink_link(NamespaceView::of(def_env), name, RelinkTarget::ByName),
+                    ),
+                    Some((home, found)) => (
+                        RelinkKind::Introduced,
+                        cx.relink_link(
+                            NamespaceView::of(home),
+                            name,
+                            RelinkTarget::Introduced(found),
+                        ),
+                    ),
+                };
                 let alias = match alias_to {
                     None => {
                         cx.relink_alias(target, def_env.clone(), name.clone(), None, identity, mint)
@@ -1463,6 +1720,7 @@ impl<'a> Desugarer<'a> {
                         mint,
                     ),
                 };
+                self.note_relinked(expansion_scope, name, &alias, kind, linkable, cx);
                 let symbol = cx.intern_symbol(&alias);
                 made.push((identity.clone(), symbol));
             }
@@ -1482,6 +1740,43 @@ impl<'a> Desugarer<'a> {
             open: RefCell::default(),
         };
         self.rewrite_refs(expanded, &renames, 0, cx)
+    }
+
+    /// Enter in the form's table what relinking gave one mention (#837): the
+    /// identifiers the expansion whose scope is `guard` introduced under
+    /// `spelling` mean the record `linkable` names, which is pooled here,
+    /// beneath the context that found it, and which the pool roots from
+    /// here on. `resolve_reference` answers them from the table.
+    ///
+    /// A target with no record (`linkable` is `None`: a frame's own
+    /// variable, which no program makes a relink target) gets no entry, and
+    /// the identifier is read through its spelling as before.
+    ///
+    /// Every relinking writes its record to the scope trace, with or
+    /// without a link: a keyword and a binder are never emitted as a
+    /// reference, so this is the only record of the spelling they were
+    /// given, and of a target that had no record.
+    fn note_relinked(
+        &self,
+        guard: ScopeId,
+        written: &Rc<str>,
+        spelling: &Rc<str>,
+        kind: RelinkKind,
+        linkable: Option<patina_core::Linkable<'_>>,
+        cx: &FormCx<'_, '_>,
+    ) {
+        patina_core::scope_trace::relink(written, spelling, guard, kind, linkable.is_some());
+        if let Some(linkable) = linkable {
+            let link = cx.literals.add_link(linkable);
+            self.early.relink(
+                guard,
+                Rc::clone(spelling),
+                Relinked {
+                    link,
+                    written: Rc::clone(written),
+                },
+            );
+        }
     }
 
     /// The use site's own name for the *location* a template's variable
@@ -1700,11 +1995,29 @@ impl<'a> Desugarer<'a> {
     /// The rest — a form with an internal `define` *and* an early-bound
     /// reference, which ordinary code does have — is rebuilt node by node,
     /// once.
-    fn settle_early_bindings(expr: CoreExpr, (introduced, linked): FinishedForm) -> CoreExpr {
-        if introduced.is_empty() || !linked {
+    fn settle_early_bindings(expr: CoreExpr, finished: FinishedForm) -> CoreExpr {
+        let FinishedForm {
+            introduced,
+            linked,
+            relinked_emits,
+        } = finished;
+        // A relinked reference has something to take back only where the
+        // form defined the spelling relinking gave it: a scan of two short
+        // lists, so that a form with a relinked reference and an internal
+        // `define` of some other name is not walked for it (#837).
+        let relinked = relinked_emits.iter().any(|emit| {
+            introduced
+                .iter()
+                .any(|(defined, _)| *defined == emit.spelling)
+        });
+        if introduced.is_empty() || !(linked || relinked) {
             return expr;
         }
-        fn settle(expr: &CoreExpr, introduced: &[(Rc<str>, ScopeSet)]) -> CoreExpr {
+        fn settle(
+            expr: &CoreExpr,
+            introduced: &[(Rc<str>, ScopeSet)],
+            emits: &[RelinkedEmit],
+        ) -> CoreExpr {
             let introduced_here = |name: &Rc<str>, scopes: &ScopeSet| {
                 introduced.iter().any(|(defined, at)| {
                     defined == name && patina_core::scope_resolve::is_candidate(at, scopes)
@@ -1713,7 +2026,7 @@ impl<'a> Desugarer<'a> {
             // Grown with the depth of the code (#617). The rebuild carries
             // every other node's link (`map_children`).
             let mut settled = patina_core::walk::ensure_sufficient_stack(|| {
-                expr.map_children(|child| settle(child, introduced))
+                expr.map_children(|child| settle(child, introduced, emits))
             });
             let (name, scopes, link) = match &mut settled.kind {
                 CoreExprKind::Var { name, scopes, link } => (name, scopes, link),
@@ -1725,12 +2038,33 @@ impl<'a> Desugarer<'a> {
                 } => (var, scopes, link),
                 _ => return settled,
             };
-            if link.is_some() && introduced_here(name, scopes) {
-                *link = None;
+            match link.map(Link::kind) {
+                None => {}
+                Some(LinkKind::Early) => {
+                    if introduced_here(name, scopes) {
+                        *link = None;
+                    }
+                }
+                // A relinked node carries the spelling its template wrote;
+                // the definition is named by the spelling relinking gave
+                // the binder with its references, which this occurrence
+                // had when it was emitted. Scopes are only ever added to
+                // an identifier, so two mentions of one written name do not
+                // come to share a scope set, and the pair names one emit.
+                Some(LinkKind::Relinked) => {
+                    let emit = emits
+                        .iter()
+                        .find(|emit| emit.written == *name && emit.scopes == *scopes)
+                        .expect("a relinked node was emitted by this form");
+                    if introduced_here(&emit.spelling, scopes) {
+                        *link = None;
+                        *name = Rc::clone(&emit.spelling);
+                    }
+                }
             }
             settled
         }
-        settle(&expr, &introduced)
+        settle(&expr, &introduced, &relinked_emits)
     }
 
     /// The alias for `tv`, if it is a reference *this expansion introduced*
@@ -2197,14 +2531,8 @@ impl<'a> Desugarer<'a> {
 
         // Identifier - variable reference with scopes (for hygiene)
         if let Some((name, scopes)) = cx.get_identifier_data_any(tagged) {
-            let by_name = self.checked_reference(&name, &scopes, cx)?;
-            let link = self.early_bound(
-                &name,
-                &scopes,
-                by_name,
-                patina_core::scope_trace::Op::Get,
-                cx,
-            );
+            let (name, link) =
+                self.linked_reference(name, &scopes, patina_core::scope_trace::Op::Get, cx)?;
             return Ok(CoreExpr::new(CoreExprKind::linked_var(name, scopes, link)));
         }
 
@@ -2764,14 +3092,8 @@ impl<'a> Desugarer<'a> {
         // same message it gives for `(list if)`; Gauche accepts it and then
         // breaks inside its own startup code. Without this, reading syntax was
         // an error while overwriting it silently succeeded.
-        let by_name = self.checked_reference(&name, &scopes, cx)?;
-        let link = self.early_bound(
-            &name,
-            &scopes,
-            by_name,
-            patina_core::scope_trace::Op::Set,
-            cx,
-        );
+        let (name, link) =
+            self.linked_reference(name, &scopes, patina_core::scope_trace::Op::Set, cx)?;
 
         let value = self.desugar_expression(args_vec[1], cx)?;
 
@@ -3069,6 +3391,20 @@ impl<'a> Desugarer<'a> {
     /// Top-level keywords keep their existing name visibility; #427 changes
     /// introduced variables only.
     ///
+    /// **Except a binder relinking renamed** (#837), which is bound at its
+    /// scopes at top level too. A template that defines a keyword spelled
+    /// as its library's private one has its binder renamed with its
+    /// references, and the references are answered by the form's table
+    /// where no binding's scopes select them (`resolve_reference`): bound
+    /// by name, the keyword the expansion itself introduced would be passed
+    /// over for the library's. Bound at the binder's scopes it is selected,
+    /// in the expansion that defined it and in every later expansion of a
+    /// macro generated there, whose identifiers carry those scopes; and two
+    /// runs of one definer keep two keywords, each under its own scopes.
+    /// Nothing else is bound by name for a spelling relinking gave: an
+    /// introduced `define` is declared at its scopes (#427), and the local
+    /// syntax forms bind in a frame at scopes.
+    ///
     /// Written through `cx`, whose heap a namespace's step borrows (#834).
     fn define_syntax_binding<'gc>(
         &self,
@@ -3082,8 +3418,16 @@ impl<'a> Desugarer<'a> {
             Some(context) => (context.env.as_ref(), &context.scopes),
             None => (env, &self.current_scopes),
         };
-        let binder_scopes = self.spliced_definition_scopes(binder_scopes);
-        if current_scopes.is_empty() {
+        // Asked before a splice's scopes are stripped: the table answers
+        // the identifier as the expansion left it.
+        let relinked_binder = self.written_spelling(&name, &binder_scopes).is_some();
+        let as_written = binder_scopes;
+        let binder_scopes = self.spliced_definition_scopes(as_written.clone());
+        if current_scopes.is_empty() && !relinked_binder {
+            debug_assert!(
+                self.written_spelling(&name, &as_written).is_none(),
+                "a relinked binder `{name}` bound by name"
+            );
             self.declarations
                 .borrow_mut()
                 .forget(env, &name, &ScopeSet::new());

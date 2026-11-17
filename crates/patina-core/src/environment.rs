@@ -6785,6 +6785,43 @@ mod relink_link_tests {
         );
     }
 
+    /// A namespace's name-visible scoped definition with no slot of the
+    /// name is what the name alone reaches, so a relink by name links its
+    /// entry's record; and a slot defined for the name afterwards is a
+    /// nearer binding, which `get` then reads and the earlier link does not
+    /// (the owner's ruling E1: the record the walk finds when it is asked).
+    /// The next ask links the slot's. No program makes the shape: on a VM
+    /// heap only the raw `define_scoped_definition` does, and the
+    /// tree-walker's `Define` step makes one in a run-time frame, which is
+    /// no macro's definition environment.
+    #[test]
+    fn a_visible_scoped_definition_links_its_entry_until_a_slot_is_defined() {
+        let heap = new_shared_heap();
+        let namespace = Rc::new(Environment::with_heap(&heap));
+        namespace.define_scoped_definition(&heap, Rc::from("x"), scopes(&[1]), n(1));
+        assert_eq!(namespace.get(&heap, "x"), Some(n(1)));
+        assert!(namespace.local_record("x").is_none(), "no slot of the name");
+
+        let entry = by_name(&heap, &namespace, "x").unwrap();
+        assert_eq!(entry.value(&heap.borrow()), Some(n(1)));
+
+        namespace.define(&heap, "x", n(2));
+        assert_eq!(
+            namespace.get(&heap, "x"),
+            Some(n(2)),
+            "the name reads the slot"
+        );
+        assert_eq!(
+            entry.value(&heap.borrow()),
+            Some(n(1)),
+            "the earlier link is the scoped entry's record still"
+        );
+        let slot = by_name(&heap, &namespace, "x").unwrap();
+        assert_eq!(slot.record(), namespace.local_record("x").unwrap());
+        assert_ne!(slot, entry);
+        assert_eq!(slot.value(&heap.borrow()), Some(n(2)));
+    }
+
     /// A frame's import has no record: the link is a fresh one over the
     /// import's cell at each ask, in no slot and counted nowhere, reading
     /// and locating the exporter's binding.

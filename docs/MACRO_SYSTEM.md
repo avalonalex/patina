@@ -841,9 +841,33 @@ exists to catch.
 | `scopes` | what the binding is *filed under*. `{}` means the plain by-name table, where set-of-scopes resolution cannot see it. |
 | `byname` | `visible_by_name` — whether a name-only lookup may also reach it. Source-written parameters and definitions need this view; introduced definitions stay scope-only. |
 | `cands` | how many bindings **passed** `is_candidate` — the same meaning at every site, so the backends can be compared. |
-| `picked` / `via` | which binding won, and how it ended: `scoped`, `byname` (the rule declined and the by-name fallback answered), `unbound` (the rule declined and the fallback found nothing — on a name whose `BIND` shows a scoped binding, that is the fallback *refusing* a rejected binding, the family-36 rule at work), `ambiguous` (two candidates, neither more specific), `early-link` (`phase=desugar`, `cands=0`: the desugarer bound a library macro's reference to the binding its macro means, #438, and linked its record, #837, so no backend resolves it after, unless the same form's settling takes the link back, when a backend's record follows). At `phase=compile` the VM defers its fallback to runtime, so `byname` there means only "left to a by-name lookup". |
+| `picked` / `via` | which binding won, and how it ended: `scoped`, `byname` (the rule declined and the by-name fallback answered), `unbound` (the rule declined and the fallback found nothing — on a name whose `BIND` shows a scoped binding, that is the fallback *refusing* a rejected binding, the family-36 rule at work), `ambiguous` (two candidates, neither more specific), `early-link` (`phase=desugar`, `cands=0`: the desugarer bound a library macro's reference to the binding its macro means, #438, and linked its record, #837, so no backend resolves it after, unless the same form's settling takes the link back, when a backend's record follows), `relink` (`phase=desugar`, `cands=0`: the desugarer emitted a reference relinking had linked to its macro's own binding, #837, under the spelling the template wrote; it follows the resolution's own record for the spelling relinking gave the identifier, and is settled and followed as `early-link` is). At `phase=compile` the VM defers its fallback to runtime, so `byname` there means only "left to a by-name lookup". |
 | `op` | `get`, `set`, or `bind` for a binding occurrence being renamed. The VM's renamer serves all three through one function. |
 | `landed` | on `WROTE`: where a scoped write finally went. A write walks environment by environment, so its trace is a sequence; this is its conclusion. |
+
+A `RELINK` record is written for each mention relinking decides to point at
+its macro's own binding (#837), in every build, whether or not the mention is
+ever emitted as a reference (a keyword is expanded, a binder binds):
+
+```text
+RELINK  phase=desugar name="secret" spelling="secret.3" guard=S140 target=byname record=linked
+```
+
+| field | meaning |
+|---|---|
+| `name` | the spelling the template wrote. |
+| `spelling` | the spelling the mention has in the expansion. `RESOLVE` and `BIND` records name it by this one, except a `via=relink` record. |
+| `guard` | the scope of the expansion that relinked it, which every identifier it stands for carries. |
+| `target` | how the binding is named: `byname` (what the name reaches in the macro's environment), `introduced` (a definition a macro introduced, which the mention's scopes select), `scoped-keyword` (a keyword bound at exactly the mention's scopes, a splice's). |
+| `record` | `linked` where the target had a binding record, which the form's table then answers the identifier with; `none` where it had not, and the identifier is read through its spelling. No program reaches a `none`: a frame's own variable is one, which only the raw frame API makes a macro's free name. |
+
+Two checks read these records. The spellings they give must not meet the
+names of a run's `BIND … byname=true` records: nothing may be bound by name
+under a spelling relinking gave. And a `record=none` in a lane's traces is a
+relink target with no record that a program reached. A body is scanned for
+the definitions its macro uses produce before it is desugared, and the
+scan's expansions are relinked and recorded too, under spellings of their
+own.
 
 `via=byname` is common — every reference to a global from a scoped context is
 one — so treat it as a filter, not a verdict. What is worth grepping is

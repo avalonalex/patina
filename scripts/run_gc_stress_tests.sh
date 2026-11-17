@@ -383,7 +383,19 @@ fi
 # and scheme_suite's count at 4096, which four rows of
 # expansion/relinked-names.scm and one of splicing-libraries.scm raised
 # from 10648 to 10650 and left at 385 without stress, its test count and
-# minimum left)
+# minimum left; and four test counts re-pinned 2026-11-17 for the switch's
+# first step (#837), a relinked reference linked to its record:
+# hygiene_matrix's for two (what the scope trace says of a relinked
+# reference, linked and settled, and the record every relinking writes,
+# whose children run under the trace), which raised its count at 16 from
+# 21790 to 22238 and left it at 6 without stress; vm_callprimitive's for a
+# relinked operand's printed spelling, from 1455 to 1565, and 0 without;
+# macro_definition_env's for two (a definition of a relinked spelling
+# captures nothing; a relinked keyword used as a value is named as
+# written), from 34917 to 35062, and 107 without; and host_environments's
+# for code compiled before a host's nearer definition, from 167613 to
+# 167687, and 761 without; the minimums left. The step itself moved no
+# count: gc_vm, gc_tree_walker and scheme_suite read as they did)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -393,14 +405,14 @@ TARGETS=(
     "finished_forms_release_code 16 2040 12"  # 4057 (15)
     "gc_tree_walker 16 70005 40"              # 84050 (55960)
     "gc_vm 16 19868 53"                       # 39737 (17762)
-    "host_environments 16 83806 33"           # 167613 (761)
-    "hygiene_matrix 16 11136 18"              # 21790 (6)
+    "host_environments 16 83806 34"           # 167687 (761)
+    "hygiene_matrix 16 11136 20"              # 22238 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
-    "macro_definition_env 16 16626 35"        # 34917 (107): see the header
+    "macro_definition_env 16 16626 37"        # 35062 (107): see the header
     "owned_handles 16 62714 9"                # 125648 (14)
     "rooted_loading 16 371 6"                 # 1269 (10)
-    "vm_callprimitive 16 545 20"              # 1455 (0)
+    "vm_callprimitive 16 545 21"              # 1565 (0)
     "scheme_suite 4096 1534 11"               # 10650 (385): see the header
 )
 

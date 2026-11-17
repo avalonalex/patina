@@ -1084,6 +1084,67 @@ fn no_namespace_read_answers_a_record() {
 /// procedures, so that expanding it makes no alias.
 const RECORDS: &str = "(cdr (assq 'binding-records (gc-stats)))";
 
+/// A relinked reference links the record its macro's environment finds for
+/// the name when it is expanded, and keeps it (#837, the owner's ruling
+/// E1). Only a host namespace can show it: its names are reached through
+/// its parent, the global namespace, until it defines them.
+///
+/// The host namespace `first` defines `read-x`, whose template names `x`,
+/// which `first` reaches in the global namespace. The host binds the macro
+/// in a second host namespace, which has an `x` of its own, so each
+/// expansion there relinks the template's `x`. `early` expands it while
+/// `first` still reaches the global `x`; then `first` defines an `x` of
+/// its own, nearer than the global one. `early`, compiled before that
+/// definition, goes on reading the global namespace's record, which a
+/// later assignment of the global `x` shows; an expansion after it links
+/// `first`'s. Until #837's second PR the reference was read by name
+/// through `first` each time it ran, and `early` answered `first`'s `x`
+/// once that was defined.
+fn linked_before_a_nearer_definition<B: Backend>(interp: Interpreter<B>) -> [String; 3] {
+    interp
+        .eval_program_owned("(import (scheme base)) (define x 'global)")
+        .unwrap();
+    let first = interp.new_environment();
+    interp
+        .eval_program_in(&first, "(define-syntax read-x (syntax-rules () ((_) x)))")
+        .unwrap();
+    let second = interp.new_environment();
+    let read_x = interp.lookup_in(&first, "read-x").expect("the macro");
+    interp.define_in(&second, "read-x", &read_x);
+    interp
+        .eval_program_in(&second, "(define x 'second) (define (early) (read-x))")
+        .unwrap();
+    let shown = |source: &str| {
+        let value = interp.eval_str_in(&second, source).unwrap();
+        interp.display_tagged(&value)
+    };
+    let before = shown("(list (early) (read-x) x)");
+    interp.eval_program_in(&first, "(define x 'first)").unwrap();
+    let after = shown("(list (early) (read-x) x)");
+    interp.eval_program_owned("(set! x 'global-again)").unwrap();
+    let assigned = shown("(list (early) (read-x) x)");
+    [before, after, assigned]
+}
+
+#[test]
+fn code_compiled_before_a_hosts_nearer_definition_keeps_the_record_it_linked() {
+    let expected = [
+        "(global global second)".to_string(),
+        "(global first second)".to_string(),
+        "(global-again first second)".to_string(),
+    ];
+    assert_eq!(
+        linked_before_a_nearer_definition(vm_interpreter()),
+        expected,
+        "VM"
+    );
+    assert_eq!(
+        linked_before_a_nearer_definition(tree_walker_interpreter()),
+        expected,
+        "tree-walker"
+    );
+}
+
 /// A read of a name nothing binds makes no binding record (#834, critique
 /// E3): a bare reference the backend misses, a reference from compiled code
 /// that misses when it runs, and a host's lookup. Nor does a host's lookup
