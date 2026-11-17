@@ -632,7 +632,10 @@ impl<'gc> Cx<'gc> {
     /// `target_env` binds in its own tables holds the keyword's record (#837,
     /// R6), read with this context's heap: the record reaches the alias
     /// table beneath the context, where nothing collects. Raw: names
-    /// `NamespaceView`.
+    /// `NamespaceView`. The desugarer called it until #837's second PR,
+    /// since which relinking installs no alias ([`relink_link`]
+    /// (Self::relink_link) answers the record instead); it and the next
+    /// are deleted with the alias tables.
     #[inline]
     pub fn relink_alias(
         &mut self,

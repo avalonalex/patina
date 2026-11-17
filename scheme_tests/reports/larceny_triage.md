@@ -179,6 +179,14 @@ scoped binding behind it. An *alias* still falls through to plain `get`: it
 jumps into another environment chain whose bindings this resolution never saw,
 so nothing there was rejected.
 
+(2026-11-17, #837's second PR: relinking installs no alias any more, so no
+program reaches that arm, which goes with the alias tables in the PR's last
+part. A relinked identifier is answered before this fallback is reached:
+`Desugarer::resolve_reference` asks the form's table of relinked identifiers
+after the scoped candidates and before the name, and emits a reference as a
+link to the record. The fallback itself is as described for every other
+name.)
+
 Only the *scoped* table is skipped. A plain binding was never a candidate for
 anything — the tree-walker files internal definitions by name alone — so
 falling back to one is the fallback doing its job rather than overriding a
@@ -632,6 +640,7 @@ failure list.
 - So the obstacle is underneath family 37: a substituted user symbol should come out of an expansion with no scopes and does not always, and once two bindings of a spelling are both subsets of a reference, "largest wins" picks by accident. That is worth measuring before another attempt — the `(a a)` repro above is the cheapest way in.
 - What the attempt surfaced is family 38, an independent defect — recorded there, and also not fixed: its own obvious fix turns loud errors into silent wrong answers for the same reason this one is hard.
 - Same family, still open: `rewrite_form` decides `quote` by resolution and `quasiquote`/`unquote` by spelling three lines apart, so a relinked `quasiquote.7` head is invisible to the depth counter `head_resolves_to_quote` depends on.
+  - 2026-11-17, #837's second PR: unchanged, and now measured. The spelling is no longer `quasiquote.7` (it carries the id of the macro's environment), and the head of a relinked `quote` is an identifier with its scopes where it was the alias's bare symbol; the depth counter still goes by the spelling `quasiquote`. The shape with a wrong answer is a generated macro whose template's `quasiquote` was relinked where it was generated, used from a third place that binds a quoted name differently: the datum comes out renamed (`(eq? (car (g)) 'tag)` is `#f` where chibi and Gauche answer `#t`). It is #778's class, one more reader of the spelling, and is recorded there.
 - **Fixed 2026-08-27**, on the third attempt and only after family 39 was. The two failed attempts are above and they failed for one reason: perturbing the scope sets while binders were mutually *unordered* left "largest wins" deciding by accident, which is what turned `(match '(a . 1) ((x . y) (list x y)))` into `(a a)`. Scoping a binder at the scopes it stands in (family 39) makes nested binders a chain, and on a chain there is nothing left to decide by accident. The fix itself is then the `enter_binding_form(binders, binding_scope)` this entry proposed a year of attempts ago, used by `desugar_lambda_tagged`, the `define` shorthand, `desugar_let_syntax_impl_tagged` and the internal-define body.
 - Verified: `(genlam)` answers 101 on both backends, as chibi does; `a_macro_introduced_variable_binding_renames_its_scope` asserts all three binding forms at the right answer on both, having been asserted at the wrong one before.
 
@@ -658,7 +667,7 @@ failure list.
 | inner `(lambda (v) …)` around the `set!` | error | **(99 1)** | (5 99) |
 
 - **Root cause, one layer below.** `application.rs` binds a *source-written* parameter in two independent cells — `define(name, arg)` and `define_with_scopes(name, {binding_scope}, arg)` — and nothing keeps them in sync. Exact matching was the only thing keeping `set_with_scopes` off the scoped twin; subset matching reaches it, the write lands there, and by-name reads keep the stale cell. `Environment::define_scoped_definition`'s own doc states the invariant this breaks: "It is still **one** binding. An earlier version stored the value under the bare name as well, and a `set!` through the scoped path then left the two disagreeing." The VM is immune because `alpha_rename::build_bindings` gives one location two views.
-- So the fix is to make those two cells one binding — the scoped view an indirection to the plain slot, as `alias_bindings` already does for its own case — and only then align the two resolution rules. A naive collapse is not enough on its own: it takes the chibi suite to 1225/1226 on `(let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))`.
+- So the fix is to make those two cells one binding — the scoped view an indirection to the plain slot, as `alias_bindings` already does for its own case (2026-11-17: `alias_bindings` holds nothing a program makes since #837's second PR, whose last part deletes it; the comparison is to the table as it then was) — and only then align the two resolution rules. A naive collapse is not enough on its own: it takes the chibi suite to 1225/1226 on `(let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))`.
 - Two further gaps measured while attempting it, both still open: the *fallback* halves of the two functions differ as well — `get_with_scopes` falls back to `self.get(name)` at the environment where resolution started, `set_with_scopes` recurses to the root and only there calls `self.set`, so `(define (g) (define c 5) (define-syntax b …(set! c (+ c 10))) (b) c)` errors on the tree-walker where chibi and the VM answer 15, and with a same-named global the write escapes the frame and clobbers it; and the within-frame tie-break disagreed with the VM's compile-time equivalent — **closed** by PR #135, which merged the two *read* copies into `patina_core::scope_resolve`; `set_with_scopes` still resolves by exact match and is still unmeasured, which is the remaining half of this family.
 - **Fixed 2026-08-27.** Writes resolve the way reads do, and the two cells are one: a source-written parameter is bound once through `define_scoped_definition` rather than through `define` *and* `define_with_scopes`, which is what made the naive version unsafe. All three rows of the table above now answer as chibi does on both backends — 11, 101, and `(5 101)` for the `lambda` row, whose `(5 99)` reading in this table was measured under a different evaluation order and is not what the program requires. `an_introduced_macro_can_assign_to_an_introduced_binding` and `an_introduced_macro_can_assign_to_a_source_written_binder` pin them, no longer quarantined.
 - **The fallback halves — updated for step 1 (2026-08-31).** Both halves now refuse a binding the resolution rejected: the read ends in `get_scoped_fallback` (a `get`-shaped walk that skips the name-only view of a rejected binding) and the write's root terminal is `set_scoped_terminal` (same predicate; a reference must not clobber by spelling a binding it cannot read). What *remains* open on this branch is the internal-define half below — no scoped binding exists for either predicate to reject. Re-measured 2026-08-27:
@@ -764,6 +773,22 @@ failure list.
 - **Why the VM differed:** its compiler renamed a macro-introduced global and installed a bare-name alias for it (`alpha_rename`'s former `global_aliases` output). Any later reference of that spelling could reach it after scopes were gone. #315 made legitimate references resolve to the introduced global's identity; #427 removes the alias that kept answering unrelated references.
 - The fix was sized in `PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized" (Track Q's Q7.5(b)): delete the bare-name views, not loosen the tree-walker back to the capture chibi rejects. #427 removes those views and retires the three Scheme quarantines.
 - The generated matrix has no cross-expansion refusal axis (recorded in its "Adding axes" list); the Scheme rows cover it. The tree-walker's trace shows the refusal as `RESOLVE … via=unbound` on a name whose `BIND` two lines up is a scoped definition.
+
+**A relinked keyword binder, 2026-11-17 (#837's second PR).** A top-level
+`define-syntax` whose binder is a *relinked* identifier, a template's
+keyword of a name its library has a private binding of, is bound at the
+binder's scopes, as a body's has been since #269. So a keyword an expansion
+introduces under its library's private spelling is that expansion's own,
+two runs of a definer keep two keywords, and nothing is bound by name under
+the spelling relinking gives (`Desugarer::define_syntax_binding`;
+`expansion/relinked-names.scm`'s keyword rows;
+`a_generated_definer_run_twice_keeps_two_keywords` in
+`macro_definition_env.rs`). A top-level `define-syntax` of an identifier
+that was *not* relinked is still bound by name, ignoring its scopes: #269's
+remaining half (`PRD/macro/SYNTAX_CASE_DESIGN.md`, V4), measured again that
+day. Two uses of one definer share the helper keyword, `((two 1) (two 2))`
+where chibi and Gauche answer `((one 1) (two 2))`, and the program can call
+the helper by its name. It has an issue of its own.
 
 **H3 positive cases, 2026-09-12.** The generated sweep at runtime `0c992ddb`
 found the opposite direction with seeds **370/371/374/375**: a private define,

@@ -1247,10 +1247,11 @@ VM's linking makes (#836): a held procedure that reads a fresh unbound name
 is one record more on the VM, its placeholder, and none on the tree-walker; a
 caught call of it that misses adds none; and once it is let go two
 collections give the count back. `keep` is defined and a `guard` expanded
-before the baseline, since a definition's operand is linked at load and
-`guard`'s first expansion relinks its private helpers, whose aliases
-outlive the collections (until #837 it also bound import aliases, records of
-their own).
+before the baseline, since a definition's operand is linked at load. (An
+expansion of `guard` leaves nothing behind since #837: its imported
+procedures are linked and its private helpers relinked, each to a record
+its library already has. Until then each was an alias, a record or a
+table entry more in the global namespace, which the baseline waited for.)
 `a_host_namespace_s_placeholders_are_dropped_with_their_code` does the same
 in a host namespace, on both backends: a held host procedure reading an
 unbound name is two records on the VM, a weak read-through record and the
@@ -1560,10 +1561,15 @@ frame; an importing library not yet redefined; a macro-introduced
 definition over a plain value; a macro the old library's generator
 defined, whose `foreign_expansions` keeps the old namespace while the
 macro lives (counted, by the owner's ruling of 2026-11-16 on #837's first
-PR; the alternative, keeping only binding locations, would read `held` 0); and
-two residual rows, which pin what is not released today and name what
-flips them (a macro-introduced definition linking an old procedure, until
-5c; a relinked variable alias, until #837's second PR). R-D, the VM's
+PR; the alternative, keeping only binding locations, would read `held` 0);
+one residual row, which pins what is not released today and names what
+flips it (a macro-introduced definition linking an old procedure, until
+5c); and the rows #837's second PR flipped or added, once relinking
+installed no alias: a relinked variable, held by the code that expanded
+it and by nothing once that is dropped (a residual row until then); a
+relinked keyword, its own library's and an imported one, no holder at
+all; and a generated macro over a private procedure, in its template and
+as a pattern literal alone, a holder while the program binds it. R-D, the VM's
 loaded units' constants keeping a replaced library whose body keeps code
 quoting its own procedure (#866, which owns the fix by the owner's ruling
 (a) of 2026-11-16 on #838's question 2), is pinned by a test in each backend's file: `gc_vm`'s
@@ -1842,23 +1848,27 @@ environment and a target in the holder is the holder; and a keyword target
 asked for repeatedly gets one alias (`remembered_relink`'s `Keyword` arm).
 `gc_edge_tests::environment_edges` holds the record as a sentinel, shown
 failing with the record `#[trace(skip)]`.
-`a_keyword_alias_names_no_environment_directly`, in core and in
-`macro_definition_env.rs` on both backends, failed with every alias read
-by name, as before R6; and `macro_definition_env.rs`'s
-`a_keyword_aliass_record_still_keeps_its_macros_definition_namespace`
-pins what R6 leaves: after a redefinition and two collections the old
-library's namespace is alive when an expansion left an alias to its
-private macro, through the macro's `definition_env`, and gone when none
-did (#837's question 4, ruled (a) on 2026-11-16, flips it when keyword
-aliases travel with the syntax); with the record
-`#[trace(skip)]` the namespace goes, so it is also an end-to-end sentinel
-for the record's trace. Its twin
-`a_keyword_alias_to_an_imported_keyword_releases_the_replaced_library`
-pins what R6 releases: where the library imports the keyword, the old
-namespace goes while the alias stays, and with every alias read by name it
-stayed. `environment.rs`'s `an_alias_entrys_size_is_watched` pins the
-alias entry at 80 bytes. `macro_definition_env`'s stress count was
-re-pinned.
+`a_keyword_alias_names_no_environment_directly`, in core and, until the
+second PR's switch, in `macro_definition_env.rs` on both backends, failed
+with every alias read by name, as before R6; and
+`macro_definition_env.rs` pinned what R6 left
+(`a_keyword_aliass_record_still_keeps_its_macros_definition_namespace`:
+after a redefinition and two collections the old library's namespace was
+alive when an expansion had left an alias to its private macro, through
+the macro's `definition_env`, and gone when none had; with the record
+`#[trace(skip)]` the namespace went, so it was also an end-to-end
+sentinel for the record's trace) and what R6 released
+(`a_keyword_alias_to_an_imported_keyword_releases_the_replaced_library`:
+where the library imports the keyword, the old namespace went while the
+alias stayed). The switch flipped all three, by #837's question 4, ruled
+(a) on 2026-11-16: keyword aliases travel with the syntax, so no alias is
+left and both namespaces go (`a_relinked_keyword_leaves_no_alias`,
+`a_relinked_keyword_keeps_no_definition_namespace`,
+`a_relinked_imported_keyword_leaves_nothing_of_the_replaced_library`,
+below). Core's alias tests, `environment.rs`'s
+`an_alias_entrys_size_is_watched` (the alias entry at 80 bytes) among
+them, stay until the alias tables are deleted. `macro_definition_env`'s
+stress count was re-pinned.
 
 S1's tests (#839) re-pinned `host_environments`'s stress count: two tests
 more, and the `eval_in` routes its #620 tests and raw frames gained. The

@@ -343,7 +343,8 @@ impl Record {
 /// A reference to a binding record (#837): what an early-bound reference
 /// links, the record the macro environment's own walk finds for the name
 /// (`Environment::binding_hit`; the owner's ruling E1 of 2026-11-12), and
-/// what the second PR's relinked references will link.
+/// what a relinked reference links, the record of the binding its macro's
+/// environment has for the mention (`Environment::relink_record`).
 ///
 /// Opaque outside this crate, as [`BindingCell`] is: no public constructor,
 /// and its reads take a borrow of the heap a trusted crate holds. Not
