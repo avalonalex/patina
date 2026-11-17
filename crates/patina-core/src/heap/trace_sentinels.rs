@@ -205,6 +205,120 @@ fn a_macros_relinks_die_with_the_macro() {
     );
 }
 
+/// The same edge through a context (#837), which is how a safe crate
+/// stores and reads a macro's relinks: `Cx::relink_link` finds two records,
+/// a snapshot of a frame's keyword and a library's slot; they cross the
+/// brand into the object as `Carried` (`Cx::alloc_macro_with_relinks`),
+/// and, once the frame, the program and the library are dropped and two
+/// collections have run with the macro as the only root, come back branded
+/// by a second context (`Cx::macro_relinks`) with the spellings and the
+/// guard they were stored with, in order, of kind `Relinked`, each reading
+/// what its record held. One pooled from there is a relinked link that
+/// `Cx::linkable` reads back at the same location. A macro that carries
+/// none, and a value that is no macro, answer none. The trace arm deleted,
+/// or `CarriedRelink::link` skipped, and the first read is of a freed
+/// record, which a check build refuses.
+#[test]
+fn a_macros_relinks_cross_a_context_and_a_collection() {
+    use crate::binding_record::Carried;
+    use crate::environment::RelinkTarget;
+    use crate::literal_pool::{LinkKind, LiteralPool};
+    use crate::namespace_view::NamespaceView;
+    use crate::{NoGcScope, Value};
+
+    let compiled = |name: &str| {
+        Rc::new(CompiledMacro {
+            name: Rc::from(name),
+            rules: vec![],
+            max_pvars: 0,
+            definition_scopes: ScopeSet::new(),
+            template_symbols: HashSet::new(),
+            inherited_identifiers: HashMap::new(),
+            definition_env: None,
+            foreign_expansions: vec![],
+        })
+    };
+    let shared = new_shared_heap();
+    let program = Rc::new(Environment::with_heap(&shared));
+    let frame = Rc::new(Environment::child_frame(Rc::clone(&program)));
+    let keyword = shared.borrow_mut().alloc_macro(compiled("kw"), vec![]);
+    frame.define(&shared, "kw", keyword);
+    let library = Rc::new(Environment::with_heap(&shared));
+    library.define(&shared, "secret", TaggedValue::fixnum(42));
+
+    let (carrying, plain) = NoGcScope::with_cx(&shared, |cx| {
+        let snapshot = cx
+            .relink_link(NamespaceView::of(&frame), "kw", RelinkTarget::ByName)
+            .expect("a frame's keyword is linked by a snapshot");
+        let slot = cx
+            .relink_link(NamespaceView::of(&library), "secret", RelinkTarget::ByName)
+            .expect("the library's slot");
+        let relinks = vec![
+            Carried {
+                spelling: Rc::from("kw.1"),
+                guard: ScopeId(7),
+                written: Rc::from("kw"),
+                link: snapshot,
+            },
+            Carried {
+                spelling: Rc::from("secret.2"),
+                guard: ScopeId(8),
+                written: Rc::from("secret"),
+                link: slot,
+            },
+        ];
+        let carrying = cx.alloc_macro_with_relinks(compiled("g"), vec![], relinks);
+        let plain = cx.alloc_macro_with_relinks(compiled("p"), vec![], vec![]);
+        (carrying.tagged(), plain.tagged())
+    });
+    // The macro is now the only holder of the snapshot and of the
+    // library's record.
+    drop(frame);
+    drop(program);
+    drop(library);
+    collect_from(&mut shared.borrow_mut(), &[carrying, plain]);
+    collect_from(&mut shared.borrow_mut(), &[carrying, plain]);
+
+    let pool = LiteralPool::new(&shared.borrow());
+    NoGcScope::cross(&shared, [carrying, plain], |cx, [carrying, plain]| {
+        let back = cx.macro_relinks(carrying);
+        let keys: Vec<(&str, ScopeId, &str)> = back
+            .iter()
+            .map(|carried| (&*carried.spelling, carried.guard, &*carried.written))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                ("kw.1", ScopeId(7), "kw"),
+                ("secret.2", ScopeId(8), "secret")
+            ],
+            "each key as it was stored, in order"
+        );
+        assert!(
+            (back.iter()).all(|carried| carried.link.kind() == LinkKind::Relinked),
+            "a carried relink comes back relinked"
+        );
+        let held: Value<'_> = cx.linked_value(back[0].link).expect("the snapshot's cell");
+        assert_eq!(held.tagged(), keyword);
+        assert!(cx.get_macro(held).is_some(), "the keyword is live");
+        assert_eq!(
+            cx.linked_value(back[1].link).map(|v| v.tagged()),
+            Some(TaggedValue::fixnum(42))
+        );
+
+        let link = pool.add_link(back[1].link);
+        assert_eq!(link.kind(), LinkKind::Relinked);
+        let again = cx.linkable(&pool, link);
+        assert_eq!(again.link(), back[1].link.link());
+        assert_eq!(cx.linked_location(again), cx.linked_location(back[1].link));
+
+        assert!(cx.macro_relinks(plain).is_empty(), "a macro with none");
+        assert!(cx.macro_relinks(held).is_empty(), "nor the keyword's");
+        let fixnum = cx.linked_value(back[1].link).unwrap();
+        assert!(cx.macro_relinks(fixnum).is_empty(), "no macro, no relinks");
+    });
+}
+
 /// Tracing `foreign_expansions` keeps an environment no longer than its
 /// macro: once the macro is unreachable, the sweep frees its slot, and that
 /// drops the environment's last `Rc`. So the edge cannot keep a replaced

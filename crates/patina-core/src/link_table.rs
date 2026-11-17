@@ -1176,9 +1176,13 @@ mod tests {
     /// A macro object's carried relink (#837) is held to the same kinds,
     /// where the object is allocated: a check build refuses one over a
     /// record of `kind`, naming the kind and the spelling, before it makes
-    /// the object. Here, beside the pinned entry's refusal, since a
-    /// carried record is pinned in some later unit's table, and both ask
-    /// `Record::refused_as_a_link`. A record of the plain kind is taken.
+    /// the object: the heap has allocated nothing more when the refusal
+    /// unwinds (`bytes_allocated`, which every allocation moves; the live
+    /// bytes are the last collection's and would read 0 either way). Here,
+    /// beside the pinned entry's refusal, since a carried record is pinned
+    /// in some later unit's table, and both ask
+    /// `Record::refused_as_a_link`. A record of the plain kind is taken,
+    /// and charged.
     fn assert_a_carried_relink_is_refused(
         heap: &crate::heap::SharedHeap,
         record: Record,
@@ -1208,7 +1212,7 @@ mod tests {
                 BindingLink::new(record),
             )
         };
-        let bytes = heap.borrow().live_bytes();
+        let bytes = heap.borrow().bytes_allocated();
         let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             heap.borrow_mut()
                 .alloc_macro_with_relinks(compiled(), vec![], vec![relink(record)]);
@@ -1222,7 +1226,7 @@ mod tests {
             "{kind}: {message}"
         );
         assert_eq!(
-            heap.borrow().live_bytes(),
+            heap.borrow().bytes_allocated(),
             bytes,
             "{kind}: refused before the object is made"
         );
@@ -1233,6 +1237,10 @@ mod tests {
             heap.borrow_mut()
                 .alloc_macro_with_relinks(compiled(), vec![], vec![relink(plain)]);
         assert_eq!(heap.borrow().macro_relinks(mac).len(), 1);
+        assert!(
+            heap.borrow().bytes_allocated() > bytes,
+            "the counter the refusal is held to moves when an object is made"
+        );
     }
 
     #[test]

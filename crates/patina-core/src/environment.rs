@@ -6972,6 +6972,49 @@ mod relink_link_tests {
         assert_eq!(pool.len(), 2);
     }
 
+    /// `Cx::linked_value` answers nothing for a record whose cell holds
+    /// `UNBOUND`. No record `Cx::relink_link` answers is one, so the
+    /// record is built by hand, over a free cell.
+    #[test]
+    fn a_link_over_an_unbound_cell_reads_no_value() {
+        use crate::literal_pool::LinkKind;
+
+        let heap = new_shared_heap();
+        let record = {
+            let mut heap = heap.borrow_mut();
+            let cell = BindingCell::free(&mut heap, TaggedValue::UNBOUND);
+            Record::new(&mut heap, cell)
+        };
+        crate::NoGcScope::with_cx(&heap, |cx| {
+            let link = crate::Linkable::new(BindingLink::new(record), LinkKind::Relinked);
+            assert!(cx.linked_value(link).is_none());
+        });
+    }
+
+    /// `Cx::linkable` reads a link through the pool that made it and no
+    /// other, in every build, as `LiteralPool::link` does.
+    #[test]
+    #[should_panic(expected = "a link read through another compilation's pool")]
+    fn a_context_reads_a_link_through_its_own_pool_only() {
+        use crate::literal_pool::LiteralPool;
+        use crate::namespace_view::NamespaceView;
+
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "helper", n(1));
+        let (pool, other) = (
+            LiteralPool::new(&heap.borrow()),
+            LiteralPool::new(&heap.borrow()),
+        );
+        crate::NoGcScope::with_cx(&heap, |cx| {
+            let found = cx
+                .relink_link(NamespaceView::of(&library), "helper", RelinkTarget::ByName)
+                .expect("the library binds it");
+            let link = pool.add_link(found);
+            cx.linkable(&other, link);
+        });
+    }
+
     /// The VM's introduced definition is a global of its own, renamed: the
     /// link is that global's slot record, and never the bare spelling's,
     /// which the library binds to something else here. Until its `Define`
