@@ -2,9 +2,14 @@
 F(L), and each clause, on synthetic readings; no interpreter needed."""
 import dataclasses
 import importlib.util
+import json
+import os
 from pathlib import Path
 import re
+import tempfile
 import unittest
+from unittest import mock
+import warnings
 
 SOURCE = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('steady', SOURCE / 'scripts/run_steady_state.py')
@@ -346,6 +351,27 @@ class Driver(unittest.TestCase):
         self.assertNotIn('assq', rest)
         self.assertEqual(self.driver.count('(assq '), 1)
         self.assertIn("(if (and entry (cdr entry)) (cdr entry) 'none)", self.driver)
+
+
+class Environment(unittest.TestCase):
+    def test_a_run_gets_none_of_the_caller_s_patina_or_allocator_settings(self):
+        # A stand-in for the interpreter, which writes the names of its
+        # environment's variables to the file its last argument names.
+        with tempfile.TemporaryDirectory() as scratch:
+            binary = Path(scratch) / 'patina'
+            binary.write_text('#!/usr/bin/env python3\nimport json, os, sys\n'
+                              'open(sys.argv[-1], "w").write(json.dumps(sorted(os.environ)))\n')
+            binary.chmod(0o755)
+            row = steady.Row('r', 'churn', 'x.scm', {}, args=('{scratch}/environment.json',))
+            caller = {'MallocNanoZone': '0', 'MallocXzoneThreadCaching': '0', 'PATINA_GC_STRESS': '16',
+                      'STEADY_TEST_KEPT': '1'}
+            # run_once leaves the child's pipes for the collector to close.
+            with mock.patch.dict(os.environ, caller), warnings.catch_warnings():
+                warnings.simplefilter('ignore', ResourceWarning)
+                steady.run_once(binary, row, 'vm', 1, 60, 4096, scratch)
+            names = json.loads((Path(scratch) / 'environment.json').read_text())
+        self.assertIn('STEADY_TEST_KEPT', names)
+        self.assertEqual([name for name in names if name.startswith(('PATINA_', 'Malloc'))], [])
 
 
 if __name__ == '__main__':

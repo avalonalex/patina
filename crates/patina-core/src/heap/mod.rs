@@ -137,6 +137,17 @@ fn check_storable(value: TaggedValue, into: &'static str) {
     }
 }
 
+/// A check build's failure: a macro's carried relink over a record of a
+/// kind no link names (#837).
+#[cold]
+#[inline(never)]
+fn carried_record_of_the_wrong_kind(spelling: &str, kind: &str) -> ! {
+    panic!(
+        "a macro's carried relink for {spelling:?} holds {kind}, which no relinked link \
+         names (#837)"
+    );
+}
+
 #[cold]
 #[inline(never)]
 fn stored_a_retired_register(into: &str) -> ! {
@@ -339,6 +350,10 @@ pub enum HeapObjectData {
     Macro {
         body: Rc<crate::compiled_macro::CompiledMacro>,
         literals: Box<[TaggedValue]>,
+        /// The relinked identifiers among `literals`, each with the record
+        /// it was relinked to (#837): held and traced here for the same
+        /// reason. Empty, and no allocation, for a macro that carries none.
+        relinks: Box<[crate::binding_record::CarriedRelink]>,
     },
     RecordType(Rc<crate::record_type::RecordTypeDescriptor>),
     Record {
@@ -1488,18 +1503,56 @@ impl Heap {
     }
 
     /// Allocate a macro object: `body`, and the `literals` its patterns and
-    /// templates name by index (#718).
+    /// templates name by index (#718). It carries no relinks, whatever its
+    /// body: `Cx::alloc_macro_with_relinks` makes one that does.
     pub fn alloc_macro(
         &mut self,
         body: Rc<crate::compiled_macro::CompiledMacro>,
         literals: Vec<TaggedValue>,
     ) -> TaggedValue {
+        self.alloc_macro_with_relinks(body, literals, Vec::new())
+    }
+
+    /// [`alloc_macro`](Self::alloc_macro) for a generated macro that
+    /// carries relinked identifiers (#837): `relinks` are the ones among
+    /// `literals`, each with the record a generator's expansion relinked it
+    /// to, which the object holds and traces from here on.
+    ///
+    /// A check build refuses a relink whose record is a placeholder, a
+    /// read-through record or the heap's by-name record
+    /// (`Record::refused_as_a_link`): a later expansion pins the record in
+    /// its unit's link table, where the linked read would find `UNBOUND`
+    /// through any of the three for good. No record `Cx::relink_link`
+    /// answers is one.
+    ///
+    /// Core's alone: a `CarriedRelink` is an unbranded record, live only
+    /// while something roots it, so the one way to store one from outside
+    /// this crate is `Cx::alloc_macro_with_relinks`, whose `Carried` a
+    /// context branded. The caller here keeps each record live until the
+    /// object holds it.
+    pub(crate) fn alloc_macro_with_relinks(
+        &mut self,
+        body: Rc<crate::compiled_macro::CompiledMacro>,
+        literals: Vec<TaggedValue>,
+        relinks: Vec<crate::binding_record::CarriedRelink>,
+    ) -> TaggedValue {
         if GC_CHECK {
             literals.iter().for_each(|&l| check_storable(l, "macro"));
+            for relink in &relinks {
+                // The read of the record's flags is what holds it to a live
+                // record of a kind a link names; its word is a pair's, never
+                // a retired register's, so `check_storable` has nothing to
+                // ask of it.
+                let record = relink.link().record();
+                if let Some(kind) = record.refused_as_a_link(self) {
+                    carried_record_of_the_wrong_kind(relink.spelling(), kind);
+                }
+            }
         }
         self.alloc_object(HeapObjectData::Macro {
             body,
             literals: literals.into_boxed_slice(),
+            relinks: relinks.into_boxed_slice(),
         })
     }
 
@@ -2515,6 +2568,22 @@ impl Heap {
         match self.get_object(mac) {
             HeapObjectData::Macro { literals, .. } => literals.get(id.index()).copied(),
             _ => None,
+        }
+    }
+
+    /// The relinked identifiers the macro object `mac` carries (#837):
+    /// empty if `mac` is no macro or carries none.
+    #[inline]
+    pub(crate) fn macro_relinks(
+        &self,
+        mac: TaggedValue,
+    ) -> &[crate::binding_record::CarriedRelink] {
+        if !mac.is_object() {
+            return &[];
+        }
+        match self.get_object(mac) {
+            HeapObjectData::Macro { relinks, .. } => relinks,
+            _ => &[],
         }
     }
 

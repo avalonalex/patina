@@ -16,8 +16,11 @@ Each `CallFrame` owns a register window: a contiguous slice of a shared
 `Vec<TaggedValue>`. Local variables and temporaries are accessed by index (O(1),
 no hash lookup). Global variables are linked once per distinct name when a
 code unit loads (an operand the desugarer linked has an entry of its own,
-preset by pass 5 with its record and left alone at load, #837), and read by
-index through the unit's link table (#836). A
+preset by pass 5 with its record and left alone at load, #837, whether
+early binding linked it or relinking; the compiler keeps the two apart and
+gives a relinked one no fast path), and read by index through the unit's
+link table
+(#836). A
 name lookup is left to `Define`; to the cold read or store of a name not yet
 bound; to every read and store of a name its namespace reaches by an alias
 or a visible scoped definition, which is bound and goes by name each time;

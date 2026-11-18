@@ -46,7 +46,10 @@
 use crate::Trace;
 use crate::census::Site;
 use crate::heap::Heap;
+use crate::literal_pool::LinkKind;
+use crate::scope::ScopeId;
 use crate::tagged_value::TaggedValue;
+use std::rc::Rc;
 
 /// What a cell of the namespace numbered `env_id` holds in its second word:
 /// the fixnum `env_id << 4`, the low bits left free: 4b.9's flags are a
@@ -305,6 +308,27 @@ impl Record {
         heap.adopt_record(self.0, cell.0);
     }
 
+    /// Why this record is none a link may name, or `None` for one it may
+    /// (#837): a placeholder, a read-through record and the heap's by-name
+    /// record each hold `UNBOUND` where the linked read looks, so a pinned
+    /// operand over one, or a macro's carried relink, would answer unbound
+    /// for good instead of following an adoption. Every record a namespace's
+    /// slot or scoped entry holds, and every fresh record over a cell
+    /// (`Environment::early_link`, `Environment::relink_record`), may be
+    /// linked. What a check build's `LinkTable::link_in` and
+    /// `Heap::alloc_macro_with_relinks` refuse by.
+    pub(crate) fn refused_as_a_link(self, heap: &Heap) -> Option<&'static str> {
+        if self.is_placeholder(heap) {
+            Some("a placeholder")
+        } else if self.parent_record(heap).is_some() {
+            Some("a read-through record")
+        } else if self.is_by_name(heap) {
+            Some("the by-name record")
+        } else {
+            None
+        }
+    }
+
     /// The record's identity: its word less a check build's generation
     /// stamp. Compared, never dereferenced: a record made in a swept
     /// record's slot has the swept record's key in every build, so a holder
@@ -359,7 +383,7 @@ impl BindingLink {
 
     /// What the binding holds now: record → cell → value, two loads, as
     /// `LinkTable::get` reads it; `None` where the cell holds `UNBOUND`,
-    /// which only a record of a kind no early link names (a placeholder, a
+    /// which only a record of a kind no link names (a placeholder, a
     /// read-through record, the by-name record) does.
     #[inline(always)]
     pub fn value(self, heap: &Heap) -> Option<TaggedValue> {
@@ -425,16 +449,20 @@ impl BindingLink {
 #[derive(Clone, Copy)]
 pub struct Linkable<'gc> {
     link: BindingLink,
+    /// What found the record: early binding or relinking, which the pool
+    /// copies into the [`Link`](crate::Link) it answers.
+    kind: LinkKind,
     _brand: crate::value::Brand<'gc>,
 }
 
 impl<'gc> Linkable<'gc> {
-    /// `link`, branded `'gc`. The caller holds a context of that brand, and
-    /// the record is live in it.
+    /// `link`, found by `kind`, branded `'gc`. The caller holds a context
+    /// of that brand, and the record is live in it.
     #[inline]
-    pub(crate) fn new(link: BindingLink) -> Self {
+    pub(crate) fn new(link: BindingLink, kind: LinkKind) -> Self {
         Linkable {
             link,
+            kind,
             _brand: std::marker::PhantomData,
         }
     }
@@ -444,12 +472,129 @@ impl<'gc> Linkable<'gc> {
     pub(crate) fn link(self) -> BindingLink {
         self.link
     }
+
+    /// What linked the reference (#837).
+    #[inline]
+    pub(crate) fn kind(self) -> LinkKind {
+        self.kind
+    }
 }
 
 impl std::fmt::Debug for Linkable<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Linkable({:?})", self.link)
+        write!(f, "Linkable({:?}, {:?})", self.link, self.kind)
     }
+}
+
+/// A relinked identifier a generated macro carries (#837's second PR): an
+/// identifier a generator's expansion relinked and this macro's patterns or
+/// templates kept, with the record it was relinked to. A macro object holds
+/// them (`HeapObjectData::Macro.relinks`), key and record together, so that
+/// a `CompiledMacro` holds no word (#718) and nothing has to keep two
+/// halves in step. The record is the one edge: the collector traces it
+/// through the macro object, for as long as the macro lives.
+///
+/// Opaque outside this crate, as [`BindingLink`] is, and stored only by
+/// it: a safe crate makes one from a [`Carried`] a context branded
+/// (`Cx::alloc_macro_with_relinks`, the one way into a macro object from
+/// outside core), and reads one back as a `Carried` (`Cx::macro_relinks`).
+/// The raw layer can clone one out of a live macro object's payload
+/// (`HeapObjectData::Macro`), as it can any word, and can do nothing with
+/// it. Raw: the desugarer's link plumbing.
+#[derive(Clone, Debug, Trace)]
+pub struct CarriedRelink {
+    /// The spelling the identifier has in this macro.
+    #[trace(skip, reason = "a spelling")]
+    spelling: Rc<str>,
+    /// The scope of the expansion that relinked it.
+    #[trace(skip, reason = "a scope id")]
+    guard: ScopeId,
+    /// The spelling the generator's template wrote.
+    #[trace(skip, reason = "a spelling")]
+    written: Rc<str>,
+    /// The record it was relinked to.
+    link: BindingLink,
+}
+
+impl CarriedRelink {
+    /// A carried relink over `link`. The caller keeps the record live until
+    /// a macro object holds this.
+    pub(crate) fn new(
+        spelling: Rc<str>,
+        guard: ScopeId,
+        written: Rc<str>,
+        link: BindingLink,
+    ) -> Self {
+        CarriedRelink {
+            spelling,
+            guard,
+            written,
+            link,
+        }
+    }
+
+    /// The spelling the identifier has in its macro.
+    pub(crate) fn spelling(&self) -> &Rc<str> {
+        &self.spelling
+    }
+
+    /// The record it was relinked to.
+    pub(crate) fn link(&self) -> BindingLink {
+        self.link
+    }
+
+    /// This relink beneath a context, its record branded `'gc`: the caller
+    /// holds a context of that brand and the macro object that holds this
+    /// is live in it.
+    pub(crate) fn branded<'gc>(&self) -> Carried<'gc> {
+        Carried {
+            spelling: Rc::clone(&self.spelling),
+            guard: self.guard,
+            written: Rc::clone(&self.written),
+            link: Linkable::new(self.link, LinkKind::Relinked),
+        }
+    }
+}
+
+/// A [`CarriedRelink`] beneath a context, its record branded as a
+/// [`Linkable`] is: what `Cx::macro_relinks` answers and
+/// `Cx::alloc_macro_with_relinks` takes. Raw: the desugarer's link
+/// plumbing.
+#[derive(Clone, Debug)]
+pub struct Carried<'gc> {
+    /// The spelling the identifier has in the macro.
+    pub spelling: Rc<str>,
+    /// The scope of the expansion that relinked it.
+    pub guard: ScopeId,
+    /// The spelling the generator's template wrote.
+    pub written: Rc<str>,
+    /// The record it was relinked to, of [`LinkKind::Relinked`].
+    pub link: Linkable<'gc>,
+}
+
+impl Carried<'_> {
+    /// This relink as a macro object holds it, its brand dropped: the
+    /// caller stores it in a macro object beneath the context that branded
+    /// it. A check build refuses an early-bound handle, which
+    /// `Cx::macro_relinks` would read back as relinked: `Carried`'s fields
+    /// are public, so the handle may be any a context branded.
+    pub(crate) fn into_stored(self) -> CarriedRelink {
+        if crate::heap::GC_CHECK && self.link.kind() != LinkKind::Relinked {
+            carried_an_early_link(&self.spelling);
+        }
+        CarriedRelink::new(self.spelling, self.guard, self.written, self.link.link())
+    }
+}
+
+/// A check build's failure: an early-bound handle stored as a macro's
+/// carried relink (`Carried::into_stored`).
+#[cold]
+#[inline(never)]
+fn carried_an_early_link(spelling: &str) -> ! {
+    panic!(
+        "a macro's carried relink for {spelling:?} holds an early-bound link: a macro \
+         carries relinked identifiers only (#837)"
+    );
 }
 
 /// A check build's failure: a read-through record read as a record of its

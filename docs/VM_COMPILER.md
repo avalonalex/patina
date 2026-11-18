@@ -416,11 +416,20 @@ into the unit's link table, `CodeObject::links` (`patina_core::LinkTable`).
   one index across the unit. The key is an `OperandKey` (#837): the
   spelling after `alpha_rename`, under which two unlinked operands of one
   spelling resolve to one binding, or, for an operand the desugarer linked,
-  its record. A linked `car` and the unit's own `car` get two indices, both
-  spelled `car` in the table; two pool entries over one record get one.
-  `primitive_calls`' map is keyed the same way, and a linked callee's
-  eligibility for `CallPrimitive`, an inline opcode or a control sequence
-  is its record's value, never its spelling's binding.
+  its record and what linked it: `Record` for early binding, `Relinked`
+  for relinking. A linked `car` and the unit's own `car` get two indices,
+  both spelled `car` in the table; two pool entries of one kind over one
+  record get one; an early-bound and a relinked operand over one record
+  get two, pinned to the same record.
+  `primitive_calls`' map is keyed the same way. A callee early binding
+  linked is eligible for `CallPrimitive`, an inline opcode or a control
+  sequence by its record's value, never its spelling's binding. A callee
+  relinking linked is never eligible: `resolve_primitive_calls` skips it
+  ahead of reading its record, so it compiles to `LoadGlobal` and `Call`,
+  or `TailCall` in tail position, whatever its record's cell holds. That
+  is a rule of scope, not of
+  soundness, and making one eligible later is deleting the skip and
+  `OperandKey::Relinked`.
 - **One table per unit.** The table exists only once the whole unit is
   compiled: a lambda's code waits as a pass-private `Member`, and
   `Pass5Codegen::run` makes the table and then every member's `CodeObject`,
@@ -454,7 +463,10 @@ into the unit's link table, `CodeObject::links` (`patina_core::LinkTable`).
   through unresolved, keeping its spelling and link; pass 1 counts it in no
   lambda's free variables and marks nothing mutated; pass 2 makes it a
   global without `ctx.lookup`, copying the record out of the pool
-  (`LiteralPool::link`); passes 3 and 4 carry it. Pass 5 builds the table,
+  (`LiteralPool::link`) with the link's kind (`Link::kind`) into a
+  `LinkedOperand { link, relinked }`; passes 3 and 4 carry it. Pass 5
+  keys it (`OperandKey::of`), hands the table its record, and builds the
+  table,
   when any entry is linked, with `LinkTable::with_links` (otherwise with
   `LinkTable::new`), which presets each linked entry with its
   record and pins it: `link_in` leaves it, and the cold paths
@@ -471,7 +483,12 @@ into the unit's link table, `CodeObject::links` (`patina_core::LinkTable`).
   switch (#837): a library macro's `car` compiles to an inline `Car` on a
   `car@linked` operand, beside the unit's own `car` on an entry of its own
   (`vm_callprimitive.rs`'s fast-path test, and its test of a linked and an
-  own operand of one spelling in one form).
+  own operand of one spelling in one form). Nothing makes a relinked
+  operand yet: #837's second PR's desugarer does, and until then the
+  compiler's half is held by `primitive_calls.rs`'s
+  `a_relinked_callee_is_no_fast_path` and
+  `a_relinked_and_an_early_operand_of_one_record_stay_apart`, over links
+  `Cx::relink_link` makes by hand.
 
 ---
 

@@ -1865,6 +1865,96 @@ more, and the `eval_in` routes its #620 tests and raw frames gained. The
 other targets' counts stayed where they were, a handle allocating nothing in
 the arenas.
 
+The second PR (#837) starts with a scoreboard: the relinking shapes no
+lane held, each a row that passed before the PR, on both backends, and
+must pass after it. `expansion/relinked-names.scm` has thirty-eight (a
+generated macro over a private variable or keyword, in the form that made
+it and in later ones, through one level and two; a reference beside the
+program's definition of its spelling, in one form and across forms; a
+relinked assignment; a definer of introduced state; a template's own
+binder of the spelling; a keyword an expansion introduces under a relinked
+spelling, in one expansion, through a generated macro, run twice, compiled
+first, of a private variable's spelling and across a second library; a
+definition an expansion produces into a body beside a reference to it, and
+at top level; a generated macro's relinked literal; and a template that
+itself writes forty names spelled like a relinked one). Gauche answers all
+thirty-eight as asserted; chibi, run by hand with the libraries as files,
+thirty-one, and the file's header and its `*` row in `DIVERGENCES.tsv`
+record the seven. `expansion/splicing-libraries.scm` gains the row for a keyword
+a splice's frame binds, read in a procedure compiled later. The shapes no
+oracle can stage are Rust tests: `macro_definition_env.rs`'s
+`a_macro_generated_through_three_levels_reaches_the_private_variable`,
+`a_macro_generated_across_two_libraries_reaches_the_first` and
+`generated_macros_keep_the_library_they_were_made_from_across_a_redefinition`,
+and `gc_shared_tests!`'s
+`a_generated_macros_literal_survives_its_librarys_redefinition`, on both
+backends and under zeal, a macro whose only mention of its library's
+private binding is a pattern literal. The stress counts of
+`macro_definition_env`, `gc_vm`, `gc_tree_walker` and `scheme_suite` were
+re-pinned.
+
+The same PR's plumbing makes no relinked link in any program. Part of it
+is on every program's path already: the VM compiler reads each link's
+kind, and a macro object is allocated with no relinks, which the
+collector's arm then loops over. What makes a relinked link or stores a
+relink is called by nothing but its tests, which build each part by hand.
+The pool's
+`a_link_keeps_its_kind_through_the_pool` (an early and a relinked link of
+one record are two links, each read from its own entry, and neither kind
+shows in what a link prints). `environment.rs`'s `relink_link_tests`, one
+case per kind of relink target (`Environment::relink_record`): a
+namespace's slot, one record however often it is asked for; an import; a
+definition over the import, which the link follows; a name reached through
+a host namespace's parent, where the next ask after a host definition
+links the host's record and the earlier link is the parent's still; a
+frame's import, a fresh record at each ask; a frame's keyword by name, a
+snapshot record, and a frame's variable, nothing; a keyword at scopes, in
+a namespace's table and in a frame's; the VM's renamed global, `None`
+until its `Define` has run and never the bare spelling's; the
+tree-walker's scoped entry, the one at exactly the scopes among two runs'
+and a plain binding, and an identity nobody holds; and the context's
+`relink_link`, `linkable`, `linked_value` and `linked_location`. Each
+record is asked `Record::refused_as_a_link` and pinned in a link table,
+whose `link_in` refuses a placeholder, a read-through record or the
+by-name record in a check build. The macro object's carried relinks:
+`trace_sentinels.rs`'s `compiled_macro_fields` gains a carried record in no
+slot, reachable only through the object, shown failing with the trace
+arm's `relinks` line deleted and again with `CarriedRelink::link` marked
+`skip`; `a_macros_relinks_die_with_the_macro` (the record, its cell and
+its value are kept while the macro is rooted and swept with it);
+`a_macros_relinks_cross_a_context_and_a_collection` (the same edge as a
+safe crate stores and reads it: a frame keyword's snapshot and a library's
+slot record go in through `Cx::alloc_macro_with_relinks`, and after two
+collections with the macro as the only root come back through
+`Cx::macro_relinks` with their keys, relinked, each reading what it
+held); `link_table.rs`'s `a_check_build_refuses_a_carried_placeholder`,
+`a_check_build_refuses_a_carried_read_through_record`,
+`a_check_build_refuses_the_carried_by_name_record` and
+`a_check_build_refuses_a_carried_early_link`, which CI's controls line
+picks up by their prefix, each held to having allocated nothing, wherever
+the refused relink stands among the object's; `heap/check.rs`'s
+`a_macro_literal_that_is_a_retired_register_panics`, the control of the
+literals' check (#718) that the same allocator makes; and
+`account.rs`'s `the_object_slots_size_is_watched` (72 bytes, as before
+the payload grew) and `a_macros_relinks_are_charged_and_counted_live` (48
+bytes a relink at allocation, and live with the macro). The census's
+count of a relink as a word of the object is
+`a_macros_relinks_are_words_of_the_object`, in core's lib tests with the
+`gc-census` feature, which CI's census step runs beside the census's own
+lane (`cargo test -p patina-core --lib --features gc-census --
+heap::census::`): that lane runs programs, and no program makes a relink
+before the second PR. The VM: `primitive_calls.rs`'s `a_relinked_callee_is_no_fast_path`
+(over the records an early-bound `car` gets its inline opcode through, an
+early-bound `length` its `CallPrimitive` and an early-bound
+`call-with-values` and `dynamic-wind` their sequences, the relinked callee
+is in neither map and compiles to a load of its pinned operand and a call)
+and `a_relinked_and_an_early_operand_of_one_record_stay_apart` (two keys,
+two pinned entries of one record, in either order; an assignment's operand
+keyed by its link's kind as a reference's is; and an early-bound
+`call-with-values` keeping its sequence beside a relinked one over the
+same record). No stress count moved for
+them: they are unit tests of crates the stress lane does not run.
+
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):
 the variable that sets the mode did not reach the process, or the program
@@ -2113,6 +2203,20 @@ the environment's size at random, the same for all its runs (#653): the
 VM's cycles depend on where the stack lands. Ten rounds is the default.
 The whole default set, 73 measurements, takes about 2 minutes a round on
 one build here; a comparison takes three times that.
+
+A run inherits the caller's environment without `PATINA_*` and without
+macOS's allocator settings, every variable named `Malloc…` (#862); the
+comparison, Criterion, census and steady-state runners drop the same. The
+Claude desktop app starts its sessions with `MallocNanoZone=0`, which on
+macOS 27.2 turns off the system allocator's per-thread cache. Measured
+2026-11-17, the tree-walker's workloads then count 7.5–9.8% more
+instructions (`tw-port-churn` 1%), and each run of a binary lands on one of
+several counts up to 1.3% apart, how often on each changing with the
+binary's code signature: copies of one build that differ in nothing else
+read a workload up to 0.7% apart. The harness's readings recorded before
+that date for #837's stack (#875, #878, #881), its baseline at 791b7c5a
+among them, were taken under the variable, and none is comparable with a
+reading taken since.
 
 ```bash
 ./scripts/run_gc_benchmarks.sh --rounds 3                    # this build, every set

@@ -310,8 +310,16 @@ impl HeapObjectData {
                 code_id: _,
                 free_vars,
             } => free_vars.capacity() * VALUE_BYTES,
-            // The literals are the object's own; the body is a shared `Rc`.
-            HeapObjectData::Macro { body: _, literals } => literals.len() * VALUE_BYTES,
+            // The literals and the carried relinks (#837) are the object's
+            // own; the body is a shared `Rc`.
+            HeapObjectData::Macro {
+                body: _,
+                literals,
+                relinks,
+            } => {
+                literals.len() * VALUE_BYTES
+                    + relinks.len() * size_of::<crate::binding_record::CarriedRelink>()
+            }
             HeapObjectData::VmContinuationRef { id: _, bytes }
             | HeapObjectData::VmDelimitedContinuationRef { id: _, bytes } => *bytes,
             // Nothing outside the slot. A port's slot holds its `PortTable`
@@ -1031,6 +1039,86 @@ impl Heap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every object is charged a slot, so the slot's size is a cost of
+    /// every flonum, closure and identifier: 72 bytes, measured at
+    /// 8e3fc0bc and here. That is the largest payload, an exception's
+    /// kind, message and irritants at 24 bytes each, with the variant's
+    /// tag in a niche; an identifier's is 64. A macro object's carried
+    /// relinks (#837) took its payload from 24 bytes to 40, under both,
+    /// and a carried relink is 48, which `payload_bytes` charges per
+    /// relink. Pinned exactly, so that a payload that moves the slot is
+    /// seen and measured before it is accepted.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn the_object_slots_size_is_watched() {
+        assert_eq!(OBJECT_SLOT_BYTES, 72);
+        assert_eq!(size_of::<crate::binding_record::CarriedRelink>(), 48);
+    }
+
+    /// A macro object is charged for the relinks it carries (#837), and a
+    /// collection counts them live with it: the allocation of one with two
+    /// relinks moves the allocated bytes by a plain macro's and two
+    /// `CarriedRelink`s, and the collection that marks it finds that much
+    /// more live, and the two records and two cells the relinks hold (a
+    /// pair each), than the one that marks only the plain macro. The
+    /// records are in no slot and no table, so nothing but the macro keeps
+    /// them.
+    #[test]
+    fn a_macros_relinks_are_charged_and_counted_live() {
+        use crate::binding_record::{BindingCell, BindingLink, CarriedRelink, Record};
+        use crate::compiled_macro::CompiledMacro;
+        use crate::heap::trace_sentinels::collect_from;
+        use crate::scope::{ScopeId, ScopeSet};
+        use std::collections::{HashMap, HashSet};
+
+        let compiled = || {
+            Rc::new(CompiledMacro {
+                name: Rc::from("m"),
+                rules: vec![],
+                max_pvars: 0,
+                definition_scopes: ScopeSet::new(),
+                template_symbols: HashSet::new(),
+                inherited_identifiers: HashMap::new(),
+                definition_env: None,
+                foreign_expansions: vec![],
+            })
+        };
+        let relink = |heap: &mut Heap| {
+            let cell = BindingCell::free(heap, TaggedValue::fixnum(1));
+            let record = Record::new(heap, cell);
+            CarriedRelink::new(
+                Rc::from("secret.1"),
+                ScopeId(1),
+                Rc::from("secret"),
+                BindingLink::new(record),
+            )
+        };
+        let relink_bytes = size_of::<CarriedRelink>();
+
+        let mut heap = Heap::new();
+        let relinks = vec![relink(&mut heap), relink(&mut heap)];
+        let before = heap.bytes_allocated();
+        let plain = heap.alloc_macro(compiled(), vec![]);
+        let plain_bytes = heap.bytes_allocated() - before;
+        assert_eq!(plain_bytes, OBJECT_SLOT_BYTES as u64, "a slot and no more");
+        let before = heap.bytes_allocated();
+        let carrying = heap.alloc_macro_with_relinks(compiled(), vec![], relinks);
+        assert_eq!(
+            heap.bytes_allocated() - before,
+            plain_bytes + 2 * relink_bytes as u64,
+            "each relink is charged its size"
+        );
+
+        collect_from(&mut heap, &[plain, carrying]);
+        let both = heap.live_bytes();
+        collect_from(&mut heap, &[plain]);
+        assert_eq!(
+            both - heap.live_bytes(),
+            OBJECT_SLOT_BYTES + 2 * relink_bytes + 4 * PAIR_SLOT_BYTES,
+            "the macro, its relinks, and their two records and two cells"
+        );
+    }
 
     /// The per-owner counts (#834) move only with the events that name
     /// them, through a handle and with no heap borrow, and a namespace's

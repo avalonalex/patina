@@ -26,8 +26,8 @@
 //!
 //! See VM_COMPILER.md §Pass 2.
 
+use super::LinkedOperand;
 use super::pass1_analysis::{AnalysisInfo, NodeId};
-use patina_core::BindingLink;
 use patina_core::LiteralPool;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, Symbol};
 use patina_core::error::SourceLocation;
@@ -93,7 +93,7 @@ pub enum ClosedExprKind {
     /// desugarer linked, through the record it linked (#837).
     GlobalRef {
         name: Symbol,
-        link: Option<BindingLink>,
+        link: Option<LinkedOperand>,
     },
 
     /// Read value out of a `MutableCell` held in a local register.
@@ -132,7 +132,7 @@ pub enum ClosedExprKind {
     SetGlobal {
         var: Symbol,
         value: Box<ClosedExpr>,
-        link: Option<BindingLink>,
+        link: Option<LinkedOperand>,
     },
 
     Begin(Vec<ClosedExpr>),
@@ -256,13 +256,14 @@ fn convert_inner(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
         // A linked reference is always a global, through the record the
         // desugarer linked, which `ctx.lookup` must not resolve by name
         // (#837). The pool roots the record until the unit's table does.
+        // The operand keeps what linked it, early binding or relinking.
         CoreExprKind::Var {
             name,
             link: Some(link),
             scopes: _,
         } => ClosedExprKind::GlobalRef {
             name: name.clone(),
-            link: Some(ctx.literals.link(*link)),
+            link: Some(LinkedOperand::of(ctx.literals, *link)),
         },
 
         CoreExprKind::Var {
@@ -295,7 +296,7 @@ fn convert_inner(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
         } => ClosedExprKind::SetGlobal {
             var: var.clone(),
             value: Box::new(convert(value, ctx)),
-            link: Some(ctx.literals.link(*link)),
+            link: Some(LinkedOperand::of(ctx.literals, *link)),
         },
 
         CoreExprKind::Set {

@@ -712,6 +712,23 @@ pub enum IntroducedDefinition {
     Scoped(ScopeSet),
 }
 
+/// How a relinked mention's target is named (#837's second PR): what the
+/// desugarer's relinking found the mention to mean in its macro's
+/// definition environment, for `Environment::relink_record` to answer
+/// with a record. Raw: the desugarer's and the backends' link plumbing.
+#[derive(Debug, Clone, Copy)]
+pub enum RelinkTarget<'a> {
+    /// What the name alone reaches in the macro's environment.
+    ByName,
+    /// The definition a macro introduced that the mention's scopes select,
+    /// as [`Environment::introduced_definition`] found it. Asked of the
+    /// definition environment's root, which holds it.
+    Introduced(&'a IntroducedDefinition),
+    /// The scoped keyword at exactly these scopes. Asked of the
+    /// environment [`Environment::scoped_macro_binding`] found it in.
+    ScopedKeyword(&'a ScopeSet),
+}
+
 /// The tables that nearly only a global or a library environment fills, kept
 /// out of line so that the environments which never do — and the tree-walker
 /// builds one per call and per `let`-bound temporary — do not carry them. A
@@ -2852,6 +2869,119 @@ impl Environment {
             }
             BindingHit::Frame(_) => None,
         }
+    }
+
+    /// The record a relinked mention of `name` links when this is the
+    /// environment its target is asked of (#837's second PR; the owner's
+    /// ruling E1, whose text names "the second PR's relink targets"), or
+    /// `None` where the target has no record, and the mention is left as
+    /// written. Arm by arm, what an alias to the target reads today, as a
+    /// record:
+    ///
+    /// - [`RelinkTarget::ByName`]: where [`binding_hit`](Self::binding_hit)
+    ///   finds the name. A namespace's slot's or scoped entry's record, its
+    ///   own or an import's, here or up the chain; for a frame's import,
+    ///   which has no record, a fresh one over the import's cell, as
+    ///   [`early_link`](Self::early_link) makes. A frame's own binding has
+    ///   no record: a keyword there (a macro or a core-syntax marker) is
+    ///   linked by a **snapshot record**, and a variable by nothing, since
+    ///   a frame's place outlives no form.
+    /// - [`RelinkTarget::Introduced`]: for the VM's renamed global
+    ///   ([`IntroducedDefinition::Renamed`]), this namespace's slot record
+    ///   for the global, `None` until its `Define` has run and for a frame;
+    ///   for the tree-walker's scoped entry
+    ///   ([`IntroducedDefinition::Scoped`]), the record of the entry at
+    ///   exactly those scopes in this namespace's own table, never the
+    ///   spelling's, and `None` for a frame's.
+    /// - [`RelinkTarget::ScopedKeyword`]: the record of the entry at
+    ///   exactly those scopes in this environment's own table, for a
+    ///   namespace; for a frame (a splice's or a `let-syntax`'s, #424), a
+    ///   snapshot record of the keyword the entry holds, and `None` if it
+    ///   holds no keyword.
+    ///
+    /// A snapshot record is a fresh record over a fresh free cell holding
+    /// the syntax value read now: in no slot and counted nowhere, as the
+    /// fresh record over a frame's import is. A frame's keyword has no
+    /// record, and carrying the frame instead is the environment edge
+    /// #837's question 4 (a) removes; its binding is made once, by its
+    /// `let-syntax` or splice, so the snapshot reads what a read by
+    /// identity would. It and the frame import's record allocate at each
+    /// ask.
+    ///
+    /// No answer is a placeholder, a read-through record or the heap's
+    /// by-name record ([`Record::refused_as_a_link`]): the walks read
+    /// slots and scoped entries, which hold none, and the fresh records
+    /// are of the plain kind.
+    ///
+    /// Ask the real definition environment, never a declarations view of
+    /// it: a declaration's cell is a desugar-time location, not the cell
+    /// the definition will have.
+    ///
+    /// For `Cx::relink_link`, which brands the answer: the record is live
+    /// only while a root reaches it, and the context's caller pools it
+    /// before anything can collect. Borrows `heap` shared to read a
+    /// frame's keyword, and mutably for a fresh record.
+    pub(crate) fn relink_record(
+        &self,
+        heap: &RefCell<Heap>,
+        name: &str,
+        target: RelinkTarget<'_>,
+    ) -> Option<BindingLink> {
+        // The arms that answer a slot's or an entry's record borrow no
+        // heap, so nothing else would notice another heap's context here,
+        // which would brand the record for a heap it is not on.
+        #[cfg(debug_assertions)]
+        self.check_heap(&heap.borrow());
+        let hit = match target {
+            RelinkTarget::ByName => self.binding_hit(name)?,
+            RelinkTarget::Introduced(IntroducedDefinition::Renamed(global)) => {
+                return self.local_record(global).map(BindingLink::new);
+            }
+            RelinkTarget::Introduced(IntroducedDefinition::Scoped(scopes)) => {
+                return match self.scoped_definition_hit(name, scopes)? {
+                    BindingHit::Record(record) => Some(BindingLink::new(record)),
+                    // The root of a chain is a namespace; a raw frame root
+                    // is not linked.
+                    BindingHit::FrameImport(_) | BindingHit::Frame(_) => None,
+                };
+            }
+            RelinkTarget::ScopedKeyword(scopes) => {
+                return match self.scoped_definition_hit(name, scopes)? {
+                    BindingHit::Record(record) => Some(BindingLink::new(record)),
+                    BindingHit::FrameImport(_) => None,
+                    BindingHit::Frame(_) => {
+                        let value = self.scoped_definition_value(heap, name, scopes)?;
+                        self.snapshot_of_syntax(heap, value)
+                    }
+                };
+            }
+        };
+        match hit {
+            BindingHit::Record(record) => Some(BindingLink::new(record)),
+            BindingHit::FrameImport(cell) => {
+                let record = Record::new(&mut self.borrow_write(heap), cell);
+                Some(BindingLink::new(record))
+            }
+            BindingHit::Frame(_) => {
+                // `get` takes `binding_hit`'s walk, so it reads the frame's
+                // binding the hit is.
+                let value = self.get(heap, name)?;
+                self.snapshot_of_syntax(heap, value)
+            }
+        }
+    }
+
+    /// A snapshot record of `value` if it is a keyword's, a macro or a
+    /// core-syntax marker: a fresh record over a fresh free cell holding
+    /// it ([`relink_record`](Self::relink_record)). `None` for any other
+    /// value, a frame's variable's.
+    fn snapshot_of_syntax(&self, heap: &RefCell<Heap>, value: TaggedValue) -> Option<BindingLink> {
+        let mut heap = self.borrow_write(heap);
+        if heap.get_macro(value).is_none() && heap.get_core_syntax(value).is_none() {
+            return None;
+        }
+        let cell = BindingCell::free(&mut heap, value);
+        Some(BindingLink::new(Record::new(&mut heap, cell)))
     }
 
     /// Whether `name` is this namespace's import of `location` (#837): a
@@ -6494,6 +6624,547 @@ mod early_link_tests {
         // The walk goes on to the namespace, whose slot's record it links.
         let (_, through) = frame.early_link(&heap, "count").unwrap();
         assert_eq!(Some(through.record()), program.local_record("count"));
+    }
+}
+
+/// A relinked mention's link (#837's second PR): the record
+/// [`Environment::relink_record`] answers for each kind of target, one
+/// case per arm, and `None` where a target has no record. Every record it
+/// answers is of a kind a link may name, which a pinned entry of a link
+/// table holds it to in a check build.
+#[cfg(test)]
+mod relink_link_tests {
+    use super::*;
+    use crate::compiled_macro::CompiledMacro;
+    use crate::heap::new_shared_heap;
+    use crate::link_table::LinkTable;
+    use crate::scope::{ScopeId, ScopeSet};
+    use std::collections::{HashMap, HashSet};
+
+    fn n(i: i64) -> TaggedValue {
+        TaggedValue::fixnum(i)
+    }
+
+    fn scopes(ids: &[usize]) -> ScopeSet {
+        ScopeSet::from_iter(ids.iter().map(|&id| ScopeId(id)))
+    }
+
+    /// A fresh macro value, named `name`.
+    fn a_macro(heap: &SharedHeap, name: &str) -> TaggedValue {
+        let compiled = CompiledMacro {
+            name: Rc::from(name),
+            rules: vec![],
+            max_pvars: 0,
+            definition_scopes: ScopeSet::new(),
+            template_symbols: HashSet::new(),
+            inherited_identifiers: HashMap::new(),
+            definition_env: None,
+            foreign_expansions: vec![],
+        };
+        heap.borrow_mut().alloc_macro(Rc::new(compiled), vec![])
+    }
+
+    /// `link` is a record a link may name: not a placeholder, a
+    /// read-through record or the by-name record. Asked of the record in
+    /// every build, and of a link table pinned to it, whose `link_in`
+    /// refuses any of the three in a check build
+    /// (`LinkTable::check_pinned`).
+    fn assert_pinnable(heap: &SharedHeap, link: BindingLink) {
+        assert_eq!(link.record().refused_as_a_link(&heap.borrow()), None);
+        let table = LinkTable::with_links(Box::new([Rc::from("pinned")]), &[Some(link)]);
+        table.link_in(heap, &Rc::new(Environment::with_heap(heap)));
+        assert!(table.is_pinned(0));
+        assert_eq!(table.get(&heap.borrow(), 0), link.value(&heap.borrow()));
+    }
+
+    /// `relink_record(name, ByName)`, as a record that passed
+    /// [`assert_pinnable`].
+    fn by_name(heap: &SharedHeap, env: &Environment, name: &str) -> Option<BindingLink> {
+        let link = env.relink_record(heap, name, RelinkTarget::ByName)?;
+        assert_pinnable(heap, link);
+        Some(link)
+    }
+
+    /// The location of the cell `link`'s record names.
+    fn location(heap: &SharedHeap, link: BindingLink) -> BindingLocation {
+        link.record().cell(&heap.borrow()).location()
+    }
+
+    /// A namespace's own binding: its slot's record, the same one however
+    /// often it is asked for, so what the library assigns the link reads;
+    /// and three targets are three records.
+    #[test]
+    fn a_namespaces_slot_links_its_record() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "helper", n(1));
+        library.define(&heap, "other", n(2));
+        let elsewhere = Rc::new(Environment::with_heap(&heap));
+        elsewhere.define(&heap, "helper", n(3));
+
+        let helper = by_name(&heap, &library, "helper").unwrap();
+        assert_eq!(helper.record(), library.local_record("helper").unwrap());
+        for _ in 0..10 {
+            assert_eq!(by_name(&heap, &library, "helper"), Some(helper));
+        }
+        let other = by_name(&heap, &library, "other").unwrap();
+        let third = by_name(&heap, &elsewhere, "helper").unwrap();
+        assert!(helper != other && helper != third && other != third);
+
+        library.set(&heap, "helper", n(10)).unwrap();
+        assert_eq!(helper.value(&heap.borrow()), Some(n(10)));
+        assert_eq!(third.value(&heap.borrow()), Some(n(3)));
+        assert_eq!(by_name(&heap, &library, "missing"), None);
+    }
+
+    /// An import: the importing namespace's own record over the
+    /// exporter's cell, one location under two records.
+    #[test]
+    fn an_import_links_the_importers_record_over_the_exporters_cell() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "count", n(0));
+        let relay = Rc::new(Environment::with_heap(&heap));
+        share(&heap, &relay, "count", &library, "count");
+
+        let link = by_name(&heap, &relay, "count").unwrap();
+        assert_eq!(link.record(), relay.local_record("count").unwrap());
+        assert_ne!(link.record(), library.local_record("count").unwrap());
+        assert_eq!(
+            Some(location(&heap, link)),
+            library.binding_location(&heap, "count")
+        );
+        library.set(&heap, "count", n(4)).unwrap();
+        assert_eq!(link.value(&heap.borrow()), Some(n(4)));
+    }
+
+    /// A definition over the definition environment's own import re-points
+    /// the slot's record in place, and the link follows it: no departure
+    /// from a read by name.
+    #[test]
+    fn a_relink_follows_a_definition_over_the_import() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "count", n(0));
+        let relay = Rc::new(Environment::with_heap(&heap));
+        share(&heap, &relay, "count", &library, "count");
+        let link = by_name(&heap, &relay, "count").unwrap();
+        relay.define(&heap, "count", n(5));
+        assert_eq!(link.value(&heap.borrow()), Some(n(5)));
+        assert_eq!(relay.get(&heap, "count"), Some(n(5)));
+        assert_eq!(library.get(&heap, "count"), Some(n(0)));
+        assert_eq!(by_name(&heap, &relay, "count"), Some(link));
+    }
+
+    /// A name a host namespace reaches through its parent links the
+    /// parent's record (E1). Once the host defines the name, the next ask
+    /// links the host's own record, and the earlier link still reads the
+    /// parent's: a target that travels with the syntax is not re-read by
+    /// name.
+    #[test]
+    fn a_name_reached_through_a_parent_links_the_parents_record() {
+        let heap = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(&heap));
+        let inherited = a_macro(&heap, "kw");
+        global.define(&heap, "kw", inherited);
+        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
+
+        let before = by_name(&heap, &host, "kw").unwrap();
+        assert_eq!(before.record(), global.local_record("kw").unwrap());
+        assert_eq!(before.value(&heap.borrow()), Some(inherited));
+
+        let own = a_macro(&heap, "kw");
+        host.define(&heap, "kw", own);
+        let after = by_name(&heap, &host, "kw").unwrap();
+        assert_eq!(after.record(), host.local_record("kw").unwrap());
+        assert_eq!(after.value(&heap.borrow()), Some(own));
+        assert_eq!(
+            before.value(&heap.borrow()),
+            Some(inherited),
+            "the earlier link is the parent's record still"
+        );
+    }
+
+    /// A frame's import has no record: the link is a fresh one over the
+    /// import's cell at each ask, in no slot and counted nowhere, reading
+    /// and locating the exporter's binding.
+    #[test]
+    fn a_frames_import_links_a_fresh_record_over_its_cell() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "count", n(0));
+        let program = Rc::new(Environment::with_heap(&heap));
+        let frame = Rc::new(Environment::child_frame(Rc::clone(&program)));
+        let cell = library.cell_of(&heap, "count").unwrap();
+        frame.import_cell(&heap, "imported", cell);
+        let counts = |heap: &Heap| (heap.binding_records(), heap.cells());
+        let before = counts(&heap.borrow());
+
+        let first = by_name(&heap, &frame, "imported").unwrap();
+        let second = by_name(&heap, &frame, "imported").unwrap();
+        assert_ne!(first, second, "a fresh record at each ask");
+        for link in [first, second] {
+            assert_eq!(location(&heap, link), cell.location());
+            assert_ne!(link.record(), library.local_record("count").unwrap());
+        }
+        assert_eq!(counts(&heap.borrow()), before, "counted nowhere");
+        library.set(&heap, "count", n(8)).unwrap();
+        assert_eq!(first.value(&heap.borrow()), Some(n(8)));
+        assert_eq!(second.value(&heap.borrow()), Some(n(8)));
+    }
+
+    /// A frame's keyword, by name: a snapshot record, a fresh record over
+    /// a fresh free cell holding the macro, or the core-syntax marker,
+    /// read now. A frame's variable links nothing, since a frame's place
+    /// outlives no form.
+    #[test]
+    fn a_frames_keyword_by_name_links_a_snapshot_and_its_variable_nothing() {
+        let heap = new_shared_heap();
+        let program = Rc::new(Environment::with_heap(&heap));
+        let frame = Rc::new(Environment::child_frame(Rc::clone(&program)));
+        let keyword = a_macro(&heap, "kw");
+        let marker = heap
+            .borrow_mut()
+            .core_syntax(crate::core_syntax::CoreForm::If);
+        frame.define(&heap, "kw", keyword);
+        frame.define(&heap, "my-if", marker);
+        frame.define(&heap, "variable", n(3));
+        let inner = Rc::new(Environment::child_frame(Rc::clone(&frame)));
+        let counts = |heap: &Heap| (heap.binding_records(), heap.cells());
+        let before = counts(&heap.borrow());
+
+        // From the frame, and from a frame under it, whose walk finds it.
+        for env in [&frame, &inner] {
+            let first = by_name(&heap, env, "kw").unwrap();
+            let second = by_name(&heap, env, "kw").unwrap();
+            assert_ne!(first, second, "a fresh record at each ask");
+            assert_ne!(
+                location(&heap, first),
+                location(&heap, second),
+                "and a fresh cell"
+            );
+            assert_eq!(first.value(&heap.borrow()), Some(keyword));
+            assert_eq!(
+                by_name(&heap, env, "my-if").unwrap().value(&heap.borrow()),
+                Some(marker)
+            );
+            assert_eq!(
+                by_name(&heap, env, "variable"),
+                None,
+                "a frame's own variable has no record"
+            );
+        }
+        assert_eq!(counts(&heap.borrow()), before, "counted nowhere");
+    }
+
+    /// A keyword at scopes. In a namespace's own table: the record of the
+    /// entry at exactly those scopes, which a redefinition there stores
+    /// into and another entry of the spelling, or a plain binding of it,
+    /// leaves alone. In a frame's (a splice's or a `let-syntax`'s): a
+    /// snapshot record of the keyword. Scopes nobody holds, and a frame's
+    /// scoped variable, link nothing.
+    #[test]
+    fn a_scoped_keyword_links_its_entrys_record_or_a_frames_snapshot() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        let (identity, other) = (scopes(&[1]), scopes(&[2]));
+        let first = a_macro(&heap, "kw");
+        library.define_with_scopes(&heap, "kw", identity.clone(), first);
+        library.define_with_scopes(&heap, "kw", other.clone(), a_macro(&heap, "kw"));
+        library.define(&heap, "kw", a_macro(&heap, "kw"));
+        let keyword = |env: &Environment, at: &ScopeSet| {
+            let link = env.relink_record(&heap, "kw", RelinkTarget::ScopedKeyword(at))?;
+            assert_pinnable(&heap, link);
+            Some(link)
+        };
+
+        let link = keyword(&library, &identity).unwrap();
+        assert_eq!(link.value(&heap.borrow()), Some(first));
+        assert_eq!(
+            Some(location(&heap, link)),
+            library.scoped_definition_location(&heap, "kw", &identity)
+        );
+        assert_eq!(keyword(&library, &identity), Some(link), "one record");
+        assert_ne!(keyword(&library, &other), Some(link));
+        assert_ne!(link.record(), library.local_record("kw").unwrap());
+        let second = a_macro(&heap, "kw");
+        library.define_with_scopes(&heap, "kw", identity.clone(), second);
+        assert_eq!(link.value(&heap.borrow()), Some(second), "a redefinition");
+        assert_eq!(
+            keyword(&library, &scopes(&[9])),
+            None,
+            "scopes nobody holds"
+        );
+        assert_eq!(
+            keyword(&library, &scopes(&[1, 2])),
+            None,
+            "an identity, matched exactly"
+        );
+
+        let frame = Rc::new(Environment::child_frame(Rc::clone(&library)));
+        let local = a_macro(&heap, "kw");
+        frame.define_with_scopes(&heap, "kw", scopes(&[5]), local);
+        frame.define_with_scopes(&heap, "variable", scopes(&[5]), n(3));
+        let snapshot = keyword(&frame, &scopes(&[5])).unwrap();
+        assert_eq!(snapshot.value(&heap.borrow()), Some(local));
+        assert_ne!(keyword(&frame, &scopes(&[5])), Some(snapshot), "fresh");
+        assert_eq!(
+            keyword(&frame, &identity),
+            None,
+            "asked of the environment that holds the entry, not walked for"
+        );
+        assert_eq!(
+            frame.relink_record(
+                &heap,
+                "variable",
+                RelinkTarget::ScopedKeyword(&scopes(&[5]))
+            ),
+            None,
+            "a frame's scoped variable has no record"
+        );
+    }
+
+    /// Through a context: `Cx::relink_link` brands the record and says
+    /// relinking found it, the pool keeps that in the `Link`, and
+    /// `Cx::linkable` brands a pooled link again with its kind, for
+    /// `Cx::linked_value` and `Cx::linked_location` to read what the
+    /// record holds and where its cell is, which is where the binding is
+    /// by name. An early link of the same binding is the same record, of
+    /// the other kind. The context asks for the target it is given: the
+    /// spelling's keyword at scopes, and a definition a macro introduced
+    /// as each backend holds it, are records of their own.
+    #[test]
+    fn a_context_brands_a_relink_and_reads_a_pooled_one_back() {
+        use crate::literal_pool::{LinkKind, LiteralPool};
+        use crate::namespace_view::NamespaceView;
+
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "helper", n(1));
+        // The spelling as three other targets, each a record of its own: a
+        // keyword at scopes, which is also the entry a tree-walker's
+        // introduced definition is, and the VM's renamed global.
+        let identity = scopes(&[1]);
+        let keyword = a_macro(&heap, "helper");
+        library.define_with_scopes(&heap, "helper", identity.clone(), keyword);
+        library.define(&heap, "helper.g1", n(7));
+        let pool = LiteralPool::new(&heap.borrow());
+        crate::NoGcScope::with_cx(&heap, |cx| {
+            let ns = NamespaceView::of(&library);
+            let found = cx
+                .relink_link(ns, "helper", RelinkTarget::ByName)
+                .expect("the library binds it");
+            assert_eq!(found.kind(), LinkKind::Relinked);
+            assert_eq!(
+                found.link().record(),
+                library.local_record("helper").unwrap()
+            );
+            let link = pool.add_link(found);
+            assert_eq!(link.kind(), LinkKind::Relinked);
+
+            let again = cx.linkable(&pool, link);
+            assert_eq!(again.kind(), LinkKind::Relinked);
+            assert_eq!(again.link(), found.link());
+            assert_eq!(cx.linked_value(again).map(|v| v.tagged()), Some(n(1)));
+            assert_eq!(
+                Some(cx.linked_location(again)),
+                cx.binding_location(ns, "helper")
+            );
+
+            let (at, early) = cx.early_link(ns, "helper").unwrap();
+            let early = cx.linkable(&pool, pool.add_link(early));
+            assert_eq!(early.kind(), LinkKind::Early);
+            assert_eq!(early.link(), found.link(), "one record, two kinds");
+            assert_eq!(cx.linked_location(early), at);
+
+            assert!(
+                cx.relink_link(ns, "missing", RelinkTarget::ByName)
+                    .is_none()
+            );
+
+            // The context asks for the target it was given, never for the
+            // name alone.
+            let scoped = IntroducedDefinition::Scoped(identity.clone());
+            let renamed = IntroducedDefinition::Renamed("helper.g1".into());
+            for (target, holds) in [
+                (RelinkTarget::ScopedKeyword(&identity), keyword),
+                (RelinkTarget::Introduced(&scoped), keyword),
+                (RelinkTarget::Introduced(&renamed), n(7)),
+            ] {
+                let other = cx.relink_link(ns, "helper", target).expect("a record");
+                assert_eq!(other.kind(), LinkKind::Relinked, "{target:?}");
+                assert_ne!(other.link(), found.link(), "{target:?}");
+                assert_eq!(
+                    cx.linked_value(other).map(|v| v.tagged()),
+                    Some(holds),
+                    "{target:?}"
+                );
+            }
+        });
+        library.set(&heap, "helper", n(2)).unwrap();
+        assert_eq!(pool.len(), 2);
+    }
+
+    /// A relink is asked with the environment's own heap: a debug build
+    /// refuses another's, in the arms that answer a record without
+    /// borrowing the heap too, where nothing else would notice and a
+    /// context would brand a record of another heap.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore = "needs a debug build")]
+    #[should_panic(expected = "a namespace step with another heap's borrow")]
+    fn a_relink_is_asked_with_the_environments_own_heap() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "helper", n(1));
+        let other = new_shared_heap();
+        library.relink_record(&other, "helper", RelinkTarget::ByName);
+    }
+
+    /// `Cx::linked_value` answers nothing for a record whose cell holds
+    /// `UNBOUND`. No record `Cx::relink_link` answers is one, so the
+    /// record is built by hand, over a free cell.
+    #[test]
+    fn a_link_over_an_unbound_cell_reads_no_value() {
+        use crate::literal_pool::LinkKind;
+
+        let heap = new_shared_heap();
+        let record = {
+            let mut heap = heap.borrow_mut();
+            let cell = BindingCell::free(&mut heap, TaggedValue::UNBOUND);
+            Record::new(&mut heap, cell)
+        };
+        crate::NoGcScope::with_cx(&heap, |cx| {
+            let link = crate::Linkable::new(BindingLink::new(record), LinkKind::Relinked);
+            assert!(cx.linked_value(link).is_none());
+        });
+    }
+
+    /// `Cx::linkable` reads a link through the pool that made it and no
+    /// other, in every build, as `LiteralPool::link` does.
+    #[test]
+    #[should_panic(expected = "a link read through another compilation's pool")]
+    fn a_context_reads_a_link_through_its_own_pool_only() {
+        use crate::literal_pool::LiteralPool;
+        use crate::namespace_view::NamespaceView;
+
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "helper", n(1));
+        let (pool, other) = (
+            LiteralPool::new(&heap.borrow()),
+            LiteralPool::new(&heap.borrow()),
+        );
+        crate::NoGcScope::with_cx(&heap, |cx| {
+            let found = cx
+                .relink_link(NamespaceView::of(&library), "helper", RelinkTarget::ByName)
+                .expect("the library binds it");
+            let link = pool.add_link(found);
+            cx.linkable(&other, link);
+        });
+    }
+
+    /// The VM's introduced definition is a global of its own, renamed: the
+    /// link is that global's slot record, and never the bare spelling's,
+    /// which the library binds to something else here. Until its `Define`
+    /// has run there is no slot and no record; `introduced_definition`
+    /// does not answer one that is recorded but not yet bound either
+    /// (`collect_introduced_globals`), so only a target built by hand
+    /// reaches that `None`.
+    #[test]
+    fn the_vms_renamed_global_links_its_slot_once_defined() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "count", n(100));
+        library.define_introduced_global("count".into(), scopes(&[1]), "count.g1".into());
+        let found = IntroducedDefinition::Renamed("count.g1".into());
+        let introduced = || library.relink_record(&heap, "count", RelinkTarget::Introduced(&found));
+
+        assert_eq!(
+            library.introduced_definition(&heap, "count", &scopes(&[1, 7])),
+            None,
+            "recorded, not yet bound: no candidate"
+        );
+        assert_eq!(introduced(), None, "its `Define` has not run");
+        library.define(&heap, "count.g1", n(10));
+        assert_eq!(
+            library.introduced_definition(&heap, "count", &scopes(&[1, 7])),
+            Some(found.clone())
+        );
+        let link = introduced().unwrap();
+        assert_pinnable(&heap, link);
+        assert_eq!(link.record(), library.local_record("count.g1").unwrap());
+        assert_ne!(link.record(), library.local_record("count").unwrap());
+        assert_eq!(link.value(&heap.borrow()), Some(n(10)));
+        library.set(&heap, "count.g1", n(11)).unwrap();
+        assert_eq!(link.value(&heap.borrow()), Some(n(11)));
+        // A frame under the library holds no global.
+        let frame = Environment::child_frame(Rc::clone(&library));
+        assert_eq!(
+            frame.relink_record(&heap, "count", RelinkTarget::Introduced(&found)),
+            None
+        );
+    }
+
+    /// The tree-walker's introduced definition is a scoped entry: the link
+    /// is the record of the entry at exactly the chosen scopes, among two
+    /// runs' entries and a plain binding of the spelling. An identity the
+    /// library does not hold links nothing: never the spelling's record.
+    /// Nor does a raw frame root's entry, a variable's or a keyword's.
+    #[test]
+    fn the_tree_walkers_scoped_entry_links_its_record_never_the_spellings() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(&heap));
+        library.define(&heap, "count", n(100));
+        library.define_with_scopes(&heap, "count", scopes(&[1]), n(10));
+        library.define_with_scopes(&heap, "count", scopes(&[2]), n(20));
+        let introduced = |at: &ScopeSet| {
+            let found = IntroducedDefinition::Scoped(at.clone());
+            let link = library.relink_record(&heap, "count", RelinkTarget::Introduced(&found))?;
+            assert_pinnable(&heap, link);
+            Some(link)
+        };
+
+        for (mention, run, value) in [(scopes(&[1, 7]), 1, 10), (scopes(&[2, 8]), 2, 20)] {
+            let found = library
+                .introduced_definition(&heap, "count", &mention)
+                .unwrap();
+            assert_eq!(found, IntroducedDefinition::Scoped(scopes(&[run])));
+            let link = library
+                .relink_record(&heap, "count", RelinkTarget::Introduced(&found))
+                .unwrap();
+            assert_eq!(Some(link), introduced(&scopes(&[run])));
+            assert_eq!(link.value(&heap.borrow()), Some(n(value)));
+            assert_eq!(
+                Some(location(&heap, link)),
+                library.scoped_definition_location(&heap, "count", &scopes(&[run]))
+            );
+            assert_ne!(link.record(), library.local_record("count").unwrap());
+        }
+        assert_ne!(introduced(&scopes(&[1])), introduced(&scopes(&[2])));
+        assert_eq!(introduced(&scopes(&[9])), None, "an identity nobody holds");
+        assert_eq!(library.get(&heap, "count"), Some(n(100)));
+
+        // A raw frame root's scoped definition is not linked.
+        let frame = Environment::child_frame(Rc::clone(&library));
+        frame.define_with_scopes(&heap, "count", scopes(&[3]), n(30));
+        let found = IntroducedDefinition::Scoped(scopes(&[3]));
+        assert_eq!(
+            frame.relink_record(&heap, "count", RelinkTarget::Introduced(&found)),
+            None
+        );
+        // Nor a keyword it holds there, which a `ScopedKeyword` target
+        // links by a snapshot.
+        frame.define_with_scopes(&heap, "kw", scopes(&[4]), a_macro(&heap, "kw"));
+        let found = IntroducedDefinition::Scoped(scopes(&[4]));
+        assert!(
+            frame
+                .relink_record(&heap, "kw", RelinkTarget::ScopedKeyword(&scopes(&[4])))
+                .is_some()
+        );
+        assert_eq!(
+            frame.relink_record(&heap, "kw", RelinkTarget::Introduced(&found)),
+            None
+        );
     }
 }
 

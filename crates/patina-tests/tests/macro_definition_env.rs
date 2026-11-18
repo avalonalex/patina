@@ -695,6 +695,136 @@ fn a_generated_macros_private_reference_survives_a_collection_and_a_program_defi
     );
 }
 
+/// Three levels: a library macro generates a macro that generates a macro
+/// whose template names the library's private `secret`. The innermost is
+/// made in a later form than the middle one, after the program has defined
+/// a `secret` of its own, and again inside a body; each reads the library's
+/// binding, at top level, in a procedure under a local `secret`, and in the
+/// body. chibi 0.12 (the library as a file) and Gauche 0.9.15 answer the
+/// same (2026-11-16). One of #837's scoreboard rows, which the suite file
+/// `expansion/relinked-names.scm` holds the rest of: it passed before the
+/// second PR and must after.
+#[test]
+fn a_macro_generated_through_three_levels_reaches_the_private_variable() {
+    let program = "(define-library (t nest)
+  (export gen3 bump!)
+  (import (scheme base))
+  (begin
+    (define secret 42)
+    (define (bump!) (set! secret (+ secret 1)))
+    (define-syntax gen3
+      (syntax-rules ()
+        ((_ g2)
+         (define-syntax g2
+           (syntax-rules ()
+             ((_ g1)
+              (define-syntax g1
+                (syntax-rules () ((_) secret)))))))))))
+(import (scheme base) (t nest))
+(gen3 mid)
+(define secret 'program)
+(mid inner)
+(bump!)
+(define first (list (inner) secret))
+(define (later) (let ((secret 'local)) (inner)))
+(bump!)
+(list first (later) (let () (mid local-inner) (local-inner)))";
+    let expected = "((43 program) 44 44)".to_string();
+    assert_eq!(
+        on_both_backends(program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// Two libraries: `(t genb)` runs `(t gena)`'s generator and exports the
+/// macro it made, and has a private `secret` of its own. The exported
+/// macro reads the first library's `secret`, from a third root that
+/// defines another, before and after the first library assigns it, as a
+/// macro the program makes with the same generator does. chibi 0.12 (the
+/// libraries as files) and Gauche 0.9.15 answer the same (2026-11-16). A
+/// scoreboard row of #837's second PR.
+#[test]
+fn a_macro_generated_across_two_libraries_reaches_the_first() {
+    let program = "(define-library (t gena)
+  (export mk bump!)
+  (import (scheme base))
+  (begin
+    (define secret 42)
+    (define (bump!) (set! secret (+ secret 1)))
+    (define-syntax mk
+      (syntax-rules ()
+        ((_ name) (define-syntax name (syntax-rules () ((_) secret))))))))
+(define-library (t genb)
+  (export get-b)
+  (import (scheme base) (t gena))
+  (begin
+    (define secret 'genb-own)
+    (mk get-b)))
+(import (scheme base) (t genb) (t gena))
+(define secret 'program)
+(define first (list (get-b) secret))
+(bump!)
+(mk get-p)
+(list first (list (get-b) (get-p)))";
+    let expected = "((42 program) (43 43))".to_string();
+    assert_eq!(
+        on_both_backends(program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// A redefinition: `get-old`, a macro the first `(t redef)`'s generator
+/// made, and `h-old`, a procedure that expanded its `m`, each name the
+/// first library's private `secret`, and still read it after the library
+/// is redefined, imported again and two collections run, while a macro
+/// made then and a fresh expansion of `m` read the new one's, which the
+/// new `bump!` has assigned. Neither oracle redefines a library so (Gauche
+/// 0.9.15 keeps the one module and answers the new library's value
+/// throughout, `new` and then `(bumped new)` for all four; chibi 0.12
+/// takes no `define-library` in a script), so it is a Rust test and not a
+/// suite row. A scoreboard row of #837's second PR, run under the stress
+/// lane and in a release `gc-check` build too, where a freed record or
+/// cell panics.
+#[test]
+fn generated_macros_keep_the_library_they_were_made_from_across_a_redefinition() {
+    let library = |value: &str| {
+        format!(
+            "(define-library (t redef-gen)
+  (export mk m bump!)
+  (import (scheme base))
+  (begin
+    (define secret '{value})
+    (define (bump!) (set! secret (list 'bumped secret)))
+    (define-syntax m (syntax-rules () ((_) secret)))
+    (define-syntax mk
+      (syntax-rules ()
+        ((_ name) (define-syntax name (syntax-rules () ((_) secret))))))))
+"
+        )
+    };
+    let program = format!(
+        "{}(import (scheme base) (patina debug) (t redef-gen))
+(mk get-old)
+(define (h-old) (m))
+{}(define before (list (get-old) (h-old) (m)))
+(import (t redef-gen))
+(gc) (gc)
+(mk get-new)
+(bump!)
+(list before (list (get-old) (h-old) (get-new) (m)))",
+        library("old"),
+        library("new")
+    );
+    let expected = "((old old old) (old old (bumped new) (bumped new)))".to_string();
+    assert_eq!(
+        on_both_backends(&program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
 /// The library `call-f` comes from: an exported `f` its template calls.
 const CALL_F: &str = "(define-library (t lib-f)
   (export call-f f)

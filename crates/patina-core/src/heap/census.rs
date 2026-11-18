@@ -32,7 +32,19 @@ pub(super) fn object_info(data: &HeapObjectData) -> (Variant, usize, u64) {
         }
         H::Procedure(_) => (7, 0, 16),
         H::Port(_) => (8, 0, 16),
-        H::Macro { literals, .. } => (9, literals.len(), 16 + 8 * literals.len() as u64),
+        // Its literals and its carried relinks' records (#837), a word
+        // each: the headered layout models the record's word alone, where
+        // the byte account charges a relink its whole `CarriedRelink`, key
+        // and all, since that layout has no place for the key's two
+        // spellings and says nothing yet of where they go. No program makes
+        // a relink before #837's second PR, so until then only this
+        // module's test reaches the term.
+        H::Macro {
+            literals, relinks, ..
+        } => {
+            let n = literals.len() + relinks.len();
+            (9, n, 16 + 8 * n as u64)
+        }
         H::RecordType(_) => (10, 0, 16),
         H::Record { fields, .. } => {
             let n = fields.borrow().len();
@@ -205,5 +217,54 @@ impl Heap {
         }
         scan.source_entries = entries.len() as u64;
         scan.source_identifier_entries = identifier_entries.len() as u64;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::binding_record::{BindingCell, BindingLink, CarriedRelink, Record};
+    use crate::compiled_macro::CompiledMacro;
+    use crate::scope::{ScopeId, ScopeSet};
+    use std::collections::{HashMap, HashSet};
+
+    /// The census sizes a macro object by its header and a word for each
+    /// literal and each carried relink's record (#837): a plain macro is 16
+    /// bytes and no length, and one with a literal and a relink is 32 and
+    /// 2. No program makes a relink before #837's second PR, so the
+    /// census's own lane, which runs programs, does not reach the term.
+    #[test]
+    fn a_macros_relinks_are_words_of_the_object() {
+        let body = || {
+            Rc::new(CompiledMacro {
+                name: Rc::from("m"),
+                rules: vec![],
+                max_pvars: 0,
+                definition_scopes: ScopeSet::new(),
+                template_symbols: HashSet::new(),
+                inherited_identifiers: HashMap::new(),
+                definition_env: None,
+                foreign_expansions: vec![],
+            })
+        };
+        let mut heap = Heap::new();
+        let cell = BindingCell::free(&mut heap, TaggedValue::fixnum(1));
+        let record = Record::new(&mut heap, cell);
+        let relink = CarriedRelink::new(
+            Rc::from("secret.1"),
+            ScopeId(1),
+            Rc::from("secret"),
+            BindingLink::new(record),
+        );
+        let sized = |literals: Vec<TaggedValue>, relinks: Vec<CarriedRelink>| {
+            let (_, len, bytes) = object_info(&HeapObjectData::Macro {
+                body: body(),
+                literals: literals.into_boxed_slice(),
+                relinks: relinks.into_boxed_slice(),
+            });
+            (len, bytes)
+        };
+        assert_eq!(sized(vec![], vec![]), (0, 16));
+        assert_eq!(sized(vec![TaggedValue::fixnum(7)], vec![relink]), (2, 32));
     }
 }

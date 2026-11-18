@@ -94,8 +94,9 @@ pub struct LinkTable {
     /// is read by name, the heap's by-name record `(cell . BY_NAME)` over a
     /// free cell holding `UNBOUND`. `UNBOUND` until linked, but for a
     /// pinned entry (#837), which holds from the table's making the record
-    /// an early link names: a namespace's slot or scoped entry record, or
-    /// E1's fresh record over a frame's import's cell. Cells, so the
+    /// an early or a relinked link names: a namespace's slot or scoped
+    /// entry record, E1's fresh record over a frame's import's cell, or a
+    /// relink's snapshot record of a frame's keyword. Cells, so the
     /// collector is shown each where it lives (#682).
     entries: Box<[Cell<TaggedValue>]>,
     /// The spellings, in the order pass 5 first emitted an operand naming
@@ -234,9 +235,10 @@ impl LinkTable {
     /// A pinned entry (#837) is left as [`LinkTable::with_links`] made it,
     /// on the first link and on a relink. A debug or `gc-check` build checks
     /// here, where the table first becomes readable, under `load_unit`'s
-    /// window, that each pinned record is one an early link names — a
-    /// namespace's slot or scoped entry record, or E1's fresh record over a
-    /// frame's import's cell — and not a placeholder, a read-through record
+    /// window, that each pinned record is one an early or a relinked link
+    /// names — a namespace's slot or scoped entry record, E1's fresh record
+    /// over a frame's import's cell, or a relink's snapshot record of a
+    /// frame's keyword — and not a placeholder, a read-through record
     /// or the by-name record: the linked read finds
     /// `UNBOUND` through those, and the cold paths refuse a pinned entry,
     /// so it would answer unbound for good instead of following an
@@ -273,15 +275,12 @@ impl LinkTable {
         );
     }
 
-    /// A check build's refusal of a pinned record of a kind no early link
-    /// names (#837): see [`LinkTable::link_in`].
+    /// A check build's refusal of a pinned record of a kind no early or
+    /// relinked link names (#837): see [`LinkTable::link_in`].
     fn check_pinned(&self, heap: &Heap) {
         for &k in self.pinned.iter() {
             let record = Record::from_word(self.entries[k as usize].get());
-            if record.is_placeholder(heap)
-                || record.parent_record(heap).is_some()
-                || record.is_by_name(heap)
-            {
+            if record.refused_as_a_link(heap).is_some() {
                 pinned_record_of_the_wrong_kind(&self.names[k as usize]);
             }
         }
@@ -443,14 +442,14 @@ impl LinkTable {
 pub struct Assignee(BindingCell);
 
 /// A check build's failure: a pinned entry holds a placeholder, a
-/// read-through record or the by-name record, none of which an early link
-/// names (#837).
+/// read-through record or the by-name record, none of which an early or a
+/// relinked link names (#837).
 #[cold]
 #[inline(never)]
 fn pinned_record_of_the_wrong_kind(name: &str) -> ! {
     panic!(
         "a pinned link-table entry for {name:?} holds a placeholder, a read-through record \
-         or the by-name record, which no early link names (#837)"
+         or the by-name record, which no early or relinked link names (#837)"
     );
 }
 
@@ -1174,6 +1173,193 @@ mod tests {
                 "{kind}: refused before it links"
             );
         }
+    }
+
+    /// A macro object's carried relink (#837) is held to the same kinds,
+    /// where the object is allocated: a check build refuses one over a
+    /// record of `kind`, wherever it stands among the object's relinks,
+    /// naming the kind and the spelling, before it makes
+    /// the object: the heap has allocated nothing more when the refusal
+    /// unwinds (`bytes_allocated`, which every allocation moves; the live
+    /// bytes are the last collection's and would read 0 either way). Here,
+    /// beside the pinned entry's refusal, since a carried record is pinned
+    /// in some later unit's table, and both ask
+    /// `Record::refused_as_a_link`. A record of the plain kind is taken,
+    /// and charged.
+    fn assert_a_carried_relink_is_refused(
+        heap: &crate::heap::SharedHeap,
+        record: Record,
+        kind: &str,
+    ) {
+        use crate::binding_record::CarriedRelink;
+        use crate::compiled_macro::CompiledMacro;
+        use std::collections::{HashMap, HashSet};
+
+        let compiled = || {
+            Rc::new(CompiledMacro {
+                name: Rc::from("m"),
+                rules: vec![],
+                max_pvars: 0,
+                definition_scopes: crate::ScopeSet::new(),
+                template_symbols: HashSet::new(),
+                inherited_identifiers: HashMap::new(),
+                definition_env: None,
+                foreign_expansions: vec![],
+            })
+        };
+        let relink = |record| {
+            CarriedRelink::new(
+                Rc::from("secret.1"),
+                crate::ScopeId(7),
+                Rc::from("secret"),
+                BindingLink::new(record),
+            )
+        };
+        let ns = Rc::new(Environment::with_heap(heap));
+        ns.define(heap, "x", n(1));
+        let plain = ns.local_record("x").unwrap();
+        // Alone, and after and before a record that is taken: every relink
+        // is asked, wherever it stands among them.
+        let bytes = heap.borrow().bytes_allocated();
+        for relinks in [
+            vec![relink(record)],
+            vec![relink(plain), relink(record)],
+            vec![relink(record), relink(plain)],
+        ] {
+            let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                heap.borrow_mut()
+                    .alloc_macro_with_relinks(compiled(), vec![], relinks);
+            }))
+            .expect_err(kind);
+            let message = panic_message(&*refused).unwrap_or_default();
+            assert!(
+                message.contains(&format!(
+                    "a macro's carried relink for \"secret.1\" holds {kind}"
+                )),
+                "{kind}: {message}"
+            );
+            assert_eq!(
+                heap.borrow().bytes_allocated(),
+                bytes,
+                "{kind}: refused before the object is made"
+            );
+        }
+        let mac =
+            heap.borrow_mut()
+                .alloc_macro_with_relinks(compiled(), vec![], vec![relink(plain)]);
+        assert_eq!(heap.borrow().macro_relinks(mac).len(), 1);
+        assert!(
+            heap.borrow().bytes_allocated() > bytes,
+            "the counter the refusal is held to moves when an object is made"
+        );
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    fn a_check_build_refuses_a_carried_placeholder() {
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        let placeholder = ns.link_record(&heap, "later").unwrap();
+        assert_a_carried_relink_is_refused(&heap, placeholder, "a placeholder");
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    fn a_check_build_refuses_a_carried_read_through_record() {
+        let heap = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(&heap));
+        global.define(&heap, "x", n(1));
+        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
+        let read_through = host.link_record(&heap, "x").unwrap();
+        assert_a_carried_relink_is_refused(&heap, read_through, "a read-through record");
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    fn a_check_build_refuses_the_carried_by_name_record() {
+        let heap = new_shared_heap();
+        let by_name = Record::from_word(heap.borrow_mut().by_name_record());
+        assert_a_carried_relink_is_refused(&heap, by_name, "the by-name record");
+    }
+
+    /// A macro carries relinked identifiers only (#837): a check build
+    /// refuses a `Carried` whose handle early binding branded, naming the
+    /// spelling, where a context stores it (`Carried::into_stored`), and
+    /// makes no object. `Carried`'s fields are public, so the handle may
+    /// be any a context answered; stored, `Cx::macro_relinks` would read it
+    /// back as relinked, and the reference it was copied for would lose the
+    /// fast paths early binding keeps. The same record relinked is taken.
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    fn a_check_build_refuses_a_carried_early_link() {
+        use crate::binding_record::Carried;
+        use crate::compiled_macro::CompiledMacro;
+        use crate::environment::RelinkTarget;
+        use crate::literal_pool::LinkKind;
+        use crate::namespace_view::NamespaceView;
+        use std::collections::{HashMap, HashSet};
+
+        let compiled = || {
+            Rc::new(CompiledMacro {
+                name: Rc::from("m"),
+                rules: vec![],
+                max_pvars: 0,
+                definition_scopes: crate::ScopeSet::new(),
+                template_symbols: HashSet::new(),
+                inherited_identifiers: HashMap::new(),
+                definition_env: None,
+                foreign_expansions: vec![],
+            })
+        };
+        fn carried(link: crate::Linkable<'_>) -> Carried<'_> {
+            Carried {
+                spelling: Rc::from("secret.1"),
+                guard: crate::ScopeId(7),
+                written: Rc::from("secret"),
+                link,
+            }
+        }
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        ns.define(&heap, "secret", n(1));
+        let bytes = heap.borrow().bytes_allocated();
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::NoGcScope::with_cx(&heap, |cx| {
+                let (_, early) = cx.early_link(NamespaceView::of(&ns), "secret").unwrap();
+                assert_eq!(early.kind(), LinkKind::Early);
+                cx.alloc_macro_with_relinks(compiled(), vec![], vec![carried(early)]);
+            })
+        }))
+        .expect_err("an early-bound handle");
+        let message = panic_message(&*refused).unwrap_or_default();
+        assert!(
+            message.contains("a macro's carried relink for \"secret.1\" holds an early-bound link"),
+            "{message}"
+        );
+        assert_eq!(
+            heap.borrow().bytes_allocated(),
+            bytes,
+            "refused before the object is made"
+        );
+        crate::NoGcScope::with_cx(&heap, |cx| {
+            let relinked = cx
+                .relink_link(NamespaceView::of(&ns), "secret", RelinkTarget::ByName)
+                .unwrap();
+            let mac = cx.alloc_macro_with_relinks(compiled(), vec![], vec![carried(relinked)]);
+            assert_eq!(cx.macro_relinks(mac).len(), 1);
+        });
     }
 
     /// A table is traced once an epoch (#836): the first ask in an epoch

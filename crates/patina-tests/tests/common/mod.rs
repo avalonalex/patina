@@ -2038,6 +2038,63 @@ macro_rules! gc_shared_tests {
         }
 
         #[test]
+        fn a_generated_macros_literal_survives_its_librarys_redefinition() {
+            // `g` mentions the first `(tmp lit)`'s private `priv-lit` only
+            // as a pattern literal: its templates introduce nothing, so no
+            // identifier of it is inherited and it keeps no environment of
+            // its generator's expansion. The program binds a `priv-lit` of
+            // its own, so the literal is a relinked one. Before the
+            // redefinition the library's own mention, which `feed` hands
+            // it, matches and the program's does not; after the library is
+            // redefined and imported again, the new library's `priv-lit`
+            // is another binding than the one `g` names, and nothing
+            // matches. Each step is a top-level form of its own, with two
+            // collections after the import. A scoreboard row of #837's
+            // second PR, after which the record `g` carries is the only
+            // thing that names the old library's binding: a freed record
+            // or cell panics where it is read in a debug or check build
+            // (#621). Under zeal too. Neither oracle redefines a library
+            // so (Gauche 0.9.15 keeps the one module and answers
+            // `(0 0 1)` twice).
+            let library = |value: &str| {
+                format!(
+                    "(define-library (tmp lit)
+                       (export def-matcher feed)
+                       (import (scheme base))
+                       (begin
+                         (define priv-lit (list '{value}))
+                         (define-syntax def-matcher
+                           (syntax-rules ()
+                             ((_ name)
+                              (define-syntax name
+                                (syntax-rules (priv-lit)
+                                  ((_ priv-lit) 1)
+                                  ((_ anything) 0))))))
+                         (define-syntax feed
+                           (syntax-rules () ((_ k) (k priv-lit))))))"
+                )
+            };
+            assert_gc_and_zeal_eval_to(
+                &format!(
+                    "(import (scheme base) (patina debug))
+                     {}
+                     (import (tmp lit))
+                     (define priv-lit 'the-programs)
+                     (def-matcher g)
+                     (define before (list (g priv-lit) (g 7) (feed g)))
+                     {}
+                     (import (tmp lit))
+                     (gc) (gc)
+                     (define after (list (g priv-lit) (g 7) (feed g)))
+                     (list before after)",
+                    library("old"),
+                    library("new")
+                ),
+                "((0 0 1) (0 0 0))",
+            );
+        }
+
+        #[test]
         fn a_replaced_library_s_procedure_reads_by_name_through_its_namespace_after_a_collection(
         ) {
             // `old-step` is the first `(r836 stepper)`'s `step`, whose body

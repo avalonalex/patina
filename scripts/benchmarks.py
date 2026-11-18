@@ -81,7 +81,9 @@ def metadata(args):
 
 
 def environment():
-    env = os.environ.copy()
+    # A caller's allocator settings would change what a run is timed at
+    # (gc_bench.ALLOCATOR_SETTINGS).
+    env = {k: v for k, v in os.environ.items() if not k.startswith(gc_bench.ALLOCATOR_SETTINGS)}
     env['PATINA_ISOLATED_LIBRARIES'] = '1'
     # GC/trace overrides would invalidate a normal-runtime baseline.
     env.pop('PATINA_GC', None)

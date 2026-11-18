@@ -258,6 +258,10 @@ const SHARED_PAYLOADS: &[&str] = &[
     "Identifier.name",
     "Library.0",
     "Macro.body",
+    // Shared, immutable state (#837): each `CarriedRelink` holds two
+    // `Rc<str>` spellings inside a struct of its own, which the scan reads
+    // as a wrapper (`SHARED_WRAPPERS`).
+    "Macro.relinks",
     "MutableCell.0",
     "Parameter.values",
     "Procedure.0",
@@ -272,7 +276,7 @@ const SHARED_PAYLOADS: &[&str] = &[
 /// The payloads of `HeapObjectData` holding an `Rc`, a `RefCell`, a `Cell`
 /// or an `Interior` are the ones `SHARED_PAYLOADS` lists (C9). The scan reads
 /// each payload's type as written, so a type that wraps one inside a struct
-/// of its own is beyond it.
+/// of its own is beyond it unless `SHARED_WRAPPERS` names the struct.
 #[test]
 fn heap_payloads_hold_no_new_shared_state() {
     let heap = Path::new(env!("CARGO_MANIFEST_DIR")).join("../patina-core/src/heap/mod.rs");
@@ -305,8 +309,9 @@ fn the_static_scan_finds_a_static_mut() {
 }
 
 /// Positive control: the payload scan finds a struct variant's `RefCell`
-/// field, a tuple variant's `Rc` and one that rustfmt split over lines, and
-/// passes the rest, comments and attributes among them.
+/// field, a tuple variant's `Rc`, one that rustfmt split over lines and a
+/// wrapper it was told holds shared state, and passes the rest, comments
+/// and attributes among them.
 #[test]
 fn the_payload_scan_finds_new_shared_state() {
     let text = "pub enum HeapObjectData {
@@ -323,12 +328,17 @@ fn the_payload_scan_finds_new_shared_state() {
     ),
     Callback(Box<dyn Fn(TaggedValue) -> TaggedValue>),
     Counted(Arc<RefCellCount>),
+    Carrying {
+        words: Box<[TaggedValue]>,
+        relinks: Box<[crate::binding_record::CarriedRelink]>,
+        other: Box<[CarriedRelinkCount]>,
+    },
     Free,
 }
 ";
     assert_eq!(
         shared_payloads(text),
-        ["Counter.hits", "Shared.1", "Split.0"]
+        ["Counter.hits", "Shared.1", "Split.0", "Carrying.relinks"]
     );
 }
 
@@ -524,9 +534,19 @@ fn top_level_pieces(text: &str) -> Vec<&str> {
     pieces
 }
 
-/// Whether a type, as written, names `Rc`, `RefCell`, `Cell` or `Interior`:
-/// a whole word, so neither `Arc` nor `RefCellCount` does.
+/// Core's structs that hold an `Rc`, a `RefCell`, a `Cell` or an `Interior`
+/// in a field of their own, and that a payload names: the scan reads a
+/// payload's type as written and not into the types it names, so each is
+/// told to it here. `CarriedRelink` (#837) holds two `Rc<str>` spellings.
+const SHARED_WRAPPERS: &[&str] = &["CarriedRelink"];
+
+/// Whether a type, as written, names `Rc`, `RefCell`, `Cell` or `Interior`,
+/// or one of the [`SHARED_WRAPPERS`]: a whole word, so neither `Arc` nor
+/// `RefCellCount` does.
 fn names_shared_state(ty: &str) -> bool {
     ty.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .any(|word| matches!(word, "Rc" | "RefCell" | "Cell" | "Interior"))
+        .any(|word| {
+            matches!(word, "Rc" | "RefCell" | "Cell" | "Interior")
+                || SHARED_WRAPPERS.contains(&word)
+        })
 }

@@ -44,6 +44,15 @@
 (test-equal "local shadowing does not capture exported helpers" '(53 55 61)
   (let-syntax ((helper (syntax-rules () ((_) 'local))))
     (list (answer) (recur) (generated-answer))))
+;; #837's scoreboard (`relinked-names.scm` has the rest): each private keyword
+;; is a frame's, relinked at every expansion, here in a procedure compiled in
+;; a later form than the generated macro was made in. chibi 0.12 answers the
+;; same with the library as a file (2026-11-16).
+(define (later)
+  (list (answer) (recur) (another) (generated-answer) (generated-in-library) (helper)))
+(test-equal "a procedure compiled later reaches each private keyword"
+  '(53 55 60 61 61 caller)
+  (later))
 (test-equal "a library-generated splice binds before earlier references" '(62 62)
   (let ()
     (define (earlier) if)

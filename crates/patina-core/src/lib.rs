@@ -81,7 +81,7 @@ pub mod vfs;
 pub mod walk;
 
 // Re-export main types for convenience
-pub use binding_record::{BindingCell, BindingLink, Linkable};
+pub use binding_record::{BindingCell, BindingLink, Carried, CarriedRelink, Linkable};
 pub use compiled_macro::{CompiledMacro, CompiledRule, Identifier, LiteralId, Pattern, Template};
 pub use continuation::{
     CpsContinuation, DynamicWindRecord, WindRecord, next_dynamic_wind_id, next_prompt_id,
@@ -93,8 +93,8 @@ pub use core_expr::{
 pub use core_syntax::{ALL_CORE_FORMS, CoreForm};
 pub use cps_expr::{CpsExpr, CpsExprKind, CpsParam, CpsPrimitive, PromptTag};
 pub use environment::{
-    BindingLocation, Environment, IntroducedDefinition, IntroducedRecord, ScopedBinding,
-    ScopedSetError,
+    BindingLocation, Environment, IntroducedDefinition, IntroducedRecord, RelinkTarget,
+    ScopedBinding, ScopedSetError,
 };
 pub use error::{ErrorDetail, ErrorKind, ExceptionKind, ExceptionObject, SourceLocation};
 pub use heap::PromiseState;
@@ -105,7 +105,7 @@ pub use heap::cx::{
 pub use instance::{CurrentPort, Instance};
 pub use library::Library;
 pub use link_table::{Assignee, LinkIdx, LinkTable};
-pub use literal_pool::{Link, Lit, LiteralPool};
+pub use literal_pool::{Link, LinkKind, Lit, LiteralPool};
 pub use namespace_view::NamespaceView;
 pub use port::{Port, PortData, PortDirection, PortKind, StdioKind, StringPortData};
 pub use procedure::{Arity, Procedure};

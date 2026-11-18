@@ -30,33 +30,65 @@ use crate::types::CodeObject;
 use patina_core::core_expr::{CoreExpr, Symbol};
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
-use patina_core::{BindingLink, NamespaceView};
+use patina_core::{BindingLink, Link, LinkKind, NamespaceView};
 use patina_core::{Lit, LiteralPool};
 use patina_primitives::PrimitiveRegistry;
 use std::rc::Rc;
 
+/// A linked operand as the passes carry it from pass 2 on (#837): the
+/// record the desugarer linked, and whether relinking linked it
+/// ([`LinkKind::Relinked`]) rather than early binding. Pass 2 reads both out
+/// of the compilation's literal pool, which roots the record until the
+/// unit's link table does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct LinkedOperand {
+    /// The record the operand reads and writes.
+    pub link: BindingLink,
+    /// Whether relinking linked it: such an operand takes no fast path,
+    /// whatever its record's cell holds (`resolve_primitive_calls`).
+    pub relinked: bool,
+}
+
+impl LinkedOperand {
+    /// The operand the pooled `link` stands for: its record, read out of
+    /// `literals`, and its kind.
+    pub fn of(literals: &LiteralPool, link: Link) -> Self {
+        LinkedOperand {
+            link: literals.link(link),
+            relinked: link.kind() == LinkKind::Relinked,
+        }
+    }
+}
+
 /// What identifies a global operand within one compilation (#837): its
-/// spelling, or for an operand the desugarer linked, its record. A linked
-/// `car` and the unit's own `car` never share an entry, in pass 5's link
-/// table or in `primitive_calls`' map: sharing one would give one site the
-/// other's binding once the program defines `car`.
+/// spelling, or for an operand the desugarer linked, its record and what
+/// linked it. A linked `car` and the unit's own `car` never share an entry,
+/// in pass 5's link table or in `primitive_calls`' map: sharing one would
+/// give one site the other's binding once the program defines `car`. Nor do
+/// an early-bound and a relinked operand over one record: the first keeps
+/// its fast paths and the second takes none, so one entry of the map could
+/// not answer for both. Their two entries of the link table are pinned to
+/// the same record.
 ///
-/// A `Record` key is the record's identity less a check build's stamp
-/// (`BindingLink::key`), sound because the compilation's literal pool roots
-/// every linked record for the maps' whole life.
+/// A `Record` or `Relinked` key is the record's identity less a check
+/// build's stamp (`BindingLink::key`), sound because the compilation's
+/// literal pool roots every linked record for the maps' whole life.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum OperandKey {
     /// An operand looked up by its spelling.
     Name(Symbol),
-    /// An operand linked to a binding record.
+    /// An operand early binding linked to a binding record.
     Record(u64),
+    /// An operand relinking linked to a binding record.
+    Relinked(u64),
 }
 
 impl OperandKey {
-    /// The key of the operand spelled `name`, linked to `link` if set.
-    pub fn of(name: &Symbol, link: Option<BindingLink>) -> Self {
+    /// The key of the operand spelled `name`, linked as `link` says if set.
+    pub fn of(name: &Symbol, link: Option<LinkedOperand>) -> Self {
         match link {
-            Some(link) => OperandKey::Record(link.key()),
+            Some(operand) if operand.relinked => OperandKey::Relinked(operand.link.key()),
+            Some(operand) => OperandKey::Record(operand.link.key()),
             None => OperandKey::Name(Rc::clone(name)),
         }
     }
@@ -211,6 +243,28 @@ pub(crate) fn link_to(
     patina_core::NoGcScope::with_cx(heap, |cx| {
         let (_, linkable) = cx
             .early_link(NamespaceView::of(ns), name)
+            .unwrap_or_else(|| panic!("{name} names a record"));
+        literals.add_link(linkable)
+    })
+}
+
+/// [`link_to`] for a relinked reference (#837's second PR): the record
+/// `Cx::relink_link` answers for `name` by name in `ns`, pooled in
+/// `literals`, of [`LinkKind::Relinked`].
+#[cfg(test)]
+pub(crate) fn relink_to(
+    heap: &SharedHeap,
+    ns: &Environment,
+    name: &str,
+    literals: &LiteralPool,
+) -> patina_core::Link {
+    patina_core::NoGcScope::with_cx(heap, |cx| {
+        let linkable = cx
+            .relink_link(
+                NamespaceView::of(ns),
+                name,
+                patina_core::RelinkTarget::ByName,
+            )
             .unwrap_or_else(|| panic!("{name} names a record"));
         literals.add_link(linkable)
     })

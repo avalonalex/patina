@@ -14,7 +14,9 @@
 //! `LocalRef`/`ClosureRef`, so only true global references are candidates.
 //! A callee the desugarer linked to a binding record (#837) is keyed by the
 //! record (`OperandKey`), and its eligibility is the record's: what it
-//! holds, never what its spelling means in the environment.
+//! holds, never what its spelling means in the environment. A callee
+//! relinking linked is never eligible, whatever its record holds: it stays
+//! on the generic `Call` path.
 //! Rebinding a primitive name *after* compilation is handled at runtime, not
 //! here: the `Define`/`StoreGlobal` handlers, the import path and a host's
 //! definitions (`Backend::define`, #673) mark the overwritten primitive in
@@ -30,19 +32,18 @@ use patina_core::procedure::Procedure;
 use patina_primitives::PrimitiveRegistry;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::OperandKey;
 use super::pass4_registers::{AllocatedExpr, RegExpr, RegExprKind};
+use super::{LinkedOperand, OperandKey};
 use crate::types::instruction::{ControlForm, PrimitiveFnId};
-use patina_core::BindingLink;
 use patina_core::core_expr::Symbol;
 
 /// The callees pass 5 may compile to a primitive call instead of a generic
 /// `Call`.
 #[derive(Debug, Default)]
 pub struct PrimitiveCallMap {
-    /// Callees (by env binding, or by the record linked) that compile to
-    /// `CallPrimitive` (or an inline opcode, when `inline` is set and the
-    /// call site has the right arity).
+    /// Callees (by env binding, or by the record early binding linked)
+    /// that compile to `CallPrimitive` (or an inline opcode, when `inline`
+    /// is set and the call site has the right arity). Never a relinked one.
     pub by_name: FxHashMap<OperandKey, ResolvedPrimitive>,
     /// Primitive procedure *values* in operator position — the quasiquote
     /// pre-pass's constructors — keyed by the literal's raw bits; these
@@ -58,8 +59,8 @@ pub struct PrimitiveCallMap {
     /// Keyed on the binding, not on the spelling, since #442: a program's
     /// own `call-with-values` is a call of the program's procedure, and an
     /// import renamed, or a library template's reference early binding
-    /// links (#438, #837), still gets the sequence: a linked one by its
-    /// record's value.
+    /// links (#438, #837), still gets the sequence: an early-bound one by
+    /// its record's value. A relinked one never does.
     pub control: FxHashMap<OperandKey, ControlForm>,
 }
 
@@ -175,9 +176,10 @@ pub(crate) fn is_excluded(qualified_name: &str) -> bool {
 ///
 /// A name maps to a `PrimitiveFnId` only when it is used in callee position,
 /// currently binds to a registry primitive in `env`, and is not one of the
-/// excluded control primitives; a linked callee (#837) when its record's
-/// cell holds one. Anything unresolvable simply stays on the generic `Call`
-/// path — at worst slower, never wrong.
+/// excluded control primitives; a callee early binding linked (#837) when
+/// its record's cell holds one; a callee relinking linked, never. Anything
+/// unresolvable simply stays on the generic `Call` path — at worst slower,
+/// never wrong.
 pub fn resolve_primitive_calls(
     allocated: &AllocatedExpr,
     heap: &SharedHeap,
@@ -196,7 +198,14 @@ pub fn resolve_primitive_calls(
         // which marks the primitive it replaces, as for any binding of the
         // environment's own, so the site deoptimizes as theirs do.
         let val = match link {
-            Some(link) => link.value(&heap.borrow()),
+            // A relinked callee (#837's second PR) is an ordinary call: a
+            // private or an introduced binding, whose fast paths #837
+            // leaves as they were. A rule of scope, not of soundness: a
+            // record's read changes only by a write the shadow marks see,
+            // as above. Making one eligible is deleting this arm and
+            // `OperandKey::Relinked`.
+            Some(operand) if operand.relinked => continue,
+            Some(operand) => operand.link.value(&heap.borrow()),
             None => resolved_by_name(view, heap, &name),
         };
         let Some(val) = val else {
@@ -300,7 +309,7 @@ fn primitive_entry(proc: &Procedure, registry: &PrimitiveRegistry) -> Option<(us
 #[derive(Default)]
 struct Callees {
     /// Each callee once by its key, with its spelling and its link.
-    names: FxHashMap<OperandKey, (Symbol, Option<BindingLink>)>,
+    names: FxHashMap<OperandKey, (Symbol, Option<LinkedOperand>)>,
     values: FxHashSet<patina_core::tagged_value::TaggedValue>,
 }
 
@@ -445,7 +454,12 @@ mod tests {
         let tailed = pass3_tail::Pass3Tail::run(&closed);
         let allocated = pass4_registers::Pass4Registers::run(&tailed);
         let map = resolve_primitive_calls(&allocated, &heap, &env, state.primitive_registry());
-        let key = |link| OperandKey::of(&Rc::from("car"), Some(literals.link(link)));
+        let key = |link| {
+            OperandKey::of(
+                &Rc::from("car"),
+                Some(crate::compiler::LinkedOperand::of(&literals, link)),
+            )
+        };
         assert!(map.by_name.contains_key(&OperandKey::Name(Rc::from("car"))));
         assert!(
             map.by_name.contains_key(&key(to_primitive)),
@@ -484,5 +498,361 @@ mod tests {
             )),
             "the linked car whose record holds a number is an ordinary call"
         );
+    }
+
+    /// A machine with its primitives, `call-with-values` and
+    /// `dynamic-wind` bound as the library loader binds them, a library
+    /// that imports the global `car`, `length` and those two, and a pool:
+    /// what the two tests below link against.
+    fn with_importer() -> (
+        crate::runtime::VmState,
+        std::rc::Rc<patina_core::environment::Environment>,
+        patina_core::LiteralPool,
+    ) {
+        use patina_core::environment::Environment;
+        let mut state = crate::runtime::VmState::on_a_fresh_heap();
+        state.install_primitives();
+        let heap = state.heap().clone();
+        for (name, arity) in [("call-with-values", 2), ("dynamic-wind", 3)] {
+            state.global_env().define_primitive(
+                &heap,
+                name,
+                patina_core::Arity::Exact(arity),
+                vec!["patina".into(), "internal".into(), "control".into()],
+            );
+        }
+        let importer = std::rc::Rc::new(Environment::with_heap(&heap));
+        for name in ["car", "length", "call-with-values", "dynamic-wind"] {
+            let cell = state.global_env().cell_of(&heap, name).unwrap();
+            importer.import_cell(&heap, name, cell);
+        }
+        let literals = patina_core::LiteralPool::new(&heap.borrow());
+        (state, importer, literals)
+    }
+
+    /// `(lambda (p) (begin call ...))`, each call a linked callee applied
+    /// to `arity` copies of `p`.
+    fn a_lambda_calling(
+        calls: &[(&str, patina_core::Link, usize)],
+    ) -> patina_core::core_expr::CoreExpr {
+        use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
+        use patina_core::{ScopeId, ScopeSet};
+        use std::rc::Rc;
+
+        let scopes = ScopeSet::from_iter([ScopeId(500)]);
+        let p = || CoreExpr::new(CoreExprKind::var(Rc::from("p"), ScopeSet::new()));
+        let calls = calls
+            .iter()
+            .map(|&(name, link, arity)| {
+                CoreExpr::new(CoreExprKind::App {
+                    func: Rc::new(CoreExpr::new(CoreExprKind::linked_var(
+                        Rc::from(name),
+                        scopes.clone(),
+                        Some(link),
+                    ))),
+                    args: (0..arity).map(|_| p()).collect(),
+                })
+            })
+            .collect();
+        CoreExpr::new(CoreExprKind::Lambda {
+            params: Formals::Fixed(vec![ScopedParam::simple(Rc::from("p"))]),
+            body: vec![CoreExpr::new(CoreExprKind::Begin(calls))],
+            binding_scopes: Rc::new(ScopeSet::new()),
+        })
+    }
+
+    /// The primitive-call map of `expr` compiled in `state`'s globals.
+    fn primitive_calls_of(
+        state: &crate::runtime::VmState,
+        literals: &patina_core::LiteralPool,
+        expr: &patina_core::core_expr::CoreExpr,
+    ) -> super::PrimitiveCallMap {
+        use crate::compiler::{pass1_analysis, pass2_closure, pass3_tail, pass4_registers};
+        let env = state.global_env();
+        let renamed = crate::compiler::alpha_rename::alpha_rename(expr, Some(env))
+            .unwrap()
+            .expr;
+        let analysis = pass1_analysis::Pass1Analysis::run(&renamed);
+        let closed = pass2_closure::Pass2Closure::run(&renamed, &analysis, literals);
+        let tailed = pass3_tail::Pass3Tail::run(&closed);
+        let allocated = pass4_registers::Pass4Registers::run(&tailed);
+        super::resolve_primitive_calls(&allocated, state.heap(), env, state.primitive_registry())
+    }
+
+    /// A callee relinking linked is no fast path (#837's second PR),
+    /// whatever its record's cell holds: over the records an early-bound
+    /// `car` gets the inline opcode through, an early-bound `length` its
+    /// `CallPrimitive`, and an early-bound `call-with-values` and
+    /// `dynamic-wind` their instruction sequences, the relinked callee is
+    /// in neither map, and pass 5 compiles each call through it to a load
+    /// of its pinned operand and a `Call`, or a `TailCall` for the last.
+    #[test]
+    fn a_relinked_callee_is_no_fast_path() {
+        use super::OperandKey;
+        use crate::compiler::{LinkedOperand, link_to, relink_to};
+        use crate::types::instruction::Instruction;
+        use std::rc::Rc;
+
+        let (state, importer, literals) = with_importer();
+        let heap = state.heap().clone();
+        const CALLEES: [(&str, usize); 4] = [
+            ("car", 1),
+            ("length", 1),
+            ("call-with-values", 2),
+            ("dynamic-wind", 3),
+        ];
+        let early = CALLEES.map(|(name, arity)| {
+            let link = link_to(&heap, &importer, name, &literals);
+            (name, link, arity)
+        });
+        let relinked = CALLEES.map(|(name, arity)| {
+            let link = relink_to(&heap, &importer, name, &literals);
+            (name, link, arity)
+        });
+        let key = |name: &str, link| {
+            OperandKey::of(&Rc::from(name), Some(LinkedOperand::of(&literals, link)))
+        };
+
+        // The positive control: the same four records, early-bound, are
+        // two primitive calls, one inline and one not, and two control
+        // forms.
+        let map = primitive_calls_of(&state, &literals, &a_lambda_calling(&early));
+        for (name, link, _) in &early[..2] {
+            assert!(map.by_name.contains_key(&key(name, *link)), "{name}");
+        }
+        for (name, link, _) in &early[2..] {
+            assert!(map.control.contains_key(&key(name, *link)), "{name}");
+        }
+
+        let relinked_car = relinked[0].1;
+        let relinked = a_lambda_calling(&relinked);
+        let map = primitive_calls_of(&state, &literals, &relinked);
+        assert!(
+            map.by_name.is_empty() && map.control.is_empty(),
+            "a relinked callee is in neither map: {map:?}"
+        );
+        assert_eq!(
+            key("car", relinked_car),
+            OperandKey::Relinked(literals.link(relinked_car).key())
+        );
+
+        let (_, nested) = crate::compiler::compile_with_qq_resolving(
+            &relinked,
+            &literals,
+            &heap,
+            state.global_env(),
+            state.primitive_registry(),
+        )
+        .unwrap();
+        let code = &nested[0];
+        let loads: Vec<&str> = code
+            .instructions
+            .iter()
+            .filter_map(|instr| match instr {
+                Instruction::LoadGlobal { link, .. } => {
+                    assert!(code.links.is_pinned(*link), "a relinked operand is pinned");
+                    Some(&**code.links.name(*link))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(loads, CALLEES.map(|(name, _)| name));
+        let calls = code
+            .instructions
+            .iter()
+            .filter(|instr| {
+                matches!(
+                    instr,
+                    Instruction::Call { .. } | Instruction::TailCall { .. }
+                )
+            })
+            .count();
+        assert_eq!(calls, CALLEES.len(), "each an ordinary call");
+        assert!(
+            !code.instructions.iter().any(|instr| matches!(
+                instr,
+                Instruction::Car { .. }
+                    | Instruction::CallPrimitive { .. }
+                    | Instruction::JumpUnlessShadowed { .. }
+            )),
+            "no inline opcode, primitive call or control sequence"
+        );
+    }
+
+    /// An early-bound and a relinked `car` over one record, in one unit,
+    /// are two operands (#837's second PR): two keys, so the early one
+    /// keeps its inline opcode and the relinked one is a call, and two
+    /// entries of the unit's link table, both pinned, both reading the one
+    /// record. Sharing a key would give the two sites one answer: both the
+    /// fast path, or neither. An assignment's operand is keyed by its
+    /// link's kind as a reference's is, and a control form's sequence is
+    /// found by the operand's own key, as a primitive call's is.
+    #[test]
+    fn a_relinked_and_an_early_operand_of_one_record_stay_apart() {
+        use super::OperandKey;
+        use crate::compiler::{LinkedOperand, link_to, relink_to};
+        use crate::types::instruction::Instruction;
+        use std::rc::Rc;
+
+        let (state, importer, literals) = with_importer();
+        let heap = state.heap().clone();
+        let early = link_to(&heap, &importer, "car", &literals);
+        let relinked = relink_to(&heap, &importer, "car", &literals);
+        assert_eq!(literals.link(early), literals.link(relinked), "one record");
+        let key = |link| OperandKey::of(&Rc::from("car"), Some(LinkedOperand::of(&literals, link)));
+        assert_ne!(key(early), key(relinked));
+
+        // In either order, so that neither can answer for the other by
+        // being met first.
+        for calls in [
+            [("car", early, 1), ("car", relinked, 1)],
+            [("car", relinked, 1), ("car", early, 1)],
+        ] {
+            let expr = a_lambda_calling(&calls);
+            let map = primitive_calls_of(&state, &literals, &expr);
+            assert!(map.by_name.contains_key(&key(early)));
+            assert!(!map.by_name.contains_key(&key(relinked)));
+            assert_eq!(map.by_name.len(), 1);
+
+            let (_, nested) = crate::compiler::compile_with_qq_resolving(
+                &expr,
+                &literals,
+                &heap,
+                state.global_env(),
+                state.primitive_registry(),
+            )
+            .unwrap();
+            let code = &nested[0];
+            let names: Vec<&str> = code.links.names().iter().map(|name| &**name).collect();
+            assert_eq!(names, ["car", "car"], "two entries, one spelling");
+            assert_eq!(code.links.pinned(), &[0, 1], "both pinned");
+            let h = heap.borrow();
+            assert!(code.links.get(&h, 0).is_some());
+            assert_eq!(code.links.get(&h, 0), code.links.get(&h, 1), "one record");
+            let inline: Vec<_> = code
+                .instructions
+                .iter()
+                .filter_map(|instr| match instr {
+                    Instruction::Car { link, .. } => Some(*link),
+                    _ => None,
+                })
+                .collect();
+            let loaded: Vec<_> = code
+                .instructions
+                .iter()
+                .filter_map(|instr| match instr {
+                    Instruction::LoadGlobal { link, .. } => Some(*link),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!((inline.len(), loaded.len()), (1, 1));
+            assert_ne!(inline[0], loaded[0], "each its own entry");
+        }
+
+        // An assignment is an operand too, of its link's kind: a relinked
+        // `set!` stores through the entry a relinked reference to the
+        // record loads, and an early-bound `set!` through the early-bound
+        // reference's, and one of each kind are two entries.
+        let compiled = |expr: &patina_core::core_expr::CoreExpr| {
+            let (_, mut nested) = crate::compiler::compile_with_qq_resolving(
+                expr,
+                &literals,
+                &heap,
+                state.global_env(),
+                state.primitive_registry(),
+            )
+            .unwrap();
+            nested.remove(0)
+        };
+        for (assigned, called, entries) in [
+            (relinked, relinked, 1),
+            (early, early, 1),
+            (relinked, early, 2),
+            (early, relinked, 2),
+        ] {
+            let code = compiled(&a_lambda_assigning_then_calling("car", assigned, called));
+            assert_eq!(code.links.names().len(), entries);
+            assert_eq!(code.links.pinned().len(), entries, "every entry pinned");
+            let stores = code
+                .instructions
+                .iter()
+                .filter(|instr| matches!(instr, Instruction::StoreGlobal { .. }))
+                .count();
+            assert_eq!(stores, 1, "the assignment stores through its entry");
+        }
+
+        // And a control form: the early-bound `call-with-values` keeps its
+        // sequence, behind its one guard, and the relinked one over the
+        // same record is a call, in either order.
+        let early = link_to(&heap, &importer, "call-with-values", &literals);
+        let relinked = relink_to(&heap, &importer, "call-with-values", &literals);
+        assert_eq!(literals.link(early), literals.link(relinked), "one record");
+        let key = |link| {
+            OperandKey::of(
+                &Rc::from("call-with-values"),
+                Some(LinkedOperand::of(&literals, link)),
+            )
+        };
+        for calls in [
+            [
+                ("call-with-values", early, 2),
+                ("call-with-values", relinked, 2),
+            ],
+            [
+                ("call-with-values", relinked, 2),
+                ("call-with-values", early, 2),
+            ],
+        ] {
+            let expr = a_lambda_calling(&calls);
+            let map = primitive_calls_of(&state, &literals, &expr);
+            assert!(map.control.contains_key(&key(early)));
+            assert!(!map.control.contains_key(&key(relinked)));
+            assert_eq!((map.control.len(), map.by_name.len()), (1, 0));
+
+            let code = compiled(&expr);
+            let guards = code
+                .instructions
+                .iter()
+                .filter(|instr| matches!(instr, Instruction::JumpUnlessShadowed { .. }))
+                .count();
+            assert_eq!(guards, 1, "one sequence, the early-bound operand's");
+            let names: Vec<&str> = code.links.names().iter().map(|name| &**name).collect();
+            assert_eq!(names, ["call-with-values", "call-with-values"]);
+            assert_eq!(code.links.pinned().len(), 2, "both pinned");
+        }
+    }
+
+    /// `(lambda (p) (begin (set! name p) (name p)))`, the assignment
+    /// linked by `assigned` and the callee by `called`.
+    fn a_lambda_assigning_then_calling(
+        name: &str,
+        assigned: patina_core::Link,
+        called: patina_core::Link,
+    ) -> patina_core::core_expr::CoreExpr {
+        use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
+        use patina_core::{ScopeId, ScopeSet};
+        use std::rc::Rc;
+
+        let scopes = ScopeSet::from_iter([ScopeId(500)]);
+        let p = || CoreExpr::new(CoreExprKind::var(Rc::from("p"), ScopeSet::new()));
+        let assignment = CoreExpr::new(CoreExprKind::linked_set(
+            Rc::from(name),
+            scopes.clone(),
+            Rc::new(p()),
+            Some(assigned),
+        ));
+        let call = CoreExpr::new(CoreExprKind::App {
+            func: Rc::new(CoreExpr::new(CoreExprKind::linked_var(
+                Rc::from(name),
+                scopes,
+                Some(called),
+            ))),
+            args: vec![p()],
+        });
+        CoreExpr::new(CoreExprKind::Lambda {
+            params: Formals::Fixed(vec![ScopedParam::simple(Rc::from("p"))]),
+            body: vec![CoreExpr::new(CoreExprKind::Begin(vec![assignment, call]))],
+            binding_scopes: Rc::new(ScopeSet::new()),
+        })
     }
 }

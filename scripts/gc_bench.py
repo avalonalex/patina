@@ -369,6 +369,28 @@ def descriptor_limit(workload):
     return limit
 
 
+# macOS's allocator takes its settings from the environment, in variables
+# named `Malloc...` (malloc(3), ENVIRONMENT), and a caller's reached every run
+# (#862). The Claude desktop app starts its sessions with `MallocNanoZone=0`,
+# which on macOS 27.2 turns off the allocator's per-thread cache. Under it,
+# measured 2026-11-17, the tree-walker's workloads counted 7.5-9.8% more
+# instructions (`tw-port-churn` 1%), and each run of a binary landed on one
+# of several counts up to 1.3% apart, how often on each changing with the
+# binary's code signature, so with every build, whatever it changed. A run
+# loses the prefix, not a list of names: `MallocXzoneThreadCaching=0` did
+# the same, the manual names neither of the two, and those it names are
+# debugging switches (stack logging, scribbling, guard pages, heap checks)
+# no measurement is taken under.
+ALLOCATOR_SETTINGS = 'Malloc'
+
+
+def run_environment():
+    """The caller's environment as a measured run inherits it: without the
+    interpreter's own settings (`PATINA_*`), which the runner then sets, and
+    without the allocator's (`ALLOCATOR_SETTINGS`)."""
+    return {k: v for k, v in os.environ.items() if not k.startswith(('PATINA_', ALLOCATOR_SETTINGS))}
+
+
 def run_one(side, workload, backend, scratch, pad, timeout):
     """One run of `workload` on `side` ({'binary', 'root', 'example'}):
     its metrics, or an exception describing the failure."""
@@ -376,7 +398,7 @@ def run_one(side, workload, backend, scratch, pad, timeout):
     log = scratch / f'gc-{workload["name"]}-{backend}-{side["label"]}.csv'
     if log.exists():
         log.unlink()
-    env = {k: v for k, v in os.environ.items() if not k.startswith('PATINA_')}
+    env = run_environment()
     # Isolated, each binary loads its own checkout's lib/.
     env.update(PATINA_GC_LOG=str(log), PATINA_ISOLATED_LIBRARIES='1', PATINA_BENCH_PAD='x' * pad)
     if workload['kind'] == 'example':
