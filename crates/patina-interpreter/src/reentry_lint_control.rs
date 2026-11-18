@@ -77,16 +77,25 @@ fn every_nameable_entry_is_matched() {
     };
 
     // patina-runtime
+    #[allow(deprecated)]
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |b: &VmBackend, env: &Rc<Environment>| b.eval(TaggedValue::NULL, env);
+    #[allow(deprecated)]
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |b: &VmBackend| b.eval_global(TaggedValue::NULL);
+    #[allow(deprecated)]
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |b: &VmBackend, env: &Rc<Environment>, map: &Rc<RefCell<crate::SourceMap>>| {
         b.eval_with_source_map(TaggedValue::NULL, env, map)
     };
+    #[allow(deprecated)]
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |b: &VmBackend| b.call(TaggedValue::NULL, &[]);
+    // the handle methods (#839)
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |b: &VmBackend, e: &crate::OwnedEnvironment, d: &crate::Owned| b.eval_in(e, d, None);
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |b: &VmBackend, f: &crate::Owned| b.call_owned(f, &[]);
 
     // patina-interpreter: a host's call of a procedure (#710)
     #[expect(clippy::disallowed_methods, reason = "positive control")]
@@ -98,7 +107,7 @@ fn every_nameable_entry_is_matched() {
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |i: &Vm| i.eval_str_with_source_name_owned("", "");
     #[expect(clippy::disallowed_methods, reason = "positive control")]
-    let _ = |i: &Vm, env: &Rc<Environment>| i.eval_str_in_env("", "", env);
+    let _ = |i: &Vm, env: &crate::OwnedEnvironment| i.eval_str_in_env("", "", env);
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |i: &Vm| i.eval_program_owned("");
     #[expect(clippy::disallowed_methods, reason = "positive control")]
@@ -108,7 +117,7 @@ fn every_nameable_entry_is_matched() {
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |i: &Vm, fold_case: &mut bool| i.eval_program_with_fold_case_owned("", "", fold_case);
     #[expect(clippy::disallowed_methods, reason = "positive control")]
-    let _ = |i: &Vm, fold_case: &mut bool, env: &Rc<Environment>| {
+    let _ = |i: &Vm, fold_case: &mut bool, env: &crate::OwnedEnvironment| {
         i.eval_program_in_env("", "", fold_case, env)
     };
     #[expect(clippy::disallowed_methods, reason = "positive control")]

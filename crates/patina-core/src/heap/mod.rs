@@ -865,7 +865,11 @@ impl Heap {
     /// what is bound in it until the handle is dropped (#620). Panics on a
     /// frame or a frame of temporaries, as on another heap's environment: a
     /// handle holds a namespace (#831's ruling on question 1, #835). Raw, as
-    /// `Heap` is.
+    /// `Heap` is. Keep the handle for as long as the namespace is in use: a
+    /// collection while no handle holds a namespace nothing else roots (one
+    /// `Environment::with_heap` made, or a host namespace whose handles were
+    /// all dropped) frees what is bound there, and holding it again does not
+    /// bring that back (#857, #839).
     pub fn hold_namespace(&self, env: Rc<crate::environment::Environment>) -> OwnedEnvironment {
         self.assert_own(&env);
         assert!(
@@ -873,6 +877,34 @@ impl Heap {
             "a frame or a frame of temporaries: a handle holds only a namespace (#831)"
         );
         self.handles.hold_environment(env)
+    }
+
+    /// A handle on `global`, a backend's global environment, of this heap:
+    /// a namespace through [`Heap::hold_namespace`], and until stage 5e a
+    /// frame through the deprecated holder, so that a host backend, or a
+    /// tree-walker `Evaluator`, whose global is a frame keeps running
+    /// (#839; question 4 (b), ruled 2026-11-16). What
+    /// `Backend::global_namespace` answers. Not an interface: it loses its
+    /// frame branch, or goes, at 5e. Deprecated with the holder its frame
+    /// branch reaches, since it holds any environment of the heap as that
+    /// one does: a host holds a namespace with [`Heap::hold_namespace`].
+    #[doc(hidden)]
+    #[deprecated(
+        note = "workspace-internal: `Backend::global_namespace`'s route, which holds a frame global \
+                through the deprecated holder until stage 5e; hold a namespace with \
+                `hold_namespace` (#839)"
+    )]
+    #[allow(
+        deprecated,
+        reason = "a frame global is held through the deprecated holder until it goes at stage 5e \
+                  (#839, question 4 (b))"
+    )]
+    pub fn hold_global(&self, global: Rc<crate::environment::Environment>) -> OwnedEnvironment {
+        if global.is_namespace() {
+            self.hold_namespace(global)
+        } else {
+            self.hold_environment(global)
+        }
     }
 
     /// A new host namespace over `parent`, this heap's parentless namespace,
@@ -892,7 +924,13 @@ impl Heap {
         )))
     }
 
-    /// The environment `handle` holds. Panics as [`Heap::held`] does.
+    /// The environment `handle` holds. The handle roots it, not this `Rc`:
+    /// keep the handle while the environment is in use. A collection while
+    /// no handle holds a namespace that nothing else roots (one
+    /// `Environment::with_heap` made, or a host namespace whose handles were
+    /// all dropped) frees what is bound there, and holding this `Rc` again
+    /// with [`Heap::hold_namespace`] does not bring that back (#857, #839).
+    /// Panics as [`Heap::held`] does.
     pub fn held_environment(
         &self,
         handle: &OwnedEnvironment,

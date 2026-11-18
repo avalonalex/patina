@@ -396,7 +396,9 @@ fn a_collection_at_a_call_leaves_the_namespaces_its_code_release_drops_out_of_l(
     // returns: `external-bytes` is down by the fifty namespaces, and the L
     // that `(gc)` left is what a second `(gc)` leaves, to the byte. The
     // sweep's L, read before the release, was the fifty namespaces above
-    // it.
+    // it. Each reading is taken in a form of the same shape, since the form
+    // being evaluated keeps its datum (#839): `l2`'s fill changes nothing,
+    // the vector being all `#f` already.
     //
     // Collecting only where `(gc)` asks, that `(gc)` is the collection
     // that finds them dead, as it is at the adaptive threshold, which 1.6
@@ -429,7 +431,7 @@ fn a_collection_at_a_call_leaves_the_namespaces_its_code_release_drops_out_of_l(
         (set! e0 (stat 'external-bytes))
         (set! l1 (begin (vector-fill! held #f) (gc) (stat 'live-bytes)))
         (set! e1 (stat 'external-bytes))
-        (set! l2 (begin (gc) (stat 'live-bytes)))
+        (set! l2 (begin (vector-fill! held #f) (gc) (stat 'live-bytes)))
         (list (> (- e0 e1) 1000000) (>= (- l0 l2) (- e0 e1)) (- l1 l2))
         "#;
     assert_eq!(eval_program_vm_gc_off(code), "(#t #t 0)");
@@ -535,10 +537,9 @@ fn a_library_body_s_code_quoting_its_own_procedure_keeps_it_loaded() {
     // tree-walker's answer is `(3 -1 -1)`: both go, and with them the
     // namespace the first `environment` made for nothing else. #866's fix,
     // tracing a unit's constants by code id as its link table is, flips
-    // this to the tree-walker's answer; that PR updates it. This rests on
-    // the owner's ruling on #838's question 2, still pending; under its
-    // (b), 4b.11's PR fixes R-D and this pin reads `(3 -1 -1)`. Under zeal
-    // too.
+    // this to the tree-walker's answer; that PR updates it. The owner's
+    // ruling (a) of 2026-11-16 on #838's question 2 leaves the fix to #866.
+    // Under zeal too.
     assert_gc_and_zeal_eval_to(&library_body_quoting_its_own_procedure(), "(3 1 1)");
 }
 

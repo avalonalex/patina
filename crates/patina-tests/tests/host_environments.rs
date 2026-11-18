@@ -22,6 +22,12 @@
 //! `eval` and `load` through an environment specifier a host made over one,
 //! and a host primitive's `Step::Eval` or `ApplyContext::eval_expr` in one.
 
+#![allow(
+    deprecated,
+    reason = "#620's tests and the raw frames run through the old `Backend` methods beside the \
+              handle methods, and introspect through `Interpreter::global_env` and \
+              `raw_environment`, until stage 5e (#839)"
+)]
 #![expect(
     clippy::disallowed_macros,
     reason = "HOST_FRAME: the raw frame or host namespace a host primitive of the test evaluates \
@@ -98,19 +104,24 @@ fn a_value_bound_in_a_host_environment_survives_a_program_that_collects() {
 }
 
 /// #620's second program: a definition the program makes in the host
-/// environment through `Backend::eval`, across a program that collects
-/// outside it.
-fn defined_across_a_collection<B: Backend>(interp: Interpreter<B>) {
+/// environment through `Backend::eval`, or through `Backend::eval_in` with
+/// handles (#839), across a program that collects outside it.
+fn defined_across_a_collection<B: Backend>(interp: Interpreter<B>, by_eval_in: bool) {
     interp.eval_program_owned(PRELUDE).unwrap();
     let env = interp.new_environment();
     let datum = read(
         "(define kept (list 'kept (vector 4 5 6)))",
         interp.backend().heap(),
     );
-    interp
-        .backend()
-        .eval(datum, &interp.raw_environment(&env))
-        .unwrap();
+    if by_eval_in {
+        let datum = interp.backend().heap().borrow().hold(datum);
+        interp.backend().eval_in(&env, &datum, None).unwrap();
+    } else {
+        interp
+            .backend()
+            .eval(datum, &interp.raw_environment(&env))
+            .unwrap();
+    }
     assert!(
         interp.lookup("kept").is_none(),
         "defined in the global environment"
@@ -126,38 +137,50 @@ fn defined_across_a_collection<B: Backend>(interp: Interpreter<B>) {
 
 #[test]
 fn a_definition_made_in_a_host_environment_survives_a_program_that_collects() {
-    defined_across_a_collection(vm_interpreter());
-    defined_across_a_collection(tree_walker_interpreter());
+    for by_eval_in in [false, true] {
+        defined_across_a_collection(vm_interpreter(), by_eval_in);
+        defined_across_a_collection(tree_walker_interpreter(), by_eval_in);
+    }
 }
 
-/// #620's last table: through `Backend::eval`, or `eval_with_source_map`, a
-/// datum evaluated in a host environment reads its bindings, closes over
-/// them, and defines in it alone, on both backends.
-fn evaluated_in_the_environment<B: Backend>(
-    interp: Interpreter<B>,
-    with_source_map: bool,
-) -> [String; 4] {
+/// The routes #620's last table evaluates a datum by.
+#[derive(Clone, Copy, Debug)]
+enum Route {
+    Eval,
+    EvalWithSourceMap,
+    /// `Backend::eval_in` over handles (#839), with no source map or one.
+    EvalIn(bool),
+}
+
+/// #620's last table: through `Backend::eval`, `eval_with_source_map`, or
+/// `eval_in` over handles (#839), a datum evaluated in a host environment
+/// reads its bindings, closes over them, and defines in it alone, on both
+/// backends. Every route binds `f` the same way, with `Interpreter::define`
+/// of a handle, so only the evaluation differs.
+fn evaluated_in_the_environment<B: Backend>(interp: Interpreter<B>, route: Route) -> [String; 4] {
     let env = interp.new_environment();
     let raw = interp.raw_environment(&env);
     interp.define_in(&env, "x", TaggedValue::fixnum(99));
     interp.eval_program_owned("(define x 1)").unwrap();
     let heap = interp.backend().heap().clone();
     let source_map = Rc::new(RefCell::new(SourceMap::new()));
-    let eval = |source: &str| {
+    let eval = |source: &str| -> Owned {
         let datum = read(source, &heap);
         let backend = interp.backend();
-        let value = if with_source_map {
-            backend.eval_with_source_map(datum, &raw, &source_map)
-        } else {
-            backend.eval(datum, &raw)
+        let value = match route {
+            Route::Eval => backend.eval(datum, &raw),
+            Route::EvalWithSourceMap => backend.eval_with_source_map(datum, &raw, &source_map),
+            Route::EvalIn(with_source_map) => {
+                let datum = heap.borrow().hold(datum);
+                let map = with_source_map.then_some(&source_map);
+                return backend.eval_in(&env, &datum, map).unwrap();
+            }
         };
-        value.unwrap()
+        heap.borrow().hold(value.unwrap())
     };
     let x = interp.display_tagged(eval("x"));
     let closure = eval("(lambda () x)");
-    interp
-        .global_env()
-        .define(interp.backend().heap(), "f", closure);
+    interp.define("f", &closure);
     let called = interp.display_tagged(interp.eval_str_owned("(f)").unwrap());
     eval("(define y 42)");
     let in_env = interp.display_tagged(interp.lookup_in(&env, "y").unwrap());
@@ -168,18 +191,97 @@ fn evaluated_in_the_environment<B: Backend>(
 #[test]
 fn backend_eval_evaluates_in_the_environment_it_is_given() {
     let expected = ["99", "99", "42", "None"];
-    for with_source_map in [false, true] {
+    for route in [
+        Route::Eval,
+        Route::EvalWithSourceMap,
+        Route::EvalIn(false),
+        Route::EvalIn(true),
+    ] {
         assert_eq!(
-            evaluated_in_the_environment(vm_interpreter(), with_source_map),
+            evaluated_in_the_environment(vm_interpreter(), route),
             expected,
-            "VM, with a source map: {with_source_map}"
+            "VM, {route:?}"
         );
         assert_eq!(
-            evaluated_in_the_environment(tree_walker_interpreter(), with_source_map),
+            evaluated_in_the_environment(tree_walker_interpreter(), route),
             expected,
-            "tree-walker, with a source map: {with_source_map}"
+            "tree-walker, {route:?}"
         );
     }
+}
+
+/// #857's program on `Backend`'s handle methods: a namespace a host made
+/// with `Environment::with_heap` and held with `Heap::hold_namespace`, bound
+/// in through `define_in` and read through `eval_in`, across a program that
+/// collects outside it, with the handle kept throughout (#839). The handle
+/// roots what is bound in the namespace, and only while it lives: a host
+/// that drops it and holds the same `Rc` again after a collection reads
+/// freed slots (`with_heap`'s documentation; question 3 (a) on #839, ruled
+/// 2026-11-16).
+fn held_raw_namespace<B: Backend>(interp: Interpreter<B>) -> String {
+    interp.eval_program_owned(PRELUDE).unwrap();
+    let heap = interp.backend().heap().clone();
+    let raw = Rc::new(Environment::with_heap(&heap));
+    let ns = heap.borrow().hold_namespace(Rc::clone(&raw));
+    let value = interp
+        .eval_str_owned("(list 'kept (vector 4 5 6))")
+        .unwrap();
+    interp.backend().define_in(&ns, "kept", &value);
+    drop(value);
+    let before = collections(&interp);
+    interp.eval_program_owned(CHURN).unwrap();
+    interp.eval_program_owned("(gc) (gc)").unwrap();
+    assert!(collections(&interp) > before, "the program did not collect");
+    let datum = read("kept", &heap);
+    let datum = heap.borrow().hold(datum);
+    let kept = interp.backend().eval_in(&ns, &datum, None).unwrap();
+    interp.display_tagged(&kept)
+}
+
+#[test]
+fn a_held_raw_namespace_keeps_its_bindings_across_a_collection() {
+    assert_eq!(held_raw_namespace(vm_interpreter()), "(kept #(4 5 6))");
+    assert_eq!(
+        held_raw_namespace(tree_walker_interpreter()),
+        "(kept #(4 5 6))"
+    );
+}
+
+/// A tree-walker whose `Evaluator::global_env`, a pub field, is a frame
+/// runs programs as before S1: `global_namespace` holds the frame through
+/// the deprecated holder until stage 5e (question 4 (b) on #839, ruled
+/// 2026-11-16).
+#[test]
+fn a_tree_walker_whose_global_is_a_frame_runs_until_5e() {
+    let mut evaluator = patina_interpreter::Evaluator::new();
+    let namespace = Rc::clone(&evaluator.global_env);
+    let frame = Rc::new(Environment::child_frame(Rc::clone(&namespace)));
+    evaluator.global_env = Rc::clone(&frame);
+    let interp = patina_interpreter::TreeWalkInterpreter::from_evaluator(evaluator);
+    interp
+        .backend()
+        .add_library_search_path(common::test_lib_root());
+    let answer = interp
+        .eval_program_owned("(import (scheme base)) (define x 40) (+ x 2)")
+        .unwrap();
+    assert_eq!(interp.display_tagged(&answer), "42");
+    // The handle holds the frame itself, and the program defined in it, not
+    // in the namespace beneath: a `global_namespace` that walked up to the
+    // nearest namespace would answer 42 too.
+    let heap = interp.backend().heap().clone();
+    let global = interp.backend().global_namespace();
+    let held = heap.borrow().held_environment(&global);
+    assert!(Rc::ptr_eq(&held, &frame), "the handle holds the frame");
+    assert!(
+        frame.local_names(&heap).iter().any(|name| name == "x"),
+        "the program defined `x` in the frame"
+    );
+    assert!(
+        patina_core::NamespaceView::of(&namespace)
+            .get(&heap, "x")
+            .is_none(),
+        "the program defined `x` in the namespace beneath the frame"
+    );
 }
 
 /// The handle forms evaluate in a host environment: its definitions and
@@ -1199,9 +1301,10 @@ fn three_raw_frames<B: Backend>(
 /// of the global namespace, one of a host namespace, and one of temporaries
 /// over the global namespace. Each frame is given `Backend::eval`, an
 /// `import` by `eval_with_source_map`, and, held through the deprecated
-/// `Heap::hold_environment`, `eval_str_in` and `eval_program_in`; after each
-/// entry the interpreter evaluates a global form. Each is then given
-/// `Backend::define`, which answers no `Result`. The frame of the global
+/// `Heap::hold_environment`, `eval_str_in`, `eval_program_in` and
+/// `Backend::eval_in` (#839); after each entry the interpreter evaluates a
+/// global form. Each is then given `Backend::define` and, through the held
+/// frame, `Backend::define_in`, which answer no `Result`. The frame of the global
 /// namespace is also given a `define-library`, which a later global
 /// `import` asks for. No frame is given a `define` form: the tree-walker
 /// binds a frame of temporaries' definitions in the environment above it
@@ -1253,20 +1356,30 @@ fn raw_frames<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
             interp.eval_program_in(&held, "(+ 1 2) (* 2 3)"),
         ));
         out.push(next());
+        let datum = read("(let ((x 7)) x)", &heap);
+        let datum = heap.borrow().hold(datum);
+        out.push(shown_owned(
+            interp
+                .backend()
+                .eval_in(&held, &datum, None)
+                .map_err(InterpreterError::Backend),
+        ));
+        out.push(next());
         interp
             .backend()
             .define(frame, "defined-here", TaggedValue::fixnum(5));
-        out.push(format!(
-            "frame binds defined-here: {}",
-            frame
-                .local_names(&heap)
-                .iter()
-                .any(|name| name == "defined-here")
-        ));
-        out.push(format!(
-            "global binds defined-here: {}",
-            interp.lookup("defined-here").is_some()
-        ));
+        let five = heap.borrow().hold(TaggedValue::fixnum(5));
+        interp.backend().define_in(&held, "defined-in", &five);
+        for name in ["defined-here", "defined-in"] {
+            out.push(format!(
+                "frame binds {name}: {}",
+                frame.local_names(&heap).iter().any(|local| local == name)
+            ));
+            out.push(format!(
+                "global binds {name}: {}",
+                interp.lookup(name).is_some()
+            ));
+        }
     }
     out.push(shown(
         interp
@@ -1296,16 +1409,17 @@ fn refusal_named(answer: String) -> String {
 /// The VM evaluates only in a namespace, and refuses a frame with an error
 /// naming its kind, not a panic (#835): a raw frame of the global
 /// namespace, one of a host namespace, and one of temporaries, by
-/// `Backend::eval`, by `eval_with_source_map`, and by `eval_str_in` and
-/// `eval_program_in` on a frame held through the deprecated
-/// `Heap::hold_environment`. The kind is asked before anything else, so an
+/// `Backend::eval`, by `eval_with_source_map`, and by `eval_str_in`,
+/// `eval_program_in` and `Backend::eval_in` (#839) on a frame held through
+/// the deprecated `Heap::hold_environment`. The kind is asked before anything else, so an
 /// `import` refused binds nothing, and a `define-library` refused loads
 /// nothing: a later global `import` of the library fails. After each
 /// refusal the next form evaluates. The tree-walker evaluates each frame by
 /// name, as it did before the refusal: the answers below are the base's
-/// (e392fe3d), where the VM answered the same. `Backend::define` still
-/// writes each frame on both backends, a frame of temporaries included, and
-/// binds nothing in the global namespace.
+/// (e392fe3d), where the VM answered the same. `Backend::define`, and
+/// `define_in` through the held frame, still write each frame on both
+/// backends, a frame of temporaries included, and bind nothing in the
+/// global namespace.
 #[test]
 fn a_raw_frame_is_refused_by_the_vm() {
     let by_vm: Vec<String> = raw_frames(vm_interpreter())
@@ -1327,8 +1441,12 @@ fn a_raw_frame_is_refused_by_the_vm() {
                 "42",
                 &refused,
                 "42",
+                &refused,
+                "42",
                 "frame binds defined-here: true",
                 "global binds defined-here: false",
+                "frame binds defined-in: true",
+                "global binds defined-in: false",
             ]
             .map(String::from),
         );
@@ -1360,8 +1478,12 @@ fn a_raw_frame_is_refused_by_the_vm() {
             "42",
             "6",
             "42",
+            "7",
+            "42",
             "frame binds defined-here: true",
             "global binds defined-here: false",
+            "frame binds defined-in: true",
+            "global binds defined-in: false",
         ]);
     }
     expected.extend(["#<unspecified>", "42", "loaded", "42"]);

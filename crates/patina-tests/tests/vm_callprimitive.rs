@@ -129,12 +129,22 @@ fn control_forms_set_after_use_deoptimize() {
     );
 }
 
+/// How [`host_definitions`] binds a name in the global environment.
+#[derive(Clone, Copy, Debug)]
+enum GlobalDefiner {
+    /// `Interpreter::define`, through `Backend::define_in`.
+    Interpreter,
+    /// The deprecated `Backend::define`, promised until stage 5e (#839).
+    Deprecated,
+}
+
 /// A host's definition deoptimizes as a program's does (#673). Through
-/// `Interpreter::define`, code compiled while the name was a primitive's
-/// calls the new value, as on the tree-walker, which looks the name up at
-/// each call. `Environment::define` and `set` write the binding and nothing
-/// else, and left that code calling the primitive on the VM.
-fn host_definitions<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
+/// `Interpreter::define`, or the deprecated `Backend::define` that S1's
+/// `define_in` replaced (#839), code compiled while the name was a
+/// primitive's calls the new value, as on the tree-walker, which looks the
+/// name up at each call. `Environment::define` and `set` write the binding
+/// and nothing else, and left that code calling the primitive on the VM.
+fn host_definitions<B: Backend>(interp: Interpreter<B>, definer: GlobalDefiner) -> Vec<String> {
     interp
         .eval_program_owned(
             "(define (f x) (car x)) \
@@ -145,9 +155,16 @@ fn host_definitions<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
         .unwrap();
     let replaced = interp.eval_str_owned("(lambda args 'replaced)").unwrap();
     let new = interp.eval_str_owned("(lambda () 'new)").unwrap();
-    interp.define("car", &replaced);
-    interp.define("call-with-values", &replaced);
-    interp.define("h", &new);
+    let define = |name: &str, value: &patina_core::Owned| match definer {
+        GlobalDefiner::Interpreter => interp.define(name, value),
+        GlobalDefiner::Deprecated => {
+            let backend = interp.backend();
+            backend.define(backend.global_env(), name, interp.raw_value(value));
+        }
+    };
+    define("car", &replaced);
+    define("call-with-values", &replaced);
+    define("h", &new);
     ["(f '(1 2))", "(car '(1 2))", "(k)", "(g)"]
         .into_iter()
         .map(|form| interp.display_tagged(interp.eval_str_owned(form).unwrap()))
@@ -157,18 +174,25 @@ fn host_definitions<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
 #[test]
 fn a_host_definition_deoptimizes() {
     let expected = ["replaced", "replaced", "replaced", "new"];
-    assert_eq!(host_definitions(common::vm_interpreter()), expected);
-    assert_eq!(
-        host_definitions(common::tree_walker_interpreter()),
-        expected
-    );
+    for definer in [GlobalDefiner::Interpreter, GlobalDefiner::Deprecated] {
+        assert_eq!(
+            host_definitions(common::vm_interpreter(), definer),
+            expected,
+            "VM, {definer:?}"
+        );
+        assert_eq!(
+            host_definitions(common::tree_walker_interpreter(), definer),
+            expected,
+            "tree-walker, {definer:?}"
+        );
+    }
 }
 
 /// How [`host_environment_definitions`] defines `car` in the host
 /// environment.
 #[derive(Clone, Copy, Debug)]
 enum Definer {
-    /// `Interpreter::define_in`, through `Backend::define`.
+    /// `Interpreter::define_in`, through `Backend::define_in`.
     Host,
     /// A `define` form evaluated there: on the VM a compiled `Define`.
     Compiled,

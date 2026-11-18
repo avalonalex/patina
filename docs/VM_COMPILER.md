@@ -80,7 +80,8 @@ Literal, Var, Quote, Quasiquote, Lambda, If, Set, Begin,
 Define, Import, Expand, App, Apply
 ```
 
-- `Import` is intercepted before compilation in `Backend::eval()`
+- `Import` is intercepted before compilation in the VM's `eval_datum`, which
+  `Backend::eval_in` and the deprecated `eval` reach
 - `Quasiquote` holds a `QuasiTemplate`: the structure the desugarer derived,
   with each unquoted expression already desugared where it was written
   (#445). The shared lowering (§4) turns it into calls

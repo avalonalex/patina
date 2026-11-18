@@ -388,7 +388,7 @@ enum Mode {
 
 /// Run `code` on one backend, capturing either its value or its error.
 ///
-/// Generic over `B: Backend` — `global_env()` is on the trait and
+/// Generic over `B: Backend` — `global_namespace()` is on the trait and
 /// `display_tagged` is the same writer for both backends, so one body serves
 /// the tree-walker and the VM.
 fn run_on<B: Backend>(interp: Interpreter<B>, code: &str, mode: Mode) -> Outcome
@@ -1875,9 +1875,9 @@ macro_rules! gc_shared_tests {
                 // macro lives. Expanded after the redefinition, its
                 // template's `f` reads the re-pointed import, the new
                 // library's. This pins `foreign_expansions` counted among a
-                // replaced namespace's holders, pending the owner's ruling
-                // on #837's first PR; its alternative, an edge that keeps
-                // only binding locations, flips `held` to 0.
+                // replaced namespace's holders, by the owner's ruling of
+                // 2026-11-16 on #837's first PR; the alternative, an edge
+                // that keeps only binding locations, would read `held` 0.
                 (
                     "generated-macro",
                     generated_old.clone(),

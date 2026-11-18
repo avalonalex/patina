@@ -3,9 +3,10 @@
 #![allow(deprecated)] // Exercise the compatibility APIs as an external caller.
 
 use patina_interpreter::{
-    Backend, Environment, EvalError, Interpreter, SharedHeap, TaggedValue, event,
-    new_shared_heap,
+    Backend, Environment, EvalError, Interpreter, Owned, OwnedEnvironment, SharedHeap, SourceMap,
+    TaggedValue, event, new_shared_heap,
 };
+use std::cell::RefCell;
 use std::rc::Rc;
 
 /// `heap()`'s typed replacements (#831), as a host outside the workspace
@@ -30,7 +31,10 @@ fn replacements<B: Backend>(interpreter: &Interpreter<B>) {
 }
 
 // A host-supplied backend needs neither of Patina's concrete backends: a
-// global environment, and the heap its values live on.
+// global environment, and the heap its values live on. It implements only
+// the methods the trait requires and takes every default, the four handle
+// methods' included (#839); rustc warns no implementation of a deprecated
+// method, which the `deny` pins from outside the workspace.
 struct LiteralBackend(Rc<Environment>, SharedHeap);
 impl LiteralBackend {
     fn new() -> Self {
@@ -38,6 +42,7 @@ impl LiteralBackend {
         Self(Rc::new(Environment::with_heap(&heap)), heap)
     }
 }
+#[deny(deprecated)]
 impl Backend for LiteralBackend {
     type Error = EvalError;
     fn eval(&self, datum: TaggedValue, _: &Rc<Environment>) -> Result<TaggedValue, EvalError> {
@@ -51,13 +56,129 @@ impl Backend for LiteralBackend {
     }
 }
 
+// The state at stage 5e: a backend that implements only the handle methods
+// (#839), over `LiteralBackend`'s, and whose old methods, required and
+// provided alike, are unreachable. The interpreter it serves calls none of
+// them.
+struct HandleBackend(LiteralBackend);
+#[deny(deprecated)]
+impl Backend for HandleBackend {
+    type Error = EvalError;
+    fn eval(&self, _: TaggedValue, _: &Rc<Environment>) -> Result<TaggedValue, EvalError> {
+        unreachable!("S1: the interpreter calls the handle methods")
+    }
+    fn global_env(&self) -> &Rc<Environment> {
+        unreachable!("S1: the interpreter calls the handle methods")
+    }
+    fn heap(&self) -> &SharedHeap {
+        self.0.heap()
+    }
+    fn eval_global(&self, _: TaggedValue) -> Result<TaggedValue, EvalError> {
+        unreachable!("S1: the interpreter calls the handle methods")
+    }
+    fn eval_with_source_map(
+        &self,
+        _: TaggedValue,
+        _: &Rc<Environment>,
+        _: &Rc<RefCell<SourceMap>>,
+    ) -> Result<TaggedValue, EvalError> {
+        unreachable!("S1: the interpreter calls the handle methods")
+    }
+    fn define(&self, _: &Rc<Environment>, _: &str, _: TaggedValue) {
+        unreachable!("S1: the interpreter calls the handle methods")
+    }
+    fn call(&self, _: TaggedValue, _: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+        unreachable!("S1: the interpreter calls the handle methods")
+    }
+    fn eval_in(
+        &self,
+        env: &OwnedEnvironment,
+        expr: &Owned,
+        source_map: Option<&Rc<RefCell<SourceMap>>>,
+    ) -> Result<Owned, EvalError> {
+        self.0.eval_in(env, expr, source_map)
+    }
+    fn define_in(&self, env: &OwnedEnvironment, name: &str, value: &Owned) {
+        self.0.define_in(env, name, value)
+    }
+    fn call_owned(&self, f: &Owned, args: &[Owned]) -> Result<Owned, EvalError> {
+        self.0.call_owned(f, args)
+    }
+    fn global_namespace(&self) -> OwnedEnvironment {
+        self.0.global_namespace()
+    }
+}
+
+/// `Backend`'s handle methods (#839), as a host outside the workspace calls
+/// them on an identity backend, with nothing deprecated: each answer is the
+/// datum or the form the default builds.
+#[deny(deprecated)]
+fn handle_methods<B: Backend>(interpreter: &Interpreter<B>) {
+    let backend = interpreter.backend();
+    let before = interpreter.gc_stats().handles;
+    let hold = |value| backend.heap().borrow().hold(value);
+    let global = backend.global_namespace();
+    let value = backend
+        .eval_in(&global, &hold(TaggedValue::fixnum(42)), None)
+        .unwrap();
+    assert_eq!(interpreter.raw_value(&value).as_fixnum(), Some(42));
+    backend.define_in(&global, "handle-defined", &hold(TaggedValue::fixnum(43)));
+    let defined = interpreter.lookup("handle-defined").expect("bound");
+    assert_eq!(interpreter.raw_value(&defined).as_fixnum(), Some(43));
+    let form = backend
+        .call_owned(
+            &hold(TaggedValue::fixnum(5)),
+            &[hold(TaggedValue::fixnum(1))],
+        )
+        .unwrap();
+    assert_eq!(interpreter.display_tagged(&form), "('5 '1)");
+    drop((global, value, defined, form));
+    assert_eq!(interpreter.gc_stats().handles, before);
+}
+
+/// The handle methods on a Patina backend: a datum read in the
+/// interpreter's context, evaluated, defined in a host environment, and a
+/// procedure called (#839).
 #[cfg(any(
     feature = "vm",
     feature = "tree-walker",
     feature = "legacy-pipeline",
     feature = "defaults"
 ))]
-fn check<B: Backend>(interpreter: Interpreter<B>)
+#[deny(deprecated)]
+fn scheme_handle_methods<B: Backend>(interpreter: &mut Interpreter<B>) {
+    use patina_interpreter::Parser;
+    let read = |interpreter: &mut Interpreter<B>, source: &str| {
+        interpreter.with(|cx| {
+            let datum = Parser::new(source).unwrap().parse(cx).unwrap();
+            cx.hold(datum)
+        })
+    };
+    let sum = read(interpreter, "(+ 40 2)");
+    let define = read(interpreter, "(define y 1)");
+    let doubler = read(interpreter, "(lambda (x) (* 2 x))");
+    let three = read(interpreter, "3");
+    let backend = interpreter.backend();
+    let global = backend.global_namespace();
+    let value = backend.eval_in(&global, &sum, None).unwrap();
+    assert_eq!(interpreter.display_tagged(&value), "42");
+    let env = interpreter.new_environment();
+    backend.eval_in(&env, &define, None).unwrap();
+    let y = interpreter.lookup_in(&env, "y").expect("`y` is bound there");
+    assert_eq!(interpreter.display_tagged(&y), "1");
+    assert!(interpreter.lookup("y").is_none());
+    let doubler = backend.eval_in(&global, &doubler, None).unwrap();
+    let six = backend.call_owned(&doubler, &[three]).unwrap();
+    assert_eq!(interpreter.display_tagged(&six), "6");
+}
+
+#[cfg(any(
+    feature = "vm",
+    feature = "tree-walker",
+    feature = "legacy-pipeline",
+    feature = "defaults"
+))]
+fn check<B: Backend>(mut interpreter: Interpreter<B>)
 where
     B::Error: patina_interpreter::HasSourceLocation,
 {
@@ -127,6 +248,7 @@ where
     let head = interpreter.eval_str_owned("(head '(1 2))").unwrap();
     assert_eq!(interpreter.display_tagged(&head), "replaced");
     replacements(&interpreter);
+    scheme_handle_methods(&mut interpreter);
     let probe = interpreter.heap_probe();
     drop(interpreter);
     assert!(probe.is_gone());
@@ -136,11 +258,45 @@ fn main() {
     let host = Interpreter::new(LiteralBackend::new());
     assert_eq!(host.eval_program("40 42").unwrap().as_fixnum(), Some(42));
     assert!(host.eval_program("42 (").is_err());
-    // `Backend::define`'s default, which a host-supplied backend takes.
+    // `Backend::define_in`'s default, over `define`'s, which a host-supplied
+    // backend takes.
     host.define("answer", TaggedValue::fixnum(42));
     let answer = host.lookup("answer").expect("`answer` is bound");
     assert_eq!(host.raw_value(&answer).as_fixnum(), Some(42));
     replacements(&host);
+    handle_methods(&host);
+    // The global namespace's handle holds the backend's own global.
+    assert!(Rc::ptr_eq(
+        &host
+            .backend()
+            .heap()
+            .borrow()
+            .held_environment(&host.backend().global_namespace()),
+        &host.backend().0
+    ));
+    // A host backend that implements only the handle methods runs the
+    // interpreter's entries, none of which reaches an old method.
+    let mut handles = Interpreter::new(HandleBackend(LiteralBackend::new()));
+    let value = handles.eval_program_owned("40 42").unwrap();
+    assert_eq!(handles.raw_value(&value).as_fixnum(), Some(42));
+    let value = handles.eval_str_owned("7").unwrap();
+    assert_eq!(handles.raw_value(&value).as_fixnum(), Some(7));
+    assert!(handles.eval_program_owned("42 (").is_err());
+    handles.define("answer", TaggedValue::fixnum(42));
+    let answer = handles.lookup("answer").expect("`answer` is bound");
+    assert_eq!(handles.raw_value(&answer).as_fixnum(), Some(42));
+    let called = handles.call(&answer, &[]).unwrap();
+    assert_eq!(handles.display_tagged(&called), "('42)");
+    let env = handles.new_environment();
+    let value = handles.eval_str_in(&env, "9").unwrap();
+    assert_eq!(handles.raw_value(&value).as_fixnum(), Some(9));
+    let value = handles.eval_program_in(&env, "8 9").unwrap();
+    assert_eq!(handles.raw_value(&value).as_fixnum(), Some(9));
+    handles.define_in(&env, "local", &answer);
+    assert!(handles.lookup_in(&env, "local").is_some());
+    assert!(handles.lookup("local").is_none());
+    handle_methods(&handles);
+    replacements(&handles);
     #[cfg(any(feature = "vm", feature = "defaults"))]
     check(patina_interpreter::VmInterpreter::new_vm());
     #[cfg(any(

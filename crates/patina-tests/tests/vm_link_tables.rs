@@ -115,7 +115,8 @@ fn a_store_by_name_marks_the_primitive_it_replaces() {
     use patina_runtime::Backend;
 
     let interp = common::vm_interpreter();
-    let env = interp.backend().global_env();
+    let global = interp.backend().global_namespace();
+    let env = interp.backend().heap().borrow().held_environment(&global);
     env.define_alias("car-alias", env.clone(), "car".into());
     let answer = interp
         .eval_program_owned(

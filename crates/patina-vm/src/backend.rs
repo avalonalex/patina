@@ -19,6 +19,7 @@ use crate::runtime::{VmState, execute};
 use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
 use patina_core::heap::SharedHeap;
+use patina_core::heap::handles::{Owned, OwnedEnvironment};
 use patina_core::tagged_value::TaggedValue;
 use patina_frontend::{Desugarer, SchemeLibraryLoader};
 use patina_runtime::HasDiagnostic;
@@ -281,8 +282,8 @@ impl VmBackend {
     /// A frame is refused with an error naming its kind
     /// ([`Environment::frame_kind`], #835): a raw frame, or a frame under a
     /// host namespace, handed to `Backend::eval` or `eval_with_source_map`,
-    /// or to a handle form through the deprecated `Heap::hold_environment`
-    /// or `Cx::hold_environment`.
+    /// or to a handle form (`eval_in` included, #839) through the deprecated
+    /// `Heap::hold_environment` or `Cx::hold_environment`.
     /// The kind is asked first, so a refused frame neither loads a library
     /// nor binds an import. The global namespace, a host namespace and a
     /// parentless namespace (a library's, a specifier's) run as before. The
@@ -392,14 +393,18 @@ impl VmBackend {
         #[expect(
             clippy::disallowed_methods,
             reason = "the backend's top level, outermost, so the run may collect. Holds the form's \
-                      datum, not read after the call; the form's constants are in the loaded \
-                      unit, which the code store roots while it runs. `env` is the global \
-                      environment, which the machine's `globals` hold, or a host namespace, which \
-                      its `OwnedEnvironment` holds, and the records the code uses are held by its \
-                      unit, which its frame, a marked closure or the running code reports, and \
-                      which holds and traces the namespace it was linked in. A raw namespace that \
-                      nothing roots between calls (`Environment::with_heap`) is none of these: \
-                      #857's hole, outside #601's promise, which this run does not widen"
+                      datum, not read after the call, which a caller of `eval_in` holds besides; \
+                      the form's constants are in the loaded unit, which the code store roots \
+                      while it runs. `env` is the global environment, which the machine's \
+                      `globals` hold, or a namespace the caller's handle holds (`eval_in`: a host \
+                      namespace, or one `Heap::hold_namespace` held), and the records the code \
+                      uses are held by its unit, which its frame, a marked closure or the running \
+                      code reports, and which holds and traces the namespace it was linked in. A \
+                      namespace that nothing roots between calls (a `with_heap` namespace, or a \
+                      host namespace whose handles were all dropped), reached through the \
+                      deprecated `eval` or `eval_with_source_map`, or through `eval_in` over a \
+                      handle taken again after a collection that ran while no handle held it, is \
+                      none of these (#857)"
         )]
         let result = execute(&mut state, unit);
         state.release_unit_if_unused(top_id);
@@ -421,8 +426,10 @@ impl VmBackend {
         // The application's literals, rooted until its code is loaded, as a
         // form's are (#705, #869).
         let literals = patina_core::LiteralPool::new(&heap.borrow());
-        // SAFETY: the words are a host's handles' (`Interpreter::call`),
-        // which root them, on this backend's heap.
+        // SAFETY: the words are live by `Backend`'s first rule, on this
+        // backend's heap: read from the caller's handles on `call_owned`,
+        // which root them through the call, or, on the deprecated `call`,
+        // the caller's obligation (`Backend`'s "# Words").
         let (callee, operands) = unsafe {
             let callee = literals.add_word(f);
             let operands: Vec<_> = args.iter().map(|&arg| literals.add_word(arg)).collect();
@@ -1111,6 +1118,54 @@ impl Backend for VmBackend {
     fn call(&self, f: TaggedValue, args: &[TaggedValue]) -> Result<TaggedValue, Self::Error> {
         self.call_procedure(f, args)
     }
+
+    /// Evaluates through `eval_datum`, as `eval` does, so a frame a
+    /// deprecated holder held is refused first (#835), and holds the answer
+    /// (#839).
+    fn eval_in(
+        &self,
+        env: &OwnedEnvironment,
+        expr: &Owned,
+        source_map: Option<&Rc<RefCell<patina_frontend::SourceMap>>>,
+    ) -> Result<Owned, Self::Error> {
+        let (env, word) = {
+            let heap = self.heap.borrow();
+            (heap.held_environment(env), heap.held(expr))
+        };
+        let value = self.eval_datum(word, &env, source_map)?;
+        Ok(self.heap.borrow().hold(value))
+    }
+
+    /// Marks the primitive the definition rebinds, as `define` does
+    /// (`define_global`, #673).
+    fn define_in(&self, env: &OwnedEnvironment, name: &str, value: &Owned) {
+        let (env, value) = {
+            let heap = self.heap.borrow();
+            (heap.held_environment(env), heap.held(value))
+        };
+        define_global(&mut self.state.borrow_mut(), &env, Rc::from(name), value);
+    }
+
+    /// Runs the application as `call` does (`call_procedure`, #710), with
+    /// the words read from the caller's handles, and holds the answer.
+    fn call_owned(&self, f: &Owned, args: &[Owned]) -> Result<Owned, Self::Error> {
+        let (callee, operands) = {
+            let heap = self.heap.borrow();
+            (
+                heap.held(f),
+                args.iter().map(|arg| heap.held(arg)).collect::<Vec<_>>(),
+            )
+        };
+        let value = self.call_procedure(callee, &operands)?;
+        Ok(self.heap.borrow().hold(value))
+    }
+
+    /// The VM's global environment is always a namespace.
+    fn global_namespace(&self) -> OwnedEnvironment {
+        self.heap
+            .borrow()
+            .hold_namespace(Rc::clone(&self.global_env))
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1229,7 +1284,7 @@ mod tests {
         assert_eq!(&**code.links.name(car), "car");
         assert!(code.links.pinned().is_empty(), "nothing links yet");
         assert!(code.links.namespace().is_none(), "never loaded");
-        assert!(backend.global_env().get(&backend.heap, "g").is_none());
+        assert!(backend.global_env.get(&backend.heap, "g").is_none());
         backend
             .disasm_source("(car '(1 2))")
             .expect("prints what it compiles");

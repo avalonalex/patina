@@ -308,7 +308,8 @@ one dispatch per arm.
 **Primitive redefinition deopt.** Emitting `CallPrimitive`/inline opcodes
 assumes the global still binds the primitive at run time. That assumption is
 checked, not trusted: `Define`/`StoreGlobal`, an import, and a host's
-definition through `Backend::define` (#673) set a per-primitive bit in
+definition through `Backend::define_in`, or the deprecated `define` (#673,
+#839), set a per-primitive bit in
 `VmState::shadowed_primitives` when they overwrite a primitive binding, and
 every fast path tests its bit (one load+mask) before firing. A definition
 marks by the environment's own binding, the only one a fast path compiled

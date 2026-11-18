@@ -343,7 +343,22 @@ fi
 # holder row that a macro's definition environment alone keeps and two
 # checks in the release test's reading, which raised the counts at 16 to
 # 39361 and 83012 and without stress to 17464 and 55000, the minimums taken
-# by the same rule)
+# by the same rule; host_environments's test count and minimum re-pinned
+# 2026-11-16 for #839's two tests on `Backend`'s handle methods, a held raw
+# namespace across a collection and a tree-walker whose global is a frame,
+# and the `eval_in` routes its #620 tests and raw frames gained, which
+# raised its count at 16 from 117297 to 167613 and without stress from 753
+# to 761 (the base re-measured at be9c1701, where the row read 117298 and
+# 754), the minimum at half its count at 16; gc_vm's edited test, which
+# reads its two counts in forms of one shape, left its counts as they were,
+# and so did vm_callprimitive's, owned_handles's,
+# finished_forms_release_code's, macro_definition_env's and
+# hygiene_matrix's, whose tests did not change: a handle allocates nothing
+# in the arenas; then vm_callprimitive's count re-measured that day for a
+# second row of its host-definition test, through the deprecated
+# `Backend::define`, which raised it at 16 from 1382 to 1455, without stress
+# 0 as before, its test count and minimum left; host_environments's
+# frame-global test's new checks left its counts as they were)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -353,14 +368,14 @@ TARGETS=(
     "finished_forms_release_code 16 2040 12"  # 4057 (15)
     "gc_tree_walker 16 69006 38"              # 83012 (55000)
     "gc_vm 16 19680 51"                       # 39361 (17464)
-    "host_environments 16 58646 31"           # 117298 (754)
+    "host_environments 16 83806 33"           # 167613 (761)
     "hygiene_matrix 16 11136 18"              # 21790 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
     "macro_definition_env 16 16626 30"        # 34504 (87): see the header
     "owned_handles 16 62714 9"                # 125648 (14)
     "rooted_loading 16 371 6"                 # 1269 (10)
-    "vm_callprimitive 16 545 20"              # 1382 (0)
+    "vm_callprimitive 16 545 20"              # 1455 (0)
     "scheme_suite 4096 1534 11"               # 10572 (385): see the header
 )
 

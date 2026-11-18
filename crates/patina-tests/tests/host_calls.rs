@@ -140,3 +140,36 @@ fn a_call_that_fails_answers_an_error_and_the_interpreter_carries_on() {
         assert_eq!(answer, (true, true, "10".to_string()));
     }
 }
+
+/// The deprecated `Backend::call`, which `call_owned` replaced and which is
+/// promised until stage 5e (#839), still applies a procedure to words as a
+/// top-level form does; the answer is held at once, before the next
+/// evaluation (`Backend`'s second rule).
+fn a_deprecated_backend_call<B: Backend>(interp: Interpreter<B>) -> String {
+    interp
+        .eval_program_owned("(import (scheme base)) (define (pair a b) (list b a))")
+        .unwrap();
+    let callee = interp.lookup("pair").unwrap();
+    let symbol = interp.eval_str_owned("'quote").unwrap();
+    let list = interp.eval_str_owned("'(+ 1 2)").unwrap();
+    let words = [interp.raw_value(&symbol), interp.raw_value(&list)];
+    #[allow(
+        deprecated,
+        reason = "the deprecated route's own coverage until stage 5e (#839)"
+    )]
+    let answer = interp.backend().call(interp.raw_value(&callee), &words);
+    let answer = interp.backend().heap().borrow().hold(answer.unwrap());
+    interp.display_tagged(&answer)
+}
+
+#[test]
+fn the_deprecated_backend_call_applies_a_procedure() {
+    assert_eq!(
+        a_deprecated_backend_call(vm_interpreter()),
+        "((+ 1 2) quote)"
+    );
+    assert_eq!(
+        a_deprecated_backend_call(tree_walker_interpreter()),
+        "((+ 1 2) quote)"
+    );
+}

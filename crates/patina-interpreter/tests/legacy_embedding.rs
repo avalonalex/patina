@@ -103,3 +103,25 @@ fn compatibility_adapters_keep_their_error_categories_and_execution_order() {
     );
     assert!(env.get(pipeline_heap, "should-not-run").is_none());
 }
+
+/// `StandardPipeline` refuses an environment of another heap, which it never
+/// supported, with a configuration error, where it read that heap's slots
+/// as its own before #839 held each call's environment.
+#[test]
+fn the_pipeline_refuses_an_environment_of_another_heap() {
+    use patina_interpreter::{Pipeline, PipelineError, StandardPipeline};
+    let pipeline = StandardPipeline::new();
+    let other = StandardPipeline::new();
+    let foreign = other.evaluator().global_env.clone();
+    for result in [
+        pipeline.eval("42", &foreign),
+        pipeline.eval_program("42", &foreign),
+    ] {
+        assert!(
+            matches!(result, Err(PipelineError::Configuration(_))),
+            "{result:?}"
+        );
+    }
+    let own = pipeline.evaluator().global_env.clone();
+    assert_eq!(pipeline.eval("42", &own).unwrap().as_fixnum(), Some(42));
+}
