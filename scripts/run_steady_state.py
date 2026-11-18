@@ -64,9 +64,6 @@ CLAUSES = ('SS1', 'SS2', 'SS4', 'SS5')
 PER_OWNER_KEYS = ('symbols', 'ports', 'namespaces', 'cells', 'binding-records', 'code-units')
 # What a pin allows above the cost it pins: the owner's ruling R9 on #782.
 PIN_TOLERANCE = 1.05
-# `library-stream`'s pin: SS1's bound per cycle at its N of 250 (`leak_floor`,
-# 95.38 B) over PIN_TOLERANCE, about 90.84 B (question 4 on #834).
-LIBRARY_STREAM_PIN = (3 * 250 * 8 + 64 * KIB) / (3 * 250) / PIN_TOLERANCE
 
 
 @dataclasses.dataclass(frozen=True)
@@ -215,15 +212,13 @@ ROWS = [
     Row('guard-stream-repl', 'REPL', 'stream:guard', {'vm': 1000, 'tree-walker': 1000}, clauses=REPL,
         mode='repl'),
     # Each cycle redefines a library and imports it again. Since #834 an
-    # importer holds the export's cell, not the library's namespace, and the
-    # import owners that kept every replaced namespace are gone: SS1 reads
-    # 0 B a cycle on both backends, from about 40.8 KB. 4b.11 promotes SS1
-    # (start decision 12); until then its pin, whose 1.05x is SS1's bound
-    # per cycle at this N, holds the row as SS1 will (question 4 on #834,
-    # 2026-11-06), so the '#614' label silences nothing.
-    Row('library-stream', 'REPL', 'stream:library', {'vm': 250, 'tree-walker': 250}, clauses=REPL,
-        red={'SS1': '#614'},
-        pin={'vm': LIBRARY_STREAM_PIN, 'tree-walker': LIBRARY_STREAM_PIN}),
+    # importer holds the export's cell, not the library's namespace, and
+    # nothing else keeps a replaced namespace that the program holds no
+    # value or code from: SS1 reads 0 B a cycle on both backends, from about
+    # 40.8 KB, and the clause was promoted with its pin by #838 (start
+    # decision 12 on #782). The macro variant is held by `gc_vm`'s and
+    # `gc_tree_walker`'s `a_redefined_library_is_released`.
+    Row('library-stream', 'REPL', 'stream:library', {'vm': 250, 'tree-walker': 250}, clauses=REPL),
     # Server-style.
     Row('steady-alloc', 'server', 'steady-alloc.scm', {'vm': 100000, 'tree-walker': 50000}, pr=True,
         red={'SS2/vm': '#616'}),

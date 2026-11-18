@@ -522,6 +522,27 @@ fn a_collection_where_a_load_ends_leaves_a_replaced_library_s_namespace_out_of_l
 }
 
 #[test]
+fn a_library_body_s_code_quoting_its_own_procedure_keeps_it_loaded() {
+    // R-D (#838's audit; residual, flips with #866): `(tmp steady)`'s body
+    // keeps `g`, a closure of a unit `eval` compiled whose constant is the
+    // library's own `f`. The code store traces every loaded unit's
+    // constants in every collection (`VmState::code_store`), and `g`'s
+    // unit stays loaded while `g` lives, which the library's namespace
+    // holds; `f` reports its own unit, whose link table holds that
+    // namespace. So the cycle closes through the roots: after the
+    // library is redefined, its old namespace and its specifier's are kept
+    // for good, not for the one collection more that #866 describes. The
+    // tree-walker's answer is `(3 -1 -1)`: both go, and with them the
+    // namespace the first `environment` made for nothing else. #866's fix,
+    // tracing a unit's constants by code id as its link table is, flips
+    // this to the tree-walker's answer; that PR updates it. This rests on
+    // the owner's ruling on #838's question 2, still pending; under its
+    // (b), 4b.11's PR fixes R-D and this pin reads `(3 -1 -1)`. Under zeal
+    // too.
+    assert_gc_and_zeal_eval_to(&library_body_quoting_its_own_procedure(), "(3 1 1)");
+}
+
+#[test]
 fn a_bound_placeholder_is_never_dropped() {
     // The procedure `keep` holds reads `later` and `later2`, which nothing
     // binds when `eval` compiles it, so its unit links a placeholder for

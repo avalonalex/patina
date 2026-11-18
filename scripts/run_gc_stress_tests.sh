@@ -14,9 +14,11 @@
 # nothing, and four have (#5, #164, #200, #201). The count is the record
 # PATINA_GC_COUNT_DIR asks for (crates/patina-core/src/heap/gc.rs), one per
 # process, which must also say the process ran under this interval. A
-# minimum is half the count measured when it was pinned (the counts are
-# deterministic), and every one is above what the target makes without
-# stress, so a run the variable did not reach fails here even if the record
+# minimum is half the count measured at its interval when it was pinned, or,
+# where a target's zeal halves keep its count without stress above that,
+# midway between its counts without stress and at its interval (the counts
+# are deterministic), so every one is above what the target makes without
+# stress, and a run the variable did not reach fails here even if the record
 # went missing some other way. Lower a minimum only with a measurement.
 #
 # Each target must also run all its tests: none filtered out, and at least
@@ -328,7 +330,20 @@ fi
 # stress from 75 to 83, the minimum left; then, for the review's
 # follow-up, a third, that a keyword alias to an imported keyword releases
 # the replaced library, which raised its count at 16 to 34504 and without
-# stress to 87, the minimum left)
+# stress to 87, the minimum left; and gc_vm's and gc_tree_walker's test
+# counts and minimums re-pinned 2026-11-16 for #838's three shared tests of
+# a redefined library's release, and each file's test of a library body
+# whose code quotes its own procedure, which raised the counts at 16 from
+# 25199 to 39118 on the VM and from 46913 to 82199 on the tree-walker, and
+# without stress from 6264 to 17266 and from 21898 to 54236, nearly all
+# their zeal halves: both counts without stress had passed their minimums,
+# so gc_vm's minimum is half its count at 16, and gc_tree_walker's, whose
+# count without stress is above that half, midway between its two counts,
+# as the rule at the top now says; then, for #838's mutation matrix, a
+# holder row that a macro's definition environment alone keeps and two
+# checks in the release test's reading, which raised the counts at 16 to
+# 39361 and 83012 and without stress to 17464 and 55000, the minimums taken
+# by the same rule)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -336,8 +351,8 @@ TARGETS=(
     "ephemerons 16 289 30"                    # 5738 (204)
     "escape_from_primitive 16 3669 19"        # 9789 (94)
     "finished_forms_release_code 16 2040 12"  # 4057 (15)
-    "gc_tree_walker 16 23246 34"              # 46913 (21898)
-    "gc_vm 16 11810 47"                       # 25199 (6264)
+    "gc_tree_walker 16 69006 38"              # 83012 (55000)
+    "gc_vm 16 19680 51"                       # 39361 (17464)
     "host_environments 16 58646 31"           # 117298 (754)
     "hygiene_matrix 16 11136 18"              # 21790 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
