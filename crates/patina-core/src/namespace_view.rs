@@ -8,7 +8,8 @@
 //! (`Library::import_into`, `define_primitive`, `Cx::define_primitive` and
 //! `Cx::lookup`), the writes that go around them (the desugarer's staged
 //! import, a host library's exports, the builders' own definitions), the
-//! hosts' `define` and `lookup`, and the desugarer's alias installs. The
+//! hosts' `define` and `lookup`, and the desugarer's alias installs, which
+//! it makes through `Cx::relink_alias` with the context's heap (#837). The
 //! desugarer's and the expander's queries reach namespaces through `Cx`,
 //! which passes the context's heap: most through methods over this view
 //! (`Cx::binding_location`, `Cx::scoped_binding_of` and the rest), and
@@ -315,10 +316,14 @@ impl<'e> NamespaceView<'e> {
     /// An alias here to `name` in `target_env`, under `scopes`
     /// ([`Environment::relink_alias`]): the one remembered for that target,
     /// or the root's when this is a frame, which writes nothing; or a fresh
-    /// one `mint` offers, inserted as a macro-expansion alias.
+    /// one `mint` offers, inserted as a macro-expansion alias, which holds
+    /// the target's record where `target_env` binds a keyword in its own
+    /// tables (#837, R6). The target namespace borrows `heap` shared to
+    /// tell.
     #[inline]
     pub fn relink_alias(
         self,
+        heap: &RefCell<Heap>,
         target_env: Rc<Environment>,
         name: Rc<str>,
         scopes: Option<ScopeSet>,
@@ -326,7 +331,7 @@ impl<'e> NamespaceView<'e> {
         mint: impl FnMut() -> Rc<str>,
     ) -> Rc<str> {
         self.env
-            .relink_alias(target_env, name, scopes, mention, mint)
+            .relink_alias(heap, target_env, name, scopes, mention, mint)
     }
 
     /// [`relink_alias`](Self::relink_alias) to the definition
@@ -335,6 +340,7 @@ impl<'e> NamespaceView<'e> {
     #[inline]
     pub fn relink_alias_to_introduced(
         self,
+        heap: &RefCell<Heap>,
         home: Rc<Environment>,
         name: Rc<str>,
         found: IntroducedDefinition,
@@ -342,7 +348,7 @@ impl<'e> NamespaceView<'e> {
         mint: impl FnMut() -> Rc<str>,
     ) -> Rc<str> {
         self.env
-            .relink_alias_to_introduced(home, name, found, mention, mint)
+            .relink_alias_to_introduced(heap, home, name, found, mention, mint)
     }
 
     // ---------------------------------------------------------------------

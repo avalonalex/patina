@@ -1252,8 +1252,10 @@ impl<'a> Desugarer<'a> {
         // scan instead supplies its private environment: no speculative alias
         // or expansion identity may reach the real program.
         let target_env = scan_env.cloned().unwrap_or_else(|| self.env.root());
-        // Its alias installs go through the namespace view, a frame's as a
-        // namespace's: the view asserts no kind.
+        // Its alias installs go through the context, over the namespace
+        // view, a frame's as a namespace's: the view asserts no kind, and the
+        // context's heap says which target is a keyword, whose record the
+        // alias holds (#837, R6).
         let target = NamespaceView::of(&target_env);
         let mut renames: HashMap<Rc<str>, Aliases> = HashMap::new();
         // Each name once: the written ones, then those only an enclosing
@@ -1404,10 +1406,14 @@ impl<'a> Desugarer<'a> {
                         .flatten()
                         != Some(scopes.clone())
                     {
-                        let alias =
-                            target.relink_alias(home, name.clone(), Some(scopes), identity, || {
-                                Rc::from(alias_name(name))
-                            });
+                        let alias = cx.relink_alias(
+                            target,
+                            home,
+                            name.clone(),
+                            Some(scopes),
+                            identity,
+                            || Rc::from(alias_name(name)),
+                        );
                         let symbol = cx.intern_symbol(&alias);
                         made.push((identity.clone(), symbol));
                     }
@@ -1446,11 +1452,16 @@ impl<'a> Desugarer<'a> {
                 let mint = || Rc::from(alias_name(name));
                 let alias = match alias_to {
                     None => {
-                        target.relink_alias(def_env.clone(), name.clone(), None, identity, mint)
+                        cx.relink_alias(target, def_env.clone(), name.clone(), None, identity, mint)
                     }
-                    Some((home, found)) => {
-                        target.relink_alias_to_introduced(home, name.clone(), found, identity, mint)
-                    }
+                    Some((home, found)) => cx.relink_alias_to_introduced(
+                        target,
+                        home,
+                        name.clone(),
+                        found,
+                        identity,
+                        mint,
+                    ),
                 };
                 let symbol = cx.intern_symbol(&alias);
                 made.push((identity.clone(), symbol));

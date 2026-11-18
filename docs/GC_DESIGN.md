@@ -132,8 +132,28 @@ record, so that its cell and value are marked as the pairs they are; each
 cell a frame imports; and one kind of edge that leaves the parent chain, an
 `Rc<Environment>` in a side table rather than a value in a slot: a
 macro-expansion alias into the environment the macro was defined in
-(relinking's and keywords'; early binding made none in any table since
-4b.10, which links the binding's record instead, #837). An
+(relinking's; early binding made none in any table since 4b.10, which
+links the binding's record instead, #837). A keyword's alias holds its
+target's binding record instead, a pair the trace reports as a value,
+where the target namespace binds the keyword in its own tables (its slot
+for the name, or its scoped entry at exactly the alias's scopes; the
+owner's ruling R6, `AliasHome::Keyword`); any other keyword target, and
+every variable target until 4b.10's second PR, keeps the edge to its
+environment. Such an alias names no environment directly, but the record
+reaches its cell and the macro, and the macro's `definition_env` is the
+environment it was defined in, so a replaced library's namespace stays
+while an alias to a keyword defined in it does (#837's question 4,
+`macro_definition_env.rs`'s
+`a_keyword_aliass_record_still_keeps_its_macros_definition_namespace`).
+One whose relinked keyword it imports goes, where nothing else keeps it
+(a relinked variable's alias, code compiled against it, or
+`foreign_expansions`): the record is its import over
+the exporter's cell, and the macro's `definition_env` the exporter's
+namespace (`a_keyword_alias_to_an_imported_keyword_releases_the_replaced_library`).
+So a record can outlive the namespace whose slot or scoped entry it was,
+which the `binding-records` statistic, a sum over the live namespaces, does
+not count (nor `cells` its cell, once no live namespace's record names it
+as its own). An
 import is no such edge: it is the exporter's cell, which the importer's
 record names, or a frame's import table holds, and which the trace marks
 like any value, so an importer keeps the cell and not the library's
