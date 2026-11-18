@@ -35,6 +35,32 @@ runs daily on `main`, by hand, and on a pull request that changes one of its
 lanes' own inputs (the scripts, the pinned baseline, the workflow). The same
 caveat applies to both.
 
+**Stacked pull requests** (owner's ruling, 2026-11-16, which replaces the
+2026-11-08 one that kept stacked pull requests on local gates until they were
+retargeted). A chain of pull requests linked as a
+[GitHub stack](https://docs.github.com/en/pull-requests/get-started/about-stacked-prs)
+(`gh stack link`, bottom to top) triggers the three workflows as if each
+targeted the stack's base, so a stacked pull request no longer waits to be
+retargeted to `main`. Every job in them carries one `if:`, which runs it for a
+pull request in a stack only at two places:
+
+- the **top** (`stack.position == stack.size`), whose diff against the stack's
+  base holds every change below it, so its path filters and its checkout cover
+  the whole stack;
+- the **bottom**, the lowest unmerged one (`stack.base.ref` equal to the pull
+  request's own base), which is what a partial merge lands next.
+
+A pull request in the middle shows its jobs as skipped. It is covered by the
+top's run and by its own local gate, recorded in its description; it gets a
+run of its own when the ones below it merge and it becomes the bottom. A
+pull request outside a stack, a push and a schedule have no `stack` in their
+event, and run every job as before
+([the metadata](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/optimizing-ci-for-stacked-pull-requests)).
+Merging the top merges every pull request below it, each as its own squash;
+after a partial merge GitHub rebases the branches that remain. A skipped job
+satisfies no required check that a later policy might add: the caveat above
+holds here too.
+
 ## Test Structure
 
 ```

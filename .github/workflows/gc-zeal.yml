@@ -93,6 +93,16 @@ env:
 jobs:
   zeal:
     name: GC zeal (control suite, both backends)
+    # A pull request in a GitHub stack runs this job only at the stack's bottom
+    # (its lowest unmerged pull request) and at its top, whose diff against
+    # the stack's base holds every change below it. Pushes, schedules and pull
+    # requests outside a stack run it as before. See
+    # docs/TEST_ORGANIZATION.md, "CI trigger scope".
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.stack == null
+      || github.event.pull_request.stack.position == github.event.pull_request.stack.size
+      || github.event.pull_request.stack.base.ref == github.event.pull_request.base.ref
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
