@@ -1373,6 +1373,58 @@ fn a_relinked_keyword_used_as_a_value_is_named_as_written() {
     }
 }
 
+/// An ambiguous reference to a relinked identifier is named as its
+/// template wrote it too. `(t amb)`'s `gen` defines its private `x` at top
+/// level, at its expansion's scopes, and a macro `g` whose template reads
+/// `x` and defines the name `gen`'s use handed it. The program reads the
+/// spelling relinking gives `x` and hands it to `gen`, so `(g)` defines
+/// that spelling at `g`'s own scopes, and the template's `x`, which carries
+/// both expansions' scopes, names neither binding more specifically than
+/// the other. The error names `x`, where without the rewrite it named the
+/// spelling. (chibi 0.12 and Gauche 0.9.15 answer `g` undefined: the macro
+/// a template defines at top level is the expansion's own there, where
+/// Patina binds an unrelinked keyword by name, #269's remaining half.)
+#[test]
+fn an_ambiguous_relinked_reference_is_named_as_written() {
+    fn check<B: patina_runtime::Backend>(interp: patina_interpreter::Interpreter<B>, backend: &str)
+    where
+        B::Error: std::fmt::Display,
+    {
+        interp
+            .eval_program_owned(
+                "(define-library (t amb)
+  (export gen spell-x)
+  (import (scheme base))
+  (begin
+    (define x 'lib-x)
+    (define-syntax quote-it (syntax-rules () ((_ v) 'v)))
+    (define-syntax spell-x (syntax-rules () ((_) (quote-it x))))
+    (define-syntax gen
+      (syntax-rules ()
+        ((_ u)
+         (begin
+           (define x 1)
+           (define-syntax g
+             (syntax-rules () ((_) (begin (define u 2) x))))))))))
+(import (scheme base) (t amb))",
+            )
+            .expect("the library");
+        let spelling = answer_or_error(&interp, "(spell-x)").expect("spells");
+        answer_or_error(&interp, &format!("(gen {spelling})")).expect("gen");
+        let message = answer_or_error(&interp, "(g)").expect_err("an ambiguous reference");
+        assert!(
+            message.contains("ambiguous reference: `x` at"),
+            "{backend}: {message}"
+        );
+        assert!(
+            !message.contains(&spelling),
+            "{backend}: the message names the spelling {spelling}: {message}"
+        );
+    }
+    check(common::vm_interpreter(), "VM");
+    check(common::tree_walker_interpreter(), "tree-walker");
+}
+
 /// Two expansions of a macro are given one spelling for its private name
 /// (the spelling is a function of the macro's environment, the name and
 /// the mention), so the spelling cannot keep them apart: here the outer

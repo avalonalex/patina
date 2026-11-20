@@ -2249,8 +2249,14 @@ library's binding as it was. The VM reads and writes the body's variable,
 `#<unspecified>`, and the tree-walker raises its own undefined-variable
 error, as for a body nothing expanded, where before the switch the
 tree-walker reached the library's binding by the alias's name, and
-assigned it. The stress counts of `macro_definition_env` and
-`scheme_suite` were re-pinned.
+assigned it. And `an_ambiguous_relinked_reference_is_named_as_written`
+holds the rewrite of the ambiguous-reference error's name, which no test
+had reached: a program hands a library's generator the spelling it learned
+for the library's private `x`, so the generated macro defines that
+spelling at its own scopes beside the generator's definition at its own,
+and the template's `x`, carrying both, is ambiguous; the error names `x`,
+where without the rewrite it named the spelling. The stress counts of
+`macro_definition_env` and `scheme_suite` were re-pinned.
 
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):
