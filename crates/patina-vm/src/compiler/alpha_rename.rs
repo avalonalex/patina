@@ -17,7 +17,7 @@
 
 use crate::compiler::for_each_define;
 use crate::error::CompileError;
-use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam, Symbol};
+use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, QuasiTemplate, ScopedParam, Symbol};
 use patina_core::environment::Environment;
 use patina_core::scope::ScopeSet;
 use patina_core::scope_resolve::AmbiguousReference;
@@ -314,7 +314,7 @@ pub(crate) fn alpha_rename(
 /// the scope set is unique by construction.
 fn top_level_define_bindings(exprs: &[CoreExpr]) -> Vec<Binding> {
     let mut bindings = Vec::new();
-    for_each_define(exprs, &mut |name, scopes| {
+    for_each_top_level_define(exprs, &mut |name, scopes| {
         if scopes.is_empty() {
             return;
         }
@@ -329,6 +329,74 @@ fn top_level_define_bindings(exprs: &[CoreExpr]) -> Vec<Binding> {
         });
     });
     bindings
+}
+
+/// Call `f` for each definition a top-level form makes outside every
+/// lambda: through `Begin`, as `for_each_define` does, and also where a
+/// definition stands in an expression position, as a `when` or an `if`
+/// branch, an operand, or a definition's or assignment's value puts it.
+///
+/// R7RS calls such a definition an error, and chibi refuses one, but Gauche
+/// and the tree-walker accept it and bind it as a top-level definition at
+/// its scopes. Collected through `Begin` alone, an introduced one found no
+/// binding here, was defined by its bare spelling, and every expansion of
+/// one macro shared that global (#884): two `(when #t (def-pair …))` gave
+/// `(b b)` on the VM where the tree-walker and Gauche give `(a b)`.
+///
+/// `Lambda` is not descended into: its body is its own scope, and its
+/// definitions are `body_define_bindings`'.
+fn for_each_top_level_define(exprs: &[CoreExpr], f: &mut impl FnMut(&Symbol, &ScopeSet)) {
+    for expr in exprs {
+        // Grown with the depth of the code (#617).
+        patina_core::walk::ensure_sufficient_stack(|| match &expr.kind {
+            CoreExprKind::Define {
+                name,
+                scopes,
+                value,
+            } => {
+                f(name, scopes);
+                for_each_top_level_define(std::slice::from_ref(&**value), f);
+            }
+            CoreExprKind::Begin(inner) => for_each_top_level_define(inner, f),
+            CoreExprKind::If { test, then, else_ } => {
+                for_each_top_level_define(std::slice::from_ref(&**test), f);
+                for_each_top_level_define(std::slice::from_ref(&**then), f);
+                for_each_top_level_define(std::slice::from_ref(&**else_), f);
+            }
+            CoreExprKind::Set { value, .. } => {
+                for_each_top_level_define(std::slice::from_ref(&**value), f);
+            }
+            CoreExprKind::App { func, args } | CoreExprKind::Apply { func, args } => {
+                for_each_top_level_define(std::slice::from_ref(&**func), f);
+                for_each_top_level_define(args, f);
+            }
+            CoreExprKind::Expand { expr: inner } => {
+                for_each_top_level_define(std::slice::from_ref(&**inner), f);
+            }
+            CoreExprKind::Quasiquote(template) => each_unquoted(template, f),
+            CoreExprKind::Lambda { .. }
+            | CoreExprKind::Literal(_)
+            | CoreExprKind::Var { .. }
+            | CoreExprKind::Quote(_)
+            | CoreExprKind::Import { .. } => {}
+        });
+    }
+}
+
+/// The unquoted expressions of a quasiquote template, for
+/// `for_each_top_level_define`.
+fn each_unquoted(template: &QuasiTemplate, f: &mut impl FnMut(&Symbol, &ScopeSet)) {
+    match template {
+        QuasiTemplate::Datum(_) => {}
+        QuasiTemplate::Unquoted(expr) => {
+            for_each_top_level_define(std::slice::from_ref(&**expr), f)
+        }
+        QuasiTemplate::Build(_, parts) => {
+            for part in parts {
+                patina_core::walk::ensure_sufficient_stack(|| each_unquoted(part, f));
+            }
+        }
+    }
 }
 
 /// Bindings for the definitions a lambda body contributes — all of them,
@@ -373,41 +441,11 @@ fn body_define_bindings(
         .collect()
 }
 
-/// Rename a body or `Begin`, recording introduced top-level identities for
-/// references in later forms. No introduced definition gets a bare-name
-/// alias: only references with matching scopes may reach it (#269, #427).
+/// Rename a body or `Begin`. The `Define` arm of `rename_expr_inner` records
+/// each introduced top-level identity for later forms, wherever the
+/// definition stands.
 fn rename_body(exprs: &[CoreExpr], env: &mut RenameEnv) -> Vec<CoreExpr> {
-    let mut out = Vec::with_capacity(exprs.len());
-    for expr in exprs {
-        let renamed = rename_expr(expr, env);
-        // Read the new name off the renamed node rather than resolving a
-        // second time: the two answers have to agree, and this way they are
-        // the same answer.
-        let rename = match (&expr.kind, &renamed.kind) {
-            (
-                CoreExprKind::Define { name, scopes, .. },
-                CoreExprKind::Define { name: new_name, .. },
-            ) if !scopes.is_empty() && new_name != name => {
-                Some((name.clone(), scopes.clone(), new_name.clone()))
-            }
-            _ => None,
-        };
-        if let Some((name, scopes, new_name)) = rename
-            && env.at_top_level
-        {
-            // Record the identity; a later form resolves to this same global
-            // for reads and writes, without exposing it by its bare name.
-            env.introduced_globals.push((
-                name,
-                RenamedGlobal {
-                    scopes,
-                    name: new_name,
-                },
-            ));
-        }
-        out.push(renamed);
-    }
-    out
+    exprs.iter().map(|expr| rename_expr(expr, env)).collect()
 }
 
 fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
@@ -520,12 +558,29 @@ fn rename_expr_inner(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
             let renamed_name = env
                 .resolve(name, scopes, scope_trace::Op::Bind)
                 .unwrap_or_else(|| name.clone());
+            let value = Rc::new(rename_expr(value, env));
+            if env.at_top_level && !scopes.is_empty() && renamed_name != *name {
+                // Record the identity: a later form resolves to this same
+                // global for reads and writes, without exposing it by its
+                // bare name (#269, #427). Recorded here, not where a body is
+                // walked, so that a definition in an expression position, as
+                // a `when` or an `if` branch puts it, is recorded too (#884).
+                // One entry per definition, including separate expansions of
+                // one spelling in a single form (#408).
+                env.introduced_globals.push((
+                    name.clone(),
+                    RenamedGlobal {
+                        scopes: scopes.clone(),
+                        name: renamed_name.clone(),
+                    },
+                ));
+            }
             CoreExprKind::Define {
                 name: renamed_name,
                 // Consumed: the pass exists so everything downstream can
                 // resolve by name alone, as it does for `Var` above.
                 scopes: ScopeSet::new(),
-                value: Rc::new(rename_expr(value, env)),
+                value,
             }
         }
 

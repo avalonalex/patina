@@ -370,7 +370,10 @@ fi
 # the minimums taken by the same rule; and scheme_suite's count at 4096,
 # which expansion/relinked-names.scm and a row of splicing-libraries.scm
 # raised from 10572 to 10648 and left at 385 without stress, its test count
-# and minimum left)
+# and minimum left; and hygiene_matrix's test count re-pinned 2026-11-18 for
+# #884's test that a definition in an expression position keeps its
+# expansion's binding, its 18 other tests making 21790 as before and the new
+# test 147, so 21937 at 16 and 6 without stress, the minimum left)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -381,7 +384,7 @@ TARGETS=(
     "gc_tree_walker 16 69525 39"              # 83551 (55500)
     "gc_vm 16 19776 52"                       # 39552 (17616)
     "host_environments 16 83806 33"           # 167613 (761)
-    "hygiene_matrix 16 11136 18"              # 21790 (6)
+    "hygiene_matrix 16 11136 19"              # 21937 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
     "macro_definition_env 16 16626 33"        # 34738 (91): see the header
