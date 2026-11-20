@@ -1697,11 +1697,11 @@ macro_rules! gc_shared_tests {
             // `binding-records` and `cells` do not count (GC_DESIGN §3.3).
             // Each backend is compared with itself. Under zeal too, which
             // collects at every outermost safe point. The macro variant's
-            // release rests on #872's early links (4b.10 PR-1b), and on the
-            // tree-walker on #837's question 1 (a), its read through the
-            // record its `CpsExpr` carries, both pending: without #872 it
-            // reads 600 namespaces more at 800 on both backends (measured
-            // on `main` at `3c4aa637`).
+            // release rests on #872's early links (4b.10 PR-1b, merged
+            // 2026-11-16), and on the tree-walker on #837's question 1 (a),
+            // its read through the record its `CpsExpr` carries, ruled
+            // 2026-11-16: without #872 it reads 600 namespaces more at 800
+            // on both backends (measured on `main` at `3c4aa637`).
             //
             // The three relinking variants (#837's second PR, #614's
             // `relinkv`, `relinkk` and `relinkki`): the library's macro

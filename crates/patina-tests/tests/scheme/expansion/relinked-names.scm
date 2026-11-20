@@ -103,8 +103,11 @@
 
 ;; ─── The libraries ──────────────────────────────────────────────────────────
 
-;; The template's own text: forty exported names spelled as a relinked
-;; `secret` might be, beside the private `secret`, in one template.
+;; The template's own text: forty exported names, `secret.0` to
+;; `secret.39`, beside the private `secret`, in one template. A relinked
+;; `secret` was spelled so before #837's switch, numbered from 0; it now
+;; carries its library's environment id, which is in the hundreds in any
+;; run, so none of the forty meets it.
 (define-library (probe collide)
   (export collide-all
           secret.0 secret.1 secret.2 secret.3 secret.4 secret.5 secret.6
@@ -453,13 +456,13 @@
 
 ;; First in the file, while the program binds no `secret`. The private
 ;; `secret` reads the library's 42, and every exported `secret.k` its own
-;; value: the second element lists the ones that did not. A spot check: the
-;; spelling a relinked `secret` is given is a matter of the implementation,
-;; and a library's text is written before anything could tell it, so
-;; whether one of the forty meets it depends on what ran before this file.
-;; The sure checks are Rust tests, which read the spelling from an
-;; expansion and write a range of names around it
-;; (`macro_definition_env.rs`).
+;; value: the second element lists the ones that did not. The forty no
+;; longer meet the spelling a relinked `secret` is given (the library's
+;; comment says why), so the row checks only that a template's own names
+;; read their own values. The checks that can meet the spelling are Rust
+;; tests, which read it from an expansion and write a range of names
+;; around it (`macro_definition_env.rs`'s
+;; `a_template_that_writes_the_relinked_spelling_*`).
 (define collided (collide-all))
 
 (test-equal "a template's own name spelled like a relinked one reads its own value"

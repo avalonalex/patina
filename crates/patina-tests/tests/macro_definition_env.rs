@@ -982,7 +982,8 @@ fn number_after_secret(spelling: &str) -> usize {
 /// library and to the program. The program reads each `secret.k` in a
 /// procedure of its own, under a `guard`. Answers what the template's
 /// `secret` read and what each `secret.k` read, having checked from the
-/// library's own leaked spelling that its number fell in the range.
+/// library's own leaked spelling that its number fell in the range and
+/// that it is one of the names the template writes.
 fn a_template_writing_the_relinked_spelling<B: patina_runtime::Backend>(
     interp: &patina_interpreter::Interpreter<B>,
     names_are: WrittenNames,
@@ -1043,11 +1044,19 @@ where
 (define read (both))"
         ))
         .expect("the collision library");
-    let second = number_after_secret(&answer_or_error(interp, "(spell-second)").expect("spells"));
+    let second_spelling = answer_or_error(interp, "(spell-second)").expect("spells");
+    let second = number_after_secret(&second_spelling);
     assert!(
         (first..=first + COLLISION_RANGE).contains(&second),
         "the range missed the library's spelling: {second} is not in {first}..={}",
         first + COLLISION_RANGE
+    );
+    // The number alone falling in the range is not enough: were the
+    // spelling to gain anything after it, no name the template writes
+    // would meet it, and the test would pass for that reason.
+    assert!(
+        names.contains(&second_spelling),
+        "the library's spelling {second_spelling} is none of the names the template writes"
     );
     let private = answer_or_error(interp, "(car read)").expect("the template's secret");
     let written = (0..names.len())

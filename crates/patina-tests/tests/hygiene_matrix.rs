@@ -2190,9 +2190,15 @@ const RELINK_RECORD_PROGRAMS: &[(&str, &str, &str, &str, &str)] = &[
 /// answers no record for a frame's variable, so the mention gets no link
 /// and no spelling: it is left as the template wrote it, and reads what the
 /// use site's scoped resolution finds for the name, the frame's own `x`.
-/// (While relinking installed an alias the mention read the macro's frame
-/// through it, `outer`: the one answer that needed the alias, and one only
-/// the raw frame API reaches.)
+///
+/// **The answer pinned, `inner`, is wrong**: the use site's `x` captures
+/// the template's, where referential transparency wants the macro's frame,
+/// `outer`. While relinking installed an alias the mention read `outer`
+/// through it; this is the one answer that needed the alias. It is
+/// accepted because only the deprecated raw frame API reaches it
+/// (`Environment::with_parent`, which goes at stage 5e, #831): no program
+/// makes a relink target with no record, and every lane traced for one
+/// reads none (#837's D61).
 #[allow(
     deprecated,
     reason = "a raw frame is what makes a relink target with no record: `with_parent` goes at \
@@ -2251,7 +2257,8 @@ fn every_relinking_writes_a_record_of_its_target() {
         let (name, backend) = case.split_once('/').expect("<case>/<backend>");
         if name == "none" {
             // Without a link the mention is left as written, and is the
-            // use site's own `x`.
+            // use site's own `x`: a capture, accepted only because the raw
+            // frame API alone reaches it (see `a_relink_target_with_no_record`).
             assert_eq!(a_relink_target_with_no_record(), "inner");
             return;
         }
