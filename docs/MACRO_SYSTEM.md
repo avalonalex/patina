@@ -461,17 +461,16 @@ such name.
   (`rewrite_refs`; only identifiers that carry the expansion's scope, family
   35's rule) to a spelling `relink_spelling` computes: the written name, the
   id of the macro's environment and the ids of the scopes the mention
-  carries. It is bound nowhere and interned nowhere, so it is no name to any
-  reader; it is what tells a relinked identifier from the others that carry
-  its expansion's scope, and only the macro's own templates write those. So
-  the spelling is kept clear of every name the macro's templates write or
-  inherited, and of the spellings the same expansion has already given: a
-  template that writes `secret` and also, literally, the spelling `secret`
-  would otherwise be given reads its own binding by the second. Two
-  expansions of
-  one macro give one mention the same spelling; the guard keeps them apart.
-  No test computes a spelling: a test that needs one reads it from an
-  expansion.
+  carries. Relinking binds it nowhere and interns it nowhere, so it is no
+  name to any reader (but for one shape on the VM, below); it is what tells
+  a relinked identifier from the others that carry its expansion's scope,
+  and only the macro's own templates write those. So the spelling is kept
+  clear of every name the macro's templates write or inherited, and of the
+  spellings the same expansion has already given: a template that writes
+  `secret` and also, literally, the spelling `secret` would otherwise be
+  given reads its own binding by the second. Two expansions of one macro
+  give one mention the same spelling; the guard keeps them apart. No test
+  computes a spelling: a test that needs one reads it from an expansion.
 - **One reader.** `Desugarer::resolve_reference` resolves a head, a value
   reference, a `set!` target and a `quote` head alike: bindings the
   identifier's scopes select first, as always; then the form's table; then
@@ -489,8 +488,13 @@ such name.
   other top-level keyword is still bound by name: so a keyword an expansion
   introduces under its library's private spelling is that expansion's own,
   and two runs of one definer keep two keywords. Nothing is bound by name
-  under a relinked spelling; a debug assertion and the scope trace's
-  `RELINK` records hold that.
+  under a relinked spelling, but for one shape on the VM, older than the
+  switch (#885): a definition a template places in an expression position
+  inside a procedure body (in a `when`, an `if` branch, an operand) is
+  bound by its bare spelling, as a global every expansion shares, a
+  relinked spelling like any other, where the tree-walker binds it at its
+  scopes and chibi and Gauche refuse the program. A debug assertion and
+  the scope trace's `RELINK` records hold the rest.
 - **Settling.** A reference beside a definition its own expansion produces
   into a body is answered by the table, since nothing selects it while the
   body is desugared, and so is emitted as a link to the library's binding.

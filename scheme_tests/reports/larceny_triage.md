@@ -783,7 +783,14 @@ two runs of a definer keep two keywords, and nothing is bound by name under
 the spelling relinking gives (`Desugarer::define_syntax_binding`;
 `expansion/relinked-names.scm`'s keyword rows;
 `a_generated_definer_run_twice_keeps_two_keywords` in
-`macro_definition_env.rs`). A top-level `define-syntax` of an identifier
+`macro_definition_env.rs`), but for one shape on the VM, measured
+2026-11-20 and older than the switch: a definition a template places in
+an expression position inside a procedure body (in a `when`, an `if`
+branch, an operand) is bound by its bare spelling, as a global every
+expansion shares, a relinked spelling like any other, where the
+tree-walker binds it at its scopes and chibi and Gauche refuse the
+program (#885; the same shape at top level is #884's, bound at its scopes
+on both backends since). A top-level `define-syntax` of an identifier
 that was *not* relinked is still bound by name, ignoring its scopes: #269's
 remaining half (`PRD/macro/SYNTAX_CASE_DESIGN.md`, V4), measured again that
 day. Two uses of one definer share the helper keyword, `((two 1) (two 2))`

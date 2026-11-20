@@ -3628,7 +3628,10 @@ impl<'a> Desugarer<'a> {
     /// runs of one definer keep two keywords, each under its own scopes.
     /// Nothing else is bound by name for a spelling relinking gave: an
     /// introduced `define` is declared at its scopes (#427), and the local
-    /// syntax forms bind in a frame at scopes.
+    /// syntax forms bind in a frame at scopes. The VM's compiler departs
+    /// from that in one shape: it binds a definition a template places in
+    /// an expression position inside a procedure body by its bare spelling,
+    /// as a global, a relinked spelling like any other (#885).
     ///
     /// Written through `cx`, whose heap a namespace's step borrows (#834).
     fn define_syntax_binding<'gc>(
