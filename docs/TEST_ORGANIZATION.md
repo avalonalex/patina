@@ -2223,15 +2223,34 @@ the desugarer of the commit before it. The stress counts of
 `vm_callprimitive`, `gc_vm` and `gc_tree_walker` were re-pinned, the last
 two with their minimums, which the release variants moved.
 
-The switch's review added tests for what it found. `macro_definition_env.rs`'s
+The switch's review added tests for what it found.
+`macro_definition_env.rs`'s
 `a_definer_run_twice_in_an_expression_keeps_two_bindings`: a library
 definer of its private name, run twice in a `when` at top level, keeps
 two bindings, and the spelling its runs share is no name,
 `(a b lib-hidden no-such-name)` on both backends as Gauche answers (chibi
 refuses a definition there). The switch gives the two runs one spelling,
 which the VM bound by name in that position until #884, below the switch,
-bound such a definition at its scopes. The stress count of
-`macro_definition_env` was re-pinned.
+bound such a definition at its scopes. Two answers the switch moves that
+its own list missed are pinned as well. `expansion/relinked-names.scm`
+gains a fiftieth row, "a definer's keyword captures no macro generated
+before it": a macro the library's generator made, then a definer of a
+keyword spelled as the library's private one run at top level, and the
+generated macro expands the library's keyword, `((lib-kc-priv 1) (kc-tag
+2) (lib-kc-priv 3))`, where before the switch it expanded the definer's.
+That is the second answer the switch moves from chibi's to Gauche's,
+beside the generated definer's: chibi by hand answers forty-one of the
+fifty, the nine it does not recorded in the file's header and the
+register's note. `macro_definition_env.rs`'s
+`an_expansions_own_definition_reached_before_it_runs_is_not_the_librarys`:
+a template's reference to the private name its own expansion defines in a
+body, and an assignment to it, run before that definition, leave the
+library's binding as it was. The VM reads and writes the body's variable,
+`#<unspecified>`, and the tree-walker raises its own undefined-variable
+error, as for a body nothing expanded, where before the switch the
+tree-walker reached the library's binding by the alias's name, and
+assigned it. The stress counts of `macro_definition_env` and
+`scheme_suite` were re-pinned.
 
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):

@@ -447,7 +447,12 @@ fi
 # definer of its private name run twice where a definition is an
 # expression, which keeps two bindings: its 53 other tests making 39531 as
 # before and the new test 77, so 39608 at 16 and 127 without stress, the
-# minimum left)
+# minimum left; and again that day for an expansion's own definition in a
+# body reached before it runs, which leaves the library's binding as it
+# was: its 54 other tests making 39608 and the new test 74, so 39682 at 16
+# and 127 without stress, the minimum left; and relinked-names.scm's row
+# for a definer's keyword beside a macro generated before it left
+# scheme_suite's counts as they were, 10653 at 4096 and 385 without stress)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -461,7 +466,7 @@ TARGETS=(
     "hygiene_matrix 16 11136 25"              # 22757 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
-    "macro_definition_env 16 16626 54"        # 39608 (127): see the header
+    "macro_definition_env 16 16626 55"        # 39682 (127): see the header
     "owned_handles 16 62714 9"                # 125648 (14)
     "rooted_loading 16 371 6"                 # 1269 (10)
     "vm_callprimitive 16 545 23"              # 1893 (0)

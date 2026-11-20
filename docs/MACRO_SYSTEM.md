@@ -479,22 +479,30 @@ such name.
   to the record under the spelling its template wrote (`linked_var`,
   `linked_set`, `LinkKind::Relinked`), which both backends read and write in
   place of any name and which never takes a fast path (`docs/VM_COMPILER.md`
-  §10). Errors, `--dump` and the trace print the written spelling.
+  §10). A linked node's errors, `--dump` and the trace print the written
+  spelling; a reference that settling gives back, and a definition an
+  expansion introduces, carry the spelling relinking gave and print it
+  (`undefined variable: hidden.466` on the tree-walker, `` unbound
+  variable: `hidden.429 #156` `` on the VM).
 - **A binder of a relinked spelling is bound at its scopes.** A template's
   own `let`, parameter or internal `define` of the name is renamed with its
   references and binds as any scoped binder does, selected before the table
   is asked. A top-level `define-syntax` whose binder the table answers is
   bound at the binder's scopes too (`define_syntax_binding`), where any
   other top-level keyword is still bound by name: so a keyword an expansion
-  introduces under its library's private spelling is that expansion's own,
-  and two runs of one definer keep two keywords. Nothing is bound by name
-  under a relinked spelling, but for one shape on the VM, older than the
-  switch (#885): a definition a template places in an expression position
-  inside a procedure body (in a `when`, an `if` branch, an operand) is
-  bound by its bare spelling, as a global every expansion shares, a
-  relinked spelling like any other, where the tree-walker binds it at its
-  scopes and chibi and Gauche refuse the program. A debug assertion and
-  the scope trace's `RELINK` records hold the rest.
+  introduces under its library's private spelling is that expansion's own.
+  Two runs of one definer keep two keywords, and a macro generated before a
+  definer runs expands the library's keyword, not the definer's: Gauche's
+  answers, where chibi's top-level `define-syntax` lands on the library's
+  keyword, and until that PR Patina's bound the alias's slot by name, so in
+  both a generated macro expanded the newest definition. Nothing is bound
+  by name under a relinked spelling, but for one shape on the VM, older
+  than that PR (#885): a definition a template places in an expression
+  position inside a procedure body (in a `when`, an `if` branch, an
+  operand) is bound by its bare spelling, as a global every expansion
+  shares, a relinked spelling like any other, where the tree-walker binds
+  it at its scopes and chibi and Gauche refuse the program. A debug
+  assertion and the scope trace's `RELINK` records hold the rest.
 - **Settling.** A reference beside a definition its own expansion produces
   into a body is answered by the table, since nothing selects it while the
   body is desugared, and so is emitted as a link to the library's binding.

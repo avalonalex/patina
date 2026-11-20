@@ -2035,6 +2035,50 @@ fn a_relinked_reference_beside_a_definition_its_expansion_produces_at_top_level(
     }
 }
 
+/// A template's reference to its library's private name, and an
+/// assignment to it, where its own expansion produces a definition of that
+/// name into a body and runs them before the definition: each means the
+/// body's definition, not yet run, and the library's binding is untouched.
+/// The VM reads and writes the body's variable before its definition has
+/// run, `#<unspecified>`, as chibi 0.12 answers `#<undef>`; the tree-walker
+/// raises its own undefined-variable error for each, as it does for a body
+/// nothing expanded (guarded here). Gauche 0.9.15 answers `(1
+/// written-by-body lib-hidden)`. Before #837's switch the tree-walker
+/// reached the library's binding by the alias's name: the read answered
+/// `lib-hidden`, and the assignment wrote the library's variable, which
+/// then read `written-by-body`.
+#[test]
+fn an_expansions_own_definition_reached_before_it_runs_is_not_the_librarys() {
+    let program = "(define-library (t early)
+  (export read-before set-before lib-hidden)
+  (import (scheme base))
+  (begin
+    (define hidden 'lib-hidden)
+    (define (lib-hidden) hidden)
+    (define-syntax read-before
+      (syntax-rules ()
+        ((_ v) (begin (define (get) hidden) (define x (get)) (define hidden v) x))))
+    (define-syntax set-before
+      (syntax-rules ()
+        ((_ v)
+         (begin (define (put!) (set! hidden v)) (define x (put!)) (define hidden v) x))))))
+(import (scheme base) (t early))
+(define (f) (read-before 1))
+(define (g) (set-before 'written-by-body))
+(let* ((read (guard (e (#t 'error)) (f)))
+       (assigned (guard (e (#t 'error)) (g)))
+       (library (lib-hidden)))
+  (list read assigned library))";
+    assert_eq!(
+        on_both_backends(program),
+        [
+            "(#<unspecified> #<unspecified> lib-hidden)".to_string(),
+            "(error error lib-hidden)".to_string()
+        ],
+        "[VM, tree-walker]"
+    );
+}
+
 /// A library definer whose template defines its library's private name,
 /// run twice where a definition is an expression (a `when` at top level),
 /// keeps two bindings, and the spelling relinking gave the name is no name

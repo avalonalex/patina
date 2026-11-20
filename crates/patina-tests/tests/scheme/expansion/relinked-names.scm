@@ -31,6 +31,13 @@
 ;;   generated, and is bound at its own scopes in each run, where it was
 ;;   bound by name and the second run redefined the first's keyword,
 ;;   `(two 3)`. Gauche answers as asserted; chibi does not (below).
+;; - "a definer's keyword captures no macro generated before it", added
+;;   with the switch's review (2026-11-20): a macro the library's
+;;   generator made carries the library's private keyword, and a definer
+;;   run after it binds a keyword of that spelling at top level, at its
+;;   own scopes. Bound by name, the definer's keyword was what the
+;;   generated macro expanded, `((kc-tag 1) (kc-tag 2) (lib-kc-priv 3))`.
+;;   Gauche answers as asserted; chibi does not (below).
 ;; - The six rows under "The spelling is no name". Until the switch the
 ;;   spelling a relinked identifier was given was an alias in the using
 ;;   namespace, a name a program could read, assign, expand, define over
@@ -44,25 +51,29 @@
 ;; defined in libraries inline. **chibi 0.12 cannot run this file** — it does
 ;; not take `define-library` in a script; `expansion/template-references.scm`
 ;; has the measurement — and is registered `*` / `incomplete` in
-;; `DIVERGENCES.tsv`. Gauche 0.9.15 runs it and answers all forty-nine
-;; rows as asserted.
+;; `DIVERGENCES.tsv`. Gauche 0.9.15 runs it and answers all fifty rows as
+;; asserted.
 ;;
 ;; Every row was also run under chibi 0.12 with the libraries as `.sld`
 ;; files and the rest of this file as the program (2026-11-16; the second
 ;; batch's four rows, the definer row, the six rows on the spelling, and
-;; the whole file again, 2026-11-17). It agrees on forty-one of the
-;; forty-nine. The eight it does not are seven of the nine rows on a keyword an expansion introduces
-;; under its library's private spelling, and the generated definer's row;
-;; the comment above those rows counts them. chibi's
-;; top-level `define-syntax` lands on the *library's* keyword, so the
-;; library's own macro and every earlier generated macro expand the newest
-;; definition: `((introduced 2) (introduced 3))`, `((one 4) (one 5))`,
-;; `((one 6) (one 7))`, `((two 8) (two 8) ((one 6) (one 7)))`, `((late 9)
-;; (late 9) (late 9))`, `((from-l3-again 1) (from-l3-again 2)
-;; (from-l3-again 3))`, `((from-l3-again 4) (from-l3-again 5))` and, for the
-;; generated definer, `(((one 1) (one 2)) ((two 3) (two 4) (two 5)))`, in
-;; the file's order. Gauche keeps each expansion's keyword its own, as
-;; Patina does, and it is the arbiter of these rows.
+;; the whole file again, 2026-11-17; the row on a definer's keyword beside
+;; an earlier generated macro, and the whole file again, 2026-11-20). It
+;; agrees on forty-one of the fifty. The nine it does not are seven of the
+;; nine rows on a keyword an expansion introduces under its library's
+;; private spelling, the generated definer's row and the row on a
+;; definer's keyword beside an earlier generated macro; the comment above
+;; those rows counts them. chibi's top-level `define-syntax` lands on the
+;; *library's* keyword, so the library's own macro and every earlier
+;; generated macro expand the newest definition: `((introduced 2)
+;; (introduced 3))`, `((one 4) (one 5))`, `((one 6) (one 7))`, `((two 8)
+;; (two 8) ((one 6) (one 7)))`, `((late 9) (late 9) (late 9))`,
+;; `((from-l3-again 1) (from-l3-again 2) (from-l3-again 3))`,
+;; `((from-l3-again 4) (from-l3-again 5))`, for the generated definer
+;; `(((one 1) (one 2)) ((two 3) (two 4) (two 5)))` and for the definer
+;; beside a generated macro `((kc-tag 1) (kc-tag 2) (kc-tag 3))`, in the
+;; file's order. Gauche keeps each expansion's keyword its own, as Patina
+;; does, and it is the arbiter of these rows.
 ;;
 ;; A row that writes the library's variable and then reads it through
 ;; another path does the two in a `let*`, never as two operands of one call:
@@ -302,6 +313,25 @@
               (begin (define-syntax dd-priv (syntax-rules () ((_ y) (list 'tag y))))
                      (define-syntax n (syntax-rules () ((_ y) (dd-priv y)))))))))))))
 
+;; A generator and a definer over one private keyword, `kc-priv`: the
+;; macro `gen-kc` makes in the program expands the library's keyword, and
+;; `def-kc` defines a keyword of that spelling at top level, and a macro
+;; that uses it.
+(define-library (probe kwcarry)
+  (export gen-kc def-kc use-kc-priv)
+  (import (scheme base))
+  (begin
+    (define-syntax kc-priv (syntax-rules () ((_ y) (list 'lib-kc-priv y))))
+    (define-syntax use-kc-priv (syntax-rules () ((_ y) (kc-priv y))))
+    (define-syntax gen-kc
+      (syntax-rules ()
+        ((_ n) (define-syntax n (syntax-rules () ((_ x) (kc-priv x)))))))
+    (define-syntax def-kc
+      (syntax-rules ()
+        ((_ name tag)
+         (begin (define-syntax kc-priv (syntax-rules () ((_ y) (list 'tag y))))
+                (define-syntax name (syntax-rules () ((_ y) (kc-priv y))))))))))
+
 ;; A definition of the private spelling beside a reference to it.
 (define-library (probe settle)
   (export beside get-settled)
@@ -413,7 +443,7 @@
 (import (probe collide) (probe getter) (probe later) (probe casing)
         (probe mint) (probe setter) (probe genset) (probe intro)
         (probe shadow) (probe kwgen) (probe kwintro) (probe defdef)
-        (probe settle) (probe fwd)
+        (probe kwcarry) (probe settle) (probe fwd)
         (probe applying) (probe setcall) (probe control)
         (probe litguard) (probe litonly) (probe litgen))
 
@@ -694,6 +724,21 @@
 (test-equal "a generated definer run twice keeps two keywords"
   '(((one 1) (lib-dd-priv 2)) ((one 3) (two 4) (lib-dd-priv 5)))
   (list dd-first (list (dd-g 3) (dd-g2 4) (use-dd-priv 5))))
+
+;; A macro the library's generator made, and then a definer run at top
+;; level that defines a keyword spelled as the library's private
+;; `kc-priv`. The generated macro's `kc-priv` is the library's, carried
+;; from the form that made it; the definer's keyword is bound at its own
+;; run's scopes and is its own macro's. Gauche 0.9.15 answers as asserted;
+;; chibi 0.12, whose `define-syntax` lands on the library's keyword,
+;; `((kc-tag 1) (kc-tag 2) (kc-tag 3))`. One of the rows the switch
+;; added (the header lists them).
+(gen-kc kc-k)
+(def-kc kc-d kc-tag)
+
+(test-equal "a definer's keyword captures no macro generated before it"
+  '((lib-kc-priv 1) (kc-tag 2) (lib-kc-priv 3))
+  (list (kc-k 1) (kc-d 2) (use-kc-priv 3)))
 
 ;; ─── The spelling is no name ────────────────────────────────────────────────
 

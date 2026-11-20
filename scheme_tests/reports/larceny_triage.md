@@ -779,23 +779,28 @@ failure list.
 keyword of a name its library has a private binding of, is bound at the
 binder's scopes, as a body's has been since #269. So a keyword an expansion
 introduces under its library's private spelling is that expansion's own,
-two runs of a definer keep two keywords, and nothing is bound by name under
-the spelling relinking gives (`Desugarer::define_syntax_binding`;
-`expansion/relinked-names.scm`'s keyword rows;
-`a_generated_definer_run_twice_keeps_two_keywords` in
-`macro_definition_env.rs`), but for one shape on the VM, measured
-2026-11-20 and older than the switch: a definition a template places in
-an expression position inside a procedure body (in a `when`, an `if`
-branch, an operand) is bound by its bare spelling, as a global every
-expansion shares, a relinked spelling like any other, where the
-tree-walker binds it at its scopes and chibi and Gauche refuse the
-program (#885; the same shape at top level is #884's, bound at its scopes
-on both backends since). A top-level `define-syntax` of an identifier
-that was *not* relinked is still bound by name, ignoring its scopes: #269's
-remaining half (`PRD/macro/SYNTAX_CASE_DESIGN.md`, V4), measured again that
-day. Two uses of one definer share the helper keyword, `((two 1) (two 2))`
-where chibi and Gauche answer `((one 1) (two 2))`, and the program can call
-the helper by its name. It has an issue of its own.
+and two runs of a definer keep two keywords
+(`Desugarer::define_syntax_binding`; `expansion/relinked-names.scm`'s
+keyword rows; `a_generated_definer_run_twice_keeps_two_keywords` in
+`macro_definition_env.rs`). Nor does a definer's keyword capture a macro
+generated before it ran (2026-11-20, `relinked-names.scm`'s "a definer's
+keyword captures no macro generated before it"): the generated macro
+expands the library's private keyword, `((lib-kc-priv 1) (kc-tag 2)
+(lib-kc-priv 3))` as Gauche answers, where Patina before the switch, and
+chibi, expanded the definer's. Nothing is bound by name under the spelling
+relinking gives, but for one shape on the VM, measured 2026-11-20 and
+older than the switch: a definition a template places in an expression
+position inside a procedure body (in a `when`, an `if` branch, an operand)
+is bound by its bare spelling, as a global every expansion shares, a
+relinked spelling like any other, where the tree-walker binds it at its
+scopes and chibi and Gauche refuse the program (#885; the same shape at
+top level is #884's, bound at its scopes on both backends since). A
+top-level `define-syntax` of an identifier that was *not* relinked is
+still bound by name, ignoring its scopes: #269's remaining half
+(`PRD/macro/SYNTAX_CASE_DESIGN.md`, V4), measured again that day. Two uses
+of one definer share the helper keyword, `((two 1) (two 2))` where chibi
+and Gauche answer `((one 1) (two 2))`, and the program can call the helper
+by its name. It has an issue of its own.
 
 **H3 positive cases, 2026-09-12.** The generated sweep at runtime `0c992ddb`
 found the opposite direction with seeds **370/371/374/375**: a private define,
