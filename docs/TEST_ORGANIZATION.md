@@ -2223,6 +2223,16 @@ the desugarer of the commit before it. The stress counts of
 `vm_callprimitive`, `gc_vm` and `gc_tree_walker` were re-pinned, the last
 two with their minimums, which the release variants moved.
 
+The switch's review added tests for what it found. `macro_definition_env.rs`'s
+`a_definer_run_twice_in_an_expression_keeps_two_bindings`: a library
+definer of its private name, run twice in a `when` at top level, keeps
+two bindings, and the spelling its runs share is no name,
+`(a b lib-hidden no-such-name)` on both backends as Gauche answers (chibi
+refuses a definition there). The switch gives the two runs one spelling,
+which the VM bound by name in that position until #884, below the switch,
+bound such a definition at its scopes. The stress count of
+`macro_definition_env` was re-pinned.
+
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):
 the variable that sets the mode did not reach the process, or the program

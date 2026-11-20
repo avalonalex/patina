@@ -442,7 +442,12 @@ fi
 # 21790 as before and the new test 147, so 21937 at 16 and 6 without stress,
 # the minimum left), merged beside the switch's tests: its 24 other tests
 # making 22610 as at the switch's head and the new test 147, so 22757 at 16
-# and 6 without stress, the minimum left)
+# and 6 without stress, the minimum left; and macro_definition_env's test
+# count re-pinned 2026-11-20 for the switch's review (#837), a library
+# definer of its private name run twice where a definition is an
+# expression, which keeps two bindings: its 53 other tests making 39531 as
+# before and the new test 77, so 39608 at 16 and 127 without stress, the
+# minimum left)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -456,7 +461,7 @@ TARGETS=(
     "hygiene_matrix 16 11136 25"              # 22757 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
-    "macro_definition_env 16 16626 53"        # 39531 (127): see the header
+    "macro_definition_env 16 16626 54"        # 39608 (127): see the header
     "owned_handles 16 62714 9"                # 125648 (14)
     "rooted_loading 16 371 6"                 # 1269 (10)
     "vm_callprimitive 16 545 23"              # 1893 (0)

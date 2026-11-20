@@ -2035,6 +2035,42 @@ fn a_relinked_reference_beside_a_definition_its_expansion_produces_at_top_level(
     }
 }
 
+/// A library definer whose template defines its library's private name,
+/// run twice where a definition is an expression (a `when` at top level),
+/// keeps two bindings, and the spelling relinking gave the name is no name
+/// to the program. Gauche 0.9.15 answers as asserted; chibi 0.12 refuses a
+/// definition in an expression context. Before #837's switch the VM
+/// answered `(a b lib-hidden …)` too: each run defined the alias it was
+/// given by name, and the alias was minted again after each definition.
+/// The switch gives both runs one spelling, which the VM bound by name in
+/// that position until #884 bound such a definition at its scopes: the
+/// switch's commits alone answered `(b b lib-hidden b)` on the VM.
+#[test]
+fn a_definer_run_twice_in_an_expression_keeps_two_bindings() {
+    let program = "(define-library (t pair)
+  (export def-pair lib-hidden spell-hidden)
+  (import (scheme base))
+  (begin
+    (define hidden 'lib-hidden)
+    (define (lib-hidden) hidden)
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax spell-hidden (syntax-rules () ((_) (quote-it hidden))))
+    (define-syntax def-pair
+      (syntax-rules () ((_ getter v) (begin (define hidden v) (define (getter) hidden)))))))
+(import (scheme base) (scheme eval) (scheme repl) (t pair))
+(when #t (def-pair get-a 'a))
+(when #t (def-pair get-b 'b))
+(list (get-a) (get-b) (lib-hidden)
+      (guard (e (#t 'no-such-name)) (eval (spell-hidden) (interaction-environment))))";
+    let expected = "(a b lib-hidden no-such-name)";
+    assert_eq!(common::eval_program_vm(program), expected, "VM");
+    assert_eq!(
+        common::eval_program_tree_walker(program),
+        expected,
+        "tree-walker"
+    );
+}
+
 /// A library whose macro expands to a body headed by a private definer,
 /// a keyword the program cannot name and has a procedure of its own
 /// spelled like.
