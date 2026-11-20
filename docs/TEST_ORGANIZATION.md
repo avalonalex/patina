@@ -2105,12 +2105,14 @@ the table does not answer compared as before), and the desugarer's
 `a_scans_table_reads_the_forms_and_keeps_its_own`. No stress count
 moved: they are unit tests of crates the stress lane does not run.
 
-The switch itself: relinking installs no alias and interns nothing. The
-spelling it gives a mention is a function of the macro's environment, the
-name and the mention, kept clear of the names the macro's own templates
-write, and is bound nowhere; the identifier means its record in the
-form's table, and in the relinks of a generated macro that keeps it. The
-desugarer's `a_relinked_spelling_is_a_function_of_its_mention_clear_of_what_is_taken`
+The switch itself: relinking installs no alias and itself interns nothing
+(a relinked identifier that reaches a quote is interned as data under its
+spelling, the open defect of a relinked identifier used as data, older
+than the switch). The spelling it gives a mention is a function of the
+macro's environment, the name and the mention, kept clear of the names
+the macro's own templates write, and is bound nowhere; the identifier
+means its record in the form's table, and in the relinks of a generated
+macro that keeps it. The desugarer's `a_relinked_spelling_is_a_function_of_its_mention_clear_of_what_is_taken`
 and `a_spelling_is_taken_by_the_macros_own_names_and_by_the_expansions`
 are the function's unit tests. Every test that needs the spelling reads
 it from an expansion (a quoting macro of the library's, since a relinked

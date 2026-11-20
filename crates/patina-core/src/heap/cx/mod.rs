@@ -633,9 +633,9 @@ impl<'gc> Cx<'gc> {
     /// R6), read with this context's heap: the record reaches the alias
     /// table beneath the context, where nothing collects. Raw: names
     /// `NamespaceView`. The desugarer called it until #837's second PR,
-    /// since which relinking installs no alias ([`relink_link`]
-    /// (Self::relink_link) answers the record instead); it and the next
-    /// are deleted with the alias tables.
+    /// since which relinking installs no alias
+    /// ([`relink_link`](Self::relink_link) answers the record instead); it
+    /// and the next are deleted with the alias tables.
     #[inline]
     pub fn relink_alias(
         &mut self,

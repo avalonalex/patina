@@ -2365,12 +2365,14 @@ the form's run returns on the tree-walker (§9.7). After that a relinked
 *variable* reference is held by the code that expanded it, through its
 link, for as long as that code lives (the `relink-variable` row: one
 namespace above the baseline while the procedure is held, none once it is
-dropped), and a relinked *keyword* by nothing at all: the keyword was
-expanded, and the code names nothing of it (`relink-keyword`: none at
-either reading). So every reading of a release is **between top-level
-forms**: a program that expands, redefines and measures inside one form
-reads the pool's hold on the tree-walker and not on the VM, and each test
-of a release keeps its steps in forms of their own.
+dropped), and a relinked *keyword* reference by nothing at all: the
+keyword was expanded, and the code names nothing of it (`relink-keyword`:
+none at either reading). A keyword an expansion *defines* under a
+relinked spelling is a definition, which stays (R-C, below). So every
+reading of a release is **between top-level forms**: a program that
+expands, redefines and measures inside one form reads the pool's hold on
+the tree-walker and not on the VM, and each test of a release keeps its
+steps in forms of their own.
 
 Two shapes keep a replaced namespace past the program's last use, each
 with an owner. Until #837's second PR there were four: a relinked variable
@@ -2379,9 +2381,19 @@ and was never removed (R-A), and a relinked keyword an alias whose record
 reached the macro the replaced library defined, and so its
 `definition_env` (R-B; one whose relinked keyword the library imports kept
 no namespace, but each redefinition left an alias entry, a spelling and a
-record). Relinking installs nothing now, and both are released. A macro-introduced top-level definition, kept until 5c (start
-decision 8), whose code links one of the old library's bindings whose
-value reaches its code (R-C, 5c). On the VM, a library whose body keeps
+record). Relinking installs nothing now, and both are released. A
+macro-introduced top-level definition, kept until 5c (start decision 8),
+whose code links one of the old library's bindings whose value reaches
+its code; or a keyword an expansion defines at top level under a
+relinked spelling, bound at its scopes (`define_syntax_binding`) and kept
+as such a definition is, whose macro's `foreign_expansions` names the
+environment of the library that generated it, which it keeps, one
+namespace a run, as the alias's slot did before #837's second PR (R-C,
+5c; measured 2026-11-20 on both backends across 600 redefinitions: a
+keyword whose template inherits an identifier of its generator's keeps a
+namespace and 277 binding records a run, one that inherits none only its
+own entry's record and cell, and one an expansion defines in a body
+nothing). On the VM, a library whose body keeps
 code quoting one of its own procedures: the code store traces a loaded
 unit's constants in every collection (§5.2), so the procedure, its unit,
 the namespace, the closure of the quoting unit in the namespace's slot and

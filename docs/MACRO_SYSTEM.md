@@ -539,7 +539,13 @@ under a `quasiquote` whose head was relinked is renamed (#778's class); a
 definition an expansion produces into a body does not shadow the library's
 private keyword of its name; and a top-level `define-syntax` of a name that
 was *not* relinked is bound by name, so two uses of one definer share one
-keyword (#269's remaining half).
+keyword (#269's remaining half). Also unchanged, and in no issue yet: the
+literal matcher's rule that a relinked literal matches an input spelled
+otherwise whose binding holds the same heap object ("Literal Matching"
+below), so a generated matcher whose literal is its library's private
+binding of `car` matches the program's own `(define plit car)` and `car`
+itself, where chibi and Gauche match neither (measured 2026-11-20; the
+rule predates that PR, which kept it).
 
 **A template's reference to a name the use site imported is bound when it is
 expanded** (#438). Where the use site and the definition site reach one
