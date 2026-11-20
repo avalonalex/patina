@@ -2257,8 +2257,9 @@ had reached: a program hands a library's generator the spelling it learned
 for the library's private `x`, so the generated macro defines that
 spelling at its own scopes beside the generator's definition at its own,
 and the template's `x`, carrying both, is ambiguous; the error names `x`,
-where without the rewrite it named the spelling. The stress counts of
-`macro_definition_env` and `scheme_suite` were re-pinned.
+where without the rewrite it named the spelling. The stress count of
+`macro_definition_env` was re-pinned for each test; the new row left
+`scheme_suite`'s counts as they were.
 
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):
