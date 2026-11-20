@@ -436,7 +436,13 @@ fi
 # without; host_environments's for a relinked expansion in a host
 # namespace, to 167847, and to 765 without; and vm_callprimitive's for the
 # code of a relinked apply, call-with-values and assignment, to 1893, and 0
-# without; those four minimums left)
+# without; those four minimums left; and hygiene_matrix's test count
+# re-pinned 2026-11-18 for #884's test that a definition in an expression
+# position keeps its expansion's binding (on main, its 18 other tests making
+# 21790 as before and the new test 147, so 21937 at 16 and 6 without stress,
+# the minimum left), merged beside the switch's tests: its 24 other tests
+# making 22610 as at the switch's head and the new test 147, so 22757 at 16
+# and 6 without stress, the minimum left)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -447,7 +453,7 @@ TARGETS=(
     "gc_tree_walker 16 112579 41"             # 129201 (95958)
     "gc_vm 16 44645 54"                       # 58197 (31094)
     "host_environments 16 83806 36"           # 167847 (765)
-    "hygiene_matrix 16 11136 24"              # 22610 (6)
+    "hygiene_matrix 16 11136 25"              # 22757 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
     "macro_definition_env 16 16626 53"        # 39531 (127): see the header

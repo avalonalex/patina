@@ -155,12 +155,22 @@ rather than the per-form counter used for locals. `alpha_rename` runs once per
 top-level form and the counter restarts each time, so two forms expanding one
 macro otherwise mint the same global.
 
+The definitions are collected wherever the form makes them outside every
+lambda (`for_each_top_level_define`): through `begin`, as a body's are, and
+also where a definition stands in an expression position — inside `when`, an
+`if` branch, an operand, or a definition's or assignment's value. R7RS calls
+such a definition an error and chibi refuses it, but Gauche and the
+tree-walker bind it at top level at its scopes. Collected through `begin`
+alone, it found no binding here and was defined by its bare spelling, one
+global shared by every expansion of the macro (#884).
+
 The generated spelling contains a space (`tmp #136`). That is deliberate: a
 space is a delimiter, so the reader cannot produce the symbol from source, and
 these names outlive the form that made them.
 
 Renaming leaves the bare name unbound. The pass returns each introduced
-definition's original name, scopes and renamed global in `introduced_globals`;
+definition's original name, scopes and renamed global in `introduced_globals`,
+recorded where the `Define` is renamed, wherever it stands;
 `compile_pipeline` records them with `Environment::define_introduced_global`
 after codegen, so a failed compile leaves the environment untouched. The list
 keeps every definition, even when one form introduces the same spelling twice.
