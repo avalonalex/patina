@@ -1081,7 +1081,8 @@ fn no_namespace_read_answers_a_record() {
 }
 
 /// The binding records the heap counts, read by a form that calls only
-/// procedures, so that expanding it makes no alias.
+/// procedures, so that reading it expands no macro (which, until #837's
+/// second PR, could leave an alias's record behind).
 const RECORDS: &str = "(cdr (assq 'binding-records (gc-stats)))";
 
 /// A relinked reference links the record its macro's environment finds for
@@ -1157,8 +1158,11 @@ fn code_compiled_before_a_hosts_nearer_definition_keeps_the_record_it_linked() {
 /// global keyword still; a macro generated after the definition carries
 /// `first`'s. Until #837's second PR a carried keyword was read by name
 /// through `first` at each expansion, and `user-before` expanded
-/// `first`'s keyword once that was defined
-/// (`alias_home_tests::a_keyword_reached_through_the_targets_parent_keeps_its_environment`).
+/// `first`'s keyword once that was defined (core's
+/// `alias_home_tests::a_keyword_reached_through_the_targets_parent_keeps_its_environment`,
+/// deleted with the alias tables; `relink_link_tests`'
+/// `a_name_reached_through_a_parent_links_the_parents_record` holds the
+/// link's half).
 fn carried_before_a_nearer_definition<B: Backend>(interp: Interpreter<B>) -> [String; 2] {
     interp
         .eval_program_owned(

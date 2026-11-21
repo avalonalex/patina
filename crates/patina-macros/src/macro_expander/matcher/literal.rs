@@ -209,8 +209,10 @@ fn local_binding(
 /// macro's literal stopped matching its own importer's use of it, where
 /// chibi, Gauche and the matcher before #450 all match. No import is a copy
 /// now: every import is the exporter's cell (#834), #427 refuses an
-/// introduced definition's bare export and #847 an alias's. The check stays
-/// for a binding of the use site's own that holds what the library's holds,
+/// introduced definition's bare export, and a spelling relinking gave an
+/// identifier is bound nowhere, so it is no export (#846, #837). The check
+/// stays for a binding of the use site's own that holds what the library's
+/// holds,
 /// the copy's shape, as a host's `define` of an import's value makes
 /// (`an_import_installed_as_a_copy_still_matches_the_librarys_literal`). A
 /// program's definition over an import holds a value of its own, so this

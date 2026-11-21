@@ -4,7 +4,7 @@
 //! 0..6 insertions/frame (13..47 for the indexed property's, #613), nonempty
 //! scope masks, optional plain `x`, both
 //! name-visible and scope-only bindings, and values in 0..3 (deliberate ties).
-//! Nonempty references exercise scoped resolution; plain access, aliases,
+//! Nonempty references exercise scoped resolution; plain access,
 //! compiler/desugarer integration and GC are outside this domain.
 //!
 //! Frames are stored root first; insertions oldest first. Redefining an

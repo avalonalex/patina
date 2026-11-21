@@ -1703,7 +1703,8 @@ impl<'a> Desugarer<'a> {
             // route: an import is the exporting library's location (#406),
             // the cell its binding names (#834), and no export is installed
             // as a copy (#427 refuses a macro-introduced definition's bare
-            // export, #847 an export spelled as an alias). Until imports
+            // export, and a spelling relinking gave an identifier is bound
+            // nowhere, so it is no export, #846). Until imports
             // shared, there was nothing to ask but whether they
             // held equal values, and two variables that are both `0`, `#f`
             // or `'()` — which is what variables start as — read as one

@@ -354,7 +354,9 @@ flag on one CPS node, and the doc comments that justified them; step 2 is one
 desugarer function and its rewrite keying, `collect_template_symbols`, and an
 optional scope set on `AliasTarget`. After both, every relinking alias names a
 binding and no runtime path answers an introduced definition by its spelling,
-which is what the prerequisite asks resolved IR to carry.
+which is what the prerequisite asks resolved IR to carry. (The alias this
+sizes went with #837's second PR: a relinked identifier's target is a
+binding record that travels with the syntax, and `AliasTarget` is deleted.)
 
 What resolve-once still has to solve is elsewhere. The obstacle the Q7 deferral
 did not name is that the desugarer's binding table *is* the runtime
