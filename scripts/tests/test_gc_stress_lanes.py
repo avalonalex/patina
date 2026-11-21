@@ -30,7 +30,7 @@ target = sys.argv[sys.argv.index('--test') + 1]
 directory = os.environ.get('PATINA_GC_COUNT_DIR')
 stress = os.environ.get('PATINA_GC_STRESS')
 env = 'adaptive' if mode == 'other-mode' or not stress else 'PATINA_GC_STRESS=' + stress
-count = 0 if mode == 'zero' else 100000
+count = 0 if mode == 'zero' else 1000000
 if directory and mode != 'no-record':
     with open(os.path.join(directory, 'gc-count.%d' % os.getpid()), 'w') as f:
         f.write('pid=%d exe=%s-0123abcd env=%s backends=tree-walker,vm collections=%020d\n'
@@ -152,7 +152,7 @@ class Lanes(unittest.TestCase):
         self.assert_lane_fails(self.run_script('run_gc_stress_tests.sh', mode='zero'),
                                'FAIL gc_vm at 16: ok. 99 passed')
         self.assert_lane_fails(self.run_script('run_gc_stress_tests.sh', mode='zero'),
-                               '0 collections, pinned minimum 19776')
+                               '0 collections, pinned minimum 44645')
 
     def test_per_pr_lane_fails_a_run_the_variables_did_not_reach(self):
         self.assert_lane_fails(self.run_script('run_gc_stress_tests.sh', mode='no-record'),
@@ -163,7 +163,7 @@ class Lanes(unittest.TestCase):
     def test_per_pr_lane_fails_a_run_that_did_not_run_every_test(self):
         result = self.run_script('run_gc_stress_tests.sh', mode='filtered')
         self.assert_lane_fails(result, '2 test(s) filtered out')
-        self.assertIn('1 test(s) passed, pinned 52', result.stdout)
+        self.assertIn('1 test(s) passed, pinned 54', result.stdout)
 
     def test_per_pr_lane_fails_a_failing_target(self):
         result = self.run_script('run_gc_stress_tests.sh', mode='fail')

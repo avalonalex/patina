@@ -556,10 +556,10 @@ pub struct CompiledMacro {
     /// written here, can carry an expansion scope that *selects* a binding,
     /// and because one spelling can arrive under several and mean a different
     /// binding under each — the generator's `tmp`, which the template binds,
-    /// beside a caller's `tmp`, which is free. The relinker aliases by name,
-    /// so it decides each of these separately: a mention is aliased only
-    /// where it resolves to the binding the name alone reaches, and each
-    /// mention that is gets an alias of its own.
+    /// beside a caller's `tmp`, which is free. The relinker decides each of
+    /// these separately: a mention is relinked by name only where it
+    /// resolves to the binding the name alone reaches, and each mention
+    /// that is relinked gets a spelling of its own (#837).
     #[trace(skip, reason = "names, each with the scope sets it arrived under")]
     pub inherited_identifiers: HashMap<Rc<str>, Vec<ScopeSet>>,
 

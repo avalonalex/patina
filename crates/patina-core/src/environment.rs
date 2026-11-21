@@ -140,7 +140,7 @@ impl std::ops::DerefMut for ScopedTable {
 /// table, and an entry keeps its record across a redefinition
 /// (`insert_scoped_record`). Every other target keeps its environment, and
 /// is read there by name or by identity as before ([`AliasHome::Holder`],
-/// [`AliasHome::Env`]): a variable, until 4b.10's second PR; a keyword the
+/// [`AliasHome::Env`]): a variable; a keyword the
 /// namespace reaches through its parent, through an alias or as a
 /// name-visible scoped definition, which a later definition could move the
 /// by-name read away from; and a keyword a frame binds.
@@ -176,7 +176,7 @@ enum AliasHome {
     /// target in the holder is always this, a keyword included.
     Holder,
     /// In another environment, read there by name or by identity: a
-    /// variable, until 4b.10's second PR, or a keyword the own-table rule
+    /// variable, or a keyword the own-table rule
     /// ([`AliasTarget`]) does not take as a record. No program has reached
     /// this arm with a keyword a frame binds: a same-root shadow of a
     /// top-level keyword does not relink, and a host namespace binds in its
@@ -3514,8 +3514,11 @@ impl Environment {
     ///
     /// Takes no heap, so it cannot tell a keyword from a variable: the
     /// alias names `target_env` and reads it by name, whatever the target
-    /// is. The desugarer's relinking goes through
-    /// [`relink_alias`](Self::relink_alias), which holds a keyword's record.
+    /// is. The desugarer's relinking went through
+    /// [`relink_alias`](Self::relink_alias), which holds a keyword's record,
+    /// until #837's second PR, since which it installs no alias: these
+    /// methods are called by nothing but their tests, and go with the alias
+    /// tables in that PR's last part.
     pub fn define_alias(
         &self,
         alias: impl Into<Rc<str>>,
@@ -6785,6 +6788,43 @@ mod relink_link_tests {
         );
     }
 
+    /// A namespace's name-visible scoped definition with no slot of the
+    /// name is what the name alone reaches, so a relink by name links its
+    /// entry's record; and a slot defined for the name afterwards is a
+    /// nearer binding, which `get` then reads and the earlier link does not
+    /// (the owner's ruling E1: the record the walk finds when it is asked).
+    /// The next ask links the slot's. No program makes the shape: on a VM
+    /// heap only the raw `define_scoped_definition` does, and the
+    /// tree-walker's `Define` step makes one in a run-time frame, which is
+    /// no macro's definition environment.
+    #[test]
+    fn a_visible_scoped_definition_links_its_entry_until_a_slot_is_defined() {
+        let heap = new_shared_heap();
+        let namespace = Rc::new(Environment::with_heap(&heap));
+        namespace.define_scoped_definition(&heap, Rc::from("x"), scopes(&[1]), n(1));
+        assert_eq!(namespace.get(&heap, "x"), Some(n(1)));
+        assert!(namespace.local_record("x").is_none(), "no slot of the name");
+
+        let entry = by_name(&heap, &namespace, "x").unwrap();
+        assert_eq!(entry.value(&heap.borrow()), Some(n(1)));
+
+        namespace.define(&heap, "x", n(2));
+        assert_eq!(
+            namespace.get(&heap, "x"),
+            Some(n(2)),
+            "the name reads the slot"
+        );
+        assert_eq!(
+            entry.value(&heap.borrow()),
+            Some(n(1)),
+            "the earlier link is the scoped entry's record still"
+        );
+        let slot = by_name(&heap, &namespace, "x").unwrap();
+        assert_eq!(slot.record(), namespace.local_record("x").unwrap());
+        assert_ne!(slot, entry);
+        assert_eq!(slot.value(&heap.borrow()), Some(n(2)));
+    }
+
     /// A frame's import has no record: the link is a fresh one over the
     /// import's cell at each ask, in no slot and counted nowhere, reading
     /// and locating the exporter's binding.
@@ -9441,8 +9481,9 @@ mod relink_alias_tests {
     /// and the alias takes the next spelling offered. The one test of
     /// `relink_alias`'s refusal of a bound spelling, ported from
     /// `import_alias_tests`' `minting_never_forwards_over_a_name_already_bound`
-    /// when early binding stopped minting. Over a variable target, which the
-    /// second PR re-targets.
+    /// when early binding stopped minting. Over a variable target. Nothing
+    /// but these tests mints an alias since #837's second PR, whose last
+    /// part deletes them with the tables.
     #[test]
     fn minting_skips_a_name_already_bound() {
         let heap = new_shared_heap();
@@ -9849,8 +9890,8 @@ mod alias_home_tests {
         assert_eq!(program.get(&heap, &alias), Some(keyword));
     }
 
-    /// A variable in the target's slot keeps its environment until 4b.10's
-    /// second PR, and a target in the holder is the holder, keyword or not.
+    /// A variable in the target's slot keeps its environment, and a target
+    /// in the holder is the holder, keyword or not.
     #[test]
     fn a_variable_keeps_its_environment_and_the_holder_stays_the_holder() {
         let heap = new_shared_heap();

@@ -1273,10 +1273,11 @@ VM's linking makes (#836): a held procedure that reads a fresh unbound name
 is one record more on the VM, its placeholder, and none on the tree-walker; a
 caught call of it that misses adds none; and once it is let go two
 collections give the count back. `keep` is defined and a `guard` expanded
-before the baseline, since a definition's operand is linked at load and
-`guard`'s first expansion relinks its private helpers, whose aliases
-outlive the collections (until #837 it also bound import aliases, records of
-their own).
+before the baseline, since a definition's operand is linked at load. (An
+expansion of `guard` leaves nothing behind since #837: its imported
+procedures are linked and its private helpers relinked, each to a record
+its library already has. Until then each was an alias, a record or a
+table entry more in the global namespace, which the baseline waited for.)
 `a_host_namespace_s_placeholders_are_dropped_with_their_code` does the same
 in a host namespace, on both backends: a held host procedure reading an
 unbound name is two records on the VM, a weak read-through record and the
@@ -1586,10 +1587,15 @@ frame; an importing library not yet redefined; a macro-introduced
 definition over a plain value; a macro the old library's generator
 defined, whose `foreign_expansions` keeps the old namespace while the
 macro lives (counted, by the owner's ruling of 2026-11-16 on #837's first
-PR; the alternative, keeping only binding locations, would read `held` 0); and
-two residual rows, which pin what is not released today and name what
-flips them (a macro-introduced definition linking an old procedure, until
-5c; a relinked variable alias, until #837's second PR). R-D, the VM's
+PR; the alternative, keeping only binding locations, would read `held` 0);
+one residual row, which pins what is not released today and names what
+flips it (a macro-introduced definition linking an old procedure, until
+5c); and the rows #837's second PR flipped or added, once relinking
+installed no alias: a relinked variable, held by the code that expanded
+it and by nothing once that is dropped (a residual row until then); a
+relinked keyword, its own library's and an imported one, no holder at
+all; and a generated macro over a private procedure, in its template and
+as a pattern literal alone, a holder while the program binds it. R-D, the VM's
 loaded units' constants keeping a replaced library whose body keeps code
 quoting its own procedure (#866, which owns the fix by the owner's ruling
 (a) of 2026-11-16 on #838's question 2), is pinned by a test in each backend's file: `gc_vm`'s
@@ -1868,23 +1874,27 @@ environment and a target in the holder is the holder; and a keyword target
 asked for repeatedly gets one alias (`remembered_relink`'s `Keyword` arm).
 `gc_edge_tests::environment_edges` holds the record as a sentinel, shown
 failing with the record `#[trace(skip)]`.
-`a_keyword_alias_names_no_environment_directly`, in core and in
-`macro_definition_env.rs` on both backends, failed with every alias read
-by name, as before R6; and `macro_definition_env.rs`'s
-`a_keyword_aliass_record_still_keeps_its_macros_definition_namespace`
-pins what R6 leaves: after a redefinition and two collections the old
-library's namespace is alive when an expansion left an alias to its
-private macro, through the macro's `definition_env`, and gone when none
-did (#837's question 4, ruled (a) on 2026-11-16, flips it when keyword
-aliases travel with the syntax); with the record
-`#[trace(skip)]` the namespace goes, so it is also an end-to-end sentinel
-for the record's trace. Its twin
-`a_keyword_alias_to_an_imported_keyword_releases_the_replaced_library`
-pins what R6 releases: where the library imports the keyword, the old
-namespace goes while the alias stays, and with every alias read by name it
-stayed. `environment.rs`'s `an_alias_entrys_size_is_watched` pins the
-alias entry at 80 bytes. `macro_definition_env`'s stress count was
-re-pinned.
+`a_keyword_alias_names_no_environment_directly`, in core and, until the
+second PR's switch, in `macro_definition_env.rs` on both backends, failed
+with every alias read by name, as before R6; and
+`macro_definition_env.rs` pinned what R6 left
+(`a_keyword_aliass_record_still_keeps_its_macros_definition_namespace`:
+after a redefinition and two collections the old library's namespace was
+alive when an expansion had left an alias to its private macro, through
+the macro's `definition_env`, and gone when none had; with the record
+`#[trace(skip)]` the namespace went, so it was also an end-to-end
+sentinel for the record's trace) and what R6 released
+(`a_keyword_alias_to_an_imported_keyword_releases_the_replaced_library`:
+where the library imports the keyword, the old namespace went while the
+alias stayed). The switch flipped all three, by #837's question 4, ruled
+(a) on 2026-11-16: keyword aliases travel with the syntax, so no alias is
+left and both namespaces go (`a_relinked_keyword_leaves_no_alias`,
+`a_relinked_keyword_keeps_no_definition_namespace`,
+`a_relinked_imported_keyword_leaves_nothing_of_the_replaced_library`,
+below). Core's alias tests, `environment.rs`'s
+`an_alias_entrys_size_is_watched` (the alias entry at 80 bytes) among
+them, stay until the alias tables are deleted. `macro_definition_env`'s
+stress count was re-pinned.
 
 S1's tests (#839) re-pinned `host_environments`'s stress count: two tests
 more, and the `eval_in` routes its #620 tests and raw frames gained. The
@@ -1893,7 +1903,7 @@ the arenas.
 
 The second PR (#837) starts with a scoreboard: the relinking shapes no
 lane held, each a row that passed before the PR, on both backends, and
-must pass after it. `expansion/relinked-names.scm` has thirty-eight (a
+must pass after it. `expansion/relinked-names.scm` began with thirty-eight (a
 generated macro over a private variable or keyword, in the form that made
 it and in later ones, through one level and two; a reference beside the
 program's definition of its spelling, in one form and across forms; a
@@ -1903,11 +1913,12 @@ spelling, in one expansion, through a generated macro, run twice, compiled
 first, of a private variable's spelling and across a second library; a
 definition an expansion produces into a body beside a reference to it, and
 at top level; a generated macro's relinked literal; and a template that
-itself writes forty names spelled like a relinked one). Gauche answers all
-thirty-eight as asserted; chibi, run by hand with the libraries as files,
-thirty-one, and the file's header and its `*` row in `DIVERGENCES.tsv`
+itself writes forty names spelled like a relinked one). Gauche answers
+every row as asserted; chibi, run by hand with the libraries as files,
+all but seven, and the file's header and its `*` row in `DIVERGENCES.tsv`
 record the seven. `expansion/splicing-libraries.scm` gains the row for a keyword
-a splice's frame binds, read in a procedure compiled later. The shapes no
+a splice binds at its scopes in its library's namespace, read in a
+procedure compiled later. The shapes no
 oracle can stage are Rust tests: `macro_definition_env.rs`'s
 `a_macro_generated_through_three_levels_reaches_the_private_variable`,
 `a_macro_generated_across_two_libraries_reaches_the_first` and
@@ -1919,11 +1930,42 @@ private binding is a pattern literal. The stress counts of
 `macro_definition_env`, `gc_vm`, `gc_tree_walker` and `scheme_suite` were
 re-pinned.
 
-The same PR's plumbing makes no relinked link in any program. Part of it
-is on every program's path already: the VM compiler reads each link's
-kind, and a macro object is allocated with no relinks, which the
-collector's arm then loops over. What makes a relinked link or stores a
-relink is called by nothing but its tests, which build each part by hand.
+A second batch followed the plumbing and precedes the switch, since a
+mutation run over the first found two kinds of relink target each held by
+one row: with relinking to a scoped keyword off, only
+`splicing-libraries.scm` failed, and with relinking to an introduced
+definition off, only `relinked-names.scm`. Each kind is now held in more
+than one test target. An introduced definition:
+`macro_definition_env.rs`'s
+`a_definers_introduced_state_is_read_and_assigned_from_procedures_compiled_later`.
+A scoped keyword: a second row of `splicing-libraries.scm` (a recursive
+keyword under `splicing-letrec-syntax` that a generated macro carries into
+later forms), `macro_definition_env.rs`'s
+`a_splices_private_keywords_are_expanded_from_later_forms`, and
+`gc_shared_tests!`'s
+`a_generated_macro_keeps_a_splices_keyword_across_its_librarys_redefinition`,
+on both backends and under zeal. Every target a program's relinking
+reaches is a namespace's record: instrumented over every suite file, the
+workspace's tests, chibi's suite and the compat corpus on both backends,
+the desugarer asks for a slot's or an import's record by name, a scoped
+keyword's entry and an introduced definition's, each in a namespace, and
+never for a frame's keyword or a frame's import, which only the core
+tests of `Environment::relink_record` build. `relinked-names.scm` gains
+four rows, forty-two in all, of which chibi by hand answers thirty-five: a
+template's own internal definitions of the private spellings; a template's
+`apply` past the program's definition of `apply`; a relinked assignment
+beside calls of one binding bound early and late; and a private name for
+`call-with-values` or `dynamic-wind`, which the library re-points. The
+same four stress counts were re-pinned.
+
+The same PR's plumbing made no relinked link in any program when it
+landed, and its tests build each part by hand. Part of it was on every
+program's path from the start: the VM compiler reads each link's kind,
+and a macro object is allocated with no relinks, which the collector's
+arm then loops over. The desugarer makes a relinked link for every mention
+an expansion relinks since the switch's first step, and stores a relink
+in each generated macro that keeps a relinked identifier since its second
+(both below).
 The pool's
 `a_link_keeps_its_kind_through_the_pool` (an early and a relinked link of
 one record are two links, each read from its own entry, and neither kind
@@ -1968,8 +2010,8 @@ count of a relink as a word of the object is
 `a_macros_relinks_are_words_of_the_object`, in core's lib tests with the
 `gc-census` feature, which CI's census step runs beside the census's own
 lane (`cargo test -p patina-core --lib --features gc-census --
-heap::census::`): that lane runs programs, and no program makes a relink
-before the second PR. The VM: `primitive_calls.rs`'s `a_relinked_callee_is_no_fast_path`
+heap::census::`): that lane runs programs, which need not make a relink.
+The VM: `primitive_calls.rs`'s `a_relinked_callee_is_no_fast_path`
 (over the records an early-bound `car` gets its inline opcode through, an
 early-bound `length` its `CallPrimitive` and an early-bound
 `call-with-values` and `dynamic-wind` their sequences, the relinked callee
@@ -1980,6 +2022,279 @@ keyed by its link's kind as a reference's is; and an early-bound
 `call-with-values` keeping its sequence beside a relinked one over the
 same record). No stress count moved for
 them: they are unit tests of crates the stress lane does not run.
+
+The switch's first step makes the desugarer link what relinking renames:
+each relinked mention's record goes in a table of the form, and a
+reference the table answers is emitted as a link under the spelling its
+template wrote, while the alias is still installed beside it.
+`hygiene_matrix.rs`'s `the_trace_says_how_a_relinked_reference_ended`
+(a read and an assignment end `via=relink` under the written spelling and
+no backend resolves them after; one beside a definition its own expansion
+produces into a body is settled, and the backend's record follows under
+the spelling the definition has) and
+`every_relinking_writes_a_record_of_its_target` (a `RELINK` record for a
+library's private variable, a definer's introduced state and a splice's
+keyword, which is never emitted as a reference; and `record=none` for a
+raw frame's own variable, a target with no record that only the frame API
+makes, so that a lane read for `record=none` is known to write it).
+`vm_callprimitive.rs`'s
+`a_relinked_operand_is_printed_as_its_template_wrote_it` (`car@linked`
+loaded and called by an ordinary `Call`, `secret@linked` stored and read).
+`macro_definition_env.rs`'s
+`a_definition_of_a_relinked_spelling_captures_nothing` (a procedure
+compiled before a program's definition of the spelling relinking gave a
+template's `secret` reads and assigns the library's still; the spelling is
+read from an expansion, never computed) and
+`a_relinked_keyword_used_as_a_value_is_named_as_written`.
+`host_environments.rs`'s
+`code_compiled_before_a_hosts_nearer_definition_keeps_the_record_it_linked`
+and core's
+`a_visible_scoped_definition_links_its_entry_until_a_slot_is_defined` pin
+the two places a linked record departs from a read by name, a name
+reached through a host namespace's parent and a name-visible scoped
+definition, each of which later gains a nearer binding: no program
+without the host API reaches either. The stress counts of
+`hygiene_matrix`, `vm_callprimitive`, `macro_definition_env` and
+`host_environments` were re-pinned for the tests; the step itself moved
+none.
+
+Its second step carries the records across forms: a macro compiled in a
+form takes the table's entries for the relinked identifiers among its
+literals into its object, and each later expansion of it puts them back
+in its form's table before matching. With the alias still installed a
+carried identifier the table does not answer is read by name, so the
+across-forms tests that existed pass without the step, and these are the
+ones that fail without it. `hygiene_matrix.rs`'s
+`the_trace_says_how_a_relinked_reference_ended` gains a generated macro
+expanded in a later form, whose reference ends `via=relink`.
+`vm_callprimitive.rs`'s
+`a_generated_macros_carried_reference_is_a_linked_operand`
+(`secret@linked` in the later form's code). `macro_definition_env.rs`'s
+`a_definition_of_a_carried_spelling_captures_no_later_expansion` (a
+program's definition of the spelling a generated macro carries moves no
+expansion of it, before or after), `a_generated_definer_run_twice_keeps_two_keywords`
+(a carried binder is bound at its scopes in each run, where the second run
+redefined the first's keyword; Gauche's answer, and no longer chibi's:
+`relinked-names.scm` has the row, the first of that file's rows that
+failed before the switch, and the register's note chibi's answer) and
+`a_generated_macro_carries_a_relink_of_each_kind` (a namespace's slot, an
+introduced definition and a splice's keyword in one macro object, read
+back through `Cx::macro_relinks`; a check build refuses a record no link
+may name at each of the three). `host_environments.rs`'s
+`a_generated_macro_keeps_the_keyword_it_carried_past_a_hosts_nearer_definition`
+is the keyword half of the host-namespace pin: a macro generated before
+the host's definition expands the global keyword still, and one generated
+after it the host's. The same four stress counts and `scheme_suite`'s
+were re-pinned.
+
+Its third step gives the two readers that still went by a name the form's
+table: the literal matcher, which compares a relinked identifier by the
+location of its record's cell, or by one heap object where the two sides
+are spelled differently or both relinked, after local bindings and before
+any name; and the body scan, whose table is empty and reads the
+enclosing form's beneath it. With the alias installed the end-to-end
+literal and scan rows answer through it, so the step's own tests are
+unit tests: `matcher/literal.rs`'s `relinked_tests`, one case for each
+row of the rule over a hand-made table (two relinked identifiers by
+location under one spelling and two, by one heap object in two cells,
+and two cells that both hold `0` apart; a relinked identifier against a
+name at the record's location, a program's own binding of the spelling
+and an unbound name, on either side, for one spelling and for two; a
+local binding of the relinked spelling compared first; and identifiers
+the table does not answer compared as before), and the desugarer's
+`a_scans_table_reads_the_forms_and_keeps_its_own`. No stress count
+moved: they are unit tests of crates the stress lane does not run.
+
+The switch itself: relinking installs no alias and itself interns nothing
+(a relinked identifier that reaches a quote is interned as data under its
+spelling, the open defect of a relinked identifier used as data, #887,
+older than the switch). The spelling it gives a mention is a function of the
+macro's environment, the name and the mention, kept clear of the names
+the macro's own templates write, and is bound nowhere; the identifier
+means its record in the form's table, and in the relinks of a generated
+macro that keeps it. The desugarer's `a_relinked_spelling_is_a_function_of_its_mention_clear_of_what_is_taken`
+and `a_spelling_is_taken_by_the_macros_own_names_and_by_the_expansions`
+are the function's unit tests. Every test that needs the spelling reads
+it from an expansion (a quoting macro of the library's, since a relinked
+identifier used as data keeps it) and none computes it.
+`expansion/relinked-names.scm` gains six rows, forty-nine in all, of which
+chibi by hand answers forty-one: the leaked spelling `eval`uated is
+unbound; a definition of it captures no earlier code; an assignment to it
+is refused and the library's variable is what it was; a form headed by a
+private keyword's is no macro use (#873); a program's identifier of the
+spelling does not match a generated macro's relinked literal; and a
+relinked identifier does not match a literal a program spelled so. Each
+row is written to be right under both readings of the leak, since chibi
+and Gauche answer the written name there: the file's comment above the
+rows says how. `macro_definition_env.rs`'s
+`a_relinked_spelling_is_no_name_in_the_programs_text` is the same in a
+program's own text, where an assignment to a private keyword's spelling
+is an error about an undefined name and no longer one about a macro;
+`a_template_that_writes_the_relinked_spelling_unbound_reads_nothing`
+writes a template that names its private `secret` beside four hundred
+unbound `secret.k` around a spelling it has read, checks from the
+library's own leak that the range met it, and wants the private one to
+read 42 and every other to be unbound (it runs alone in a child process:
+the numbers come from counters the process shares, and the file's other
+tests take thousands between two of its forms); and the three keyword
+tests of the first PR are flipped, as it said they would be:
+`a_relinked_keyword_leaves_no_alias` (the spelling is nothing `get`
+answers and no slot, and the namespace's names and records are as they
+were), `a_relinked_keyword_keeps_no_definition_namespace` (a replaced
+library whose own keyword an expansion relinked is released, with the
+expansion or without) and
+`a_relinked_imported_keyword_leaves_nothing_of_the_replaced_library`.
+`a_definition_over_an_alias_does_not_capture_the_next_expansion`, which
+scanned the namespace for the alias, went; its successor landed with the
+first step. `hygiene_matrix.rs`'s
+`a_program_identifier_spelled_as_a_relinked_literal_does_not_match` is
+the literal rows in one namespace, which no oracle's `eval` can stage,
+and `every_relinking_writes_a_record_of_its_target`'s raw frame reads its
+own `x` now: a mention with no record is left as written, where the alias
+read the macro's frame. The holder audit's `relink-variable` row reads
+`((old 1) 1 0)`: the code that expanded the macro is what holds the old
+library, and nothing does once it is dropped.
+`script_running.rs`'s `a_library_cannot_export_a_relinked_spelling`
+replaces #846's test: the spelling, read from a run, and `secret.0` to
+`secret.15` are each refused as not defined. The stress counts of
+`macro_definition_env`, `hygiene_matrix` and `scheme_suite` were
+re-pinned for the tests; the switch moved no count of a target whose
+tests it left alone.
+
+The rest of the switch's tests pin what it leaves, and rewrite what still
+passes under names that say what is tested now. **Nothing is left in a
+namespace**: `macro_definition_env.rs`'s
+`a_relinked_reference_mints_no_spelling` (after expansions at top level
+and in a procedure the spelling given a private variable or keyword is
+nothing `get` answers and no slot, and the namespace lists no name that
+starts as one would), `a_relinked_expansion_leaves_the_programs_names_alone`
+(its names three ways, its placeholders, the binding records and what it
+has charged for its tables, before the first expansions and after),
+`a_body_scan_leaves_no_relinked_name_behind`, and `host_environments.rs`'s
+`a_relinked_expansion_in_a_host_namespace_leaves_the_global_names_alone`.
+**Only an identifier of the expansion is the relinked one**:
+`only_an_identifier_of_the_expansion_is_the_relinked_one` (a macro of the
+program's whose template writes the very spelling, used in the same form
+as the library's, reads the program's own or nothing);
+`a_template_that_writes_the_relinked_spelling_reads_its_own`, the bound
+twins of the range test, with the names shared with the program and with
+them private to the library, where relinking must also keep the spellings
+of one expansion apart; and the middle-library case of
+`a_macro_generated_across_two_libraries_reaches_the_first`, whose middle
+library itself defines the spelling the generated macro carries. **The
+shapes that pass before and after**: the relinked twins of the four
+early-link tests (`a_relinked_reference_reads_the_library_inside_a_frame_binding_of_its_spelling`,
+`an_unquoted_relinked_reference_stays_linked`,
+`an_unquoted_relinked_reference_in_a_form_settling_rebuilds_stays_linked`,
+`a_relinked_link_keeps_the_old_library_binding_across_a_redefinition`);
+`a_relinked_reference_beside_a_definition_its_expansion_produces_into_a_body`
+(beside a reference, a forward reference, in a `lambda` body, and two
+expansions' mentions of one written name of which settling takes back
+only its own) and its top-level twin, where settling has nothing to do;
+`a_body_scan_sees_the_enclosing_expansions_relinked_keywords`; and
+`hygiene_matrix.rs`'s `a_generated_macros_relinked_literal_still_matches`,
+`a_relinked_else_is_conds_else` and
+`relinked_literals_from_two_libraries_are_one_binding`, each answered the
+same by chibi and Gauche. **The code**: `vm_callprimitive.rs`'s
+`a_re_pointed_private_binding_is_never_a_fast_path` (#837's own program: a
+library's private names for `car` and `call-with-values`, re-pointed by
+the library, in place of the test that installed an alias by hand) and
+`a_relinked_reference_takes_no_call_path_of_its_own` (a relinked `apply`
+is a `Call`, a relinked `call-with-values` has no sequence, and an
+early-bound call beside a relinked assignment and call of one binding are
+two pinned entries); `vm_link_tables.rs`'s
+`a_relinked_store_marks_the_primitive_it_replaces`, in place of the store
+through an alias, and `a_store_writes_the_namespace_its_unit_was_linked_in`,
+renamed. **Release** (`gc_shared_tests!`, both backends, under zeal too):
+`a_redefined_library_is_released` gains #614's `relinkv`, `relinkk` and
+`relinkki`, every count flat across 600 redefinitions, `symbols` among
+them; the holder audit gains `relink-keyword` and
+`relink-keyword-imported` (no holder at either reading),
+`generated-macro-private` and `generated-macro-literal` (the generated
+macro holds the old library while the program binds it, the second
+through its carried relink alone), thirteen rows in all, each taking its
+holder in a top-level form of its own;
+`a_relinked_procedure_from_a_replaced_library_still_runs` is the relinked
+twin of `a_value_from_a_replaced_library_still_runs`; and
+`a_replaced_library_s_procedure_reads_a_relinked_private_after_a_collection`
+is the test of a store and a read by name through an alias, renamed for
+the link it now goes through. `nested_expansions_sharing_a_spelling_do_not_capture_each_other`
+is renamed too. Each test that says "before the switch" was run against
+the desugarer of the commit before it. The stress counts of
+`macro_definition_env`, `hygiene_matrix`, `host_environments`,
+`vm_callprimitive`, `gc_vm` and `gc_tree_walker` were re-pinned, the last
+two with their minimums, which the release variants moved.
+
+The switch's review added tests for what it found.
+`macro_definition_env.rs`'s
+`a_definer_run_twice_in_an_expression_keeps_two_bindings`: a library
+definer of its private name, run twice in a `when` at top level, keeps
+two bindings, and the spelling its runs share is no name,
+`(a b lib-hidden no-such-name)` on both backends as Gauche answers (chibi
+refuses a definition there). The switch gives the two runs one spelling,
+which the VM bound by name in that position until #884, below the switch,
+bound such a definition at its scopes. Two answers the switch moves that
+its own list missed are pinned as well. `expansion/relinked-names.scm`
+gains a fiftieth row, "a definer's keyword captures no macro generated
+before it": a macro the library's generator made, then a definer of a
+keyword spelled as the library's private one run at top level, and the
+generated macro expands the library's keyword, `((lib-kc-priv 1) (kc-tag
+2) (lib-kc-priv 3))`, where before the switch it expanded the definer's.
+That is the second answer the switch moves from chibi's to Gauche's,
+beside the generated definer's: chibi by hand answers forty-one of the
+fifty, the nine it does not recorded in the file's header and the
+register's note. `macro_definition_env.rs`'s
+`an_expansions_own_definition_reached_before_it_runs_is_not_the_librarys`:
+a template's reference to the private name its own expansion defines in a
+body, and an assignment to it, run before that definition, leave the
+library's binding as it was. The VM reads and writes the body's variable,
+`#<unspecified>`, and the tree-walker raises its own undefined-variable
+error, as for a body nothing expanded, where before the switch the
+tree-walker reached the library's binding by the alias's name, and
+assigned it. And `an_ambiguous_relinked_reference_is_named_as_written`
+holds the rewrite of the ambiguous-reference error's name, which no test
+had reached: a program hands a library's generator the spelling it learned
+for the library's private `x`, so the generated macro defines that
+spelling at its own scopes beside the generator's definition at its own,
+and the template's `x`, carrying both, is ambiguous; the error names `x`,
+where without the rewrite it named the spelling. The stress count of
+`macro_definition_env` was re-pinned for each test; the new row left
+`scheme_suite`'s counts as they were.
+
+The switch's mutation stage added tests for the slips of its code that
+every test passed in a build, each run failing under its mutation in a
+debug and a release `gc-check` build. `macro_definition_env.rs`'s
+`a_macro_a_library_makes_is_expanded_in_its_later_forms`: a library runs
+another library's generator and expands the macro it made in its own
+later forms, which one desugarer desugars one after another (a program's
+forms each get a desugarer of their own), so a form that left its table of
+relinked identifiers to the next passed every other test in a release
+build. `a_body_scan_sees_the_enclosing_expansions_relinked_keywords` now
+also defines `when` and `unless` in such a body, and
+`a_body_scan_puts_back_a_generated_macros_carried_keywords` does so with a
+generated macro's carried definer: a scan that cannot expand the private
+definer refuses the reads as syntax used as a value, where the defined
+names the control had used were bound by the backends whatever the scan
+saw. `a_generators_written_name_spelled_as_a_relinked_one_reads_nothing`,
+alone in a process like the range tests, reaches the second clause of
+`relink_spelling`'s `taken`, which the switch's record said no program
+reaches: a generator whose template writes the names around the number
+of the library that runs it. `a_templates_quote_that_is_its_librarys_own_macro_stays_that_macro`
+holds a relinked `quote` head renamed with its scopes;
+`a_generated_macro_carries_two_expansions_relinks_of_one_spelling` holds
+the carried relinks kept apart by guard as well as spelling; and
+`a_splice_an_expansion_wrote_carries_its_keywords_relinks` holds the
+relinks a splice's keyword carries into later forms.
+`a_relinked_reference_beside_a_definition_its_expansion_produces_into_a_body`
+gains two mentions of one written name in one expansion under two
+spellings, which settling tells apart by the scopes each carries;
+`vm_callprimitive.rs`'s `a_re_pointed_private_binding_is_never_a_fast_path`
+gains a generated macro's carried call, which is no fast path; and
+`patina-macros`' `a_relinked_identifier_and_a_name_of_its_spelling_match_by_location`
+a binding of the spelling that holds the record's object, which the value
+rule, for two spellings only, does not match. The stress count of
+`macro_definition_env` was re-pinned, and `vm_callprimitive`'s count at
+16 recorded.
 
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):

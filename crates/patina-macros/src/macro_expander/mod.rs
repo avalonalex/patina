@@ -249,6 +249,24 @@ fn edit_scopes<'gc>(
     )
 }
 
+/// The identifiers relinking renamed in the form being expanded (#837),
+/// which a literal comparison asks before a site's environment for what a
+/// name is bound to: the spelling relinking gave an identifier is bound
+/// nowhere, and what it means is the record the desugarer's table of the
+/// form has for it. Raw: the desugarer's link plumbing.
+pub trait RelinkedNames {
+    /// The binding the identifier `name` at `scopes` was relinked to: where
+    /// its record's cell is, and what the cell holds (`None` where it is
+    /// unbound). `None` if the form's table does not answer the
+    /// identifier, which is then an ordinary one.
+    fn binding<'gc>(
+        &self,
+        name: &str,
+        scopes: &patina_runtime::ScopeSet,
+        cx: &Cx<'gc>,
+    ) -> Option<(patina_core::BindingLocation, Option<Value<'gc>>)>;
+}
+
 /// One side of a literal comparison: where a macro was defined, or where it is
 /// being used. The environment an identifier resolves in, and the scopes a
 /// reference written there without scopes of its own stands in — the rule
@@ -258,6 +276,11 @@ fn edit_scopes<'gc>(
 pub struct Site<'a> {
     pub env: &'a std::rc::Rc<patina_runtime::Environment>,
     pub scopes: &'a patina_runtime::ScopeSet,
+    /// The identifiers relinking renamed in the form this site is expanded
+    /// in (#837), asked where neither side of a comparison reaches a local
+    /// binding. `None` where nothing was relinked, and on the direct-API
+    /// paths: the comparison is then by the environments alone. Raw.
+    pub relinked: Option<&'a dyn RelinkedNames>,
 }
 
 /// What one expansion produced, in the context it was expanded in.
@@ -302,6 +325,7 @@ pub fn expand_macro_with_scope<'gc>(
     let definition = compiled_macro.definition_env.as_ref().map(|env| Site {
         env,
         scopes: &compiled_macro.definition_scopes,
+        relinked: None,
     });
     expand_macro_at_sites(mac, args, cx, definition, use_site, 0)
 }
@@ -457,6 +481,7 @@ mod ambiguous_literal_tests {
                 Some(Site {
                     env: &use_site_env,
                     scopes: &use_site_scopes,
+                    relinked: None,
                 }),
             )?;
             Ok(cx.format(expansion.form))

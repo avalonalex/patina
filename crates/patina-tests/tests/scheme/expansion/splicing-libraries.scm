@@ -24,10 +24,23 @@
       (syntax-rules () ((_ name) (splicing-let-syntax () (define name 62)))))
     (define-syntax define-rec-spliced
       (syntax-rules () ((_ name) (splicing-letrec-syntax () (define name 63)))))))
+;; #837's scoreboard: a recursive private keyword under
+;; `splicing-letrec-syntax`, which only a macro the library's generator
+;; makes mentions.
+(define-library (probe splicegen)
+  (import (scheme base) (srfi 188))
+  (export make-countdown countdown-in-library)
+  (begin
+    (splicing-letrec-syntax
+        ((step (syntax-rules () ((_ 0) 70) ((_ n) (step 0)))))
+      (define-syntax make-countdown
+        (syntax-rules ()
+          ((_ name) (define-syntax name (syntax-rules () ((_) (step 1))))))))
+    (make-countdown countdown-in-library)))
 (define-library (probe reexport)
   (import (probe splice))
   (export (rename answer renamed-answer) recur value))
-(import (scheme base) (scheme eval) (srfi 64) (probe splice)
+(import (scheme base) (scheme eval) (srfi 64) (probe splice) (probe splicegen)
         (prefix (probe reexport) reexport:))
 (test-begin "splicing-libraries")
 (define-syntax helper (syntax-rules () ((_) 'caller)))
@@ -45,14 +58,29 @@
   (let-syntax ((helper (syntax-rules () ((_) 'local))))
     (list (answer) (recur) (generated-answer))))
 ;; #837's scoreboard (`relinked-names.scm` has the rest): each private keyword
-;; is a frame's, relinked at every expansion, here in a procedure compiled in
-;; a later form than the generated macro was made in. chibi 0.12 answers the
-;; same with the library as a file (2026-11-16).
+;; is bound at its splice's scopes in the library's namespace, and relinked
+;; at every expansion, here in a procedure compiled in a later form than the
+;; generated macro was made in. chibi 0.12 answers the same with the library
+;; as a file (2026-11-16).
 (define (later)
   (list (answer) (recur) (another) (generated-answer) (generated-in-library) (helper)))
 (test-equal "a procedure compiled later reaches each private keyword"
   '(53 55 60 61 61 caller)
   (later))
+;; And a second shape of the same: the generated macro is made in one form
+;; and used in later ones, at top level and in a procedure under a
+;; `let-syntax` of the spelling, and each expansion of it expands the
+;; recursive private keyword again. The program's own `step` is another
+;; keyword. chibi 0.12 answers the same with the libraries as files
+;; (2026-11-17).
+(define-syntax step (syntax-rules () ((_ n) 'caller-step)))
+(make-countdown generated-countdown)
+(define (countdown-later)
+  (let-syntax ((step (syntax-rules () ((_ n) 'local))))
+    (list (generated-countdown) (countdown-in-library) (step 1))))
+(test-equal "a generated macro carries a recursive private keyword into later forms"
+  '(70 70 (70 70 local) caller-step)
+  (list (generated-countdown) (countdown-in-library) (countdown-later) (step 1)))
 (test-equal "a library-generated splice binds before earlier references" '(62 62)
   (let ()
     (define (earlier) if)

@@ -8,8 +8,9 @@
 //! (`Library::import_into`, `define_primitive`, `Cx::define_primitive` and
 //! `Cx::lookup`), the writes that go around them (the desugarer's staged
 //! import, a host library's exports, the builders' own definitions), the
-//! hosts' `define` and `lookup`, and the desugarer's alias installs, which
-//! it makes through `Cx::relink_alias` with the context's heap (#837). The
+//! hosts' `define` and `lookup`, and the alias installs the desugarer made
+//! through `Cx::relink_alias` until #837's second PR (it installs none
+//! now; the two wrappers below go with the alias tables). The
 //! desugarer's and the expander's queries reach namespaces through `Cx`,
 //! which passes the context's heap: most through methods over this view
 //! (`Cx::binding_location`, `Cx::scoped_binding_of` and the rest), and

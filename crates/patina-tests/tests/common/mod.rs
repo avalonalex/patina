@@ -1518,6 +1518,33 @@ macro_rules! gc_shared_tests {
             (define-syntax m (syntax-rules () ((_ x) (f x))))))\n\
             (import (tmp steady))\n(m 1)\n";
 
+        /// #614's `relinkv`, one cycle: the library's macro names a private
+        /// procedure, and the cycle expands it.
+        const RELINK_VARIABLE_STREAM_FORM: &str = "(define-library (tmp steady) (export m) \
+            (import (scheme base)) (begin (define (secret x) (+ x 1)) \
+            (define-syntax m (syntax-rules () ((_ x) (secret x))))))\n\
+            (import (tmp steady))\n(m 1)\n";
+
+        /// #614's `relinkk`, one cycle: the macro names a private keyword.
+        const RELINK_KEYWORD_STREAM_FORM: &str = "(define-library (tmp steady) (export m) \
+            (import (scheme base)) (begin \
+            (define-syntax priv (syntax-rules () ((_ x) (+ x 1)))) \
+            (define-syntax m (syntax-rules () ((_ x) (priv x))))))\n\
+            (import (tmp steady))\n(m 1)\n";
+
+        /// The library #614's `relinkki` imports its keyword from, defined
+        /// once.
+        const IMPORTED_KEYWORD_PRELUDE: &str = "(define-library (tmp kpriv) (export priv) \
+            (import (scheme base)) (begin \
+            (define-syntax priv (syntax-rules () ((_ x) (+ x 1))))))";
+
+        /// #614's `relinkki`, one cycle: the macro names a keyword the
+        /// library imports from [`IMPORTED_KEYWORD_PRELUDE`]'s.
+        const RELINK_IMPORTED_KEYWORD_STREAM_FORM: &str = "(define-library (tmp steady) \
+            (export m) (import (scheme base) (tmp kpriv)) (begin \
+            (define-syntax m (syntax-rules () ((_ x) (priv x))))))\n\
+            (import (tmp steady))\n(m 1)\n";
+
         /// The keys [`release_readings`] reads, in the order it writes them.
         const RELEASE_KEYS: [&str; 12] = [
             "live objects",
@@ -1534,9 +1561,9 @@ macro_rules! gc_shared_tests {
             "bytes-allocated",
         ];
 
-        /// Run `form` 200 times, read [`RELEASE_KEYS`], run it 600 times
-        /// more and read them again, with `eval`; answer both readings and
-        /// the collections the run made.
+        /// After `prelude`, run `form` 200 times, read [`RELEASE_KEYS`], run
+        /// it 600 times more and read them again, with `eval`; answer both
+        /// readings and the collections the run made.
         ///
         /// The readings allocate nothing that survives: the first
         /// `(gc-stats)` interns the keys' symbols before either reading,
@@ -1544,9 +1571,14 @@ macro_rules! gc_shared_tests {
         /// first (a vector made at each would show at the second as one
         /// more vector and 112 bytes). Each reading's `(gc) (gc)` is
         /// written where it runs, outside `keys!`.
-        fn release_readings(eval: fn(&str) -> String, form: &str) -> (Vec<i64>, Vec<i64>, i64) {
+        fn release_readings(
+            eval: fn(&str) -> String,
+            prelude: &str,
+            form: &str,
+        ) -> (Vec<i64>, Vec<i64>, i64) {
             let program = format!(
                 r#"(import (scheme base) (patina debug))
+                   {prelude}
                    (gc-stats)
                    (define r (make-vector 32 0))
                    (define (keys! at)
@@ -1585,8 +1617,14 @@ macro_rules! gc_shared_tests {
         /// it was, under `eval`, named `mode`; under zeal, that `eval`
         /// collected at more places than one a cycle and the program's
         /// `(gc)`s.
-        fn assert_released(variant: &str, mode: &str, eval: fn(&str) -> String, form: &str, zeal: bool) {
-            let (at_200, at_800, collections) = release_readings(eval, form);
+        fn assert_released(
+            variant: &str,
+            mode: &str,
+            eval: fn(&str) -> String,
+            (prelude, form): (&str, &str),
+            zeal: bool,
+        ) {
+            let (at_200, at_800, collections) = release_readings(eval, prelude, form);
             let show = |reading: &[i64]| {
                 RELEASE_KEYS
                     .iter()
@@ -1659,15 +1697,78 @@ macro_rules! gc_shared_tests {
             // `binding-records` and `cells` do not count (GC_DESIGN §3.3).
             // Each backend is compared with itself. Under zeal too, which
             // collects at every outermost safe point. The macro variant's
-            // release rests on #872's early links (4b.10 PR-1b), and on the
-            // tree-walker on #837's question 1 (a), its read through the
-            // record its `CpsExpr` carries, both pending: without #872 it
-            // reads 600 namespaces more at 800 on both backends (measured
-            // on `main` at `3c4aa637`).
-            for (variant, form) in [("plain", PLAIN_STREAM_FORM), ("macro", MACRO_STREAM_FORM)] {
-                assert_released(variant, stringify!($eval), $eval, form, false);
-                assert_released(variant, stringify!($eval_zeal), $eval_zeal, form, true);
+            // release rests on #872's early links (4b.10 PR-1b, merged
+            // 2026-11-16), and on the tree-walker on #837's question 1 (a),
+            // its read through the record its `CpsExpr` carries, ruled
+            // 2026-11-16: without #872 it reads 600 namespaces more at 800
+            // on both backends (measured on `main` at `3c4aa637`).
+            //
+            // The three relinking variants (#837's second PR, #614's
+            // `relinkv`, `relinkk` and `relinkki`): the library's macro
+            // names a private procedure, a private keyword, or a keyword
+            // the library imports from one that is not redefined, and
+            // each cycle expands it. A relinked identifier's target
+            // travels with it, in the expanding form's table, and nothing
+            // is installed or interned, so each cycle leaves nothing:
+            // `symbols` too is where it was. Before the switch the first
+            // two kept every replaced namespace through an alias (600
+            // namespaces more at 800), and the third a symbol, a pair and
+            // two table entries a cycle.
+            for (variant, prelude, form) in [
+                ("plain", "", PLAIN_STREAM_FORM),
+                ("macro", "", MACRO_STREAM_FORM),
+                ("relinkv", "", RELINK_VARIABLE_STREAM_FORM),
+                ("relinkk", "", RELINK_KEYWORD_STREAM_FORM),
+                ("relinkki", IMPORTED_KEYWORD_PRELUDE, RELINK_IMPORTED_KEYWORD_STREAM_FORM),
+            ] {
+                assert_released(variant, stringify!($eval), $eval, (prelude, form), false);
+                assert_released(variant, stringify!($eval_zeal), $eval_zeal, (prelude, form), true);
             }
+        }
+
+        #[test]
+        fn a_relinked_procedure_from_a_replaced_library_still_runs() {
+            // The twin of the test below for a private procedure, which a
+            // program cannot name: `h` expanded the first `(tmp steady)`'s
+            // `m`, whose template calls and assigns the library's private
+            // `secret`, so `h`'s code links the first library's record for
+            // it, relinked (#837's second PR). After the redefinition and
+            // two collections `h` still runs the old procedure and still
+            // writes the old variable, while `m` expands the new
+            // library's: in a debug or check build a freed record, cell
+            // or closure panics where it is used (#621, #625). The old
+            // namespace is held while `h` is (`held`, one above `base`)
+            // and goes once it is dropped. Each step is a top-level form
+            // of its own. Under zeal too.
+            assert_gc_and_zeal_eval_to(
+                r#"
+                (import (scheme base) (patina debug))
+                (define base 0) (define held 0) (define dropped 0)
+                (define h #f) (define out #f)
+                (define-library (tmp steady) (export m) (import (scheme base))
+                  (begin (define calls 0)
+                         (define (secret x) (list 'old x calls))
+                         (define-syntax m
+                           (syntax-rules ()
+                             ((_ x) (begin (set! calls (+ calls 1)) (secret x)))))))
+                (import (tmp steady))
+                (gc) (gc) (set! base (cdr (assq 'namespaces (gc-stats))))
+                (set! h (lambda () (m 1)))
+                (define-library (tmp steady) (export m) (import (scheme base))
+                  (begin (define calls 100)
+                         (define (secret x) (list 'new x calls))
+                         (define-syntax m
+                           (syntax-rules ()
+                             ((_ x) (begin (set! calls (+ calls 1)) (secret x)))))))
+                (import (tmp steady))
+                (gc) (gc) (set! held (cdr (assq 'namespaces (gc-stats))))
+                (set! out (list (h) (m 2) (h) (m 3)))
+                (set! h #f)
+                (gc) (gc) (set! dropped (cdr (assq 'namespaces (gc-stats))))
+                (append out (list (- held base) (- dropped base)))
+                "#,
+                "((old 1 1) (new 2 101) (old 1 2) (new 3 102) 1 0)",
+            );
         }
 
         #[test]
@@ -1746,7 +1847,9 @@ macro_rules! gc_shared_tests {
         #[test]
         fn a_replaced_library_lives_only_as_long_as_its_holders() {
             // #838's holder audit, executable (GC_DESIGN §8): each row takes
-            // one holder of the first `(tmp steady)`, redefines the library,
+            // one holder of the first `(tmp steady)` in a top-level form
+            // of its own (a form's pool roots the records it pooled until
+            // the form is loaded or has run), redefines the library,
             // reads `held`, uses the holder once, so that a stale reference
             // panics in a debug or check build, drops it, and reads
             // `dropped`. Each answers `(out held dropped)`, the last two
@@ -1755,9 +1858,9 @@ macro_rules! gc_shared_tests {
             // two at `held` and none at `dropped`; one that is no holder
             // reads none at either. Under zeal too.
             //
-            // The two residual rows pin what is not released today, each
-            // with the issue or stage that flips it; that PR updates the
-            // row's expectation.
+            // The one residual row pins what is not released today, with
+            // the stage that flips it; that PR updates the row's
+            // expectation.
             let kept_specifier_old = steady(
                 "f m",
                 "(scheme base)",
@@ -1801,12 +1904,40 @@ macro_rules! gc_shared_tests {
                 "(define secret (list 'old)) \
                  (define-syntax m (syntax-rules () ((_ x) (cons x secret))))",
             );
+            let relink_keyword_old = steady(
+                "m",
+                "(scheme base)",
+                "(define-syntax priv (syntax-rules () ((_ x) (list 'old x)))) \
+                 (define-syntax m (syntax-rules () ((_ x) (priv x))))",
+            );
+            let imported_keyword = "(define-library (tmp kpriv) (export priv) \
+                 (import (scheme base)) (begin \
+                 (define-syntax priv (syntax-rules () ((_ tag x) (list tag x))))))";
+            let relink_keyword_imported_old = steady(
+                "m",
+                "(scheme base) (tmp kpriv)",
+                "(define-syntax m (syntax-rules () ((_ x) (priv 'old x))))",
+            );
+            let generated_private_old = steady(
+                "defgen",
+                "(scheme base)",
+                "(define (secret x) (list 'old x)) (define-syntax defgen (syntax-rules () \
+                 ((_ name) (define-syntax name (syntax-rules () ((_ y) (secret y)))))))",
+            );
+            let generated_literal_old = steady(
+                "defgen feed",
+                "(scheme base)",
+                "(define (priv-lit) 'old) (define-syntax defgen (syntax-rules () \
+                 ((_ name) (define-syntax name (syntax-rules (priv-lit) \
+                 ((_ priv-lit) 'lit) ((_ x) 'other)))))) \
+                 (define-syntax feed (syntax-rules () ((_ g) (g priv-lit))))",
+            );
             let importer_old = steady("f", "(scheme base)", "(define (f x) (list 'old x))");
             let user = "(define-library (tmp user) (export g) (import (scheme base) (tmp steady)) \
                         (begin (define (g) (f 1))))\n(import (tmp user))";
             let continuation_use = "(if (procedure? holder) (holder 42))\n\
                                     (set! out holder)\n(set! holder #f)";
-            let rows: [(&str, String, &str, String, String, &str); 9] = [
+            let rows: [(&str, String, &str, String, String, &str); 13] = [
                 // A kept environment specifier holds its own namespace, and
                 // through its import records over the old values, which
                 // reach the old code, the old library's. The old macro
@@ -1912,18 +2043,83 @@ macro_rules! gc_shared_tests {
                     "(set! out (pub))\n(set! pub #f)".to_string(),
                     "(2 1 1)",
                 ),
-                // Residual R-A, until #837's second PR, which removes
-                // variable aliases: the program's procedure reads the old
-                // library's private `secret` through a relink alias, which
-                // keeps the namespace after the procedure is dropped. That
-                // PR flips `dropped` to 0.
+                // The program's procedure reads the old library's private
+                // `secret` through the link its expansion of `m` was
+                // relinked to: the code holds the record, the record its
+                // cell, the cell the private closure, and the closure the
+                // namespace. Nothing else does, so the namespace goes with
+                // the procedure. It was residual R-A until #837's second
+                // PR: the expansion left an alias in the program, which
+                // kept the namespace for good, and `dropped` read 1.
                 (
                     "relink-variable",
                     relink_variable_old.clone(),
                     "(set! holder (lambda () (m 1)))",
                     relink_variable_old.replace("'old", "'new"),
                     "(set! out (holder))\n(set! holder #f)".to_string(),
-                    "((old 1) 1 1)",
+                    "((old 1) 1 0)",
+                ),
+                // A private keyword is no holder at all (R-B, until #837's
+                // second PR): the expansion names nothing of it, its
+                // record was in the expanding form's pool only, and the
+                // procedure's code holds what the keyword expanded to. The
+                // old namespace is gone at `held`. Before the switch the
+                // keyword's alias kept it for good, `1 1`.
+                (
+                    "relink-keyword",
+                    relink_keyword_old.clone(),
+                    "(set! holder (lambda () (m 1)))",
+                    relink_keyword_old.replace("'old", "'new"),
+                    "(set! out (holder))\n(set! holder #f)".to_string(),
+                    "((old 1) 0 0)",
+                ),
+                // The same where the library imports the keyword from one
+                // that is not redefined: nothing of the old library is
+                // kept, as before the switch, when the alias stayed and
+                // the namespace went.
+                (
+                    "relink-keyword-imported",
+                    format!("{imported_keyword}\n{relink_keyword_imported_old}"),
+                    "(set! holder (lambda () (m 1)))",
+                    relink_keyword_imported_old.replace("'old", "'new"),
+                    "(set! out (holder))\n(set! holder #f)".to_string(),
+                    "((old 1) 0 0)",
+                ),
+                // A macro the old library's generator defined, whose
+                // template reads the old library's private procedure: the
+                // macro carries the relinked identifier with its record,
+                // and holds the namespace through `foreign_expansions`
+                // besides, while the program binds it; expanded after the
+                // redefinition it still calls the old procedure. Once the
+                // program rebinds the name, nothing holds the namespace.
+                // Before the switch the alias did, `1 1`.
+                (
+                    "generated-macro-private",
+                    generated_private_old.clone(),
+                    "(defgen gm)",
+                    generated_private_old.replace("'old", "'new"),
+                    "(set! out (gm 1))\n(define gm 0)".to_string(),
+                    "((old 1) 1 0)",
+                ),
+                // A generated macro whose only mention of the old
+                // library's private procedure is a pattern literal: its
+                // templates introduce nothing, so it keeps no environment
+                // of its generator's expansion, and the record it carries
+                // for the literal is the only thing that holds the old
+                // procedure, and through it the namespace. The literal is
+                // the old binding still: the new library's mention, which
+                // `feed` hands it after the redefinition, does not match.
+                // A live macro's carried relinks are counted holders
+                // (GC_DESIGN §8); once the program rebinds the name,
+                // nothing holds the namespace. Before the switch the
+                // alias did, `1 1`.
+                (
+                    "generated-macro-literal",
+                    generated_literal_old.clone(),
+                    "(defgen gm)\n(define first (list (gm 7) (feed gm)))",
+                    generated_literal_old.replace("'old", "'new"),
+                    "(set! out (list first (gm 7) (feed gm)))\n(define gm 0)".to_string(),
+                    "(((other lit) other other) 1 0)",
                 ),
             ];
             for (name, define, take, redefine, use_and_drop, expected) in &rows {
@@ -2095,19 +2291,71 @@ macro_rules! gc_shared_tests {
         }
 
         #[test]
-        fn a_replaced_library_s_procedure_reads_by_name_through_its_namespace_after_a_collection(
-        ) {
+        fn a_generated_macro_keeps_a_splices_keyword_across_its_librarys_redefinition() {
+            // `generated` is made by the first `(tmp splice)`'s generator
+            // and mentions that library's `helper`, a keyword private to
+            // a splice: bound at the splice's scopes in the library's
+            // namespace, and reached by nothing a program writes. The
+            // library is then redefined and imported again, two
+            // collections run, and `generated` is expanded at top level
+            // and in a procedure: it still expands the first library's
+            // keyword, where a macro the new generator makes expands the
+            // new one's. Each step is a top-level form of its own. A
+            // scoreboard row of #837's second PR, the third target that
+            // holds a relinked scoped keyword: a freed record, cell or
+            // macro panics where it is read in a debug or check build
+            // (#621). Under zeal too. Neither oracle redefines a library
+            // so, and Gauche 0.9.15 has no `(srfi 188)`.
+            let library = |value: &str| {
+                format!(
+                    "(define-library (tmp splice)
+                       (import (scheme base) (srfi 188))
+                       (export make-answer)
+                       (begin
+                         (splicing-let-syntax
+                             ((helper (syntax-rules () ((_ x) (list '{value} x)))))
+                           (define-syntax make-answer
+                             (syntax-rules ()
+                               ((_ name)
+                                (define-syntax name
+                                  (syntax-rules () ((_ x) (helper x))))))))))"
+                )
+            };
+            assert_gc_and_zeal_eval_to(
+                &format!(
+                    "(import (scheme base) (patina debug))
+                     {}
+                     (import (tmp splice))
+                     (make-answer generated)
+                     {}
+                     (import (tmp splice))
+                     (gc) (gc)
+                     (define (later) (generated 2))
+                     (make-answer generated-new)
+                     (list (generated 1) (later) (generated-new 3))",
+                    library("old"),
+                    library("new")
+                ),
+                "((old 1) (old 2) (new 3))",
+            );
+        }
+
+        #[test]
+        fn a_replaced_library_s_procedure_reads_a_relinked_private_after_a_collection() {
             // `old-step` is the first `(r836 stepper)`'s `step`, whose body
             // the first `(r836 counter)`'s macro expands into a read and an
             // assignment of that library's private `counter`: a name
-            // `(r836 stepper)`'s namespace reaches by an alias, which the
-            // code reads by name, through the namespace its unit's table
-            // was linked in, not through an entry the table links. Both
-            // libraries are then replaced, so the first `(r836 stepper)`'s
-            // namespace is held only by the units of the code compiled in
-            // it, and the first `(r836 counter)`'s only through that
-            // namespace's alias. On the VM it is the table's namespace that
-            // keeps `counter`'s record and its value.
+            // `(r836 stepper)` cannot write, which the expansion relinks,
+            // so `step`'s code links `counter`'s record (#837's second
+            // PR). Both libraries are then replaced, so the first `(r836
+            // stepper)`'s namespace is held only by the units of the code
+            // compiled in it, and the first `(r836 counter)`'s binding
+            // only by the record that code links: a pinned entry of the
+            // unit's link table on the VM, the record its `CpsExpr`
+            // carries on the tree-walker. Until the switch the reference
+            // was read by name through an alias in `(r836 stepper)`'s
+            // namespace, and it was the table's namespace that kept the
+            // record.
             assert_gc_and_zeal_eval_to(
                 r#"
                 (import (scheme base) (patina debug))
