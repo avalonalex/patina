@@ -116,6 +116,11 @@ impl BitSet {
         self.words[i / 64] & (1u64 << (i % 64)) != 0
     }
 
+    /// The bits the set was made with.
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
     fn count_ones(&self) -> usize {
         self.words.iter().map(|w| w.count_ones() as usize).sum()
     }
@@ -130,6 +135,11 @@ pub struct MarkBits {
     pub(crate) vectors: BitSet,
     pub(crate) strings: BitSet,
     pub(crate) objects: BitSet,
+    /// One bit per entry of the heap's scope-set table (#788): set for id 0
+    /// when it is made, so that the empty set is never freed, and for the
+    /// set of each identifier marking traces. The sweep frees the entries
+    /// whose bit is clear (`heap/scope_sets.rs`).
+    pub(crate) scope_sets: BitSet,
     /// The payloads of the marked objects (`heap/account.rs`), counted as
     /// marking reaches each one: a vector's elements when it is traced, a
     /// string's characters when it is marked, an object's payload when it
@@ -164,11 +174,15 @@ impl MarkBits {
     }
 
     fn for_heap(heap: &Heap) -> Self {
+        let mut scope_sets = BitSet::new(heap.scope_sets.entries());
+        // The empty set, id 0, is never given up.
+        scope_sets.set(0);
         Self {
             pairs: BitSet::new(heap.pairs.len()),
             vectors: BitSet::new(heap.vectors.len()),
             strings: BitSet::new(heap.strings.len()),
             objects: BitSet::new(heap.objects.len()),
+            scope_sets,
             live_payload: 0,
             live_closures: 0,
         }
@@ -1744,15 +1758,6 @@ impl<'h> GcVisitor<'h> {
             | HeapObjectData::Port(_)
             // An id, a name and field names.
             | HeapObjectData::RecordType(_)
-            | HeapObjectData::Identifier {
-                // A spelling.
-                name: _,
-                // The id of a set of scope ids in the heap's scope-set table
-                // (#788).
-                scopes: _,
-                // A flag.
-                written: _,
-            }
             // A name and an id.
             | HeapObjectData::PromptTag(_)
             // A datum label's number.
@@ -1787,6 +1792,19 @@ impl<'h> GcVisitor<'h> {
                 if self.live_weak_ids.insert(*id) {
                     self.new_weak_ids.push(*id);
                 }
+            }
+
+            // No value: its set's id, recorded so that the sweep keeps the
+            // set (#788). The table holds sets of scope ids, which hold no
+            // value, and is no root.
+            HeapObjectData::Identifier {
+                // A spelling.
+                name: _,
+                scopes,
+                // A flag.
+                written: _,
+            } => {
+                self.marks.scope_sets.set(scopes.index());
             }
 
             HeapObjectData::Complex { real, imag } => {
@@ -1975,10 +1993,11 @@ impl Heap {
     /// except a file port's, which the drain after the collection takes
     /// (`heap/finalize.rs`, #785), and so is every namespace's placeholder
     /// and weak read-through record that nothing marked (`PlaceholderList`,
-    /// #836). Pairs are `Copy` with nothing to drop, so a plain release
-    /// build skips the store; a check build writes a poison value, so a
-    /// stale reference that marking reaches traces nothing from the dead
-    /// pair.
+    /// #836), and every scope set that no marked identifier carries
+    /// (`heap/scope_sets.rs`, #788). Pairs are `Copy` with nothing to drop,
+    /// so a plain release build skips the store; a check build writes a
+    /// poison value, so a stale reference that marking reaches traces
+    /// nothing from the dead pair.
     ///
     /// Use-after-free detection does not depend on the tombstones: in a
     /// check build every arena accessor refuses a reference to a freed slot,
@@ -2050,6 +2069,9 @@ impl Heap {
         if self.syntax_sources.capacity() > self.syntax_sources.len().saturating_mul(4).max(64) {
             self.syntax_sources.shrink_to(64);
         }
+        // Nor are the scope sets (#788): every set no marked identifier
+        // carries is freed, and its id reused.
+        self.scope_sets.sweep(&marks.scope_sets);
         // Moved out so the object arena's recording closure can hold it while
         // the arenas themselves are mutably borrowed.
         let mut freed_closures = self.gc_freed_closure_code_ids.take();

@@ -1175,3 +1175,125 @@ fn ephemeron_datum_under_a_live_key() {
     collect_from(&mut heap, &[ephemeron, key]);
     s.assert_survived(&heap);
 }
+
+// ----------------------------------------------------------------------------
+// The scope-set table (#788): an identifier's set lives while the identifier
+// does, and an entry no marked identifier holds is recycled. A set's id
+// carries no generation stamp, so a test of reuse asserts that the new set
+// took the freed id, which holds in a check build as in any other.
+// ----------------------------------------------------------------------------
+
+/// The set made of these scope ids. Not minted (`ScopeId::fresh`), so the
+/// tests leave the process's scope counter as it was.
+fn scope_set_of(ids: &[usize]) -> ScopeSet {
+    let mut set = ScopeSet::new();
+    for &id in ids {
+        set.add_scope(ScopeId(id));
+    }
+    set
+}
+
+/// The id of `identifier`'s set in its heap's table.
+fn scope_set_id(heap: &Heap, identifier: TaggedValue) -> super::scope_sets::ScopeSetId {
+    match heap.get_object(identifier) {
+        HeapObjectData::Identifier { scopes, .. } => *scopes,
+        other => panic!("not an identifier: {other:?}"),
+    }
+}
+
+/// A set only one identifier carries, the identifier reachable only through
+/// a pair, keeps its entry across a collection: its id, and its contents. A
+/// new set interned after the collection takes another entry, which it would
+/// not if the sweep had freed this one. Fails with the identifier's arm in
+/// `trace_object_children` recording nothing (#164's rule).
+#[test]
+fn an_identifiers_scope_set_lives_with_it() {
+    let mut heap = Heap::new();
+    let decoy = heap.alloc_pair(TaggedValue::fixnum(-1), TaggedValue::NULL);
+    // Four scopes, so the set spills past the inline three.
+    let set = scope_set_of(&[901, 902, 903, 904]);
+    let identifier = heap.alloc_identifier(Rc::from("x"), set.clone());
+    let id = scope_set_id(&heap, identifier);
+    let root = heap.alloc_pair(identifier, TaggedValue::NULL);
+    collect_from(&mut heap, &[root]);
+    super::sentinels::assert_freed(&heap, decoy, "the decoy");
+    assert_eq!(scope_set_id(&heap, identifier), id);
+    let newcomer = heap.scope_sets.intern(scope_set_of(&[905]));
+    assert_ne!(newcomer, id, "the live identifier's entry was reused");
+    assert_eq!(heap.scope_set(id), &set);
+    assert_eq!(heap.get_identifier_data(identifier).unwrap().1, &set);
+    assert_eq!(heap.scope_sets.intern(set), id);
+}
+
+/// A set no marked identifier carries is freed, and the next set interned
+/// takes its entry: the same id, asserted equal (the section's note), with
+/// every live identifier's set as it was. The freed entry lies between two
+/// live ones, so it is the free list that hands it back.
+#[test]
+fn a_scope_set_no_identifier_carries_is_recycled() {
+    let mut heap = Heap::new();
+    let low = heap.alloc_identifier(Rc::from("low"), scope_set_of(&[911]));
+    let dead = heap.alloc_identifier(Rc::from("dead"), scope_set_of(&[912, 913, 914, 915]));
+    let high = heap.alloc_identifier(Rc::from("high"), scope_set_of(&[916, 917]));
+    let freed = scope_set_id(&heap, dead);
+    assert_eq!(heap.scope_sets.len(), 3);
+    collect_from(&mut heap, &[low, high]);
+    super::sentinels::assert_freed(&heap, dead, "the identifier no root reaches");
+    assert_eq!(heap.scope_sets.len(), 2);
+    let set = scope_set_of(&[918, 919, 920]);
+    let newcomer = heap.alloc_identifier(Rc::from("new"), set.clone());
+    assert_eq!(scope_set_id(&heap, newcomer), freed);
+    assert_eq!(heap.get_identifier_data(newcomer).unwrap().1, &set);
+    assert_eq!(
+        heap.get_identifier_data(low).unwrap().1,
+        &scope_set_of(&[911])
+    );
+    assert_eq!(
+        heap.get_identifier_data(high).unwrap().1,
+        &scope_set_of(&[916, 917])
+    );
+}
+
+/// The empty set's entry, id 0, survives a collection that marks no
+/// identifier at all, written or not: a set interned after it takes another
+/// entry, and an identifier made after it still reads the empty set.
+#[test]
+fn the_empty_scope_set_is_never_recycled() {
+    let mut heap = Heap::new();
+    let written = heap.alloc_source_identifier(Rc::from("written"));
+    let plain = heap.alloc_identifier(Rc::from("plain"), ScopeSet::new());
+    let scoped = heap.alloc_identifier(Rc::from("scoped"), scope_set_of(&[921]));
+    collect_from(&mut heap, &[]);
+    for (identifier, what) in [(written, "written"), (plain, "plain"), (scoped, "scoped")] {
+        super::sentinels::assert_freed(&heap, identifier, what);
+    }
+    let set = scope_set_of(&[922]);
+    let newcomer = heap.alloc_identifier(Rc::from("new"), set.clone());
+    let fresh = heap.alloc_source_identifier(Rc::from("fresh"));
+    assert_ne!(
+        scope_set_id(&heap, newcomer),
+        super::scope_sets::ScopeSetId::EMPTY
+    );
+    assert_eq!(heap.get_identifier_data(newcomer).unwrap().1, &set);
+    assert_eq!(
+        scope_set_id(&heap, fresh),
+        super::scope_sets::ScopeSetId::EMPTY
+    );
+    assert!(heap.get_identifier_data(fresh).unwrap().1.is_empty());
+}
+
+/// In a check build, reading a free entry panics: here an id kept past the
+/// collection that freed it. The entry lies between two live ones, so the
+/// sweep keeps it as a free entry rather than dropping it from the end.
+#[test]
+#[cfg(any(debug_assertions, feature = "gc-check"))]
+#[should_panic(expected = "is free")]
+fn a_check_build_refuses_a_free_scope_set() {
+    let mut heap = Heap::new();
+    let low = heap.alloc_identifier(Rc::from("low"), scope_set_of(&[931]));
+    let dead = heap.alloc_identifier(Rc::from("dead"), scope_set_of(&[932]));
+    let high = heap.alloc_identifier(Rc::from("high"), scope_set_of(&[933]));
+    let freed = scope_set_id(&heap, dead);
+    collect_from(&mut heap, &[low, high]);
+    heap.scope_set(freed);
+}

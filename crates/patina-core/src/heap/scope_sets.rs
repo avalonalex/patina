@@ -11,6 +11,24 @@
 //! Id 0 is the empty set, made with the table and never given up: the
 //! reader's identifiers carry it, and take it with no lookup.
 //!
+//! **Liveness.** The table holds no value and is no root. Marking an
+//! identifier sets its id's bit in the collection's [`MarkBits`], a bitmap
+//! sized to the table when the collection starts, with id 0's bit set
+//! before anything is marked. The sweep, beside the `syntax_sources` prune,
+//! frees every entry whose bit is clear ([`ScopeSetTable::sweep`]): its set
+//! leaves the index and its spill is dropped, and its id is reused, the
+//! lowest first. So right after a collection the table holds exactly the
+//! sets the marked identifiers carry, and between collections those and
+//! the ones interned since (decision 19 on #782). A `ScopeId` is never
+//! reused; only a set's id is.
+//!
+//! A free entry holds the empty set, which no other entry but id 0 holds,
+//! so in debug and `gc-check` builds a read of a free entry panics, as
+//! #621's checks do for a freed slot: an id read through an identifier the
+//! sweep freed, or an id kept past a collection.
+//!
+//! [`MarkBits`]: super::gc::MarkBits
+//!
 //! A plain field of `Heap`, read and written under the heap's borrow beside
 //! `symbol_table` (decision 18 on #782). No code outside `patina-core` names
 //! an id, so every access already holds that borrow, and
@@ -18,6 +36,8 @@
 
 use rustc_hash::FxHashMap;
 
+use super::GC_CHECK;
+use super::gc::BitSet;
 use crate::scope::ScopeSet;
 
 /// What an identifier holds for its scopes: the number of its set's entry in
@@ -44,10 +64,12 @@ impl ScopeSetId {
 /// One heap's scope sets. See the [module docs](self).
 #[derive(Debug)]
 pub(crate) struct ScopeSetTable {
-    /// Each id's set. Entry 0 is the empty set.
+    /// Each id's set. Entry 0 is the empty set; a free entry holds it too.
     sets: Vec<ScopeSet>,
     /// Each set but the empty one, by its contents.
     index: FxHashMap<ScopeSet, ScopeSetId>,
+    /// The free entries, the lowest last, which `intern` reuses first.
+    free: Vec<ScopeSetId>,
 }
 
 impl ScopeSetTable {
@@ -56,11 +78,12 @@ impl ScopeSetTable {
         Self {
             sets: vec![ScopeSet::new()],
             index: FxHashMap::default(),
+            free: Vec::new(),
         }
     }
 
-    /// The id of `set`'s entry, made if the table has none: the empty set's
-    /// with no lookup.
+    /// The id of `set`'s entry, made if the table has none, in a free entry
+    /// if there is one: the empty set's with no lookup.
     pub(crate) fn intern(&mut self, set: ScopeSet) -> ScopeSetId {
         if set.is_empty() {
             return ScopeSetId::EMPTY;
@@ -68,16 +91,68 @@ impl ScopeSetTable {
         if let Some(&id) = self.index.get(&set) {
             return id;
         }
-        let id = ScopeSetId::at(self.sets.len());
-        self.sets.push(set.clone());
+        let id = match self.free.pop() {
+            Some(id) => {
+                self.sets[id.index()] = set.clone();
+                id
+            }
+            None => {
+                let id = ScopeSetId::at(self.sets.len());
+                self.sets.push(set.clone());
+                id
+            }
+        };
         self.index.insert(set, id);
         id
     }
 
-    /// The set at `id`.
+    /// The set at `id`. In a check build, a free entry's read panics.
     #[inline]
     pub(crate) fn get(&self, id: ScopeSetId) -> &ScopeSet {
-        &self.sets[id.index()]
+        let set = &self.sets[id.index()];
+        if GC_CHECK && id != ScopeSetId::EMPTY && set.is_empty() {
+            free_entry_read(id);
+        }
+        set
+    }
+
+    /// The entries the table has made, free ones and id 0 included: what a
+    /// collection's bitmap is sized to.
+    pub(crate) fn entries(&self) -> usize {
+        self.sets.len()
+    }
+
+    /// The sweep's pass (#788): free every entry `marked` lacks. Its set
+    /// leaves the index and drops its spill, the free entries at the end go,
+    /// and the free list is made again from the rest. Id 0's bit is set
+    /// when the bitmap is made, so the empty set is never freed. A free
+    /// entry's bit is never set, since no identifier holds a free id, so it
+    /// is found free again and holds the empty set already.
+    pub(crate) fn sweep(&mut self, marked: &BitSet) {
+        debug_assert_eq!(
+            self.sets.len(),
+            marked.len(),
+            "a scope set was interned while marking"
+        );
+        for index in 0..self.sets.len() {
+            if !marked.get(index) {
+                let set = std::mem::take(&mut self.sets[index]);
+                if !set.is_empty() {
+                    self.index.remove(&set);
+                }
+            }
+        }
+        let kept = (0..self.sets.len())
+            .rposition(|index| marked.get(index))
+            .map_or(0, |last| last + 1);
+        self.sets.truncate(kept);
+        self.free.clear();
+        self.free.extend(
+            (0..kept)
+                .rev()
+                .filter(|&index| !marked.get(index))
+                .map(ScopeSetId::at),
+        );
     }
 
     /// The sets held, not counting the empty one.
@@ -85,6 +160,17 @@ impl ScopeSetTable {
     pub(crate) fn len(&self) -> usize {
         self.index.len()
     }
+}
+
+/// The panic of a check build's read of a free entry, out of line so the
+/// read stays a load and a branch.
+#[cold]
+#[inline(never)]
+fn free_entry_read(id: ScopeSetId) -> ! {
+    panic!(
+        "scope set {} is free: an identifier the sweep freed, or an id kept past a collection",
+        id.0
+    )
 }
 
 #[cfg(test)]
