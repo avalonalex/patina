@@ -405,7 +405,8 @@ nine parameters spelled `x`, so a lower bound would build an index on every
 call of it.
 
 Since #427, neither backend exposes an introduced variable through its bare
-spelling. The VM's former bare-name alias let unrelated expansions reach a
+spelling; on the VM, one a macro introduces in an expression position at top
+level, inside `when` or an `if` branch, only since #884. The VM's former bare-name alias let unrelated expansions reach a
 binding their scopes rejected; the tree-walker's name-visible view let plain
 source and bare library exports reach it. Both views are gone. Caller-supplied
 definition names stay public, and source-written parameters and internal

@@ -1441,6 +1441,53 @@ fn introduced_globals_are_private_but_their_accessors_can_be_exported() {
     assert_eq!(eval_program_tree_walker(public_accessors), "(11 17)");
 }
 
+/// #427's top-level policy holds for a definition a macro introduces in an
+/// expression position at top level (inside `when`, an `if` branch, an
+/// operand) as it does for one in a body: each expansion binds at its own
+/// scopes, so two expansions keep two bindings, the bare spelling reaches
+/// neither, and a later form reaches the one its own expansion made (#884).
+/// The VM collected such definitions through `begin` only and defined them
+/// by their bare spelling, one global for every expansion: `(c c c d c)`
+/// and `(b b)`. Gauche 0.9.15 answers as asserted; chibi 0.12 refuses both
+/// programs ("unexpected define"), since R7RS calls a definition in an
+/// expression position an error.
+#[test]
+fn a_definition_in_an_expression_position_keeps_its_expansion_s_binding() {
+    let positions = r#"
+        (import (scheme base))
+        (define-syntax def-pair
+          (syntax-rules () ((_ getter v) (begin (define hid v) (define (getter) hid)))))
+        (when #t (def-pair get-a 'a))
+        (if #t (def-pair get-b 'b) #f)
+        (car (list (def-pair get-c 'c)))
+        (def-pair get-d 'd)
+        (list (get-a) (get-b) (get-c) (get-d) (guard (e (#t 'unbound)) hid))
+    "#;
+    assert_eq!(eval_program_vm(positions), "(a b c d unbound)", "VM");
+    assert_eq!(
+        eval_program_tree_walker(positions),
+        "(a b c d unbound)",
+        "tree-walker"
+    );
+
+    // A bare `if` branch, with no `begin` around the definition: the
+    // definition is recorded for later forms wherever it stands, so the
+    // generated macro's reference in a later form finds it.
+    let later_form = r#"
+        (import (scheme base))
+        (define-syntax def-and-reader
+          (syntax-rules ()
+            ((_ reader v)
+             (begin (if #t (define hid v) #f)
+                    (define-syntax reader (syntax-rules () ((_) hid)))))))
+        (def-and-reader read-a 'a)
+        (def-and-reader read-b 'b)
+        (list (read-a) (read-b))
+    "#;
+    assert_eq!(eval_program_vm(later_form), "(a b)", "VM");
+    assert_eq!(eval_program_tree_walker(later_form), "(a b)", "tree-walker");
+}
+
 /// A program that defines over an imported name *after* a library macro
 /// mentioning it was expanded does not capture the template's reference: one
 /// procedure, compiled once, bumps the library's `count` on both of its
