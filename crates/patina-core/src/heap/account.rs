@@ -22,9 +22,10 @@
 //! closure's free variables are fixed at construction, and the heap writes
 //! them in place; the other payloads charged — a bignum's limbs, an
 //! exception's message and irritants, a `values` object, a symbol's name, a
-//! continuation's snapshot — are never written after allocation. A parameter's value stack, which `parameterize` grows and
-//! shrinks, is not charged: it is as deep as the `parameterize` forms active,
-//! which their frames already pay for.
+//! continuation's snapshot — are never written after allocation. A
+//! parameter's value stack, which `parameterize` grows and shrinks, is not
+//! charged: it is as deep as the `parameterize` forms active, which their
+//! frames already pay for.
 //!
 //! **Shared `Rc` payloads are not charged** — a procedure's body and
 //! environment (a tree-walker closure is charged an estimate of its frame
