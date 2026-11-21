@@ -4794,6 +4794,53 @@ mod scoped_write_tests {
             .to_string();
         assert!(ambiguous.contains("ambiguous reference"), "{ambiguous}");
     }
+
+    /// `set` writes a name-visible scoped definition by its name, as the
+    /// tree-walker assigns a definition it marks `visible_by_name`: a
+    /// namespace's own, the same from a frame below it, and a frame's own.
+    /// `get` by the name and `get_with_scopes` at the definition's scopes
+    /// read what it wrote, and a scoped definition not visible by name is
+    /// not written. The core tests that assigned a scoped definition by
+    /// name went through the macro-expansion alias until #837's second PR
+    /// deleted it, after which a `set` that skipped this arm passed every
+    /// core test (that PR's mutation stage).
+    #[test]
+    fn set_writes_a_name_visible_scoped_definition_by_name() {
+        let heap = new_shared_heap();
+        let ns = Rc::new(Environment::with_heap(&heap));
+        ns.define_scoped_definition(&heap, "vis", scopes(&[2]), TaggedValue::fixnum(4));
+        ns.set(&heap, "vis", TaggedValue::fixnum(40)).unwrap();
+        assert_eq!(ns.get(&heap, "vis"), Some(TaggedValue::fixnum(40)));
+        assert_eq!(
+            ns.get_with_scopes(&heap, "vis", &scopes(&[2])).unwrap(),
+            Some(TaggedValue::fixnum(40))
+        );
+
+        // From a frame below it, by the walk up the chain.
+        let frame = Rc::new(Environment::child_frame(Rc::clone(&ns)));
+        frame.set(&heap, "vis", TaggedValue::fixnum(41)).unwrap();
+        assert_eq!(ns.get(&heap, "vis"), Some(TaggedValue::fixnum(41)));
+
+        // A frame's own.
+        frame.define_scoped_definition(&heap, "own", scopes(&[3]), TaggedValue::fixnum(5));
+        frame.set(&heap, "own", TaggedValue::fixnum(50)).unwrap();
+        assert_eq!(frame.get(&heap, "own"), Some(TaggedValue::fixnum(50)));
+        assert_eq!(
+            frame.get_with_scopes(&heap, "own", &scopes(&[3])).unwrap(),
+            Some(TaggedValue::fixnum(50))
+        );
+
+        // One not visible by name is not written.
+        ns.define_with_scopes(&heap, "hidden", scopes(&[4]), TaggedValue::fixnum(6));
+        assert_eq!(
+            ns.set(&heap, "hidden", TaggedValue::fixnum(60)),
+            Err("hidden".to_string())
+        );
+        assert_eq!(
+            ns.get_with_scopes(&heap, "hidden", &scopes(&[4])).unwrap(),
+            Some(TaggedValue::fixnum(6))
+        );
+    }
 }
 
 #[cfg(test)]
@@ -8666,8 +8713,11 @@ mod heap_step_tests {
                     Box::new(|| frame.set(&heap, "frame-import", n(26)).unwrap()),
                 ),
                 (
+                    // Not unwrapped: a `set` that missed the binding answers
+                    // `Err`, and an unwrap's panic would pass for the
+                    // borrow's.
                     "ns.set of the visible scoped binding",
-                    Box::new(|| ns.set(&heap, "vis", n(27)).unwrap()),
+                    Box::new(|| ignore(ns.set(&heap, "vis", n(27)))),
                 ),
                 (
                     "host.define of a fresh name",
