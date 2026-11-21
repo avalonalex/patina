@@ -450,19 +450,32 @@ mod relinked_tests {
     /// One relinked identifier and a name spelled like it: a match only
     /// where the name, in its own site, is the record's location. A
     /// program's own binding of the spelling and an unbound name are not
-    /// it, on either side.
+    /// it, on either side, nor is a binding of the spelling that holds the
+    /// very object the record's cell holds: holding one object is the rule
+    /// for two spellings only (#837's mutation stage).
     #[test]
     fn a_relinked_identifier_and_a_name_of_its_spelling_match_by_location() {
         let world = world();
         let table = table(&world);
         let relinked: Ident = ("lit.7", Some(7));
         let name: Ident = ("lit.7", None);
+        let same_object = Rc::new(Environment::with_heap(&world.heap));
+        let shared = world
+            .library
+            .get(&world.heap, "lit")
+            .expect("the library's lit");
+        same_object.define(&world.heap, "lit.7", shared);
         for (site, expected, what) in [
             (&world.importer, true, "the name is the record's location"),
             (
                 &world.program,
                 false,
                 "the program's own binding of the spelling",
+            ),
+            (
+                &same_object,
+                false,
+                "another binding of the spelling, which holds the record's object",
             ),
             (&world.empty, false, "an unbound name"),
         ] {

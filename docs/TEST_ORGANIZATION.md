@@ -2261,6 +2261,41 @@ where without the rewrite it named the spelling. The stress count of
 `macro_definition_env` was re-pinned for each test; the new row left
 `scheme_suite`'s counts as they were.
 
+The switch's mutation stage added tests for the slips of its code that
+every test passed in a build, each run failing under its mutation in a
+debug and a release `gc-check` build. `macro_definition_env.rs`'s
+`a_macro_a_library_makes_is_expanded_in_its_later_forms`: a library runs
+another library's generator and expands the macro it made in its own
+later forms, which one desugarer desugars one after another (a program's
+forms each get a desugarer of their own), so a form that left its table of
+relinked identifiers to the next passed every other test in a release
+build. `a_body_scan_sees_the_enclosing_expansions_relinked_keywords` now
+also defines `when` and `unless` in such a body, and
+`a_body_scan_puts_back_a_generated_macros_carried_keywords` does so with a
+generated macro's carried definer: a scan that cannot expand the private
+definer refuses the reads as syntax used as a value, where the defined
+names the control had used were bound by the backends whatever the scan
+saw. `a_generators_written_name_spelled_as_a_relinked_one_reads_nothing`,
+alone in a process like the range tests, reaches the second clause of
+`relink_spelling`'s `taken`, which the switch's record said no program
+reaches: a generator whose template writes the names around the number
+of the library that runs it. `a_templates_quote_that_is_its_librarys_own_macro_stays_that_macro`
+holds a relinked `quote` head renamed with its scopes;
+`a_generated_macro_carries_two_expansions_relinks_of_one_spelling` holds
+the carried relinks kept apart by guard as well as spelling; and
+`a_splice_an_expansion_wrote_carries_its_keywords_relinks` holds the
+relinks a splice's keyword carries into later forms.
+`a_relinked_reference_beside_a_definition_its_expansion_produces_into_a_body`
+gains two mentions of one written name in one expansion under two
+spellings, which settling tells apart by the scopes each carries;
+`vm_callprimitive.rs`'s `a_re_pointed_private_binding_is_never_a_fast_path`
+gains a generated macro's carried call, which is no fast path; and
+`patina-macros`' `a_relinked_identifier_and_a_name_of_its_spelling_match_by_location`
+a binding of the spelling that holds the record's object, which the value
+rule, for two spellings only, does not match. The stress count of
+`macro_definition_env` was re-pinned, and `vm_callprimitive`'s count at
+16 recorded.
+
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):
 the variable that sets the mode did not reach the process, or the program

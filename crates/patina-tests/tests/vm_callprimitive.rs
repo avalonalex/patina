@@ -298,21 +298,27 @@ fn a_set_through_a_host_namespace_marks_the_primitive_it_replaces() {
 /// template call is relinked. The operand is the library's variable,
 /// whatever it holds: an ordinary load and call, with no inline `Car`, no
 /// `CallPrimitive` and no control sequence, so that the library's
-/// assignment is what the next call runs.
+/// assignment is what the next call runs. So is a generated macro's call,
+/// which carries the record its generator's expansion relinked `h` to
+/// into later forms (`gen-h`, which `def-call-h` made a form earlier):
+/// the carried link is relinked, never early (#837's mutation stage).
 #[test]
 fn a_re_pointed_private_binding_is_never_a_fast_path() {
     const REPOINT: &str = "(define-library (t repoint)
-  (export call-h call-k repoint!)
+  (export call-h call-k def-call-h repoint!)
   (import (scheme base))
   (begin
     (define h car)
     (define k call-with-values)
     (define (repoint!) (set! h cdr) (set! k (lambda (p c) 'second)))
     (define-syntax call-h (syntax-rules () ((_ p) (h p))))
-    (define-syntax call-k (syntax-rules () ((_ p c) (k p c))))))
+    (define-syntax call-k (syntax-rules () ((_ p c) (k p c))))
+    (define-syntax def-call-h
+      (syntax-rules () ((_ name) (define-syntax name (syntax-rules () ((_ p) (h p)))))))))
 (import (scheme base) (t repoint))
 (define (h p) 'the-programs)
 (define (k p c) 'the-programs)
+(def-call-h gen-h)
 ";
     let interp = Interpreter::new(patina_vm::VmBackend::new());
     interp
@@ -342,15 +348,28 @@ fn a_re_pointed_private_binding_is_never_a_fast_path() {
         (1, 0),
         "a private name for call-with-values is an ordinary call"
     );
+    let gh = operands(
+        &interp
+            .backend()
+            .compile_for_inspection("(define (gh) (gen-h '(1 2)))")
+            .expect("compiles"),
+    );
+    assert_eq!(gh.loads, ["h@linked"], "the carried callee's operand");
+    assert_eq!(
+        (gh.calls, gh.inline_cars, gh.primitive_calls, gh.control),
+        (1, 0, 0, 0),
+        "a generated macro's private name for car is an ordinary call"
+    );
 
     let program = format!(
         "{REPOINT}(define (f) (call-k (lambda () 1) (lambda (x) (list 'cwv x))))
 (define (g) (call-h '(1 2)))
-(define before (list (f) (g)))
+(define (gh) (gen-h '(1 2)))
+(define before (list (f) (g) (gh)))
 (repoint!)
-(list before (f) (g) (h 0) (k 0 0))"
+(list before (f) (g) (gh) (h 0) (k 0 0))"
     );
-    let expected = "(((cwv 1) 1) second (2) the-programs the-programs)";
+    let expected = "(((cwv 1) 1 1) second (2) (2) the-programs the-programs)";
     assert_eq!(eval(&program), expected, "VM");
     assert_eq!(
         common::eval_program_tree_walker(&program),

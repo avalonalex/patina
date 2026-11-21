@@ -456,7 +456,17 @@ fi
 # stress; and macro_definition_env's again that day for an ambiguous
 # reference to a relinked identifier, named as its template wrote it: its
 # 55 other tests making 39682 and the new test 70, so 39752 at 16 and 127
-# without stress, the minimum left)
+# without stress, the minimum left; and again that day for the switch's
+# mutation stage: six tests (a macro a library makes expanded in its later
+# forms, a generator's name spelled as a relinked one, a body scan that
+# puts back a generated macro's carried keywords, a template's quote that
+# is its library's own macro, two expansions' relinks of one spelling in
+# one generated macro, a splice an expansion wrote), which collect 1241 at
+# 16, beside its 56 other tests, two of them extended, making 39829, so
+# 41070 at 16 and 129 without stress, the minimum left; and
+# vm_callprimitive's count at 16 rose from 1893 to 1899 for the
+# generated-macro case its re-pointed private binding test gained, 0
+# without stress, its test count and minimum left)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -470,10 +480,10 @@ TARGETS=(
     "hygiene_matrix 16 11136 25"              # 22757 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
-    "macro_definition_env 16 16626 56"        # 39752 (127): see the header
+    "macro_definition_env 16 16626 62"        # 41070 (129): see the header
     "owned_handles 16 62714 9"                # 125648 (14)
     "rooted_loading 16 371 6"                 # 1269 (10)
-    "vm_callprimitive 16 545 23"              # 1893 (0)
+    "vm_callprimitive 16 545 23"              # 1899 (0)
     "scheme_suite 4096 1534 11"               # 10653 (385): see the header
 )
 

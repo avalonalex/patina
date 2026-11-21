@@ -1158,6 +1158,130 @@ fn a_template_that_writes_the_relinked_spelling_reads_its_own() {
     }
 }
 
+/// A generator whose template writes every name `secret.k` for `k` in a
+/// range that starts where a library defined just before it had its
+/// spelling, and a library, `(t gen-mid)`, defined just after it, that
+/// runs the generator at its top level and hands it its own private
+/// `secret`, then exports the macro it made. The made macro's template
+/// holds each `secret.k` as an identifier its generator's expansion
+/// introduced, and the middle library's `secret` as a name written where
+/// the macro was made. Expanded in the program, the made macro relinks
+/// that `secret`, which the program cannot name, and the spelling it gives
+/// it is one of the `secret.k` if nothing keeps it clear of the names the
+/// macro inherited from its generator (`relink_spelling`'s `taken`, its
+/// second clause). The program reads each `secret.k` in a procedure of
+/// the made macro's template, under a `guard`. Answers what the handed
+/// `secret` read and what each `secret.k` read, having checked from the
+/// middle library's own leaked spelling that its number fell in the range
+/// and that it is one of the names the generator wrote.
+fn a_generator_writing_the_relinked_spelling<B: patina_runtime::Backend>(
+    interp: &patina_interpreter::Interpreter<B>,
+) -> (String, Vec<String>)
+where
+    B::Error: std::fmt::Display,
+{
+    interp
+        .eval_program_owned(
+            "(define-library (t gen-first)
+  (export spell-gen-first)
+  (import (scheme base))
+  (begin
+    (define secret 'first)
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax spell-gen-first (syntax-rules () ((_) (quote-it secret))))))
+(import (scheme base) (t gen-first))",
+        )
+        .expect("the first library");
+    let first = number_after_secret(&answer_or_error(interp, "(spell-gen-first)").expect("spells"));
+    let names: Vec<String> = (first..=first + COLLISION_RANGE)
+        .map(|k| format!("secret.{k}"))
+        .collect();
+    let thunks = names
+        .iter()
+        .map(|name| format!("(lambda () {name})"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    interp
+        .eval_program_owned(&format!(
+            "(define-library (t gen-writes)
+  (export gen)
+  (import (scheme base))
+  (begin
+    (define-syntax gen
+      (syntax-rules ()
+        ((_ name s)
+         (define-syntax name (syntax-rules () ((_) (list s (list {thunks}))))))))))
+(define-library (t gen-mid)
+  (export made spell-mid)
+  (import (scheme base) (t gen-writes))
+  (begin
+    (define secret 42)
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax spell-mid (syntax-rules () ((_) (quote-it secret))))
+    (gen made secret)))
+(import (t gen-mid))
+(define read (made))"
+        ))
+        .expect("the generator and the middle library");
+    let mid_spelling = answer_or_error(interp, "(spell-mid)").expect("spells");
+    let mid = number_after_secret(&mid_spelling);
+    assert!(
+        (first..=first + COLLISION_RANGE).contains(&mid),
+        "the range missed the middle library's spelling: {mid} is not in {first}..={}",
+        first + COLLISION_RANGE
+    );
+    assert!(
+        names.contains(&mid_spelling),
+        "the middle library's spelling {mid_spelling} is none of the names the generator writes"
+    );
+    let handed = answer_or_error(interp, "(car read)").expect("the handed secret");
+    let written = (0..names.len())
+        .map(|k| {
+            answer_or_error(
+                interp,
+                &format!("(guard (e (#t 'unbound)) ((list-ref (cadr read) {k})))"),
+            )
+            .expect("a guarded read")
+        })
+        .collect();
+    (handed, written)
+}
+
+/// A made macro relinks a name written where it was made, spelled clear of
+/// the names its generator wrote into it: the middle library's private
+/// `secret`, handed in, reads its 42, and every `secret.k` the generator
+/// wrote, bound nowhere, is unbound, one of them the very spelling the
+/// relinked `secret` would have had. chibi 0.12 and Gauche 0.9.15 answer
+/// so (`(42 unbound …)`, measured 2026-11-20 over a fixed range of six
+/// names, the libraries as files for chibi). Without the clause the
+/// expansion's own `secret.k` of that spelling read 42 (#837's mutation
+/// stage, M33).
+#[test]
+fn a_generators_written_name_spelled_as_a_relinked_one_reads_nothing() {
+    if !alone_in_a_process("a_generators_written_name_spelled_as_a_relinked_one_reads_nothing") {
+        return;
+    }
+    fn check<B: patina_runtime::Backend>(interp: patina_interpreter::Interpreter<B>, backend: &str)
+    where
+        B::Error: std::fmt::Display,
+    {
+        let (handed, written) = a_generator_writing_the_relinked_spelling(&interp);
+        assert_eq!(handed, "42", "{backend}");
+        assert_eq!(written.len(), COLLISION_RANGE + 1, "{backend}");
+        let bound: Vec<(usize, &String)> = written
+            .iter()
+            .enumerate()
+            .filter(|(_, read)| *read != "unbound")
+            .collect();
+        assert!(
+            bound.is_empty(),
+            "{backend}: names the generator wrote, by their place in the range, read {bound:?}"
+        );
+    }
+    check(common::vm_interpreter(), "VM");
+    check(common::tree_walker_interpreter(), "tree-walker");
+}
+
 /// A generated macro carries the spelling relinking gave its template's
 /// `secret`, and the program then defines that spelling. A procedure that
 /// expanded the macro before the definition, an expansion after it and a
@@ -1349,6 +1473,78 @@ fn a_generated_macro_carries_a_relink_of_each_kind() {
         three_carried_relinks(common::tree_walker_interpreter()),
         expected,
         "tree-walker"
+    );
+}
+
+/// A generated macro can hold two identifiers of one spelling that two
+/// expansions relinked, each under its own guard (#837): `(t two-guards)`'s
+/// `outer` hands its own mention of the private `secret` to the private
+/// `inner`, whose template writes `secret` too, so the macro `inner` makes
+/// holds `inner`'s `secret` and `outer`'s, both given the spelling
+/// relinking gives the library's `secret` and both meaning it. The made
+/// macro carries a relink for each, by guard and spelling, and expanded in
+/// later forms, at top level and in a procedure, after the library has
+/// assigned the variable and the program has defined a `secret` of its
+/// own, both read the library's. chibi 0.12 and Gauche 0.9.15 answer the
+/// same (2026-11-20). Carried by spelling alone, one of the two was read
+/// by name and was unbound (#837's mutation stage).
+#[test]
+fn a_generated_macro_carries_two_expansions_relinks_of_one_spelling() {
+    let program = "(define-library (t two-guards)
+  (export outer bump!)
+  (import (scheme base))
+  (begin
+    (define secret 42)
+    (define (bump!) (set! secret (+ secret 1)))
+    (define-syntax inner
+      (syntax-rules ()
+        ((_ name passed) (define-syntax name (syntax-rules () ((_) (list secret passed)))))))
+    (define-syntax outer (syntax-rules () ((_ name) (inner name secret))))))
+(import (scheme base) (t two-guards))
+(define secret 'program)
+(outer g)
+(bump!)
+(define (h) (g))
+(list (g) (h) secret)";
+    let expected = "((43 43) (43 43) program)".to_string();
+    assert_eq!(
+        on_both_backends(program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// A template's `quote` that is its library's own macro stays that macro
+/// at a use site whose `quote` is the standard one (#837): `(t own-quote)`
+/// defines a `quote` of its own, which its macros' templates write as
+/// `(quote x)` and as `'x`, and the program imports the standard `quote`.
+/// The use site resolves such a head to its own `quote`, so relinking
+/// renames the head as it renames any other occurrence, keeping its
+/// scopes, and the form's table answers it with the library's macro; the
+/// datum is left alone. At top level and in a procedure. chibi 0.12 and
+/// Gauche 0.9.15 answer the same (2026-11-20). Left as the template wrote
+/// it, the head was the program's `quote`, and each use answered its datum
+/// (#837's mutation stage).
+#[test]
+fn a_templates_quote_that_is_its_librarys_own_macro_stays_that_macro() {
+    let program = "(define-library (t own-quote)
+  (export q-of q-short)
+  (import (except (scheme base) quote) (rename (only (scheme base) quote) (quote core-quote)))
+  (begin
+    (define-syntax quote
+      (syntax-rules () ((_ x) (list (core-quote lib-quoted) (core-quote x)))))
+    (define-syntax q-of (syntax-rules () ((_ x) (quote x))))
+    (define-syntax q-short (syntax-rules () ((_ x) 'x)))))
+(import (scheme base) (t own-quote))
+(define (h) (list (q-of there) (q-short again)))
+(list (q-of hello) (q-short world) (h) 'plain)";
+    let expected =
+        "((lib-quoted hello) (lib-quoted world) ((lib-quoted there) (lib-quoted again)) plain)"
+            .to_string();
+    assert_eq!(
+        on_both_backends(program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
     );
 }
 
@@ -1636,6 +1832,51 @@ where
     answer_or_error(&interp, "(list (get-b) (get-own))").expect("reads")
 }
 
+/// A macro a library makes with another library's generator, expanded in
+/// that library's later forms (#837): `(t lib-user)` runs `(t lib-gen)`'s
+/// `mk` at its top level, so the made macro's template names
+/// `(t lib-gen)`'s private `secret`, relinked in that form, and the next
+/// two forms of the same library expand it, a definition run as the
+/// library loads and a procedure's. A library's forms are desugared one
+/// after another by one desugarer, each with a table of its own, into
+/// which each later form puts back the relink the macro carries. Both
+/// read the generator's library's `secret`, before and after it assigns
+/// it, past a `secret` of the library's own and the program's. chibi 0.12
+/// and Gauche 0.9.15 answer the same (2026-11-20). A form that left its
+/// table to the next had the next form's put-back find the old entry and
+/// skip it, and the reference was read by its spelling, which is bound
+/// nowhere (#837's mutation stage).
+#[test]
+fn a_macro_a_library_makes_is_expanded_in_its_later_forms() {
+    let program = "(define-library (t lib-gen)
+  (export mk bump!)
+  (import (scheme base))
+  (begin
+    (define secret 42)
+    (define (bump!) (set! secret (+ secret 1)))
+    (define-syntax mk
+      (syntax-rules ()
+        ((_ name) (define-syntax name (syntax-rules () ((_) secret))))))))
+(define-library (t lib-user)
+  (export read-it first-read)
+  (import (scheme base) (t lib-gen))
+  (begin
+    (define secret 'user-own)
+    (mk get)
+    (define first-read (get))
+    (define (read-it) (list (get) secret))))
+(import (scheme base) (t lib-gen) (t lib-user))
+(define secret 'program)
+(bump!)
+(list first-read (read-it) secret)";
+    let expected = "(42 (43 user-own) program)".to_string();
+    assert_eq!(
+        on_both_backends(program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
 /// A redefinition: `get-old`, a macro the first `(t redef)`'s generator
 /// made, and `h-old`, a procedure that expanded its `m`, each name the
 /// first library's private `secret`, and still read it after the library
@@ -1775,6 +2016,42 @@ fn a_splices_private_keywords_are_expanded_from_later_forms() {
 (list first (later))";
     let expected =
         "(((helped 1) (helped 2) 70 the-programs) ((helped 4) (helped 5) 70 local))".to_string();
+    assert_eq!(
+        on_both_backends(program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// A keyword of a splice an expansion wrote carries what that expansion
+/// relinked into later forms (#837): `(t spl)`'s `def-spliced` writes a
+/// `splicing-let-syntax` whose `helper` names the library's private
+/// `secret`, relinked in the form that runs it, and a macro the splice's
+/// body defines, which uses `helper`. Expanded in later forms, at top
+/// level and in a procedure, `helper`'s expansion reads the library's
+/// `secret`, past the program's: a splice's macro carries its relinked
+/// identifiers as any generated macro does. chibi 0.12 answers the same
+/// (2026-11-20; Gauche 0.9.15 has no `(srfi 188)`). Allocated without
+/// them, `helper`'s `secret` was read by its spelling, bound nowhere
+/// (#837's mutation stage).
+#[test]
+fn a_splice_an_expansion_wrote_carries_its_keywords_relinks() {
+    let program = "(define-library (t spl)
+  (export def-spliced)
+  (import (scheme base) (srfi 188))
+  (begin
+    (define secret 42)
+    (define-syntax def-spliced
+      (syntax-rules ()
+        ((_ name)
+         (splicing-let-syntax ((helper (syntax-rules () ((_) secret))))
+           (define-syntax name (syntax-rules () ((_) (helper))))))))))
+(import (scheme base) (t spl))
+(define secret 'program)
+(def-spliced get)
+(define (h) (get))
+(list (get) (h) secret)";
+    let expected = "(42 42 program)".to_string();
     assert_eq!(
         on_both_backends(program),
         [expected.clone(), expected],
@@ -2048,6 +2325,16 @@ const SETTLE: &str = "(define-library (t settle)
 ///   the `settled` its use of `get-settled` expands to, which is given the
 ///   same spelling by another expansion and is the library's. Settling
 ///   tells them apart by the scopes each carries.
+/// - two mentions of one written name in one expansion, which relinking
+///   gives two spellings: a macro `(t settle-two)`'s generator made in the
+///   library writes `tmp` as the definition it produces and reads that
+///   `tmp` beside the library's own, which the generator was handed.
+///   Settling finds each node's emit by its written name and its scopes,
+///   and takes back only the produced definition's: `(lib local)`, as for
+///   the same template's `let` (`hygiene_matrix.rs`'s
+///   `one_spelling_mentioned_as_two_bindings_is_relinked_as_two`). Found
+///   by the written name alone, the produced definition's reference met
+///   the library's emit first and read `lib` (#837's mutation stage).
 #[test]
 fn a_relinked_reference_beside_a_definition_its_expansion_produces_into_a_body() {
     for (program, expected) in [
@@ -2063,6 +2350,24 @@ fn a_relinked_reference_beside_a_definition_its_expansion_produces_into_a_body()
         (
             "(define (f) (beside-two w) (list w (get-settled)))\n(f)",
             "((introduced 42 introduced) 42)",
+        ),
+        (
+            "(define-library (t settle-two)
+  (export m)
+  (import (scheme base))
+  (begin
+    (define tmp 'lib)
+    (define-syntax def-m
+      (syntax-rules ()
+        ((_ name arg)
+         (define-syntax name
+           (syntax-rules ()
+             ((_ v) (begin (define tmp 'local) (define v (list arg tmp)))))))))
+    (def-m m tmp)))
+(import (t settle-two))
+(define (f) (m w) w)
+(list (f) (let () (m u) u))",
+            "((lib local) (lib local))",
         ),
     ] {
         let program = format!("{SETTLE}{program}");
@@ -2205,16 +2510,58 @@ const SCAN: &str = "(define-library (t scan)
 /// scan reads the enclosing form's table beneath its own, finds the
 /// keyword, expands it and sees the definition, so the body's reference
 /// to the defined name is bound to it. At top level and in a procedure.
+/// Where the defined name is a keyword at the use site (`when`, `unless`),
+/// the body's variable is what the body's reference reads: a scan that
+/// does not reach the enclosing table cannot expand the private definer,
+/// and the reference was refused as syntax used as a value (#837's
+/// mutation stage). chibi 0.12 and Gauche 0.9.15 answer the same
+/// (2026-11-20).
 #[test]
 fn a_body_scan_sees_the_enclosing_expansions_relinked_keywords() {
     let program = format!(
         "{SCAN}(list (with-private x 1 (list x (get-shown)))
       ((lambda () (with-private y 2 (+ y 1))))
-      (def-private 1 2))"
+      (def-private 1 2)
+      (with-private when 4 (list when))
+      ((lambda () (with-private unless 5 (list unless)))))"
     );
-    let expected = "((1 lib-shown) 3 the-programs)".to_string();
+    let expected = "((1 lib-shown) 3 the-programs (4) (5))".to_string();
     assert_eq!(
         on_both_backends(&program),
+        [expected.clone(), expected],
+        "[VM, tree-walker]"
+    );
+}
+
+/// A body is scanned with what a generated macro carries put back (#837):
+/// `my-def`, which `(t scan-carried)`'s `def-with` made a form earlier,
+/// carries the library's private definer, relinked there, and a
+/// procedure's body and a `let` body use `my-def` to define `when` and
+/// `unless`, keywords at the use site, and read them. The scan puts back
+/// the macro's carried relinks before it expands it, as the real desugar
+/// does, so it sees the definitions, and the reads are the body's
+/// variables. chibi 0.12 and Gauche 0.9.15 answer the same (2026-11-20).
+/// Scanned without the put-back, the private definer was no macro to the
+/// scan, the names were not the body's, and each read was refused as
+/// syntax used as a value (#837's mutation stage).
+#[test]
+fn a_body_scan_puts_back_a_generated_macros_carried_keywords() {
+    let program = "(define-library (t scan-carried)
+  (export def-with)
+  (import (scheme base))
+  (begin
+    (define-syntax def-private (syntax-rules () ((_ name value) (define name value))))
+    (define-syntax def-with
+      (syntax-rules ()
+        ((_ m) (define-syntax m (syntax-rules () ((_ name value) (def-private name value)))))))))
+(import (scheme base) (t scan-carried))
+(define (def-private . args) 'the-programs)
+(def-with my-def)
+(define (f) (my-def when 1) (list when))
+(list (f) (let () (my-def unless 2) (list unless)) (def-private 0))";
+    let expected = "((1) (2) the-programs)".to_string();
+    assert_eq!(
+        on_both_backends(program),
         [expected.clone(), expected],
         "[VM, tree-walker]"
     );
