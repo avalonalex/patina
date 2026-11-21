@@ -38,10 +38,13 @@
 //! The heap's **by-name record** (#836) is one more, `(cell . BY_NAME)` over
 //! a free cell holding `TaggedValue::UNBOUND`, one per heap
 //! (`Heap::by_name_record`): what a link table links for a name its
-//! namespace reaches by an alias or a visible scoped definition, which is
-//! read by name. It is in no slot and no store, and nothing adopts it or
-//! stores into its cell, so every read through it finds `UNBOUND` and goes
-//! by name (`LinkTable::read_cold`).
+//! namespace reaches by a visible scoped definition, which is read by name.
+//! It is in no slot and no store, and nothing adopts it or stores into its
+//! cell, so every read through it finds `UNBOUND` and goes by name
+//! (`LinkTable::read_cold`). It served a macro-expansion alias's name too,
+//! until #837's second PR deleted the alias; it outlives that stack for
+//! the shape that remains, which on a VM heap only a raw call makes (#837's
+//! D5, and its follow-up issue).
 
 use crate::Trace;
 use crate::census::Site;
@@ -91,8 +94,8 @@ pub(crate) const PLACEHOLDER: i64 = 1;
 /// A record's flag (#836): set on the heap's by-name record alone
 /// ([`Record::by_name`]), a record over a free cell that holds
 /// `TaggedValue::UNBOUND` for good, which a link table links for a name its
-/// namespace reaches by an alias or a visible scoped definition. Every read
-/// through it goes by name; never in a slot or a store, never adopted.
+/// namespace reaches by a visible scoped definition. Every read through it
+/// goes by name; never in a slot or a store, never adopted.
 pub(crate) const BY_NAME: i64 = 2;
 
 /// A location: the pair `(value . owner)`, where owner is the fixnum

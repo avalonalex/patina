@@ -145,8 +145,9 @@ pub enum Instruction {
     /// bits. So while the mark is clear the operator is still that procedure,
     /// and once it is set every such site calls whatever its operator is now.
     /// Two things keep that true: the compiler gives a fast path only to a
-    /// binding of the environment's own, never to a name answered through a
-    /// macro-expansion alias, which can be re-pointed without a write
+    /// binding of the environment's own, never to a name answered by name
+    /// alone (the name-only view of a scoped definition), which can be
+    /// re-pointed without a write, or to a relinked operand
     /// (`resolve_primitive_calls`); and a top-level `define-syntax` over the
     /// name reports nothing, for these sites as for `CallPrimitive`'s, so one
     /// compiled before it keeps the procedure — as chibi's does, where Gauche

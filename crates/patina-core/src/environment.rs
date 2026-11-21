@@ -1953,9 +1953,10 @@ impl Environment {
     /// The record code compiled in this namespace links for `name` (#835,
     /// #836), made the first time and the same one after:
     /// - its own ([`local_record`](Self::local_record)), in a slot;
-    /// - `None` for a frame, and for a name this namespace reaches by an
-    ///   alias or a visible scoped definition of its own, which
-    ///   [`get`](Self::get) finds first and which is read by name;
+    /// - `None` for a frame, and for a name this namespace reaches by a
+    ///   visible scoped definition of its own
+    ///   ([`read_by_name`](Self::read_by_name)), which [`get`](Self::get)
+    ///   finds first and which is read by name;
     /// - in a parentless namespace that does not bind `name`, a placeholder
     ///   (#836): a record of its own with its flag set, over a cell of its
     ///   own holding `TaggedValue::UNBOUND`, kept weakly in its placeholder
@@ -1963,9 +1964,9 @@ impl Environment {
     /// - in a host namespace that does not bind `name`, a read-through record
     ///   over its parent's: over the parent's record in a slot, strong, in
     ///   [`ReadThrough`] (a weak one made earlier is promoted there); `None`
-    ///   where the parent reaches `name` by an alias or a visible scoped
-    ///   definition; otherwise over the parent's placeholder, weak, in this
-    ///   namespace's placeholder store (R7).
+    ///   where the parent reaches `name` by a visible scoped definition;
+    ///   otherwise over the parent's placeholder, weak, in this namespace's
+    ///   placeholder store (R7).
     ///
     /// Takes the write step. The reads by name (`get`, `get_with_scopes`,
     /// `Interpreter::lookup_in`, the tree-walker's) never call it, so a read
@@ -1987,9 +1988,9 @@ impl Environment {
         if let Some(own) = self.local_record(name) {
             return Some(own);
         }
-        // `get`'s order: an alias here, then a visible scoped definition
-        // here, both before the parent and before an unbound name. A record
-        // would read another binding than `get` does.
+        // `get`'s order: a visible scoped definition here comes before the
+        // parent and before an unbound name. A record would read another
+        // binding than `get` does.
         if self.read_by_name(name) {
             return None;
         }
@@ -2011,8 +2012,8 @@ impl Environment {
         };
         match bound {
             Some((key, parent_record)) => Some(self.strong_child(&mut step, key, parent_record)),
-            // The parent's own `get` finds an alias or a visible scoped
-            // definition of its own there: read by name, and no placeholder.
+            // The parent's own `get` finds a visible scoped definition of
+            // its own there: read by name, and no placeholder.
             None if parent.read_by_name(name) => None,
             None => {
                 let (key, placeholder) = parent.placeholder(&mut step, shared);
@@ -2021,17 +2022,31 @@ impl Environment {
         }
     }
 
-    /// Whether `get` finds `name` here by an alias or a visible scoped
-    /// definition, before any slot's binding but this namespace's own:
-    /// [`link_record`](Self::link_record) leaves such a name to be read by
-    /// name, and `LinkTable::read_cold` and `LinkTable::assignee` read and
-    /// write a host namespace's read-through record by name when its
-    /// namespace has gained one since (#836). Takes no borrow of the heap.
+    /// Whether `get` finds `name` here by the name-only view of a scoped
+    /// definition (a visible scoped definition), before any slot's binding
+    /// but this namespace's own: the one thing a namespace reaches by name
+    /// and not by a slot's record, since #837's second PR deleted the
+    /// macro-expansion alias, which was the other.
     ///
-    /// Each latch is tested here, as [`get`](Self::get) tests it, before
-    /// the lookup it guards: a host namespace's every read of a parent's
-    /// binding asks this, and one with no alias and no visible scoped
-    /// definition answers for two loads and no call.
+    /// [`link_record`](Self::link_record) leaves such a name to be read by
+    /// name, which on a VM heap links the heap's by-name record
+    /// (`Heap::by_name_record`): a name this namespace defines so, or, for a
+    /// host namespace, one its parent does. And `LinkTable::read_cold` and
+    /// `LinkTable::assignee` read and write a host namespace's read-through
+    /// record by name when the host has gained such a definition since
+    /// (#836), a shape `insert_scoped_record` refuses in a debug build
+    /// (#835, #836), so that those two tests serve a release build's raw
+    /// call alone. On a VM heap only the raw
+    /// [`define_scoped_definition`](Self::define_scoped_definition) makes a
+    /// visible scoped definition in a namespace; the tree-walker's `Define`
+    /// step, the one other maker, links nothing. What becomes of the shape,
+    /// and so of the by-name record, is left to a follow-up issue (#837's
+    /// D5). Takes no borrow of the heap.
+    ///
+    /// The latch is tested here, as [`get`](Self::get) tests it, before the
+    /// lookup it guards: a host namespace's every read of a parent's binding
+    /// asks this, and one with no visible scoped definition answers for one
+    /// load and no call.
     #[inline]
     pub(crate) fn read_by_name(&self, name: &str) -> bool {
         self.has_visible_scoped.get() && self.visible_scoped_index(name).is_some()
@@ -2247,8 +2262,9 @@ impl Environment {
     }
 
     /// Whether a placeholder or a weak read-through record holds `name` here
-    /// (#836): `insert_scoped_record` asserts that no visible scoped
-    /// definition is made over one, which linked code would read past.
+    /// (#836): `insert_scoped_record` asserts that a host namespace makes
+    /// no visible scoped definition over one, which linked code would read
+    /// past (and `read_by_name` would then have to send by name).
     fn holds_placeholder(&self, name: &str) -> bool {
         self.weak_entries()
             .is_some_and(|store| store.contains(name))

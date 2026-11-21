@@ -15,7 +15,7 @@
 //! ([`LinkTable::link_in`]): the namespace's own record, a host namespace's
 //! read-through record, a placeholder for a name the namespace does not
 //! bind yet (`Environment::link_record`), or the heap's by-name record for a
-//! name it reaches by an alias or a visible scoped definition. A table the
+//! name it reaches by a visible scoped definition. A table the
 //! VM compiles and never loads (the disassembler's) stays unlinked, its
 //! entries `UNBOUND`, an immediate, but for its pinned entries, and serves
 //! its names alone.
@@ -90,9 +90,9 @@ pub struct LinkTable {
     /// namespace's own (in a slot, flags 0, its own or an import's), a host
     /// namespace's read-through record `(unbound . parent)`, a placeholder
     /// `(cell . PLACEHOLDER)` over `(UNBOUND . owner)`, or, for a name the
-    /// namespace reaches by an alias or a visible scoped definition, which
-    /// is read by name, the heap's by-name record `(cell . BY_NAME)` over a
-    /// free cell holding `UNBOUND`. `UNBOUND` until linked, but for a
+    /// namespace reaches by a visible scoped definition, which is read by
+    /// name, the heap's by-name record `(cell . BY_NAME)` over a free cell
+    /// holding `UNBOUND`. `UNBOUND` until linked, but for a
     /// pinned entry (#837), which holds from the table's making the record
     /// an early or a relinked link names: a namespace's slot or scoped
     /// entry record, E1's fresh record over a frame's import's cell, or a
@@ -313,12 +313,14 @@ impl LinkTable {
     /// What operand `k` names where [`LinkTable::get`] answered `None`, as
     /// `Environment::get` would read its name in the namespace the table
     /// was linked in (#836): a host namespace's read-through record answers
-    /// its parent's binding, unless the host now reaches the name by an
-    /// alias or a visible scoped definition of its own, which `get` finds
-    /// first; a placeholder, the by-name record, a read-through record over
-    /// a parent's placeholder and a parent's binding that holds `UNBOUND`
-    /// are read by name, so an alias, a scoped definition, or a binding a
-    /// route made without adopting the record is seen. `None` is unbound,
+    /// its parent's binding, unless the host now reaches the name by a
+    /// visible scoped definition of its own, which `get` finds first (a
+    /// shape `insert_scoped_record` refuses in a debug build, #835, #836,
+    /// so the test serves a release build's raw call alone); a placeholder,
+    /// the by-name record, a read-through record over a parent's
+    /// placeholder and a parent's binding that holds `UNBOUND` are read by
+    /// name, so a scoped definition, or a binding a route made without
+    /// adopting the record, is seen. `None` is unbound,
     /// and is not remembered: the next read asks again.
     ///
     /// A pinned entry (#837) answers `None` here, unread: its spelling in
@@ -366,8 +368,8 @@ impl LinkTable {
     /// `heap` borrowed (#836): the record's own cell, its own or an
     /// import's, when it holds a binding; for a host namespace's
     /// read-through record over a bound parent, while the host reaches the
-    /// name by no alias or visible scoped definition of its own, the
-    /// parent's cell ([`Record::resolved_cell`]), as `Environment::set`
+    /// name by no visible scoped definition of its own, the parent's
+    /// cell ([`Record::resolved_cell`]), as `Environment::set`
     /// writes it. `None` for every other case, a placeholder, the by-name
     /// record and a read-through record over a parent's placeholder among
     /// them, which a store resolves by name. Never a cell that holds
