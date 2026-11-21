@@ -15,7 +15,7 @@
 //! ([`LinkTable::link_in`]): the namespace's own record, a host namespace's
 //! read-through record, a placeholder for a name the namespace does not
 //! bind yet (`Environment::link_record`), or the heap's by-name record for a
-//! name it reaches by an alias or a visible scoped definition. A table the
+//! name it reaches by a visible scoped definition. A table the
 //! VM compiles and never loads (the disassembler's) stays unlinked, its
 //! entries `UNBOUND`, an immediate, but for its pinned entries, and serves
 //! its names alone.
@@ -90,9 +90,9 @@ pub struct LinkTable {
     /// namespace's own (in a slot, flags 0, its own or an import's), a host
     /// namespace's read-through record `(unbound . parent)`, a placeholder
     /// `(cell . PLACEHOLDER)` over `(UNBOUND . owner)`, or, for a name the
-    /// namespace reaches by an alias or a visible scoped definition, which
-    /// is read by name, the heap's by-name record `(cell . BY_NAME)` over a
-    /// free cell holding `UNBOUND`. `UNBOUND` until linked, but for a
+    /// namespace reaches by a visible scoped definition, which is read by
+    /// name, the heap's by-name record `(cell . BY_NAME)` over a free cell
+    /// holding `UNBOUND`. `UNBOUND` until linked, but for a
     /// pinned entry (#837), which holds from the table's making the record
     /// an early or a relinked link names: a namespace's slot or scoped
     /// entry record, E1's fresh record over a frame's import's cell, or a
@@ -313,12 +313,14 @@ impl LinkTable {
     /// What operand `k` names where [`LinkTable::get`] answered `None`, as
     /// `Environment::get` would read its name in the namespace the table
     /// was linked in (#836): a host namespace's read-through record answers
-    /// its parent's binding, unless the host now reaches the name by an
-    /// alias or a visible scoped definition of its own, which `get` finds
-    /// first; a placeholder, the by-name record, a read-through record over
-    /// a parent's placeholder and a parent's binding that holds `UNBOUND`
-    /// are read by name, so an alias, a scoped definition, or a binding a
-    /// route made without adopting the record is seen. `None` is unbound,
+    /// its parent's binding, unless the host now reaches the name by a
+    /// visible scoped definition of its own, which `get` finds first (a
+    /// shape `insert_scoped_record` refuses in a debug build, #835, #836,
+    /// so the test serves a release build's raw call alone); a placeholder,
+    /// the by-name record, a read-through record over a parent's
+    /// placeholder and a parent's binding that holds `UNBOUND` are read by
+    /// name, so a scoped definition, or a binding a route made without
+    /// adopting the record, is seen. `None` is unbound,
     /// and is not remembered: the next read asks again.
     ///
     /// A pinned entry (#837) answers `None` here, unread: its spelling in
@@ -366,8 +368,8 @@ impl LinkTable {
     /// `heap` borrowed (#836): the record's own cell, its own or an
     /// import's, when it holds a binding; for a host namespace's
     /// read-through record over a bound parent, while the host reaches the
-    /// name by no alias or visible scoped definition of its own, the
-    /// parent's cell ([`Record::resolved_cell`]), as `Environment::set`
+    /// name by no visible scoped definition of its own, the parent's
+    /// cell ([`Record::resolved_cell`]), as `Environment::set`
     /// writes it. `None` for every other case, a placeholder, the by-name
     /// record and a read-through record over a parent's placeholder among
     /// them, which a store resolves by name. Never a cell that holds
@@ -474,6 +476,7 @@ mod tests {
     use crate::heap::sentinels::Sentinels;
     use crate::heap::trace::Trace as _;
     use crate::heap::trace_sentinels::collect_only;
+    use crate::scope::{ScopeId, ScopeSet};
     use crate::tagged_value::TaggedValue;
     use std::cell::{Cell, OnceCell};
     use std::rc::Rc;
@@ -613,24 +616,26 @@ mod tests {
         );
     }
 
-    /// A name a namespace reaches by an alias of its own is read by name
-    /// (#836): its entry is the heap's by-name record, a record flagged
+    /// A name a namespace reaches by a visible scoped definition of its own
+    /// (the name-only view of a scoped definition, which on a VM heap only
+    /// the raw `Environment::define_scoped_definition` makes) is read by
+    /// name (#836): its entry is the heap's by-name record, a record flagged
     /// `BY_NAME` over a cell holding `UNBOUND`, made once and the same word
     /// for every name and every table after, and counted nowhere. Linking
     /// it makes no store and no placeholder; the linked read finds
-    /// `UNBOUND` and the cold read reads the name, afresh each time, so the
-    /// alias's target defined later is seen.
+    /// `UNBOUND` and the cold read reads the name, afresh each time, so a
+    /// later visible definition of the name is seen.
     #[test]
-    fn link_in_links_the_by_name_record_for_an_alias_and_makes_no_placeholder() {
+    fn link_in_links_the_by_name_record_for_a_visible_scoped_definition_and_makes_no_placeholder() {
         let heap = new_shared_heap();
-        let library = Rc::new(Environment::with_heap(&heap));
         let ns = Rc::new(Environment::with_heap(&heap));
-        ns.define_alias("alias", Rc::clone(&library), Rc::from("target"));
-        ns.define_alias("other", Rc::clone(&library), Rc::from("target"));
+        let at = |id| ScopeSet::from_iter([ScopeId(id)]);
+        ns.define_scoped_definition(&heap, "visible", at(1), n(100));
+        ns.define_scoped_definition(&heap, "other", at(1), n(1));
         let counts = |heap: &crate::Heap| (heap.binding_records(), heap.cells());
         let before = counts(&heap.borrow());
 
-        let linked = table(&["alias"]);
+        let linked = table(&["visible"]);
         linked.link_in(&heap, &ns);
         let word = linked.entry(0);
         assert!(word.is_pair(), "a record, not `UNBOUND`");
@@ -639,7 +644,7 @@ mod tests {
             assert_eq!(h.cdr(word), n(BY_NAME), "flagged by-name");
             assert_eq!(h.car(h.car(word)), TaggedValue::UNBOUND);
         }
-        let second = table(&["other", "alias"]);
+        let second = table(&["other", "visible"]);
         second.link_in(&heap, &ns);
         linked.link_in(&heap, &ns);
         assert_eq!(
@@ -653,11 +658,15 @@ mod tests {
         assert_eq!(counts(&heap.borrow()), before, "counted nowhere");
 
         assert_eq!(linked.get(&heap.borrow(), 0), None, "unbound by the link");
-        assert_eq!(linked.read_cold(&heap, 0), None, "the target is unbound");
-        library.define(&heap, "target", n(100));
-        assert_eq!(linked.get(&heap.borrow(), 0), None);
         assert_eq!(linked.read_cold(&heap, 0), Some(n(100)), "read by name");
-        assert_eq!(ns.get(&heap, "alias"), Some(n(100)));
+        ns.define_scoped_definition(&heap, "visible", at(2), n(200));
+        assert_eq!(linked.get(&heap.borrow(), 0), None);
+        assert_eq!(
+            linked.read_cold(&heap, 0),
+            Some(n(200)),
+            "afresh: the newest visible definition"
+        );
+        assert_eq!(ns.get(&heap, "visible"), Some(n(200)));
     }
 
     /// The linked read (#836): `get` answers every binding of the
@@ -696,14 +705,12 @@ mod tests {
     /// The cold read through a host namespace's read-through records (#835,
     /// #836). A strong one, over the parent's binding, answers `None` to
     /// `get`, since its own cell names no binding, and the parent's value,
-    /// as it is now, to `read_cold`; once the host reaches the name by an
-    /// alias of its own, `read_cold` reads the alias, as `Environment::get`
-    /// finds it first. A weak one, over the parent's placeholder, answers
-    /// `None` to both until the parent defines the name, and then the
-    /// parent's value to `read_cold` alone: the parent's define adopts its
-    /// placeholder, not the host's record.
+    /// as it is now, to `read_cold`. A weak one, over the parent's
+    /// placeholder, answers `None` to both until the parent defines the
+    /// name, and then the parent's value to `read_cold` alone: the parent's
+    /// define adopts its placeholder, not the host's record.
     #[test]
-    fn read_cold_reads_a_read_through_record_s_parent_unless_the_host_aliases_it() {
+    fn read_cold_reads_a_read_through_record_s_parent() {
         let heap = new_shared_heap();
         let global = Rc::new(Environment::with_heap(&heap));
         global.define(&heap, "x", n(1));
@@ -717,17 +724,6 @@ mod tests {
         global.define(&heap, "x", n(2));
         assert_eq!(linked.read_cold(&heap, 0), Some(n(2)), "as it is now");
 
-        let library = Rc::new(Environment::with_heap(&heap));
-        library.define(&heap, "x", n(100));
-        host.define_alias("x", Rc::clone(&library), Rc::from("x"));
-        assert_eq!(get(0), None);
-        assert_eq!(
-            linked.read_cold(&heap, 0),
-            Some(n(100)),
-            "the host's alias, before the parent"
-        );
-        assert_eq!(host.get(&heap, "x"), Some(n(100)));
-
         assert_eq!(get(1), None, "a weak child");
         assert_eq!(linked.read_cold(&heap, 1), None, "over a placeholder");
         global.define(&heap, "y", n(9));
@@ -740,8 +736,8 @@ mod tests {
     /// host's read-through record over a bound parent, the parent's cell,
     /// while the host's own cell, which every read-through record of the
     /// host shares, still holds `UNBOUND`, so another name the host reads
-    /// through is still unbound by its link; and none for a placeholder or
-    /// a name the host reaches by an alias, which a store writes by name.
+    /// through is still unbound by its link; and none for a placeholder,
+    /// which a store writes by name.
     #[test]
     fn assignee_resolves_the_cell_a_store_writes() {
         let heap = new_shared_heap();
@@ -788,14 +784,6 @@ mod tests {
         );
         assert_eq!(hosted.read_cold(&heap, 1), Some(n(4)));
         assert!(hosted.assignee(&heap.borrow(), 2).is_none(), "a weak child");
-
-        let library = Rc::new(Environment::with_heap(&heap));
-        library.define(&heap, "x", n(100));
-        host.define_alias("x", Rc::clone(&library), Rc::from("x"));
-        assert!(
-            hosted.assignee(&heap.borrow(), 0).is_none(),
-            "the host's alias: by name"
-        );
     }
 
     /// A table is linked in the namespace it was compiled in (#836): a debug

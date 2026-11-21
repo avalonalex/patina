@@ -1442,7 +1442,7 @@ macro_rules! gc_shared_tests {
         // walk the namespace whole. The code then reads a binding of that
         // namespace through its link: `map`'s import record, a binding
         // `LoadGlobal` reads through its entry, or a library's private
-        // binding, or by name, through an alias of the namespace. On the VM
+        // binding, relinked (#837). On the VM
         // the namespace and the records it reads are held by the code's
         // unit, whose link table a marked closure, a frame or the running
         // code reports by its code id, and nothing else: a closure holds no

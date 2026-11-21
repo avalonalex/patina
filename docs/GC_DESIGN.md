@@ -147,10 +147,10 @@ ruling (a) of 2026-11-16 on #837's question 4 (`macro_definition_env.rs`'s
 `a_relinked_keyword_keeps_no_definition_namespace` and
 `a_relinked_imported_keyword_leaves_nothing_of_the_replaced_library`; the
 holder audit's `relink-variable` and `relink-keyword` rows, §8). The alias
-tables and that edge are still declared in `Environment`
-(`alias_bindings`, `AliasHome`, `RareTables::relink_aliases`) and still
-traced; nothing but their own tests writes one, and the PR's last part
-deletes them.
+tables and that edge went with the PR's last part (`alias_bindings`,
+`AliasHome`, `RareTables::relink_aliases` and the methods over them), so an
+environment's own trace reaches no other environment, and
+`GcVisitor::visit_env` follows only its parent chain.
 So a record can outlive the namespace whose slot or scoped entry it was,
 held by code that links it or by a macro that carries it, which the
 `binding-records` statistic, a sum over the live namespaces, does not count
@@ -706,8 +706,8 @@ record (below).
   (`RareTables::placeholders`, `crates/patina-core/src/placeholder_store.rs`)
   and never in a slot, so the slots stay append-only (D1) and nothing that
   reads them sees one. A name the namespace reaches by a visible scoped
-  definition (or by an alias, which nothing installs since #837's second
-  PR) gets none, and is read by name. A define or an import of
+  definition (or by a macro-expansion alias, until #837's second PR
+  deleted them) gets none, and is read by name. A define or an import of
   the name adopts it as a read-through record is adopted: re-pointed at the
   fresh cell or the exporter's and its flag cleared, in one funnel
   (`Heap::adopt_record`), and moved into a fresh slot with its word, so code
@@ -723,11 +723,10 @@ record (below).
   name not yet bound among them, whose placeholder the definition then
   adopts. The tree-walker makes none.
 - **The by-name record (#836).** A name the namespace reaches by a visible
-  scoped definition is read by name (as one it reached by an alias was,
-  while relinking installed aliases: no program makes one since #837's
-  second PR, and that half goes with the alias tables), and a link table
-  links the
-  heap's by-name record for it (`Heap::by_name_record`): `(cell . BY_NAME)`
+  scoped definition is read by name (as one it reached by a macro-expansion
+  alias was, until #837's second PR deleted the alias; the record outlives
+  that stack, #837's D5, #892), and a link table links the heap's by-name
+  record for it (`Heap::by_name_record`): `(cell . BY_NAME)`
   over a free cell that holds `UNBOUND` for good, made once a heap, the
   first time a link needs it, and rooted in `HandleTable.by_name` (§5.3).
   So every linked entry is a record, and the hot read's `UNBOUND` test sends
@@ -1046,7 +1045,7 @@ expansion runs in (§7; point C of `PRD/GC_PRD.md` §11.3).
 | `HandleTable.ports` | `heap/port_table.rs` | Not a root: the heap's `PortTable` (#785), the `Rc<Port>` each port object's slot names by number, which hold Rust state and no value, so the derived trace skips the field. The table also records each entry's owner word, by which the sweep's pass finds a dead entry by its object's mark bit (#818) and which a check build's read compares by its bits; it must stay untraced, or every port object would live for ever. On the `HandleTable`, by its own `Rc`, for `root_set`'s reason and so that exit's registry of tables can hold it weakly (§4.6, #786); the table teardown starts takes it over, so a heap keeps one for its life. The sweep's pass takes a dead plain port's entry out as the sweep starts, and the drain after the collection a file port's (§4.5, §4.6). A read, on every port operation, does not mark the table borrowed (`HeapTable::with_unguarded`, #818): it clones an `Rc` and reaches nothing. An entry need not hold its port's last `Rc`: the `Instance` holds the standard ports and caches the current ones, and a host may keep one |
 | `HandleTable.finals` | `heap/finalize.rs` | Not a root: the heap's `FinalRegistry` (#785, §4.6), whose entries name their objects by slot index so that a collection can find them dead, weak by design, so the derived trace skips the field. On the `HandleTable`, by its own `Rc`, beside the `PortTable` whose entries it names, and carried across teardown with it |
 | `HandleTable.placeholders` | `placeholder_store.rs` | Not a root: the heap's `PlaceholderList` (#836), its namespaces' placeholder stores keyed by `env_id`, which the sweep's pass walks to drop every placeholder and weak read-through record no traced link table marked (§4.5, §4.7). Weak by design, so the derived trace skips the field: traced, it would keep every listed namespace's placeholders. It holds stores, never a namespace, by `Rc` or `Weak`; a namespace's drop takes its store off at once (`PlaceholderHandle`). On the `HandleTable`, by its own `Rc`, for `root_set`'s reason, and carried across teardown, so the teardown sweep's pass empties the store of every namespace that outlives the heap |
-| `HandleTable.by_name` | `heap/handles.rs` | The heap's by-name record (#836, `Heap::by_name_record`): the record a VM unit's link table links for a name its namespace reaches by a visible scoped definition, read by name (§4.7; or by an alias, until #837's second PR stopped installing them). Made once, the first time a link needs it, and rooted here for the heap's life, so that an entry naming it never names a freed pair whatever the tables traced; `None` on a heap no such link was made on, as on every tree-walker heap. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason. Uncounted. Pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown |
+| `HandleTable.by_name` | `heap/handles.rs` | The heap's by-name record (#836, `Heap::by_name_record`): the record a VM unit's link table links for a name its namespace reaches by a visible scoped definition, read by name (§4.7; or by a macro-expansion alias, until #837's second PR deleted them; the record outlives that stack for the shape that remains, which on a VM heap only the raw `Environment::define_scoped_definition` makes, and #892 owns it, #837's D5). Made once, the first time a link needs it, and rooted here for the heap's life, so that an entry naming it never names a freed pair whatever the tables traced; `None` on a heap no such link was made on, as on every tree-walker heap. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason. Uncounted. Pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
 | A compilation's `LiteralPool` | `crates/patina-core/src/literal_pool.rs` | The heap literals of the form being compiled, from its expansion until the code that holds them is traced in its own right (§9.7, #705, #869): registered with the heap's root set for the pool's life, its entries reported as slots. The VM's `load_unit` takes the pool and drops it once the code store holds the unit, before the form runs; the tree-walker's `eval_in_env_with` once the form's run returns; and a `Step::Eval`'s is retired to a slot on the heap's `Instance` (`Evaluator::retire_pool`, at most one), released by the next retirement, the start of the driver's next collection, before it marks, or a run's return (§7). So it never holds more than one form's quoted text |
 | Macro literals, relinks and environments | `heap/mod.rs`, `binding_record.rs`, `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: the literals the object holds (§9.6); the record of each relinked identifier it carries (`HeapObjectData::Macro.relinks`, #837, §9.6), with the record's cell and the value the cell holds; and its body's `definition_env` and each `foreign_expansions` environment (§4.3). Pinned by the sentinel test `compiled_macro_fields`, whose carried record is in no slot and reachable only through the object, shown failing with the arm's `relinks` line deleted and again with `CarriedRelink::link` marked `skip`; `a_macros_relinks_die_with_the_macro` pins that the edge lasts exactly as long as the macro |
@@ -1213,7 +1212,8 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   their `Vec`.
   **A tree-walker closure (#637)** is charged its `Rc<Procedure>`, its
   parameters and `CAPTURED_FRAME_BYTES`, an estimate of the frame it
-  captures — a frame binding one parameter, 612 bytes — because on that
+  captures — a frame binding one parameter, 572 bytes (612 until #837's
+  second PR took the alias table out of every environment) — because on that
   backend every `let` makes a closure that keeps its frame alive until a
   sweep, and charged its slot alone, closure-heavy programs peaked at
   64–126 MB. Its payload has a path of its own, so that
@@ -1277,8 +1277,8 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   plateaued at 2.9 GB; a program that keeps its namespaces raises L with
   them. Frames (`Environment::child_frame`
   and `for_temporaries`, the tree-walker's per call and per `let`) never
-  charge, and skip the measuring: a scoped binding or an alias, which is how
-  the tree-walker binds a call's parameters, checks the environment's kind
+  charge, and skip the measuring: a scoped binding, which is how the
+  tree-walker binds a call's parameters, checks the environment's kind
   before it reads a table's capacity; a plain binding compares the slot vector's
   length with its capacity (a fresh frame's first, nothing); and a frame
   whose vector spills or whose index grows finds in one load that it has no

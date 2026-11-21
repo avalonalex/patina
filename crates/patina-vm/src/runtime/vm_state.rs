@@ -2134,12 +2134,13 @@ pub(super) fn load_global_cold(
 
 /// `StoreGlobal`'s store to operand `k` where the table resolves no cell
 /// (`LinkTable::assignee`, #836): a placeholder, the by-name record, a host
-/// namespace's read-through record over a parent's placeholder or under an
-/// alias of the host's own. By name in the table's namespace, as `set`
-/// finds it, a macro-expansion alias included, so a template can assign to
-/// a binding private to the library that defined it; marking first by the
-/// binding `get` finds, which may be a parent's or an alias's. An unbound
-/// name is an error, as it was.
+/// namespace's read-through record over a parent's placeholder or under a
+/// visible scoped definition of the host's own. By name in the table's
+/// namespace, as `set` finds it; marking first by the binding `get` finds,
+/// which may be a parent's or a visible scoped definition. An unbound name
+/// is an error, as it was. (A template's assignment to a binding private
+/// to its library is linked, #837, and no longer comes here by a
+/// macro-expansion alias.)
 ///
 /// A pinned operand (#837), one the desugarer linked, is never stored by
 /// name: its spelling in the namespace may be another binding than the one
@@ -3316,9 +3317,10 @@ fn dispatch_one_instruction(
 /// primitive *before* replacing it. An assignment the unit's table resolves
 /// no cell for, the `StoreGlobal` handler's by name (`store_global_cold`),
 /// calls this, since it writes the binding `get` finds, which may be a
-/// parent's or an alias's. A definition, the `Define` handler's or a host's through
-/// `Backend::define_in` or the deprecated `define`, goes through
-/// [`define_global`], which marks by the environment's own binding. The import machinery in both this file and
+/// parent's or a visible scoped definition. A definition, the `Define`
+/// handler's or a host's through `Backend::define_in` or the deprecated
+/// `define`, goes through [`define_global`], which marks by the
+/// environment's own binding. The import machinery in both this file and
 /// `backend.rs` does the same job through `import_export` (PRD P8.1), which
 /// compares the value before with the value after, since what an import
 /// installs is a binding rather than a value they hold. Rebinding a name to
@@ -3342,8 +3344,8 @@ fn mark_if_shadowing_primitive(
 ///
 /// A definition writes `env`'s own binding of the name, and a fast path
 /// compiled in `env` stands on no other: `resolve_primitive_calls` leaves a
-/// name `env` reaches through a parent, a macro-expansion alias or the
-/// name-only view of a macro's definition to an ordinary call. So this marks
+/// name `env` reaches through a parent or the name-only view of a scoped
+/// definition to an ordinary call. So this marks
 /// the primitive that binding held, if any, and a definition that gives
 /// `env` a binding of its own marks nothing: a host namespace that defines
 /// `car` leaves the global `car`'s fast path alone. A read-through record is

@@ -22,8 +22,10 @@ gives a relinked one no fast path), and read by index through the unit's
 link table
 (#836). A
 name lookup is left to `Define`; to the cold read or store of a name not yet
-bound; to every read and store of a name its namespace reaches by an alias
-or a visible scoped definition, which is bound and goes by name each time;
+bound; to every read and store of a name its namespace reaches by a
+visible scoped definition, which is bound and goes by name each time (and
+of one it reached by a macro-expansion alias, until #837's second PR deleted
+the alias);
 and, in a host namespace that has such names, to the test that a name it
 reads or writes through its parent is not one of them (`docs/VM_ISA.md`
 §4.1).

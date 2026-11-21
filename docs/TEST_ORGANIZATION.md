@@ -1852,8 +1852,9 @@ which pass under Gauche and under chibi with the library as a `.sld`, and
 which can pass vacuously in a process that has minted many aliases first, so
 they were shown failing with the file run alone. `scope_trace.rs`'s grammar
 tests hold the `via=early-link` record, and
-`relink_alias_tests::minting_skips_a_name_already_bound` keeps the one
-property of the deleted `import_alias_tests` no other test had, and
+`relink_alias_tests::minting_skips_a_name_already_bound` kept the one
+property of the deleted `import_alias_tests` no other test had, until the
+second PR's last part deleted it with the alias tables, and
 `hygiene_matrix.rs`'s `the_trace_says_how_an_early_bound_reference_ended`
 holds both outcomes the scope trace records for one. The stress counts of
 `macro_definition_env`, `vm_callprimitive`, `hygiene_matrix` and
@@ -1893,8 +1894,8 @@ left and both namespaces go (`a_relinked_keyword_leaves_no_alias`,
 `a_relinked_imported_keyword_leaves_nothing_of_the_replaced_library`,
 below). Core's alias tests, `environment.rs`'s
 `an_alias_entrys_size_is_watched` (the alias entry at 80 bytes) among
-them, stay until the alias tables are deleted. `macro_definition_env`'s
-stress count was re-pinned.
+them, went with the alias tables in the second PR's last part (below).
+`macro_definition_env`'s stress count was re-pinned.
 
 S1's tests (#839) re-pinned `host_environments`'s stress count: two tests
 more, and the `eval_in` routes its #620 tests and raw frames gained. The
@@ -2295,6 +2296,57 @@ a binding of the spelling that holds the record's object, which the value
 rule, for two spellings only, does not match. The stress count of
 `macro_definition_env` was re-pinned, and `vm_callprimitive`'s count at
 16 recorded.
+
+The second PR's last part deletes the alias surface the switch left with
+no caller, and the tests of it with it, each with its successor named.
+`environment.rs`'s `relink_alias_tests` (one alias per target, per
+identity and per mention, the mint skipping a bound name, a placeholder's
+or a weak read-through record's, a remembered alias defined over, and a
+frame reusing its root's) and `alias_home_tests` (each arm of what a
+keyword's alias held) went, with `an_alias_entrys_size_is_watched`:
+`relink_link_tests` holds what a relinked mention links, one record
+however often asked, a keyword's slot or scoped entry, a parent-reached
+keyword, a frame's keyword by a snapshot;
+`a_template_that_writes_the_relinked_spelling_reads_its_own` and the
+scoreboard's collision row hold the one hazard of a spelling left; and
+`macro_definition_env.rs`'s `a_relinked_keyword_leaves_no_alias` and
+`a_body_scan_leaves_no_relinked_name_behind` hold that nothing is left.
+`a_bare_alias_is_the_introduced_global_it_was_installed_for` went with the
+shape it named, which nothing had made since #427. The tests that read a
+scoped definition through a scoped alias read it through a relinked
+mention's link instead (`an_indexed_spelling_is_found_by_its_exact_readers`,
+`a_scoped_relink_reads_writes_and_locates_that_definition`,
+`an_identity_the_library_does_not_hold_links_nothing`);
+`the_walk_is_gets_walk`, `binding_hit_finds_what_binding_location_locates`,
+`no_namespace_read_answers_a_record`, `a_frame_charges_nothing` and
+`captured_frame_bytes_is_a_one_parameter_frame` lost their alias
+paragraphs, and `gc_edge_tests::environment_edges` its two alias
+sentinels; and the tests of the heap's by-name record reach it through
+the route that remains, a name-visible scoped definition (`link_table.rs`'s
+`link_in_links_the_by_name_record_for_a_visible_scoped_definition_and_makes_no_placeholder`,
+`link_record_leaves_a_host_scoped_definition_to_be_read_by_name`, the
+parent's arm of
+`a_host_links_a_weak_child_over_the_parents_placeholder_and_promotes_it`,
+and the VM's
+`a_shadowed_primitives_site_reads_a_visible_scoped_operand_by_name`).
+The host-alias tails of `read_cold_reads_a_read_through_record_s_parent`
+and `assignee_resolves_the_cell_a_store_writes` went with no successor:
+after the alias only a visible scoped definition makes a host namespace
+read a linked name by name, and `insert_scoped_record` refuses one over a
+read-through record in a debug build, so no test builds that shape.
+`Environment`'s two fields left behind padding of their size for one
+commit, so that rule (d) could read the code's removal apart from the
+layout's;
+then `environment_size_is_watched` was re-pinned at 184 bytes (224
+before) and `captured_frame_bytes_is_a_one_parameter_frame` at 572 (612),
+`a_namespace_charges_its_tables_as_they_grow_and_gives_them_back` pins a
+fresh namespace's charge exactly, and `gc_edge_tests::environment_edges`
+builds the struct with neither padding field, shown failing with a traced
+field's trace removed. The stress lane's counts stayed as they were but
+`scheme_suite`'s without stress, 368 where it was 385: the byte trigger
+counts what a tree-walker closure is charged for its frame, which fell
+with the frame, and with that estimate alone put back the count is 385
+again.
 
 **Every stress run must have collected (#626).** A lane that passes
 without collecting has tested nothing, and four have (#5, #164, #200, #201):

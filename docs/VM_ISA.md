@@ -173,8 +173,10 @@ has in the namespace the unit was compiled in (`LinkTable::link_in`,
 which names the exporting library's cell; in a host namespace (#835) a
 read-through record over the parent's record; for a name the namespace does
 not bind yet, a placeholder, which a later `define` or import of the name
-adopts, keeping its word; and for a name the namespace reaches by an alias or
-a visible scoped definition, the heap's by-name record. A debug build
+adopts, keeping its word; and for a name the namespace reaches by a visible
+scoped definition, the heap's by-name record (which served a name it reached
+by a macro-expansion alias too, until #837's second PR deleted the alias;
+the record outlives that stack, #837's D5, #892). A debug build
 refuses a link in any other namespace than the one the unit was compiled in.
 
 `LoadGlobal` follows `link[k] → record → cell → value` under one shared
@@ -182,8 +184,8 @@ borrow of the heap, with one compare against `UNBOUND` (`LinkTable::get`):
 every own and imported binding answers there. A placeholder, a read-through
 record and the by-name record hold `UNBOUND` in their own cell and take the
 cold read (`LinkTable::read_cold`), which answers a read-through record's
-parent unless the host namespace now reaches the name by an alias or a
-visible scoped definition, and otherwise reads the name in the table's
+parent unless the host namespace now reaches the name by a visible scoped
+definition, and otherwise reads the name in the table's
 namespace, as `Environment::get` does; nothing binding it is the
 unbound-variable error, and a miss is not remembered. `StoreGlobal` resolves
 the cell the same way (`LinkTable::assignee`: the record's own cell when it
@@ -241,10 +243,11 @@ All Scheme values except `#f` are truthy (R7RS §6.3).
 emits the sequence where the operator is *bound* to the form's procedure when
 the site is compiled — a renamed import and a library template's early-bound
 reference included, the latter judged by the record it links (`car@linked`,
-#837), a program's own definition of the name not, nor
-a name answered through a macro-expansion alias — and puts the
-ordinary `LoadGlobal` + `Call` of the operator between the guard and the
-sequence. `VmState::shadowed_controls` holds one bit per form, set when any
+#837), a program's own definition of the name not, nor a name answered
+by name alone (the name-only view of a scoped definition), nor a relinked
+operand — and puts the ordinary `LoadGlobal` + `Call` of the operator
+between the guard and the sequence. `VmState::shadowed_controls` holds
+one bit per form, set when any
 global binding holding the form's procedure is given another value; every
 writer of a value reports that, as it does for `CallPrimitive`'s shadow bits
 (§4.5). Clear, the operator is still the procedure and the site jumps to the

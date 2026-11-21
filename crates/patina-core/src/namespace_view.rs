@@ -7,11 +7,10 @@
 //! import and every Rust-built library's definition takes
 //! (`Library::import_into`, `define_primitive`, `Cx::define_primitive` and
 //! `Cx::lookup`), the writes that go around them (the desugarer's staged
-//! import, a host library's exports, the builders' own definitions), the
-//! hosts' `define` and `lookup`, and the alias installs the desugarer made
-//! through `Cx::relink_alias` until #837's second PR (it installs none
-//! now; the two wrappers below go with the alias tables). The
-//! desugarer's and the expander's queries reach namespaces through `Cx`,
+//! import, a host library's exports, the builders' own definitions), and the
+//! hosts' `define` and `lookup`. (The alias installs the desugarer made
+//! through `Cx::relink_alias` went with #837's second PR.) The desugarer's
+//! and the expander's queries reach namespaces through `Cx`,
 //! which passes the context's heap: most through methods over this view
 //! (`Cx::binding_location`, `Cx::scoped_binding_of` and the rest), and
 //! `Cx::resolve_with_scopes` and `Cx::scoped_macro_binding` through
@@ -44,17 +43,17 @@
 //!   charge. A lookup of a name that is not bound inserts nothing;
 //! - **inserts** give a name a plain slot of this environment's where it has
 //!   none, or record what binds no name (a macro-introduced definition's
-//!   identity). A name the environment reached only through a
-//!   macro-expansion alias, the name-only view of a scoped definition or its
-//!   parent is inserted all the same: the new slot shadows what it reached;
+//!   identity). A name the environment reached only through the name-only
+//!   view of a scoped definition or its parent is inserted all the same:
+//!   the new slot shadows what it reached;
 //! - **re-points** make a name with a plain slot here mean another location:
 //!   a `define` over an import, and an import over a definition or another
 //!   import (§11.6's Re-pointing row);
 //! - **stores** write a value into the location a name means, which is
 //!   where [`Environment::get`] reads it: this environment's own binding;
 //!   the library's for a name it imported, since an import is one location,
-//!   not a copy (R7RS §5.2, #406); and, for `set!` by name, an alias's
-//!   target, a scoped definition or the parent's binding.
+//!   not a copy (R7RS §5.2, #406); and, for `set!` by name, a scoped
+//!   definition or the parent's binding.
 //!
 //! A `define` and an import each keep one signature, and can insert, re-point
 //! or store depending on what the name held; each method says which outcome
@@ -109,8 +108,8 @@ impl<'e> NamespaceView<'e> {
 
     /// The value `name` means here, walking to the parent as
     /// [`Environment::get`] does: a plain binding, read through an import to
-    /// the library's location, then a macro-expansion alias, then the
-    /// name-only view of a scoped definition, then the parent. `None` for a
+    /// the library's location, then the name-only view of a scoped
+    /// definition, then the parent. `None` for a
     /// name bound nowhere on the chain, which inserts nothing. A hit in a
     /// namespace borrows `heap` shared.
     #[inline]
@@ -193,8 +192,8 @@ impl<'e> NamespaceView<'e> {
 
     /// The cell this environment's own binding of `name` names
     /// ([`Environment::cell_of`]): a namespace's record's, or a frame's
-    /// import's. `None` for a frame's own binding, a name reached through an
-    /// alias or the parent, or one not bound. A namespace borrows `heap`
+    /// import's. `None` for a frame's own binding, a name reached through the
+    /// parent, or one not bound. A namespace borrows `heap`
     /// shared.
     #[inline]
     pub fn cell_of(self, heap: &RefCell<Heap>, name: &str) -> Option<BindingCell> {
@@ -214,8 +213,8 @@ impl<'e> NamespaceView<'e> {
 
     /// Define `name` as `value` here ([`Environment::define`]):
     /// - an **insert** when the name has no plain slot here: it gets one of
-    ///   its own, which shadows whatever the name reached before (an alias,
-    ///   a scoped definition's name-only view, the parent's binding);
+    ///   its own, which shadows whatever the name reached before (a scoped
+    ///   definition's name-only view, the parent's binding);
     /// - a **store** when its binding here is this environment's own: the
     ///   slot and its location stay, and the value changes (R7RS's "acts like
     ///   `set!`");
@@ -314,54 +313,16 @@ impl<'e> NamespaceView<'e> {
         self.env.define_introduced_global(name, scopes, renamed_to);
     }
 
-    /// An alias here to `name` in `target_env`, under `scopes`
-    /// ([`Environment::relink_alias`]): the one remembered for that target,
-    /// or the root's when this is a frame, which writes nothing; or a fresh
-    /// one `mint` offers, inserted as a macro-expansion alias, which holds
-    /// the target's record where `target_env` binds a keyword in its own
-    /// tables (#837, R6). The target namespace borrows `heap` shared to
-    /// tell.
-    #[inline]
-    pub fn relink_alias(
-        self,
-        heap: &RefCell<Heap>,
-        target_env: Rc<Environment>,
-        name: Rc<str>,
-        scopes: Option<ScopeSet>,
-        mention: &ScopeSet,
-        mint: impl FnMut() -> Rc<str>,
-    ) -> Rc<str> {
-        self.env
-            .relink_alias(heap, target_env, name, scopes, mention, mint)
-    }
-
-    /// [`relink_alias`](Self::relink_alias) to the definition
-    /// [`Environment::introduced_definition`] found in `home`
-    /// ([`Environment::relink_alias_to_introduced`]).
-    #[inline]
-    pub fn relink_alias_to_introduced(
-        self,
-        heap: &RefCell<Heap>,
-        home: Rc<Environment>,
-        name: Rc<str>,
-        found: IntroducedDefinition,
-        mention: &ScopeSet,
-        mint: impl FnMut() -> Rc<str>,
-    ) -> Rc<str> {
-        self.env
-            .relink_alias_to_introduced(heap, home, name, found, mention, mint)
-    }
-
     // ---------------------------------------------------------------------
     // Stores.
     // ---------------------------------------------------------------------
 
     /// `set!` of `name`: a store into the location [`get`](Self::get) reads,
     /// by the same walk ([`Environment::set`]): this environment's own
-    /// binding, or the library's for an import, an alias's target, a scoped
-    /// definition, or the parent's. `Err` with the name when it is bound
-    /// nowhere on the chain, having written nothing. The namespace whose
-    /// binding it writes borrows `heap` mutably.
+    /// binding, or the library's for an import, a scoped definition, or the
+    /// parent's. `Err` with the name when it is bound nowhere on the chain,
+    /// having written nothing. The namespace whose binding it writes borrows
+    /// `heap` mutably.
     #[inline]
     pub fn set(self, heap: &RefCell<Heap>, name: &str, value: TaggedValue) -> Result<(), String> {
         self.env.set(heap, name, value)

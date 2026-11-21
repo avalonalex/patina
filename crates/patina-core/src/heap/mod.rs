@@ -1751,11 +1751,22 @@ impl Heap {
     /// The heap's by-name record (#836): `(cell . BY_NAME)` over a free cell
     /// holding `UNBOUND`, made on the first call and the same word on every
     /// later one, rooted by the handle table for the heap's life. What a VM
-    /// link table links for a name its namespace reaches by an alias or a
-    /// visible scoped definition (`LinkTable::link_in`), so that each entry
-    /// is a record and the linked read's two loads need no test of their
-    /// own: every read through it finds `UNBOUND` and goes by name. No
-    /// namespace's, so `binding-records` and `cells` count neither pair.
+    /// link table links for a name its namespace reaches by a visible scoped
+    /// definition (`LinkTable::link_in`, `Environment::read_by_name`), so
+    /// that each entry is a record and the linked read's two loads need no
+    /// test of their own: every read through it finds `UNBOUND` and goes by
+    /// name. No namespace's, so `binding-records` and `cells` count neither
+    /// pair.
+    ///
+    /// What it serves now (#837's D5): a macro-expansion alias's name was
+    /// the other thing a namespace reached by name, and went with #837's
+    /// second PR, so what is left is a name-visible scoped definition in a
+    /// namespace, which on a VM heap only the raw
+    /// `Environment::define_scoped_definition` makes (the tree-walker's
+    /// `Define` step makes one too, and links nothing). The record outlives
+    /// that stack: refusing the shape in a VM namespace, or linking its
+    /// scoped entry's record, is a decision about the raw shape, which
+    /// #892 owns, not a consequence of deleting the alias.
     pub(crate) fn by_name_record(&mut self) -> TaggedValue {
         if let Some(record) = self.handles.by_name() {
             return record;

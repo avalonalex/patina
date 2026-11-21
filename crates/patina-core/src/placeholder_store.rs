@@ -202,9 +202,10 @@ impl PlaceholderStore {
         Some(record)
     }
 
-    /// Whether the store holds an entry for `name`: a name a placeholder or
-    /// a weak read-through record holds is taken, for the minting of an
-    /// alias (`Environment::relink_alias`).
+    /// Whether the store holds an entry for `name`: what a host namespace's
+    /// visible scoped definition is asserted not to be made over
+    /// (`Environment::holds_placeholder`). It served the minting of a
+    /// relink alias too, until #837's second PR deleted the alias.
     pub(crate) fn contains(&self, name: &str) -> bool {
         self.state.with(|state| state.entries.contains_key(name))
     }

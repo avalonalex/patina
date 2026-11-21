@@ -517,13 +517,14 @@ fn test_macro_reaches_its_library_after_a_collection() {
     assert_eq!(common::eval_program(program), "(20 25)");
 }
 
-// ─── One alias per target (#611) ────────────────────────────────────────────
+// ─── No symbol per expansion (#611) ─────────────────────────────────────────
 //
-// Relinking gives a template's reference to a private helper an alias in the
-// program. It used to mint one per expansion, which nothing removes, so each
+// Relinking gave a template's reference to a private helper an alias in the
+// program. It minted one per expansion, which nothing removed, so each
 // top-level `guard` — whose helper `%guard-aux` is private — left three
-// aliases and their symbols behind. One target now has one alias
-// (`Environment::relink_alias`).
+// aliases and their symbols behind; then one per target, until #837's
+// second PR, since which it installs nothing and deleted the alias tables.
+// These hold that repeated expansions add no symbol.
 
 /// A library whose macros name one exported helper and one private one.
 const PRIVATE_HELPER: &str = "(define-library (t m)

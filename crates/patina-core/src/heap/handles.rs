@@ -15,10 +15,10 @@
 //! `Heap::hold_namespace` held; until stage 5e the deprecated
 //! `hold_environment` holds any environment of the heap (#831). The table
 //! holds the environment, and a collection traces it with
-//! `GcVisitor::visit_env`, its bindings, its parent chain and its alias
-//! targets. A host that holds an environment by its own `Rc` instead, as the
-//! legacy pipeline's callers do, can have the table trace it for as long as
-//! anything holds it ([`HandleTable::track`]); the table keeps it weakly.
+//! `GcVisitor::visit_env`, its bindings and its parent chain. A host that
+//! holds an environment by its own `Rc` instead, as the legacy pipeline's
+//! callers do, can have the table trace it for as long as anything holds it
+//! ([`HandleTable::track`]); the table keeps it weakly.
 //!
 //! Each entry belongs to exactly one handle. [`Clone`] makes a new entry,
 //! and a drop frees the handle's own, so no two handles share an index and a
@@ -93,10 +93,10 @@ pub struct HandleTable {
     /// `root_set`'s reason. `None` until the first use.
     parameterize_each: HeapTable<Option<TaggedValue>>,
     /// The heap's by-name record (#836, `Heap::by_name_record`): the record
-    /// a VM link table links for a name its namespace reaches by an alias
-    /// or a visible scoped definition, which is read by name. Made on the
-    /// first such link and kept here for the heap's life, so every table
-    /// links the one word, and a table's entry is a record in every case.
+    /// a VM link table links for a name its namespace reaches by a visible
+    /// scoped definition, which is read by name. Made on the first such link
+    /// and kept here for the heap's life, so every table links the one word,
+    /// and a table's entry is a record in every case.
     /// `None` until then, as on every heap the tree-walker runs. Here and
     /// not on `Heap`, for `root_set`'s reason.
     by_name: HeapTable<Option<TaggedValue>>,

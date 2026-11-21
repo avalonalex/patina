@@ -242,11 +242,12 @@ pub fn resolve_primitive_calls(
 /// What an unlinked callee `name` holds in `env`, if it is a binding of the
 /// environment's own.
 ///
-/// Only a binding of the environment's own. A name it answers through a
-/// macro-expansion alias, or as the name-only view of a definition a macro
-/// introduced, can be pointed at another binding without any write to the
-/// one it reaches now, which is what the shadow marks watch — a second
-/// expansion defining it again re-points the alias. So can a name a host
+/// Only a binding of the environment's own. A name it answers as the
+/// name-only view of a scoped definition can be pointed at another binding
+/// without any write to the one it reaches now, which is what the shadow
+/// marks watch: a later visible definition of the spelling is read in its
+/// place. So could a name answered through a macro-expansion alias until
+/// #837's second PR deleted it. So can a name a host
 /// namespace reaches through its parent (#620): a definition there gives it
 /// a binding of its own and writes nothing of the parent's. A host
 /// namespace's read-through records (#835) are in no slot, so they are
