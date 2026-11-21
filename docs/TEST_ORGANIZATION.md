@@ -2107,8 +2107,8 @@ moved: they are unit tests of crates the stress lane does not run.
 
 The switch itself: relinking installs no alias and itself interns nothing
 (a relinked identifier that reaches a quote is interned as data under its
-spelling, the open defect of a relinked identifier used as data, older
-than the switch). The spelling it gives a mention is a function of the
+spelling, the open defect of a relinked identifier used as data, #887,
+older than the switch). The spelling it gives a mention is a function of the
 macro's environment, the name and the mention, kept clear of the names
 the macro's own templates write, and is bound nowhere; the identifier
 means its record in the form's table, and in the relinks of a generated

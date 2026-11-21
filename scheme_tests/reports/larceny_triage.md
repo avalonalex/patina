@@ -800,7 +800,7 @@ still bound by name, ignoring its scopes: #269's remaining half
 (`PRD/macro/SYNTAX_CASE_DESIGN.md`, V4), measured again that day. Two uses
 of one definer share the helper keyword, `((two 1) (two 2))` where chibi
 and Gauche answer `((one 1) (two 2))`, and the program can call the helper
-by its name. It has an issue of its own.
+by its name (#890).
 
 **H3 positive cases, 2026-09-12.** The generated sweep at runtime `0c992ddb`
 found the opposite direction with seeds **370/371/374/375**: a private define,

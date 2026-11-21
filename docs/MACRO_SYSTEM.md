@@ -526,20 +526,20 @@ such name.
 `expansion/relinked-names.scm` is the scoreboard of these shapes, scored by
 Gauche through the oracle lane and by chibi by hand.
 
-**Open, and unchanged by that PR**, each recorded for an issue of its own
-when the PR opened (the `quasiquote` one on #778): a relinked
+**Open, and unchanged by that PR**, each in an issue: a relinked
 identifier used as **data** keeps the spelling relinking gave it, so a
 `case` datum of a private name does not match, a quoting macro answers the
 spelling and not the written name, and a `cond-expand` feature name is not
 recognised (the renaming happens in the expansion's syntax, before an
 identifier is known to be a reference; the spelling a program can learn so
-differs by backend and by what was loaded first); at top level a binder a
-use passes in captures the template's own reference to that name; data
-under a `quasiquote` whose head was relinked is renamed (#778's class); a
-definition an expansion produces into a body does not shadow the library's
-private keyword of its name; and a top-level `define-syntax` of a name that
-was *not* relinked is bound by name, so two uses of one definer share one
-keyword (#269's remaining half). Also unchanged, and in no issue yet: the
+differs by backend and by what was loaded first; #887); at top level a
+binder a use passes in captures the template's own reference to that name
+(#888); data under a `quasiquote` whose head was relinked is renamed
+(#778's class, recorded there); a definition an expansion produces into a
+body does not shadow the library's private keyword of its name (#889); and
+a top-level `define-syntax` of a name that was *not* relinked is bound by
+name, so two uses of one definer share one keyword (#890, #269's remaining
+half). Also unchanged, and in no issue yet: the
 literal matcher's rule that a relinked literal matches an input spelled
 otherwise whose binding holds the same heap object ("Literal Matching"
 below), so a generated matcher whose literal is its library's private
