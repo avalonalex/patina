@@ -103,21 +103,7 @@ pub fn build_library(
         )
     };
 
-    // A name the library reaches only through a macro-expansion alias is the
-    // desugarer's, not a binding the library made: its importers would get a
-    // copy taken now, and chibi and Gauche leave it undefined (#846).
     for spec in &declarations.exports {
-        let internal = match spec {
-            ExportSpec::Identifier(name) => name,
-            ExportSpec::Rename { internal, .. } => internal,
-        };
-        if library.env.reaches_only_by_alias(internal) {
-            return Err(reject(
-                internal,
-                "is a name the desugarer made for a macro-expansion alias, not a binding the \
-                 library defines or imports, so it cannot be exported",
-            ));
-        }
         // Keywords need no exemption here. A library that imports one has a
         // binding to export like any other; one that does not cannot export
         // it, and saying so is right rather than lenient — the importer
@@ -132,7 +118,9 @@ pub fn build_library(
         };
         // The cell the binding names, own or imported: a re-export is the
         // defining library's cell, one hop (#834). The environment is
-        // parentless, so this is `get`'s answer less an alias, refused above.
+        // parentless, so this is `get`'s answer. A spelling relinking gave an
+        // identifier is bound nowhere, so it is "not defined" here, as chibi
+        // and Gauche leave it (#846, #837).
         match library.env.cell_of(heap, internal) {
             Some(cell) => library.export_cell(external.clone(), cell),
             None => return Err(reject(internal, "not defined")),

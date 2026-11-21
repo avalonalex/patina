@@ -1520,8 +1520,11 @@ impl<'h> GcVisitor<'h> {
     }
 
     /// Trace an environment and every environment it keeps live: its parent
-    /// chain and its alias targets, and theirs. An import is a cell, which
-    /// the environment's trace marks like any value (#834).
+    /// chain, and any environment its trace reports, and theirs. Since
+    /// #837's second PR removed the macro-expansion alias, whose target was
+    /// the one such edge, an environment's own trace reports none. An
+    /// import is a cell, which the environment's trace marks like any value
+    /// (#834).
     /// Deduped by environment identity, so the global environment is walked
     /// once no matter how many closures point at it. Iterative: what one
     /// environment reaches is queued, not recursed into.

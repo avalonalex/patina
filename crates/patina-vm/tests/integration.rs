@@ -541,21 +541,28 @@ fn a_shadowed_primitives_site_looks_up_its_operands_name() {
 /// A shadowed primitive's site reads its operand as `LoadGlobal` reads a
 /// global (#836): where the linked read finds no binding in the operand's
 /// record, by the cold read, which reads the name in the unit's namespace.
-/// Here the operand is a name the namespace reaches by an alias, whose entry
-/// is the heap's by-name record, so the linked read always misses and the
-/// site must call what the alias names. Built by hand: pass 5 emits a
-/// primitive site only for a name its namespace binds in a slot of its own,
-/// whose record the linked read answers, so no compiled site reads cold.
+/// Here the operand is a name the namespace reaches by a visible scoped
+/// definition (the name-only view of a scoped definition, which on a VM
+/// heap only the raw `Environment::define_scoped_definition` makes), whose
+/// entry is the heap's by-name record, so the linked read always misses and
+/// the site must call what the definition holds. Built by hand: pass 5
+/// emits a primitive site only for a name its namespace binds in a slot of
+/// its own, whose record the linked read answers, so no compiled site reads
+/// cold.
 #[test]
-fn a_shadowed_primitives_site_reads_an_aliased_operand_by_name() {
+fn a_shadowed_primitives_site_reads_a_visible_scoped_operand_by_name() {
     use patina_core::LinkTable;
     use patina_vm::types::Arity;
     use patina_vm::types::instruction::{Instruction, PrimitiveFnId};
 
     let mut state = fresh_state();
     let globals = Rc::clone(state.global_env());
-    // `negate` names the namespace's own `-`, by an alias.
-    globals.define_alias("negate", Rc::clone(&globals), "-".into());
+    // `negate` is the namespace's own `-`, as a visible scoped definition.
+    let minus = globals
+        .get(state.heap(), "-")
+        .expect("`-` is bound in the global namespace");
+    let scopes = ScopeSet::from_iter([patina_core::ScopeId(1)]);
+    globals.define_scoped_definition(state.heap(), "negate", scopes, minus);
     let car = state
         .primitive_registry()
         .resolve_index("scheme.base/car")

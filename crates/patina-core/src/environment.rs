@@ -120,165 +120,6 @@ impl std::ops::DerefMut for ScopedTable {
     }
 }
 
-/// Where a macro-expansion alias points: where the real binding is
-/// ([`AliasHome`]), the name it has there, and — for a definition reachable
-/// only under its scopes — the scope set that is its identity.
-///
-/// **A keyword's alias holds its target's record** (#837, the owner's
-/// ruling R6), where the target environment is a namespace that binds the
-/// keyword in its own tables: the record of its slot for the name, for an
-/// alias with no scopes, or of its scoped entry at exactly the alias's
-/// scopes, whose value is a macro when the alias is installed
-/// ([`Environment::relink_alias`], which the desugarer reaches through
-/// `Cx::relink_alias`). Such an alias names no environment
-/// ([`AliasHome::Keyword`]). The record reads what the by-name read it
-/// replaces answered, whatever the namespace binds later, without an
-/// argument about what that is: a name with a slot is read from the slot
-/// before any alias or scoped entry ([`Environment::get`]'s order), a
-/// slot's record is re-pointed and never replaced, a scoped read with
-/// scopes was always the entry at exactly them, in the namespace's own
-/// table, and an entry keeps its record across a redefinition
-/// (`insert_scoped_record`). Every other target keeps its environment, and
-/// is read there by name or by identity as before ([`AliasHome::Holder`],
-/// [`AliasHome::Env`]): a variable; a keyword the
-/// namespace reaches through its parent, through an alias or as a
-/// name-visible scoped definition, which a later definition could move the
-/// by-name read away from; and a keyword a frame binds.
-///
-/// `scopes` is what lets an alias name a *binding* rather than a spelling
-/// (#408). A definition a macro introduced is stored by the tree-walker under
-/// the scopes it was introduced at, and the bare name reaches at most one of
-/// a spelling's definitions — the latest, or none where a plain definition
-/// has the name. A generated macro used outside its library has to reach the
-/// one its own generator introduced, so its alias carries that definition's
-/// scopes and is read and written with them. The VM renames such a
-/// definition to a global of its own, so there the alias is a plain one to
-/// the renamed name and this stays `None`.
-///
-/// Every walk reads, writes and locates a target through the three methods
-/// below, so that what an alias means is stated once.
-#[derive(Debug, Clone, Trace)]
-struct AliasTarget {
-    home: AliasHome,
-    name: Rc<str>,
-    scopes: Option<ScopeSet>,
-}
-
-/// Where an [`AliasTarget`]'s binding is.
-#[derive(Debug, Clone, Trace)]
-enum AliasHome {
-    /// In the environment holding the alias, read there by name or by
-    /// identity. Not an optimisation: an `Rc<Environment>` pointing at the
-    /// environment that owns the table is a cycle refcounting can never
-    /// break, so a self-alias would pin that environment — and its heap —
-    /// for the process. It also saves an `Rc` clone and drop on the paths
-    /// that clone the entry ([`Environment::alias_target`]'s callers). A
-    /// target in the holder is always this, a keyword included.
-    Holder,
-    /// In another environment, read there by name or by identity: a
-    /// variable, or a keyword the own-table rule
-    /// ([`AliasTarget`]) does not take as a record. No program has reached
-    /// this arm with a keyword a frame binds: a same-root shadow of a
-    /// top-level keyword does not relink, and a host namespace binds in its
-    /// own tables or reaches its parent's (#837). A unit test builds it.
-    Env(Rc<Environment>),
-    /// A keyword a namespace binds in its own tables (R6): the record of its
-    /// slot for the name, or of its scoped entry at exactly the alias's
-    /// scopes. Names no environment.
-    Keyword {
-        record: Record,
-        #[trace(
-            skip,
-            reason = "the target namespace's id, which `remembered_relink` compares; ids are never reused"
-        )]
-        env_id: u64,
-    },
-}
-
-impl AliasTarget {
-    /// The id of the environment the target is in, as a [`RelinkKey`]
-    /// names it.
-    fn env_id(&self, holder: &Environment) -> u64 {
-        match &self.home {
-            AliasHome::Holder => holder.env_id(),
-            AliasHome::Env(env) => env.env_id(),
-            AliasHome::Keyword { env_id, .. } => *env_id,
-        }
-    }
-
-    // The scopes are a definition's *identity*, which resolution chose when
-    // the alias was made, so all three match them exactly in the target's own
-    // table and cannot disagree on the cell. Resolving them again as a
-    // *reference* (`get_with_scopes`) would answer the same while the
-    // definition is there, at a candidate list per read — and would fall back
-    // by name if it ever were not, reading and writing a plain binding of the
-    // spelling where a dangling plain alias answers nothing.
-    //
-    // A keyword's record is read, stored into and located as the slot or
-    // the entry it is in would be, under the heap borrowed with the
-    // holder's check that it is the one the values live on: the holder and
-    // the target namespace are on one heap.
-
-    fn get(&self, holder: &Environment, heap: &RefCell<Heap>) -> Option<TaggedValue> {
-        let env = match &self.home {
-            AliasHome::Keyword { record, .. } => {
-                return Some(record.value(&holder.borrow_read(heap)));
-            }
-            AliasHome::Holder => holder,
-            AliasHome::Env(env) => env,
-        };
-        match &self.scopes {
-            None => env.get(heap, &self.name),
-            Some(scopes) => env.scoped_definition_value(heap, &self.name, scopes),
-        }
-    }
-
-    /// `Err` carries the name, as [`Environment::set`]'s does. A keyword's
-    /// record is stored into at the site the slot's or the entry's own
-    /// write logs.
-    fn set(
-        &self,
-        holder: &Environment,
-        heap: &RefCell<Heap>,
-        value: TaggedValue,
-    ) -> Result<(), String> {
-        let env = match &self.home {
-            AliasHome::Keyword { record, .. } => {
-                let site = match self.scopes {
-                    None => Site::EnvSetSlot,
-                    Some(_) => Site::EnvSetScoped,
-                };
-                let mut heap = holder.borrow_write(heap);
-                let cell = record.cell(&heap);
-                cell.store(&mut heap, value, site);
-                return Ok(());
-            }
-            AliasHome::Holder => holder,
-            AliasHome::Env(env) => env,
-        };
-        match &self.scopes {
-            None => env.set(heap, &self.name, value),
-            Some(scopes) => env.set_scoped_definition(heap, &self.name, scopes, value),
-        }
-    }
-
-    /// Where the target is, as [`Environment::binding_hit`] answers it.
-    fn hit(&self, holder: &Environment) -> Option<BindingHit> {
-        let env = match &self.home {
-            AliasHome::Keyword { record, .. } => return Some(BindingHit::Record(*record)),
-            AliasHome::Holder => holder,
-            AliasHome::Env(env) => env,
-        };
-        match &self.scopes {
-            None => env.binding_hit(&self.name),
-            Some(scopes) => env.scoped_definition_hit(&self.name, scopes),
-        }
-    }
-}
-
-/// Alias name -> the binding it forwards to.
-type AliasBindings = FxHashMap<Rc<str>, AliasTarget>;
-
 /// Why a scoped assignment did not happen.
 ///
 /// Two outcomes, kept apart because they call for different diagnostics and
@@ -702,8 +543,9 @@ pub struct IntroducedRecord {
     pub record: u64,
 }
 
-/// How a top-level definition a macro introduced is held, which is what an
-/// alias to it has to say — see [`Environment::introduced_definition`].
+/// How a top-level definition a macro introduced is held, which is what a
+/// relinked mention of it has to name ([`RelinkTarget::Introduced`]) — see
+/// [`Environment::introduced_definition`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntroducedDefinition {
     /// The VM's: renamed to this global, a plain binding of the root.
@@ -732,9 +574,9 @@ pub enum RelinkTarget<'a> {
 /// The tables that nearly only a global or a library environment fills, kept
 /// out of line so that the environments which never do — and the tree-walker
 /// builds one per call and per `let`-bound temporary — do not carry them. A
-/// frame comes to have them when an alias is installed in it, or when it
-/// binds more than [`FRAME_INDEX_ABOVE`] scoped bindings of one spelling
-/// (`scoped_index`). `Environment::rare` has the measurement.
+/// frame comes to have them when it binds more than [`FRAME_INDEX_ABOVE`]
+/// scoped bindings of one spelling (`scoped_index`). `Environment::rare`
+/// has the measurement.
 #[derive(Debug, Default, Trace)]
 struct RareTables {
     /// The identities of the macro-introduced top-level definitions compiled
@@ -747,14 +589,14 @@ struct RareTables {
     /// form and its frames come from that form alone, so without this a
     /// reference in a later form has no candidate to resolve against,
     /// degrades to its bare spelling, and is answered by whatever the name
-    /// means at run time — a user's global of that spelling, or the bare-name
-    /// alias. That is Larceny triage family 40, and in the assignment
-    /// direction it silently wrote a macro's private state onto a user's
-    /// variable.
+    /// means at run time — a user's global of that spelling, or once the
+    /// bare-name alias the VM installed. That is Larceny triage family 40,
+    /// and in the assignment direction it silently wrote a macro's private
+    /// state onto a user's variable.
     ///
-    /// Installed beside the aliases by the VM's `compile_pipeline`, into the
-    /// environment a form is compiled in: a namespace of either kind, a host
-    /// namespace included (#835). Nothing asserts which. `introduced_global`
+    /// Recorded by the VM's `compile_pipeline`, into the environment a form
+    /// is compiled in: a namespace of either kind, a host namespace included
+    /// (#835). Nothing asserts which. `introduced_global`
     /// and `for_each_introduced_candidate` read this environment's table
     /// alone; `has_introduced_definition` reads its root's, which for a host
     /// form is the global namespace's (the owner's ruling (c) of 2026-11-07
@@ -793,16 +635,6 @@ struct RareTables {
     /// itself by its marker, so the read path pays one compare, and so does
     /// the one writer that must drop an entry — `define` over an import.
     frame_imports: RefCell<Vec<Option<BindingCell>>>,
-    /// For each binding the desugarer's relinking aliased here, the alias it
-    /// minted — see [`Environment::relink_alias`]. One target has one alias
-    /// however many expansions ask (#611), where each expansion used to mint
-    /// its own: a program of `n` top-level `guard` forms held `3n` aliases to
-    /// one private helper, and their symbols.
-    #[trace(
-        skip,
-        reason = "environment ids, names, scope ids and alias spellings; the binding each alias reaches is an edge of `alias_bindings`"
-    )]
-    relink_aliases: RefCell<FxHashMap<RelinkKey, Rc<str>>>,
     /// This environment's mutable specifier, made the first time one was
     /// asked for ([`Environment::mutable_specifier`]) and handed out after
     /// that: `(interaction-environment)` answers one object, as chibi,
@@ -929,9 +761,9 @@ fn flagged_record_in_a_slot(name: &str) -> ! {
 /// namespaces between collections. A frame ([`Environment::child_frame`])
 /// is never one: the tree-walker builds one per call and per `let`-bound
 /// temporary, and what its bindings hold is short-lived and small, so its
-/// path does as little of the measuring as it can. A scoped binding or an
-/// alias — the tree-walker binds a call's parameters under their scopes —
-/// asks [`Environment::is_namespace`] before it reads a table's capacity,
+/// path does as little of the measuring as it can. A scoped binding — the
+/// tree-walker binds a call's parameters under their scopes — asks
+/// [`Environment::is_namespace`] before it reads a table's capacity,
 /// and a frame reads none. A plain binding compares the slot vector's
 /// length with its capacity, except a fresh frame's first, which compares
 /// nothing; and when a frame's vector spills or its index grows, one load
@@ -940,13 +772,12 @@ fn flagged_record_in_a_slot(name: &str) -> ! {
 ///
 /// **What is counted** ([`Environment::table_bytes`]): the environment and
 /// its out-of-line tables' box; every table's own buffer at its capacity —
-/// the slot vector once it is out of line, the name index, the scoped and
-/// alias tables, the relink aliases, the table of introduced
-/// globals and the table of the scoped bindings' indexes, a host
-/// namespace's table of read-through records (#835), whose keys are its
-/// parent's slot names and are counted there, and a frame's import cells,
-/// which a namespace never has; the name of each slot, an `Rc<str>` of two
-/// counts and its bytes,
+/// the slot vector once it is out of line, the name index, the scoped
+/// table, the table of introduced globals and the table of the scoped
+/// bindings' indexes, a host namespace's table of read-through records
+/// (#835), whose keys are its parent's slot names and are counted there,
+/// and a frame's import cells, which a namespace never has; the name of
+/// each slot, an `Rc<str>` of two counts and its bytes,
 /// counted whether or not something else shares it (an `environment` built
 /// by import has a fresh name for each of its several hundred bindings,
 /// which are most of what it holds); and each spelling's own buffers, which
@@ -956,9 +787,9 @@ fn flagged_record_in_a_slot(name: &str) -> ! {
 /// vector), and its introduced globals' identities and their boxed index.
 /// The tree-walker fills the lists and their indexes, the VM the
 /// identities. Not counted: what an entry owns beyond its place in its
-/// buffer — a scope set's spilled part, an alias's or a scoped binding's
-/// name, and a name another table shares, as each identity's renamed global
-/// is its slot's name — and the values, which live in the arenas and are
+/// buffer — a scope set's spilled part, a scoped binding's name, and a name
+/// another table shares, as each identity's renamed global is its slot's
+/// name — and the values, which live in the arenas and are
 /// charged there, as are the binding records and cells (#834): each a pair,
 /// charged in the live bytes as the pair arena's and never here. An
 /// estimate, then, of the tables a namespace fills by
@@ -1149,12 +980,6 @@ pub(crate) const fn hash_table_bytes<K, V>(capacity: usize) -> usize {
     buckets * (size_of::<(K, V)>() + 1) + 16
 }
 
-/// What a relink alias stands for ([`Environment::relink_alias`]): the
-/// environment that holds the binding, by id, the binding's name there, the
-/// scopes that select it (`None` for one the name alone reaches), and the
-/// identity of the macro's mention it renames.
-type RelinkKey = (u64, Rc<str>, Option<ScopeSet>, ScopeSet);
-
 /// Mint a process-unique, never-reused environment id (0 is reserved: a free
 /// cell's owner tag is the fixnum 0, `binding_record.rs`, and a VM link
 /// table's `compiled_in` is 0 for code compiled in no namespace, #836).
@@ -1192,10 +1017,10 @@ fn fresh_env_id() -> u64 {
 /// Lookup order for `get_with_scopes(name, scopes)`:
 /// 1. Collect all bindings where `binding.scopes ⊆ scopes`
 /// 2. Return the binding with the largest scope set (most specific)
-/// 3. Fall back by name — to simple bindings and aliases, and to the
-///    name-only view of a scoped definition **only when this resolution did
-///    not just reject it**. A binding the rule refused stays refused; the
-///    fallback answering it anyway was triage family 36.
+/// 3. Fall back by name — to simple bindings, and to the name-only view of
+///    a scoped definition **only when this resolution did not just reject
+///    it**. A binding the rule refused stays refused; the fallback
+///    answering it anyway was triage family 36.
 ///
 /// ## The heap a namespace's binding takes (#834)
 ///
@@ -1236,10 +1061,9 @@ fn fresh_env_id() -> u64 {
 ///
 /// Derived (#686): the value in each of its slots, which in a namespace is
 /// the binding's record, and so its cell and value; each cell a frame
-/// imports (`frame_imports`); the target of each macro-expansion alias; a
-/// host namespace's read-through table (`RareTables::read_through`), its
-/// `unbound` cell and each read-through record, and through the record the
-/// parent's (#835); not its parent. `SlotVisitor::env` walks an
+/// imports (`frame_imports`); a host namespace's read-through table
+/// (`RareTables::read_through`), its `unbound` cell and each read-through
+/// record, and through the record the parent's (#835); not its parent. `SlotVisitor::env` walks an
 /// environment with the chain it heads, and the collector follows the
 /// parent by reference, since nearly every environment has one: queueing it
 /// as well cost a hash lookup and a reference count per environment, about
@@ -1270,40 +1094,30 @@ pub struct Environment {
     /// Scope-aware bindings (for scope sets hygiene)
     /// Each name can have multiple bindings with different scope sets
     scoped_bindings: RefCell<ScopedTable>,
-    /// Bindings installed by macro expansion that point at a binding in
-    /// another environment instead of holding a value.
+    /// The bytes of the macro-expansion alias table, a `RefCell` of an
+    /// `FxHashMap`, which #837's second PR deleted: kept as padding of its
+    /// size for one commit, so that the code's removal and the layout's are
+    /// measured apart (D21).
+    #[trace(skip, reason = "padding, removed by the next commit")]
+    _was_alias_bindings: [u64; 5],
+    /// The alias table's latch, kept as padding with it.
+    #[trace(skip, reason = "padding, removed by the next commit")]
+    _was_has_aliases: bool,
+    /// Whether `scoped_bindings` holds a name-visible definition.
     ///
-    /// A `syntax-rules` template may reference a name bound where the macro was
-    /// *defined* — typically a library-private helper — which does not exist
-    /// where the macro is *used*. Expansion renames such a reference to a
-    /// unique name and records the alias here, so the use site can resolve it.
+    /// Asked of every frame a name lookup walks past, and the answer is no
+    /// for almost every frame — a lambda's parameters are scoped bindings
+    /// but not *visible* ones. Kept outside the `RefCell` it describes so
+    /// that walking a chain of frames costs a load per frame rather than a
+    /// borrow-flag round trip.
     ///
-    /// The indirection is deliberate: resolving through the alias on every
-    /// lookup means a later `set!` on the original binding is visible, which
-    /// copying the value at expansion time would silently freeze.
-    alias_bindings: RefCell<AliasBindings>,
-    /// Whether `alias_bindings` holds anything, and whether `scoped_bindings`
-    /// holds a name-visible definition.
-    ///
-    /// Both questions are asked of every frame a name lookup walks past, and
-    /// the answer is no for almost every frame — a lambda's parameters are
-    /// scoped bindings but not *visible* ones, and aliases exist only where a
-    /// macro was expanded. Kept outside the `RefCell`s they describe so that
-    /// walking a chain of frames costs a load per frame rather than two
-    /// borrow-flag round trips.
-    ///
-    /// These are the **only** copies of those two facts, and each has exactly
-    /// one writer — `install_alias` and `insert_scoped`. A second copy stored
-    /// beside the table it describes is how a lookup comes to miss a binding
-    /// that scoped resolution still finds, which is what triage families 36
-    /// and 38 were. Both latch on and never clear: nothing removes a binding
-    /// from either table, so a `true` is permanent and a stale one would only
-    /// cost a borrow, never an answer.
-    #[trace(
-        skip,
-        reason = "a summary of `alias_bindings`, which is traced in full"
-    )]
-    has_aliases: Cell<bool>,
+    /// This is the **only** copy of that fact, and it has exactly one
+    /// writer — `insert_scoped`. A second copy stored beside the table it
+    /// describes is how a lookup comes to miss a binding that scoped
+    /// resolution still finds, which is what triage families 36 and 38
+    /// were. It latches on and never clears: nothing removes a binding from
+    /// the table, so a `true` is permanent and a stale one would only cost a
+    /// borrow, never an answer.
     #[trace(
         skip,
         reason = "a summary of `scoped_bindings`, which is traced in full"
@@ -1478,8 +1292,8 @@ impl Environment {
             bindings: RefCell::new(Bindings::default()),
             env_id: fresh_env_id(),
             scoped_bindings: RefCell::new(ScopedTable::default()),
-            alias_bindings: RefCell::new(FxHashMap::default()),
-            has_aliases: Cell::new(false),
+            _was_alias_bindings: [0; 5],
+            _was_has_aliases: false,
             has_visible_scoped: Cell::new(false),
             kind,
             frame: kind.frame_flag(),
@@ -1536,8 +1350,8 @@ impl Environment {
             bindings: RefCell::new(Bindings::default()),
             env_id: fresh_env_id(),
             scoped_bindings: RefCell::new(ScopedTable::default()),
-            alias_bindings: RefCell::new(FxHashMap::default()),
-            has_aliases: Cell::new(false),
+            _was_alias_bindings: [0; 5],
+            _was_has_aliases: false,
             has_visible_scoped: Cell::new(false),
             kind,
             frame: kind.frame_flag(),
@@ -1912,9 +1726,10 @@ impl Environment {
             // A number.
             env_id: _,
             scoped_bindings,
-            alias_bindings,
+            // Padding, removed by the next commit.
+            _was_alias_bindings: _,
+            _was_has_aliases: _,
             // Flags.
-            has_aliases: _,
             has_visible_scoped: _,
             kind: _,
             frame: _,
@@ -1941,13 +1756,11 @@ impl Environment {
         }
         bytes +=
             hash_table_bytes::<Rc<str>, ScopedBindingList>(scoped_bindings.borrow().capacity());
-        bytes += hash_table_bytes::<Rc<str>, AliasTarget>(alias_bindings.borrow().capacity());
         if let Some(rare) = rare.get() {
             let RareTables {
                 introduced_global_names,
                 scoped_index,
                 frame_imports,
-                relink_aliases,
                 // A heap value, in the arenas.
                 specifier: _,
                 // This account.
@@ -1964,7 +1777,6 @@ impl Environment {
                 + hash_table_bytes::<Rc<str>, ScopeIndex>(scoped_index.borrow().capacity())
                 // Always empty in a namespace, whose imports are records.
                 + frame_imports.borrow().capacity() * size_of::<Option<BindingCell>>()
-                + hash_table_bytes::<RelinkKey, Rc<str>>(relink_aliases.borrow().capacity())
                 // A host namespace's read-through records (#835): the box and
                 // the table's buffer. Its keys are its parent's slot names,
                 // shared, and counted there; its records and their cell are
@@ -2235,8 +2047,7 @@ impl Environment {
     /// definition answers for two loads and no call.
     #[inline]
     pub(crate) fn read_by_name(&self, name: &str) -> bool {
-        (self.has_aliases.get() && self.alias_target(name).is_some())
-            || (self.has_visible_scoped.get() && self.visible_scoped_index(name).is_some())
+        self.has_visible_scoped.get() && self.visible_scoped_index(name).is_some()
     }
 
     /// This namespace's weak entries' store, if a linker has made one
@@ -2449,8 +2260,8 @@ impl Environment {
     }
 
     /// Whether a placeholder or a weak read-through record holds `name` here
-    /// (#836). An alias is never minted at such a name: a relink alias would
-    /// leave linked code reading the entry where `get` reads the alias.
+    /// (#836): `insert_scoped_record` asserts that no visible scoped
+    /// definition is made over one, which linked code would read past.
     fn holds_placeholder(&self, name: &str) -> bool {
         self.weak_entries()
             .is_some_and(|store| store.contains(name))
@@ -2534,8 +2345,7 @@ impl Environment {
     /// The cell this environment's own binding of `name` names: a namespace
     /// slot's record's cell; a namespace visible scoped entry's record's
     /// cell, the name-only view [`get`](Self::get) reads; a frame's import's
-    /// cell. `None` for a frame's own binding, a name reached only through a
-    /// macro-expansion alias (refused for export by #847), or through the
+    /// cell. `None` for a frame's own binding, or a name reached through the
     /// parent.
     ///
     /// What a library exports (`build_library`), and what a test hands
@@ -2548,11 +2358,6 @@ impl Environment {
                 return Some(Record::from_word(word).cell(&step));
             }
             return (word == TaggedValue::IMPORTED).then(|| self.frame_import_cell(slot));
-        }
-        // `get` follows an alias before the name-only view: so does this,
-        // to agree with it, and an alias is no binding to name.
-        if self.has_aliases.get() && self.alias_target(name).is_some() {
-            return None;
         }
         let i = self.visible_scoped_index(name)?;
         let step = self.read_step(heap)?;
@@ -2707,21 +2512,9 @@ impl Environment {
                 env.set_slot_value(heap, slot, value);
                 return Ok(());
             }
-            // Assign through a macro-expansion alias, so a template that
-            // mutates a binding private to its defining library works. Reads
-            // follow aliases in `get`; writes have to as well or the two
-            // disagree.
-            if env.has_aliases.get()
-                && let Some(set) = env.set_through_alias(heap, name, value)
-            {
-                return set;
-            }
-            // The write side of the same fallback `get` takes, and it has to
-            // be here for the reason `alias_bindings` gives for its own pair:
-            // a name that reads through to a scoped definition and does not
-            // write through to it leaves the two disagreeing. Reached when a
-            // macro-generated macro's template assigns to a definition its
-            // expansion introduced, which arrives relinked to the bare name.
+            // The write side of the same fallback `get` takes: a name that
+            // reads through to a scoped definition and does not write
+            // through to it leaves the two disagreeing.
             if let Some(i) = env.visible_scoped_index(name) {
                 let mut step = env.write_step(heap);
                 if let Some(bindings) = env.scoped_bindings.borrow_mut().get_mut(name) {
@@ -2758,19 +2551,9 @@ impl Environment {
             if let Some(tv) = env.local_value(heap, name) {
                 return Some(tv);
             }
-            // Follow a macro-expansion alias to its target: the binding record
-            // it holds, or the environment it names. Checked after real
-            // bindings so a local definition always wins, and before the
-            // parent so the alias is not shadowed by an unrelated outer
-            // binding of the same (unique) name.
-            if env.has_aliases.get()
-                && let Some(found) = env.get_through_alias(heap, name)
-            {
-                return found;
-            }
             // A macro-introduced definition lives under its scopes; this is the
-            // name-only view of it. Checked after real bindings and aliases, so a
-            // binding written in source always wins.
+            // name-only view of it. Checked after real bindings, so a binding
+            // written in source always wins.
             if env.has_visible_scoped.get()
                 && let Some(i) = env.visible_scoped_index(name)
             {
@@ -2796,10 +2579,10 @@ impl Environment {
     /// Where `get(name)` finds its binding, or `None` where `get` finds
     /// nothing (#837).
     ///
-    /// The same walk as [`get`], step for step — a plain binding, then a
-    /// macro-expansion alias, then the name-only view of a scoped definition,
-    /// then the parent — because the two must agree on *which* binding the
-    /// name reaches, or this would name one and `get` read another. One
+    /// The same walk as [`get`], step for step — a plain binding, then the
+    /// name-only view of a scoped definition, then the parent — because the
+    /// two must agree on *which* binding the name reaches, or this would
+    /// name one and `get` read another. One
     /// shared walk is Track Q's Q7.3; until then they mirror by hand, and
     /// [`binding_location`](Self::binding_location) and `Cx::early_link`
     /// both go through this one.
@@ -2814,11 +2597,6 @@ impl Environment {
         loop {
             if let Some(slot) = env.local_slot(name) {
                 return Some(env.slot_hit(slot));
-            }
-            if env.has_aliases.get()
-                && let Some(target) = env.alias_target(name)
-            {
-                return target.hit(env);
             }
             if let Some(i) = env.visible_scoped_index(name) {
                 let table = env.scoped_bindings.borrow();
@@ -2842,12 +2620,12 @@ impl Environment {
     /// its macro's environment (#837, the owner's ruling E1), and the
     /// location of the record's cell: the record where
     /// [`binding_hit`](Self::binding_hit) finds the name, a namespace's
-    /// slot's or scoped entry's, here or in a namespace up the chain, an
-    /// alias's target's included. Where the walk ends at a frame's import,
-    /// which has no record, a fresh one over the import's cell, in no slot
-    /// and counted nowhere, as the by-name record is not. `None` where the
-    /// walk finds nothing, or a frame's own binding, which no early link
-    /// may name: a frame's place outlives no form.
+    /// slot's or scoped entry's, here or in a namespace up the chain. Where
+    /// the walk ends at a frame's import, which has no record, a fresh one
+    /// over the import's cell, in no slot and counted nowhere, as the
+    /// by-name record is not. `None` where the walk finds nothing, or a
+    /// frame's own binding, which no early link may name: a frame's place
+    /// outlives no form.
     ///
     /// For `Cx::early_link`, which brands the answer: the record is live
     /// only while a root reaches it, and the context's caller pools it
@@ -2875,8 +2653,8 @@ impl Environment {
     /// environment its target is asked of (#837's second PR; the owner's
     /// ruling E1, whose text names "the second PR's relink targets"), or
     /// `None` where the target has no record, and the mention is left as
-    /// written. Arm by arm, what an alias to the target reads today, as a
-    /// record:
+    /// written. Arm by arm, as a record, what the alias relinking installed
+    /// until then read:
     ///
     /// - [`RelinkTarget::ByName`]: where [`binding_hit`](Self::binding_hit)
     ///   finds the name. A namespace's slot's or scoped entry's record, its
@@ -3142,40 +2920,6 @@ impl Environment {
         Some(resolve(step.as_deref(), bindings[position].tagged_value))
     }
 
-    /// Assign that definition — [`scoped_definition_location`]'s write. `Err`
-    /// carries the name, as [`set`]'s does. A namespace writes it at its
-    /// step, under a mutable borrow of `heap`.
-    ///
-    /// [`scoped_definition_location`]: Self::scoped_definition_location
-    /// [`set`]: Self::set
-    fn set_scoped_definition(
-        &self,
-        heap: &RefCell<Heap>,
-        name: &str,
-        scopes: &ScopeSet,
-        value: TaggedValue,
-    ) -> Result<(), String> {
-        let mut step = self.write_step(heap);
-        let mut table = self.scoped_bindings.borrow_mut();
-        let binding = table.get_mut(name).and_then(|bindings| {
-            let position = self.scoped_position(name, bindings, scopes)?;
-            bindings.get_mut(position)
-        });
-        match binding {
-            Some(binding) => {
-                write_entry(
-                    step.as_deref_mut(),
-                    binding,
-                    value,
-                    Site::EnvSetScoped,
-                    false,
-                );
-                Ok(())
-            }
-            None => Err(name.to_string()),
-        }
-    }
-
     /// Whether the root of this chain holds *any* top-level definition of
     /// `name` that a macro introduced — the cheap question that lets a caller
     /// skip [`introduced_definition`] for the names it cannot answer, which
@@ -3204,7 +2948,7 @@ impl Environment {
     }
 
     /// The *top-level* definition a macro introduced that `scopes` selects
-    /// for `name`, as something an alias can point at — or `None` when
+    /// for `name`, as something a relinked mention can link — or `None` when
     /// `scopes` selects anything else: nothing, a plain binding, or a lexical
     /// one.
     ///
@@ -3267,113 +3011,14 @@ impl Environment {
             .cloned()
     }
 
-    /// Whether `name` is reached here only through a macro-expansion alias:
-    /// no binding of this environment's own, and an alias the desugarer
-    /// installed under that name. `get` follows such an alias, but the alias
-    /// is not a binding, so a library cannot export it (#846).
-    pub fn reaches_only_by_alias(&self, name: &str) -> bool {
-        self.has_aliases.get()
-            && self.local_slot(name).is_none()
-            && self.alias_target(name).is_some()
-    }
-
-    /// Resolve a macro-expansion alias installed here, if any.
-    ///
-    /// Clones the entry. The hot walks (`get`, `set` and the scoped
-    /// fallbacks) read it in place through
-    /// [`get_through_alias`](Self::get_through_alias) and
-    /// [`set_through_alias`](Self::set_through_alias) instead; this serves
-    /// the rest, as `binding_hit` and `name_reaches_binding_of`. The
-    /// emptiness check matters: almost every environment has no aliases.
-    fn alias_target(&self, name: &str) -> Option<AliasTarget> {
-        let aliases = self.alias_bindings.borrow();
-        if aliases.is_empty() {
-            return None;
-        }
-        aliases.get(name).cloned()
-    }
-
-    /// What a macro-expansion alias here for `name` reads, if one is
-    /// installed: `Some` of [`AliasTarget::get`]'s answer.
-    ///
-    /// Out of line, and reading the entry in place rather than cloning it,
-    /// so that the tree-walker's hottest walks that check for an alias at
-    /// every step — `get` and `get_scoped_fallback`, beneath
-    /// `resolve_with_scopes` — carry neither the entry nor its read in their
-    /// own frames (#837). `binding_hit` and `name_reaches_binding_of` still
-    /// clone it, through [`alias_target`](Self::alias_target). The table's shared
-    /// borrow is held across the read, which may borrow it again (a target
-    /// in the holder) but never mutably: only an install does.
-    #[inline(never)]
-    fn get_through_alias(&self, heap: &RefCell<Heap>, name: &str) -> Option<Option<TaggedValue>> {
-        let aliases = self.alias_bindings.borrow();
-        let target = aliases.get(name)?;
-        Some(target.get(self, heap))
-    }
-
-    /// [`get_through_alias`](Self::get_through_alias)'s write: `Some` of
-    /// [`AliasTarget::set`]'s answer where an alias for `name` is installed
-    /// here. A store borrows nothing that an install does.
-    #[inline(never)]
-    fn set_through_alias(
-        &self,
-        heap: &RefCell<Heap>,
-        name: &str,
-        value: TaggedValue,
-    ) -> Option<Result<(), String>> {
-        let aliases = self.alias_bindings.borrow();
-        let target = aliases.get(name)?;
-        Some(target.set(self, heap, value))
-    }
-
-    /// Each macro-expansion alias here, sorted by spelling, for the tests
-    /// of what a keyword alias holds (#837, R6): its spelling, what it
-    /// names as its home — `"holder"`, `"env"` or `"keyword"`
-    /// ([`AliasHome`]) — and how many environments the alias entry's own
-    /// trace reports to a collector. Only with `test-support`.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn alias_homes_for_tests(&self) -> Vec<(String, &'static str, usize)> {
-        /// Counts the environments it is given, and ignores the rest.
-        struct Envs(usize);
-        impl crate::SlotVisitor for Envs {
-            fn slot(&mut self, _: &Cell<TaggedValue>) {}
-            fn pinned(&mut self, _: TaggedValue) {}
-            fn env(&mut self, _: &Rc<Environment>) {
-                self.0 += 1;
-            }
-            fn continuation(&mut self, _: &Rc<crate::CpsContinuation>) {}
-            fn cont_env(&mut self, _: &crate::cont_value::ContEnv) {}
-            fn expr_literals(&mut self, _: &crate::cps_expr::CpsExpr) {}
-            fn code(&mut self, _: u64) {}
-        }
-        let mut homes: Vec<(String, &'static str, usize)> = self
-            .alias_bindings
-            .borrow()
-            .iter()
-            .map(|(alias, target)| {
-                let home = match target.home {
-                    AliasHome::Holder => "holder",
-                    AliasHome::Env(_) => "env",
-                    AliasHome::Keyword { .. } => "keyword",
-                };
-                let mut envs = Envs(0);
-                (alias, target).trace(&mut envs);
-                (alias.to_string(), home, envs.0)
-            })
-            .collect();
-        homes.sort();
-        homes
-    }
-
     /// Record that a macro-introduced top-level definition of `name`, at
     /// `scopes`, was renamed to the global `renamed_to`.
     ///
     /// Records the binding identity that later forms resolve at compile and
     /// desugar time, and that definition-environment relinking uses to find
-    /// the renamed global. No bare-name alias is installed: that would let a
-    /// reference from another expansion reach a definition its scopes reject
-    /// (#427, triage family 40).
+    /// the renamed global. Nothing is bound under the bare name: that would
+    /// let a reference from another expansion reach a definition its scopes
+    /// reject (#427, triage family 40).
     ///
     /// Two different expansions get different scope sets and so are different
     /// entries, which is the whole point — and which means a program that
@@ -3469,16 +3114,13 @@ impl Environment {
         env.env_id
     }
 
-    /// The root of this environment's parent chain.
-    ///
-    /// Macro-expansion aliases must be installed where the code will actually
-    /// be resolved. A desugar-time environment may be a transient child made
-    /// for a `let-syntax` or internal-define body and dropped once desugaring
-    /// finishes, so aliases go to the root instead. For a host form the root
-    /// is the global namespace, past its host namespace: a relink alias goes
-    /// there. Early binding, which asks the host namespace first
-    /// ([`namespace_root`](Self::namespace_root), #835), installs nothing
-    /// anywhere since 4b.10 (#837).
+    /// The root of this environment's parent chain: for a host form, the
+    /// global namespace, past its host namespace
+    /// ([`namespace_root`](Self::namespace_root) stops at the host
+    /// namespace, #835). Relinking asks it which library holds a
+    /// definition a macro introduced. It installed its aliases there until
+    /// #837's second PR, which removed them; nothing is installed anywhere
+    /// now.
     pub fn root(self: &Rc<Self>) -> Rc<Environment> {
         let mut env = self.clone();
         while let Some(parent) = env.parent.clone() {
@@ -3498,299 +3140,6 @@ impl Environment {
             env = Rc::clone(env.parent.as_ref().expect("a frame has its parent"));
         }
         env
-    }
-
-    /// Install a macro-expansion alias: `alias` resolves to `target_name` as
-    /// bound in `target_env`, looked up afresh on every access.
-    ///
-    /// The desugarer installs a generated, unique alias so it cannot shadow
-    /// anything the program wrote. For an introduced definition, its scopes
-    /// select the target: the renamed global on the VM, or a scoped alias on
-    /// the tree-walker. The VM no longer installs aliases under the bare
-    /// spelling of introduced globals (#427).
-    ///
-    /// Keyed by `alias`, so a second install under the same name replaces the
-    /// first.
-    ///
-    /// Takes no heap, so it cannot tell a keyword from a variable: the
-    /// alias names `target_env` and reads it by name, whatever the target
-    /// is. The desugarer's relinking went through
-    /// [`relink_alias`](Self::relink_alias), which holds a keyword's record,
-    /// until #837's second PR, since which it installs no alias: these
-    /// methods are called by nothing but their tests, and go with the alias
-    /// tables in that PR's last part.
-    pub fn define_alias(
-        &self,
-        alias: impl Into<Rc<str>>,
-        target_env: Rc<Environment>,
-        target_name: Rc<str>,
-    ) {
-        let home = self.by_name_home(target_env);
-        self.install_alias(alias.into(), home, target_name, None);
-    }
-
-    /// [`define_alias`] to the definition [`introduced_definition`] found:
-    /// `found`, of `name`, held by `home`. How the backend holds it decides
-    /// what kind of alias that is, and deciding it here is what keeps the
-    /// relinker from having to know.
-    ///
-    /// [`define_alias`]: Self::define_alias
-    /// [`introduced_definition`]: Self::introduced_definition
-    pub fn define_alias_to_introduced(
-        &self,
-        alias: impl Into<Rc<str>>,
-        home: Rc<Environment>,
-        name: Rc<str>,
-        found: IntroducedDefinition,
-    ) {
-        match found {
-            IntroducedDefinition::Renamed(renamed) => self.define_alias(alias, home, renamed),
-            IntroducedDefinition::Scoped(scopes) => {
-                self.define_scoped_alias(alias, home, name, scopes)
-            }
-        }
-    }
-
-    /// [`define_alias`] to a definition reachable only under `scopes` — see
-    /// [`AliasTarget`] for why an alias can need them.
-    ///
-    /// [`define_alias`]: Self::define_alias
-    pub fn define_scoped_alias(
-        &self,
-        alias: impl Into<Rc<str>>,
-        target_env: Rc<Environment>,
-        target_name: Rc<str>,
-        scopes: ScopeSet,
-    ) {
-        let home = self.by_name_home(target_env);
-        self.install_alias(alias.into(), home, target_name, Some(scopes));
-    }
-
-    /// The alias here for the binding of `name` in `target_env` — the one
-    /// `scopes` select, for a binding the name alone does not reach — as a
-    /// macro's mention of it under `mention`, its identity, renames it:
-    /// minted once per target and mention (#611).
-    ///
-    /// The desugarer's relinking (`link_definition_env_refs`) used to mint an
-    /// alias for every expansion that needed one, so a library macro whose
-    /// template names a private helper, as `guard` names `%guard-aux`, left an
-    /// alias and an interned symbol in the program per top-level form, which
-    /// nothing removes. One target now has one alias here. Two targets, or
-    /// two identities of one spelling that select different bindings, still
-    /// get one each.
-    ///
-    /// And two mentions of one target get one each. The alias's spelling is
-    /// also how a renamed mention is told from another of the same name: a
-    /// generated macro can mention a spelling once as a binder of its own
-    /// template and once as the library's binding, both reaching the same
-    /// target, and one spelling for the two had the binder capture the other
-    /// (`hygiene_matrix.rs`, `one_spelling_mentioned_as_two_bindings_…`). A
-    /// macro's mention is the same from one expansion to the next — written
-    /// templates mention a name under their definition scopes — so this costs
-    /// nothing in what is shared. Two *expansions* of one mention share the
-    /// spelling and are told apart by the scopes their occurrences keep
-    /// (`Desugarer::rewrite_refs`).
-    ///
-    /// An alias is an ordinary spelling (`%guard-aux.17` is a legal
-    /// identifier), so a program can define over it. A remembered alias is
-    /// reused only while it is still an alias to the same target and nothing
-    /// here binds its spelling, and is replaced otherwise; and `mint` is asked
-    /// again while the spelling it offers is bound here already. Otherwise it
-    /// is installed as [`define_alias`] or [`define_scoped_alias`] would.
-    ///
-    /// A frame first reuses an alias its root holds for the target: a lookup
-    /// from the frame reaches the root's, and the frame installs nothing. The
-    /// desugarer's speculative body scan works in a frame, which it drops with
-    /// whatever was minted there.
-    ///
-    /// An alias it installs to a keyword `target_env` binds in its own
-    /// tables holds the keyword's record, and names no environment (#837,
-    /// R6; [`AliasTarget`]). `heap` is the one its values live on, which
-    /// says what is a macro, and which the target namespace's step borrows
-    /// shared to read it: the desugarer passes its context's
-    /// (`Cx::relink_alias`), beneath which nothing collects, so the record
-    /// reaches the alias table with no collection between.
-    ///
-    /// [`define_alias`]: Self::define_alias
-    /// [`define_scoped_alias`]: Self::define_scoped_alias
-    pub fn relink_alias(
-        &self,
-        heap: &RefCell<Heap>,
-        target_env: Rc<Environment>,
-        name: Rc<str>,
-        scopes: Option<ScopeSet>,
-        mention: &ScopeSet,
-        mut mint: impl FnMut() -> Rc<str>,
-    ) -> Rc<str> {
-        let key: RelinkKey = (target_env.env_id(), name, scopes, mention.clone());
-        if let Some(alias) = self.remembered_relink(&key) {
-            return alias;
-        }
-        let mut root = self.parent.as_ref();
-        while let Some(parent) = root.and_then(|env| env.parent.as_ref()) {
-            root = Some(parent);
-        }
-        if let Some(alias) = root.and_then(|root| root.remembered_relink(&key)) {
-            return alias;
-        }
-        // A name a placeholder holds is taken too (#836): code that linked
-        // it would read the placeholder where `get` reads the alias.
-        let alias = loop {
-            let candidate = mint();
-            if self.local_slot(&candidate).is_none()
-                && self.alias_target(&candidate).is_none()
-                && !self.holds_placeholder(&candidate)
-            {
-                break candidate;
-            }
-        };
-        let home = self.relink_home(heap, target_env, &key.1, key.2.as_ref());
-        self.install_alias(Rc::clone(&alias), home, key.1.clone(), key.2.clone());
-        let rare = self.rare.get_or_init(Box::default);
-        let grew = {
-            let mut table = rare.relink_aliases.borrow_mut();
-            let capacity = table.capacity();
-            table.insert(key, Rc::clone(&alias));
-            table.capacity() != capacity
-        };
-        if grew {
-            self.recharge();
-        }
-        alias
-    }
-
-    /// [`relink_alias`] to the definition [`introduced_definition`] found, as
-    /// [`define_alias_to_introduced`] installs one.
-    ///
-    /// [`relink_alias`]: Self::relink_alias
-    /// [`introduced_definition`]: Self::introduced_definition
-    /// [`define_alias_to_introduced`]: Self::define_alias_to_introduced
-    pub fn relink_alias_to_introduced(
-        &self,
-        heap: &RefCell<Heap>,
-        home: Rc<Environment>,
-        name: Rc<str>,
-        found: IntroducedDefinition,
-        mention: &ScopeSet,
-        mint: impl FnMut() -> Rc<str>,
-    ) -> Rc<str> {
-        match found {
-            IntroducedDefinition::Renamed(renamed) => {
-                self.relink_alias(heap, home, renamed, None, mention, mint)
-            }
-            IntroducedDefinition::Scoped(scopes) => {
-                self.relink_alias(heap, home, name, Some(scopes), mention, mint)
-            }
-        }
-    }
-
-    /// The alias remembered here for `key`, while it is still an alias to
-    /// that target and nothing here binds its spelling.
-    fn remembered_relink(&self, key: &RelinkKey) -> Option<Rc<str>> {
-        let alias = self.rare.get()?.relink_aliases.borrow().get(key).cloned()?;
-        let (target_id, name, scopes, _) = key;
-        let still = self.local_slot(&alias).is_none()
-            && self.alias_target(&alias).is_some_and(|target| {
-                target.env_id(self) == *target_id
-                    && target.name == *name
-                    && target.scopes == *scopes
-            });
-        // No placeholder can sit at a remembered alias's spelling (#836):
-        // the mint skips a name one holds, and a link of an alias's spelling
-        // makes none (`link_record`), so this is asserted, not tested, on a
-        // path every relinking expansion takes.
-        debug_assert!(
-            !still || !self.holds_placeholder(&alias),
-            "a remembered relink alias over a placeholder (#836)"
-        );
-        still.then_some(alias)
-    }
-
-    /// Where an alias here to a binding of `target_env` finds it when it is
-    /// read by name or by identity: here, or in `target_env`. A target that
-    /// is this environment is [`AliasHome::Holder`]: see there.
-    fn by_name_home(&self, target_env: Rc<Environment>) -> AliasHome {
-        if target_env.env_id() == self.env_id() {
-            AliasHome::Holder
-        } else {
-            AliasHome::Env(target_env)
-        }
-    }
-
-    /// Where a relink alias here to `name` in `target_env`, under `scopes`,
-    /// finds its binding (#837, R6): the target's record, for a keyword
-    /// `target_env` binds in its own tables
-    /// ([`own_keyword_record`](Self::own_keyword_record)), and otherwise
-    /// [`by_name_home`](Self::by_name_home)'s answer. See [`AliasTarget`]
-    /// for why only a namespace's own tables.
-    fn relink_home(
-        &self,
-        heap: &RefCell<Heap>,
-        target_env: Rc<Environment>,
-        name: &str,
-        scopes: Option<&ScopeSet>,
-    ) -> AliasHome {
-        if target_env.env_id() != self.env_id()
-            && let Some(record) = target_env.own_keyword_record(heap, name, scopes)
-        {
-            return AliasHome::Keyword {
-                record,
-                env_id: target_env.env_id(),
-            };
-        }
-        self.by_name_home(target_env)
-    }
-
-    /// This namespace's own record for `name`, where it binds a keyword
-    /// there (#837, R6): the record of its slot for the name, with no
-    /// `scopes`, or of its scoped entry at exactly `scopes`, when what the
-    /// record's cell holds is a macro. `None` for a frame, for a name
-    /// bound otherwise or not in those tables — reached through the
-    /// parent, an alias or the name-only view of a scoped definition — and
-    /// for a variable. Borrows `heap` shared, as the namespace step reads.
-    fn own_keyword_record(
-        &self,
-        heap: &RefCell<Heap>,
-        name: &str,
-        scopes: Option<&ScopeSet>,
-    ) -> Option<Record> {
-        // Redundant today, and stated where the rule is: a frame's
-        // `local_record` is `None`, and its scoped hit is never a `Record`,
-        // so no test can fail on this line (the frame arm's test pins the
-        // answer, not the check).
-        if !self.is_namespace() {
-            return None;
-        }
-        let record = match scopes {
-            None => self.local_record(name)?,
-            Some(scopes) => match self.scoped_definition_hit(name, scopes)? {
-                BindingHit::Record(record) => record,
-                BindingHit::FrameImport(_) | BindingHit::Frame(_) => return None,
-            },
-        };
-        let heap = self.borrow_read(heap);
-        heap.get_macro(record.value(&heap))
-            .is_some()
-            .then_some(record)
-    }
-
-    fn install_alias(
-        &self,
-        alias: Rc<str>,
-        home: AliasHome,
-        name: Rc<str>,
-        scopes: Option<ScopeSet>,
-    ) {
-        self.has_aliases.set(true);
-        let grew = {
-            let mut aliases = self.alias_bindings.borrow_mut();
-            let capacity = self.is_namespace().then(|| aliases.capacity());
-            aliases.insert(alias, AliasTarget { home, name, scopes });
-            capacity.is_some_and(|capacity| aliases.capacity() != capacity)
-        };
-        if grew {
-            self.recharge();
-        }
     }
 
     /// A frame's own binding of `name` (#834): what [`define`](Self::define)
@@ -4119,7 +3468,8 @@ impl Environment {
     /// they acquire body scopes while their source references can still be
     /// name-only. All introduced definitions use `define_with_scopes`
     /// instead (#269, #427); their generated getters and setters reach the
-    /// scoped binding directly, including through scoped library aliases.
+    /// scoped binding directly, or, from another library, through the
+    /// binding's record (#837).
     ///
     /// The name-only view's reach is plain access — [`get`], [`set`], and
     /// the relinker resolving through them — not scoped resolution's
@@ -4131,8 +3481,7 @@ impl Environment {
     ///
     /// It is still **one** binding. An earlier version stored the value under
     /// the bare name as well, and a `set!` through the scoped path then left
-    /// the two disagreeing — the freeze `alias_bindings` names as the reason
-    /// its own indirection exists.
+    /// the two disagreeing, a value frozen in a copy.
     ///
     /// Borrows `heap` as [`define_with_scopes`](Self::define_with_scopes)
     /// does.
@@ -4152,8 +3501,7 @@ impl Environment {
     /// This is the name-only view of a name-visible scoped binding. It is one
     /// cell, not a copy: an earlier version stored the value under the bare
     /// name as well, and a `set!` through the scoped path then left the two
-    /// disagreeing — the freeze `alias_bindings` documents as the reason its
-    /// own indirection exists.
+    /// disagreeing, a value frozen in a copy.
     ///
     /// Most recent wins, which is the behaviour from when a definition carried
     /// no scopes at all and each expansion simply overwrote the last.
@@ -4318,8 +3666,8 @@ impl Environment {
 
     /// The by-name fallback for a scoped assignment no scoped binding
     /// answered — [`get_scoped_fallback`]'s mirror, and deliberately the same
-    /// shape: plain binding, then alias, then the name-only view of a scoped
-    /// definition, then the parent.
+    /// shape: plain binding, then the name-only view of a scoped definition,
+    /// then the parent.
     ///
     /// It starts where the resolution started, not at the root. Starting at
     /// the root was #291: a plain binding in an intervening frame could be
@@ -4349,11 +3697,6 @@ impl Environment {
             if let Some(slot) = env.local_slot(name) {
                 env.set_slot_value(heap, slot, value);
                 return Ok(());
-            }
-            if env.has_aliases.get()
-                && let Some(set) = env.set_through_alias(heap, name, value)
-            {
-                return set;
             }
             if env.has_visible_scoped.get()
                 && let Some(i) = env.visible_scoped_index(name)
@@ -4403,7 +3746,7 @@ impl Environment {
     /// 1. Collect all bindings for this name where `binding.scopes ⊆ reference.scopes`
     /// 2. Return the binding with the largest scope set (most specific match)
     /// 3. Fall back by name via [`get_scoped_fallback`] — which answers from
-    ///    plain bindings and aliases freely, but never from the name-only
+    ///    plain bindings freely, but never from the name-only
     ///    view of a scoped binding this resolution rejected in step 1. So a
     ///    scoped reference can come back `None` for a name a plain [`get`]
     ///    would answer; that refusal is the fix for triage family 36, and it
@@ -4533,8 +3876,8 @@ impl Environment {
 
     /// The by-name fallback for a scoped reference no scoped binding answered.
     ///
-    /// Walks as [`get`] does — plain bindings, aliases, then the name-only
-    /// view of scoped definitions — except that a frame's name-only view is
+    /// Walks as [`get`] does — plain bindings, then the name-only view of
+    /// scoped definitions — except that a frame's name-only view is
     /// skipped when this resolution *rejected* the binding behind it.
     /// Reaching by spelling a binding set-of-scopes resolution just refused
     /// would override the rule with the spelling-based capture scope sets
@@ -4543,11 +3886,11 @@ impl Environment {
     /// one is the fallback doing its job rather than overriding a decision.
     ///
     /// The predicate is stated with `is_candidate` rather than as "skip every
-    /// visible binding" — equivalent on this path, since the resolution that
-    /// fell back here saw every scoped binding on this chain — because an
-    /// *alias* jumps into another environment chain this resolution never
-    /// looked at. Nothing over there was rejected, so the walk continues
-    /// through plain [`get`] on that side.
+    /// visible binding": equivalent on this path, since the resolution that
+    /// fell back here saw every scoped binding on this chain. What told the
+    /// two apart was a macro-expansion alias, which jumped into another
+    /// environment chain this resolution never looked at; #837's second PR
+    /// removed it.
     ///
     /// [`get`]: Self::get
     fn get_scoped_fallback(
@@ -4561,11 +3904,6 @@ impl Environment {
         loop {
             if let Some(tv) = env.local_value(heap, name) {
                 return Some(tv);
-            }
-            if env.has_aliases.get()
-                && let Some(found) = env.get_through_alias(heap, name)
-            {
-                return found;
             }
             if env.has_visible_scoped.get()
                 && let Some(i) = env.visible_scoped_index(name)
@@ -4644,7 +3982,8 @@ impl Environment {
 
     /// Locate a scoped macro's binding for a transformer that escapes its
     /// local syntax region (#424). Unlike a runtime lexical variable, this
-    /// binding lives in the expansion environment and can be shared by alias.
+    /// binding lives in the expansion environment and can be linked by a
+    /// relinked mention (`RelinkTarget::ScopedKeyword`, #837).
     ///
     /// `heap` is the one its values live on, which says what is a macro, and
     /// which each namespace's step borrows shared (#834).
@@ -4666,30 +4005,27 @@ impl Environment {
     }
 
     /// Whether the name-only view of `name` — what [`get`] answers, and so
-    /// what an alias to `name` in this environment forwards to — is the
-    /// *binding* a reference at `scopes` denotes.
+    /// what a relinked mention of `name` asked of this environment by name
+    /// links (`RelinkTarget::ByName`) — is the *binding* a reference at
+    /// `scopes` denotes.
     ///
-    /// The definition-environment relinker's question. It aliases by name, so
-    /// it may only alias a mention whose own resolution lands where the name
+    /// The definition-environment relinker's question. It links by name, so
+    /// it may only link a mention whose own resolution lands where the name
     /// alone does. Comparing the two views' *values* — what it did first —
     /// cannot answer that: two bindings of one spelling that happen to hold
-    /// equal values read as one, and the alias is then installed onto the
+    /// equal values read as one, and the mention is then linked to the
     /// wrong one. A definer macro used twice in a library, each expansion
     /// introducing its own `(define count 0)` beside a generated macro that
     /// bumps it, had both generated macros bumping a single counter from
     /// outside the library; and since the values stop being equal after the
-    /// first bump, whether a later use was aliased or refused depended on
+    /// first bump, whether a later use was relinked or refused depended on
     /// what the program had run so far.
     ///
     /// Walks as [`get`] does and stops at the first frame that answers the
-    /// name. A plain binding or an alias there is what the reference reaches
-    /// exactly when no scoped binding claimed it, since
-    /// [`get_scoped_fallback`] takes the same walk. A name-visible scoped
-    /// definition is, when it is the one resolution chose. An alias to a
-    /// renamed introduced global can also name the chosen binding, recognised
-    /// by its recorded identity ([`define_introduced_global`]). This check
-    /// supports such aliases, though the compiler no longer installs them
-    /// under an introduced definition's bare spelling.
+    /// name. A plain binding there is what the reference reaches exactly
+    /// when no scoped binding claimed it, since [`get_scoped_fallback`]
+    /// takes the same walk. A name-visible scoped definition is, when it is
+    /// the one resolution chose.
     ///
     /// `Err` as [`scoped_binding_of`] gives it: an ambiguous reference
     /// denotes no binding.
@@ -4699,7 +4035,6 @@ impl Environment {
     ///
     /// [`get`]: Self::get
     /// [`get_scoped_fallback`]: Self::get_scoped_fallback
-    /// [`define_introduced_global`]: Self::define_introduced_global
     /// [`scoped_binding_of`]: Self::scoped_binding_of
     pub fn name_reaches_binding_of(
         &self,
@@ -4717,17 +4052,6 @@ impl Environment {
             if env.bindings.borrow().slot_of(name).is_some() {
                 return Ok(chosen.is_none());
             }
-            if env.has_aliases.get()
-                && let Some(target) = env.alias_target(name)
-            {
-                let Some(chosen) = chosen else {
-                    return Ok(true);
-                };
-                let renamed = env.introduced_global(name, &chosen);
-                return Ok(matches!(target.home, AliasHome::Holder)
-                    && target.scopes.is_none()
-                    && renamed.is_some_and(|r| r == target.name));
-            }
             if let Some(i) = env.visible_scoped_index(name) {
                 let table = env.scoped_bindings.borrow();
                 let visible = table.get(name).and_then(|bindings| bindings.get(i));
@@ -4738,7 +4062,7 @@ impl Environment {
             }
             match env.parent.as_deref() {
                 Some(parent) => env = parent,
-                // Unbound by name: nothing for an alias to reach.
+                // Unbound by name.
                 None => return Ok(false),
             }
         }
@@ -4913,8 +4237,8 @@ impl Environment {
     ///
     /// Every slot is a name a program or a library bound. Early binding put
     /// an alias in a slot until 4b.10, which this left out; it links the
-    /// binding's record now and names nothing here (#837), and relinking's
-    /// and keywords' aliases live in `alias_bindings`, not in a slot.
+    /// binding's record now and names nothing here (#837), and so, since
+    /// #837's second PR, does relinking, of a variable or a keyword.
     /// `heap` is read no more, and kept for the raw layer's callers.
     pub fn local_names(&self, _heap: &RefCell<Heap>) -> Vec<String> {
         self.bindings
@@ -5623,9 +4947,9 @@ mod scoped_index_tests {
     }
 
     /// Redefinition overwrites in place, before the index is built and after;
-    /// a scoped alias reads, writes and locates the binding it names through
-    /// the exact-set readers; and a reference from one expansion reads its
-    /// own.
+    /// a relinked mention's link reads, writes and locates the binding it
+    /// names, found through the exact-set readers (`scoped_definition_hit`);
+    /// and a reference from one expansion reads its own.
     #[test]
     fn an_indexed_spelling_is_found_by_its_exact_readers() {
         let heap = new_shared_heap();
@@ -5646,14 +4970,17 @@ mod scoped_index_tests {
             );
         }
 
-        let user = Environment::with_heap(&heap);
-        for (alias, k) in [("oldest", 0), ("newest", 11)] {
-            user.define_scoped_alias(alias, Rc::clone(&library), "count".into(), identity(k));
-        }
-        assert_eq!(user.get(&heap, "oldest"), Some(n(0)));
-        assert_eq!(user.get(&heap, "newest"), Some(n(-11)));
-        user.set(&heap, "oldest", n(40)).unwrap();
-        user.set(&heap, "newest", n(41)).unwrap();
+        let link = |k: usize| {
+            let found = IntroducedDefinition::Scoped(identity(k));
+            library
+                .relink_record(&heap, "count", RelinkTarget::Introduced(&found))
+                .expect("the library holds that identity")
+        };
+        let (oldest, newest) = (link(0), link(11));
+        assert_eq!(oldest.value(&heap.borrow()), Some(n(0)));
+        assert_eq!(newest.value(&heap.borrow()), Some(n(-11)));
+        assert!(oldest.assign(&mut heap.borrow_mut(), n(40)));
+        assert!(newest.assign(&mut heap.borrow_mut(), n(41)));
         assert_eq!(
             library.scoped_definition_value(&heap, "count", &identity(0)),
             Some(n(40))
@@ -5662,13 +4989,13 @@ mod scoped_index_tests {
             library.scoped_definition_value(&heap, "count", &identity(11)),
             Some(n(41))
         );
-        // Each alias locates the cell its definition's record names (#834).
-        let located = |alias| user.binding_location(&heap, alias);
+        // Each link locates the cell its definition's record names (#834).
+        let located = |link: BindingLink| link.record().cell(&heap.borrow()).location();
         let definition = |k| library.scoped_definition_location(&heap, "count", &identity(k));
-        assert!(matches!(located("oldest"), Some(BindingLocation::Cell(..))));
-        assert_eq!(located("oldest"), definition(0));
-        assert_eq!(located("newest"), definition(11));
-        assert_ne!(located("oldest"), located("newest"));
+        assert!(matches!(located(oldest), BindingLocation::Cell(..)));
+        assert_eq!(Some(located(oldest)), definition(0));
+        assert_eq!(Some(located(newest)), definition(11));
+        assert_ne!(located(oldest), located(newest));
 
         library
             .set_with_scopes(&heap, "count", &scopes(&[4, 104, 500]), n(44))
@@ -5804,22 +5131,6 @@ mod name_view_tests {
         assert!(reaches(&heap, &env, "x", &[7]));
     }
 
-    /// An explicitly installed alias can name an introduced global's
-    /// identity. The VM no longer creates these bare aliases (#427), but the
-    /// environment API still needs to compare their bindings correctly.
-    #[test]
-    fn a_bare_alias_is_the_introduced_global_it_was_installed_for() {
-        let heap = new_shared_heap();
-        let env = Rc::new(Environment::with_heap(&heap));
-        for (id, renamed) in [(1, "count #1"), (2, "count #2")] {
-            env.define(&heap, renamed, zero());
-            env.define_introduced_global("count".into(), scopes(&[id]), renamed.into());
-            env.define_alias("count", Rc::clone(&env), renamed.into());
-        }
-        assert!(!reaches(&heap, &env, "count", &[1]));
-        assert!(reaches(&heap, &env, "count", &[2]));
-    }
-
     /// A child frame that binds nothing of the name defers to its parent.
     #[test]
     fn the_walk_continues_into_the_parent() {
@@ -5878,9 +5189,9 @@ mod shared_binding_tests {
     }
 
     /// The environments the collector is shown from `env`, by its trace and
-    /// as its parent. None of these tests gives an importer a parent or an
-    /// alias, and an import is a cell, not an edge to its library (#834),
-    /// so there are none.
+    /// as its parent. None of these tests gives an importer a parent, and an
+    /// import is a cell, not an edge to its library (#834), so there are
+    /// none.
     fn edges_to_environments(env: &Environment) -> Vec<*const Environment> {
         /// Records the environments it is given, and ignores the rest.
         struct Envs(Vec<*const Environment>);
@@ -6262,29 +5573,9 @@ mod binding_location_tests {
             child.binding_location(&heap, "X"),
             root.binding_location(&heap, "X")
         );
-
-        // Through a macro-expansion alias, into another environment.
-        let library = Rc::new(Environment::with_heap(&heap));
-        library.define(&heap, "helper", zero());
-        root.define_alias("helper.1", Rc::clone(&library), "helper".into());
-        assert_eq!(
-            child.binding_location(&heap, "helper.1"),
-            library.binding_location(&heap, "helper")
-        );
-
-        // Through an alias whose target is the environment holding it, which
-        // is stored without one: the walk restarts there, as `get`'s does.
-        root.define(&heap, "renamed.7", zero());
-        root.define_alias("bare", Rc::clone(&root), "renamed.7".into());
-        assert_eq!(child.get(&heap, "bare"), Some(zero()));
-        assert_eq!(
-            child.binding_location(&heap, "bare"),
-            root.binding_location(&heap, "renamed.7")
-        );
-        // A dangling alias is nothing, to both.
-        root.define_alias("dangling", Rc::clone(&root), "nowhere".into());
-        assert_eq!(child.get(&heap, "dangling"), None);
-        assert_eq!(child.binding_location(&heap, "dangling"), None);
+        // A name bound nowhere is nothing, to both.
+        assert_eq!(child.get(&heap, "nowhere"), None);
+        assert_eq!(child.binding_location(&heap, "nowhere"), None);
 
         // A plain binding wins over a parent's, as it does for `get`.
         child.define(&heap, "X", zero());
@@ -6322,9 +5613,9 @@ mod binding_location_tests {
     /// `binding_hit` is `binding_location`'s walk (#837): on each shape the
     /// tests above locate, its hit is the kind the step found, and the
     /// location `binding_location` answers is the one each shape's binding
-    /// is, computed without the walk: the library's cell for its own name,
-    /// an import and an alias of it; the frame's id and slot for its own
-    /// binding, and its id, spelling and place for its scoped definition.
+    /// is, computed without the walk: the library's cell for its own name
+    /// and an import of it; the frame's id and slot for its own binding, and
+    /// its id, spelling and place for its scoped definition.
     /// (`binding_location` is the hit's location by construction, so the
     /// expectations are what make this a test of its answers.)
     #[test]
@@ -6340,8 +5631,6 @@ mod binding_location_tests {
         library.define_scoped_definition(&heap, "S", scopes.clone(), zero());
         let program = Rc::new(Environment::with_heap(&heap));
         share(&heap, &program, "imported", &library, "X");
-        program.define_alias("aliased", Rc::clone(&library), "X".into());
-        program.define_scoped_alias("scoped", Rc::clone(&library), "S".into(), scopes.clone());
         let x = Some(library.cell_of(&heap, "X").unwrap().location());
 
         // A namespace's own binding, and its import: the record in its slot.
@@ -6356,20 +5645,11 @@ mod binding_location_tests {
             Some(BindingHit::Record(import))
         );
         assert_ne!(import, own, "two records over one cell");
-        // Through an alias, the target's own record, plain or scoped.
-        assert_eq!(
-            located(&program, "aliased", x.clone()),
-            Some(BindingHit::Record(own))
-        );
-        // The scoped entry's cell, by the alias and by the name-only view
-        // of the namespace's scoped entry: one location, a cell, not `X`'s.
+        // The scoped entry's cell, by the name-only view of the namespace's
+        // scoped entry: a cell, not `X`'s.
         let s = library.binding_location(&heap, "S");
         assert!(matches!(s, Some(BindingLocation::Cell(_))), "{s:?}");
         assert_ne!(s, x);
-        assert!(matches!(
-            located(&program, "scoped", s.clone()),
-            Some(BindingHit::Record(_))
-        ));
         assert!(matches!(
             located(&library, "S", s),
             Some(BindingHit::Record(_))
@@ -7208,9 +6488,10 @@ mod relink_link_tests {
     }
 }
 
-/// An alias can name a *binding* a macro introduced, not only a spelling
-/// (#408). `hygiene_matrix.rs`'s `introducing` rows say it from Scheme; these
-/// pin how each backend's storage is found and what is refused.
+/// A relinked mention can name a *binding* a macro introduced, not only a
+/// spelling (#408). `hygiene_matrix.rs`'s `introducing` rows say it from
+/// Scheme; these pin how each backend's storage is found and what is
+/// refused.
 #[cfg(test)]
 mod introduced_definition_tests {
     use super::*;
@@ -7265,48 +6546,63 @@ mod introduced_definition_tests {
         assert!(!library.has_introduced_definition("other"));
     }
 
+    /// The record a relinked mention of a definition the tree-walker
+    /// introduced links (`RelinkTarget::Introduced`, #837): reading,
+    /// assigning and locating that definition, and nothing else of the
+    /// spelling.
     #[test]
-    fn a_scoped_alias_reads_writes_and_locates_that_definition() {
+    fn a_scoped_relink_reads_writes_and_locates_that_definition() {
         let heap = new_shared_heap();
         let library = tree_walker_library(&heap);
         let program = Rc::new(Environment::with_heap(&heap));
         program.define(&heap, "count", n(-1));
-        program.define_scoped_alias("count.1", Rc::clone(&library), "count".into(), scopes(&[1]));
-        program.define_scoped_alias("count.2", Rc::clone(&library), "count".into(), scopes(&[2]));
+        let link = |run: usize| {
+            let found = IntroducedDefinition::Scoped(scopes(&[run]));
+            library
+                .relink_record(&heap, "count", RelinkTarget::Introduced(&found))
+                .expect("the library holds that identity")
+        };
+        let (first, second) = (link(1), link(2));
 
-        assert_eq!(program.get(&heap, "count.1"), Some(n(10)));
-        assert_eq!(program.get(&heap, "count.2"), Some(n(20)));
+        assert_eq!(first.value(&heap.borrow()), Some(n(10)));
+        assert_eq!(second.value(&heap.borrow()), Some(n(20)));
 
-        program.set(&heap, "count.1", n(11)).unwrap();
-        assert_eq!(program.get(&heap, "count.1"), Some(n(11)));
+        assert!(first.assign(&mut heap.borrow_mut(), n(11)));
+        assert_eq!(first.value(&heap.borrow()), Some(n(11)));
+        assert_eq!(
+            library.scoped_definition_value(&heap, "count", &scopes(&[1])),
+            Some(n(11))
+        );
         // Nothing else of the spelling moved: not the second run's, not the
         // library's plain one, not the program's.
-        assert_eq!(program.get(&heap, "count.2"), Some(n(20)));
+        assert_eq!(second.value(&heap.borrow()), Some(n(20)));
         assert_eq!(library.get(&heap, "count"), Some(n(100)));
         assert_eq!(program.get(&heap, "count"), Some(n(-1)));
 
-        let first = program.binding_location(&heap, "count.1");
-        assert!(matches!(first, Some(BindingLocation::Cell(..))));
-        assert_ne!(first, program.binding_location(&heap, "count.2"));
-        assert_ne!(first, library.binding_location(&heap, "count"));
+        let located = |link: BindingLink| Some(link.record().cell(&heap.borrow()).location());
+        assert!(matches!(located(first), Some(BindingLocation::Cell(..))));
+        assert_ne!(located(first), located(second));
+        assert_ne!(located(first), library.binding_location(&heap, "count"));
     }
 
+    /// The scopes are an identity, matched exactly. Resolved as a
+    /// *reference* instead, an identity the library does not hold would
+    /// fall back by name and read — and assign — the plain `count`. An
+    /// identity the library does not hold links nothing.
     #[test]
-    fn a_scoped_alias_never_falls_back_to_the_spelling() {
+    fn an_identity_the_library_does_not_hold_links_nothing() {
         let heap = new_shared_heap();
-        // The scopes are an identity, matched exactly. Resolved as a
-        // *reference* instead, an identity the library does not hold would
-        // fall back by name and read — and assign — the plain `count`.
         let library = tree_walker_library(&heap);
-        let program = Rc::new(Environment::with_heap(&heap));
-        program.define_scoped_alias("count.9", Rc::clone(&library), "count".into(), scopes(&[9]));
-
-        assert_eq!(program.get(&heap, "count.9"), None);
-        assert_eq!(program.binding_location(&heap, "count.9"), None);
-        // Refused with the name, as `set` refuses a dangling plain alias.
+        let found = IntroducedDefinition::Scoped(scopes(&[9]));
         assert_eq!(
-            program.set(&heap, "count.9", n(1)),
-            Err("count".to_string())
+            library.relink_record(&heap, "count", RelinkTarget::Introduced(&found)),
+            None
+        );
+        // Nor does a spelling it does not have at all.
+        let found = IntroducedDefinition::Scoped(scopes(&[1]));
+        assert_eq!(
+            library.relink_record(&heap, "other", RelinkTarget::Introduced(&found)),
+            None
         );
         assert_eq!(library.get(&heap, "count"), Some(n(100)));
     }
@@ -7332,8 +6628,9 @@ mod introduced_definition_tests {
     fn a_lexical_binding_is_not_an_introduced_definition() {
         let heap = new_shared_heap();
         // A `let`-bound variable around the macro's definition is a scoped
-        // binding in a *child* frame. It is not something an alias can name —
-        // it lives in a run-time frame — so it is left to scoped resolution.
+        // binding in a *child* frame. It is not something a relinked mention
+        // can name — it lives in a run-time frame — so it is left to scoped
+        // resolution.
         let library = Rc::new(Environment::with_heap(&heap));
         let body = Rc::new(Environment::child_frame(Rc::clone(&library)));
         body.define_with_scopes(&heap, "f", scopes(&[3]), n(1));
@@ -7379,13 +6676,10 @@ mod record_read_tests {
     #[test]
     fn no_namespace_read_answers_a_record() {
         let heap = new_shared_heap();
-        // Where the imports come from, and where the two aliases point.
+        // Where the imports come from.
         let library = Rc::new(Environment::with_heap(&heap));
         library.define(&heap, "lib", n(2));
         library.define(&heap, "aliased-lib", n(8));
-        let other = Rc::new(Environment::with_heap(&heap));
-        other.define(&heap, "target", n(6));
-        other.define_with_scopes(&heap, "deep", scopes(&[7]), n(7));
         let mut exporting = Library::with_env(vec!["t13".to_string()], Rc::clone(&library));
         exporting.export_value(&heap, "free".to_string(), n(9));
 
@@ -7401,14 +6695,6 @@ mod record_read_tests {
         // time, its renamed global defined when the code runs.
         ns.define_introduced_global("renamed".into(), scopes(&[5]), "renamed #5".into());
         ns.define(&heap, "renamed #5", n(5));
-        // A plain alias and a scoped one.
-        ns.define_alias("plain-alias", Rc::clone(&other), "target".into());
-        ns.define_scoped_alias(
-            "scoped-alias",
-            Rc::clone(&other),
-            "deep".into(),
-            scopes(&[7]),
-        );
         // One export imported under two names: two records over one cell
         // (GC_DESIGN §4.7), which until #837 the desugarer's import alias
         // also made.
@@ -7428,8 +6714,6 @@ mod record_read_tests {
             ("imported", 2),
             ("visible", 3),
             ("renamed #5", 5),
-            ("plain-alias", 6),
-            ("scoped-alias", 7),
             ("aliased", 8),
             ("aliased-too", 8),
             ("free", 9),
@@ -7496,11 +6780,6 @@ mod record_read_tests {
             );
         }
         assert_eq!(ns.get(&heap, "hidden"), None, "not visible by name");
-
-        // An alias's target, read as each walk reads it.
-        let target = |alias: &str| ns.alias_target(alias).unwrap().get(&ns, &heap);
-        assert_eq!(target("plain-alias"), Some(n(6)));
-        assert_eq!(target("scoped-alias"), Some(n(7)));
 
         // By slot, whose record is what a VM link table links (#836).
         for (name, value) in [
@@ -7884,7 +7163,6 @@ mod namespace_charge_tests {
                 frame.define(&heap, format!("v{i}"), n(i));
                 frame.define_with_scopes(&heap, format!("s{i}"), scopes.clone(), n(i));
             }
-            frame.define_alias("alias", Rc::clone(&global), Rc::from("x"));
             assert_eq!(frame.charged_bytes(), None);
             assert!(!frame.is_namespace());
             assert_eq!(external(&heap), start, "a frame of {depth}");
@@ -8001,8 +7279,8 @@ mod namespace_charge_tests {
     /// The estimate a tree-walker closure is charged for its frame (#637) is
     /// the frame it describes: one the tree-walker builds for a call of one
     /// parameter, bound under its scopes, measured as a namespace's tables
-    /// are. Its slot vector is inline and it has no index, aliases or rare
-    /// tables, so the frame and its scoped table are all it holds.
+    /// are. Its slot vector is inline and it has no index or rare tables, so
+    /// the frame and its scoped table are all it holds.
     #[test]
     fn captured_frame_bytes_is_a_one_parameter_frame() {
         let heap = new_shared_heap();
@@ -8015,7 +7293,6 @@ mod namespace_charge_tests {
         let bindings = frame.bindings.borrow();
         assert!(!bindings.slots.spilled());
         assert!(bindings.index.is_none());
-        assert_eq!(frame.alias_bindings.borrow().capacity(), 0);
         assert!(frame.rare.get().is_none());
         let measured = RC_COUNTS
             + size_of::<Environment>()
@@ -8291,21 +7568,15 @@ mod read_through_tests {
         assert_eq!(global.link_record(&heap, "x"), global.local_record("x"));
     }
 
-    /// A name the host namespace reaches by an alias or a visible scoped
-    /// definition of its own, over a name the global namespace binds in a
-    /// slot, is left to be read by name: `get` finds either before the
-    /// parent's binding, and a read-through record would read the parent's.
+    /// A name the host namespace reaches by a visible scoped definition of
+    /// its own, over a name the global namespace binds in a slot, is left to
+    /// be read by name: `get` finds it before the parent's binding, and a
+    /// read-through record would read the parent's.
     #[test]
-    fn link_record_leaves_a_host_alias_or_scoped_definition_to_be_read_by_name() {
+    fn link_record_leaves_a_host_scoped_definition_to_be_read_by_name() {
         let heap = new_shared_heap();
         let (global, host) = global_and_host(&heap);
         global.define(&heap, "y", n(2));
-        let library = Rc::new(Environment::with_heap(&heap));
-        library.define(&heap, "target", n(100));
-
-        host.define_alias("x", Rc::clone(&library), Rc::from("target"));
-        assert_eq!(host.get(&heap, "x"), Some(n(100)), "the alias first");
-        assert_eq!(host.link_record(&heap, "x"), None, "an alias here");
 
         let mut scopes = ScopeSet::new();
         scopes.add_scope(crate::scope::ScopeId(7));
@@ -8317,7 +7588,7 @@ mod read_through_tests {
             "a visible scoped definition here"
         );
 
-        assert!(table(&host).is_none(), "neither made a record");
+        assert!(table(&host).is_none(), "it made no record");
     }
 
     /// The table is the host namespace's alone: once it drops, a collection
@@ -8604,8 +7875,8 @@ mod placeholder_tests {
     /// is charged the read-through table its first weak record makes for
     /// the cell it names, and each store gives back a name's bytes at once
     /// as the parent adopts its placeholder and as the record is promoted.
-    /// A name the parent reaches by an alias gets neither a record nor a
-    /// placeholder.
+    /// A name the parent reaches by a visible scoped definition gets neither
+    /// a record nor a placeholder.
     #[test]
     fn a_host_links_a_weak_child_over_the_parents_placeholder_and_promotes_it() {
         let heap = new_shared_heap();
@@ -8676,12 +7947,14 @@ mod placeholder_tests {
         assert_eq!(sums(&heap), (records + 2, cells + 1));
         assert_counts_agree(&heap, &[&global, &host]);
 
-        let library = Rc::new(Environment::with_heap(&heap));
-        library.define(&heap, "target", n(100));
-        global.define_alias("aliased", Rc::clone(&library), Rc::from("target"));
-        assert_eq!(host.link_record(&heap, "aliased"), None, "read by name");
-        assert!(!in_store(&global, "aliased") && !in_store(&host, "aliased"));
-        assert_counts_agree(&heap, &[&global, &host, &library]);
+        let mut scopes = ScopeSet::new();
+        scopes.add_scope(crate::scope::ScopeId(7));
+        global.define_scoped_definition(&heap, "visible", scopes, n(100));
+        assert_eq!(host.get(&heap, "visible"), Some(n(100)));
+        assert_eq!(host.link_record(&heap, "visible"), None, "read by name");
+        assert!(!in_store(&global, "visible") && !in_store(&host, "visible"));
+        assert!(!in_read_through(&host, "visible"));
+        assert_counts_agree(&heap, &[&global, &host]);
     }
 
     /// #836's question 11, the departure from SD3 the owner's ruling (a) of
@@ -8934,23 +8207,11 @@ mod layout_tests {
             "Environment grew to {size} bytes; measure the tree-walker before raising this"
         );
     }
-
-    /// A macro-expansion alias's entry, which a namespace's alias table
-    /// charges per bucket: 64 bytes until a keyword's home held its record
-    /// and its target's id (#837, R6; the design's risk P4), 80 since. Pinned
-    /// exactly so that a change either way is seen and charged knowingly.
-    #[test]
-    #[cfg(target_pointer_width = "64")]
-    fn an_alias_entrys_size_is_watched() {
-        assert_eq!(std::mem::size_of::<super::AliasTarget>(), 80);
-        assert_eq!(std::mem::size_of::<super::AliasHome>(), 24);
-    }
 }
 
 /// Every edge the collector follows out of an environment, each to a value
-/// nothing else reaches (#623): a plain binding, a scoped one, the binding an
-/// alias forwards to (#38), through its environment and through a keyword's
-/// record (#837), a frame's imported cell (#834), and the parent's binding.
+/// nothing else reaches (#623): a plain binding, a scoped one, a frame's
+/// imported cell (#834), the mutable specifier, and the parent's binding.
 /// The environment is built by a struct literal, so a new field breaks this
 /// test as well as `for_each_gc_edge`; the reads before the collection show
 /// the literal is the environment the API would build.
@@ -8970,11 +8231,6 @@ mod gc_edge_tests {
         let mut s = Sentinels::new(&mut h);
         let plain = s.pair(&mut h, "Environment.bindings");
         let scoped = s.vector(&mut h, "Environment.scoped_bindings");
-        let aliased = s.string(&mut h, "Environment.alias_bindings");
-        let keyword = s.pair(
-            &mut h,
-            "Environment.alias_bindings: AliasHome::Keyword.record's cell",
-        );
         let imported = s.object(&mut h, "Environment.rare: RareTables.frame_imports");
         let specifier = s.object(&mut h, "Environment.rare: RareTables.specifier");
         let inherited = s.pair(&mut h, "Environment.parent");
@@ -8982,8 +8238,6 @@ mod gc_edge_tests {
 
         let parent = Rc::new(Environment::with_heap(&heap));
         parent.define(&heap, "inherited", inherited);
-        let alias_target = Rc::new(Environment::with_heap(&heap));
-        alias_target.define(&heap, "private", aliased);
         // The library itself is never traced: the frame's import keeps its
         // cell, and so the value, alone.
         let library = Rc::new(Environment::with_heap(&heap));
@@ -9001,33 +8255,6 @@ mod gc_edge_tests {
                 visible_by_name: true,
             }],
         );
-        // A keyword alias's record (#837, R6), over its cell, whose
-        // namespace is dropped: the alias entry alone reaches the value.
-        let (keyword_record, keyword_env) = {
-            let library = Rc::new(Environment::with_heap(&heap));
-            library.define(&heap, "kw", keyword);
-            (library.local_record("kw").unwrap(), library.env_id())
-        };
-        let mut aliases = AliasBindings::default();
-        aliases.insert(
-            Rc::from("alias"),
-            AliasTarget {
-                home: AliasHome::Env(Rc::clone(&alias_target)),
-                name: Rc::from("private"),
-                scopes: None,
-            },
-        );
-        aliases.insert(
-            Rc::from("keyword-alias"),
-            AliasTarget {
-                home: AliasHome::Keyword {
-                    record: keyword_record,
-                    env_id: keyword_env,
-                },
-                name: Rc::from("kw"),
-                scopes: None,
-            },
-        );
         let env = Environment {
             heap_id: heap.borrow().id(),
             bindings: RefCell::new(Bindings {
@@ -9039,8 +8266,9 @@ mod gc_edge_tests {
             }),
             env_id: fresh_env_id(),
             scoped_bindings: RefCell::new(scoped_table),
-            alias_bindings: RefCell::new(aliases),
-            has_aliases: Cell::new(true),
+            // Padding, removed by the next commit: it holds no edge.
+            _was_alias_bindings: [0; 5],
+            _was_has_aliases: false,
             has_visible_scoped: Cell::new(true),
             kind: Kind::Frame,
             frame: Kind::Frame.frame_flag(),
@@ -9048,7 +8276,6 @@ mod gc_edge_tests {
                 introduced_global_names: RefCell::default(),
                 scoped_index: RefCell::default(),
                 frame_imports: RefCell::new(vec![None, Some(exported)]),
-                relink_aliases: RefCell::default(),
                 specifier: Cell::new(Some(specifier)),
                 namespace: None,
                 // A host namespace's: `read_through_edges`.
@@ -9063,8 +8290,6 @@ mod gc_edge_tests {
             env.get_with_scopes(&heap, "hidden", &scopes).unwrap(),
             Some(scoped)
         );
-        assert_eq!(env.get(&heap, "alias"), Some(aliased));
-        assert_eq!(env.get(&heap, "keyword-alias"), Some(keyword));
         assert_eq!(env.get(&heap, "exported"), Some(imported));
         assert_eq!(env.get(&heap, "inherited"), Some(inherited));
         let env = Rc::new(env);
@@ -9114,8 +8339,9 @@ mod gc_edge_tests {
             bindings: RefCell::new(Bindings::default()),
             env_id: fresh_env_id(),
             scoped_bindings: RefCell::new(ScopedTable::default()),
-            alias_bindings: RefCell::new(AliasBindings::default()),
-            has_aliases: Cell::new(false),
+            // Padding, removed by the next commit.
+            _was_alias_bindings: [0; 5],
+            _was_has_aliases: false,
             has_visible_scoped: Cell::new(false),
             kind: Kind::HostNamespace,
             frame: Kind::HostNamespace.frame_flag(),
@@ -9248,740 +8474,6 @@ mod gc_edge_tests {
             read_cell.contains("use-after-free"),
             "a freed cell: {read_cell}"
         );
-    }
-}
-
-#[cfg(test)]
-mod relink_alias_tests {
-    //! [`Environment::relink_alias`] (#611): one alias per target, however
-    //! many expansions ask, and never one shared by two targets.
-    use super::*;
-    use crate::heap::new_shared_heap;
-    use crate::scope::{ScopeId, ScopeSet};
-
-    fn n(i: i64) -> TaggedValue {
-        TaggedValue::fixnum(i)
-    }
-
-    /// A library with two private helpers, and a program that cannot name
-    /// either.
-    fn library_and_program(heap: &SharedHeap) -> (Rc<Environment>, Rc<Environment>) {
-        let library = Rc::new(Environment::with_heap(heap));
-        library.define(heap, "helper", n(1));
-        library.define(heap, "other", n(2));
-        let program = Rc::new(Environment::with_heap(heap));
-        (library, program)
-    }
-
-    #[test]
-    fn one_target_asked_for_repeatedly_gets_one_alias() {
-        let heap = new_shared_heap();
-        let (library, program) = library_and_program(&heap);
-        let minted = Cell::new(0);
-        let mut mint = || {
-            minted.set(minted.get() + 1);
-            Rc::<str>::from(format!("helper.{}", minted.get()))
-        };
-        let first = program.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "helper".into(),
-            None,
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        for _ in 0..100 {
-            let again = program.relink_alias(
-                &heap,
-                Rc::clone(&library),
-                "helper".into(),
-                None,
-                &ScopeSet::new(),
-                &mut mint,
-            );
-            assert_eq!(again, first);
-        }
-        assert_eq!(minted.get(), 1, "an alias per target, not per expansion");
-        // Still an alias, resolved afresh: it sees what the library assigns.
-        library.set(&heap, "helper", n(10)).unwrap();
-        assert_eq!(program.get(&heap, &first), Some(n(10)));
-    }
-
-    #[test]
-    fn two_targets_get_two_aliases() {
-        let heap = new_shared_heap();
-        let (library, program) = library_and_program(&heap);
-        let elsewhere = Rc::new(Environment::with_heap(&heap));
-        elsewhere.define(&heap, "helper", n(3));
-        let minted = Cell::new(0);
-        let mut mint = || {
-            minted.set(minted.get() + 1);
-            Rc::<str>::from(format!("alias.{}", minted.get()))
-        };
-        let helper = program.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "helper".into(),
-            None,
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        let other = program.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "other".into(),
-            None,
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        // The same spelling in another environment is another target.
-        let elsewhere_helper = program.relink_alias(
-            &heap,
-            Rc::clone(&elsewhere),
-            "helper".into(),
-            None,
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        assert_eq!(minted.get(), 3);
-        assert_eq!(program.get(&heap, &helper), Some(n(1)));
-        assert_eq!(program.get(&heap, &other), Some(n(2)));
-        assert_eq!(program.get(&heap, &elsewhere_helper), Some(n(3)));
-    }
-
-    #[test]
-    fn two_identities_of_one_spelling_get_two_aliases() {
-        let heap = new_shared_heap();
-        let (library, program) = library_and_program(&heap);
-        let a = ScopeSet::singleton(ScopeId::fresh());
-        let b = ScopeSet::singleton(ScopeId::fresh());
-        let minted = Cell::new(0);
-        let mut mint = || {
-            minted.set(minted.get() + 1);
-            Rc::<str>::from(format!("tmp.{}", minted.get()))
-        };
-        let by_name = program.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "tmp".into(),
-            None,
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        let at_a = program.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "tmp".into(),
-            Some(a.clone()),
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        let at_b = program.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "tmp".into(),
-            Some(b),
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        assert_eq!(minted.get(), 3, "{by_name} {at_a} {at_b}");
-        assert_eq!(
-            program.relink_alias(
-                &heap,
-                Rc::clone(&library),
-                "tmp".into(),
-                Some(a),
-                &ScopeSet::new(),
-                &mut mint
-            ),
-            at_a
-        );
-        assert_eq!(minted.get(), 3);
-    }
-
-    /// Two mentions of one target — a generated macro's own binder of a
-    /// spelling and the library's binding it was passed — each get an alias,
-    /// since the spelling is what tells the renamed mentions apart.
-    #[test]
-    fn two_mentions_of_one_target_get_two_aliases() {
-        let heap = new_shared_heap();
-        let (library, program) = library_and_program(&heap);
-        let generated = ScopeSet::singleton(ScopeId::fresh());
-        let minted = Cell::new(0);
-        let mut mint = || {
-            minted.set(minted.get() + 1);
-            Rc::<str>::from(format!("helper.{}", minted.get()))
-        };
-        let as_written = program.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "helper".into(),
-            None,
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        let as_generated = program.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "helper".into(),
-            None,
-            &generated,
-            &mut mint,
-        );
-        assert_ne!(as_written, as_generated);
-        assert_eq!(minted.get(), 2);
-        // Each mention keeps its own from then on, and both reach the helper.
-        assert_eq!(
-            program.relink_alias(
-                &heap,
-                Rc::clone(&library),
-                "helper".into(),
-                None,
-                &generated,
-                &mut mint
-            ),
-            as_generated
-        );
-        assert_eq!(minted.get(), 2);
-        assert_eq!(program.get(&heap, &as_written), Some(n(1)));
-        assert_eq!(program.get(&heap, &as_generated), Some(n(1)));
-    }
-
-    /// The mint skips a name a placeholder holds (#836): an alias there
-    /// would leave code that linked the name reading the placeholder where
-    /// `get` reads the alias.
-    #[test]
-    fn minting_skips_a_name_a_placeholder_holds() {
-        let heap = new_shared_heap();
-        let (library, program) = library_and_program(&heap);
-        let placeholder = program
-            .link_record(&heap, "helper.1")
-            .expect("a placeholder");
-        let minted = Cell::new(0);
-        let mut mint = || {
-            minted.set(minted.get() + 1);
-            Rc::<str>::from(format!("helper.{}", minted.get()))
-        };
-        let alias = program.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "helper".into(),
-            None,
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        assert_eq!(&*alias, "helper.2");
-        assert_eq!(program.get(&heap, &alias), Some(n(1)));
-        assert_eq!(program.get(&heap, "helper.1"), None, "still unbound");
-        assert_eq!(program.link_record(&heap, "helper.1"), Some(placeholder));
-    }
-
-    /// The mint skips a name already bound here, which an alias would
-    /// shadow (#837): the program's binding of the spelling stays its own,
-    /// and the alias takes the next spelling offered. The one test of
-    /// `relink_alias`'s refusal of a bound spelling, ported from
-    /// `import_alias_tests`' `minting_never_forwards_over_a_name_already_bound`
-    /// when early binding stopped minting. Over a variable target. Nothing
-    /// but these tests mints an alias since #837's second PR, whose last
-    /// part deletes them with the tables.
-    #[test]
-    fn minting_skips_a_name_already_bound() {
-        let heap = new_shared_heap();
-        let (library, program) = library_and_program(&heap);
-        program.define(&heap, "helper.1", n(42));
-        let minted = Cell::new(0);
-        let mut mint = || {
-            minted.set(minted.get() + 1);
-            Rc::<str>::from(format!("helper.{}", minted.get()))
-        };
-        let alias = program.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "helper".into(),
-            None,
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        assert_eq!(&*alias, "helper.2");
-        assert_eq!(program.get(&heap, &alias), Some(n(1)));
-        assert_eq!(
-            program.get(&heap, "helper.1"),
-            Some(n(42)),
-            "the program's own binding"
-        );
-    }
-
-    /// The same in a host namespace (#836): the mint skips a name its weak
-    /// read-through record holds, over the parent's placeholder.
-    #[test]
-    fn minting_skips_a_name_a_weak_read_through_record_holds() {
-        let heap = new_shared_heap();
-        let (library, _) = library_and_program(&heap);
-        let global = Rc::new(Environment::with_heap(&heap));
-        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
-        let child = host.link_record(&heap, "helper.1").expect("a weak child");
-        let minted = Cell::new(0);
-        let mut mint = || {
-            minted.set(minted.get() + 1);
-            Rc::<str>::from(format!("helper.{}", minted.get()))
-        };
-        let alias = host.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "helper".into(),
-            None,
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        assert_eq!(&*alias, "helper.2");
-        assert_eq!(host.get(&heap, &alias), Some(n(1)));
-        assert_eq!(host.get(&heap, "helper.1"), None, "still unbound");
-        assert_eq!(host.link_record(&heap, "helper.1"), Some(child));
-    }
-
-    /// `remembered_relink`'s assertion (#836): no path puts a placeholder at
-    /// a remembered alias's spelling, since the mint skips a name one holds
-    /// and a link of an alias's spelling makes none, so one forged into the
-    /// store there is refused at the next relink to the same target.
-    #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "a remembered relink alias over a placeholder")]
-    fn a_remembered_relink_alias_over_a_placeholder_is_refused() {
-        let heap = new_shared_heap();
-        let (library, program) = library_and_program(&heap);
-        let mut mint = || Rc::<str>::from("helper.1");
-        let alias = program.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "helper".into(),
-            None,
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        program
-            .link_record(&heap, "elsewhere")
-            .expect("a placeholder, and the store");
-        let forged = {
-            let mut h = heap.borrow_mut();
-            let cell = BindingCell::new_own(&mut h, TaggedValue::UNBOUND, program.env_id());
-            Record::placeholder(&mut h, cell)
-        };
-        let store = program.weak_entries().expect("the store");
-        store.insert(alias, forged);
-        program.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "helper".into(),
-            None,
-            &ScopeSet::new(),
-            &mut mint,
-        );
-    }
-
-    #[test]
-    fn a_remembered_alias_that_was_defined_over_is_replaced() {
-        let heap = new_shared_heap();
-        let (library, program) = library_and_program(&heap);
-        let minted = Cell::new(0);
-        let mut mint = || {
-            minted.set(minted.get() + 1);
-            Rc::<str>::from(format!("helper.{}", minted.get()))
-        };
-        let first = program.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "helper".into(),
-            None,
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        // `helper.1` is a legal identifier: the program binds it itself.
-        program.define(&heap, Rc::clone(&first), n(99));
-        let second = program.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "helper".into(),
-            None,
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        assert_ne!(second, first);
-        assert_eq!(minted.get(), 2);
-        assert_eq!(program.get(&heap, &first), Some(n(99)));
-        assert_eq!(program.get(&heap, &second), Some(n(1)));
-        // And the replacement is the one remembered from then on.
-        assert_eq!(
-            program.relink_alias(
-                &heap,
-                Rc::clone(&library),
-                "helper".into(),
-                None,
-                &ScopeSet::new(),
-                &mut mint
-            ),
-            second
-        );
-        assert_eq!(minted.get(), 2);
-    }
-
-    #[test]
-    fn a_frame_reuses_its_roots_alias_and_keeps_its_own_to_itself() {
-        let heap = new_shared_heap();
-        let (library, program) = library_and_program(&heap);
-        let minted = Cell::new(0);
-        let mut mint = || {
-            minted.set(minted.get() + 1);
-            Rc::<str>::from(format!("alias.{}", minted.get()))
-        };
-        let rooted = program.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "helper".into(),
-            None,
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        let body = Rc::new(Environment::child_frame(Rc::clone(&program)));
-        let frame = Rc::new(Environment::child_frame(Rc::clone(&body)));
-        assert_eq!(
-            frame.relink_alias(
-                &heap,
-                Rc::clone(&library),
-                "helper".into(),
-                None,
-                &ScopeSet::new(),
-                &mut mint
-            ),
-            rooted
-        );
-        assert_eq!(minted.get(), 1);
-        assert!(
-            frame.alias_target(&rooted).is_none(),
-            "the frame installs nothing"
-        );
-        assert_eq!(frame.get(&heap, &rooted), Some(n(1)));
-        // A target the root has not aliased is minted into the frame alone.
-        let own = frame.relink_alias(
-            &heap,
-            Rc::clone(&library),
-            "other".into(),
-            None,
-            &ScopeSet::new(),
-            &mut mint,
-        );
-        assert_eq!(minted.get(), 2);
-        assert!(program.alias_target(&own).is_none());
-        assert_eq!(frame.get(&heap, &own), Some(n(2)));
-    }
-}
-
-/// What a relink alias names as its home (#837, R6; [`AliasTarget`]): a
-/// keyword's record only where the target namespace binds the keyword in
-/// its own tables — its slot for the name, or its scoped entry at exactly
-/// the alias's scopes — and its environment everywhere else. One test per
-/// arm, each also reading, writing and locating through the alias against
-/// what the target's own read answers, and following a redefinition.
-#[cfg(test)]
-mod alias_home_tests {
-    use super::*;
-    use crate::compiled_macro::CompiledMacro;
-    use crate::heap::new_shared_heap;
-    use crate::scope::{ScopeId, ScopeSet};
-    use std::collections::{HashMap, HashSet};
-
-    fn n(i: i64) -> TaggedValue {
-        TaggedValue::fixnum(i)
-    }
-
-    /// A fresh macro value, named `name`.
-    fn a_macro(heap: &SharedHeap, name: &str) -> TaggedValue {
-        let compiled = CompiledMacro {
-            name: Rc::from(name),
-            rules: vec![],
-            max_pvars: 0,
-            definition_scopes: ScopeSet::new(),
-            template_symbols: HashSet::new(),
-            inherited_identifiers: HashMap::new(),
-            definition_env: None,
-            foreign_expansions: vec![],
-        };
-        heap.borrow_mut().alloc_macro(Rc::new(compiled), vec![])
-    }
-
-    /// The alias `program` holds for `name` in `target`, under `scopes`,
-    /// relinked as the desugarer relinks one.
-    fn relinked(
-        heap: &SharedHeap,
-        program: &Environment,
-        target: &Rc<Environment>,
-        name: &str,
-        scopes: Option<ScopeSet>,
-    ) -> Rc<str> {
-        let spelling: Rc<str> = Rc::from(format!("{name}.alias.{}", target.env_id()));
-        program.relink_alias(
-            heap,
-            Rc::clone(target),
-            Rc::from(name),
-            scopes,
-            &ScopeSet::new(),
-            || Rc::clone(&spelling),
-        )
-    }
-
-    /// What `program` names as `alias`'s home, and how many environments
-    /// the alias entry's trace reports.
-    fn home_of(program: &Environment, alias: &str) -> (&'static str, usize) {
-        let homes = program.alias_homes_for_tests();
-        let (_, home, envs) = homes
-            .into_iter()
-            .find(|(spelling, _, _)| spelling == alias)
-            .unwrap_or_else(|| panic!("no alias `{alias}`"));
-        (home, envs)
-    }
-
-    /// A keyword in the target namespace's slot: the alias holds the
-    /// slot's record, names no environment, and reads, writes and locates
-    /// what the namespace's own read does — across a redefinition, which
-    /// stores into the record's cell, and an import over it, which
-    /// re-points the record.
-    #[test]
-    fn a_keyword_in_the_targets_slot_is_held_by_its_record() {
-        let heap = new_shared_heap();
-        let library = Rc::new(Environment::with_heap(&heap));
-        let first = a_macro(&heap, "kw");
-        library.define(&heap, "kw", first);
-        let program = Rc::new(Environment::with_heap(&heap));
-        let alias = relinked(&heap, &program, &library, "kw", None);
-        assert_eq!(home_of(&program, &alias), ("keyword", 0));
-        assert_eq!(program.get(&heap, &alias), Some(first));
-        assert_eq!(
-            program.binding_location(&heap, &alias),
-            library.binding_location(&heap, "kw")
-        );
-
-        let second = a_macro(&heap, "kw");
-        library.define(&heap, "kw", second);
-        assert_eq!(program.get(&heap, &alias), Some(second), "a redefinition");
-
-        let elsewhere = Rc::new(Environment::with_heap(&heap));
-        let third = a_macro(&heap, "kw");
-        elsewhere.define(&heap, "kw", third);
-        share(&heap, &library, "kw", &elsewhere, "kw");
-        assert_eq!(program.get(&heap, &alias), Some(third), "an import over it");
-        assert_eq!(
-            program.binding_location(&heap, &alias),
-            library.binding_location(&heap, "kw")
-        );
-
-        // A write through the alias is the slot's.
-        program.set(&heap, &alias, n(7)).unwrap();
-        assert_eq!(library.get(&heap, "kw"), Some(n(7)));
-        assert_eq!(elsewhere.get(&heap, "kw"), Some(n(7)), "one location");
-    }
-
-    /// A keyword at exactly the alias's scopes in the target namespace's
-    /// scoped table (a splice's private keyword, #424): the alias holds
-    /// the entry's record, which a redefinition at those scopes stores into
-    /// and another entry of the spelling leaves alone.
-    #[test]
-    fn a_keyword_at_exactly_the_aliass_scopes_is_held_by_its_record() {
-        let heap = new_shared_heap();
-        let library = Rc::new(Environment::with_heap(&heap));
-        let identity = ScopeSet::singleton(ScopeId::fresh());
-        let first = a_macro(&heap, "kw");
-        library.define_with_scopes(&heap, "kw", identity.clone(), first);
-        let program = Rc::new(Environment::with_heap(&heap));
-        let alias = relinked(&heap, &program, &library, "kw", Some(identity.clone()));
-        assert_eq!(home_of(&program, &alias), ("keyword", 0));
-        assert_eq!(program.get(&heap, &alias), Some(first));
-        assert_eq!(
-            program.binding_location(&heap, &alias),
-            library.scoped_definition_location(&heap, "kw", &identity)
-        );
-
-        let second = a_macro(&heap, "kw");
-        library.define_with_scopes(&heap, "kw", identity.clone(), second);
-        let other = ScopeSet::singleton(ScopeId::fresh());
-        library.define_with_scopes(&heap, "kw", other, a_macro(&heap, "kw"));
-        library.define(&heap, "kw", a_macro(&heap, "kw"));
-        assert_eq!(program.get(&heap, &alias), Some(second));
-        assert_eq!(
-            library.scoped_definition_value(&heap, "kw", &identity),
-            Some(second)
-        );
-
-        program.set(&heap, &alias, n(8)).unwrap();
-        assert_eq!(
-            library.scoped_definition_value(&heap, "kw", &identity),
-            Some(n(8))
-        );
-    }
-
-    /// A keyword a host namespace reaches through its parent, the global
-    /// namespace: the host binds nothing of its own, so the alias names the
-    /// host and reads it by name, and a later host definition of the
-    /// spelling moves it, as it moved the by-name read before.
-    #[test]
-    fn a_keyword_reached_through_the_targets_parent_keeps_its_environment() {
-        let heap = new_shared_heap();
-        let global = Rc::new(Environment::with_heap(&heap));
-        let inherited = a_macro(&heap, "kw");
-        global.define(&heap, "kw", inherited);
-        let host = Rc::new(Environment::host_namespace(Rc::clone(&global)));
-        let program = Rc::new(Environment::with_heap(&heap));
-        let alias = relinked(&heap, &program, &host, "kw", None);
-        assert_eq!(home_of(&program, &alias), ("env", 1));
-        assert_eq!(program.get(&heap, &alias), Some(inherited));
-
-        let own = a_macro(&heap, "kw");
-        host.define(&heap, "kw", own);
-        assert_eq!(program.get(&heap, &alias), Some(own));
-    }
-
-    /// A keyword the target namespace reaches as the name-only view of a
-    /// scoped definition, which a later visible definition of the spelling
-    /// would move: the alias keeps its environment.
-    #[test]
-    fn a_name_visible_scoped_keyword_keeps_its_environment() {
-        let heap = new_shared_heap();
-        let library = Rc::new(Environment::with_heap(&heap));
-        let visible = a_macro(&heap, "kw");
-        library.define_scoped_definition(
-            &heap,
-            "kw",
-            ScopeSet::singleton(ScopeId::fresh()),
-            visible,
-        );
-        let program = Rc::new(Environment::with_heap(&heap));
-        let alias = relinked(&heap, &program, &library, "kw", None);
-        assert_eq!(home_of(&program, &alias), ("env", 1));
-        assert_eq!(program.get(&heap, &alias), Some(visible));
-        assert_eq!(library.get(&heap, "kw"), Some(visible));
-    }
-
-    /// A keyword the target namespace reaches through an alias of its own:
-    /// the alias keeps its environment.
-    #[test]
-    fn a_keyword_reached_through_the_targets_alias_keeps_its_environment() {
-        let heap = new_shared_heap();
-        let elsewhere = Rc::new(Environment::with_heap(&heap));
-        let keyword = a_macro(&heap, "kw");
-        elsewhere.define(&heap, "kw", keyword);
-        let library = Rc::new(Environment::with_heap(&heap));
-        library.define_alias("kw", Rc::clone(&elsewhere), Rc::from("kw"));
-        let program = Rc::new(Environment::with_heap(&heap));
-        let alias = relinked(&heap, &program, &library, "kw", None);
-        assert_eq!(home_of(&program, &alias), ("env", 1));
-        assert_eq!(program.get(&heap, &alias), Some(keyword));
-    }
-
-    /// A keyword a frame binds, built directly: no program reached this
-    /// shape (`AliasHome::Env`). The alias keeps the frame.
-    #[test]
-    fn a_keyword_a_frame_binds_keeps_its_environment() {
-        let heap = new_shared_heap();
-        let library = Rc::new(Environment::with_heap(&heap));
-        let frame = Rc::new(Environment::child_frame(Rc::clone(&library)));
-        let keyword = a_macro(&heap, "kw");
-        frame.define(&heap, "kw", keyword);
-        let program = Rc::new(Environment::with_heap(&heap));
-        let alias = relinked(&heap, &program, &frame, "kw", None);
-        assert_eq!(home_of(&program, &alias), ("env", 1));
-        assert_eq!(program.get(&heap, &alias), Some(keyword));
-    }
-
-    /// A variable in the target's slot keeps its environment, and a target
-    /// in the holder is the holder, keyword or not.
-    #[test]
-    fn a_variable_keeps_its_environment_and_the_holder_stays_the_holder() {
-        let heap = new_shared_heap();
-        let library = Rc::new(Environment::with_heap(&heap));
-        library.define(&heap, "v", n(1));
-        let program = Rc::new(Environment::with_heap(&heap));
-        let variable = relinked(&heap, &program, &library, "v", None);
-        assert_eq!(home_of(&program, &variable), ("env", 1));
-        assert_eq!(program.get(&heap, &variable), Some(n(1)));
-
-        let keyword = a_macro(&heap, "kw");
-        program.define(&heap, "kw", keyword);
-        let own = relinked(&heap, &program, &program, "kw", None);
-        assert_eq!(home_of(&program, &own), ("holder", 0));
-        assert_eq!(program.get(&heap, &own), Some(keyword));
-    }
-
-    /// A keyword alias's entry reports no environment to a collector,
-    /// where an alias by name to the same keyword reports its namespace,
-    /// even when the keyword's macro was defined in that namespace: the
-    /// record is a pair, and what it reaches transitively — the macro's
-    /// `definition_env` among it — is the collector's to follow from the
-    /// record, not the entry's (#837's question 4;
-    /// `macro_definition_env.rs` runs the same end to end).
-    #[test]
-    fn a_keyword_alias_names_no_environment_directly() {
-        let heap = new_shared_heap();
-        let library = Rc::new(Environment::with_heap(&heap));
-        let compiled = CompiledMacro {
-            name: Rc::from("kw"),
-            rules: vec![],
-            max_pvars: 0,
-            definition_scopes: ScopeSet::new(),
-            template_symbols: HashSet::new(),
-            inherited_identifiers: HashMap::new(),
-            definition_env: Some(Rc::clone(&library)),
-            foreign_expansions: vec![],
-        };
-        let keyword = heap.borrow_mut().alloc_macro(Rc::new(compiled), vec![]);
-        library.define(&heap, "kw", keyword);
-        let program = Rc::new(Environment::with_heap(&heap));
-        let relinked = relinked(&heap, &program, &library, "kw", None);
-        program.define_alias("kw.by-name", Rc::clone(&library), Rc::from("kw"));
-        assert_eq!(
-            program.alias_homes_for_tests(),
-            vec![
-                (relinked.to_string(), "keyword", 0),
-                ("kw.by-name".to_string(), "env", 1),
-            ]
-        );
-        assert_eq!(program.get(&heap, &relinked), Some(keyword));
-        assert_eq!(program.get(&heap, "kw.by-name"), Some(keyword));
-    }
-
-    /// One keyword target asked for repeatedly gets one alias
-    /// (`remembered_relink`'s `Keyword` arm, #611), and a keyword of the
-    /// same spelling in another namespace gets its own.
-    #[test]
-    fn one_keyword_target_asked_for_repeatedly_gets_one_alias() {
-        let heap = new_shared_heap();
-        let library = Rc::new(Environment::with_heap(&heap));
-        library.define(&heap, "kw", a_macro(&heap, "kw"));
-        let other = Rc::new(Environment::with_heap(&heap));
-        other.define(&heap, "kw", a_macro(&heap, "kw"));
-        let program = Rc::new(Environment::with_heap(&heap));
-        let minted = Cell::new(0);
-        let mut mint = || {
-            minted.set(minted.get() + 1);
-            Rc::<str>::from(format!("kw.{}", minted.get()))
-        };
-        let mut ask = |target: &Rc<Environment>| {
-            program.relink_alias(
-                &heap,
-                Rc::clone(target),
-                "kw".into(),
-                None,
-                &ScopeSet::new(),
-                &mut mint,
-            )
-        };
-        let first = ask(&library);
-        for _ in 0..100 {
-            assert_eq!(ask(&library), first);
-        }
-        let elsewhere = ask(&other);
-        assert_ne!(elsewhere, first);
-        assert_eq!(ask(&other), elsewhere);
-        assert_eq!(minted.get(), 2, "an alias per target, not per expansion");
-        assert_eq!(home_of(&program, &first), ("keyword", 0));
-        assert_eq!(home_of(&program, &elsewhere), ("keyword", 0));
     }
 }
 
