@@ -296,18 +296,24 @@ fn a_rename_of_an_identifier_not_provided_is_an_error() {
     }
 }
 
-/// A library cannot export a name the desugarer made for a macro-expansion
-/// alias (#846). Expanding `(probe a)`'s `peek` in `(probe b)`'s body mints
-/// an alias `secret.N` in B's namespace. Spelling it in B's exports gave
-/// B's importers a copy taken when B was built, and chibi and Gauche leave
-/// such a name undefined. Now the load is refused, with an error of its own,
-/// on both backends.
+/// A library cannot export the spelling relinking gives a template
+/// identifier (#846, #837). Expanding `(probe a)`'s `peek` in `(probe b)`'s
+/// body relinks `(probe a)`'s private `secret`: the identifier is given a
+/// spelling of its own in the expansion, which is bound nowhere, so a
+/// library that spells it in its exports exports a name it does not
+/// define, and the load is refused as it is for any such name, on both
+/// backends. chibi and Gauche leave such a name undefined.
 ///
-/// N comes from a counter, so the test does not assume it: it tries each N
-/// from 0, in a fresh process each, and wants one to be refused as an alias
-/// and every other refused as not defined, with none loading.
+/// The spelling is read from an expansion, never computed: `(probe b)`
+/// first exports what `(probe a)`'s quoting macro answers for the same
+/// identifier, a run prints it, and the library is then rewritten to export
+/// that name, which a run of the same program spells the same way. The
+/// test also tries `secret.0` to `secret.15`, the spellings an alias had
+/// until #837's second PR, when the expansion installed one in
+/// `(probe b)`'s namespace and exporting it was refused with an error of
+/// its own: each is "not defined" now, and none is refused as an alias.
 #[test]
-fn a_library_cannot_export_a_desugarer_made_alias() {
+fn a_library_cannot_export_a_relinked_spelling() {
     let temp = TempDir::new().unwrap();
     let lib = temp.path().join("lib/probe");
     fs::create_dir_all(&lib).unwrap();
@@ -315,9 +321,11 @@ fn a_library_cannot_export_a_desugarer_made_alias() {
         lib.join("a.sld"),
         "(define-library (probe a)
   (import (scheme base))
-  (export peek)
+  (export peek spell)
   (begin
     (define secret 0)
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax spell (syntax-rules () ((_) (quote-it secret))))
     (define-syntax peek (syntax-rules () ((_) secret)))))",
     )
     .unwrap();
@@ -326,38 +334,40 @@ fn a_library_cannot_export_a_desugarer_made_alias() {
         "(import (scheme base) (scheme write) (probe b)) (write s)",
     )
     .unwrap();
-    for backend in BOTH_BACKENDS {
-        let mut refused_as_alias = None;
-        for n in 0..16 {
-            fs::write(
-                lib.join("b.sld"),
-                format!(
-                    "(define-library (probe b)
+    let b_exporting = |export: &str| {
+        fs::write(
+            lib.join("b.sld"),
+            format!(
+                "(define-library (probe b)
   (import (scheme base) (probe a))
-  (export (rename secret.{n} s))
-  (begin (define b-saw (peek))))"
-                ),
-            )
-            .unwrap();
-            let mut args = backend.to_vec();
-            args.extend(["-I", "lib", "probe.scm"]);
+  (export {export})
+  (begin (define b-saw (peek)) (define spelling (spell))))"
+            ),
+        )
+        .unwrap();
+    };
+    for backend in BOTH_BACKENDS {
+        let mut args = backend.to_vec();
+        args.extend(["-I", "lib", "probe.scm"]);
+        b_exporting("(rename spelling s)");
+        let (spelling, stderr, ok) = run_patina(temp.path(), &args);
+        assert!(ok, "{backend:?}: {stderr}");
+        assert!(
+            spelling.starts_with("secret") && spelling != "secret",
+            "{backend:?}: the spelling relinking gave `secret`, read from an expansion: {spelling}"
+        );
+        let candidates = std::iter::once(spelling).chain((0..16).map(|n| format!("secret.{n}")));
+        for name in candidates {
+            b_exporting(&format!("(rename {name} s)"));
             let (stdout, stderr, ok) = run_patina(temp.path(), &args);
             assert!(
                 !ok,
-                "{backend:?}: (probe b) exporting secret.{n} loaded: {stdout}"
+                "{backend:?}: (probe b) exporting {name} loaded: {stdout}"
             );
-            if stderr.contains("macro-expansion alias") {
-                refused_as_alias = Some(n);
-                break;
-            }
             assert!(
-                stderr.contains("not defined"),
-                "{backend:?}: secret.{n} was refused for another reason: {stderr}"
+                stderr.contains("not defined") && !stderr.contains("macro-expansion alias"),
+                "{backend:?}: {name} was refused for another reason: {stderr}"
             );
         }
-        assert!(
-            refused_as_alias.is_some(),
-            "{backend:?}: no secret.N in 0..16 was refused as an alias"
-        );
     }
 }

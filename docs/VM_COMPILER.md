@@ -493,8 +493,13 @@ into the unit's link table, `CodeObject::links` (`patina_core::LinkTable`).
   switch (#837): a library macro's `car` compiles to an inline `Car` on a
   `car@linked` operand, beside the unit's own `car` on an entry of its own
   (`vm_callprimitive.rs`'s fast-path test, and its test of a linked and an
-  own operand of one spelling in one form). Nothing makes a relinked
-  operand yet: #837's second PR's desugarer does, and until then the
+  own operand of one spelling in one form). It links a relinked one too
+  since #837's second PR: a template's reference to a binding its library
+  holds privately, or one the use site means something else by, compiles
+  to a `LoadGlobal` or a `StoreGlobal` of a pinned operand under the
+  spelling the template wrote, `secret@linked`, and a call of one to an
+  ordinary `Call` (`vm_callprimitive.rs`'s
+  `a_relinked_operand_is_printed_as_its_template_wrote_it`). The
   compiler's half is held by `primitive_calls.rs`'s
   `a_relinked_callee_is_no_fast_path` and
   `a_relinked_and_an_early_operand_of_one_record_stay_apart`, over links

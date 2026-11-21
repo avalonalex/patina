@@ -370,10 +370,103 @@ fi
 # the minimums taken by the same rule; and scheme_suite's count at 4096,
 # which expansion/relinked-names.scm and a row of splicing-libraries.scm
 # raised from 10572 to 10648 and left at 385 without stress, its test count
-# and minimum left; and hygiene_matrix's test count re-pinned 2026-11-18 for
-# #884's test that a definition in an expression position keeps its
-# expansion's binding, its 18 other tests making 21790 as before and the new
-# test 147, so 21937 at 16 and 6 without stress, the minimum left)
+# and minimum left; and the same four re-pinned 2026-11-17 for the
+# scoreboard's second batch, so that each kind of relink target is held in
+# more than one target before the switch: macro_definition_env's test count
+# for two (a definer's introduced state and a splice's private keywords,
+# each across forms and collections), which raised its count at 16 from
+# 34738 to 34917 and without stress from 91 to 107, the minimum left;
+# gc_vm's and gc_tree_walker's test counts for the shared test of a
+# generated macro that keeps a splice's keyword across its library's
+# redefinition, which raised the counts at 16 to 39737 and 84050 and
+# without stress to 17762 and 55960, the minimums taken by the same rule;
+# and scheme_suite's count at 4096, which four rows of
+# expansion/relinked-names.scm and one of splicing-libraries.scm raised
+# from 10648 to 10650 and left at 385 without stress, its test count and
+# minimum left; and four test counts re-pinned 2026-11-17 for the switch's
+# first step (#837), a relinked reference linked to its record:
+# hygiene_matrix's for two (what the scope trace says of a relinked
+# reference, linked and settled, and the record every relinking writes,
+# whose children run under the trace), which raised its count at 16 from
+# 21790 to 22238 and left it at 6 without stress; vm_callprimitive's for a
+# relinked operand's printed spelling, from 1455 to 1565, and 0 without;
+# macro_definition_env's for two (a definition of a relinked spelling
+# captures nothing; a relinked keyword used as a value is named as
+# written), from 34917 to 35062, and 107 without; and host_environments's
+# for code compiled before a host's nearer definition, from 167613 to
+# 167687, and 761 without; the minimums left. The step itself moved no
+# count: gc_vm, gc_tree_walker and scheme_suite read as they did; and the
+# same re-pinned that day for its second step, a generated macro carrying
+# its relinks across forms: vm_callprimitive's test count for the carried
+# reference's operand, which raised its count at 16 to 1669, and 0
+# without; macro_definition_env's for three (a definition of a carried
+# spelling, a generated definer run twice, a relink of each kind in one
+# macro), to 35302, and from 107 to 113 without; host_environments's for
+# the keyword a generated macro carried past a host's definition, to
+# 167767, and 761 without; hygiene_matrix's trace test's fourth program
+# raised its count at 16 to 22310, its test count left; and
+# relinked-names.scm's row for the generated definer raised scheme_suite's
+# at 4096 to 10652 and left it at 385 without; the minimums left; and for
+# the switch itself, from which relinking installs no alias and interns
+# nothing: macro_definition_env's test count for one more (the alias scan
+# of a definition over the spelling went, its successor having landed with
+# the first step; a relinked spelling is no name in a program's text; a
+# template that writes it unbound reads nothing, which runs alone in a
+# child for the range it writes), which raised its count at 16 to 36200,
+# and to 115 without; hygiene_matrix's for a program's identifier spelled
+# as a relinked literal, to 22388, and 6 without; and six rows of
+# relinked-names.scm raised scheme_suite's at 4096 to 10653 and left it at
+# 385 without; the minimums left. The switch moved no count of a target
+# whose tests it left alone: gc_vm, gc_tree_walker, host_environments and
+# vm_callprimitive read as they did; and six targets re-pinned that day for
+# the rest of the switch's tests: gc_vm's and gc_tree_walker's test counts
+# for the relinked twin of a value kept from a replaced library, and their
+# shared tests' three relinking variants of a redefined library's release
+# (800 redefinitions each, under zeal too) and four holder rows, which
+# raised the counts at 16 from 39737 to 58197 and from 84050 to 129201 and
+# without stress from 17762 to 31094 and from 55960 to 95958: both counts
+# without stress are above half their counts at 16, so each minimum is
+# midway between its two counts; macro_definition_env's test count for
+# twelve (no spelling minted, the program's names left alone, only an
+# identifier of the expansion, a template writing bound names around the
+# spelling, the four relinked twins of the early-link tests, a definition
+# an expansion produces into a body and at top level, and the body scan's
+# two), which raised its count at 16 to 39531, and to 127 without;
+# hygiene_matrix's for three relinked-literal tests, to 22610, and 6
+# without; host_environments's for a relinked expansion in a host
+# namespace, to 167847, and to 765 without; and vm_callprimitive's for the
+# code of a relinked apply, call-with-values and assignment, to 1893, and 0
+# without; those four minimums left; and hygiene_matrix's test count
+# re-pinned 2026-11-18 for #884's test that a definition in an expression
+# position keeps its expansion's binding (on main, its 18 other tests making
+# 21790 as before and the new test 147, so 21937 at 16 and 6 without stress,
+# the minimum left), merged beside the switch's tests: its 24 other tests
+# making 22610 as at the switch's head and the new test 147, so 22757 at 16
+# and 6 without stress, the minimum left; and macro_definition_env's test
+# count re-pinned 2026-11-20 for the switch's review (#837), a library
+# definer of its private name run twice where a definition is an
+# expression, which keeps two bindings: its 53 other tests making 39531 as
+# before and the new test 77, so 39608 at 16 and 127 without stress, the
+# minimum left; and again that day for an expansion's own definition in a
+# body reached before it runs, which leaves the library's binding as it
+# was: its 54 other tests making 39608 and the new test 74, so 39682 at 16
+# and 127 without stress, the minimum left; and relinked-names.scm's row
+# for a definer's keyword beside a macro generated before it left
+# scheme_suite's counts as they were, 10653 at 4096 and 385 without
+# stress; and macro_definition_env's again that day for an ambiguous
+# reference to a relinked identifier, named as its template wrote it: its
+# 55 other tests making 39682 and the new test 70, so 39752 at 16 and 127
+# without stress, the minimum left; and again that day for the switch's
+# mutation stage: six tests (a macro a library makes expanded in its later
+# forms, a generator's name spelled as a relinked one, a body scan that
+# puts back a generated macro's carried keywords, a template's quote that
+# is its library's own macro, two expansions' relinks of one spelling in
+# one generated macro, a splice an expansion wrote), which collect 1241 at
+# 16, beside its 56 other tests, two of them extended, making 39829, so
+# 41070 at 16 and 129 without stress, the minimum left; and
+# vm_callprimitive's count at 16 rose from 1893 to 1899 for the
+# generated-macro case its re-pointed private binding test gained, 0
+# without stress, its test count and minimum left)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -381,17 +474,17 @@ TARGETS=(
     "ephemerons 16 289 30"                    # 5738 (204)
     "escape_from_primitive 16 3669 19"        # 9789 (94)
     "finished_forms_release_code 16 2040 12"  # 4057 (15)
-    "gc_tree_walker 16 69525 39"              # 83551 (55500)
-    "gc_vm 16 19776 52"                       # 39552 (17616)
-    "host_environments 16 83806 33"           # 167613 (761)
-    "hygiene_matrix 16 11136 19"              # 21937 (6)
+    "gc_tree_walker 16 112579 41"             # 129201 (95958)
+    "gc_vm 16 44645 54"                       # 58197 (31094)
+    "host_environments 16 83806 36"           # 167847 (765)
+    "hygiene_matrix 16 11136 25"              # 22757 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
-    "macro_definition_env 16 16626 33"        # 34738 (91): see the header
+    "macro_definition_env 16 16626 62"        # 41070 (129): see the header
     "owned_handles 16 62714 9"                # 125648 (14)
     "rooted_loading 16 371 6"                 # 1269 (10)
-    "vm_callprimitive 16 545 20"              # 1455 (0)
-    "scheme_suite 4096 1534 11"               # 10648 (385): see the header
+    "vm_callprimitive 16 545 23"              # 1899 (0)
+    "scheme_suite 4096 1534 11"               # 10653 (385): see the header
 )
 
 OUT=$(mktemp -d)

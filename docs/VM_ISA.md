@@ -202,7 +202,9 @@ a read or store that its record cannot answer is the unbound-variable
 error. A pinned entry is an early-bound operand's or a relinked one's. The
 two read and store alike; they differ only at compile time, where a
 relinked callee takes no fast path (`VM_COMPILER.md` §10.5). The desugarer
-makes early-bound ones today, and relinked ones with #837's second PR.
+makes both: an early-bound one for a template's reference to a binding the
+use site imports too, and a relinked one for a reference to a binding its
+library holds privately or the use site means something else by.
 
 ### 4.2 MutableCell Operations
 

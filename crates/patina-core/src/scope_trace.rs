@@ -24,7 +24,8 @@
 //! # Using it
 //!
 //! `PATINA_SCOPE_TRACE=<file>` appends a record per binding, per scoped
-//! resolution, and per completed scoped write. **Use an absolute path**: the
+//! resolution, per completed scoped write, and per relinking. **Use an
+//! absolute path**: the
 //! compat harness and the Larceny runner both `cd` into a scratch directory
 //! they then delete.
 //!
@@ -66,10 +67,13 @@
 //!   `scoped` (the rule decided), `byname` (it declined and the caller fell
 //!   back to spelling), `unbound` (it declined and nothing answered),
 //!   `ambiguous` (two candidates, neither more specific — an error rather
-//!   than an answer), or `early-link` (the desugarer bound a library macro's
+//!   than an answer), `early-link` (the desugarer bound a library macro's
 //!   reference to the binding its macro means, which no backend resolves
 //!   after unless the same form's settling takes the link back, when a
-//!   backend's record follows: `phase=desugar`, #837).
+//!   backend's record follows: `phase=desugar`, #837), or `relink` (the
+//!   desugarer emitted a reference that relinking had linked to its macro's
+//!   own binding, under the spelling the template wrote; settled and
+//!   followed the same way).
 //! - `op` — `get`, `set`, or `bind` for a binding occurrence being renamed.
 //!   The VM's renamer serves all three through one function, so without this
 //!   a VM trace could not be diffed against the tree-walker's for the
@@ -84,6 +88,18 @@
 //! a `via=byname` on a name that *has* a scoped binding two lines above:
 //! resolution saw a candidate, rejected it, and spelling answered anyway.
 //!
+//! A `RELINK` record is written for each mention relinking decides to
+//! point at its macro's own binding (#837), whether or not the mention is
+//! ever a reference: `name`, the spelling the template wrote; `spelling`,
+//! the one the mention was given in the expansion; `guard`, the scope of
+//! the expansion that relinked it; `target`, how the binding is named
+//! (`byname`, `introduced`, `scoped-keyword`); and `record`, `linked` where
+//! the target had a binding record to link and `none` where it had not.
+//!
+//! ```text
+//! RELINK  phase=desugar name="secret" spelling="secret.3" guard=S140 target=byname record=linked
+//! ```
+//!
 //! Records are **not** deduplicated, unlike [`crate::scope_resolve`]'s
 //! ambiguity log: order and repetition are the signal, since the question is
 //! usually which of two things happened first.
@@ -95,7 +111,7 @@
 //! record. `phase=compile` records the renamer's decisions, which is the last
 //! point the VM has scopes at all.
 
-use crate::scope::ScopeSet;
+use crate::scope::{ScopeId, ScopeSet};
 use std::cell::Cell;
 use std::io::Write;
 use std::sync::{Mutex, OnceLock};
@@ -204,6 +220,15 @@ pub enum Outcome {
     /// `phase=desugar` only, with `cands=0`: a reference is linked only where
     /// no scoped binding selects it.
     EarlyLink,
+    /// The desugarer emitted a reference, or an assignment, that relinking
+    /// had linked to the binding its macro means (#837): a private or an
+    /// introduced one, or one the use site means something else by. The
+    /// record names the spelling the template wrote, and follows the
+    /// resolution's own record for the spelling relinking gave the
+    /// identifier. Neither backend resolves it after, unless the form's
+    /// settling takes the link back, as for [`Outcome::EarlyLink`].
+    /// `phase=desugar` only, with `cands=0`.
+    Relink,
 }
 
 impl Outcome {
@@ -214,6 +239,7 @@ impl Outcome {
             Outcome::Unbound => "unbound",
             Outcome::Ambiguous => "ambiguous",
             Outcome::EarlyLink => "early-link",
+            Outcome::Relink => "relink",
         }
     }
 }
@@ -371,6 +397,67 @@ fn resolve_record(
     )
 }
 
+/// How relinking names the binding a mention means (#837): what a `RELINK`
+/// record's `target` field says.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RelinkKind {
+    /// What the name alone reaches in the macro's environment.
+    ByName,
+    /// A definition a macro introduced, which the mention's scopes select.
+    Introduced,
+    /// A keyword bound at exactly the scopes the mention carries.
+    ScopedKeyword,
+}
+
+impl RelinkKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            RelinkKind::ByName => "byname",
+            RelinkKind::Introduced => "introduced",
+            RelinkKind::ScopedKeyword => "scoped-keyword",
+        }
+    }
+}
+
+/// Record a mention relinking points at its macro's own binding (#837):
+/// the spelling the template `wrote`, the `spelling` the mention is given
+/// in the expansion, the scope of the expansion that relinked it, how the
+/// binding is named, and whether it had a record to link.
+///
+/// Written for every such mention, a keyword's and a binder's included,
+/// which no `RESOLVE … via=relink` record names; and in every build, so
+/// that a lane of release binaries can be read for a target with no
+/// record.
+pub fn relink(wrote: &str, spelling: &str, guard: ScopeId, target: RelinkKind, linked: bool) {
+    if !enabled() {
+        return;
+    }
+    emit(relink_record(
+        phase_str(),
+        wrote,
+        spelling,
+        guard,
+        target,
+        linked,
+    ));
+}
+
+/// The `RELINK` grammar. See [`bind_record`] for why it is split out.
+fn relink_record(
+    phase: &str,
+    wrote: &str,
+    spelling: &str,
+    guard: ScopeId,
+    target: RelinkKind,
+    linked: bool,
+) -> String {
+    format!(
+        "RELINK  phase={phase} name={wrote:?} spelling={spelling:?} guard={guard} target={} record={}\n",
+        target.as_str(),
+        if linked { "linked" } else { "none" }
+    )
+}
+
 /// Record where a scoped write finally landed.
 ///
 /// The write walks environment by environment, so its trace is a *sequence*
@@ -481,6 +568,45 @@ mod tests {
             ),
             "RESOLVE phase=desugar name=\"f\" ref={S140} cands=0 picked=- via=early-link op=get\n"
         );
+        // A relinked reference, under the spelling its template wrote, and
+        // the relinking that linked it (#837).
+        assert_eq!(
+            resolve_record(
+                "desugar",
+                "secret",
+                &set(&[140]),
+                0,
+                None,
+                Op::Set,
+                Outcome::Relink
+            ),
+            "RESOLVE phase=desugar name=\"secret\" ref={S140} cands=0 picked=- via=relink op=set\n"
+        );
+        assert_eq!(
+            relink_record(
+                "desugar",
+                "secret",
+                "secret.3",
+                crate::scope::ScopeId(140),
+                RelinkKind::ByName,
+                true
+            ),
+            "RELINK  phase=desugar name=\"secret\" spelling=\"secret.3\" guard=S140 \
+             target=byname record=linked\n"
+        );
+        // A target with no record to link: a frame's own variable.
+        assert_eq!(
+            relink_record(
+                "desugar",
+                "x",
+                "x.4",
+                crate::scope::ScopeId(141),
+                RelinkKind::ScopedKeyword,
+                false
+            ),
+            "RELINK  phase=desugar name=\"x\" spelling=\"x.4\" guard=S141 \
+             target=scoped-keyword record=none\n"
+        );
     }
 
     /// A name that could otherwise forge a field or a whole record is escaped.
@@ -509,10 +635,27 @@ mod tests {
                 Outcome::ByName,
                 Outcome::Unbound,
                 Outcome::Ambiguous,
-                Outcome::EarlyLink
+                Outcome::EarlyLink,
+                Outcome::Relink
             ]
             .map(Outcome::as_str),
-            ["scoped", "byname", "unbound", "ambiguous", "early-link"]
+            [
+                "scoped",
+                "byname",
+                "unbound",
+                "ambiguous",
+                "early-link",
+                "relink"
+            ]
+        );
+        assert_eq!(
+            [
+                RelinkKind::ByName,
+                RelinkKind::Introduced,
+                RelinkKind::ScopedKeyword
+            ]
+            .map(RelinkKind::as_str),
+            ["byname", "introduced", "scoped-keyword"]
         );
     }
 }

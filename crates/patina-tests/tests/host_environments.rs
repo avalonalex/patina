@@ -1084,6 +1084,231 @@ fn no_namespace_read_answers_a_record() {
 /// procedures, so that expanding it makes no alias.
 const RECORDS: &str = "(cdr (assq 'binding-records (gc-stats)))";
 
+/// A relinked reference links the record its macro's environment finds for
+/// the name when it is expanded, and keeps it (#837, the owner's ruling
+/// E1). Only a host namespace can show it: its names are reached through
+/// its parent, the global namespace, until it defines them.
+///
+/// The host namespace `first` defines `read-x`, whose template names `x`,
+/// which `first` reaches in the global namespace. The host binds the macro
+/// in a second host namespace, which has an `x` of its own, so each
+/// expansion there relinks the template's `x`. `early` expands it while
+/// `first` still reaches the global `x`; then `first` defines an `x` of
+/// its own, nearer than the global one. `early`, compiled before that
+/// definition, goes on reading the global namespace's record, which a
+/// later assignment of the global `x` shows; an expansion after it links
+/// `first`'s. Until #837's second PR the reference was read by name
+/// through `first` each time it ran, and `early` answered `first`'s `x`
+/// once that was defined.
+fn linked_before_a_nearer_definition<B: Backend>(interp: Interpreter<B>) -> [String; 3] {
+    interp
+        .eval_program_owned("(import (scheme base)) (define x 'global)")
+        .unwrap();
+    let first = interp.new_environment();
+    interp
+        .eval_program_in(&first, "(define-syntax read-x (syntax-rules () ((_) x)))")
+        .unwrap();
+    let second = interp.new_environment();
+    let read_x = interp.lookup_in(&first, "read-x").expect("the macro");
+    interp.define_in(&second, "read-x", &read_x);
+    interp
+        .eval_program_in(&second, "(define x 'second) (define (early) (read-x))")
+        .unwrap();
+    let shown = |source: &str| {
+        let value = interp.eval_str_in(&second, source).unwrap();
+        interp.display_tagged(&value)
+    };
+    let before = shown("(list (early) (read-x) x)");
+    interp.eval_program_in(&first, "(define x 'first)").unwrap();
+    let after = shown("(list (early) (read-x) x)");
+    interp.eval_program_owned("(set! x 'global-again)").unwrap();
+    let assigned = shown("(list (early) (read-x) x)");
+    [before, after, assigned]
+}
+
+#[test]
+fn code_compiled_before_a_hosts_nearer_definition_keeps_the_record_it_linked() {
+    let expected = [
+        "(global global second)".to_string(),
+        "(global first second)".to_string(),
+        "(global-again first second)".to_string(),
+    ];
+    assert_eq!(
+        linked_before_a_nearer_definition(vm_interpreter()),
+        expected,
+        "VM"
+    );
+    assert_eq!(
+        linked_before_a_nearer_definition(tree_walker_interpreter()),
+        expected,
+        "tree-walker"
+    );
+}
+
+/// The same for a keyword a generated macro carries (#837; the owner's
+/// ruling on question 4, that a keyword's target travels with the
+/// syntax). The host namespace `first` defines `def-user`, which makes a
+/// macro whose template uses the keyword `kw`, which `first` reaches in
+/// the global namespace. The host binds `def-user` in a second host
+/// namespace, which has a `kw` of its own, so each expansion there relinks
+/// the template's `kw`. `user-before` is generated while `first` still
+/// reaches the global `kw`; then `first` defines a `kw` of its own.
+/// `user-before` carries the global namespace's record and expands the
+/// global keyword still; a macro generated after the definition carries
+/// `first`'s. Until #837's second PR a carried keyword was read by name
+/// through `first` at each expansion, and `user-before` expanded
+/// `first`'s keyword once that was defined
+/// (`alias_home_tests::a_keyword_reached_through_the_targets_parent_keeps_its_environment`).
+fn carried_before_a_nearer_definition<B: Backend>(interp: Interpreter<B>) -> [String; 2] {
+    interp
+        .eval_program_owned(
+            "(import (scheme base))
+             (define-syntax kw (syntax-rules () ((_ x) (list 'global x))))",
+        )
+        .unwrap();
+    let first = interp.new_environment();
+    interp
+        .eval_program_in(
+            &first,
+            "(define-syntax def-user
+               (syntax-rules ()
+                 ((_ name) (define-syntax name (syntax-rules () ((_ x) (kw x)))))))",
+        )
+        .unwrap();
+    let second = interp.new_environment();
+    let def_user = interp.lookup_in(&first, "def-user").expect("the macro");
+    interp.define_in(&second, "def-user", &def_user);
+    interp
+        .eval_program_in(
+            &second,
+            "(define-syntax kw (syntax-rules () ((_ x) (list 'second x))))
+             (def-user user-before)",
+        )
+        .unwrap();
+    let shown = |source: &str| {
+        let value = interp.eval_str_in(&second, source).unwrap();
+        interp.display_tagged(&value)
+    };
+    let before = shown("(list (user-before 1) (kw 2))");
+    interp
+        .eval_program_in(
+            &first,
+            "(define-syntax kw (syntax-rules () ((_ x) (list 'first x))))",
+        )
+        .unwrap();
+    interp
+        .eval_program_in(&second, "(def-user user-after)")
+        .unwrap();
+    let after = shown("(list (user-before 3) (user-after 4) (kw 5))");
+    [before, after]
+}
+
+#[test]
+fn a_generated_macro_keeps_the_keyword_it_carried_past_a_hosts_nearer_definition() {
+    let expected = [
+        "((global 1) (second 2))".to_string(),
+        "((global 3) (first 4) (second 5))".to_string(),
+    ];
+    assert_eq!(
+        carried_before_a_nearer_definition(vm_interpreter()),
+        expected,
+        "VM"
+    );
+    assert_eq!(
+        carried_before_a_nearer_definition(tree_walker_interpreter()),
+        expected,
+        "tree-walker"
+    );
+}
+
+/// What the global namespace lists, three ways, and has charged for its
+/// tables.
+type GlobalNames = (Vec<String>, Vec<String>, Vec<String>, Option<usize>);
+
+/// A relinked expansion in a host namespace leaves the global namespace as
+/// it was, and the host namespace no name for the spelling (#837). The
+/// host namespace imports a library whose macros read its private variable
+/// and expand its private keyword; forms evaluated there expand them at
+/// top level and in a procedure. The global namespace's names three ways
+/// and what it has charged for its tables are what they were before, and
+/// the spelling an expansion gave the private variable is nothing either
+/// namespace answers. (The heap's count of binding records is not
+/// compared: on the VM the host namespace gains a read-through record for
+/// a global name its code reads, #835.) Until the switch the expansions'
+/// aliases went in the root of the chain the form was desugared in.
+fn a_relinked_expansion_in_a_host_namespace<B: Backend>(
+    interp: Interpreter<B>,
+) -> (String, [GlobalNames; 2], bool) {
+    interp
+        .eval_program_owned(
+            "(import (scheme base) (patina debug))
+             (define-library (host4b leak)
+               (export get-secret use-priv spell-secret)
+               (import (scheme base))
+               (begin
+                 (define secret 42)
+                 (define-syntax priv (syntax-rules () ((_ x) (list 'priv x))))
+                 (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+                 (define-syntax spell-secret (syntax-rules () ((_) (quote-it secret))))
+                 (define-syntax get-secret (syntax-rules () ((_) secret)))
+                 (define-syntax use-priv (syntax-rules () ((_ x) (priv x))))))",
+        )
+        .unwrap();
+    let env = interp.new_environment();
+    interp
+        .eval_program_in(&env, "(import (host4b leak)) (define h #f)")
+        .unwrap();
+    let heap = interp.backend().heap();
+    let global = || {
+        interp.eval_str_owned("(gc)").unwrap();
+        let global = interp.global_env();
+        (
+            global.local_names(heap),
+            global.get_all_names(heap),
+            global.weak_entry_names_for_tests(),
+            global.charged_bytes(),
+        )
+    };
+    let before = global();
+    let answer = interp
+        .eval_program_in(
+            &env,
+            "(set! h (lambda () (get-secret))) (list (get-secret) (h) (use-priv 1))",
+        )
+        .unwrap();
+    let answer = interp.display_tagged(&answer);
+    let after = global();
+    let spelling = interp.eval_str_in(&env, "(spell-secret)").unwrap();
+    let spelling = interp.display_tagged(&spelling);
+    assert!(
+        spelling.starts_with("secret") && spelling != "secret",
+        "the spelling relinking gave `secret`, read from an expansion: {spelling}"
+    );
+    let named = interp.global_env().get(heap, &spelling).is_some()
+        || interp.global_env().local_slot(&spelling).is_some()
+        || interp.raw_environment(&env).get(heap, &spelling).is_some()
+        || interp.raw_environment(&env).local_slot(&spelling).is_some();
+    (answer, [before, after], named)
+}
+
+#[test]
+fn a_relinked_expansion_in_a_host_namespace_leaves_the_global_names_alone() {
+    for (backend, (answer, [before, after], named)) in [
+        (
+            "VM",
+            a_relinked_expansion_in_a_host_namespace(vm_interpreter()),
+        ),
+        (
+            "tree-walker",
+            a_relinked_expansion_in_a_host_namespace(tree_walker_interpreter()),
+        ),
+    ] {
+        assert_eq!(answer, "(42 42 (priv 1))", "{backend}");
+        assert_eq!(after, before, "{backend}: the global namespace");
+        assert!(!named, "{backend}: the relinked spelling is a name");
+    }
+}
+
 /// A read of a name nothing binds makes no binding record (#834, critique
 /// E3): a bare reference the backend misses, a reference from compiled code
 /// that misses when it runs, and a host's lookup. Nor does a host's lookup
@@ -1104,12 +1329,12 @@ const RECORDS: &str = "(cdr (assq 'binding-records (gc-stats)))";
 /// tree-walker, which links nothing; a call that misses, caught, makes no
 /// other; and once `keep` lets it go, two collections give the count back.
 /// `keep` is defined, and a `guard` of the same shape expanded, before the
-/// baseline, since a definition's operand is linked at load and the first
-/// expansion of `guard` relinks its template's private helpers, whose
-/// aliases outlive the collections. (Its imported procedures it links,
-/// making no record, since #837; until then each was an import alias, a
-/// record more in the global namespace, which this baseline also waited
-/// for.)
+/// baseline, since a definition's operand is linked at load. (An expansion
+/// of `guard` leaves nothing behind since #837: its template's imported
+/// procedures are linked and its private helpers relinked, each to a
+/// record its library already has. Until then each was an alias, a record
+/// or a table entry more in the global namespace that outlived the
+/// collections, which this baseline waited for.)
 fn read_makes_no_record<B: Backend>(interp: Interpreter<B>, backend: &str) {
     interp
         .eval_program_owned(

@@ -5,19 +5,45 @@
 ;; in the expansion, and what that spelling is bound to is the subject here.
 ;;
 ;; **This file is a scoreboard, landed before the change it scores** (#837's
-;; second PR). Every row passed when it was written, on both backends, and
-;; says "nothing about this shape changes": the rows are the relinking
+;; second PR). Every row but those the switch added (listed below) passed
+;; when it was written, on both backends, and says "nothing about this
+;; shape changes": the rows are the relinking
 ;; shapes that no lane held — a generated macro over a private variable or
 ;; keyword, in the form that made it and in later ones; a relinked
 ;; assignment; introduced state; a keyword an expansion introduces under a
 ;; relinked spelling; a definition an expansion produces into a body beside
 ;; a reference to it; a generated macro's relinked literal; a template that
-;; itself writes a name spelled like a relinked one. `hygiene_matrix.rs`
+;; itself writes a name spelled like a relinked one; and, in a second batch
+;; that also passed when it was written, a template's own internal
+;; definitions of the private spellings and a relinked reference where a
+;; call has a fast path (`apply`, an assignment beside calls of one binding,
+;; a private name for `call-with-values` or `dynamic-wind`). `hygiene_matrix.rs`
 ;; scores the first two families and, by its own assertion, none of the
 ;; rest. The same shapes with a collection or a library redefinition between
 ;; the steps, which no oracle can stage, are Rust tests
 ;; (`macro_definition_env.rs`, `gc_shared_tests!`), and the splicing one is a
 ;; row of `expansion/splicing-libraries.scm`.
+;;
+;; **The rows the switch added failed before it**, each on both backends:
+;;
+;; - "a generated definer run twice keeps two keywords": the definer's
+;;   binder of the private spelling was relinked when the definer was
+;;   generated, and is bound at its own scopes in each run, where it was
+;;   bound by name and the second run redefined the first's keyword,
+;;   `(two 3)`. Gauche answers as asserted; chibi does not (below).
+;; - "a definer's keyword captures no macro generated before it", added
+;;   with the switch's review (2026-11-20): a macro the library's
+;;   generator made carries the library's private keyword, and a definer
+;;   run after it binds a keyword of that spelling at top level, at its
+;;   own scopes. Bound by name, the definer's keyword was what the
+;;   generated macro expanded, `((kc-tag 1) (kc-tag 2) (lib-kc-priv 3))`.
+;;   Gauche answers as asserted; chibi does not (below).
+;; - The six rows under "The spelling is no name". Until the switch the
+;;   spelling a relinked identifier was given was an alias in the using
+;;   namespace, a name a program could read, assign, expand, define over
+;;   and match as a literal. In the file's order the rows answered `(42
+;;   42)`, `(mine 42)`, `(assigned hacked)`, `((leak-kw 1) (leak-kw 9)
+;;   (leak-kw 3))`, `(matched matched other other)` and `(hit miss)`.
 ;;
 ;; ── Why this file needs libraries, and what that costs ─────────────────────
 ;;
@@ -25,20 +51,27 @@
 ;; defined in libraries inline. **chibi 0.12 cannot run this file** — it does
 ;; not take `define-library` in a script; `expansion/template-references.scm`
 ;; has the measurement — and is registered `*` / `incomplete` in
-;; `DIVERGENCES.tsv`. Gauche 0.9.15 runs it and answers all thirty-eight rows
-;; as asserted.
+;; `DIVERGENCES.tsv`. Gauche 0.9.15 runs it and answers all fifty rows as
+;; asserted.
 ;;
 ;; Every row was also run under chibi 0.12 with the libraries as `.sld`
-;; files and the rest of this file as the program (2026-11-16). It agrees on
-;; thirty-one of the thirty-eight. The seven it does not are seven of the
+;; files and the rest of this file as the program (2026-11-16; the second
+;; batch's four rows, the definer row, the six rows on the spelling, and
+;; the whole file again, 2026-11-17; the row on a definer's keyword beside
+;; an earlier generated macro, and the whole file again, 2026-11-20). It
+;; agrees on forty-one of the fifty. The nine it does not are seven of the
 ;; nine rows on a keyword an expansion introduces under its library's
-;; private spelling; the comment above those rows counts them. chibi's
-;; top-level `define-syntax` lands on the *library's* keyword, so the
-;; library's own macro and every earlier generated macro expand the newest
-;; definition: `((introduced 2) (introduced 3))`, `((one 4) (one 5))`,
-;; `((one 6) (one 7))`, `((two 8) (two 8) ((one 6) (one 7)))`, `((late 9)
-;; (late 9) (late 9))`, `((from-l3-again 1) (from-l3-again 2)
-;; (from-l3-again 3))` and `((from-l3-again 4) (from-l3-again 5))`, in the
+;; private spelling, the generated definer's row and the row on a
+;; definer's keyword beside an earlier generated macro; the comment above
+;; those rows counts them. chibi's top-level `define-syntax` lands on the
+;; *library's* keyword, so the library's own macro and every earlier
+;; generated macro expand the newest definition: `((introduced 2)
+;; (introduced 3))`, `((one 4) (one 5))`, `((one 6) (one 7))`, `((two 8)
+;; (two 8) ((one 6) (one 7)))`, `((late 9) (late 9) (late 9))`,
+;; `((from-l3-again 1) (from-l3-again 2) (from-l3-again 3))`,
+;; `((from-l3-again 4) (from-l3-again 5))`, for the generated definer
+;; `(((one 1) (one 2)) ((two 3) (two 4) (two 5)))` and for the definer
+;; beside a generated macro `((kc-tag 1) (kc-tag 2) (kc-tag 3))`, in the
 ;; file's order. Gauche keeps each expansion's keyword its own, as Patina
 ;; does, and it is the arbiter of these rows.
 ;;
@@ -70,8 +103,11 @@
 
 ;; ─── The libraries ──────────────────────────────────────────────────────────
 
-;; The template's own text: forty exported names spelled as a relinked
-;; `secret` might be, beside the private `secret`, in one template.
+;; The template's own text: forty exported names, `secret.0` to
+;; `secret.39`, beside the private `secret`, in one template. A relinked
+;; `secret` was spelled so before #837's switch, numbered from 0; it now
+;; carries its library's environment id, which is in the hundreds in any
+;; run, so none of the forty meets it.
 (define-library (probe collide)
   (export collide-all
           secret.0 secret.1 secret.2 secret.3 secret.4 secret.5 secret.6
@@ -262,6 +298,43 @@
          (begin (define-syntax kw-secret (syntax-rules () ((_) 'introduced-kw)))
                 (define-syntax name (syntax-rules () ((_) (kw-secret))))))))))
 
+;; A generator of definers: the definer it makes in the program defines a
+;; keyword spelled as this library's private `dd-priv`, at top level, and a
+;; macro that uses it.
+(define-library (probe defdef)
+  (export def-definer use-dd-priv)
+  (import (scheme base))
+  (begin
+    (define-syntax dd-priv (syntax-rules () ((_ x) (list 'lib-dd-priv x))))
+    (define-syntax use-dd-priv (syntax-rules () ((_ x) (dd-priv x))))
+    (define-syntax def-definer
+      (syntax-rules ()
+        ((_ d)
+         (define-syntax d
+           (syntax-rules ()
+             ((_ n tag)
+              (begin (define-syntax dd-priv (syntax-rules () ((_ y) (list 'tag y))))
+                     (define-syntax n (syntax-rules () ((_ y) (dd-priv y)))))))))))))
+
+;; A generator and a definer over one private keyword, `kc-priv`: the
+;; macro `gen-kc` makes in the program expands the library's keyword, and
+;; `def-kc` defines a keyword of that spelling at top level, and a macro
+;; that uses it.
+(define-library (probe kwcarry)
+  (export gen-kc def-kc use-kc-priv)
+  (import (scheme base))
+  (begin
+    (define-syntax kc-priv (syntax-rules () ((_ y) (list 'lib-kc-priv y))))
+    (define-syntax use-kc-priv (syntax-rules () ((_ y) (kc-priv y))))
+    (define-syntax gen-kc
+      (syntax-rules ()
+        ((_ n) (define-syntax n (syntax-rules () ((_ x) (kc-priv x)))))))
+    (define-syntax def-kc
+      (syntax-rules ()
+        ((_ name tag)
+         (begin (define-syntax kc-priv (syntax-rules () ((_ y) (list 'tag y))))
+                (define-syntax name (syntax-rules () ((_ y) (kc-priv y))))))))))
+
 ;; A definition of the private spelling beside a reference to it.
 (define-library (probe settle)
   (export beside get-settled)
@@ -274,13 +347,21 @@
         ((_ v) (begin (define settled 'introduced) (define v settled)))))))
 
 ;; Mutually recursive definitions and their use as one expansion, the library
-;; having private procedures of both spellings.
+;; having private procedures of both spellings: produced into the body the
+;; use is in, and as the internal definitions of a body the template writes.
 (define-library (probe fwd)
-  (export m-produced)
+  (export m-produced m-direct)
   (import (scheme base))
   (begin
     (define (ev? n) 'lib-ev)
     (define (od? n) 'lib-od)
+    (define-syntax m-direct
+      (syntax-rules ()
+        ((_ x)
+         (let ()
+           (define (ev? n) (if (= n 0) 'even (od? (- n 1))))
+           (define (od? n) (if (= n 0) 'odd (ev? (- n 1))))
+           (ev? x)))))
     (define-syntax m-produced
       (syntax-rules ()
         ((_ x)
@@ -288,6 +369,38 @@
            (define (ev? n) (if (= n 0) 'even (od? (- n 1))))
            (define (od? n) (if (= n 0) 'odd (ev? (- n 1))))
            (ev? x)))))))
+
+;; A template whose head is `apply`, a call the desugarer has a lowering for.
+(define-library (probe applying)
+  (export apply-of)
+  (import (scheme base))
+  (begin
+    (define-syntax apply-of (syntax-rules () ((_ f xs) (apply f xs))))))
+
+;; A procedure the library exports, which one template calls and another
+;; assigns.
+(define-library (probe setcall)
+  (export sc-proc call-sc set-sc! read-sc)
+  (import (scheme base))
+  (begin
+    (define (sc-proc x) (list 'lib x))
+    (define (read-sc) sc-proc)
+    (define-syntax call-sc (syntax-rules () ((_ x) (sc-proc x))))
+    (define-syntax set-sc! (syntax-rules () ((_ v) (set! sc-proc v))))))
+
+;; Private names for `call-with-values` and `dynamic-wind`, which the library
+;; can point elsewhere.
+(define-library (probe control)
+  (export values-of wind-of repoint-control!)
+  (import (scheme base))
+  (begin
+    (define cwv-proc call-with-values)
+    (define wind-proc dynamic-wind)
+    (define (repoint-control!)
+      (set! cwv-proc (lambda (producer consumer) 'second))
+      (set! wind-proc (lambda (before thunk after) 'third)))
+    (define-syntax values-of (syntax-rules () ((_ a b) (cwv-proc a b))))
+    (define-syntax wind-of (syntax-rules () ((_ a b c) (wind-proc a b c))))))
 
 ;; Generated macros with a literal: the library's private variable `lit`,
 ;; its private variable `priv-lit` (which the program binds nothing of), and
@@ -332,8 +445,10 @@
 
 (import (probe collide) (probe getter) (probe later) (probe casing)
         (probe mint) (probe setter) (probe genset) (probe intro)
-        (probe shadow) (probe kwgen) (probe kwintro) (probe settle) (probe fwd) (probe litguard) (probe litonly)
-        (probe litgen))
+        (probe shadow) (probe kwgen) (probe kwintro) (probe defdef)
+        (probe kwcarry) (probe settle) (probe fwd)
+        (probe applying) (probe setcall) (probe control)
+        (probe litguard) (probe litonly) (probe litgen))
 
 (test-begin "relinked-names")
 
@@ -341,12 +456,13 @@
 
 ;; First in the file, while the program binds no `secret`. The private
 ;; `secret` reads the library's 42, and every exported `secret.k` its own
-;; value: the second element lists the ones that did not. A spot check: the
-;; spelling a relinked `secret` is given is numbered by a counter of the
-;; process, so the row meets one of the forty only while that counter is
-;; under forty, as when this file is run alone; the suite's driver runs it
-;; after other files, past all forty. The exhaustive check is a Rust test
-;; of #837's second PR.
+;; value: the second element lists the ones that did not. The forty no
+;; longer meet the spelling a relinked `secret` is given (the library's
+;; comment says why), so the row checks only that a template's own names
+;; read their own values. The checks that can meet the spelling are Rust
+;; tests, which read it from an expansion and write a range of names
+;; around it (`macro_definition_env.rs`'s
+;; `a_template_that_writes_the_relinked_spelling_*`).
 (define collided (collide-all))
 
 (test-equal "a template's own name spelled like a relinked one reads its own value"
@@ -596,6 +712,190 @@
   '((from-l3 4) (from-l3-again 5))
   (cross-in-proc))
 
+;; A definer the library's generator makes in the program, run twice. Its
+;; binder of `dd-priv` was relinked with its references when the definer
+;; was generated, so each run binds a keyword of its own, at that run's
+;; scopes, and each generated macro expands its own run's. Gauche 0.9.15
+;; answers as asserted; chibi 0.12, whose `define-syntax` lands on the
+;; library's keyword, `(((one 1) (one 2)) ((two 3) (two 4) (two 5)))`. One
+;; of the rows the switch added (the header lists them).
+(def-definer dd)
+(dd dd-g one)
+(define dd-first (list (dd-g 1) (use-dd-priv 2)))
+(dd dd-g2 two)
+
+(test-equal "a generated definer run twice keeps two keywords"
+  '(((one 1) (lib-dd-priv 2)) ((one 3) (two 4) (lib-dd-priv 5)))
+  (list dd-first (list (dd-g 3) (dd-g2 4) (use-dd-priv 5))))
+
+;; A macro the library's generator made, and then a definer run at top
+;; level that defines a keyword spelled as the library's private
+;; `kc-priv`. The generated macro's `kc-priv` is the library's, carried
+;; from the form that made it; the definer's keyword is bound at its own
+;; run's scopes and is its own macro's. Gauche 0.9.15 answers as asserted;
+;; chibi 0.12, whose `define-syntax` lands on the library's keyword,
+;; `((kc-tag 1) (kc-tag 2) (kc-tag 3))`. One of the rows the switch
+;; added (the header lists them).
+(gen-kc kc-k)
+(def-kc kc-d kc-tag)
+
+(test-equal "a definer's keyword captures no macro generated before it"
+  '((lib-kc-priv 1) (kc-tag 2) (lib-kc-priv 3))
+  (list (kc-k 1) (kc-d 2) (use-kc-priv 3)))
+
+;; ─── The spelling is no name ────────────────────────────────────────────────
+
+;; The rows the switch added (the header lists what each answered before).
+;;
+;; A relinked identifier is given a spelling of its own in the expansion,
+;; and a program can learn it: a quoting macro handed the identifier
+;; answers that spelling as a symbol, where chibi and Gauche answer the name
+;; the template wrote (an open defect of its own: a relinked identifier as
+;; data keeps the spelling relinking gave it). `(spell-…)` is that leak.
+;; The rows then use the symbol as a program would a name, through `eval`,
+;; and want what every implementation answers for a name the program bound
+;; nowhere: the spelling is bound nowhere either.
+;;
+;; **Each row is right under both readings of the leak.** Under chibi and
+;; Gauche the symbol is the written name, so each row has a private name of
+;; its own, which the program binds nowhere in this file, before or after:
+;; a row that left `leak-defined` defined would otherwise make the next
+;; row's assignment succeed there. The two literal rows bind the written
+;; name to something of another library's, `(probe leaknames)`, where it
+;; would otherwise be unbound, since chibi and Gauche disagree on a
+;; literal against an unbound name of its spelling (the header's last
+;; paragraph before "Staging").
+;;
+;; The first four rows `eval` in `(interaction-environment)`. That is this
+;; program's top level under Patina and chibi and another module under
+;; Gauche (`gosh -r7` runs a script in `r7rs.user` and answers `user`), so
+;; the rows ask it for nothing the program defined. The two literal rows
+;; need a macro in the environment they `eval` in, and take it from a
+;; library through `(environment …)`, which all three stage alike. The
+;; shape those two cannot stage, a program's own identifier and the
+;; generated macro in **one** namespace, is a Rust test
+;; (`a_program_identifier_spelled_as_a_relinked_literal_does_not_match`,
+;; `hygiene_matrix.rs`).
+(define-library (probe leak)
+  (export get-leak-read spell-leak-read
+          get-leak-defined spell-leak-defined
+          get-leak-assigned spell-leak-assigned
+          use-leak-kw spell-leak-kw
+          def-leak-matcher use-leak-lit spell-leak-lit
+          feed-leak spell-leak-fed)
+  (import (scheme base))
+  (begin
+    (define leak-read 42)
+    (define leak-defined 42)
+    (define leak-assigned 42)
+    (define leak-lit 'the-library-binding)
+    (define leak-fed 'the-library-binding)
+    (define-syntax leak-kw (syntax-rules () ((_ x) (list 'leak-kw x))))
+    (define-syntax quote-it (syntax-rules () ((_ x) 'x)))
+    (define-syntax get-leak-read (syntax-rules () ((_) leak-read)))
+    (define-syntax spell-leak-read
+      (syntax-rules () ((_) (quote-it leak-read))))
+    (define-syntax get-leak-defined (syntax-rules () ((_) leak-defined)))
+    (define-syntax spell-leak-defined
+      (syntax-rules () ((_) (quote-it leak-defined))))
+    (define-syntax get-leak-assigned (syntax-rules () ((_) leak-assigned)))
+    (define-syntax spell-leak-assigned
+      (syntax-rules () ((_) (quote-it leak-assigned))))
+    (define-syntax use-leak-kw (syntax-rules () ((_ x) (leak-kw x))))
+    (define-syntax spell-leak-kw (syntax-rules () ((_) (quote-it leak-kw))))
+    (define-syntax def-leak-matcher
+      (syntax-rules ()
+        ((_ name)
+         (define-syntax name
+           (syntax-rules (leak-lit)
+             ((_ leak-lit) 'matched)
+             ((_ anything) 'other))))))
+    (define-syntax use-leak-lit (syntax-rules () ((_ m) (m leak-lit))))
+    (define-syntax spell-leak-lit (syntax-rules () ((_) (quote-it leak-lit))))
+    (define-syntax feed-leak (syntax-rules () ((_ k) (k leak-fed))))
+    (define-syntax spell-leak-fed
+      (syntax-rules () ((_) (quote-it leak-fed))))))
+
+;; Another library's bindings of the two literal names.
+(define-library (probe leaknames)
+  (export leak-lit leak-fed)
+  (import (scheme base))
+  (begin
+    (define leak-lit 'another-librarys)
+    (define leak-fed 'another-librarys)))
+
+;; A library that runs `(probe leak)`'s generator: `leak-match`'s literal
+;; is `(probe leak)`'s private `leak-lit`, relinked here, and
+;; `leak-lit-spelling` is the spelling it was given here.
+(define-library (probe leakuser)
+  (export leak-match leak-lit-spelling)
+  (import (scheme base) (probe leak))
+  (begin
+    (def-leak-matcher leak-match)
+    (define leak-lit-spelling (spell-leak-lit))))
+
+(import (scheme eval) (scheme repl) (probe leak) (probe leakuser))
+
+(test-equal "a relinked template reference leaves no name behind"
+  '(no-such-name 42)
+  (list (guard (e (#t 'no-such-name))
+          (eval (spell-leak-read) (interaction-environment)))
+        (get-leak-read)))
+
+;; `read-leak-defined` expanded the getter before the spelling is defined.
+(define (read-leak-defined) (get-leak-defined))
+(eval (list 'define (spell-leak-defined) ''mine) (interaction-environment))
+
+(test-equal "nor a name whose definition captures earlier code"
+  '(42 42)
+  (list (read-leak-defined) (get-leak-defined)))
+
+(test-equal "nor one an assignment reaches"
+  '(refused 42)
+  (list (guard (e (#t 'refused))
+          (eval (list 'set! (spell-leak-assigned) ''hacked)
+                (interaction-environment))
+          'assigned)
+        (get-leak-assigned)))
+
+;; #873.
+(test-equal "a relinked keyword leaves no name behind"
+  '((leak-kw 1) no-such-keyword (leak-kw 3))
+  (list (use-leak-kw 1)
+        (guard (e (#t 'no-such-keyword))
+          (eval (list (spell-leak-kw) 9) (interaction-environment)))
+        (use-leak-kw 3)))
+
+;; `leak-match` and the spelling its literal was given come from
+;; `(probe leakuser)`. The library's own mention matches; the spelling as a
+;; program writes it, the written name bound by another library, and a
+;; number do not.
+(define leak-matching (environment '(probe leakuser) '(probe leaknames)))
+
+(test-equal "a program's identifier spelled as a relinked literal does not match it"
+  '(matched other other other)
+  (list (use-leak-lit leak-match)
+        (eval (list 'leak-match leak-lit-spelling) leak-matching)
+        (eval '(leak-match leak-lit) leak-matching)
+        (eval '(leak-match 7) leak-matching)))
+
+;; The other direction: a macro whose literal is spelled as the library's
+;; relinked `leak-fed`, handed the library's own. The spelling is read in
+;; the environment the macro is then defined and used in.
+(define leak-feeding
+  (environment '(scheme base) '(probe leak) '(probe leaknames)))
+(define leak-fed-spelling (eval '(spell-leak-fed) leak-feeding))
+
+(test-equal "nor does a relinked identifier match a literal a program spelled so"
+  '(miss miss)
+  (eval (list 'let-syntax
+              (list (list 'leak-k
+                          (list 'syntax-rules (list leak-fed-spelling)
+                                (list (list '_ leak-fed-spelling) ''hit)
+                                '((_ x) 'miss))))
+              '(list (feed-leak leak-k) (leak-k 7)))
+        leak-feeding))
+
 ;; ─── A definition an expansion produces beside a reference ──────────────────
 
 ;; Into a body: when the body is desugared nothing selects the reference to
@@ -624,6 +924,67 @@
 (test-equal "and into a lambda body"
   'odd
   ((lambda (k) (m-produced k)) 3))
+
+;; The same definitions as the internal definitions of a body the template
+;; itself writes: the template's own binders of the private spellings, and
+;; its references to them.
+(test-equal "a template's own internal definitions of the private spellings"
+  'odd
+  (m-direct 5))
+
+;; ─── A relinked reference where a call has a fast path ──────────────────────
+
+;; `(apply f xs)` is lowered by the desugarer where its head is the `apply`
+;; primitive. The program's definition is in a form of its own, before the
+;; expansions, so the template's `apply` is relinked in each of them, and it
+;; is the library's all the same.
+(define (apply f xs) 'program)
+(define (apply-later) (apply-of + '(1 2)))
+
+(test-equal "a template's apply is the library's past the program's definition"
+  '(3 7 program)
+  (list (apply-later) (apply-of + '(3 4)) (apply + '(1 2))))
+
+;; One binding, reached three ways. The program imports `sc-proc`, so the
+;; first two calls are bound early; then, in one form, a call bound early,
+;; the program's definition of the spelling, and after it a relinked
+;; assignment and a relinked call; and in a later form a procedure that
+;; assigns and calls, relinked both. Every template's `sc-proc` is the
+;; library's variable: each write is sequenced before the reads (the header
+;; says why), and the procedure compiled first and the library's own read
+;; see it.
+(define sc-first (call-sc 1))
+(define (sc-early x) (call-sc x))
+(begin
+  (define sc-in-form (call-sc 2))
+  (define (sc-proc x) 'mine)
+  (define sc-after
+    (let* ((wrote (set-sc! (lambda (y) (list 'new y)))) (called (call-sc 3)))
+      called)))
+(define (sc-late x)
+  (let* ((wrote (set-sc! (lambda (y) (list 'newer y)))) (called (call-sc x)))
+    called))
+
+(test-equal "a relinked assignment beside calls bound early and late, of one binding"
+  '((lib 1) (lib 2) (new 3) (new 4) (newer 5) (newer 6) (newer 7) mine)
+  (let* ((early (sc-early 4)) (late (sc-late 5)) (early-again (sc-early 6)))
+    (list sc-first sc-in-form sc-after early late early-again ((read-sc) 7)
+          (sc-proc 8))))
+
+;; The library holds `call-with-values` and `dynamic-wind` under private
+;; names, and the program has procedures of those names. A template's call
+;; is the library's variable, whatever it holds: the primitive, and then
+;; what the library assigns.
+(define (cwv-proc a b) 'program)
+(define (wind-proc a b c) 'program)
+(define (values-later) (values-of (lambda () 1) (lambda (x) (list 'cwv x))))
+(define (wind-later) (wind-of (lambda () #f) (lambda () 'dw) (lambda () #f)))
+(define control-before (list (values-later) (wind-later)))
+(repoint-control!)
+
+(test-equal "a private name for call-with-values or dynamic-wind is the library's variable"
+  '(((cwv 1) dw) second third program program)
+  (list control-before (values-later) (wind-later) (cwv-proc 1 2) (wind-proc 1 2 3)))
 
 ;; ─── A generated macro's relinked literal ───────────────────────────────────
 

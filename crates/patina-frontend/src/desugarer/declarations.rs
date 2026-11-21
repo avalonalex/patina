@@ -66,7 +66,7 @@ impl Declarations {
 
     /// Use the ordinary environment resolver, including its scope ordering and
     /// ambiguity checks. The views are never captured by compiled macros or
-    /// runtime aliases; those retain the real, live environments.
+    /// relinked links; those name the real, live environments' records.
     ///
     /// Through a shared context: the view is a frame, whose binds and
     /// imports take no borrow and allocate nothing (#834).
@@ -149,12 +149,18 @@ impl Desugarer<'_> {
 
     /// Expand `form`, a use of the macro object `mac`, whose body is
     /// `compiled`.
+    ///
+    /// Both sites of its literal comparisons are given the form's relinked
+    /// names (#837): a literal of a generated macro and an input of this
+    /// use may each be an identifier relinking renamed, whose meaning is
+    /// the form's table's and no environment's. `put_back_carried` has
+    /// put the macro's own back before this is called.
     pub(super) fn expand_macro<'gc>(
         &self,
         mac: Value<'gc>,
         compiled: &patina_core::CompiledMacro,
         form: Value<'gc>,
-        cx: &mut Cx<'gc>,
+        cx: &mut FormCx<'_, 'gc>,
     ) -> std::result::Result<patina_macros::MacroExpansion<'gc>, patina_macros::MacroError> {
         let use_env = self.expansion_env(&self.env, cx);
         let definition_env = compiled
@@ -162,6 +168,12 @@ impl Desugarer<'_> {
             .as_ref()
             .map(|env| self.expansion_env(env, cx));
         let depth = self.open_forms.borrow().depth();
+        let names = FormRelinks {
+            early: &self.early,
+            literals: cx.literals,
+        };
+        let relinked: Option<&dyn patina_macros::RelinkedNames> =
+            self.early.any_relinked.get().then_some(&names);
         patina_macros::macro_expander::expand_macro_at_sites(
             mac,
             form,
@@ -169,12 +181,40 @@ impl Desugarer<'_> {
             definition_env.as_ref().map(|env| patina_macros::Site {
                 env,
                 scopes: &compiled.definition_scopes,
+                relinked,
             }),
             Some(patina_macros::Site {
                 env: &use_env,
                 scopes: &self.current_scopes,
+                relinked,
             }),
             depth,
         )
+    }
+}
+
+/// A form's relinked names as the literal matcher asks for them (#837): the
+/// form's table, and the pool its links are entries of.
+struct FormRelinks<'a> {
+    early: &'a EarlyBinding,
+    literals: &'a LiteralPool,
+}
+
+impl patina_macros::RelinkedNames for FormRelinks<'_> {
+    fn binding<'gc>(
+        &self,
+        name: &str,
+        scopes: &ScopeSet,
+        cx: &Cx<'gc>,
+    ) -> Option<(patina_core::BindingLocation, Option<Value<'gc>>)> {
+        if scopes.is_empty() {
+            return None;
+        }
+        let (_, link) = self.early.relinked(name, scopes)?;
+        // The pool is the form's, so the link is one of its entries, and
+        // its record is live beneath the form's context. The location is
+        // read now and held across nothing.
+        let linkable = cx.linkable(self.literals, link);
+        Some((cx.linked_location(linkable), cx.linked_value(linkable)))
     }
 }

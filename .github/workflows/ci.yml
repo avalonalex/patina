@@ -405,8 +405,8 @@ jobs:
       run: cargo clippy --release --all-targets -- -D warnings
     # The GC census (#651) is compiled only with its feature, which no other
     # job builds: its tests run here, beside the lint that covers it. The
-    # second line is the census module's own unit tests, which hold what no
-    # program reaches yet: a macro object's carried relinks (#837).
+    # second line is the census module's own unit tests, which hold what the
+    # lane's programs need not reach: a macro object's carried relinks (#837).
     - name: GC census
       run: |
         cargo test -p patina-repl --test gc_census --features patina-core/gc-census

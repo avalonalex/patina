@@ -129,32 +129,33 @@ There is no traversal API today; the tracer needs a new
 *As built:* an environment's derived trace (#686) reports its edges: the
 word in each slot, plain and scoped, which in a namespace is the binding's
 record, so that its cell and value are marked as the pairs they are; each
-cell a frame imports; and one kind of edge that leaves the parent chain, an
-`Rc<Environment>` in a side table rather than a value in a slot: a
-macro-expansion alias into the environment the macro was defined in
-(relinking's; early binding made none in any table since 4b.10, which
-links the binding's record instead, #837). A keyword's alias holds its
-target's binding record instead, a pair the trace reports as a value,
-where the target namespace binds the keyword in its own tables (its slot
-for the name, or its scoped entry at exactly the alias's scopes; the
-owner's ruling R6, `AliasHome::Keyword`); any other keyword target, and
-every variable target until 4b.10's second PR, keeps the edge to its
-environment. Such an alias names no environment directly, but the record
-reaches its cell and the macro, and the macro's `definition_env` is the
-environment it was defined in, so a replaced library's namespace stays
-while an alias to a keyword defined in it does (until keyword aliases
-travel with the syntax, the owner's ruling (a) of 2026-11-16 on #837's
-question 4; `macro_definition_env.rs`'s
-`a_keyword_aliass_record_still_keeps_its_macros_definition_namespace`).
-One whose relinked keyword it imports goes, where nothing else keeps it
-(a relinked variable's alias, code compiled against it, or
-`foreign_expansions`): the record is its import over
-the exporter's cell, and the macro's `definition_env` the exporter's
-namespace (`a_keyword_alias_to_an_imported_keyword_releases_the_replaced_library`).
+cell a frame imports. No edge of a namespace's leaves the parent chain for
+a macro expansion's sake since #837's second PR: **relinking installs
+nothing in an environment.** A relinked identifier's target is a binding
+record that travels with the syntax: in the literal pool of the form that
+expanded it (§9.7), in the code that form emits, and, for a generated macro
+that keeps the identifier, in the macro object's `relinks` (§5.3, §9.6),
+each traced as the record it is. Until then an expansion left a
+macro-expansion alias in the use site's namespace, in a side table. A
+variable's named the environment the macro was defined in, by `Rc`, and was
+never removed, so a replaced library's namespace stayed for good (§8's
+R-A). A keyword's held its target's binding record (the owner's ruling R6),
+which reaches its cell and the macro, whose `definition_env` is the
+environment it was defined in, so a replaced library whose own keyword an
+expansion had relinked stayed too (R-B). Both go now, by the owner's
+ruling (a) of 2026-11-16 on #837's question 4 (`macro_definition_env.rs`'s
+`a_relinked_keyword_keeps_no_definition_namespace` and
+`a_relinked_imported_keyword_leaves_nothing_of_the_replaced_library`; the
+holder audit's `relink-variable` and `relink-keyword` rows, §8). The alias
+tables and that edge are still declared in `Environment`
+(`alias_bindings`, `AliasHome`, `RareTables::relink_aliases`) and still
+traced; nothing but their own tests writes one, and the PR's last part
+deletes them.
 So a record can outlive the namespace whose slot or scoped entry it was,
-which the `binding-records` statistic, a sum over the live namespaces, does
-not count (nor `cells` its cell, once no live namespace's record names it
-as its own). An
+held by code that links it or by a macro that carries it, which the
+`binding-records` statistic, a sum over the live namespaces, does not count
+(nor `cells` its cell, once no live namespace's record names it as its
+own). An
 import is no such edge: it is the exporter's cell, which the importer's
 record names, or a frame's import table holds, and which the trace marks
 like any value, so an importer keeps the cell and not the library's
@@ -704,17 +705,15 @@ record (below).
   each time, kept in the namespace's `PlaceholderStore`
   (`RareTables::placeholders`, `crates/patina-core/src/placeholder_store.rs`)
   and never in a slot, so the slots stay append-only (D1) and nothing that
-  reads them sees one. A name the namespace reaches by an alias or a visible
-  scoped definition gets none, and is read by name. A define or an import of
+  reads them sees one. A name the namespace reaches by a visible scoped
+  definition (or by an alias, which nothing installs since #837's second
+  PR) gets none, and is read by name. A define or an import of
   the name adopts it as a read-through record is adopted: re-pointed at the
   fresh cell or the exporter's and its flag cleared, in one funnel
   (`Heap::adopt_record`), and moved into a fresh slot with its word, so code
   that linked it reads the binding from then on; its own `UNBOUND` cell is
   garbage. A scoped definition of the name leaves it in place, and a read by
-  name finds the scoped binding, as today. No alias is minted at a name a
-  placeholder or a weak read-through record holds (`relink_alias`): it
-  would leave code that linked the name reading the entry where `get` reads
-  the alias. A check build
+  name finds the scoped binding, as today. A check build
   asserts that no slot is given a flagged or read-through record, at the
   slots' one writer (`Environment::append_slot`). The placement, a store per
   namespace with a list per heap rather than the slots themselves, is P2, the
@@ -723,8 +722,11 @@ record (below).
   namespace does not bind (`VmState::load_unit`), a top-level `define` of a
   name not yet bound among them, whose placeholder the definition then
   adopts. The tree-walker makes none.
-- **The by-name record (#836).** A name the namespace reaches by an alias or
-  a visible scoped definition is read by name, and a link table links the
+- **The by-name record (#836).** A name the namespace reaches by a visible
+  scoped definition is read by name (as one it reached by an alias was,
+  while relinking installed aliases: no program makes one since #837's
+  second PR, and that half goes with the alias tables), and a link table
+  links the
   heap's by-name record for it (`Heap::by_name_record`): `(cell . BY_NAME)`
   over a free cell that holds `UNBOUND` for good, made once a heap, the
   first time a link needs it, and rooted in `HandleTable.by_name` (§5.3).
@@ -1044,7 +1046,7 @@ expansion runs in (§7; point C of `PRD/GC_PRD.md` §11.3).
 | `HandleTable.ports` | `heap/port_table.rs` | Not a root: the heap's `PortTable` (#785), the `Rc<Port>` each port object's slot names by number, which hold Rust state and no value, so the derived trace skips the field. The table also records each entry's owner word, by which the sweep's pass finds a dead entry by its object's mark bit (#818) and which a check build's read compares by its bits; it must stay untraced, or every port object would live for ever. On the `HandleTable`, by its own `Rc`, for `root_set`'s reason and so that exit's registry of tables can hold it weakly (§4.6, #786); the table teardown starts takes it over, so a heap keeps one for its life. The sweep's pass takes a dead plain port's entry out as the sweep starts, and the drain after the collection a file port's (§4.5, §4.6). A read, on every port operation, does not mark the table borrowed (`HeapTable::with_unguarded`, #818): it clones an `Rc` and reaches nothing. An entry need not hold its port's last `Rc`: the `Instance` holds the standard ports and caches the current ones, and a host may keep one |
 | `HandleTable.finals` | `heap/finalize.rs` | Not a root: the heap's `FinalRegistry` (#785, §4.6), whose entries name their objects by slot index so that a collection can find them dead, weak by design, so the derived trace skips the field. On the `HandleTable`, by its own `Rc`, beside the `PortTable` whose entries it names, and carried across teardown with it |
 | `HandleTable.placeholders` | `placeholder_store.rs` | Not a root: the heap's `PlaceholderList` (#836), its namespaces' placeholder stores keyed by `env_id`, which the sweep's pass walks to drop every placeholder and weak read-through record no traced link table marked (§4.5, §4.7). Weak by design, so the derived trace skips the field: traced, it would keep every listed namespace's placeholders. It holds stores, never a namespace, by `Rc` or `Weak`; a namespace's drop takes its store off at once (`PlaceholderHandle`). On the `HandleTable`, by its own `Rc`, for `root_set`'s reason, and carried across teardown, so the teardown sweep's pass empties the store of every namespace that outlives the heap |
-| `HandleTable.by_name` | `heap/handles.rs` | The heap's by-name record (#836, `Heap::by_name_record`): the record a VM unit's link table links for a name its namespace reaches by an alias or a visible scoped definition, read by name (§4.7). Made once, the first time a link needs it, and rooted here for the heap's life, so that an entry naming it never names a freed pair whatever the tables traced; `None` on a heap no such link was made on, as on every tree-walker heap. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason. Uncounted. Pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown |
+| `HandleTable.by_name` | `heap/handles.rs` | The heap's by-name record (#836, `Heap::by_name_record`): the record a VM unit's link table links for a name its namespace reaches by a visible scoped definition, read by name (§4.7; or by an alias, until #837's second PR stopped installing them). Made once, the first time a link needs it, and rooted here for the heap's life, so that an entry naming it never names a freed pair whatever the tables traced; `None` on a heap no such link was made on, as on every tree-walker heap. A field of `HandleTable` rather than of `Heap`, for `root_set`'s reason. Uncounted. Pinned by the sentinel test `handle_table_fields`. Dropped with the table at teardown |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
 | A compilation's `LiteralPool` | `crates/patina-core/src/literal_pool.rs` | The heap literals of the form being compiled, from its expansion until the code that holds them is traced in its own right (§9.7, #705, #869): registered with the heap's root set for the pool's life, its entries reported as slots. The VM's `load_unit` takes the pool and drops it once the code store holds the unit, before the form runs; the tree-walker's `eval_in_env_with` once the form's run returns; and a `Step::Eval`'s is retired to a slot on the heap's `Instance` (`Evaluator::retire_pool`, at most one), released by the next retirement, the start of the driver's next collection, before it marks, or a run's return (§7). So it never holds more than one form's quoted text |
 | Macro literals, relinks and environments | `heap/mod.rs`, `binding_record.rs`, `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: the literals the object holds (§9.6); the record of each relinked identifier it carries (`HeapObjectData::Macro.relinks`, #837, §9.6), with the record's cell and the value the cell holds; and its body's `definition_env` and each `foreign_expansions` environment (§4.3). Pinned by the sentinel test `compiled_macro_fields`, whose carried record is in no slot and reachable only through the object, shown failing with the arm's `relinks` line deleted and again with `CarriedRelink::link` marked `skip`; `a_macros_relinks_die_with_the_macro` pins that the edge lasts exactly as long as the macro |
@@ -1470,9 +1472,10 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   (a weak read-through record's is the host namespace's one `unbound`
   cell, uncounted as before), leaving out a frame's imports, a free cell,
   and a cell only an importer's record or an export keeps. Neither sum
-  counts a record or cell that only code keeps after its namespace dropped
-  (an early link's, #837), nor the fresh record an early link makes over a
-  frame's import. The heap's
+  counts a record or cell that only code or a macro's carried relink keeps
+  after its namespace dropped (an early or a relinked link's, #837), nor
+  the record a link makes afresh: over a frame's import, or the snapshot of
+  a frame's keyword that a relinked identifier links. The heap's
   by-name record is in neither. Each is a running sum, raised as a
   namespace or a store makes one, `cells` lowered as a record is
   re-pointed away from an own cell, both lowered by the pass for what it
@@ -2345,18 +2348,52 @@ value reaches the old library's code (a procedure, a macro, a
 continuation, or a structure, promise or parameter that holds one): a
 cell's owner word is the fixnum `env_id << 4`, which names no namespace,
 so a record and a cell over plain data keep nothing but themselves (§3.3,
-§4.7). Four shapes keep a replaced namespace past the program's last use,
-each with an owner. A relinked variable alias (`AliasHome::Env`) names it
-for as long as the alias, which is never removed (R-A, until #837's
-second PR removes variable aliases). A keyword alias's record reaches a
-macro the replaced library defined, and so its `definition_env`, and a
-keyword alias reached through a parent, an alias or a scoped definition
-holds `AliasHome::Env` (R-B, until keyword aliases travel with the syntax,
-#837's question 4, ruled (a) on 2026-11-16; one whose relinked keyword
-the library imports keeps no namespace, but each relinked instance leaves
-an alias entry, a spelling and a record, which that change removes too). A macro-introduced top-level definition, kept until 5c (start
-decision 8), whose code links one of the old library's bindings whose
-value reaches its code (R-C, 5c). On the VM, a library whose body keeps
+§4.7). A live generated macro's **carried relinks** are holders of the same
+kind (`HeapObjectData::Macro.relinks`, #837's second PR): each is the
+record of a binding of the old library's, and keeps the namespace where
+the record's value reaches its code. For an identifier in the macro's
+template that adds nothing to what `foreign_expansions` already holds; for
+one that is only a pattern literal it is the only edge, since such a macro
+inherits no identifier and keeps no environment of its generator's
+expansion (the audit's `generated-macro-private` and
+`generated-macro-literal` rows).
+
+**A relinked identifier keeps nothing once its form is done.** Its record
+is rooted by the pool of the form that expanded it, for the pool's life:
+until `load_unit` has the unit on the VM, before the form runs, and until
+the form's run returns on the tree-walker (§9.7). After that a relinked
+*variable* reference is held by the code that expanded it, through its
+link, for as long as that code lives (the `relink-variable` row: one
+namespace above the baseline while the procedure is held, none once it is
+dropped), and a relinked *keyword* reference by nothing at all: the
+keyword was expanded, and the code names nothing of it (`relink-keyword`:
+none at either reading). A keyword an expansion *defines* under a
+relinked spelling is a definition, which stays (R-C, below). So every
+reading of a release is **between top-level forms**: a program that
+expands, redefines and measures inside one form reads the pool's hold on
+the tree-walker and not on the VM, and each test of a release keeps its
+steps in forms of their own.
+
+Two shapes keep a replaced namespace past the program's last use, each
+with an owner. Until #837's second PR there were four: a relinked variable
+left an alias in the program's namespace that named the old one by `Rc`
+and was never removed (R-A), and a relinked keyword an alias whose record
+reached the macro the replaced library defined, and so its
+`definition_env` (R-B; one whose relinked keyword the library imports kept
+no namespace, but each redefinition left an alias entry, a spelling and a
+record). Relinking installs nothing now, and both are released. A
+macro-introduced top-level definition, kept until 5c (start decision 8),
+whose code links one of the old library's bindings whose value reaches
+its code; or a keyword an expansion defines at top level under a
+relinked spelling, bound at its scopes (`define_syntax_binding`) and kept
+as such a definition is, whose macro's `foreign_expansions` names the
+environment of the library that generated it, which it keeps, one
+namespace a run, as the alias's slot did before #837's second PR (R-C,
+5c; measured 2026-11-20 on both backends across 600 redefinitions: a
+keyword whose template inherits an identifier of its generator's keeps a
+namespace and 277 binding records a run, one that inherits none only its
+own entry's record and cell, and one an expansion defines in a body
+nothing). On the VM, a library whose body keeps
 code quoting one of its own procedures: the code store traces a loaded
 unit's constants in every collection (§5.2), so the procedure, its unit,
 the namespace, the closure of the quoting unit in the namespace's slot and
@@ -2364,11 +2401,18 @@ that unit are a cycle through the roots, kept for good (R-D, #866, which
 owns the fix by the owner's ruling (a) of 2026-11-16 on #838's question 2;
 the tree-walker releases it). The
 tests that hold it: `gc_shared_tests!`'s `a_redefined_library_is_released`
-(#614's program 1 and its macro variant, every count flat across 600
-redefinitions), `a_value_from_a_replaced_library_still_runs` and
-`a_replaced_library_lives_only_as_long_as_its_holders` (the audit's rows,
-the generated macro's, a macro's `definition_env` alone, R-A's and R-C's
-among them); R-D's pins, `gc_vm`'s
+(#614's program 1, its macro variant and the three relinking variants, a
+private variable, a private keyword and an imported keyword, every count
+flat across 600 redefinitions, `symbols` among them),
+`a_value_from_a_replaced_library_still_runs`, its twin for a relinked
+private procedure, `a_relinked_procedure_from_a_replaced_library_still_runs`,
+and `a_replaced_library_lives_only_as_long_as_its_holders` (the audit's
+rows: the generated macros', a macro's `definition_env` alone, the
+relinked variable's and keyword's, and R-C's among them);
+`a_generated_macros_literal_survives_its_librarys_redefinition` and
+`a_generated_macro_keeps_a_splices_keyword_across_its_librarys_redefinition`,
+the two shapes where a carried relink is the only holder of the record it
+names; R-D's pins, `gc_vm`'s
 `a_library_body_s_code_quoting_its_own_procedure_keeps_it_loaded` and
 `gc_tree_walker`'s `a_library_body_s_code_quoting_its_own_procedure_is_released`;
 `gc_namespace_bytes.rs`'s `a_replaced_library_with_a_procedure_is_released`;
@@ -2376,8 +2420,9 @@ among them); R-D's pins, `gc_vm`'s
 `a_redefined_library_s_recursive_procedures_let_their_units_go`; and
 `macro_definition_env.rs`'s
 `an_early_link_keeps_the_old_library_binding_across_a_redefinition`,
-`a_keyword_aliass_record_still_keeps_its_macros_definition_namespace` (R-B)
-and `a_keyword_alias_to_an_imported_keyword_releases_the_replaced_library`.
+`a_relinked_link_keeps_the_old_library_binding_across_a_redefinition`,
+`a_relinked_keyword_keeps_no_definition_namespace` and
+`a_relinked_imported_keyword_leaves_nothing_of_the_replaced_library`.
 
 **At the end of a heap's life.** Until #704 an environment held the heap it
 allocates in (`Environment.heap`, a `SharedHeap`), so every heap → env edge
@@ -2653,8 +2698,12 @@ an unbranded record. A check build refuses a carried record that is a
 placeholder, a read-through record or the by-name record
 (`Record::refused_as_a_link`), as `LinkTable::link_in` refuses a pinned
 one, and a `Carried` whose handle early binding branded. The byte account charges a relink its 48 bytes, and the object's slot
-is 72 bytes as before (`the_object_slots_size_is_watched`). Nothing makes
-one yet: #837's second PR's desugarer does.
+is 72 bytes as before (`the_object_slots_size_is_watched`). The desugarer
+makes one for each relinked identifier among the literals of a macro it
+compiles (`Desugarer::relinks_carried_by`), which only a generated macro
+has, and puts each back in the table of a form that expands the macro,
+pooled there, before the expansion (`put_back_carried`), since #837's
+second PR.
 
 ### 9.7 The `CoreExpr` literal pool
 
@@ -2699,10 +2748,15 @@ Each literal is a `Lit` (`crates/patina-core/src/literal_pool.rs`):
   never reaches a program as a value. A `Link` also says what linked it
   (`LinkKind`, the top bit of its index, so a pool holds fewer than 2^31
   entries, literals and links together); `Cx::linkable` brands a pooled
-  link again beneath a context. Nothing makes a relinked one yet: #837's
-  second PR's desugarer does. The desugarer makes one for each
-  early-bound reference since 4b.10's switch; the tree-walker's CPS
-  transform copies it into the `CpsExpr`, which then holds the record
+  link again beneath a context. The desugarer makes one for each
+  early-bound reference since 4b.10's switch, and one for each mention
+  an expansion relinks since #837's second PR
+  (`Desugarer::note_relinked`), whether or not the mention is ever
+  emitted as a reference: a keyword's is read at desugar time and
+  leaves the pool with the form, so it is live until the form is loaded
+  (the VM) or has run (the tree-walker) and no longer, which is why a
+  release is read between top-level forms (§8). The tree-walker's CPS transform copies
+  an emitted reference's into the `CpsExpr`, which then holds the record
   itself (§4.4).
 - **Tests.** `a_collection_keeps_a_pooled_literal` and
   `a_collection_keeps_a_pooled_links_record` are the sentinels, and

@@ -36,9 +36,10 @@ pub(super) fn object_info(data: &HeapObjectData) -> (Variant, usize, u64) {
         // each: the headered layout models the record's word alone, where
         // the byte account charges a relink its whole `CarriedRelink`, key
         // and all, since that layout has no place for the key's two
-        // spellings and says nothing yet of where they go. No program makes
-        // a relink before #837's second PR, so until then only this
-        // module's test reaches the term.
+        // spellings and says nothing yet of where they go. A program makes
+        // a relink where a generated macro keeps an identifier its
+        // generator's expansion relinked (#837's second PR); this module's
+        // test holds the term, whatever the lane's programs reach.
         H::Macro {
             literals, relinks, ..
         } => {
@@ -231,8 +232,9 @@ mod tests {
     /// The census sizes a macro object by its header and a word for each
     /// literal and each carried relink's record (#837): a plain macro is 16
     /// bytes and no length, and one with a literal and a relink is 32 and
-    /// 2. No program makes a relink before #837's second PR, so the
-    /// census's own lane, which runs programs, does not reach the term.
+    /// 2. A program makes a relink only in a generated macro that keeps a
+    /// relinked identifier, which the census's own lane, which runs
+    /// programs, need not reach.
     #[test]
     fn a_macros_relinks_are_words_of_the_object() {
         let body = || {
