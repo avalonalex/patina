@@ -301,3 +301,91 @@ fn a_frame_write_through_a_shared_context_refuses_a_namespace() {
         );
     });
 }
+
+/// The id of the identifier `v`'s set in its heap's table (#788).
+fn set_id_of(cx: &Cx<'_>, v: Value<'_>) -> crate::heap::scope_sets::ScopeSetId {
+    match cx.heap.borrow().get_object(v.tagged()) {
+        HeapObjectData::Identifier { scopes, .. } => *scopes,
+        other => panic!("not an identifier: {other:?}"),
+    }
+}
+
+/// A scope walk makes, and interns, each distinct set once (#788): two
+/// identifiers with one set, flipped in one call, run the flip once and
+/// share the set their copies get; a written identifier is left alone.
+#[test]
+fn a_rescoping_walk_edits_each_distinct_set_once() {
+    with_cx(|cx| {
+        let set = ScopeSet::singleton(ScopeId(41)).with_scope(ScopeId(42));
+        let first = cx.alloc_identifier("a".into(), set.clone());
+        let second = cx.alloc_identifier("b".into(), set.clone());
+        let other = cx.alloc_identifier("c".into(), ScopeSet::singleton(ScopeId(44)));
+        let written = cx.alloc_source_identifier("w".into());
+        let list = cx.list_from_iter([first, second, other, written]);
+        let held = cx.heap.borrow().scope_sets.len();
+        let edits = std::cell::Cell::new(0);
+        let flipped = cx.rescope_identifiers(
+            list,
+            |_, _| true,
+            |scopes| {
+                edits.set(edits.get() + 1);
+                scopes.flip_scope(ScopeId(43))
+            },
+        );
+        assert_eq!(edits.get(), 2, "one edit for each distinct set");
+        let copies = cx.list_to_vec(flipped).expect("a list");
+        assert_eq!(set_id_of(cx, copies[0]), set_id_of(cx, copies[1]));
+        assert_ne!(set_id_of(cx, copies[0]), set_id_of(cx, copies[2]));
+        assert_eq!(copies[3], written, "a written identifier is no copy");
+        assert_eq!(
+            cx.get_identifier_data(copies[1]).unwrap().1,
+            set.flip_scope(ScopeId(43))
+        );
+        assert_eq!(cx.get_identifier_data(first).unwrap().1, set);
+        assert_eq!(cx.heap.borrow().scope_sets.len(), held + 2);
+    });
+}
+
+/// A scope addition's memo lasts across calls (#788): identifiers with one
+/// set, copied in separate calls, share the set their copies get, and a
+/// symbol made an identifier with the scope alone takes the set an
+/// identifier with no scopes gets.
+#[test]
+fn a_scope_addition_interns_each_set_once_across_calls() {
+    with_cx(|cx| {
+        let scope = ScopeId(51);
+        let set = ScopeSet::singleton(ScopeId(50));
+        let first = cx.alloc_identifier("a".into(), set.clone());
+        let second = cx.alloc_identifier("b".into(), set.clone());
+        let bare = cx.alloc_identifier("c".into(), ScopeSet::new());
+        let written = cx.alloc_source_identifier("w".into());
+        let held = cx.heap.borrow().scope_sets.len();
+        let mut addition = cx.scope_addition(scope);
+        let copies: Vec<_> = [first, second, bare, written]
+            .into_iter()
+            .map(|v| {
+                cx.add_scope_copying(&mut addition, v)
+                    .expect("an identifier")
+            })
+            .collect();
+        let made = cx.alloc_identifier_adding_scope(&mut addition, "d".into());
+        assert_eq!(cx.add_scope_copying(&mut addition, Value::fixnum(1)), None);
+        assert_eq!(set_id_of(cx, copies[0]), set_id_of(cx, copies[1]));
+        assert_eq!(set_id_of(cx, copies[2]), set_id_of(cx, copies[3]));
+        assert_eq!(set_id_of(cx, copies[2]), set_id_of(cx, made));
+        assert_eq!(
+            cx.get_identifier_data(copies[0]).unwrap().1,
+            set.with_scope(scope)
+        );
+        assert_eq!(
+            cx.get_identifier_data(made).unwrap(),
+            ("d".into(), ScopeSet::singleton(scope))
+        );
+        assert!(
+            !cx.is_source_identifier(copies[3]),
+            "a copy is no written name"
+        );
+        assert_eq!(cx.get_identifier_data(first).unwrap().1, set);
+        assert_eq!(cx.heap.borrow().scope_sets.len(), held + 2);
+    });
+}

@@ -22,6 +22,15 @@
 //! the ones interned since (decision 19 on #782). A `ScopeId` is never
 //! reused; only a set's id is.
 //!
+//! **Walks.** A scope edit that gives many identifiers the set it makes of
+//! theirs keeps a memo for its walk, from each set's id to the id of the
+//! set it made of it ([`ScopeSetMemo`], [`ScopeSetTable::edited`]), and so
+//! interns each distinct set once: `Cx::rescope_identifiers` for one call,
+//! and `Cx::add_scope_copying` for as long as the caller keeps its
+//! `ScopeAddition`. Each memo lives beneath a context, where nothing
+//! collects (#702, #707), and a `ScopeAddition` is branded with the
+//! context's lifetime, so no id a memo holds is freed while it lives.
+//!
 //! A free entry holds the empty set, which no other entry but id 0 holds,
 //! so in debug and `gc-check` builds a read of a free entry panics, as
 //! #621's checks do for a freed slot: an id read through an identifier the
@@ -60,6 +69,10 @@ impl ScopeSetId {
         ScopeSetId(u32::try_from(index).expect("more than 2^32 scope sets"))
     }
 }
+
+/// A walk's memo (#788): for each set's id it has met, the id of the set its
+/// edit made of it. Valid only while nothing collects.
+pub(crate) type ScopeSetMemo = FxHashMap<ScopeSetId, ScopeSetId>;
 
 /// One heap's scope sets. See the [module docs](self).
 #[derive(Debug)]
@@ -114,6 +127,25 @@ impl ScopeSetTable {
             free_entry_read(id);
         }
         set
+    }
+
+    /// The id of the set `edit` makes of the set at `from`, through `memo`:
+    /// `edit` runs, and its set is interned, once for each `from` the memo
+    /// has not met. So one memo serves one edit, which depends on the set
+    /// alone, and lives while nothing collects.
+    pub(crate) fn edited(
+        &mut self,
+        memo: &mut ScopeSetMemo,
+        from: ScopeSetId,
+        edit: impl FnOnce(&ScopeSet) -> ScopeSet,
+    ) -> ScopeSetId {
+        if let Some(&to) = memo.get(&from) {
+            return to;
+        }
+        let set = edit(self.get(from));
+        let to = self.intern(set);
+        memo.insert(from, to);
+        to
     }
 
     /// The entries the table has made, free ones and id 0 included: what a

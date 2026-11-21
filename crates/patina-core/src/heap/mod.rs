@@ -1664,11 +1664,7 @@ impl Heap {
         scopes: crate::scope::ScopeSet,
     ) -> TaggedValue {
         let scopes = self.scope_sets.intern(scopes);
-        self.alloc_object(HeapObjectData::Identifier {
-            name,
-            scopes,
-            written: false,
-        })
+        self.alloc_identifier_with_set(name, scopes)
     }
 
     /// A distinct program occurrence with ordinary source-symbol semantics:
@@ -1685,6 +1681,20 @@ impl Heap {
     #[inline]
     pub(crate) fn scope_set(&self, id: ScopeSetId) -> &crate::scope::ScopeSet {
         self.scope_sets.get(id)
+    }
+
+    /// An identifier named `name` whose set is the table's entry `scopes`,
+    /// interned already (#788): a walk's copy, through its memo.
+    pub(crate) fn alloc_identifier_with_set(
+        &mut self,
+        name: Rc<str>,
+        scopes: ScopeSetId,
+    ) -> TaggedValue {
+        self.alloc_object(HeapObjectData::Identifier {
+            name,
+            scopes,
+            written: false,
+        })
     }
 
     pub fn is_source_identifier(&self, value: TaggedValue) -> bool {
