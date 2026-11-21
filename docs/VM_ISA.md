@@ -176,7 +176,7 @@ not bind yet, a placeholder, which a later `define` or import of the name
 adopts, keeping its word; and for a name the namespace reaches by a visible
 scoped definition, the heap's by-name record (which served a name it reached
 by a macro-expansion alias too, until #837's second PR deleted the alias;
-the record outlives that stack, #837's D5). A debug build
+the record outlives that stack, #837's D5, #892). A debug build
 refuses a link in any other namespace than the one the unit was compiled in.
 
 `LoadGlobal` follows `link[k] → record → cell → value` under one shared

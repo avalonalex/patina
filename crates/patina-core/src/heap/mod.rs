@@ -1765,8 +1765,8 @@ impl Heap {
     /// `Environment::define_scoped_definition` makes (the tree-walker's
     /// `Define` step makes one too, and links nothing). The record outlives
     /// that stack: refusing the shape in a VM namespace, or linking its
-    /// scoped entry's record, is a decision about the raw shape, which a
-    /// follow-up issue owns, not a consequence of deleting the alias.
+    /// scoped entry's record, is a decision about the raw shape, which
+    /// #892 owns, not a consequence of deleting the alias.
     pub(crate) fn by_name_record(&mut self) -> TaggedValue {
         if let Some(record) = self.handles.by_name() {
             return record;

@@ -44,7 +44,7 @@
 //! (`LinkTable::read_cold`). It served a macro-expansion alias's name too,
 //! until #837's second PR deleted the alias; it outlives that stack for
 //! the shape that remains, which on a VM heap only a raw call makes (#837's
-//! D5, and its follow-up issue).
+//! D5, #892).
 
 use crate::Trace;
 use crate::census::Site;

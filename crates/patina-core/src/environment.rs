@@ -2040,8 +2040,8 @@ impl Environment {
     /// [`define_scoped_definition`](Self::define_scoped_definition) makes a
     /// visible scoped definition in a namespace; the tree-walker's `Define`
     /// step, the one other maker, links nothing. What becomes of the shape,
-    /// and so of the by-name record, is left to a follow-up issue (#837's
-    /// D5). Takes no borrow of the heap.
+    /// and so of the by-name record, is left to #892 (#837's D5). Takes no
+    /// borrow of the heap.
     ///
     /// The latch is tested here, as [`get`](Self::get) tests it, before the
     /// lookup it guards: a host namespace's every read of a parent's binding
