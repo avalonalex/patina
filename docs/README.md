@@ -182,6 +182,7 @@ types promised signatures name, and the raw types a host reaches from them:
 | `patina_core::BindingCell` | raw | a location's token: `Library.exports`' values, and what `Cx::new_declaration_cell` (`#[doc(hidden)]`) answers and `Cx::import_cell_in_frame` takes; unbranded, so held only while the registry entry, a record or the context that made it keeps it (#834) |
 | `patina_core::IntroducedRecord` | raw | what `Environment::introduced_records` answers, for 5c and the tests (#834) |
 | `patina_core::heap::ExternalBytes` | raw | only the raw `ExternalAccounter::new` and `Heap::external_bytes_handle` name it |
+| `patina_core::ScopeAddition` | raw | the macro expander's memo of the scope sets one walk made (#788), branded with its context's lifetime: `Cx::scope_addition`, `add_scope_copying` and `alloc_identifier_adding_scope` name it, so they are raw by the method rule. An identifier's set id (`ScopeSetId`) is core's alone: no crate outside core can name it |
 
 `patina-runtime`'s library loader, which `patina-interpreter` does not
 re-export, is workspace-internal, outside the promise (#831): its traits,
