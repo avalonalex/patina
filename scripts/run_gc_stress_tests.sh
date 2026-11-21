@@ -466,7 +466,15 @@ fi
 # 41070 at 16 and 129 without stress, the minimum left; and
 # vm_callprimitive's count at 16 rose from 1893 to 1899 for the
 # generated-macro case its re-pointed private binding test gained, 0
-# without stress, its test count and minimum left)
+# without stress, its test count and minimum left; and scheme_suite's
+# count without stress re-measured 2026-11-21 for #837's second PR's last
+# part, which took the macro-expansion alias table and its latch out of
+# every environment, so that a tree-walker closure is charged 572 bytes for
+# the frame it captures where it was 612 (CAPTURED_FRAME_BYTES): the byte
+# trigger comes later, 368 collections without stress where there were 385
+# (385 again with that estimate alone put back at 612), and 10653 at 4096
+# as before, the minimum left; every other target read as it did, at its
+# interval and without stress)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -484,7 +492,7 @@ TARGETS=(
     "owned_handles 16 62714 9"                # 125648 (14)
     "rooted_loading 16 371 6"                 # 1269 (10)
     "vm_callprimitive 16 545 23"              # 1899 (0)
-    "scheme_suite 4096 1534 11"               # 10653 (385): see the header
+    "scheme_suite 4096 1534 11"               # 10653 (368): see the header
 )
 
 OUT=$(mktemp -d)

@@ -150,11 +150,12 @@ fn kept_vm_captures_raise_the_interval() {
 }
 
 /// #637: every tree-walker closure keeps the frame it captures alive until a
-/// sweep drops it, and is charged for it — an estimate of 612 bytes on a
-/// 64-bit target, `CAPTURED_FRAME_BYTES` in `patina-core` — so a loop of
-/// garbage closures collects about every 8 MiB of what they hold. Charged
-/// their 72-byte slot alone, 100,000 of them allocated about 7 MB and did
-/// not collect. The bound below is 500 bytes a closure, under the estimate.
+/// sweep drops it, and is charged for it — an estimate of 572 bytes on a
+/// 64-bit target (612 until #837's second PR), `CAPTURED_FRAME_BYTES` in
+/// `patina-core` — so a loop of garbage closures collects about every 8 MiB
+/// of what they hold. Charged their 72-byte slot alone, 100,000 of them
+/// allocated about 7 MB and did not collect. The bound below is 500 bytes a
+/// closure, under the estimate.
 /// The tree-walker only: a VM closure is a `VmClosure`, charged its free
 /// variables, and keeps no frame alive.
 #[test]

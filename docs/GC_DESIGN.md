@@ -1213,7 +1213,8 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   their `Vec`.
   **A tree-walker closure (#637)** is charged its `Rc<Procedure>`, its
   parameters and `CAPTURED_FRAME_BYTES`, an estimate of the frame it
-  captures — a frame binding one parameter, 612 bytes — because on that
+  captures — a frame binding one parameter, 572 bytes (612 until #837's
+  second PR took the alias table out of every environment) — because on that
   backend every `let` makes a closure that keeps its frame alive until a
   sweep, and charged its slot alone, closure-heavy programs peaked at
   64–126 MB. Its payload has a path of its own, so that

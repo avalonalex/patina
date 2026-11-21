@@ -950,10 +950,11 @@ pub(crate) const RC_COUNTS: usize = 2 * size_of::<usize>();
 /// `heap/account.rs`, `cps_lambda_payload`): a frame binding one parameter
 /// under its scopes, as the tree-walker binds a call's — the frame in its
 /// `Rc`'s allocation, and the smallest scoped table, which `hashbrown` makes
-/// four buckets wide, a capacity of three. 612 bytes on a 64-bit target, the
-/// one-parameter frame #637 measured, which
-/// `captured_frame_bytes_is_a_one_parameter_frame` builds to check that the
-/// two agree.
+/// four buckets wide, a capacity of three. 572 bytes on a 64-bit target,
+/// which `captured_frame_bytes_is_a_one_parameter_frame` builds to check
+/// that the two agree: the one-parameter frame #637 measured at 612, less
+/// the macro-expansion alias table and its latch, which #837's second PR
+/// took out of every environment.
 ///
 /// A heuristic: the frame a closure captures may bind more, or bind by name
 /// alone; closures made in one frame are each charged for it; and a closure
@@ -1094,15 +1095,6 @@ pub struct Environment {
     /// Scope-aware bindings (for scope sets hygiene)
     /// Each name can have multiple bindings with different scope sets
     scoped_bindings: RefCell<ScopedTable>,
-    /// The bytes of the macro-expansion alias table, a `RefCell` of an
-    /// `FxHashMap`, which #837's second PR deleted: kept as padding of its
-    /// size for one commit, so that the code's removal and the layout's are
-    /// measured apart (D21).
-    #[trace(skip, reason = "padding, removed by the next commit")]
-    _was_alias_bindings: [u64; 5],
-    /// The alias table's latch, kept as padding with it.
-    #[trace(skip, reason = "padding, removed by the next commit")]
-    _was_has_aliases: bool,
     /// Whether `scoped_bindings` holds a name-visible definition.
     ///
     /// Asked of every frame a name lookup walks past, and the answer is no
@@ -1151,7 +1143,9 @@ pub struct Environment {
     /// `main`: adding the link table inline took this struct from 256 bytes
     /// to 264 and that backend 3–4% slower on every program, imports or no;
     /// moving both tables here took it to 224 and 4–6% *faster* than `main`.
-    /// `environment_size_is_watched` holds the line.
+    /// It is 184 since #837's second PR took out the macro-expansion
+    /// alias table and its latch. `environment_size_is_watched` holds the
+    /// line.
     rare: OnceCell<Box<RareTables>>,
     #[trace(
         skip,
@@ -1292,8 +1286,6 @@ impl Environment {
             bindings: RefCell::new(Bindings::default()),
             env_id: fresh_env_id(),
             scoped_bindings: RefCell::new(ScopedTable::default()),
-            _was_alias_bindings: [0; 5],
-            _was_has_aliases: false,
             has_visible_scoped: Cell::new(false),
             kind,
             frame: kind.frame_flag(),
@@ -1350,8 +1342,6 @@ impl Environment {
             bindings: RefCell::new(Bindings::default()),
             env_id: fresh_env_id(),
             scoped_bindings: RefCell::new(ScopedTable::default()),
-            _was_alias_bindings: [0; 5],
-            _was_has_aliases: false,
             has_visible_scoped: Cell::new(false),
             kind,
             frame: kind.frame_flag(),
@@ -1726,9 +1716,6 @@ impl Environment {
             // A number.
             env_id: _,
             scoped_bindings,
-            // Padding, removed by the next commit.
-            _was_alias_bindings: _,
-            _was_has_aliases: _,
             // Flags.
             has_visible_scoped: _,
             kind: _,
@@ -6877,7 +6864,14 @@ mod namespace_charge_tests {
         let heap = new_shared_heap();
         let env = Rc::new(Environment::with_heap(&heap));
         let made = external(&heap);
-        assert!(made >= size_of::<Environment>() + size_of::<RareTables>());
+        // A fresh namespace is charged its `Rc` allocation, the environment
+        // and its rare tables' box, and nothing else, every table being
+        // empty: pinned exactly, so that a term `table_bytes` kept for a
+        // field that has gone (the alias table's, #837) is seen.
+        assert_eq!(
+            made,
+            RC_COUNTS + size_of::<Environment>() + size_of::<RareTables>()
+        );
         assert_eq!(env.charged_bytes(), Some(made));
 
         for i in 0..1000 {
@@ -7302,7 +7296,7 @@ mod namespace_charge_tests {
         assert_eq!(measured, CAPTURED_FRAME_BYTES);
         #[cfg(target_pointer_width = "64")]
         assert_eq!(
-            CAPTURED_FRAME_BYTES, 612,
+            CAPTURED_FRAME_BYTES, 572,
             "the frame changed size: update the number CAPTURED_FRAME_BYTES's comment gives"
         );
     }
@@ -8198,12 +8192,15 @@ mod layout_tests {
     /// backend's running time on programs that never touched what the bytes
     /// were for (`Environment::rare` has the numbers). A table that only a
     /// global or library environment fills belongs in `RareTables`.
+    ///
+    /// 184 bytes since #837's second PR took the macro-expansion alias
+    /// table (40 bytes) and its latch out; 224 before.
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn environment_size_is_watched() {
         let size = std::mem::size_of::<super::Environment>();
         assert!(
-            size <= 224,
+            size <= 184,
             "Environment grew to {size} bytes; measure the tree-walker before raising this"
         );
     }
@@ -8266,9 +8263,6 @@ mod gc_edge_tests {
             }),
             env_id: fresh_env_id(),
             scoped_bindings: RefCell::new(scoped_table),
-            // Padding, removed by the next commit: it holds no edge.
-            _was_alias_bindings: [0; 5],
-            _was_has_aliases: false,
             has_visible_scoped: Cell::new(true),
             kind: Kind::Frame,
             frame: Kind::Frame.frame_flag(),
@@ -8339,9 +8333,6 @@ mod gc_edge_tests {
             bindings: RefCell::new(Bindings::default()),
             env_id: fresh_env_id(),
             scoped_bindings: RefCell::new(ScopedTable::default()),
-            // Padding, removed by the next commit.
-            _was_alias_bindings: [0; 5],
-            _was_has_aliases: false,
             has_visible_scoped: Cell::new(false),
             kind: Kind::HostNamespace,
             frame: Kind::HostNamespace.frame_flag(),
