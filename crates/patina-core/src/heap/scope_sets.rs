@@ -36,17 +36,30 @@
 //! #621's checks do for a freed slot: an id read through an identifier the
 //! sweep freed, or an id kept past a collection.
 //!
-//! [`MarkBits`]: super::gc::MarkBits
+//! **Charge** (M3). What the table holds beyond the empty set's entry, made
+//! with it, is charged as external bytes (`heap/account.rs`): its entries,
+//! the index, the free list, and each set's spill, once for its entry and
+//! once for its index key. The table charges as it grows, through its own
+//! handle, and gives back as the sweep frees sets and it shrinks, before
+//! the sweep reads the external bytes to set L, so L counts the live sets'.
+//! An identifier's slot is charged nothing for its set. A table that holds
+//! the empty set alone charges nothing, so a heap whose identifiers carry
+//! no scopes, or whose last collection freed every set, has no charge.
 //!
 //! A plain field of `Heap`, read and written under the heap's borrow beside
 //! `symbol_table` (decision 18 on #782). No code outside `patina-core` names
 //! an id, so every access already holds that borrow, and
 //! `Heap::get_identifier_data` lends a set out of the table.
+//!
+//! [`MarkBits`]: super::gc::MarkBits
+
+use std::mem::size_of;
 
 use rustc_hash::FxHashMap;
 
-use super::GC_CHECK;
 use super::gc::BitSet;
+use super::{ExternalBytes, GC_CHECK};
+use crate::environment::hash_table_bytes;
 use crate::scope::ScopeSet;
 
 /// What an identifier holds for its scopes: the number of its set's entry in
@@ -83,15 +96,25 @@ pub(crate) struct ScopeSetTable {
     index: FxHashMap<ScopeSet, ScopeSetId>,
     /// The free entries, the lowest last, which `intern` reuses first.
     free: Vec<ScopeSetId>,
+    /// The spills of the sets held: each entry's, and each index key's.
+    spilled: usize,
+    /// The external bytes the table has charged ([`Self::bytes`] when it
+    /// last settled), through `account`.
+    charged: usize,
+    account: ExternalBytes,
 }
 
 impl ScopeSetTable {
-    /// A table holding the empty set alone, at id 0.
-    pub(crate) fn new() -> Self {
+    /// A table holding the empty set alone, at id 0, which charges what it
+    /// holds beyond that through `account`, its heap's external bytes.
+    pub(crate) fn new(account: ExternalBytes) -> Self {
         Self {
             sets: vec![ScopeSet::new()],
             index: FxHashMap::default(),
             free: Vec::new(),
+            spilled: 0,
+            charged: 0,
+            account,
         }
     }
 
@@ -104,18 +127,21 @@ impl ScopeSetTable {
         if let Some(&id) = self.index.get(&set) {
             return id;
         }
+        let entry = set.clone();
+        self.spilled += entry.heap_bytes() + set.heap_bytes();
         let id = match self.free.pop() {
             Some(id) => {
-                self.sets[id.index()] = set.clone();
+                self.sets[id.index()] = entry;
                 id
             }
             None => {
                 let id = ScopeSetId::at(self.sets.len());
-                self.sets.push(set.clone());
+                self.sets.push(entry);
                 id
             }
         };
         self.index.insert(set, id);
+        self.settle_charge();
         id
     }
 
@@ -169,8 +195,8 @@ impl ScopeSetTable {
         for index in 0..self.sets.len() {
             if !marked.get(index) {
                 let set = std::mem::take(&mut self.sets[index]);
-                if !set.is_empty() {
-                    self.index.remove(&set);
+                if let Some((key, _)) = self.index.remove_entry(&set) {
+                    self.spilled -= set.heap_bytes() + key.heap_bytes();
                 }
             }
         }
@@ -185,12 +211,63 @@ impl ScopeSetTable {
                 .filter(|&index| !marked.get(index))
                 .map(ScopeSetId::at),
         );
+        self.shrink();
+        self.settle_charge();
     }
 
-    /// The sets held, not counting the empty one.
-    #[cfg(test)]
+    /// Give back the room the sweep left: all of it, but the empty set's
+    /// entry, once no other set is held, so that the table charges nothing
+    /// again; otherwise each buffer that holds four times what it uses.
+    fn shrink(&mut self) {
+        if self.index.is_empty() {
+            self.sets.shrink_to_fit();
+            self.index = FxHashMap::default();
+            self.free = Vec::new();
+            return;
+        }
+        let roomy = |capacity: usize, len: usize| capacity > (len * 4).max(64);
+        if roomy(self.sets.capacity(), self.sets.len()) {
+            self.sets.shrink_to(self.sets.len() * 2);
+        }
+        if roomy(self.index.capacity(), self.index.len()) {
+            self.index.shrink_to(self.index.len() * 2);
+        }
+        if roomy(self.free.capacity(), self.free.len()) {
+            self.free.shrink_to(self.free.len() * 2);
+        }
+    }
+
+    /// What the table holds outside itself beyond the empty set's entry: the
+    /// external bytes it charges (the module docs).
+    fn bytes(&self) -> usize {
+        self.sets.capacity().saturating_sub(1) * size_of::<ScopeSet>()
+            + hash_table_bytes::<ScopeSet, ScopeSetId>(self.index.capacity())
+            + self.free.capacity() * size_of::<ScopeSetId>()
+            + self.spilled
+    }
+
+    /// Charge what the table has grown by since it last settled, or give
+    /// back what it has shrunk by.
+    fn settle_charge(&mut self) {
+        let bytes = self.bytes();
+        if bytes > self.charged {
+            self.account.charge(bytes - self.charged);
+        } else if bytes < self.charged {
+            self.account.release(self.charged - bytes);
+        }
+        self.charged = bytes;
+    }
+
+    /// The sets held, not counting the empty one: `(gc-stats)`'s
+    /// `scope-sets`.
     pub(crate) fn len(&self) -> usize {
         self.index.len()
+    }
+
+    /// The external bytes the table has charged.
+    #[cfg(test)]
+    pub(crate) fn charged(&self) -> usize {
+        self.charged
     }
 }
 
@@ -210,6 +287,11 @@ mod tests {
     use super::*;
     use crate::scope::ScopeId;
 
+    /// A table charging an account of its own.
+    fn table() -> ScopeSetTable {
+        ScopeSetTable::new(crate::heap::Heap::new().external_bytes_handle())
+    }
+
     fn set(scopes: &[usize]) -> ScopeSet {
         let mut set = ScopeSet::new();
         for &scope in scopes {
@@ -220,7 +302,7 @@ mod tests {
 
     #[test]
     fn the_empty_set_is_id_zero_and_takes_no_entry() {
-        let mut table = ScopeSetTable::new();
+        let mut table = table();
         assert_eq!(table.intern(ScopeSet::new()), ScopeSetId::EMPTY);
         assert!(table.get(ScopeSetId::EMPTY).is_empty());
         assert_eq!(table.len(), 0);
@@ -228,7 +310,7 @@ mod tests {
 
     #[test]
     fn a_set_reads_back_as_interned_inline_or_spilled() {
-        let mut table = ScopeSetTable::new();
+        let mut table = table();
         // Three scopes fit inline; a fourth spills.
         let inline = set(&[3, 1, 2]);
         let spilled = set(&[5, 4, 7, 6]);
@@ -245,7 +327,7 @@ mod tests {
 
     #[test]
     fn equal_sets_share_an_id() {
-        let mut table = ScopeSetTable::new();
+        let mut table = table();
         let first = table.intern(set(&[1, 2, 3, 4]));
         // Built in another order, and so by another path to the same set.
         let second = table.intern(set(&[4, 3, 2, 1]));
@@ -271,5 +353,30 @@ mod tests {
         assert!(heap.get_identifier_data(written).unwrap().1.is_empty());
         // The two identifiers share one entry; the written one takes id 0.
         assert_eq!(heap.scope_sets.len(), 1);
+    }
+
+    /// The table charges what it holds as external bytes, a spilled set's
+    /// buffer twice (its entry's and its key's), and gives all of it back
+    /// once a collection frees every set; L counts the charge while a set
+    /// lives.
+    #[test]
+    fn the_table_charges_its_sets_and_gives_them_back() {
+        let mut heap = crate::heap::Heap::new();
+        assert_eq!(heap.external_bytes(), 0, "a table of the empty set alone");
+        let bare = heap.alloc_identifier("bare".into(), ScopeSet::new());
+        assert_eq!(heap.external_bytes(), 0, "the empty set is charged nothing");
+        let spilled = set(&[1, 2, 3, 4]);
+        let identifier = heap.alloc_identifier("x".into(), spilled.clone());
+        let charged = heap.scope_sets.charged();
+        assert!(charged >= 2 * spilled.heap_bytes(), "{charged}");
+        assert_eq!(heap.external_bytes(), charged);
+        crate::heap::trace_sentinels::collect_from(&mut heap, &[identifier, bare]);
+        assert_eq!(heap.scope_sets.charged(), charged);
+        assert_eq!(heap.external_bytes(), charged);
+        assert!(heap.live_bytes() > charged);
+        crate::heap::trace_sentinels::collect_from(&mut heap, &[]);
+        assert_eq!(heap.scope_sets.len(), 0);
+        assert_eq!(heap.scope_sets.charged(), 0);
+        assert_eq!(heap.external_bytes(), 0);
     }
 }

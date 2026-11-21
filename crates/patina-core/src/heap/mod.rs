@@ -787,6 +787,8 @@ impl Heap {
         let telemetry = telemetry::Telemetry::new();
         let handles = HandleTable::new(telemetry.heap_id);
         port_table::register(handles.ports());
+        let account = ByteAccount::new(Rc::clone(&mutator));
+        let scope_sets = ScopeSetTable::new(account.external_bytes_handle());
         Self {
             syntax_sources: std::collections::HashMap::new(),
             instance: Rc::new(crate::instance::Instance::default()),
@@ -795,7 +797,7 @@ impl Heap {
             strings: Vec::with_capacity(strings),
             objects: Vec::new(),
             symbol_table: std::collections::HashMap::new(),
-            scope_sets: ScopeSetTable::new(),
+            scope_sets,
             core_syntax_table: std::collections::HashMap::new(),
             free_pairs: Vec::new(),
             free_vectors: Vec::new(),
@@ -806,7 +808,7 @@ impl Heap {
             string_checks: SlotChecks::new(),
             object_checks: SlotChecks::new(),
             allocs_since_gc: 0,
-            account: ByteAccount::new(Rc::clone(&mutator)),
+            account,
             gc_threshold: GcThreshold::NEVER,
             mutator,
             gc_freed_closure_code_ids: None,

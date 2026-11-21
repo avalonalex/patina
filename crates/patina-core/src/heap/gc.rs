@@ -3217,9 +3217,13 @@ mod tests {
         heap.intern_symbol("a-symbol-the-table-roots");
         // The tree-walker closures' namespace, charged once however many
         // name it: in the bytes allocated and in L, and never reclaimed
-        // while it lives.
+        // while it lives. Beside it, the scope-set table's charge for the
+        // identifiers' one set, spilled, which both identifiers share
+        // (#788).
         let external = heap.external_bytes() as u64;
-        assert_eq!(Some(external as usize), env.charged_bytes());
+        let sets = heap.scope_sets.charged() as u64;
+        assert!(sets > 0, "the table charges the identifiers' set");
+        assert_eq!(Some((external - sets) as usize), env.charged_bytes());
         assert_eq!(heap.bytes_allocated(), occupied(&heap) + external);
         assert_eq!(heap.bytes_reclaimed(), 0);
         assert_eq!(heap.committed_bytes(), committed(&heap));
@@ -3234,14 +3238,18 @@ mod tests {
         assert_eq!(heap.committed_bytes(), committed(&heap));
 
         // Dropping the roots frees the rest, and the account still balances.
+        // The table gives its charge back as the sweep frees the set, which
+        // is no reclamation: it leaves the external bytes, and L.
         let allocated = heap.bytes_allocated();
         MarkSweepCollector::new().collect(&mut heap, &[&TestRoots::default()]);
         assert_eq!(heap.bytes_allocated(), allocated);
+        assert_eq!(heap.scope_sets.charged(), 0);
+        assert_eq!(heap.external_bytes() as u64, external - sets);
         assert_eq!(
             heap.bytes_allocated() - heap.bytes_reclaimed(),
             occupied(&heap) + external
         );
-        assert_eq!(heap.live_bytes() as u64, occupied(&heap) + external);
+        assert_eq!(heap.live_bytes() as u64, occupied(&heap) + external - sets);
         assert_eq!(heap.committed_bytes(), committed(&heap));
     }
 

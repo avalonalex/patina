@@ -93,14 +93,26 @@ class Clauses(unittest.TestCase):
         self.assertFalse(holds)
 
     def test_ss5_is_one_clause_per_per_owner_key(self):
-        self.assertTrue({'symbols', 'ports', 'namespaces', 'cells', 'binding-records', 'code-units'}
+        self.assertTrue({'symbols', 'ports', 'namespaces', 'cells', 'binding-records', 'code-units',
+                         'scope-sets'}
                         <= set(steady.PER_OWNER_KEYS))
         results = steady.evaluate(self.row, 'vm', [run(10, counts={'ports': (40, 57)})], 10)
         self.assertEqual(results['SS5:symbols'], (0, 16, True))
         self.assertEqual(results['SS5:ports'], (17, 16, False))
-        for key in ('namespaces', 'cells', 'binding-records', 'code-units'):
+        for key in ('namespaces', 'cells', 'binding-records', 'code-units', 'scope-sets'):
             self.assertEqual(results[f'SS5:{key}'], (0, 16, True), key)
         self.assertNotIn('SS5', results)
+
+    def test_scope_sets_joins_last(self):
+        # #788's key joins after `code-units`, the last before it, as each
+        # key joins in the PR that adds it to (gc-stats); its clause fails
+        # past max(16, 5%) like any other's.
+        self.assertEqual(steady.PER_OWNER_KEYS[-2:], ('code-units', 'scope-sets'))
+        self.assertEqual(self.row.checks()[-1], 'SS5:scope-sets')
+        results = steady.evaluate(self.row, 'vm', [run(10, counts={'scope-sets': (300, 316)})], 10)
+        self.assertEqual(results['SS5:scope-sets'], (16, 16, True))
+        results = steady.evaluate(self.row, 'vm', [run(10, counts={'scope-sets': (300, 317)})], 10)
+        self.assertEqual(results['SS5:scope-sets'], (17, 16, False))
 
     def test_ss5_allows_max_of_16_and_5_percent(self):
         for key in steady.PER_OWNER_KEYS:
@@ -164,18 +176,21 @@ class Clauses(unittest.TestCase):
         # its own key only.
         row = steady.Row('r', 'REPL', 'x.scm', {}, clauses=steady.REPL,
                          red={'SS5:namespaces/vm': '#1', 'SS5:cells': '#2', 'SS5:binding-records': '#3',
-                              'SS5:code-units/vm': '#4'})
+                              'SS5:code-units/vm': '#4', 'SS5:scope-sets/tree-walker': '#5'})
         self.assertEqual(steady.mark_errors(row), [])
         self.assertEqual(row.red_reason('SS5:namespaces', 'vm'), '#1')
         self.assertIsNone(row.red_reason('SS5:namespaces', 'tree-walker'))
         self.assertEqual(row.red_reason('SS5:code-units', 'vm'), '#4')
         self.assertIsNone(row.red_reason('SS5:code-units', 'tree-walker'))
+        self.assertEqual(row.red_reason('SS5:scope-sets', 'tree-walker'), '#5')
+        self.assertIsNone(row.red_reason('SS5:scope-sets', 'vm'))
         for backend in steady.BACKENDS:
             self.assertEqual(row.red_reason('SS5:cells', backend), '#2')
             self.assertEqual(row.red_reason('SS5:binding-records', backend), '#3')
             self.assertIsNone(row.red_reason('SS5:symbols', backend))
-        self.assertEqual(row.checks()[-4:],
-                         ['SS5:namespaces', 'SS5:cells', 'SS5:binding-records', 'SS5:code-units'])
+        self.assertEqual(row.checks()[-5:],
+                         ['SS5:namespaces', 'SS5:cells', 'SS5:binding-records', 'SS5:code-units',
+                          'SS5:scope-sets'])
 
     def test_hidden_define_records_and_cells_are_stage_5c(self):
         # Each expansion's introduced definition is a record and a cell
