@@ -456,6 +456,7 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, printer: &
         HeapObjectData::Ephemeron(_) => buf.push_str("#<ephemeron>"),
         HeapObjectData::Identifier { name, scopes, .. } => {
             buf.push_str(name);
+            let scopes = heap.scope_set(*scopes);
             if printer.with_scopes && !scopes.is_empty() {
                 write!(buf, "{}", scopes).unwrap();
             }

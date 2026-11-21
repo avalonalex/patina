@@ -21,9 +21,8 @@
 //! capacity is fixed by the type system; a record's field count and a
 //! closure's free variables are fixed at construction, and the heap writes
 //! them in place; the other payloads charged — a bignum's limbs, an
-//! exception's message and irritants, a `values` object, a symbol's name, an
-//! identifier's scopes, a continuation's snapshot — are never written after
-//! allocation. A parameter's value stack, which `parameterize` grows and
+//! exception's message and irritants, a `values` object, a symbol's name, a
+//! continuation's snapshot — are never written after allocation. A parameter's value stack, which `parameterize` grows and
 //! shrinks, is not charged: it is as deep as the `parameterize` forms active,
 //! which their frames already pay for.
 //!
@@ -300,11 +299,6 @@ impl HeapObjectData {
                 record_type: _,
                 fields,
             } => fields.borrow().capacity() * VALUE_BYTES,
-            HeapObjectData::Identifier {
-                name: _,
-                scopes,
-                written: _,
-            } => scopes.heap_bytes(),
             HeapObjectData::Values(values) => values.capacity() * VALUE_BYTES,
             HeapObjectData::VmClosure {
                 code_id: _,
@@ -324,8 +318,11 @@ impl HeapObjectData {
             | HeapObjectData::VmDelimitedContinuationRef { id: _, bytes } => *bytes,
             // Nothing outside the slot. A port's slot holds its `PortTable`
             // entry's number; an open file port is charged as external bytes.
+            // An identifier's holds its set's id in the heap's scope-set
+            // table (#788), and a name, an `Rc` the account does not charge.
             HeapObjectData::Real(_)
             | HeapObjectData::Port(_)
+            | HeapObjectData::Identifier { .. }
             | HeapObjectData::Complex { .. }
             | HeapObjectData::LabelPlaceholder(_)
             | HeapObjectData::MutableCell(_)

@@ -1747,7 +1747,8 @@ impl<'h> GcVisitor<'h> {
             | HeapObjectData::Identifier {
                 // A spelling.
                 name: _,
-                // Scope ids.
+                // The id of a set of scope ids in the heap's scope-set table
+                // (#788).
                 scopes: _,
                 // A flag.
                 written: _,
