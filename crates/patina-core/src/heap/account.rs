@@ -310,10 +310,12 @@ impl HeapObjectData {
                 free_vars,
             } => free_vars.capacity() * VALUE_BYTES,
             // The literals and the carried relinks (#837) are the object's
-            // own; the body is a shared `Rc`.
+            // own; the body is a shared `Rc`; the template scopes' set is the
+            // scope-set table's, which charges it as external bytes (#789).
             HeapObjectData::Macro {
                 body: _,
                 literals,
+                scopes: _,
                 relinks,
             } => {
                 literals.len() * VALUE_BYTES

@@ -1297,3 +1297,96 @@ fn a_check_build_refuses_a_free_scope_set() {
     collect_from(&mut heap, &[low, high]);
     heap.scope_set(freed);
 }
+
+/// The id of the macro object `mac`'s template scopes' set (#789).
+fn macro_scope_set_id(heap: &Heap, mac: TaggedValue) -> super::scope_sets::ScopeSetId {
+    match heap.get_object(mac) {
+        HeapObjectData::Macro { scopes, .. } => *scopes,
+        other => panic!("not a macro: {other:?}"),
+    }
+}
+
+/// A macro object's template scopes live with it, and are reported carried
+/// while they do (#789): a `CompiledMacro` built by a literal holds each of
+/// four scopes in exactly one place, its `definition_scopes`, one
+/// `Template::Symbol`'s identifier, `inherited_identifiers` and
+/// `foreign_expansions`, with no literal and no identifier on the heap that
+/// carries any of them. While the macro is rooted, through a pair, each is
+/// reported carried across a collection, and its set keeps its id: a set
+/// interned after the collection takes another, which it would not if the
+/// sweep had freed this one. Once the macro is unreachable, the collection
+/// that frees it frees its set, and none of the four is carried. A macro
+/// whose templates hold no scope takes the empty set, id 0. Fails with the
+/// `Macro` arm in `trace_object_children` recording nothing (#164's rule).
+#[test]
+fn a_macros_template_scopes_live_with_it() {
+    use crate::compiled_macro::Identifier;
+    let mut heap = Heap::new();
+    let [defined, symbol, inherited, foreign] = [941, 942, 943, 944].map(ScopeId);
+    let template = Template::List(vec![
+        Template::Symbol(Identifier::new("plain")),
+        Template::Symbol(Identifier::with_scopes("free", ScopeSet::singleton(symbol))),
+    ]);
+    let compiled = CompiledMacro {
+        name: Rc::from("m"),
+        rules: vec![CompiledRule {
+            pattern: Pattern::Wildcard,
+            template,
+            num_pvars: 0,
+            max_level: 0,
+            pvar_names: HashMap::new(),
+        }],
+        max_pvars: 0,
+        definition_scopes: ScopeSet::singleton(defined),
+        template_symbols: HashSet::from([Rc::from("plain"), Rc::from("free")]),
+        inherited_identifiers: HashMap::from([(
+            Rc::from("inherited"),
+            vec![ScopeSet::singleton(inherited)],
+        )]),
+        definition_env: None,
+        foreign_expansions: vec![(foreign, Rc::new(Environment::namespace(&heap)))],
+    };
+    let all = [defined, symbol, inherited, foreign];
+
+    let none_carried = |heap: &Heap| all.iter().all(|&scope| !heap.scope_is_carried(scope));
+    assert!(none_carried(&heap), "no set holds them before the macro");
+    let mac = heap.alloc_macro(Rc::new(compiled), vec![]);
+    let id = macro_scope_set_id(&heap, mac);
+    assert_ne!(id, super::scope_sets::ScopeSetId::EMPTY);
+    assert_eq!(heap.scope_set(id), &all.into_iter().collect::<ScopeSet>());
+    let root = heap.alloc_pair(mac, TaggedValue::NULL);
+    collect_from(&mut heap, &[root]);
+    for scope in all {
+        assert!(
+            heap.scope_is_carried(scope),
+            "{scope:?} while the macro lives"
+        );
+    }
+    assert_eq!(macro_scope_set_id(&heap, mac), id);
+    let newcomer = heap.scope_sets.intern(scope_set_of(&[945]));
+    assert_ne!(newcomer, id, "the live macro's entry was reused");
+    assert_eq!(heap.scope_set(id), &all.into_iter().collect::<ScopeSet>());
+
+    collect_from(&mut heap, &[]);
+    super::sentinels::assert_freed(&heap, mac, "the macro no root reaches");
+    assert!(
+        none_carried(&heap),
+        "the macro was swept, and its scopes are still carried"
+    );
+
+    let bare = CompiledMacro {
+        name: Rc::from("bare"),
+        rules: vec![],
+        max_pvars: 0,
+        definition_scopes: ScopeSet::new(),
+        template_symbols: HashSet::new(),
+        inherited_identifiers: HashMap::new(),
+        definition_env: None,
+        foreign_expansions: vec![],
+    };
+    let bare = heap.alloc_macro(Rc::new(bare), vec![]);
+    assert_eq!(
+        macro_scope_set_id(&heap, bare),
+        super::scope_sets::ScopeSetId::EMPTY
+    );
+}

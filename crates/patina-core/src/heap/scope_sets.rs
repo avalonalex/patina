@@ -60,7 +60,7 @@ use rustc_hash::FxHashMap;
 use super::gc::BitSet;
 use super::{ExternalBytes, GC_CHECK};
 use crate::environment::hash_table_bytes;
-use crate::scope::ScopeSet;
+use crate::scope::{ScopeId, ScopeSet};
 
 /// What an identifier holds for its scopes: the number of its set's entry in
 /// its heap's [`ScopeSetTable`]. Opaque: outside core nothing can make one or
@@ -264,6 +264,14 @@ impl ScopeSetTable {
         self.index.len()
     }
 
+    /// Whether a set the table holds contains `scope`: `Heap::scope_is_carried`
+    /// (#789), a scan of every entry when asked. A free entry holds the
+    /// empty set, which contains nothing, so the scan reads each entry
+    /// as it is, with no free-list test and no check build's refusal.
+    pub(crate) fn carries(&self, scope: ScopeId) -> bool {
+        self.sets.iter().any(|set| set.contains(&scope))
+    }
+
     /// The external bytes the table has charged.
     #[cfg(test)]
     pub(crate) fn charged(&self) -> usize {
@@ -285,7 +293,6 @@ fn free_entry_read(id: ScopeSetId) -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scope::ScopeId;
 
     /// A table charging an account of its own.
     fn table() -> ScopeSetTable {
@@ -353,6 +360,40 @@ mod tests {
         assert!(heap.get_identifier_data(written).unwrap().1.is_empty());
         // The two identifiers share one entry; the written one takes id 0.
         assert_eq!(heap.scope_sets.len(), 1);
+    }
+
+    /// `carries` answers whether any held set contains the scope: one of two
+    /// sets, a spilled one included, and not a scope neither holds; once a
+    /// collection frees a set its scopes are carried no more, by the free
+    /// entry it leaves between two live ones as by the trailing entry the
+    /// sweep drops; and the empty set, id 0, carries nothing.
+    #[test]
+    fn carries_reads_every_held_set_and_no_freed_one() {
+        let mut heap = crate::heap::Heap::new();
+        assert!(
+            !heap.scope_sets.carries(ScopeId(951)),
+            "the empty set alone"
+        );
+        let low = heap.alloc_identifier("low".into(), set(&[951]));
+        let dead = heap.alloc_identifier("dead".into(), set(&[952, 953, 954, 955]));
+        let high = heap.alloc_identifier("high".into(), set(&[956, 957]));
+        let last = heap.alloc_identifier("last".into(), set(&[958]));
+        for scope in [951, 952, 955, 956, 958] {
+            assert!(heap.scope_sets.carries(ScopeId(scope)), "S{scope}");
+        }
+        assert!(!heap.scope_sets.carries(ScopeId(959)));
+        crate::heap::trace_sentinels::collect_from(&mut heap, &[low, high]);
+        crate::heap::sentinels::assert_freed(&heap, dead, "the middle identifier");
+        crate::heap::sentinels::assert_freed(&heap, last, "the last identifier");
+        for scope in [951, 956, 957] {
+            assert!(heap.scope_sets.carries(ScopeId(scope)), "S{scope}");
+        }
+        for scope in [952, 953, 954, 955, 958] {
+            assert!(
+                !heap.scope_sets.carries(ScopeId(scope)),
+                "S{scope} was freed"
+            );
+        }
     }
 
     /// The table charges what it holds as external bytes, a spilled set's
