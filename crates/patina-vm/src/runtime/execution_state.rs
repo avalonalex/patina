@@ -48,8 +48,8 @@ pub(super) struct ExecutionState {
 /// starts its own work again.
 ///
 /// Set where the top frame comes to await a value: where the stack shrinks
-/// under it or is reinstated (`pop_frame`, `finish_wind_step`,
-/// `truncate_to_prompt`, `restore`, `append_delimited`), and where it calls
+/// under it or is reinstated (`pop_frame`, `truncate_to_prompt`, `restore`,
+/// `append_delimited`), and where it calls
 /// a callee that may answer here and now, which a callback's frames may
 /// have run above it before then ([`ExecutionState::mark_awaiting`]).
 /// Cleared where the top frame starts its own work (`dispatch_frame`,
@@ -384,23 +384,15 @@ impl ExecutionState {
         base
     }
 
-    /// Remove a frame and its window together. Extents stay live until value
-    /// delivery: a tail-called raise must still find its caller's handler.
+    /// Remove a frame and its window together, as every frame goes (a wind
+    /// step's frame too, since #714: it stays for its whole travel, and
+    /// arrival replaces it). Extents stay live until value delivery: a
+    /// tail-called raise must still find its caller's handler.
     pub(super) fn pop_frame(&mut self) -> CallFrame {
         let frame = self.frames.pop().expect("pop with empty frame stack");
         self.registers.truncate(frame.register_base);
         self.mark_awaiting();
         frame
-    }
-
-    /// A jump step is the one deliberate exception to paired removal: its
-    /// operands remain roots until the next stub holds them or arrival replaces
-    /// the register file. This preserves the existing weak-store root contract.
-    pub(super) fn finish_wind_step(&mut self) {
-        self.frames
-            .pop()
-            .expect("ResumeWindJump runs in its own frame");
-        self.mark_awaiting();
     }
 
     /// Reuse the top window for another closure, a tail call's push: the
@@ -570,8 +562,12 @@ impl ExecutionState {
             self.exception_handlers.pop();
         }
     }
+    /// Make `handlers` the live handler stack for a wind step's thunk, each
+    /// recorded depth clamped to the depth the step's stub frame, on top, was
+    /// pushed at: the depth the thunk is called above. The stub stays for
+    /// the whole travel (#714), so that depth is the same at every step.
     pub(super) fn install_thunk_handlers(&mut self, handlers: &[ExceptionHandler]) {
-        let depth = self.depth();
+        let depth = self.top_frame_depth();
         self.exception_handlers.clear();
         self.exception_handlers
             .extend(handlers.iter().map(|h| ExceptionHandler {

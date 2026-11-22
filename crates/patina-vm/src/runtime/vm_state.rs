@@ -9,8 +9,8 @@ pub(super) mod gc_roots;
 use gc_roots::switches;
 
 use super::control::{
-    Reentry, abort_to_prompt, across_reentry, call_any, call_closure_from_regs, call_value,
-    call_value_with_probe, capture_delimited, captured_handlers, classify_error,
+    Reentry, WindStub, abort_to_prompt, across_reentry, call_any, call_closure_from_regs,
+    call_value, call_value_with_probe, capture_delimited, captured_handlers, classify_error,
     deliver_before_collecting, exec_call_primitive, exec_call_primitive_direct, find_prompt,
     finish_delimited_invoke, invoke_step, is_catchable, park_escape, park_transfer,
     pop_resolved_extents, push_invoke_step, raise_step, resume_step, self_tail_call,
@@ -2643,14 +2643,16 @@ fn dispatch_one_instruction(
                 .ok_or_else(malformed)? as usize;
             let window = AssertNoGc::new(state.heap());
             state.execution.pop_frame();
-            // Freed, unlike `ResumeWindJump`'s — and copying that rule without
-            // its reason is what made this leak. A jump's arrival *replaces*
-            // the register file, so an un-freed window costs one travel; a
+            // Freed with its frame. `ResumeWindJump`'s window was once kept
+            // when its frame popped, and copying that rule without its reason
+            // is what made this leak: a jump's arrival *replaces* the
+            // register file, so an un-freed window cost one travel; a
             // composable invoke *extends* it, so the window is stranded under
             // everything appended after it and is reclaimed only when the
             // enclosing frame returns — which for a tail-recursive loop of
             // invokes is never. Measured: 27 MB against `main`'s 10 at 400k
-            // invokes, growing without bound.
+            // invokes, growing without bound. (A jump's stub frame now stays
+            // for its whole travel, #714, so no window outlives its frame.)
             //
             // Safe because the four values are already in Rust locals, and
             // nothing between here and the next write of `cont` — into the
@@ -2697,21 +2699,20 @@ fn dispatch_one_instruction(
             let value = state.reg_at(base, wind_step::VALUE);
             let entering = state.reg_at(base, wind_step::ENTERING);
             let window = AssertNoGc::new(state.heap());
-            state.execution.finish_wind_step();
-            // The stub's register window is deliberately **not** freed here.
-            // It is the only root for `target` and `value` — and `target` is a
-            // `VmContinuationRef` whose payload lives in a *weak* store
-            // (`gc_roots.rs`), so an unrooted one at a collecting safe point
-            // would have its payload pruned. Freeing it would leave both
-            // reachable from Rust locals alone until the next step writes them
-            // back. No safe point runs in that window today, which is what
-            // makes this cheap insurance rather than a fix; the same reasoning
-            // roots `pending_escape`. The window costs `NUM_REGS` per step and
-            // is reclaimed wholesale when the travel ends: arrival replaces
-            // the register file, and so does any jump that abandons this one.
+            // The stub frame stays on top for the whole travel (#714): the
+            // next step restarts it in place, and arrival replaces it with
+            // the target's frames. So `target`, a `VmContinuationRef` whose
+            // payload lives in a *weak* store (`gc_roots.rs`), stays rooted
+            // in its window, with `value`, and no word is left outside a
+            // frame's window. The frame was popped here until then, its
+            // window kept on the register file as the two's only root, a
+            // word outside every window that an interleaved stack cannot
+            // keep (`PRD/GC_PRD.md` §11.1, invariant 1).
             //
-            // `window` asserts the "no safe point" half (#624): it runs from
-            // here to the next write, inside `step_wind_jump`, which closes it.
+            // `window` asserts no safe point from here to the step's end,
+            // inside `step_wind_jump`, which closes it (#624): the step reads
+            // the weak store, holds its clone, and on arrival holds `value`
+            // in a Rust local from the restore to the delivery.
 
             // A before-thunk's record is pushed only now, after it returned:
             // while the thunk runs, its extent is not entered, so a jump out
@@ -2749,7 +2750,7 @@ fn dispatch_one_instruction(
             let abort_landing = state
                 .get_vm_continuation(target)
                 .is_some_and(|cc| cc.abort_landing);
-            step_wind_jump(state, target, value, window)?;
+            step_wind_jump(state, target, value, WindStub::Reuse, window)?;
             // Whether that pushed the next thunk's frames or arrived and
             // replaced the stack, the loop that owns what is now on the stack
             // decides — the same signal every continuation invoke sends.
@@ -2819,7 +2820,7 @@ fn dispatch_one_instruction(
                 // repeating it here would only buy a second wording of the
                 // same error that no test can reach.
                 let window = AssertNoGc::new(state.heap());
-                step_wind_jump(state, cont_tv, deliver_val, window)?;
+                step_wind_jump(state, cont_tv, deliver_val, WindStub::Push, window)?;
                 return Err(park_escape(state, deliver_val));
             }
         }

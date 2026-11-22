@@ -711,7 +711,13 @@ fn handle_control_primitive(
                 // Never read: arriving ends the process first.
                 reentry: captured_reentry(state),
             });
-            step_wind_jump(state, target, TaggedValue::UNSPECIFIED, window)?;
+            step_wind_jump(
+                state,
+                target,
+                TaggedValue::UNSPECIFIED,
+                WindStub::Push,
+                window,
+            )?;
             return Err(park_escape(state, TaggedValue::UNSPECIFIED));
         }
 
@@ -1201,6 +1207,19 @@ pub(super) mod wind_step {
     pub(in crate::runtime) const NUM_REGS: u16 = 4;
 }
 
+/// Where a jump's next step finds its stub frame (#714): pushed now, at the
+/// travel's first step, or on top already, where `ResumeWindJump` takes the
+/// step after a thunk returned into the travel's own stub.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum WindStub {
+    /// The travel starts here: a continuation invoke, `exit`, an abort's
+    /// travel. A step pushes the stub.
+    Push,
+    /// `ResumeWindJump`, in the travel's stub on top: a step restarts it in
+    /// place, at pc 0, keeping the target and value in its window.
+    Reuse,
+}
+
 /// Take the next step of a jump to the full continuation `target`: run one
 /// wind thunk between the live wind stack and the target's, or, with none
 /// left, arrive — restore the target's state and deliver `value`.
@@ -1211,7 +1230,11 @@ pub(super) mod wind_step {
 /// remaining extents outermost first (run `before`, push the record). Each
 /// thunk runs under a stub frame whose only instruction comes back here
 /// ([`Instruction::ResumeWindJump`]), so the thunks are ordinary frames of
-/// the machine the jump was made on rather than nested Rust calls.
+/// the machine the jump was made on rather than nested Rust calls. The stub
+/// frame stays for the whole travel (#714): the first step pushes it
+/// (`stub` is [`WindStub::Push`]), each later one restarts it in place
+/// ([`WindStub::Reuse`]), and arrival replaces it with the target's frames,
+/// so the target and value are in a frame's window from the first step on.
 ///
 /// Each thunk also runs in the dynamic environment of its own `dynamic-wind`
 /// call (R7RS §6.10): the wind stack below its record, and the handler stack
@@ -1233,21 +1256,24 @@ pub(super) mod wind_step {
 /// left the machine's roots — or before the lookup, if they never did. From
 /// the lookup in the weak store to the copy-back, no safe point may run: an
 /// unrooted `target` at a collecting one would have its payload pruned
-/// (`gc_roots.rs`). The window closes where they are back: at arrival, once
-/// the snapshot is restored and the value delivered; on a step, once
-/// `push_wind_step` has written them into the stub, before the thunk is
-/// called (#624).
+/// (`gc_roots.rs`), and `cc`, the store's clone, is never held across a
+/// collecting poll (#836). The window closes where they are back: at
+/// arrival, once the snapshot is restored and the value delivered; on a
+/// step, once `push_wind_step` has written them into a pushed stub, or
+/// restarted the stub that holds them, before the thunk is called (#624).
 ///
 /// # State contract
 ///
-/// Requires a live full-continuation handle. A scheduled step mutates winds,
-/// handlers, frames and registers; arrival replaces all five components and
-/// delivers value. Ok does not mean an ordinary call returned: the caller
-/// must park the transfer and yield to the owning driver.
+/// Requires a live full-continuation handle, and with [`WindStub::Reuse`]
+/// the travel's stub frame on top. A scheduled step mutates winds, handlers,
+/// frames and registers; arrival replaces all five components and delivers
+/// value. Ok does not mean an ordinary call returned: the caller must park
+/// the transfer and yield to the owning driver.
 pub(super) fn step_wind_jump(
     state: &mut VmState,
     target: TaggedValue,
     value: TaggedValue,
+    stub: WindStub,
     window: AssertNoGc,
 ) -> Result<(), VmError> {
     let cc = state
@@ -1263,10 +1289,10 @@ pub(super) fn step_wind_jump(
             .execution
             .pop_wind()
             .expect("longer than its own prefix");
+        let base = wind_step_frame(state, target, value, stub)?;
         return push_wind_step(
             state,
-            target,
-            value,
+            base,
             TaggedValue::FALSE,
             record.after,
             &record.handlers,
@@ -1280,10 +1306,10 @@ pub(super) fn step_wind_jump(
     if let WindStep::Enter(index) = step {
         let record = &cc.dynamic_winds[index];
         let entering = TaggedValue::fixnum(index as i64);
+        let base = wind_step_frame(state, target, value, stub)?;
         return push_wind_step(
             state,
-            target,
-            value,
+            base,
             entering,
             record.before,
             &record.handlers,
@@ -1385,33 +1411,78 @@ pub(super) fn exit_in_progress(state: &VmState) -> Option<i32> {
         })
 }
 
-/// Push a stub frame carrying the rest of the jump, install the handler stack
-/// the thunk's `dynamic-wind` call had, and call the thunk under it.
+/// The stub frame a wind step's thunk runs above, which carries the rest of
+/// the jump (#714): pushed at the travel's first step ([`WindStub::Push`]),
+/// with the target and value written into it, or the travel's own, on top,
+/// restarted in place at pc 0 with both kept ([`WindStub::Reuse`]). Answers
+/// its window's base. Its other two registers are the push's or the
+/// restart's fill until [`push_wind_step`] writes `ENTERING` and the thunk's
+/// return `THUNK_RESULT`.
+///
+/// # State contract
+///
+/// Requires, for `Reuse`, the travel's stub frame on top, holding `target`
+/// and `value`. Pushes or restarts that one frame; writes only its window;
+/// calls no Scheme.
+fn wind_step_frame(
+    state: &mut VmState,
+    target: TaggedValue,
+    value: TaggedValue,
+    stub: WindStub,
+) -> Result<usize, VmError> {
+    let code = wind_jump_stub(state)?;
+    match stub {
+        WindStub::Push => {
+            let base = push_stub_frame(state, code, wind_step::NUM_REGS);
+            // `set_top` for the reason the value form's stub gives: the
+            // frame is pushed, so the assert holds and keeps holding.
+            state.execution.set_top(base, wind_step::TARGET, target);
+            state.execution.set_top(base, wind_step::VALUE, value);
+            Ok(base)
+        }
+        WindStub::Reuse => {
+            debug_assert!(
+                state.execution.frames().last().is_some_and(|top| {
+                    top.code.id == code.id
+                        && state
+                            .execution
+                            .registers()
+                            .values(
+                                top.register_base + wind_step::TARGET as usize
+                                    ..top.register_base + wind_step::ENTERING as usize,
+                            )
+                            .eq([target, value])
+                }),
+                "a wind step reuses its travel's own stub frame"
+            );
+            Ok(state.execution.restart_stub(code, wind_step::ENTERING))
+        }
+    }
+}
+
+/// Run a wind step's thunk above its stub frame at `base`
+/// ([`wind_step_frame`]): install the handler stack the thunk's
+/// `dynamic-wind` call had, write which record the step enters, and call the
+/// thunk under it.
 ///
 /// Closes the jump's `window` once the stub holds the operands, before the
 /// call: a thunk may run a nested loop, which polls.
 ///
 /// # State contract
 ///
-/// Requires a valid target handle and a popped exiting record, or an
-/// unpushed entering record. Installs the supplied handlers, roots transfer
-/// operands in a stub, and calls the thunk. Calls can change all dynamic state.
+/// Requires the step's stub frame on top at `base`, holding the target and
+/// value, and a popped exiting record or an unpushed entering record.
+/// Installs the supplied handlers, writes `ENTERING`, and calls the thunk.
+/// Calls can change all dynamic state.
 fn push_wind_step(
     state: &mut VmState,
-    target: TaggedValue,
-    value: TaggedValue,
+    base: usize,
     entering: TaggedValue,
     thunk: TaggedValue,
     handlers: &[ExceptionHandler],
     window: AssertNoGc,
 ) -> Result<(), VmError> {
     install_thunk_handlers(state, handlers);
-    let code = wind_jump_stub(state)?;
-    let base = push_stub_frame(state, code, wind_step::NUM_REGS);
-    // `set_top` for the reason the value form's stub gives: the frame is
-    // pushed, so the assert holds and keeps holding.
-    state.execution.set_top(base, wind_step::TARGET, target);
-    state.execution.set_top(base, wind_step::VALUE, value);
     state.execution.set_top(base, wind_step::ENTERING, entering);
     drop(window);
     // The caller's clone of the jump's continuation (`step_wind_jump`'s `cc`,
@@ -1445,7 +1516,9 @@ fn push_wind_step(
 /// or, on a re-entry, above it. `pop_exception_handlers` reads them
 /// literally and would drop a handler as soon as a frame at or above its
 /// recorded depth returned, so each is clamped to the depth the thunk starts
-/// at. Clamping against one constant preserves the stack's non-decreasing
+/// at: the depth the step's stub frame was pushed at, below it, which is the
+/// same at every step since the stub stays for the whole travel (#714).
+/// Clamping against one constant preserves the stack's non-decreasing
 /// order, and nothing else reads the field.
 ///
 /// There is no restore, and none is owed — *for a jump*, whose target replaces
@@ -1465,8 +1538,8 @@ fn push_wind_step(
 ///
 /// # State contract
 ///
-/// Requires the wind thunk's current frame depth. Replaces only handlers,
-/// clamping their saved depths to the live stack; does not call Scheme.
+/// Requires the step's stub frame on top. Replaces only handlers, clamping
+/// their saved depths to that frame's depth; does not call Scheme.
 fn install_thunk_handlers(state: &mut VmState, handlers: &[ExceptionHandler]) {
     state.execution.install_thunk_handlers(handlers);
 }
@@ -2831,7 +2904,7 @@ fn try_invoke_full_continuation(
     }
     let window = AssertNoGc::new(state.heap());
     let deliver_val = deliver_value(state, args);
-    step_wind_jump(state, func_val, deliver_val, window)?;
+    step_wind_jump(state, func_val, deliver_val, WindStub::Push, window)?;
     Ok(Some(deliver_val))
 }
 
@@ -2965,7 +3038,7 @@ pub(super) fn abort_to_prompt(
         reentry: captured_reentry(state),
     };
     let target_tv = state.alloc_vm_continuation(target);
-    match step_wind_jump(state, target_tv, val, window) {
+    match step_wind_jump(state, target_tv, val, WindStub::Push, window) {
         Ok(()) => park_transfer(state, val),
         Err(e) => e,
     }
