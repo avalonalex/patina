@@ -395,22 +395,50 @@ Internal defines (letrec* semantics) use no new instructions:
 ### 10.4 Temporary roots (#423)
 
 Codegen records retirement ranges at instruction boundaries, including both
-edges out of an `if` test. After return threading, a forward analysis builds
-`CodeObject::register_roots`: per-PC bitsets of possible roots. Parameters
-start live, writes add their destinations, expression boundaries remove
-finished temporaries, and control-flow joins take the union. Fused predicates
-include their fast true/false edges and their deoptimization fallthrough.
+edges out of an `if` test. After return threading, a forward analysis
+computes per-PC bitsets of possible roots. Parameters start live, writes add
+their destinations, expression boundaries remove finished temporaries, and
+control-flow joins take the union. Fused predicates include their fast
+true/false edges and their deoptimization fallthrough.
+
+A frame is scanned or copied only where it can be suspended, so only those
+PCs keep a bitset (#905, `PRD/GC_PRD.md` §11.1 invariant 2):
+`CodeObject::register_roots` is a dense index of one `u16` per PC, the PC
+past the end included, naming a bitset in a table of distinct bitsets that
+every member of the unit shares through one `Rc<[u64]>`, each padded with
+zero words to the unit's widest member (`RegisterMaps`). Pass 5 builds the
+table where it builds the unit's link table, and writes `0xFFFF` for every
+other PC. The suspension points are PC 0, where a frame's entry polls, and
+the PC after each instruction `suspends_after` names, an exhaustive match
+beside `written_register`: the calls that return to their frame, every
+inline primitive opcode (each has a shadow deoptimization that calls from
+there), the tail calls (a non-procedure callee raises from the frame, and a
+primitive or parameter callee runs with the frame on the stack), the
+instructions that can raise (`LoadGlobal`, `StoreGlobal`, and `LoadConst`,
+`LoadClosure`, `ReadCell` and `WriteCell`, whose internal errors are
+catchable), and `AbortToPrompt`, `CaptureComposable` and
+`InvokeContinuation`. The bitset at a suspension point is the analysis's
+bitset there. A unit with more than 65,534 distinct bitsets gives the excess
+one all-ones bitset rather than fail to compile. On libload at the end of
+its imports (2026-11-22) the index and tables hold 601,586 B over 127,353
+PCs, 54,919 of them `0xFFFF`, where a `Vec` per PC held 5,094,120 B, 40 B a
+PC.
 
 These are GC metadata, with no extra bytecode instructions. The VM clears
 excluded slots just before collection and in full/delimited continuation
 snapshots at capture, then traces the complete register vectors as before.
 A check build clears them to `DEAD_SLOT` and panics where an instruction or a
 call's argument copy reads one, so a map that excludes a register still to be
-read fails at that read (#625, `docs/GC_DESIGN.md` §11 item 6).
+read fails at that read (#625, `docs/GC_DESIGN.md` §11 item 6). A frame found
+at a `0xFFFF` PC means a missed suspension point: a check build panics at its
+retirement, naming the code, the PC and the instruction before it, and a
+plain release build keeps every register of the frame (#905).
 The entry map also retires stale slots in a reused tail-call window. Pending
 earlier operands and local bindings remain roots; this is expression lifetime
-tracking, not last-use analysis of local variables. Runtime-built stubs keep
-conservative maps because their register protocols are not compiler output.
+tracking, not last-use analysis of local variables. Runtime-built stubs carry
+maps that keep every register at every PC (`RegisterMaps::all_live`), because
+their register protocols are not compiler output; only hand-built code has
+none.
 
 ### 10.5 Link indices (#836)
 
