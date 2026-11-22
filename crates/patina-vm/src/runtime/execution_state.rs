@@ -11,7 +11,7 @@ use crate::types::continuation::{
 };
 use crate::types::{CallFrame, Depth, FrameCode};
 use patina_core::heap::Heap;
-use patina_core::{GC_CHECK, SlotVisitor, TaggedValue, Trace};
+use patina_core::{CheckCell, GC_CHECK, SlotVisitor, TaggedValue, Trace};
 use std::cell::Cell;
 use std::ops::Range;
 use std::rc::Rc;
@@ -57,16 +57,21 @@ pub(super) struct ExecutionState {
 /// every shrink sets it, so it is `BASE` or no deeper than the stack, and
 /// equal to the stack's depth only while its top frame awaits a value.
 ///
-/// In every build, since the VM cannot name core's `gc-check` feature, but
-/// written and read only under `GC_CHECK`: a plain release build keeps the
-/// word and never touches it.
-struct Awaiting(Cell<Depth>);
+/// A [`CheckCell`], since the VM cannot name core's `gc-check` feature in a
+/// `#[cfg]`: zero-sized in a plain release build, so `ExecutionState`, and
+/// `VmState` around it, keep that build's layout. A word held in every
+/// build reordered `VmState` and split the dispatch loop's paired loads
+/// (#904's measurement).
+struct Awaiting(CheckCell<Depth>);
 
 impl Default for Awaiting {
     fn default() -> Self {
-        Awaiting(Cell::new(Depth::BASE))
+        Awaiting(CheckCell::new(Depth::BASE))
     }
 }
+
+// A plain build keeps no word for it.
+const _: () = assert!(GC_CHECK || std::mem::size_of::<Awaiting>() == 0);
 
 /// The code the innermost running dispatch loop's `cur_code` holds (#836),
 /// by id: written when `cur_code` changes (where a loop starts or an escape
@@ -220,10 +225,13 @@ impl ExecutionState {
         }
     }
 
-    /// Whether the top frame awaits a value. Kept only by a check build.
+    /// Whether the top frame awaits a value. Kept only by a check build: a
+    /// plain one answers `false`.
     fn top_awaits(&self) -> bool {
-        let awaiting = self.awaiting.0.get();
-        awaiting != Depth::BASE && awaiting == self.depth()
+        self.awaiting
+            .0
+            .get()
+            .is_some_and(|awaiting| awaiting != Depth::BASE && awaiting == self.depth())
     }
 
     /// The one way to write a register of a frame something has returned
