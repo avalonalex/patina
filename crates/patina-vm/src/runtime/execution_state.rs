@@ -5,7 +5,7 @@
 
 use super::control::abort_step;
 use crate::error::VmError;
-use crate::types::code_object::CodeObject;
+use crate::types::code_object::{Arity, CodeObject};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
@@ -72,6 +72,43 @@ impl Default for Awaiting {
 
 // A plain build keeps no word for it.
 const _: () = assert!(GC_CHECK || std::mem::size_of::<Awaiting>() == 0);
+
+/// What a push writes into every register of the window it initializes that
+/// no argument or operand of its own fills (#714, `PRD/GC_PRD.md` §11.1,
+/// frame invariant 1): a fresh window whole (`push_frame`, `push_abort_stub`),
+/// and a reused one past the registers it keeps (`tail_replace`,
+/// `restart_closure`, `restart_stub`), so that no window holds a word of an
+/// activation that has gone. A plain release build writes `NULL`, which
+/// `push_frame` always wrote. A check build writes `DEAD_SLOT`, which the
+/// machine refuses to read (`VmState::reg_at`, #625), so a read of a register
+/// the activation never wrote panics there, rather than answering what an
+/// earlier occupant of the window left.
+const FILL: TaggedValue = if GC_CHECK {
+    TaggedValue::DEAD_SLOT
+} else {
+    TaggedValue::NULL
+};
+
+/// Write [`FILL`] into every register of `window`: one store each, with no
+/// test per register.
+#[inline(always)]
+fn fill(window: &[Cell<TaggedValue>]) {
+    for slot in window {
+        slot.set(FILL);
+    }
+}
+
+/// The registers a call's arguments occupy in a window of code of `arity`:
+/// the fixed parameters, and for a variadic one the register of its rest
+/// list after them, which `store_args_in_window` writes. A reused window is
+/// filled from here up.
+#[inline(always)]
+fn argument_slots(arity: Arity) -> usize {
+    match arity {
+        Arity::Fixed(n) => n as usize,
+        Arity::Variadic(n) => n as usize + 1,
+    }
+}
 
 /// The code the innermost running dispatch loop's `cur_code` holds (#836),
 /// by id: written when `cur_code` changes (where a loop starts or an escape
@@ -194,8 +231,10 @@ impl ExecutionState {
     // The only ways to write a live register: the top frame's own write
     // (`set_top`), a write into a frame something has returned into or one
     // below the top (`return_into`), and a push's initializing writes
-    // (`push_frame`, `push_abort_stub`, and the arguments the call paths
-    // copy into a callee's window, `init_arg` and `init_args`).
+    // (`push_frame`, `push_abort_stub`, the fill of a reused window in
+    // `tail_replace`, `restart_closure` and `restart_stub`, #714, and the
+    // arguments the call paths copy into a callee's window, `init_arg` and
+    // `init_args`).
     // `inline(always)`, as the register helpers they replace were:
     // `dispatch_one_instruction` is too large for LLVM to inline them
     // otherwise (PRD §1.6 finding 1).
@@ -321,8 +360,9 @@ impl ExecutionState {
         &self.frames[depth.frame_count()..]
     }
 
-    /// Enter one loaded code object with its matching window. Caller fills
-    /// operands before the next safe point. Dynamic extents are unchanged.
+    /// Enter one loaded code object with its matching window, every register
+    /// of it [`FILL`]ed (#714). Caller fills operands before the next safe
+    /// point. Dynamic extents are unchanged.
     pub(super) fn push_frame(
         &mut self,
         code: Rc<CodeObject>,
@@ -332,7 +372,7 @@ impl ExecutionState {
         let base = self.registers.len();
         let num_regs = code.num_regs;
         self.registers
-            .resize(base + num_regs as usize, Cell::new(TaggedValue::NULL));
+            .resize(base + num_regs as usize, Cell::new(FILL));
         self.frames.push(CallFrame {
             pc: 0,
             register_base: base,
@@ -363,45 +403,73 @@ impl ExecutionState {
         self.mark_awaiting();
     }
 
-    /// Reuse the top window for another closure. Keep excess capacity as the
-    /// existing tail-call path does; the GC retirement map clears dead slots.
+    /// Reuse the top window for another closure, a tail call's push: the
+    /// window grows to the new code's registers if it needs more, and every
+    /// register of the new code past its arguments' is [`FILL`]ed (#714), so
+    /// the new activation reads nothing the replaced one wrote. The caller
+    /// writes the arguments (`store_args_in_window`), into the registers the
+    /// fill leaves alone. A window larger than the new code needs keeps its
+    /// spare registers, which the new code cannot name and retirement clears
+    /// at every collection and capture.
     pub(super) fn tail_replace(&mut self, code: Rc<CodeObject>, closure: TaggedValue) -> usize {
+        if GC_CHECK && self.top_awaits() {
+            wrote_an_awaiting_frame("tail_replace", 0);
+        }
         let frame = self
             .frames
             .last_mut()
             .expect("tail call with empty frame stack");
         if code.num_regs > frame.num_regs {
             let extra = code.num_regs - frame.num_regs;
-            self.registers.resize(
-                self.registers.len() + extra as usize,
-                Cell::new(TaggedValue::NULL),
-            );
+            self.registers
+                .resize(self.registers.len() + extra as usize, Cell::new(FILL));
             frame.num_regs = code.num_regs;
         }
+        let base = frame.register_base;
+        fill(&self.registers[base + argument_slots(code.arity)..base + code.num_regs as usize]);
         frame.pc = 0;
         frame.closure.set(closure);
         frame.code = FrameCode(code);
-        frame.register_base
+        base
     }
 
+    /// Give the top window to another activation of its own code, a self
+    /// tail call's push: every register of the code past its arguments' is
+    /// [`FILL`]ed (#714). The caller has written the arguments, which the
+    /// fill leaves alone.
     pub(super) fn restart_closure(&mut self, closure: TaggedValue) {
+        if GC_CHECK && self.top_awaits() {
+            wrote_an_awaiting_frame("restart_closure", 0);
+        }
         let frame = self
             .frames
             .last_mut()
             .expect("tail call with empty frame stack");
         frame.pc = 0;
         frame.closure.set(closure);
+        let base = frame.register_base;
+        let code = &frame.code;
+        fill(&self.registers[base + argument_slots(code.arity)..base + code.num_regs as usize]);
     }
 
-    /// Resume variants share one window size; only their instruction stream
-    /// changes. The stub starts its next round as its own work, so its
-    /// operands are written with `set_top` after this.
-    pub(super) fn restart_stub(&mut self, code: Rc<CodeObject>) {
+    /// Start the top stub frame's next round in `code`, at pc 0, as its own
+    /// work: the registers below `keep` carry over from the round before,
+    /// and the rest of `code`'s are [`FILL`]ed (#714), for the round to
+    /// write its operands into with `set_top`. Answers the window's base.
+    /// Resume variants share one window size, and only their instruction
+    /// stream changes (`resume_primitive`, which keeps the primitive's
+    /// index); a wind step restarts in its own code (`push_wind_step`, which
+    /// keeps the jump's target and value).
+    pub(super) fn restart_stub(&mut self, code: Rc<CodeObject>, keep: u16) -> usize {
+        self.clear_awaiting();
         let frame = self.frames.last_mut().expect("the stub frame");
         debug_assert!(code.num_regs <= frame.num_regs);
+        debug_assert!(keep <= code.num_regs);
+        let base = frame.register_base;
+        fill(&self.registers[base + keep as usize..base + code.num_regs as usize]);
         frame.code = FrameCode(code);
         frame.pc = 0;
-        self.clear_awaiting();
+        base
     }
 
     #[inline(always)]
@@ -810,10 +878,7 @@ pub(super) fn push_abort_stub(
     cont: TaggedValue,
 ) {
     let base = registers.len();
-    registers.resize(
-        base + abort_step::NUM_REGS as usize,
-        Cell::new(TaggedValue::NULL),
-    );
+    registers.resize(base + abort_step::NUM_REGS as usize, Cell::new(FILL));
     registers[base + abort_step::HANDLER as usize].set(handler);
     registers[base + abort_step::VAL as usize].set(val);
     registers[base + abort_step::CONT as usize].set(cont);

@@ -956,7 +956,9 @@ impl VmState {
     /// The panic of a read of a register the last retirement filled with
     /// `DEAD_SLOT` (#625): its frame's liveness map, at the pc where a
     /// collection or a capture retired it, called a register dead that was
-    /// still to be read. `frame_from_top` names the reading frame (0 for the
+    /// still to be read. Or a register the push of its window filled with
+    /// it, which the activation reads without having written (#714).
+    /// `frame_from_top` names the reading frame (0 for the
     /// top one); the pc reported is the reading instruction's, the one its
     /// frame's `pc` is one past.
     #[cold]
@@ -975,7 +977,8 @@ impl VmState {
             .expect("the reading frame is on the stack");
         panic!(
             "read of a retired register {how}: r{reg} at pc {} of #{} \
-             (a liveness map said it was dead; #625, docs/GC_DESIGN.md §11)",
+             (a liveness map said it was dead, or its activation never wrote \
+             it; #625, #714, docs/GC_DESIGN.md §11)",
             frame.pc.saturating_sub(1),
             frame.code.id
         )
@@ -3474,9 +3477,18 @@ mod tests {
         assert!(state.execution.frames().is_empty());
     }
 
-    /// Code that returns register 0, compiled by no one.
+    /// Code that returns register 0, compiled by no one. It writes the
+    /// register first, as compiled code does: a check build fills a pushed
+    /// window with `DEAD_SLOT`, which a `Return` of an unwritten register
+    /// would read (#714).
     pub(super) fn code() -> CodeObject {
-        let instructions = vec![Instruction::Return { val: 0 }];
+        let instructions = vec![
+            Instruction::LoadImmediate {
+                dst: 0,
+                val: TaggedValue::UNSPECIFIED,
+            },
+            Instruction::Return { val: 0 },
+        ];
         CodeObject {
             id: CodeObjectId::label(),
             name: None,

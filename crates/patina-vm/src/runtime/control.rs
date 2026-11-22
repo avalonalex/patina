@@ -486,8 +486,9 @@ fn store_args_in_window(state: &mut VmState, base: usize, arity: Arity, arg_vals
 fn retired_register_as_argument(index: usize) -> ! {
     panic!(
         "a retired register reached a call as its argument {index}: it was \
-         read out of a register a liveness map said was dead, by a path that \
-         does not check (#625, docs/GC_DESIGN.md §11)"
+         read out of a register a liveness map said was dead, or one its \
+         activation never wrote, by a path that does not check (#625, #714, \
+         docs/GC_DESIGN.md §11)"
     )
 }
 
@@ -1891,15 +1892,10 @@ fn set_suspension(state: &mut VmState, base: usize, suspension: Suspension) {
             }
         }
         StubWork::Collect(_) => {
-            // Nothing to call. A frame going round again keeps the last
-            // call's callee, arguments and result in these registers, which
-            // the collection would otherwise keep alive.
-            for reg in [resume_step::CALLEE, resume_step::RESULT]
-                .into_iter()
-                .chain((0..resume_step::INLINE_ARGS as u16).map(|i| resume_step::ARGS + i))
-            {
-                state.execution.set_top(base, reg, TaggedValue::UNSPECIFIED);
-            }
+            // Nothing to call. The push or the restart has filled the
+            // callee, argument and result registers (#714), so a frame
+            // going round again keeps nothing of the last call alive through
+            // the collection; until then it cleared them here.
             state
                 .execution
                 .set_top(base, resume_step::EVAL, TaggedValue::FALSE);
@@ -2232,9 +2228,12 @@ pub(super) fn resume_primitive(state: &mut VmState, base: usize) -> Result<(), V
             // argument count, or the one that collects; the loop picks up a
             // changed code object. Restarted before its operands are
             // written, so that they are the next round's own (`set_top`,
-            // #904); `set_suspension` reads neither the pc nor the code.
+            // #904); `set_suspension` reads neither the pc nor the code. The
+            // primitive's index carries over, and every other register is
+            // filled (#714): a round with fewer arguments, or one that
+            // collects, keeps nothing of the last call.
             let code = stub_for(state, &suspension.work)?;
-            state.execution.restart_stub(code);
+            state.execution.restart_stub(code, resume_step::STATE);
             set_suspension(state, base, suspension);
         }
     }
