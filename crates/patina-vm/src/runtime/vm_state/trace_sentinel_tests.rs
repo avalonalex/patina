@@ -399,7 +399,7 @@ fn for_each_slot(state: &VmState, mut each: impl FnMut(&Cell<TaggedValue>)) {
     let delimited = state.delimited_continuation_store.borrow();
     let full = full.values().next().expect("one full capture");
     let delimited = delimited.values().next().expect("one delimited capture");
-    for slot in (execution.registers().iter())
+    for slot in (execution.register_cells().iter())
         .chain(execution.frames().iter().map(|f| &f.closure))
         .chain(&full.registers)
         .chain(full.frames.iter().map(|f| &f.closure))
