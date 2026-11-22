@@ -222,10 +222,10 @@ pub struct ScopeId(pub usize);  // fresh from a process-wide counter, never reus
 
 ### The identifier (hygienic identifier)
 
-A syntax identifier is a heap object. Since #788 it holds its scope set's
-id in the heap's scope-set table, which keeps each distinct set once and
-frees a set at the first collection after no live identifier carries it, and
-since #790 its spelling's interned symbol:
+A syntax identifier is a heap object. Since #790 it holds its spelling's
+interned symbol, and since #788 its scope set's id in the heap's scope-set
+table, which keeps each distinct set once and frees a set at the first
+collection after no live identifier carries it:
 
 ```rust
 HeapObjectData::Identifier {
