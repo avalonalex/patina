@@ -140,6 +140,51 @@ impl ExecutionState {
         self.depth().lowered_by(1)
     }
 
+    // ── Register writes (#904) ──────────────────────────────────────────
+    //
+    // The only ways to write a live register: the top frame's own write
+    // (`set_top`), and a push's initializing writes (`push_frame`,
+    // `push_abort_stub`, and the arguments the call paths copy into a
+    // callee's window, `init_arg` and `init_args`). `inline(always)`, as the
+    // register helpers they replace were: `dispatch_one_instruction` is too
+    // large for LLVM to inline them otherwise (PRD §1.6 finding 1).
+
+    /// The top frame's window base.
+    #[inline(always)]
+    fn top_base(&self) -> usize {
+        self.frames.last().expect("no active frame").register_base
+    }
+
+    /// The top frame's own write, during its own instruction: `reg` of the
+    /// window at `base`, the base the dispatch prologue hoisted, or the one
+    /// `push_frame` answered for a stub's operands. Only an instruction arm
+    /// that cannot push or pop a frame before the write may pass a hoisted
+    /// base; the debug assert holds it to the top frame's.
+    #[inline(always)]
+    pub(super) fn set_top(&mut self, base: usize, reg: u16, value: TaggedValue) {
+        debug_assert_eq!(base, self.top_base());
+        self.registers[base + reg as usize].set(value);
+    }
+
+    /// A push's initializing write: argument `index` into the window at
+    /// `base`, of the frame just pushed (`push_frame`) or given to a callee
+    /// in place (`tail_replace`, `restart_closure`).
+    #[inline(always)]
+    pub(super) fn init_arg(&mut self, base: usize, index: usize, value: TaggedValue) {
+        debug_assert_eq!(base, self.top_base());
+        self.registers[base + index].set(value);
+    }
+
+    /// [`Self::init_arg`] for the first `slots` registers of that window,
+    /// from `values`, as many as both have, under one range check.
+    #[inline(always)]
+    pub(super) fn init_args(&mut self, base: usize, slots: usize, values: &[TaggedValue]) {
+        debug_assert_eq!(base, self.top_base());
+        for (slot, &value) in self.registers[base..base + slots].iter().zip(values) {
+            slot.set(value);
+        }
+    }
+
     /// The frames below `depth`: the ones a stack cut back to it keeps.
     pub(super) fn frames_below(&self, depth: Depth) -> &[CallFrame] {
         &self.frames[..depth.frame_count()]
