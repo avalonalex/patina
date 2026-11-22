@@ -922,7 +922,8 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 
 | Field | Root? | Notes |
 |-------|-------|-------|
-| `registers` | **yes** | Slots (`Cell`s, #682), the whole vector, after completed expression temporaries are cleared using per-PC compiler maps (#423); local bindings remain conservative |
+| `registers` | **yes** | Slots (`Cell`s, #682), the whole vector, after completed expression temporaries are cleared using per-PC compiler maps (#423); local bindings remain conservative. Every register lies in a frame's window (`PRD/GC_PRD.md` §11.1, invariant 1; #714, asserted in debug builds): a push fills each register no argument or operand writes, a reused window's too, and nothing keeps a word past the top window. Until #714 two did, rooted by the whole-vector trace and left alone by retirement, which reads only windows: the window a finished wind step left behind (`finish_wind_step`) and `run_apply_proc`'s scratch slot past the caller's window |
+| `answer` | **yes** | Pinned (#714). The value `return_into` was handed for a destination of `CallFrame::NO_RETURN`, a higher-order primitive's callback, which writes no register: `call_any` takes back an immediate callee's at once, with no safe point between; one a frame returned into nothing (a continuation that re-entered the callback after its primitive returned) stays until the next replaces it, or `clear` |
 | `frames[*].closure` | **yes** | A slot, reported as the registers are: the frame's `VmClosure`, or the immediate `CallFrame::NO_CLOSURE` (`types/mod.rs`). A bare `Option<ObjectIndex>` with a visitor method of its own until #683 |
 | `frames[*].code`, `running` | by id | Each frame's code (`FrameCode`, `types/mod.rs`) and the code the dispatch loop's `cur_code` holds (`RunningCode`, `execution_state.rs`, written where `cur_code` changes and put back when a nested loop ends) report their code id through `SlotVisitor::code`; the code-id round of the fixpoint (§9.5) hands each id once to `trace_code_ids`, which traces that unit's link table once a collection (`LinkTable::trace_once`, by `trace_epoch`), generation-checked. The constants stay traced from `code_store`, which never traces a table (#836). `load_unit` links each unit's table in the namespace the unit was compiled in, before any read goes through it, so a table traced marks the records its unit links, and with them the placeholders and weak read-through records nothing else marks, the heap's by-name record, and the namespace it was linked in (`LinkTable.namespace`, §8). A table's entries are dereferenced only by the code of a unit something holds: a frame, a marked closure or the running code, each of which reports the unit's id |
 | `pending_escape` | **yes** | Pinned. Value parked while crossing a Rust re-entry boundary; multiple values otherwise travel in ordinary registers as heap values |
@@ -966,7 +967,12 @@ dropped a placeholder a traced table links would leave
 instruction boundaries (`docs/VM_COMPILER.md` §10.4). Before an outermost
 collection, the VM replaces excluded slots with `UNSPECIFIED`, including
 excess capacity in reused tail-call windows; a check build writes `DEAD_SLOT`
-instead and panics where one is read (#625, §11 item 6). Full and delimited
+instead and panics where one is read (#625, §11 item 6). A push fills the
+registers of its window that no argument or operand writes the same way
+(#714), reused windows included, past the arguments up to the new code's
+register count: so a register a map calls live was written by its
+activation, and the excess capacity past the code's count, which no fill
+reaches, is what retirement alone clears. Full and delimited
 continuation snapshots receive the same cleanup at capture, with the
 delimited base offset accounted for. Tracing still visits complete vectors,
 so snapshots and tracer register views never carry deliberately untraced
@@ -2000,8 +2006,13 @@ these checks except the defer balance, which every build checks.
     may run a nested loop; the identity continuation hands it back to the
     caller, which drops it once it has placed the value;
   - the composable invoke's freed stub window (#172, `ResumeComposableInvoke`);
-  - `ResumeWindJump`'s retained target and value, from `finish_wind_step` to
-    the next write (#156);
+  - `ResumeWindJump`'s step, from the stub's reads of the target and value
+    to the end of `step_wind_jump`: the weak-store clone the step holds,
+    and on arrival the value from the restore to its delivery. The target
+    and value themselves stay in the stub's window, which stays for the
+    whole travel (#714); until then `finish_wind_step` popped the stub and
+    kept its window on the register file as their only root, outside every
+    frame's window (#156);
   - a unit from its load to its frame's push (S1, #836): until a frame holds
     the unit's code, only the code store does, and a collection would let
     the unit go, and with it the placeholders its table linked at load,
@@ -2906,7 +2917,10 @@ visitor exists, and the stress lane is the real safety net.
    every check build, register retirement (§5.2) writes
    `TaggedValue::DEAD_SLOT` rather than `UNSPECIFIED` into each register its
    frame's per-pc map calls dead, at a collection and at a continuation
-   capture. Every read of a register checks for it: `VmState::reg_at`, which
+   capture; and a push writes it into each register of its window that no
+   argument or operand writes, a tail call's, a self tail call's and a
+   stub restart's reused window included, where a plain release build
+   writes `NULL` (#714). Every read of a register checks for it: `VmState::reg_at`, which
    every instruction's operands go through (`read of a retired register as
    an instruction's operand`); the closure-call fast path's argument copy and
    its rest list, which read the caller's registers directly
@@ -2929,8 +2943,9 @@ visitor exists, and the stress lane is the real safety net.
    drops the highest live register from every map with patina-vm's
    test-only switch (`test_support::DropHighestLive`, under its
    `test-support` feature, which only patina-tests' dev-dependencies
-   enable), and the store controls in `heap/check.rs`; the release GC lane
-   runs both. The check sees a wrong map only at a pc where a collection or
+   enable), and reads, in hand-assembled code, a register a reused window's
+   push filled (`test_support::read_an_unwritten_register`, #714); and the
+   store controls in `heap/check.rs`; the release GC lane runs both. The check sees a wrong map only at a pc where a collection or
    a capture happens, which is why item 7 exists.
 7. **Zeal lane (#625):** `scripts/run_gc_zeal.sh` runs the files of
    `crates/patina-tests/tests/scheme/control/` except `tail-recursion.scm`
