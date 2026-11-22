@@ -46,8 +46,15 @@ impl<'gc> Expander<'gc> {
             patina_runtime::ScopeSet::new()
         };
 
-        // Create native Identifier with scopes (Racket-style hygiene)
-        let value = cx.alloc_identifier(name.clone(), scopes);
+        // Create native Identifier with scopes (Racket-style hygiene), for
+        // the symbol the macro object holds (#790)
+        let value = match id.symbol() {
+            Some(symbol) => {
+                let symbol = self.literal(cx, symbol);
+                cx.alloc_identifier_for(symbol, scopes)
+            }
+            None => cx.alloc_identifier(name.clone(), scopes),
+        };
         if let Some(source) = &id.source {
             cx.record_source(value, source.clone());
         }

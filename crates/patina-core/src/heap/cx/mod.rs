@@ -1190,6 +1190,35 @@ impl<'gc> Cx<'gc> {
         replacements: &mut std::collections::HashMap<Value<'gc>, Value<'gc>>,
         mut transform: impl FnMut(&mut Cx<'gc>, Value<'gc>, Rc<str>, ScopeSet) -> Option<Value<'gc>>,
     ) -> Value<'gc> {
+        self.walk_identifiers_memo(root, replacements, |cx, value| {
+            let (name, scopes) = cx.get_identifier_data_any(value)?;
+            transform(cx, value, name, scopes)
+        })
+    }
+
+    /// `root` as quoted data: each identifier in it replaced by the symbol
+    /// it stands for ([`Cx::identifier_datum`]), its name's, with no lookup
+    /// of its spelling (#790). The walk of
+    /// [`Cx::map_syntax_identifiers_memo`], sharing `replacements` across
+    /// the roots of one form as it does.
+    pub fn strip_identifiers_memo(
+        &mut self,
+        root: Value<'gc>,
+        replacements: &mut std::collections::HashMap<Value<'gc>, Value<'gc>>,
+    ) -> Value<'gc> {
+        self.walk_identifiers_memo(root, replacements, |cx, value| cx.identifier_datum(value))
+    }
+
+    /// The walk under [`Cx::map_syntax_identifiers_memo`] and
+    /// [`Cx::strip_identifiers_memo`]: `copy_of` is asked of each value it
+    /// meets that is no pair or vector, and answers an identifier's copy, or
+    /// `None` to leave the value as it is.
+    fn walk_identifiers_memo(
+        &mut self,
+        root: Value<'gc>,
+        replacements: &mut std::collections::HashMap<Value<'gc>, Value<'gc>>,
+        mut copy_of: impl FnMut(&mut Cx<'gc>, Value<'gc>) -> Option<Value<'gc>>,
+    ) -> Value<'gc> {
         use std::collections::{HashMap, HashSet};
         if let Some(&copy) = replacements.get(&root) {
             return copy;
@@ -1208,8 +1237,8 @@ impl<'gc> Cx<'gc> {
                 }
                 continue;
             }
-            if let Some((name, scopes)) = self.get_identifier_data_any(value) {
-                if let Some(copy) = transform(self, value, name, scopes) {
+            if self.is_identifier(value) {
+                if let Some(copy) = copy_of(self, value) {
                     if self.get_symbol_name(copy).is_none() {
                         self.inherit_source(value, copy);
                     }

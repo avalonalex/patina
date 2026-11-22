@@ -245,12 +245,15 @@ impl Parser {
     }
 
     /// Program syntax has distinct identifiers; datum readers continue to
-    /// return interned symbols without allocating syntax metadata.
+    /// return interned symbols without allocating syntax metadata. Either
+    /// way the spelling is interned: an occurrence's identifier carries its
+    /// symbol (#790).
     fn identifier<'gc>(&self, cx: &mut Cx<'gc>, name: &str) -> Value<'gc> {
+        let symbol = cx.intern_symbol(name);
         if self.source_map.is_some() {
-            cx.alloc_source_identifier(Rc::from(name))
+            cx.alloc_source_identifier_for(symbol)
         } else {
-            cx.intern_symbol(name)
+            symbol
         }
     }
 

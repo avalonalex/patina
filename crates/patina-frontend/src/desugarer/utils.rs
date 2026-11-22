@@ -111,13 +111,14 @@ pub fn convert_formals_tagged<'gc>(formals: Value<'gc>, cx: &Cx<'gc>) -> Result<
 ///
 /// In quoted data, identifiers from macro expansion should become plain symbols.
 /// Identifier scopes are only needed during desugaring for binding resolution,
-/// not in quoted output data.
+/// not in quoted output data. Each identifier becomes the symbol it carries,
+/// with no lookup of its spelling (`Cx::strip_identifiers_memo`, #790).
 pub fn strip_identifiers_tagged<'gc>(
     tv: Value<'gc>,
     cx: &mut Cx<'gc>,
     memo: &mut HashMap<Value<'gc>, Value<'gc>>,
 ) -> Value<'gc> {
-    cx.map_syntax_identifiers_memo(tv, memo, |cx, _, name, _| Some(cx.intern_symbol(&name)))
+    cx.strip_identifiers_memo(tv, memo)
 }
 
 /// A symbol or a scoped identifier as `(name, scopes)`.
