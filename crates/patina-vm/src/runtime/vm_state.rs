@@ -19,6 +19,7 @@ use super::control::{
     spread_apply_args, step_wind_jump, tail_call_closure_resolved, tail_call_value,
     tail_call_value_with_probe, tail_invoke_delimited, unpack_values, vm_raise_value, wind_step,
 };
+use super::execution_state::ReturnFrame;
 use crate::error::{VmError, frame_refusal};
 use crate::types::code_object::{Arity, CodeObject, RegisterMapCensus, RegisterMaps};
 use crate::types::continuation::{
@@ -941,12 +942,6 @@ impl VmState {
     #[inline(always)]
     pub(super) fn reg(&self, reg: u16) -> TaggedValue {
         self.reg_at(self.frame_base(), reg)
-    }
-
-    #[inline(always)]
-    pub(super) fn set_reg(&mut self, reg: u16, val: TaggedValue) {
-        let base = self.frame_base();
-        self.execution.set_top(base, reg, val);
     }
 
     // The base-relative read for the dispatch loop: `base` is the top
@@ -2502,7 +2497,9 @@ fn dispatch_one_instruction(
             }
             // Write result into caller's return_reg.
             let return_reg = frame.return_reg;
-            state.set_reg(return_reg, result);
+            state
+                .execution
+                .return_into(ReturnFrame::Top, return_reg, result);
             pop_resolved_extents(state, exit_depth);
         }
 
@@ -2515,7 +2512,7 @@ fn dispatch_one_instruction(
             let consumer_val = state.reg_at(base, consumer);
             let produced_vals = unpack_values(state, state.reg_at(base, producer_result));
             if let Some(result) = call_any(state, consumer_val, &produced_vals, dst)? {
-                state.set_reg(dst, result);
+                state.execution.return_into(ReturnFrame::Top, dst, result);
             }
             poll(state)?;
         }

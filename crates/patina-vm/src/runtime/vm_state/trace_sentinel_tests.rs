@@ -930,8 +930,8 @@ fn a_tail_call_where_an_escape_lands_keeps_the_landing_units_link_table() {
     )
     .id();
     let w = state.code_object(w).expect("loaded");
-    state.execution.push_frame(w, CallFrame::NO_CLOSURE, 0);
-    state.set_reg(0, k);
+    let base = state.execution.push_frame(w, CallFrame::NO_CLOSURE, 0);
+    state.execution.set_top(base, 0, k);
     let collections = state.heap.borrow().gc_collections();
 
     let result = super::run_top_frame(&mut state);

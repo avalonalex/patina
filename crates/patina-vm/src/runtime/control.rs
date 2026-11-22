@@ -113,7 +113,7 @@
 //! are `control_flow_matrix.rs`, `escape_from_primitive.rs`, and the Scheme
 //! control suites (including their existing backend-specific expectations).
 
-use super::execution_state::push_abort_stub;
+use super::execution_state::{ReturnFrame, push_abort_stub};
 use super::vm_state::gc_roots::switches;
 use super::vm_state::{
     EvalCallee, VmState, eval_closure, load_global_cold, poll_in_window, run_loop_until,
@@ -367,7 +367,7 @@ fn spread_apply_tail(state: &VmState, last: TaggedValue) -> Result<Vec<TaggedVal
 /// `Call` instruction.
 ///
 /// **A live frame is a precondition**, for the read below and for the
-/// `set_reg` inside `call_value` that it reads back. It holds because the only
+/// `return_into` inside `call_value` that it reads back. It holds because the only
 /// dispatch loop whose `exit_depth` is 0 is [`super::vm_state::execute`]'s, and that loop's one
 /// frame is never popped by a tail call: pass 3 marks top-level expressions as
 /// **not** in tail position (`pass3_tail.rs`), so `tail_call_value_with_probe`
@@ -615,7 +615,7 @@ fn handle_control_primitive(
                 // closing someone else's and leaving this one live for the
                 // next abort to land on.
                 state.execution.close_prompts(prompt_idx);
-                state.set_reg(dst, result);
+                state.execution.return_into(ReturnFrame::Top, dst, result);
             }
         }
 
@@ -656,7 +656,9 @@ fn handle_control_primitive(
             // continuation's snapshot holds the one before. A loop catching
             // one raise per iteration retained nine heap objects per
             // iteration for the life of its frame (296 MB at 160k).
-            state.set_reg(dst, TaggedValue::NULL);
+            state
+                .execution
+                .return_into(ReturnFrame::Top, dst, TaggedValue::NULL);
             // Capture a full continuation: snapshot of entire current state.
             // No safe point from the capture to the store entry: the
             // weak-table rule (`gc_roots.rs`), asserted (#624).
@@ -677,7 +679,7 @@ fn handle_control_primitive(
             // Call proc with the continuation object.
             // Proc could be a primitive or a VM closure.
             if let Some(result) = call_any(state, proc, &[cont_tv], dst)? {
-                state.set_reg(dst, result);
+                state.execution.return_into(ReturnFrame::Top, dst, result);
             }
         }
 
@@ -720,7 +722,7 @@ fn handle_control_primitive(
             // channel: a register-only protocol cannot go stale when a
             // `values` call is discarded.
             let packed = state.heap().borrow_mut().values_from(args.to_vec());
-            state.set_reg(dst, packed);
+            state.execution.return_into(ReturnFrame::Top, dst, packed);
         }
 
         VmControlPrimitive::Force => {
@@ -738,8 +740,10 @@ fn handle_control_primitive(
             let obj = args[0];
             let state_now = state.heap().borrow().promise_state(obj);
             match state_now {
-                None => state.set_reg(dst, obj),
-                Some(PromiseState::Forced(value)) => state.set_reg(dst, value),
+                None => state.execution.return_into(ReturnFrame::Top, dst, obj),
+                Some(PromiseState::Forced(value)) => {
+                    state.execution.return_into(ReturnFrame::Top, dst, value)
+                }
                 Some(PromiseState::Delayed(thunk)) => {
                     let code = force_stub(state)?;
                     let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, dst);
@@ -831,7 +835,7 @@ fn handle_control_primitive(
             // On an error/transfer, leave cleanup to the owning dispatch loop.
             if let Some(result) = call_any(state, thunk, &[], dst)? {
                 state.execution.close_handlers(handler_index);
-                state.set_reg(dst, result);
+                state.execution.return_into(ReturnFrame::Top, dst, result);
             }
         }
 
@@ -1341,9 +1345,10 @@ pub(super) fn step_wind_jump(
     pop_resolved_prompts(state);
     // Deliver into `deliver_reg` of the top frame. Any `base` the caller
     // hoisted is stale here — the whole register file was just replaced.
-    if let Some(top) = state.execution.frames().last() {
-        let top_base = top.register_base;
-        state.execution.registers()[top_base + cc.deliver_reg as usize].set(value);
+    if !state.execution.frames().is_empty() {
+        state
+            .execution
+            .return_into(ReturnFrame::Top, cc.deliver_reg, value);
     }
     drop(window);
     Ok(())
@@ -1932,11 +1937,13 @@ pub(super) fn deliver_before_collecting(state: &mut VmState, exit_depth: Depth) 
     if state.execution.top_frame_depth() <= exit_depth {
         return;
     }
-    let [.., caller, stub] = state.execution.frames() else {
+    let [.., _caller, stub] = state.execution.frames() else {
         return;
     };
-    let slot = caller.register_base + stub.return_reg as usize;
-    state.execution.registers()[slot].set(TaggedValue::UNSPECIFIED);
+    let return_reg = stub.return_reg;
+    state
+        .execution
+        .return_into(ReturnFrame::Caller, return_reg, TaggedValue::UNSPECIFIED);
 }
 
 /// The registry index of `prim`, if it is a resumable primitive
@@ -2111,7 +2118,7 @@ fn start_resumable(
         state: state as *mut VmState,
     };
     match vm_step(state, registry.start(index, args, &ctx))? {
-        VmStep::Done(value) => state.set_reg(dst, value),
+        VmStep::Done(value) => state.execution.return_into(ReturnFrame::Top, dst, value),
         VmStep::Suspend(suspension) => push_resume_frame(state, index, suspension, dst)?,
     }
     Ok(())
@@ -2149,7 +2156,9 @@ fn tail_start_resumable(
             if state.execution.depth() == exit_depth {
                 return Ok(Some(value));
             }
-            state.set_reg(return_reg, value);
+            state
+                .execution
+                .return_into(ReturnFrame::Top, return_reg, value);
             // The popped frame's extents close now, as after `Return`.
             pop_resolved_extents(state, exit_depth);
         }
@@ -2213,7 +2222,13 @@ pub(super) fn resume_primitive(state: &mut VmState, base: usize) -> Result<(), V
         state: state as *mut VmState,
     };
     match vm_step(state, registry.resume(index, kept, result, &ctx))? {
-        VmStep::Done(value) => state.execution.set_top(base, resume_step::RESULT, value),
+        // The primitive's second half can call back, and a `Step::Eval`'s
+        // expansion load libraries, on nested loops above this frame.
+        VmStep::Done(value) => {
+            state
+                .execution
+                .return_into(ReturnFrame::TopAt(base), resume_step::RESULT, value)
+        }
         VmStep::Suspend(suspension) => {
             // Round again from the top, in the variant for this call's
             // argument count, or the one that collects; the loop picks up a
@@ -3413,7 +3428,9 @@ pub(super) fn tail_invoke_delimited(
             if depth == exit_depth || depth == Depth::BASE {
                 return Ok(Some(value));
             }
-            state.set_reg(return_reg, value);
+            state
+                .execution
+                .return_into(ReturnFrame::Top, return_reg, value);
             drop(window);
             pop_resolved_extents(state, exit_depth);
             Ok(None)
@@ -3554,14 +3571,14 @@ pub(super) fn call_value_with_probe(
                 return start_resumable(state, index, arg_vals, dst);
             }
             let result = call_primitive_proc(state, &prim, arg_vals);
-            state.set_reg(dst, result?);
+            state.execution.return_into(ReturnFrame::Top, dst, result?);
             return Ok(());
         }
         if let Some(index) = parameter_set_call(state, func_val, arg_vals) {
             return start_resumable(state, index, &[func_val, arg_vals[0]], dst);
         }
         if let Some(result) = try_call_parameter(state, func_val, arg_vals) {
-            state.set_reg(dst, result?);
+            state.execution.return_into(ReturnFrame::Top, dst, result?);
             return Ok(());
         }
         if let Some(delivered) = try_invoke_full_continuation(state, func_val, arg_vals)? {
@@ -3575,7 +3592,7 @@ pub(super) fn call_value_with_probe(
             {
                 // The identity continuation resumes nothing, so nothing will
                 // deliver `value` but this.
-                state.set_reg(dst, value);
+                state.execution.return_into(ReturnFrame::Top, dst, value);
             }
             return Ok(());
         }
@@ -3700,7 +3717,9 @@ pub(super) fn tail_call_value_with_probe(
                 return Ok(Some(result));
             }
             let return_reg = frame.return_reg;
-            state.set_reg(return_reg, result);
+            state
+                .execution
+                .return_into(ReturnFrame::Top, return_reg, result);
 
             // The popped frame's extents close now, as after `Return`.
             pop_resolved_extents(state, exit_depth);
@@ -3732,7 +3751,9 @@ pub(super) fn tail_call_value_with_probe(
                 return Ok(Some(result));
             }
             let return_reg = frame.return_reg;
-            state.set_reg(return_reg, result);
+            state
+                .execution
+                .return_into(ReturnFrame::Top, return_reg, result);
 
             pop_resolved_extents(state, exit_depth);
             return Ok(None);
@@ -3934,7 +3955,11 @@ pub(super) fn exec_call_primitive_direct(
     // call started with. An earlier fix guarded it here instead, which caught
     // only primitives in call position.
     match step {
-        VmStep::Done(result) => state.execution.set_top(base, dst, result),
+        // Into the frame the call started in: a callback's frames may have
+        // run above it, and returned.
+        VmStep::Done(result) => state
+            .execution
+            .return_into(ReturnFrame::TopAt(base), dst, result),
         // A resumable primitive's call or collection runs in `resume_stub`'s
         // frame, which returns the primitive's value to `dst` (#477, #478,
         // #639).

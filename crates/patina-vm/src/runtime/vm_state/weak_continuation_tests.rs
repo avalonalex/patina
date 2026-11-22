@@ -30,7 +30,8 @@ fn pin_in_register(state: &mut VmState, value: TaggedValue) {
             .execution
             .push_frame(state.code_object(id).unwrap(), CallFrame::NO_CLOSURE, 0);
     }
-    state.set_reg(0, value);
+    let base = state.execution.frames().last().unwrap().register_base;
+    state.execution.set_top(base, 0, value);
 }
 
 /// A `VmState` with no primitives installed — unlike `integration.rs`'s
