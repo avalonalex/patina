@@ -3,7 +3,7 @@
 //!
 //! See VM_ISA.md §6 and VM_RUNTIME.md §continuations.
 
-use super::{CallFrame, Reg};
+use super::{CallFrame, Depth, Reg};
 use patina_core::Trace;
 use patina_core::tagged_value::TaggedValue;
 use std::cell::Cell;
@@ -22,10 +22,10 @@ pub struct PromptFrame {
     /// The prompt tag (opaque heap object, compared by identity).
     pub tag: TaggedValue,
 
-    /// `ExecutionState::frames.len()` at the point where the prompt was established.
+    /// `ExecutionState::depth()` at the point where the prompt was established.
     /// `AbortToPrompt` unwinds to this depth.
     #[trace(skip, reason = "a frame depth")]
-    pub stack_depth: usize,
+    pub(crate) stack_depth: Depth,
 
     /// The handler procedure: called as `(handler abort-val captured-cont)`.
     pub handler: TaggedValue,
@@ -113,14 +113,14 @@ pub struct VmDelimitedContinuation {
     #[trace(skip, reason = "a register number")]
     pub deliver_reg: Option<Reg>,
 
-    /// `ExecutionState::frames.len()` the captured slice started at — the prompt's
+    /// `ExecutionState::depth()` the captured slice started at — the prompt's
     /// own depth. Invoking the continuation lands `frames[0]` somewhere else,
     /// and this is what the difference is measured from: the frame depths
     /// recorded in `prompt_stack` and `exception_handlers` below are relative
     /// to the stack at capture and have to be shifted by it, exactly as
     /// `base_at_capture` does for `CallFrame::register_base`.
-    #[trace(skip, reason = "a depth")]
-    pub depth_at_capture: usize,
+    #[trace(skip, reason = "a frame depth")]
+    pub(crate) depth_at_capture: Depth,
 
     /// `dynamic_winds.len()` and `exception_handlers.len()` the captured
     /// slices started at. The carried prompts record positions in *those*
@@ -168,10 +168,10 @@ pub struct VmDelimitedContinuation {
 pub struct ExceptionHandler {
     /// The handler procedure: called as `(handler condition)`.
     pub handler: TaggedValue,
-    /// `ExecutionState::frames.len()` at the time the handler was installed.
+    /// `ExecutionState::depth()` at the time the handler was installed.
     /// Used to pop the handler when the thunk returns normally.
     #[trace(skip, reason = "a frame depth")]
-    pub stack_depth: usize,
+    pub(crate) stack_depth: Depth,
 }
 
 /// A full (non-delimited) continuation captured by `call/cc`.
@@ -229,6 +229,13 @@ fn buffer_bytes<T>(items: &Vec<T>) -> usize {
 }
 
 impl VmContinuation {
+    /// The depth of the stack this snapshot holds, as
+    /// `ExecutionState::depth` reads the live one's.
+    #[inline(always)]
+    pub(crate) fn depth(&self) -> Depth {
+        Depth::of_frames(self.frames.len())
+    }
+
     /// The bytes this snapshot holds, which its heap handle is charged
     /// (`Heap::alloc_vm_continuation_ref`, #606): the `Rc` box it is stored
     /// in and its buffers. A wind record's handler slice is an `Rc` shared
@@ -257,6 +264,13 @@ impl VmContinuation {
 }
 
 impl VmDelimitedContinuation {
+    /// The depth of the captured slice, measured from its first frame: how
+    /// far invoking it raises the live stack.
+    #[inline(always)]
+    pub(crate) fn depth(&self) -> Depth {
+        Depth::of_frames(self.frames.len())
+    }
+
     /// As [`VmContinuation::payload_bytes`].
     pub fn payload_bytes(&self) -> usize {
         let VmDelimitedContinuation {

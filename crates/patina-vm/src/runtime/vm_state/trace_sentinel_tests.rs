@@ -75,7 +75,7 @@ fn wind(before: TaggedValue, after: TaggedValue, handler: TaggedValue) -> Dynami
         after,
         handlers: Rc::from(vec![ExceptionHandler {
             handler,
-            stack_depth: 0,
+            stack_depth: Depth::BASE,
         }]),
     }
 }
@@ -83,7 +83,7 @@ fn wind(before: TaggedValue, after: TaggedValue, handler: TaggedValue) -> Dynami
 fn prompt(tag: TaggedValue, handler: TaggedValue) -> PromptFrame {
     PromptFrame {
         tag,
-        stack_depth: 0,
+        stack_depth: Depth::BASE,
         handler,
         dst: 0,
         dynamic_wind_depth: 0,
@@ -94,7 +94,7 @@ fn prompt(tag: TaggedValue, handler: TaggedValue) -> PromptFrame {
 fn handler(handler: TaggedValue) -> ExceptionHandler {
     ExceptionHandler {
         handler,
-        stack_depth: 0,
+        stack_depth: Depth::BASE,
     }
 }
 
@@ -267,7 +267,7 @@ fn every_continuation_snapshot_field_is_traced() {
         registers: vec![Cell::new(register)],
         base_at_capture: 0,
         deliver_reg: Some(0),
-        depth_at_capture: 0,
+        depth_at_capture: Depth::BASE,
         wind_depth_at_capture: 0,
         handler_depth_at_capture: 0,
         prompt_stack: vec![prompt(tag, prompt_handler)],
@@ -360,7 +360,7 @@ fn every_slot_the_vm_reports_is_where_its_value_lives() {
         registers: vec![Cell::new(fixnum(6))],
         base_at_capture: 0,
         deliver_reg: None,
-        depth_at_capture: 0,
+        depth_at_capture: Depth::BASE,
         wind_depth_at_capture: 0,
         handler_depth_at_capture: 0,
         prompt_stack: Vec::new(),
@@ -472,7 +472,7 @@ fn delimited_capture_of(code: &Rc<CodeObject>) -> VmDelimitedContinuation {
         registers: vec![Cell::new(TaggedValue::NULL)],
         base_at_capture: 0,
         deliver_reg: None,
-        depth_at_capture: 0,
+        depth_at_capture: Depth::BASE,
         wind_depth_at_capture: 0,
         handler_depth_at_capture: 0,
         prompt_stack: Vec::new(),

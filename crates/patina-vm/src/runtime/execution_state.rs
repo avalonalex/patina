@@ -122,8 +122,9 @@ impl ExecutionState {
     }
 
     /// How deep the frame stack is: the one reading of its depth (#903).
-    /// The dispatch loops stop at it. A count of frames until GC stage 4d.7
-    /// (#908), which makes it a byte offset from the register stack's base
+    /// Prompts, handlers and delimited captures record it, and the dispatch
+    /// loops stop at it. A count of frames until GC stage 4d.7 (#908), which
+    /// makes it a byte offset from the register stack's base
     /// (`PRD/GC_PRD.md` §11.1) by changing what [`Depth`] holds.
     #[inline(always)]
     pub(super) fn depth(&self) -> Depth {
@@ -137,6 +138,16 @@ impl ExecutionState {
     #[inline(always)]
     pub(super) fn top_frame_depth(&self) -> Depth {
         self.depth().lowered_by(1)
+    }
+
+    /// The frames below `depth`: the ones a stack cut back to it keeps.
+    pub(super) fn frames_below(&self, depth: Depth) -> &[CallFrame] {
+        &self.frames[..depth.frame_count()]
+    }
+
+    /// The frames at and above `depth`: the ones a capture from it copies.
+    pub(super) fn frames_above(&self, depth: Depth) -> &[CallFrame] {
+        &self.frames[depth.frame_count()..]
     }
 
     /// Enter one loaded code object with its matching window. Caller fills
@@ -261,7 +272,7 @@ impl ExecutionState {
             tag,
             handler,
             dst,
-            stack_depth: self.frames.len(),
+            stack_depth: self.depth(),
             dynamic_wind_depth: self.dynamic_winds.len(),
             exception_handler_depth: self.exception_handlers.len(),
         });
@@ -274,7 +285,7 @@ impl ExecutionState {
         let index = self.exception_handlers.len();
         self.exception_handlers.push(ExceptionHandler {
             handler,
-            stack_depth: self.frames.len(),
+            stack_depth: self.depth(),
         });
         index
     }
@@ -299,7 +310,7 @@ impl ExecutionState {
         while self
             .prompt_stack
             .last()
-            .is_some_and(|p| p.stack_depth >= self.frames.len())
+            .is_some_and(|p| p.stack_depth >= self.depth())
         {
             self.prompt_stack.pop();
         }
@@ -308,13 +319,13 @@ impl ExecutionState {
         while self
             .exception_handlers
             .last()
-            .is_some_and(|h| h.stack_depth >= self.frames.len())
+            .is_some_and(|h| h.stack_depth >= self.depth())
         {
             self.exception_handlers.pop();
         }
     }
     pub(super) fn install_thunk_handlers(&mut self, handlers: &[ExceptionHandler]) {
-        let depth = self.frames.len();
+        let depth = self.depth();
         self.exception_handlers.clear();
         self.exception_handlers
             .extend(handlers.iter().map(|h| ExceptionHandler {
@@ -326,7 +337,7 @@ impl ExecutionState {
     /// Capture every dynamic component together; handle allocation retires
     /// dead temporaries and installs the weak-store payload before a safe point.
     pub(super) fn capture_full(&self, deliver_reg: u16, reentry: Rc<[u64]>) -> VmContinuation {
-        patina_core::census::capture_full(self.frames.len(), self.registers.len());
+        patina_core::census::capture_full(self.depth().frame_count(), self.registers.len());
         VmContinuation {
             frames: self.frames.clone(),
             dynamic_winds: self.dynamic_winds.clone(),
@@ -343,7 +354,7 @@ impl ExecutionState {
     /// Full arrival replaces all five components. The control layer decides
     /// which Rust re-entry boundaries it leaves and when to deliver the value.
     pub(super) fn restore(&mut self, cc: &VmContinuation) {
-        patina_core::census::restore_full(cc.frames.len(), cc.registers.len());
+        patina_core::census::restore_full(cc.depth().frame_count(), cc.registers.len());
         self.registers = cc.registers.clone();
         self.frames = cc.frames.clone();
         self.dynamic_winds = cc.dynamic_winds.clone();
@@ -359,11 +370,12 @@ impl ExecutionState {
             self.dynamic_winds.len(),
             prompt.dynamic_wind_depth.min(self.dynamic_winds.len())
         );
-        let landing_depth = prompt.stack_depth.min(self.frames.len());
-        let registers_end = self.frames[..landing_depth]
+        let landing_depth = prompt.stack_depth.min(self.depth());
+        let registers_end = self
+            .frames_below(landing_depth)
             .last()
             .map_or(0, |f| f.register_base + f.num_regs as usize);
-        self.frames.truncate(landing_depth);
+        self.frames.truncate(landing_depth.frame_count());
         self.registers.truncate(registers_end);
         self.exception_handlers.truncate(
             prompt
@@ -416,7 +428,7 @@ impl ExecutionState {
         // Checked, because arbitrary user code has run between the invoke and
         // here — that is what the stub frames are for — and this assumes every
         // captured record is still on top. Unchecked it would wrap in release and
-        // hand `relocate_depth` a base near 2^64, producing carried prompts with
+        // hand `relocate_count` a base near 2^64, producing carried prompts with
         // garbage wind depths: silent corruption of some later abort's travel
         // rather than a diagnosis here.
         let wind_base = self
@@ -429,9 +441,9 @@ impl ExecutionState {
         // Relocate the captured register windows onto the end of the live array.
         let shift = self.registers.len().wrapping_sub(dc.base_at_capture);
         self.registers.extend_from_slice(&dc.registers);
-        let outermost = self.frames.len();
+        let outermost = self.depth();
         self.frames.extend(dc.frames.iter().cloned());
-        for f in &mut self.frames[outermost..] {
+        for f in &mut self.frames[outermost.frame_count()..] {
             f.register_base = f.register_base.wrapping_add(shift);
         }
 
@@ -445,19 +457,19 @@ impl ExecutionState {
         // invoke.
         let handler_base = self.exception_handlers.len();
         for p in dc.prompt_stack.iter() {
-            let stack_depth = relocate_depth(p.stack_depth, dc.depth_at_capture, outermost);
+            let stack_depth = p.stack_depth.relocate(dc.depth_at_capture, outermost);
             debug_assert!(
                 stack_depth >= outermost,
                 "a carried prompt is inside the capture"
             );
             self.prompt_stack.push(PromptFrame {
                 stack_depth,
-                dynamic_wind_depth: relocate_depth(
+                dynamic_wind_depth: relocate_count(
                     p.dynamic_wind_depth,
                     dc.wind_depth_at_capture,
                     wind_base,
                 ),
-                exception_handler_depth: relocate_depth(
+                exception_handler_depth: relocate_count(
                     p.exception_handler_depth,
                     dc.handler_depth_at_capture,
                     handler_base,
@@ -473,7 +485,7 @@ impl ExecutionState {
         }
         self.exception_handlers
             .extend(dc.exception_handlers.iter().map(|h| ExceptionHandler {
-                stack_depth: relocate_depth(h.stack_depth, dc.depth_at_capture, outermost),
+                stack_depth: h.stack_depth.relocate(dc.depth_at_capture, outermost),
                 ..h.clone()
             }));
         // Both stacks are swept by frame depth as the resumed frames return
@@ -486,7 +498,7 @@ impl ExecutionState {
         // equivalent, because it appends to the live stacks rather than replacing
         // them, and the frames it appends are the ones the depth sweep follows.
 
-        self.frames[outermost].return_reg = dst;
+        self.frames[outermost.frame_count()].return_reg = dst;
         let top_base = self
             .frames
             .last()
@@ -500,17 +512,12 @@ impl ExecutionState {
     }
 }
 
-/// Move a depth recorded against one stack onto another: `value` sat `from`
-/// units up that stack, and the same position is `to` units up this one.
-///
-/// Saturating rather than wrapping, and not hypothetically:
-/// `install_thunk_handlers` clamps a record's handler depths down to the
-/// thunk's frame depth, which can be *below* the prompt a continuation was
-/// delimited by, so `value < from` happens. Wrapping would send such a depth
-/// to about 2^64, where `pop_exception_handlers`' `stack_depth >= frames.len()`
-/// test drops it on the next return instead of keeping it for as long as the
-/// resumed frames run.
-fn relocate_depth(value: usize, from: usize, to: usize) -> usize {
+/// Move a count recorded against one wind or handler stack onto another:
+/// `value` sat `from` records up that stack, and the same position is `to`
+/// records up this one. Saturating rather than wrapping, as
+/// [`Depth::relocate`] is for frame depths, so a count recorded below `from`
+/// lands at `to` rather than near 2^64.
+fn relocate_count(value: usize, from: usize, to: usize) -> usize {
     (to + value).saturating_sub(from)
 }
 
