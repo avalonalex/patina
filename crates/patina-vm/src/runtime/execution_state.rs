@@ -11,7 +11,7 @@ use crate::types::continuation::{
 };
 use crate::types::{CallFrame, Depth, FrameCode};
 use patina_core::heap::Heap;
-use patina_core::{SlotVisitor, TaggedValue, Trace};
+use patina_core::{GC_CHECK, SlotVisitor, TaggedValue, Trace};
 use std::cell::Cell;
 use std::ops::Range;
 use std::rc::Rc;
@@ -35,6 +35,37 @@ pub(super) struct ExecutionState {
     exception_handlers: Vec<ExceptionHandler>,
     /// The code the innermost running dispatch loop runs, by id (#836).
     running: RunningCode,
+    /// Which top frame awaits a value, for the check builds' assertions on
+    /// the register writes (#904).
+    #[trace(skip, reason = "a frame depth, which only a check build writes")]
+    awaiting: Awaiting,
+}
+
+/// A check build's record of the top frame that awaits a value (#904): the
+/// depth of the stack whose top frame something has returned into, or
+/// [`Depth::BASE`] when none does. [`ExecutionState::return_into`] writes
+/// that frame, and [`ExecutionState::set_top`] may not until the frame
+/// starts its own work again.
+///
+/// Set where the top frame comes to await a value: where the stack shrinks
+/// under it or is reinstated (`pop_frame`, `finish_wind_step`,
+/// `truncate_to_prompt`, `restore`, `append_delimited`), and where it calls
+/// a callee that may answer here and now, which a callback's frames may
+/// have run above it before then ([`ExecutionState::mark_awaiting`]).
+/// Cleared where the top frame starts its own work (`dispatch_frame`,
+/// `restart_stub`) and where the stack goes (`clear`). A push leaves it, and
+/// every shrink sets it, so it is `BASE` or no deeper than the stack, and
+/// equal to the stack's depth only while its top frame awaits a value.
+///
+/// In every build, since the VM cannot name core's `gc-check` feature, but
+/// written and read only under `GC_CHECK`: a plain release build keeps the
+/// word and never touches it.
+struct Awaiting(Cell<Depth>);
+
+impl Default for Awaiting {
+    fn default() -> Self {
+        Awaiting(Cell::new(Depth::BASE))
+    }
 }
 
 /// The code the innermost running dispatch loop's `cur_code` holds (#836),
@@ -86,6 +117,7 @@ impl ExecutionState {
             dynamic_winds,
             exception_handlers,
             running: RunningCode::default(),
+            awaiting: Awaiting::default(),
         }
     }
 
@@ -169,6 +201,31 @@ impl ExecutionState {
         self.frames.last().expect("no active frame").register_base
     }
 
+    /// Record, in a check build, that the top frame awaits a value
+    /// ([`Awaiting`]): it has called a callee that may answer here and now,
+    /// through [`Self::return_into`], or something above it has just
+    /// returned or a transfer has reinstated it. With no frame, none does.
+    #[inline(always)]
+    pub(super) fn mark_awaiting(&self) {
+        if GC_CHECK {
+            self.awaiting.0.set(self.depth());
+        }
+    }
+
+    /// Record, in a check build, that the top frame starts its own work.
+    #[inline(always)]
+    fn clear_awaiting(&self) {
+        if GC_CHECK {
+            self.awaiting.0.set(Depth::BASE);
+        }
+    }
+
+    /// Whether the top frame awaits a value. Kept only by a check build.
+    fn top_awaits(&self) -> bool {
+        let awaiting = self.awaiting.0.get();
+        awaiting != Depth::BASE && awaiting == self.depth()
+    }
+
     /// The one way to write a register of a frame something has returned
     /// into, or of a frame below the top (`PRD/GC_PRD.md` §11.1): a value
     /// delivered after a pop (`Return`, a tail call's delivery), a callee's
@@ -181,6 +238,9 @@ impl ExecutionState {
     /// here: it lowers the watermark below `frame` first, and sets the
     /// thread's `ran_since_gc`, so that a minor collection that scans only
     /// the frames above the watermark sees every reference written below it.
+    ///
+    /// A check build asserts that `frame` is below the top, or is a top frame
+    /// that awaits a value ([`Awaiting`]).
     #[inline(always)]
     pub(super) fn return_into(&mut self, frame: ReturnFrame, reg: u16, value: TaggedValue) {
         let base = match frame {
@@ -196,6 +256,9 @@ impl ExecutionState {
                 caller.register_base
             }
         };
+        if GC_CHECK && frame != ReturnFrame::Caller && !self.top_awaits() {
+            returned_into_a_running_frame(reg);
+        }
         self.registers[base + reg as usize].set(value);
     }
 
@@ -203,10 +266,15 @@ impl ExecutionState {
     /// window at `base`, the base the dispatch prologue hoisted, or the one
     /// `push_frame` answered for a stub's operands. Only an instruction arm
     /// that cannot push or pop a frame before the write may pass a hoisted
-    /// base; the debug assert holds it to the top frame's.
+    /// base; the debug assert holds it to the top frame's. A check build
+    /// asserts that the top frame awaits no value ([`Awaiting`]): a write
+    /// into one is [`Self::return_into`]'s.
     #[inline(always)]
     pub(super) fn set_top(&mut self, base: usize, reg: u16, value: TaggedValue) {
         debug_assert_eq!(base, self.top_base());
+        if GC_CHECK && self.top_awaits() {
+            wrote_an_awaiting_frame("set_top", reg as usize);
+        }
         self.registers[base + reg as usize].set(value);
     }
 
@@ -216,6 +284,9 @@ impl ExecutionState {
     #[inline(always)]
     pub(super) fn init_arg(&mut self, base: usize, index: usize, value: TaggedValue) {
         debug_assert_eq!(base, self.top_base());
+        if GC_CHECK && self.top_awaits() {
+            wrote_an_awaiting_frame("init_arg", index);
+        }
         self.registers[base + index].set(value);
     }
 
@@ -224,6 +295,9 @@ impl ExecutionState {
     #[inline(always)]
     pub(super) fn init_args(&mut self, base: usize, slots: usize, values: &[TaggedValue]) {
         debug_assert_eq!(base, self.top_base());
+        if GC_CHECK && self.top_awaits() {
+            wrote_an_awaiting_frame("init_args", 0);
+        }
         for (slot, &value) in self.registers[base..base + slots].iter().zip(values) {
             slot.set(value);
         }
@@ -267,6 +341,7 @@ impl ExecutionState {
     pub(super) fn pop_frame(&mut self) -> CallFrame {
         let frame = self.frames.pop().expect("pop with empty frame stack");
         self.registers.truncate(frame.register_base);
+        self.mark_awaiting();
         frame
     }
 
@@ -277,6 +352,7 @@ impl ExecutionState {
         self.frames
             .pop()
             .expect("ResumeWindJump runs in its own frame");
+        self.mark_awaiting();
     }
 
     /// Reuse the top window for another closure. Keep excess capacity as the
@@ -309,12 +385,15 @@ impl ExecutionState {
         frame.closure.set(closure);
     }
 
-    /// Resume variants share one window size; only their instruction stream changes.
+    /// Resume variants share one window size; only their instruction stream
+    /// changes. The stub starts its next round as its own work, so its
+    /// operands are written with `set_top` after this.
     pub(super) fn restart_stub(&mut self, code: Rc<CodeObject>) {
         let frame = self.frames.last_mut().expect("the stub frame");
         debug_assert!(code.num_regs <= frame.num_regs);
         frame.code = FrameCode(code);
         frame.pc = 0;
+        self.clear_awaiting();
     }
 
     #[inline(always)]
@@ -326,7 +405,9 @@ impl ExecutionState {
         }
         let pc = frame.pc;
         frame.pc = pc + 1;
-        (pc, frame.register_base)
+        let base = frame.register_base;
+        self.clear_awaiting();
+        (pc, base)
     }
 
     #[inline(always)]
@@ -449,6 +530,7 @@ impl ExecutionState {
         self.dynamic_winds = cc.dynamic_winds.clone();
         self.prompt_stack = cc.prompt_stack.clone();
         self.exception_handlers = cc.exception_handlers.clone();
+        self.mark_awaiting();
     }
 
     /// Abort fast path, only when there is no wind thunk left to run. The
@@ -472,6 +554,7 @@ impl ExecutionState {
                 .min(self.exception_handlers.len()),
         );
         self.prompt_stack.truncate(prompt_idx);
+        self.mark_awaiting();
     }
 
     pub(super) fn push_abort_stub(
@@ -500,6 +583,7 @@ impl ExecutionState {
         self.prompt_stack.clear();
         self.dynamic_winds.clear();
         self.exception_handlers.clear();
+        self.clear_awaiting();
     }
 
     pub(super) fn retire_registers(&mut self) {
@@ -593,6 +677,7 @@ impl ExecutionState {
             .expect("the caller returns Identity when there is no hole");
         // Into the innermost appended frame, which the append reinstated;
         // `deliver_reg` is Some only for a non-empty capture.
+        self.mark_awaiting();
         self.return_into(ReturnFrame::Top, deliver_reg, value);
         Ok(())
     }
@@ -665,6 +750,33 @@ pub(super) enum ReturnFrame {
 /// lands at `to` rather than near 2^64.
 fn relocate_count(value: usize, from: usize, to: usize) -> usize {
     (to + value).saturating_sub(from)
+}
+
+/// The panic of a write into a top frame that awaits a value made by its own
+/// write path (#904): something has returned into the frame since its last
+/// instruction began, so the write is [`ExecutionState::return_into`]'s,
+/// where stage 7 lowers the stack watermark.
+#[cold]
+#[inline(never)]
+fn wrote_an_awaiting_frame(path: &str, index: usize) -> ! {
+    panic!(
+        "{path} wrote register {index} of a top frame that awaits a value: something \
+         returned into it, or it called a callee that answered, since its instruction \
+         began, so the write goes through `return_into` (#904, PRD/GC_PRD.md §11.1)"
+    )
+}
+
+/// The panic of a [`ExecutionState::return_into`] into a top frame that
+/// awaits no value (#904): nothing has returned into it since its
+/// instruction began, so the write is its own, `set_top`'s.
+#[cold]
+#[inline(never)]
+fn returned_into_a_running_frame(reg: u16) -> ! {
+    panic!(
+        "return_into wrote r{reg} of a top frame that awaits no value: nothing returned \
+         into it, and it called nothing that answered, since its instruction began, so the \
+         write is its own and goes through `set_top` (#904)"
+    )
 }
 
 /// Put the frame an abort lands in on top of `frames`, with its window on the
