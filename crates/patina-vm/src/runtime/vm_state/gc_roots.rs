@@ -84,10 +84,11 @@ pub(in crate::runtime) fn retire_registers(
     base_at_capture: usize,
 ) {
     for frame in frames {
+        // Hand-built code has no maps, and keeps every register.
         let Some(maps) = &frame.code.register_roots else {
             continue;
         };
-        let Some(roots) = maps.get(frame.pc) else {
+        let Some(roots) = maps.at(frame.pc) else {
             continue;
         };
         let dropped = switches::dropped(roots, frame.num_regs);

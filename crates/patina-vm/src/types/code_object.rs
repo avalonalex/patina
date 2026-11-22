@@ -167,14 +167,14 @@ pub struct CodeObject {
     #[trace(skip, reason = "source positions")]
     pub source_map: Vec<(usize, SourceLocation)>,
 
-    /// Bitsets of possible register roots before each instruction, after completed
-    /// expression temporaries have been retired. Locals stay conservative.
-    /// Register `r` uses bit `r % 64` in word `r / 64`.
-    /// The collector and continuation capture clear excluded slots before
-    /// tracing; normal dispatch does no work for these maps (#423).
-    /// Runtime stubs and hand-built code use `None` to retain every slot.
-    #[trace(skip, reason = "liveness bitsets")]
-    pub register_roots: Option<Vec<Vec<u64>>>,
+    /// The possible register roots of a frame suspended at each pc, after
+    /// completed expression temporaries have been retired (#423): a dense
+    /// index into the unit's deduplicated bitsets (#905, [`RegisterMaps`]).
+    /// Locals stay conservative. The collector and continuation capture
+    /// clear excluded slots before tracing; normal dispatch does no work for
+    /// these maps. Hand-built code uses `None` to retain every slot.
+    #[trace(skip, reason = "liveness bitsets, which hold no values")]
+    pub register_roots: Option<RegisterMaps>,
 
     /// The unit's link table (#836): the spelling of each global operand
     /// (`LoadGlobal`, `StoreGlobal`, `Define`, `CallPrimitive` and the
@@ -202,6 +202,66 @@ pub struct CodeObject {
 }
 
 impl TraceThroughRc for CodeObject {}
+
+/// A code object's register maps (#905, GC_PRD §11.1 invariant 2): for each
+/// pc, the id of the bitset of registers a frame suspended there may still
+/// read, in a table of distinct bitsets its whole unit shares.
+///
+/// Register `r` is bit `r % 64` of word `r / 64` of its map. A register past
+/// the map's words is dead: a tail call can leave a window larger than the
+/// code it now runs needs.
+///
+/// Opaque outside the VM: pass 5 builds it ([`Self::from_parts`]) and the
+/// runtime builds the stubs' ([`Self::all_live`]); only retirement reads it.
+#[derive(Debug, Clone)]
+pub struct RegisterMaps {
+    /// The map id of each pc, `0..=instructions.len()`, or [`Self::NEVER`]
+    /// for a pc no frame is ever suspended at.
+    index: Box<[u16]>,
+    /// The unit's distinct maps, `width` words each, in one block that every
+    /// member of the unit holds through its own `Rc`.
+    maps: Rc<[u64]>,
+    /// Words per map: the most any member of the unit needs, at least one.
+    /// A member's maps are padded with zero words to it.
+    width: usize,
+}
+
+impl RegisterMaps {
+    /// The index entry of a pc no frame is ever suspended at.
+    pub(crate) const NEVER: u16 = u16::MAX;
+
+    /// A code object's maps over its unit's table `maps`, of `width` words a
+    /// map, which `index` names by id.
+    pub(crate) fn from_parts(index: Box<[u16]>, maps: Rc<[u64]>, width: usize) -> Self {
+        debug_assert!(width > 0 && maps.len().is_multiple_of(width));
+        debug_assert!(
+            index
+                .iter()
+                .all(|&id| id == Self::NEVER || (id as usize + 1) * width <= maps.len()),
+            "an index names a map past its unit's table"
+        );
+        RegisterMaps { index, maps, width }
+    }
+
+    /// The map of a frame suspended at `pc`, or `None` where no frame can be
+    /// suspended: an entry of [`Self::NEVER`], or a pc past the end of the
+    /// index.
+    #[inline]
+    pub(crate) fn at(&self, pc: usize) -> Option<&[u64]> {
+        let id = *self.index.get(pc)?;
+        if id == Self::NEVER {
+            return None;
+        }
+        let start = id as usize * self.width;
+        self.maps.get(start..start + self.width)
+    }
+
+    /// The unit's table, which every member's maps share.
+    #[cfg(test)]
+    pub(crate) fn table(&self) -> &Rc<[u64]> {
+        &self.maps
+    }
+}
 
 impl CodeObject {
     /// Look up the source location for a given program counter.
