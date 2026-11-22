@@ -1225,6 +1225,54 @@ fn an_identifiers_scope_set_lives_with_it() {
     assert_eq!(heap.scope_sets.intern(set), id);
 }
 
+/// An identifier, its name (#790): built by a literal, with a fresh object
+/// in `name` that the intern table does not hold, so that only the trace
+/// keeps it. An interned symbol would survive through the table whether or
+/// not the trace visits it (they are roots until 5c's weak table), so it
+/// would test nothing here. The allocators make the one exception, a
+/// relinked identifier, whose name is a symbol no table holds: this is its
+/// shape, flagged as one. Fails with the visit of `name` in the
+/// identifier's arm of `trace_object_children` deleted (#164's rule).
+#[test]
+fn identifier_fields() {
+    let mut heap = Heap::new();
+    let mut s = Sentinels::new(&mut heap);
+    let name = s.object(&mut heap, "HeapObjectData::Identifier.name");
+    let identifier = heap.alloc_object(HeapObjectData::Identifier {
+        name,
+        scopes: super::scope_sets::ScopeSetId::EMPTY,
+        written: false,
+        relinked: true,
+    });
+    collect_from(&mut heap, &[identifier]);
+    s.assert_survived(&heap);
+}
+
+/// A relinked identifier's name (#837, #790), a symbol no table holds,
+/// lives while an identifier carries it, reads its spelling, and is freed
+/// with the last identifier that does: the name `symbols` never counts, so
+/// that a redefined library's spellings are not kept for good.
+#[test]
+fn a_relinked_name_lives_and_dies_with_its_identifiers() {
+    let mut heap = Heap::new();
+    let symbols = heap.stats().symbols;
+    let name = heap.alloc_relinked_name(Rc::from("secret.9-1"));
+    let first = heap.alloc_relinked_identifier(name, ScopeSet::new());
+    let second = heap.alloc_relinked_identifier(name, scope_set_of(&[941]));
+    let root = heap.alloc_pair(second, TaggedValue::NULL);
+    collect_from(&mut heap, &[root]);
+    super::sentinels::assert_freed(&heap, first, "the identifier no root reaches");
+    assert_eq!(heap.get_symbol_name(name), Some("secret.9-1"));
+    assert_eq!(
+        heap.get_identifier_data(second).unwrap().0.as_ref(),
+        "secret.9-1"
+    );
+    assert_eq!(heap.stats().symbols, symbols);
+    collect_from(&mut heap, &[]);
+    super::sentinels::assert_freed(&heap, second, "the last identifier");
+    super::sentinels::assert_freed(&heap, name, "the relinked name");
+}
+
 /// A set no marked identifier carries is freed, and the next set interned
 /// takes its entry: the same id, asserted equal (the section's note), with
 /// every live identifier's set as it was. The freed entry lies between two

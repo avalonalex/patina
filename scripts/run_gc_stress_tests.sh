@@ -497,25 +497,38 @@ fi
 # raised its count at 16 from 22757 to 22979 and without stress from 6 to
 # 14, their own eight `(gc)`s, the minimum left; the macro objects' template
 # scope sets (#789) moved no other target's count, at its interval or
-# without stress)
+# without stress; and every target's count at its interval re-measured
+# 2026-11-21 for #790, whose reader interns each spelling and whose
+# relinking makes a symbol for each spelling it gives, so that a program
+# allocates a symbol where it allocated none and its collections fall at
+# other allocations: callability's rose from 2131 to 2134, ephemerons's
+# fell from 5738 to 5736, escape_from_primitive's rose from 9789 to 9790,
+# gc_tree_walker's from 129981 to 129984, gc_vm's from 58404 to 58411,
+# host_environments's from 167847 to 167851, interpreter_api's from 3050
+# to 3052, macro_definition_env's fell from 41070 to 41021, owned_handles's
+# rose from 125648 to 125649, rooted_loading's fell from 1269 to 1268,
+# vm_callprimitive's rose from 1899 to 1901, and scheme_suite's from 10653
+# to 10676 at 4096 and from 375 to 377 without stress; every other count,
+# at its interval and without stress, read as it did, and no test count or
+# minimum moved: #790's tests are patina-core's and patina-macros' own)
 TARGETS=(
-    "callability 16 31 13"                    # 2131 (0)
+    "callability 16 31 13"                    # 2134 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
     "cps_features 16 530 3"                   # 1009 (2)
-    "ephemerons 16 289 30"                    # 5738 (204)
-    "escape_from_primitive 16 3669 19"        # 9789 (94)
+    "ephemerons 16 289 30"                    # 5736 (204)
+    "escape_from_primitive 16 3669 19"        # 9790 (94)
     "finished_forms_release_code 16 2040 12"  # 4057 (15)
-    "gc_tree_walker 16 113338 42"             # 129981 (96696)
-    "gc_vm 16 44833 55"                       # 58404 (31262)
-    "host_environments 16 83806 36"           # 167847 (765)
+    "gc_tree_walker 16 113338 42"             # 129984 (96696)
+    "gc_vm 16 44833 55"                       # 58411 (31262)
+    "host_environments 16 83806 36"           # 167851 (765)
     "hygiene_matrix 16 11136 28"              # 22979 (14)
-    "interpreter_api 16 138 28"               # 3050 (4)
+    "interpreter_api 16 138 28"               # 3052 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
-    "macro_definition_env 16 16626 62"        # 41070 (140): see the header
-    "owned_handles 16 62714 9"                # 125648 (14)
-    "rooted_loading 16 371 6"                 # 1269 (10)
-    "vm_callprimitive 16 545 23"              # 1899 (0)
-    "scheme_suite 4096 1534 11"               # 10653 (375): see the header
+    "macro_definition_env 16 16626 62"        # 41021 (140): see the header
+    "owned_handles 16 62714 9"                # 125649 (14)
+    "rooted_loading 16 371 6"                 # 1268 (10)
+    "vm_callprimitive 16 545 23"              # 1901 (0)
+    "scheme_suite 4096 1534 11"               # 10676 (377): see the header
 )
 
 OUT=$(mktemp -d)
