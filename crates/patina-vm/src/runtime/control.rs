@@ -2216,6 +2216,9 @@ pub(super) fn resume_primitive(state: &mut VmState, base: usize) -> Result<(), V
     let ctx = VmApplyContext {
         state: state as *mut VmState,
     };
+    // The stub awaits the primitive's answer, which may come after nested
+    // loops ran above it (#904).
+    state.execution.mark_awaiting();
     match vm_step(state, registry.resume(index, kept, result, &ctx))? {
         // The primitive's second half can call back, and a `Step::Eval`'s
         // expansion load libraries, on nested loops above this frame.
@@ -2227,10 +2230,12 @@ pub(super) fn resume_primitive(state: &mut VmState, base: usize) -> Result<(), V
         VmStep::Suspend(suspension) => {
             // Round again from the top, in the variant for this call's
             // argument count, or the one that collects; the loop picks up a
-            // changed code object.
+            // changed code object. Restarted before its operands are
+            // written, so that they are the next round's own (`set_top`,
+            // #904); `set_suspension` reads neither the pc nor the code.
             let code = stub_for(state, &suspension.work)?;
-            set_suspension(state, base, suspension);
             state.execution.restart_stub(code);
+            set_suspension(state, base, suspension);
         }
     }
     Ok(())
@@ -3557,6 +3562,10 @@ pub(super) fn call_value_with_probe(
     dst: u16,
 ) -> Result<(), VmError> {
     if closure_code_id.is_none() {
+        // The calling frame awaits the callee's value: one that answers here
+        // and now is written into `dst` by `return_into`, after whatever
+        // frames its callbacks ran above the caller (#904).
+        state.execution.mark_awaiting();
         // Intercept higher-order control primitives that need VM cooperation.
         if let Some(ctrl) = vm_control_primitive(state, func_val) {
             return handle_control_primitive(state, ctrl, arg_vals, dst);
@@ -3943,6 +3952,9 @@ pub(super) fn exec_call_primitive_direct(
     let ctx = VmApplyContext {
         state: state as *mut VmState,
     };
+    // The calling frame awaits the primitive's value, which may come after
+    // a callback's frames ran above it (#904).
+    state.execution.mark_awaiting();
     let step = vm_step(state, registry.start(index, arg_vals, &ctx))?;
     // No frame check here: a continuation escaping out of a re-entrant
     // primitive is signalled at the boundary (`across_reentry`) and unwinds
