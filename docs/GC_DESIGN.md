@@ -373,8 +373,9 @@ no persistent mark state on `Heap`, so there is no clearing step and no idle
 memory between collections. No `TaggedValue` or `HeapObjectData` change.
 A fifth bitmap, `scope_sets`, has a bit for each entry of the heap's
 scope-set table, sized the same way, with id 0's bit set when it is made:
-marking an identifier sets its set's bit, and the sweep frees every entry
-whose bit is clear (§4.5, §9.9, #788). It is not the weak-id seam, which
+marking an identifier sets its set's bit, as marking a macro object sets
+its template scopes' (#789), and the sweep frees every entry whose bit is
+clear (§4.5, §9.9, #788). It is not the weak-id seam, which
 4e deletes. The visitor also roots the intern table at construction (a dangling
 `symbol_table` index would break *any* collector — heap invariant, not
 policy), marking symbols without a worklist round-trip since they are leaves
@@ -406,7 +407,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs`):
 | `MutableCell` | inner value |
 | `VmClosure` | each of `free_vars` + queues `code_id` for `trace_code_ids`, unless retired (#836); no environment: its unit's link table holds the namespace, traced by that id |
 | `Procedure` | captured env (`visit_env`) + **body-expression literals** (§4.4) |
-| `Macro` | each of its `literals`, which its patterns and templates name by index (#718, §9.6); each of its `relinks`' records (#837, §9.6: `CarriedRelink`'s derived trace, its spellings and scope id skipped by name); and its body, `CompiledMacro`: `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623; the registry also roots each while its library is registered, and since #834 nothing else need once a redefinition replaces it, since an importer holds the library's cells and not its environment (`CompiledMacro`'s derived trace, #686) |
+| `Macro` | each of its `literals`, which its patterns and templates name by index (#718, §9.6); each of its `relinks`' records (#837, §9.6: `CarriedRelink`'s derived trace, its spellings and scope id skipped by name); no value but its `scopes`, the id of its template scopes' set, whose bit it sets in `MarkBits::scope_sets` as an identifier does (§9.9, #789); and its body, `CompiledMacro`: `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623; the registry also roots each while its library is registered, and since #834 nothing else need once a redefinition replaces it, since an importer holds the library's cells and not its environment (`CompiledMacro`'s derived trace, #686) |
 | `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` — each record's before/after thunks and the handler stack it captured at its `dynamic-wind` call (`WindRecord`'s derived trace, the one tracing point for a record wherever it sits: a stack, a continuation, a prompt frame, or a `DynamicWindSetup`/`Jump` cont value), `exception_handlers`, `prompt_stack` — each frame's handler and the continuation below it (derived; the tag is a plain `Rc` struct), `captured_cont_env` (deduplicated worklist), `resume` (`ContValue`'s derived trace), body literals (§4.4) |
 | `EnvironmentSpecifier` | `visit_env(env)` |
 | `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id, the two kinds sharing the heap's ids; the payload in `VmState`'s side tables is traced only for recorded ids, via the `RootProvider::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5). VM code ids — a marked closure's, each frame's code's (`FrameCode`), the running code's (`RunningCode`) — are recorded in a set of their own, since a `VmState` mints them from 0 too, and broadcast through `RootProvider::trace_code_ids` in the same fixpoint, which traces each one's unit's link table (#836) |
@@ -513,7 +514,7 @@ sweep.
 The scope sets leave in a third pass, beside the `syntax_sources` prune and
 before the arenas' sweeps (#788, §9.9): `ScopeSetTable::sweep` frees every
 entry whose bit in `MarkBits::scope_sets` is clear, which no marked identifier
-carries. Its set leaves the index and drops its spill, the free entries at the
+carries and no marked macro object holds as its template scopes' set (#789). Its set leaves the index and drops its spill, the free entries at the
 end of the table are dropped, and the free list is made again from the rest,
 lowest last, which interning reuses first. Id 0, the empty set, has its bit
 set when the bitmap is made, so it is never freed, and teardown's sweep,
@@ -1532,8 +1533,9 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   The tree-walker loads no code, and reads 0, never `#f`. `scope-sets`
   (#788) counts the sets the heap's scope-set table holds, not counting
   the empty set (§9.9): read after a collection, the sets the marked
-  identifiers carry, a live macro's literals among them; between
-  collections, those and the ones interned since. The steady-state driver
+  identifiers carry, a live macro's literals among them, and each live
+  macro's template scopes' set (#789); between collections, those and the
+  ones interned since. The steady-state driver
   reads it after `(gc) (gc)`, last of the per-owner keys. A trigger the GC
   mode does not use reads `#f`.
   `minors` and `majors` count collections by kind: every one is a major
@@ -2900,11 +2902,13 @@ contents. Id 0 is the empty set, made with the table and never given up.
   spellings all rest on that order.
 - **Not a root, and no `Trace`.** The table holds sets of scope ids, which
   hold no value, as `syntax_sources` holds none (§9.1). Marking an identifier
-  sets its id's bit in `MarkBits::scope_sets` (§4.2, §4.3), and the sweep
-  frees every entry whose bit is clear (§4.5). So right after a collection
-  the table holds exactly the sets the marked identifiers carry, a macro
-  object's literals among them, and between collections those and the ones
-  interned since (decision 19 on #782). A set a macro's literal vector keeps
+  sets its id's bit in `MarkBits::scope_sets` (§4.2, §4.3), as marking a
+  macro object sets its template scopes' (§9.10, #789), and the sweep frees
+  every entry whose bit is clear (§4.5). So right after a collection the
+  table holds exactly the sets the marked identifiers carry, a macro
+  object's literals among them, and the live macro objects' template
+  scopes, and between collections those and the ones interned since
+  (decision 19 on #782). A set a macro's literal vector keeps
   outlives the form that made it (#788's `def-getter` shape), which is why
   the table is per heap rather than per form.
 - **Walks intern once per distinct set.** `Cx::rescope_identifiers`, the
@@ -2945,6 +2949,104 @@ refuses a free entry (`a_check_build_refuses_a_free_scope_set`). Through the
 CLI, `gc_shared_tests!`' `a_live_macros_literals_keep_their_scope_sets` reads
 `scope-sets` above its base while the `def-getter` shape's macros live, and
 at it once they are gone.
+
+### 9.10 The live-scope report (#789)
+
+From 5c a macro-introduced top-level definition is reclaimed only when no
+live link table references its record and no live holder carries the
+expansion scope that introduced it (`PRD/GC_PRD.md` §11.6). GC stage 4c.3
+(#789) answers the second half from the scope-set table (§9.9):
+`Heap::scope_is_carried(ScopeId)`, true when a set the table holds contains
+the scope. It is raw, Rust only, with no Scheme surface and no `(gc-stats)`
+key, and is computed when asked, by a scan of the table's entries
+(`ScopeSetTable::carries`; a free entry holds the empty set, so the scan
+needs no free-list test), so no collection pays for it. 5c is its consumer.
+
+- **The macro object's set.** A compiled macro holds scopes off the heap: its
+  `definition_scopes`, each `Template::Symbol` identifier's scopes, the sets
+  of the identifiers it inherited from an enclosing expansion
+  (`inherited_identifiers`) and the scopes of its `foreign_expansions`.
+  `CompiledMacro::template_scopes` takes their union, and
+  `Heap::alloc_macro_with_relinks`, which every allocator of a macro object
+  reaches, interns it once. Its id is `HeapObjectData::Macro.scopes`,
+  beside `literals` and not in the body, so that 4g's item can move the body
+  into 4f's `HostPayloadTable` without touching it. The `Macro` arm of
+  `trace_object_children` sets its bit as the identifier's arm does (§4.3),
+  so the set lives exactly as long as the macro. A macro whose templates hold
+  no scope, as one written at top level, takes id 0 and costs nothing; the
+  others' sets are charged with the table's (§9.9).
+- **What counts:** every set in the table — the marked identifiers', a
+  macro object's literals among them, and the live macro objects' template
+  scopes — and every set interned since the last collection.
+- **What does not:** an environment's binders (the tree-walker's scoped
+  entries, the VM's introduced-global table), which hold a binder's scopes,
+  not a reference's; the desugarer's and the expander's transient sets,
+  which last a form; and tree-walker code. `CpsExpr`'s `Var`, `Set` and
+  `Define` hold owned sets they resolve at run time (`lookup_var_tagged`),
+  so a tree-walker closure compiled while a getter was bound still reaches
+  the definition by its expansion scope once the getter is gone, where the
+  report says that scope is uncarried. The VM resolved the same reference at
+  compile time, to the renamed global, which its code's link table holds:
+  §11.6's other test. Decision 19 on #782 leaves the gap to 5c: to reclaim
+  introduced definitions on the VM only, or to count `CpsExpr` too.
+- **Conservative between collections.** A set no live holder carries any
+  more counts until a collection frees it. Until stage 7 every collection is
+  whole-heap, so right after one the answer is exact for what it counts.
+  From stage 7 a minor marks young sets only and keeps the old ones, so the
+  report is exact for old carriers only after a major, which is where 5c
+  reads it (`PRD/GC_PRD.md` §9.9 step 6, in the stage's corrections PR's
+  wording).
+- **No expansion scope hides in a template's own sets.** The template sets
+  are counted anyway (decision 19), so the report is conservative whatever
+  they hold; and no program needs them for an expansion scope, by three
+  steps, each checked against the code at #789:
+  1. A reference reaches a binder by its scopes only if it carries every
+     scope of the binder: the candidacy test of `scope_resolve::resolve_scoped`
+     is `binding.is_subset_of(reference)` (`is_candidate`), through which the
+     desugarer, the VM's `alpha_rename` and the tree-walker's lookups all
+     resolve. A binder at `{}` is reached by name, with nothing to carry; an
+     early-bound or relinked reference (#438, #837) and VM code reach the
+     record, which the link tables answer for.
+  2. An introduced top-level binder carries the scope of the expansion that
+     introduced it: the expander mints one `macro_scope` per expansion and
+     flips it onto every identifier the template introduced, and the binder
+     is filed at its own scopes, less only a splicing `let-syntax`'s
+     (`spliced_definition_scopes`), which the desugarer mints. A
+     non-splicing `let-syntax` or `letrec-syntax` body defines into a frame
+     of its own, not the namespace, so its definitions are no records here.
+  3. A template's own sets are binding scopes, and the other two places copy
+     the literals: `definition_scopes` is the desugarer's `current_scopes`
+     where the macro is defined, or that with the `let-syntax`'s scope or a
+     fresh transformer scope, and `current_scopes` starts empty and grows
+     only by scopes the desugarer mints (a lambda's body, a `define`
+     shorthand's body, a `let-syntax` or `letrec-syntax`, a `let-syntax`
+     transformer), while expansion scopes are minted only by the expander
+     and `ScopeId::fresh` is one counter; a `Template::Symbol`'s identifier
+     carries `definition_scopes` or nothing (`compile_template_node`);
+     `inherited_identifiers` records the scopes of exactly the identifier
+     the same branch puts in the literal vector (the substituted-identifier
+     case); and `foreign_expansions` keeps only scopes found in those sets
+     (`foreign_expansions_carried_by`).
+
+  So an expansion scope that a live macro's expansion puts on a reference
+  comes from one of its literals, whose set the table holds while the macro
+  lives. The closest shape (below) reaches the user's binding through a
+  `Template::Symbol` under a non-empty definition scope and the introduced
+  one through a literal.
+
+The tests: core's sentinel `a_macros_template_scopes_live_with_it` builds a
+`CompiledMacro` by a literal with four scopes, each in exactly one of the
+four places, and checks each carried while the macro is rooted, its set's id
+kept across the collection, and each uncarried once the macro is swept; it
+fails with the arm's mark deleted (#164's rule). `hygiene_matrix.rs` holds
+three, each on both backends, each reading the scope from the binder
+(`Environment::introduced_records`) after a `(gc)`:
+`an_introduced_definitions_scope_is_carried_while_its_templates_live` (the
+`def-getter` shape: carried, then uncarried once both macros are rebound and
+collected — no holder but the two macros);
+`the_closest_shape_answers_and_its_introduced_scope_is_carried` (`(user
+42)`); and `tree_walker_code_is_not_counted` (the gap: uncarried, and
+`(peek)` still answers 7).
 
 ## 10. Staging
 

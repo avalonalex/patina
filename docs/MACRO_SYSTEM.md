@@ -239,6 +239,13 @@ lends the set, `Cx::get_identifier_data` answers an owned one, and
 `alloc_identifier` takes a `ScopeSet` and interns it. #791 gives the identifier
 its source id.
 
+A macro object holds a set's id too (#789): `HeapObjectData::Macro.scopes`,
+the union of every scope its `CompiledMacro` holds off the heap
+(`definition_scopes`, each `Template::Symbol`'s scopes, `inherited_identifiers`
+and `foreign_expansions`), interned when the object is made, so that
+`Heap::scope_is_carried`, the report 5c reads, counts them while the macro
+lives (`docs/GC_DESIGN.md` §9.10).
+
 ---
 
 ## Hygiene Mechanism

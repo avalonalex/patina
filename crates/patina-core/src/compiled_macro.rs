@@ -515,6 +515,18 @@ pub struct CompiledRule {
 /// Its trace (derived, #686) reports the environments it keeps live; the
 /// object traces the literals. Pinned by the sentinel test
 /// `compiled_macro_fields`.
+///
+/// It also holds scopes off the heap: `definition_scopes`, each
+/// `Template::Symbol` identifier's scopes, the sets in
+/// `inherited_identifiers` and the scopes of `foreign_expansions`. The
+/// object interns their union once when it is made (`template_scopes`,
+/// `HeapObjectData::Macro.scopes`) and marks it as an identifier's set is,
+/// so the heap's live-scope report,
+/// `Heap::scope_is_carried`, counts them while the macro lives (#789,
+/// `docs/GC_DESIGN.md` §9.10). Only binding scopes, which the desugarer
+/// mints, are its own: the other two places copy what its literals carry,
+/// so an expansion scope it can put on a reference is in the table through
+/// a literal anyway. Pinned by `a_macros_template_scopes_live_with_it`.
 #[derive(Clone, Debug, Trace)]
 pub struct CompiledMacro {
     /// Macro name (for error messages)
