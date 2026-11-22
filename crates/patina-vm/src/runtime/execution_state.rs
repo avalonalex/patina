@@ -99,12 +99,23 @@ const FILL: TaggedValue = if GC_CHECK {
     TaggedValue::NULL
 };
 
+/// [`FILL`], through an opaque copy (`std::hint::black_box`), so that a
+/// fill stays a run of inline stores. With the constant, LLVM turns each
+/// fill loop, and `Vec::resize`'s, into a call of `memset_pattern16` on
+/// macOS, which cost a tail call into a window of 16 registers some 55
+/// instructions, and every push the same; measured 2026-11-22 (#714).
+#[inline(always)]
+fn fill_value() -> TaggedValue {
+    std::hint::black_box(FILL)
+}
+
 /// Write [`FILL`] into every register of `window`: one store each, with no
 /// test per register.
 #[inline(always)]
 fn fill(window: &[Cell<TaggedValue>]) {
+    let value = fill_value();
     for slot in window {
-        slot.set(FILL);
+        slot.set(value);
     }
 }
 
@@ -485,7 +496,7 @@ impl ExecutionState {
         let base = self.registers.len();
         let num_regs = code.num_regs;
         self.registers
-            .resize(base + num_regs as usize, Cell::new(FILL));
+            .resize(base + num_regs as usize, Cell::new(fill_value()));
         self.frames.push(CallFrame {
             pc: 0,
             register_base: base,
@@ -527,8 +538,10 @@ impl ExecutionState {
             .expect("tail call with empty frame stack");
         if code.num_regs > frame.num_regs {
             let extra = code.num_regs - frame.num_regs;
-            self.registers
-                .resize(self.registers.len() + extra as usize, Cell::new(FILL));
+            self.registers.resize(
+                self.registers.len() + extra as usize,
+                Cell::new(fill_value()),
+            );
             frame.num_regs = code.num_regs;
         }
         let base = frame.register_base;
@@ -977,7 +990,10 @@ pub(super) fn push_abort_stub(
     cont: TaggedValue,
 ) {
     let base = registers.len();
-    registers.resize(base + abort_step::NUM_REGS as usize, Cell::new(FILL));
+    registers.resize(
+        base + abort_step::NUM_REGS as usize,
+        Cell::new(fill_value()),
+    );
     registers[base + abort_step::HANDLER as usize].set(handler);
     registers[base + abort_step::VAL as usize].set(val);
     registers[base + abort_step::CONT as usize].set(cont);
