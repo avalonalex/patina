@@ -791,6 +791,12 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   thread with a sized stack, one a `define-library` form in a program, which
   chibi rejects (a library's own `v_1`, #680), and one `(patina debug)`'s
   `gc` (what a closure keeps alive, #680)
+- `raise_site_matrix.rs` — GC stage 4d's raise-site tests (#901): 26 rows,
+  each a collection or a re-entered capture while a VM frame is suspended at
+  a raise site (`(car 5)`, `(vector-ref v 99)`, an unbound global) or at a
+  shadowed `+`'s inline opcode, under `guard` and `with-exception-handler`,
+  on both backends, on default and zeal interpreters, each row naming the
+  oracles behind its answer (chibi, Gauche, Chez)
 
 #### **Library Tests**
 - `sld_file_loading.rs` — library loading from `.sld` files
