@@ -478,7 +478,11 @@ fi
 # with #901's raise-site tests, 59546 collections at 16 and 55710 without
 # stress, nearly all of them its zeal interpreters', which collect at every
 # outermost safe point whatever the lane's variable says, so its minimum
-# is midway between the two)
+# is midway between the two; and re-pinned that day for #714's position
+# axis, which calls each site from a tail and a non-tail position and so
+# doubles its rows, and adds a test that the VM compiles each row's call as
+# its position names: 119089 collections at 16 and 111441 without stress,
+# its minimum midway again, and 7 tests)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -494,7 +498,7 @@ TARGETS=(
     "library_loading 16 46 9"                 # 129 (0): see the header
     "macro_definition_env 16 16626 62"        # 41070 (129): see the header
     "owned_handles 16 62714 9"                # 125648 (14)
-    "raise_site_matrix 16 57628 6"            # 59546 (55710)
+    "raise_site_matrix 16 115265 7"           # 119089 (111441)
     "rooted_loading 16 371 6"                 # 1269 (10)
     "vm_callprimitive 16 545 23"              # 1899 (0)
     "scheme_suite 4096 1534 11"               # 10653 (368): see the header
