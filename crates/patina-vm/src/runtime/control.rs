@@ -1132,7 +1132,7 @@ fn pop_resolved_prompts(state: &mut VmState) {
 /// `tail_call_value`) delivers straight to the caller.
 ///
 /// A handler is live exactly while the thunk it was installed for has a
-/// frame, which is `stack_depth < frames.len()`; the same holds of prompts.
+/// frame, which is `stack_depth < depth()`; the same holds of prompts.
 /// So the pops are safe at any such point, and skipping them at one leaves a
 /// stale entry that the next raise finds — the tail-position branches used to
 /// skip them, and `(with-exception-handler h (lambda () (values 1)))` left
@@ -1329,7 +1329,7 @@ pub(super) fn step_wind_jump(
     // A snapshot can carry a prompt whose body is already finished, and this
     // is the one moment that can tell (issue #176).
     //
-    // `pop_resolved_prompts` reads `stack_depth >= frames.len()` as "the
+    // `pop_resolved_prompts` reads `stack_depth >= depth()` as "the
     // body's frame is gone, so the prompt is over". That reading is wrong at
     // *capture* time: a body whose tail expression is a control primitive —
     // `(call/cc …)` — has had its frame popped by the tail call while the
