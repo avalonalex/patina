@@ -24,7 +24,7 @@ impl Depth {
     pub(crate) const BASE: Depth = Depth(0);
 
     /// The depth of a stack of `frames` frames. Only the depth accessors
-    /// call it, and tests.
+    /// call it: `ExecutionState::depth` and each continuation snapshot's.
     #[inline(always)]
     pub(crate) const fn of_frames(frames: usize) -> Depth {
         Depth(frames)
