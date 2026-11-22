@@ -28,6 +28,16 @@
 //! whose value is a constant loaded after it, and the switch drops the
 //! argument before it.
 //!
+//! Three more controls, of the same check from the other side: a push fills
+//! every register of its window that no argument or operand writes with
+//! `DEAD_SLOT` in a check build (#714, `PRD/GC_PRD.md` §11.1, invariant 1),
+//! the reused windows of a tail call, a self tail call and a stub's next
+//! round included, so a register the activation never wrote panics where it
+//! is read rather than answering what the window's earlier occupant left.
+//! Correct code reads no such register, so patina-vm runs hand-assembled
+//! code that does, on a machine of its own
+//! (`test_support::read_an_unwritten_register`), and no switch is involved.
+//!
 //! They run in every check build: every debug `cargo test`, and a release one
 //! with this crate's `gc-check` feature, which the release GC lane enables.
 //! A build without the checks reports them ignored. In such a build the
@@ -44,7 +54,7 @@ use common::vm_interpreter;
 use patina_core::TaggedValue;
 use patina_interpreter::Interpreter;
 use patina_vm::VmBackend;
-use patina_vm::test_support::DropHighestLive;
+use patina_vm::test_support::{DropHighestLive, Reuse, read_an_unwritten_register};
 
 /// The first argument of `car`, retired by the collection `(gc)` asks for:
 /// at the safe point after the call, the map holds only `x`, which the switch
@@ -121,6 +131,56 @@ control!(
     "read of a retired register as a call's argument",
     FIXED
 );
+
+/// A control of the fill: a test that must panic, in a check build, with
+/// `$expected`, at the read of the register `$expected` names, which the
+/// activation that `$reuse`'s push gave a window never wrote (#714).
+macro_rules! unwritten_control {
+    ($name:ident, $reuse:expr, $expected:literal) => {
+        #[test]
+        #[cfg_attr(
+            not(any(debug_assertions, feature = "gc-check")),
+            ignore = "needs a check build"
+        )]
+        #[should_panic(expected = $expected)]
+        fn $name() {
+            read_an_unwritten_register($reuse);
+        }
+    };
+}
+
+unwritten_control!(
+    an_unwritten_register_after_a_tail_call_panics_at_reg_at,
+    Reuse::TailCall,
+    "read of a retired register as an instruction's operand: r2"
+);
+unwritten_control!(
+    an_unwritten_register_after_a_self_tail_call_panics_at_reg_at,
+    Reuse::SelfTailCall,
+    "read of a retired register as an instruction's operand: r2"
+);
+unwritten_control!(
+    an_unwritten_register_after_a_stub_restart_panics_at_reg_at,
+    Reuse::StubRestart,
+    "read of a retired register as an instruction's operand: r1"
+);
+
+/// A plain release build reads the fill, `NULL`, in each of those
+/// registers, and never the 99 the window's earlier occupant wrote there.
+/// Compiled out of a check build, where the reads panic, rather than
+/// ignored, so that `--include-ignored` in CI's controls step runs only
+/// controls.
+#[test]
+#[cfg(not(any(debug_assertions, feature = "gc-check")))]
+fn a_plain_release_build_reads_the_fill_in_a_reused_window() {
+    for reuse in [Reuse::TailCall, Reuse::SelfTailCall, Reuse::StubRestart] {
+        assert_eq!(
+            read_an_unwritten_register(reuse),
+            TaggedValue::NULL,
+            "{reuse:?}"
+        );
+    }
+}
 
 /// What the controls see is the switch, not the programs: without it each
 /// one collects where its control does and answers correctly.

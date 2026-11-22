@@ -3444,6 +3444,123 @@ fn mark_if_import_rebound(
     }
 }
 
+/// What `test_support::read_an_unwritten_register` does (#714): on a fresh
+/// machine, run hand-assembled code in which an activation that reuses a
+/// window first reads a register it never wrote, one the window's earlier
+/// occupant wrote 99 into, and answer what the read found. The reuse is
+/// the push the fill covers: a tail call (`tail_replace`), a self tail call
+/// (`restart_closure`), or a stub's next round (`restart_stub`). A check
+/// build panics at the read, in `reg_at`; a plain release build finds the
+/// fill, `NULL`; with the fill gone, either finds 99.
+#[cfg(feature = "test-support")]
+pub(crate) fn read_an_unwritten_register(after: crate::test_support::Reuse) -> TaggedValue {
+    use crate::test_support::Reuse;
+    let stale = TaggedValue::fixnum(99);
+    let code = |name: &str, num_regs, arity, instructions, constants| CodeObject {
+        id: CodeObjectId::label(),
+        name: Some(Rc::from(name)),
+        links: patina_core::LinkTable::empty(),
+        live_closures: Cell::new(0),
+        instructions,
+        constants,
+        num_regs,
+        arity,
+        source_map: Vec::new(),
+        register_roots: None,
+    };
+    let mut state = VmState::on_a_fresh_heap();
+    match after {
+        Reuse::TailCall => {
+            // A writes r2 and tail-calls B, whose `Return` reads r2.
+            let b = state.load(code(
+                "unwritten-control-b",
+                3,
+                Arity::Fixed(0),
+                vec![Instruction::Return { val: 2 }],
+                Vec::new(),
+            ));
+            let closure = state.heap.borrow_mut().alloc_vm_closure(b.0, Vec::new());
+            state.note_closure_made(b);
+            let a = state.load(code(
+                "unwritten-control-a",
+                3,
+                Arity::Fixed(0),
+                vec![
+                    Instruction::LoadImmediate { dst: 2, val: stale },
+                    Instruction::LoadConst { dst: 0, idx: 0 },
+                    Instruction::TailCall {
+                        func: 0,
+                        args: Vec::new(),
+                    },
+                ],
+                vec![closure],
+            ));
+            let a = state.code_object(a).expect("the control's code is loaded");
+            state.execution.push_frame(a, CallFrame::NO_CLOSURE, 0);
+        }
+        Reuse::SelfTailCall => {
+            // C(self, first): the first activation writes r2 and calls
+            // itself in tail position with `first` false; the second's
+            // `Return` reads r2.
+            let c = state.load(code(
+                "unwritten-control-c",
+                4,
+                Arity::Fixed(2),
+                vec![
+                    Instruction::JumpUnless { cond: 1, target: 4 },
+                    Instruction::LoadImmediate { dst: 2, val: stale },
+                    Instruction::LoadImmediate {
+                        dst: 3,
+                        val: TaggedValue::FALSE,
+                    },
+                    Instruction::TailCall {
+                        func: 0,
+                        args: vec![0, 3],
+                    },
+                    Instruction::Return { val: 2 },
+                ],
+                Vec::new(),
+            ));
+            let closure = state.heap.borrow_mut().alloc_vm_closure(c.0, Vec::new());
+            state.note_closure_made(c);
+            let c = state.code_object(c).expect("the control's code is loaded");
+            let base = state.execution.push_frame(c, closure, 0);
+            state.execution.init_arg(base, 0, closure);
+            state.execution.init_arg(base, 1, TaggedValue::TRUE);
+        }
+        Reuse::StubRestart => {
+            // A stub frame whose first round kept r0 and wrote r1, started
+            // on its next round, which keeps r0, in code whose `Return`
+            // reads r1 before the round has written it.
+            let first = state.load(code(
+                "unwritten-control-first-round",
+                2,
+                Arity::Fixed(0),
+                vec![Instruction::Return { val: 1 }],
+                Vec::new(),
+            ));
+            let next = state.load(code(
+                "unwritten-control-next-round",
+                2,
+                Arity::Fixed(0),
+                vec![Instruction::Return { val: 1 }],
+                Vec::new(),
+            ));
+            let first = state
+                .code_object(first)
+                .expect("the control's code is loaded");
+            let next = state
+                .code_object(next)
+                .expect("the control's code is loaded");
+            let base = state.execution.push_frame(first, CallFrame::NO_CLOSURE, 0);
+            state.execution.set_top(base, 0, TaggedValue::fixnum(1));
+            state.execution.set_top(base, 1, stale);
+            state.execution.restart_stub(next, 1);
+        }
+    }
+    run_top_frame(&mut state).expect("the control's code runs")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
