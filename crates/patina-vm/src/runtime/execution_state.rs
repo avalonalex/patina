@@ -13,7 +13,9 @@ use crate::types::{CallFrame, Depth, FrameCode};
 use patina_core::heap::Heap;
 use patina_core::{SlotVisitor, TaggedValue, Trace};
 use std::cell::Cell;
+use std::ops::Range;
 use std::rc::Rc;
+use std::slice::SliceIndex;
 
 /// Its trace (derived, #686) is all five components and the running code's
 /// id, a root of every collection through `VmState`'s. The sentinel test
@@ -100,8 +102,18 @@ impl ExecutionState {
         self.running.0.set(id);
     }
 
+    /// The register file, lent for reading ([`Registers`]). The writes are
+    /// this module's: `set_top`, `return_into` and a push's (#904).
     #[inline(always)]
-    pub(super) fn registers(&self) -> &[Cell<TaggedValue>] {
+    pub(super) fn registers(&self) -> Registers<'_> {
+        Registers(&self.registers)
+    }
+    /// The register file's slots, for the one test that reports each where
+    /// it lives (`every_slot_the_vm_reports_is_where_its_value_lives`). The
+    /// collector reaches them through the derived trace, and retirement
+    /// through [`Self::retire_registers`], both inside this module.
+    #[cfg(test)]
+    pub(super) fn register_cells(&self) -> &[Cell<TaggedValue>] {
         &self.registers
     }
     #[inline(always)]
@@ -583,6 +595,51 @@ impl ExecutionState {
         // `deliver_reg` is Some only for a non-empty capture.
         self.return_into(ReturnFrame::Top, deliver_reg, value);
         Ok(())
+    }
+}
+
+/// The register file, lent for reading: what [`ExecutionState::registers`]
+/// answers. No method writes, so a holder of `&VmState` cannot write a
+/// register (#904); the step tracer and the snapshot copies read through it.
+#[derive(Clone, Copy)]
+pub(crate) struct Registers<'a>(&'a [Cell<TaggedValue>]);
+
+impl<'a> Registers<'a> {
+    #[inline(always)]
+    pub(crate) fn len(self) -> usize {
+        self.0.len()
+    }
+
+    /// The register at `index`, panicking past the end as indexing does.
+    #[inline(always)]
+    pub(crate) fn at(self, index: usize) -> TaggedValue {
+        self.0[index].get()
+    }
+
+    /// The register at `index`, if the file reaches it.
+    #[inline(always)]
+    pub(crate) fn get(self, index: usize) -> Option<TaggedValue> {
+        self.0.get(index).map(Cell::get)
+    }
+
+    /// The registers in `range`, in order.
+    pub(crate) fn values(self, range: Range<usize>) -> impl Iterator<Item = TaggedValue> + 'a {
+        self.0[range].iter().map(Cell::get)
+    }
+
+    /// Every register, in order.
+    pub(crate) fn iter(self) -> impl Iterator<Item = TaggedValue> + 'a {
+        self.0.iter().map(Cell::get)
+    }
+
+    /// A copy of the registers `range` takes: a snapshot's own file, which
+    /// the capture and retirement may then write, as they write a
+    /// continuation's, never the machine's.
+    pub(crate) fn copy<R>(self, range: R) -> Vec<Cell<TaggedValue>>
+    where
+        R: SliceIndex<[Cell<TaggedValue>], Output = [Cell<TaggedValue>]>,
+    {
+        self.0[range].to_vec()
     }
 }
 

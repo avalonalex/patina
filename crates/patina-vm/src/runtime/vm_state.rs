@@ -946,7 +946,7 @@ impl VmState {
     #[inline(always)]
     pub(super) fn reg_at(&self, base: usize, reg: u16) -> TaggedValue {
         debug_assert_eq!(base, self.frame_base());
-        let value = self.execution.registers()[base + reg as usize].get();
+        let value = self.execution.registers().at(base + reg as usize);
         if GC_CHECK && value == TaggedValue::DEAD_SLOT {
             self.read_of_a_retired_register(0, reg, "as an instruction's operand");
         }

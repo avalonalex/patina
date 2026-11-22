@@ -217,7 +217,7 @@ pub(super) fn call_closure_from_regs(
 /// the reading frame is the one below the top.
 #[inline(always)]
 fn argument_reg(state: &VmState, caller_base: usize, reg: u16) -> TaggedValue {
-    let value = state.execution.registers()[caller_base + reg as usize].get();
+    let value = state.execution.registers().at(caller_base + reg as usize);
     if GC_CHECK && value == TaggedValue::DEAD_SLOT {
         state.read_of_a_retired_register(1, reg, "as a call's argument");
     }
@@ -1379,8 +1379,7 @@ pub(super) fn exit_in_progress(state: &VmState) -> Option<i32> {
             let target = state
                 .execution
                 .registers()
-                .get(frame.register_base + wind_step::TARGET as usize)?
-                .get();
+                .get(frame.register_base + wind_step::TARGET as usize)?;
             state.get_vm_continuation(target)?.exit_status
         })
 }
@@ -2934,7 +2933,7 @@ pub(super) fn abort_to_prompt(
     // travel needs the live wind stack intact to know what it is leaving, so
     // the machine cannot be cut back until it arrives.
     let mut frames = state.execution.frames_below(landing_depth).to_vec();
-    let mut registers = state.execution.registers()[..registers_end].to_vec();
+    let mut registers = state.execution.registers().copy(..registers_end);
     push_abort_stub(
         &mut frames,
         &mut registers,
@@ -3243,7 +3242,7 @@ pub(super) fn capture_delimited(
     let base_at_capture = frames
         .first()
         .map_or(state.execution.registers().len(), |f| f.register_base);
-    let registers = state.execution.registers()[base_at_capture..].to_vec();
+    let registers = state.execution.registers().copy(base_at_capture..);
     let deliver_reg = frames.last().map(|top| {
         // Cleared, not copied as it stands: the hole is dead by construction
         // — the capturing call never returns a value into it — so whatever it
