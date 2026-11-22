@@ -1543,6 +1543,7 @@ mod tests {
     use super::*;
     use crate::compiler::compile_with_qq_resolving;
     use crate::runtime::VmState;
+    use crate::types::code_object::RegisterMapCensus;
     use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
     use patina_core::{Lit, LiteralPool};
 
@@ -1897,6 +1898,55 @@ mod tests {
             assert_eq!(maps.at(code.instructions.len() + 1), None);
         }
         assert!(unmapped > 0, "every pc has a map");
+    }
+
+    /// The census of a machine's maps (#905) counts each code object's index
+    /// and its unit's table once, and nothing for an empty slot of the code
+    /// store.
+    #[test]
+    fn the_census_counts_each_index_and_each_units_table_once() {
+        let mut state = VmState::on_a_fresh_heap();
+        state.install_primitives();
+        let heap = state.heap().clone();
+        let env = state.global_env().clone();
+        let literals = LiteralPool::new(&heap.borrow());
+        let (top, nested) = compile_with_qq_resolving(
+            &every_kind_of_operand(),
+            &literals,
+            &heap,
+            &env,
+            state.primitive_registry(),
+        )
+        .expect("compiles");
+        let members = std::iter::once(&top).chain(&nested);
+        let pcs: usize = members
+            .clone()
+            .map(|code| code.instructions.len() + 1)
+            .sum();
+        let unmapped: usize = members
+            .clone()
+            .map(|code| {
+                let maps = code.register_roots.as_ref().unwrap();
+                (0..=code.instructions.len())
+                    .filter(|&pc| maps.at(pc).is_none())
+                    .count()
+            })
+            .sum();
+        let table = Rc::clone(top.register_roots.as_ref().unwrap().table());
+        let width = top.register_roots.as_ref().unwrap().width();
+        let expected = RegisterMapCensus {
+            code_objects: 1 + nested.len(),
+            pcs,
+            unmapped_pcs: unmapped,
+            index_bytes: 2 * pcs,
+            units: 1,
+            maps: table.len() / width,
+            map_bytes: 8 * table.len(),
+        };
+        assert_eq!(state.register_map_census(), RegisterMapCensus::default());
+        let unit = state.load_unit(top, nested, &env, literals);
+        assert_eq!(state.register_map_census(), expected);
+        drop(unit);
     }
 
     /// Past the last id, a map has none of its own: it shares one that keeps

@@ -179,6 +179,13 @@ impl VmBackend {
         self.state.borrow().code_store_slots()
     }
 
+    /// What the register maps of the code the VM holds take (#905): what a
+    /// test reads to measure their memory. Not an interface.
+    #[doc(hidden)]
+    pub fn register_map_census(&self) -> crate::types::code_object::RegisterMapCensus {
+        self.state.borrow().register_map_census()
+    }
+
     /// Create a new VM backend with a fresh environment and primitive registry.
     pub fn new() -> Self {
         Self::with_fs(std::sync::Arc::new(patina_core::NativeFs))

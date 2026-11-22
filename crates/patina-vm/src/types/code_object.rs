@@ -274,6 +274,54 @@ impl RegisterMaps {
     pub(crate) fn table(&self) -> &Rc<[u64]> {
         &self.maps
     }
+
+    /// Words per map in the unit's table.
+    #[cfg(test)]
+    pub(crate) fn width(&self) -> usize {
+        self.width
+    }
+
+    /// Add these maps to `census`, counting their unit's table only if
+    /// `tables`, the tables counted so far, does not hold it yet.
+    pub(crate) fn count(
+        &self,
+        census: &mut RegisterMapCensus,
+        tables: &mut rustc_hash::FxHashSet<*const u64>,
+    ) {
+        census.code_objects += 1;
+        census.pcs += self.index.len();
+        census.unmapped_pcs += self.index.iter().filter(|&&id| id == Self::NEVER).count();
+        census.index_bytes += std::mem::size_of_val(&*self.index);
+        if tables.insert(self.maps.as_ptr()) {
+            census.units += 1;
+            census.maps += self.maps.len() / self.width;
+            census.map_bytes += std::mem::size_of_val(&*self.maps);
+        }
+    }
+}
+
+/// What the register maps of a machine's loaded code hold (#905), summed
+/// over its code store by `VmBackend::register_map_census`: what a test
+/// reads to measure their memory. Not an interface. Bytes are those the
+/// blocks hold, before the allocator rounds them up, and without the five
+/// words the maps take in each code object, or an `Rc`'s two counts.
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RegisterMapCensus {
+    /// Code objects with maps: every loaded one but hand-built code.
+    pub code_objects: usize,
+    /// Index entries, one per pc and one past each code object's end.
+    pub pcs: usize,
+    /// Of those, the entries of pcs no frame can be suspended at.
+    pub unmapped_pcs: usize,
+    /// The indexes' bytes, two an entry.
+    pub index_bytes: usize,
+    /// Distinct tables: one a unit, and one each stub.
+    pub units: usize,
+    /// The maps in those tables.
+    pub maps: usize,
+    /// The tables' bytes.
+    pub map_bytes: usize,
 }
 
 impl CodeObject {
