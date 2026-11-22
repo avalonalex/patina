@@ -1622,8 +1622,10 @@ fn runtime_stub(
 /// one of two call sites reads as the decision it is.
 ///
 /// The two thunk-stepping stubs leave `return_reg` at 0 and nothing ever
-/// returns *into* their frames: the instruction pops the frame itself and
-/// either starts the next thunk or finishes the transfer.
+/// returns *into* their frames: the instruction either starts the next
+/// thunk or finishes the transfer. The invoke pops its frame to do so; the
+/// jump restarts its frame in place for the next thunk, and its arrival
+/// replaces the frame (#714).
 ///
 /// `raise_step_stub` is the third caller and breaks that: its `Call handler`
 /// **does** return into the frame, and its own `Return` delivers the
