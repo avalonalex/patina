@@ -307,21 +307,46 @@ nothing.
 ```rust
 impl VmState {
     pub(super) fn reg(&self, r: Reg) -> TaggedValue;
-    pub(super) fn set_reg(&mut self, r: Reg, val: TaggedValue);
     fn reg_at(&self, base: usize, r: Reg) -> TaggedValue;      // dispatch loop
-    fn set_reg_at(&mut self, base: usize, r: Reg, val: TaggedValue);
+}
+impl ExecutionState {
+    pub(super) fn registers(&self) -> Registers<'_>;           // reads only
+    pub(super) fn set_top(&mut self, base: usize, r: Reg, val: TaggedValue);
+    pub(super) fn return_into(&mut self, frame: ReturnFrame, r: Reg, val: TaggedValue);
 }
 ```
 
-All index `register_base + r` into the flat register array. The `_at`
-variants take the dispatch prologue's hoisted base; only instruction arms
-that cannot push or pop a frame before the access may use them (a plain
-`set_reg` at a dispatch site signals "the frame changed here").
+All index `register_base + r` into the flat register array. `reg_at` takes
+the dispatch prologue's hoisted base, and `registers()` lends the file as a
+read-only view. Only `execution_state.rs` writes a register, by two paths
+and a push (#904):
 
-The primitive-call arms are the exception: they pass the hoisted base to a
-callee that *can* pop frames, since a higher-order primitive re-enters the VM
-and a continuation can escape out of its callback. They hold only because
-`exec_call_primitive` re-reads the frame depth before writing.
+- `set_top` is the top frame's own write, during its own instruction, with
+  the hoisted base. Only instruction arms that cannot push or pop a frame
+  before the write may use it.
+- `return_into` writes a frame something has returned into, or one below
+  the top: the value a `Return` or a tail call delivers after its pop, a
+  callee's answer once its callback's frames may have run above the caller,
+  a jump's or a composable invoke's arrival, and the register
+  `deliver_before_collecting` clears. Its `ReturnFrame` is `Top`, `TopAt`
+  (with the caller's hoisted base) or `Caller` (the frame below the top). At
+  4d it only writes; stage 7 lowers the stack watermark in it first
+  (`PRD/GC_PRD.md` §11.1).
+- A push initializes its frame's window: `push_frame`, `push_abort_stub`, a
+  call's arguments (`init_arg`, `init_args`), and a stub's operands through
+  `set_top`, the stub being the top frame.
+
+A check build asserts the choice: `return_into` writes a frame below the top
+or a top frame that awaits a value, and `set_top` and a push's writes never
+write one that does. A top frame awaits a value from the pop, arrival or
+call that makes it so until it dispatches its next instruction
+(`ExecutionState`'s `awaiting`).
+
+The primitive-call arms keep the hoisted base across a callee that *can* pop
+frames, since a higher-order primitive re-enters the VM and a continuation
+can escape out of its callback. An escape unwinds through the call
+(`across_reentry`), so the write after it, `return_into(TopAt(base))`, finds
+the frames the call started with, and a debug build checks the base.
 
 ---
 
@@ -359,7 +384,8 @@ On `Return { val }`:
 1. Read result value
 2. Pop current frame, free registers
 3. If at exit depth, return result
-4. Write result to caller's `return_reg`
+4. Write result to caller's `return_reg`, through `return_into` (§3.4), where
+   stage 7 lowers the stack watermark when the caller is below it
 5. Run cleanup: `pop_resolved_prompts()`, `pop_exception_handlers()`. Wind
    records are not swept here — `PopWind` pops each one (§5.3)
 
