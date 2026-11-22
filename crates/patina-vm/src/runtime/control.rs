@@ -982,7 +982,7 @@ pub(super) fn vm_raise_value(
             .map_or(handler_entry.stack_depth, |prompt| {
                 handler_entry.stack_depth.max(prompt.stack_depth)
             });
-        let below = state.execution.frames().len().saturating_sub(floor);
+        let below = state.execution.depth().distance_above(floor);
         let base = push_stub_frame(state, code, raise_step::NUM_REGS);
         // `push_stub_frame` leaves `return_reg` at 0, which is right for the
         // stubs that deliver their own value. This one returns through the
@@ -2888,12 +2888,12 @@ pub(super) fn abort_to_prompt(
         Ok(code) => code,
         Err(e) => return e,
     };
-    let landing_depth = prompt.stack_depth.min(state.execution.frames().len());
+    let landing_depth = prompt.stack_depth.min(state.execution.depth());
     let wind_depth = prompt.dynamic_wind_depth.min(state.execution.winds().len());
     let handler_depth = prompt
         .exception_handler_depth
         .min(state.execution.handlers().len());
-    let registers_end = match state.execution.frames()[..landing_depth].last() {
+    let registers_end = match state.execution.frames_below(landing_depth).last() {
         Some(top) => top.register_base + top.num_regs as usize,
         None => 0,
     };
@@ -2917,7 +2917,7 @@ pub(super) fn abort_to_prompt(
     // Otherwise the same landing has to be described rather than applied: the
     // travel needs the live wind stack intact to know what it is leaving, so
     // the machine cannot be cut back until it arrives.
-    let mut frames = state.execution.frames()[..landing_depth].to_vec();
+    let mut frames = state.execution.frames_below(landing_depth).to_vec();
     let mut registers = state.execution.registers()[..registers_end].to_vec();
     push_abort_stub(
         &mut frames,
@@ -3181,12 +3181,12 @@ pub(super) fn capture_delimited(
     // sliced — nothing above the boundary is left to capture — and clamped for
     // all three, since the same "recorded against a stack that has since
     // shrunk" applies to a jump popping winds mid-travel. Slicing panicked.
-    let depth_at_capture = prompt.stack_depth.min(state.execution.frames().len());
+    let depth_at_capture = prompt.stack_depth.min(state.execution.depth());
     let wind_depth_at_capture = prompt.dynamic_wind_depth.min(state.execution.winds().len());
     let handler_depth_at_capture = prompt
         .exception_handler_depth
         .min(state.execution.handlers().len());
-    let frames = state.execution.frames()[depth_at_capture..].to_vec();
+    let frames = state.execution.frames_above(depth_at_capture).to_vec();
     // An empty capture is the identity continuation, and it carries no dynamic
     // environment at all — no frames to run under means nothing for prompts,
     // handlers or extents to belong to, and an identity invoke appends no
@@ -3224,7 +3224,6 @@ pub(super) fn capture_delimited(
         .first()
         .map_or(state.execution.registers().len(), |f| f.register_base);
     let registers = state.execution.registers()[base_at_capture..].to_vec();
-    patina_core::census::capture_delimited(frames.len(), registers.len());
     let deliver_reg = frames.last().map(|top| {
         // Cleared, not copied as it stands: the hole is dead by construction
         // — the capturing call never returns a value into it — so whatever it
@@ -3234,7 +3233,7 @@ pub(super) fn capture_delimited(
         registers[top.register_base - base_at_capture + hole as usize].set(TaggedValue::NULL);
         hole
     });
-    VmDelimitedContinuation {
+    let captured = VmDelimitedContinuation {
         frames,
         dynamic_winds,
         registers,
@@ -3245,7 +3244,12 @@ pub(super) fn capture_delimited(
         handler_depth_at_capture,
         prompt_stack,
         exception_handlers,
-    }
+    };
+    patina_core::census::capture_delimited(
+        captured.depth().frame_count(),
+        captured.registers.len(),
+    );
+    captured
 }
 
 /// How an invoke of a delimited continuation ended.

@@ -2596,10 +2596,10 @@ fn dispatch_one_instruction(
                 // clause invokes. An absolute index would name a frame in the
                 // stack the raise happened on, and after either of those the
                 // live stack is a different one.
-                let stub_index = state.execution.frames().len().saturating_sub(1);
+                let stub_depth = state.execution.top_frame_depth();
                 state.execution.restore_handler(ExceptionHandler {
                     handler,
-                    stack_depth: stub_index.saturating_sub(below),
+                    stack_depth: stub_depth.lowered_by(below),
                 });
                 // The `Return` after this one delivers the handler's value as
                 // the value of `(raise-continuable …)`.
