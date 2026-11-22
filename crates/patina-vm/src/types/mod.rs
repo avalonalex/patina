@@ -115,6 +115,15 @@ impl CallFrame {
     /// What a frame that runs no closure holds as its `closure`.
     pub const NO_CLOSURE: TaggedValue = TaggedValue::FALSE;
 
+    /// The `return_reg` of a frame whose value goes to no register of its
+    /// caller (#714): a higher-order primitive's callback, whose value the
+    /// dispatch loop hands the primitive (`run_apply_proc`). No window
+    /// reaches it, since a window's registers number at most `u16::MAX`,
+    /// so it is past the end of the register file, and `return_into` writes
+    /// no register for it. A continuation that re-enters the callback after
+    /// the primitive has returned then returns into nothing.
+    pub(crate) const NO_RETURN: Reg = Reg::MAX;
+
     /// The closure this frame runs, if it runs one.
     #[inline(always)]
     pub fn closure(&self) -> Option<TaggedValue> {

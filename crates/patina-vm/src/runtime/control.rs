@@ -375,6 +375,12 @@ fn spread_apply_tail(state: &VmState, last: TaggedValue) -> Result<Vec<TaggedVal
 /// `TailCallWithValues` goes through — always leaves a caller behind. Every
 /// other loop exits at a depth of 1 or more.
 ///
+/// `return_reg` may be [`CallFrame::NO_RETURN`], a call with no destination
+/// (a higher-order primitive's callback, [`run_apply_proc`], #714): a frame
+/// the call pushes returns into nothing, and the value of a callee that
+/// answers here and now comes back through `return_into`'s no-destination
+/// form rather than a register ([`answered`]).
+///
 /// It did hold its own until 2026-09-05, one probe short: primitive →
 /// parameter → continuation → closure, with **no control primitive**, which is
 /// claimed by name before any of those and so matched nothing and fell through
@@ -401,7 +407,19 @@ pub(super) fn call_any(
     if state.execution.depth() != depth_before {
         return Ok(None);
     }
-    Ok(Some(state.reg(return_reg)))
+    Ok(Some(answered(state, return_reg)))
+}
+
+/// What a callee that answered here and now delivered to `return_reg` of the
+/// top frame: the register, or for [`CallFrame::NO_RETURN`], which writes
+/// none, the value `return_into` handed back (#714).
+#[inline(always)]
+fn answered(state: &VmState, return_reg: u16) -> TaggedValue {
+    if return_reg == CallFrame::NO_RETURN {
+        state.execution.take_answer()
+    } else {
+        state.reg(return_reg)
+    }
 }
 
 /// Try to call a parameter object with no argument, which reads it. Returns
@@ -2719,11 +2737,19 @@ impl patina_primitives::ApplyContext for VmApplyContext {
 /// Apply a procedure (VmClosure or primitive) to args within the VM,
 /// running the execution loop if needed. Used by `VmApplyContext::apply_proc`.
 ///
+/// The call has no destination ([`CallFrame::NO_RETURN`], #714): a callee
+/// that answers here and now hands its value back through `call_any`, and a
+/// closure's frame, which this loop runs to its `Return` at `depth_before`,
+/// hands it back from there, writing no register. So no word is kept past
+/// the caller's window, where a scratch slot for the callee's value was
+/// until then, and a continuation that re-enters the callback after the
+/// primitive has returned returns into nothing.
+///
 /// # State contract
 ///
-/// Requires a live caller under across_reentry. Uses a scratch return slot
-/// and may run a nested loop, changing all dynamic state. Its caller must
-/// interpret transfer flags before accepting the returned value.
+/// Requires a live caller under across_reentry. Writes no register of the
+/// caller, and may run a nested loop, changing all dynamic state. Its caller
+/// must interpret transfer flags before accepting the returned value.
 #[expect(
     clippy::disallowed_methods,
     reason = "the state is in the machine: `call_any` put `proc`'s arguments in its frame, which \
@@ -2737,10 +2763,7 @@ fn run_apply_proc(
 ) -> Result<TaggedValue, VmError> {
     let depth_before = state.execution.depth();
 
-    // Use a scratch return register beyond the current frame's live registers.
-    let return_reg = state.execution.scratch_return_reg();
-
-    if let Some(result) = call_any(state, proc, args, return_reg)? {
+    if let Some(result) = call_any(state, proc, args, CallFrame::NO_RETURN)? {
         // Primitive — returned immediately.
         return Ok(result);
     }
@@ -3325,8 +3348,12 @@ pub(super) fn capture_delimited(
         // — the capturing call never returns a value into it — so whatever it
         // still holds would be retained for the continuation's whole life.
         // `call/cc`'s capture clears its own `dst` for this reason, with 296
-        // MB of measured retention behind the comment there.
-        registers[top.register_base - base_at_capture + hole as usize].set(TaggedValue::NULL);
+        // MB of measured retention behind the comment there. An abort made
+        // as a primitive's callback has no hole in any window
+        // (`CallFrame::NO_RETURN`, #714), and nothing to clear.
+        if hole != CallFrame::NO_RETURN {
+            registers[top.register_base - base_at_capture + hole as usize].set(TaggedValue::NULL);
+        }
         hole
     });
     let captured = VmDelimitedContinuation {
@@ -3768,7 +3795,7 @@ pub(super) fn tail_call_value_with_probe(
                 pop_resolved_extents(state, exit_depth);
             }
             if state.execution.depth() == exit_depth {
-                let result = state.reg(return_reg);
+                let result = answered(state, return_reg);
                 return Ok(Some(result));
             }
             return Ok(None);

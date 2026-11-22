@@ -39,6 +39,16 @@ pub(super) struct ExecutionState {
     /// the register writes (#904).
     #[trace(skip, reason = "a frame depth, which only a check build writes")]
     awaiting: Awaiting,
+    /// The value [`ExecutionState::return_into`] was last handed for
+    /// [`CallFrame::NO_RETURN`], which writes no register (#714): a callee
+    /// that answered here and now a call that asked for no destination
+    /// (`run_apply_proc`'s), which `call_any` takes back at once
+    /// ([`ExecutionState::take_answer`]), with no safe point between. A
+    /// value a frame returned into nothing (a continuation that re-entered
+    /// a callback after its primitive returned) stays until the next one
+    /// replaces it, or the stack goes (`clear`). Pinned, as
+    /// `VmState::pending_escape` is.
+    answer: Cell<Option<TaggedValue>>,
 }
 
 /// A check build's record of the top frame that awaits a value (#904): the
@@ -160,6 +170,7 @@ impl ExecutionState {
             exception_handlers,
             running: RunningCode::default(),
             awaiting: Awaiting::default(),
+            answer: Cell::new(None),
         }
     }
 
@@ -288,6 +299,15 @@ impl ExecutionState {
     ///
     /// A check build asserts that `frame` is below the top, or is a top frame
     /// that awaits a value ([`Awaiting`]).
+    ///
+    /// **The no-destination form** (#714): `reg` is [`CallFrame::NO_RETURN`]
+    /// for the value of a call that asked for none, a higher-order
+    /// primitive's callback (`run_apply_proc`). It writes no register: the
+    /// value goes to [`Self::take_answer`], for a callee that answered here
+    /// and now, and otherwise nowhere. It is the same choke point, asserted
+    /// alike, since the frame something returned into awaits its value even
+    /// when the value goes nowhere, and stage 7 lowers the watermark for the
+    /// activation as for a write.
     #[inline(always)]
     pub(super) fn return_into(&mut self, frame: ReturnFrame, reg: u16, value: TaggedValue) {
         let base = match frame {
@@ -306,7 +326,45 @@ impl ExecutionState {
         if GC_CHECK && frame != ReturnFrame::Caller && !self.top_awaits() {
             returned_into_a_running_frame(reg);
         }
-        self.registers[base + reg as usize].set(value);
+        // The top frame's window ends the register file (`PRD/GC_PRD.md`
+        // §11.1, invariant 1, asserted at each push), and no window reaches
+        // `NO_RETURN`, so the bounds check every write makes is what tells
+        // the no-destination form apart, at no cost on a `Return`: its cold
+        // arm takes the place of the panic's. The frame below the top is
+        // tested by name, since its base plus `NO_RETURN` can fall in the
+        // top frame's window.
+        match self.registers.get(base + reg as usize) {
+            Some(slot) if frame != ReturnFrame::Caller || reg != CallFrame::NO_RETURN => {
+                slot.set(value)
+            }
+            _ => self.no_destination(reg, value),
+        }
+    }
+
+    /// The no-destination form of [`Self::return_into`], a write past the
+    /// end of the register file: hand `value` to [`Self::take_answer`], or
+    /// panic, as indexing would have, for any register but
+    /// [`CallFrame::NO_RETURN`].
+    #[cold]
+    #[inline(never)]
+    fn no_destination(&self, reg: u16, value: TaggedValue) {
+        assert_eq!(
+            reg,
+            CallFrame::NO_RETURN,
+            "return_into wrote r{reg}, past the end of the register file"
+        );
+        self.answer.set(Some(value));
+    }
+
+    /// The value a callee answered here and now to a call whose destination
+    /// was [`CallFrame::NO_RETURN`] (#714): what [`Self::return_into`]'s
+    /// no-destination form was last handed, taken, so that nothing stays.
+    /// For `call_any` and the tail path of a control primitive, which read
+    /// a register here for any other destination.
+    pub(super) fn take_answer(&self) -> TaggedValue {
+        self.answer
+            .take()
+            .expect("a callee that answered here and now answers through return_into")
     }
 
     /// The top frame's own write, during its own instruction: `reg` of the
@@ -486,19 +544,6 @@ impl ExecutionState {
         self.frames.last_mut().expect("the stub frame").return_reg = dst;
     }
 
-    /// Reserve a scratch destination without changing the frame's live window.
-    pub(super) fn scratch_return_reg(&mut self) -> u16 {
-        let return_reg = self.frames.last().map(|f| f.num_regs).unwrap_or(0);
-        if let Some(f) = self.frames.last() {
-            let needed = f.register_base + return_reg as usize + 1;
-            if self.registers.len() < needed {
-                self.registers
-                    .resize(needed, Cell::new(TaggedValue::UNSPECIFIED));
-            }
-        }
-        return_reg
-    }
-
     pub(super) fn push_prompt(
         &mut self,
         tag: TaggedValue,
@@ -656,6 +701,7 @@ impl ExecutionState {
         self.dynamic_winds.clear();
         self.exception_handlers.clear();
         self.clear_awaiting();
+        self.answer.set(None);
     }
 
     pub(super) fn retire_registers(&mut self) {
