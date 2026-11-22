@@ -143,16 +143,48 @@ impl ExecutionState {
     // ── Register writes (#904) ──────────────────────────────────────────
     //
     // The only ways to write a live register: the top frame's own write
-    // (`set_top`), and a push's initializing writes (`push_frame`,
-    // `push_abort_stub`, and the arguments the call paths copy into a
-    // callee's window, `init_arg` and `init_args`). `inline(always)`, as the
-    // register helpers they replace were: `dispatch_one_instruction` is too
-    // large for LLVM to inline them otherwise (PRD §1.6 finding 1).
+    // (`set_top`), a write into a frame something has returned into or one
+    // below the top (`return_into`), and a push's initializing writes
+    // (`push_frame`, `push_abort_stub`, and the arguments the call paths
+    // copy into a callee's window, `init_arg` and `init_args`).
+    // `inline(always)`, as the register helpers they replace were:
+    // `dispatch_one_instruction` is too large for LLVM to inline them
+    // otherwise (PRD §1.6 finding 1).
 
     /// The top frame's window base.
     #[inline(always)]
     fn top_base(&self) -> usize {
         self.frames.last().expect("no active frame").register_base
+    }
+
+    /// The one way to write a register of a frame something has returned
+    /// into, or of a frame below the top (`PRD/GC_PRD.md` §11.1): a value
+    /// delivered after a pop (`Return`, a tail call's delivery), a callee's
+    /// answer once its callback's frames have run above the caller, a jump's
+    /// or a composable invoke's arrival into the frame it reinstated, and the
+    /// register `deliver_before_collecting` clears in the frame a stub
+    /// returns into.
+    ///
+    /// At 4d it writes and nothing more. Stage 7 adds the stack watermark
+    /// here: it lowers the watermark below `frame` first, and sets the
+    /// thread's `ran_since_gc`, so that a minor collection that scans only
+    /// the frames above the watermark sees every reference written below it.
+    #[inline(always)]
+    pub(super) fn return_into(&mut self, frame: ReturnFrame, reg: u16, value: TaggedValue) {
+        let base = match frame {
+            ReturnFrame::Top => self.top_base(),
+            ReturnFrame::TopAt(base) => {
+                debug_assert_eq!(base, self.top_base());
+                base
+            }
+            ReturnFrame::Caller => {
+                let [.., caller, _] = self.frames.as_slice() else {
+                    panic!("no frame below the top");
+                };
+                caller.register_base
+            }
+        };
+        self.registers[base + reg as usize].set(value);
     }
 
     /// The top frame's own write, during its own instruction: `reg` of the
@@ -544,17 +576,29 @@ impl ExecutionState {
         // them, and the frames it appends are the ones the depth sweep follows.
 
         self.frames[outermost.frame_count()].return_reg = dst;
-        let top_base = self
-            .frames
-            .last()
-            .expect("deliver_reg is Some only for a non-empty capture")
-            .register_base;
         let deliver_reg = dc
             .deliver_reg
             .expect("the caller returns Identity when there is no hole");
-        self.registers[top_base + deliver_reg as usize].set(value);
+        // Into the innermost appended frame, which the append reinstated;
+        // `deliver_reg` is Some only for a non-empty capture.
+        self.return_into(ReturnFrame::Top, deliver_reg, value);
         Ok(())
     }
+}
+
+/// The frame an [`ExecutionState::return_into`] writes into (#904).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReturnFrame {
+    /// The top frame, which something has just returned into: the frame
+    /// above it popped, a jump or a composable invoke reinstated it, or a
+    /// callee it called answered here and now.
+    Top,
+    /// [`ReturnFrame::Top`], whose window base the caller holds already:
+    /// the base the dispatch prologue hoisted, which a primitive's call
+    /// keeps across the callback it may make.
+    TopAt(usize),
+    /// The frame below the top: the one the top frame returns into.
+    Caller,
 }
 
 /// Move a count recorded against one wind or handler stack onto another:
