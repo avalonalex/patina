@@ -183,6 +183,7 @@ types promised signatures name, and the raw types a host reaches from them:
 | `patina_core::IntroducedRecord` | raw | what `Environment::introduced_records` answers, for 5c and the tests (#834) |
 | `patina_core::heap::ExternalBytes` | raw | only the raw `ExternalAccounter::new` and `Heap::external_bytes_handle` name it |
 | `patina_core::ScopeAddition` | raw | the macro expander's memo of the scope sets one walk made (#788), branded with its context's lifetime: `Cx::scope_addition`, `add_scope_copying` and `alloc_identifier_adding_scope` name it, so they are raw by the method rule. An identifier's set id (`ScopeSetId`) is core's alone: no crate outside core can name it |
+| `patina_core::RelinkedName` | raw | a relinked spelling's symbol, which no table interns (#790), opaque and branded with its context's lifetime: `Cx::relinked_name` and `alloc_relinked_identifier` name it, so they are raw by the method rule. The other paths #790 added that take or answer an identifier's symbol (`Cx::alloc_identifier_for`, `alloc_source_identifier_for`, `identifier_datum`, `strip_identifiers_memo`, and the `Heap` forms) are raw too, the reader's, the expander's and quote stripping's plumbing: no promised signature names them, and `alloc_identifier` and `alloc_source_identifier` keep their signatures |
 
 `patina-runtime`'s library loader, which `patina-interpreter` does not
 re-export, is workspace-internal, outside the promise (#831): its traits,

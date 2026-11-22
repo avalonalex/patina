@@ -224,20 +224,29 @@ pub struct ScopeId(pub usize);  // fresh from a process-wide counter, never reus
 
 A syntax identifier is a heap object. Since #788 it holds its scope set's
 id in the heap's scope-set table, which keeps each distinct set once and
-frees a set at the first collection after no live identifier carries it:
+frees a set at the first collection after no live identifier carries it, and
+since #790 its spelling's interned symbol:
 
 ```rust
 HeapObjectData::Identifier {
-    name: Rc<str>,        // its spelling (#790 makes it a symbol)
+    name: TaggedValue,    // its spelling's symbol: interned, but for a relinked identifier's
     scopes: ScopeSetId,   // its set's entry in the heap's ScopeSetTable; 0 is the empty set
     written: bool,        // a name the reader wrote, with a symbol's binding behavior
+    relinked: bool,       // `name` is a relinked spelling's symbol, which no table holds
 }
 ```
 
 No code outside `patina-core` names a `ScopeSetId`: `Heap::get_identifier_data`
 lends the set, `Cx::get_identifier_data` answers an owned one, and
-`alloc_identifier` takes a `ScopeSet` and interns it. #791 gives the identifier
-its source id.
+`alloc_identifier` takes a `ScopeSet` and interns it. The accessors answer
+the name's spelling, read through its symbol, and `alloc_identifier` interns
+the spelling it is given; the reader, the copies, template instantiation and
+quote stripping take or answer the symbol itself, with no lookup
+(`docs/GC_DESIGN.md` §9.1). A relinked identifier's spelling is bound nowhere
+and interned nowhere: its name is a symbol object only the identifiers that
+carry it hold, made once per spelling a relinking gives (`Cx::relinked_name`),
+and it stands in quoted data for its spelling interned, as it always did.
+#791 gives the identifier its source id.
 
 A macro object holds a set's id too (#789): `HeapObjectData::Macro.scopes`,
 the union of every scope its `CompiledMacro` holds off the heap

@@ -1200,7 +1200,8 @@ impl<'gc> Cx<'gc> {
     /// it stands for ([`Cx::identifier_datum`]), its name's, with no lookup
     /// of its spelling (#790). The walk of
     /// [`Cx::map_syntax_identifiers_memo`], sharing `replacements` across
-    /// the roots of one form as it does.
+    /// the roots of one form as it does. Raw (`docs/README.md`): quote
+    /// stripping's plumbing.
     pub fn strip_identifiers_memo(
         &mut self,
         root: Value<'gc>,

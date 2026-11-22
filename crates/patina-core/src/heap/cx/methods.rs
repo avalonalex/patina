@@ -86,6 +86,7 @@ impl<'gc> Cx<'gc> {
     }
 
     /// [`Heap::alloc_identifier_for`](crate::Heap::alloc_identifier_for) on this context's heap.
+    /// Raw (`docs/README.md`, #790).
     #[inline]
     pub fn alloc_identifier_for(
         &mut self,
@@ -221,6 +222,7 @@ impl<'gc> Cx<'gc> {
     }
 
     /// [`Heap::alloc_source_identifier_for`](crate::Heap::alloc_source_identifier_for) on this context's heap.
+    /// Raw (`docs/README.md`, #790).
     #[inline]
     pub fn alloc_source_identifier_for(&mut self, symbol: Value<'gc>) -> Value<'gc> {
         let r = self
@@ -426,6 +428,7 @@ impl<'gc> Cx<'gc> {
     }
 
     /// [`Heap::identifier_datum`](crate::Heap::identifier_datum) on this context's heap.
+    /// Raw (`docs/README.md`, #790).
     #[inline]
     pub fn identifier_datum(&mut self, tv: Value<'gc>) -> Option<Value<'gc>> {
         let r = self.heap.borrow_mut().identifier_datum(tv.tagged())?;
