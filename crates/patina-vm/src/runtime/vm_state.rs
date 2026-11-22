@@ -971,8 +971,12 @@ impl VmState {
         reg: u16,
         how: &str,
     ) -> ! {
-        let frames = self.execution.frames();
-        let frame = &frames[frames.len() - 1 - frame_from_top];
+        let frame = self
+            .execution
+            .frames()
+            .iter()
+            .nth_back(frame_from_top)
+            .expect("the reading frame is on the stack");
         panic!(
             "read of a retired register {how}: r{reg} at pc {} of #{} \
              (a liveness map said it was dead; #625, docs/GC_DESIGN.md §11)",
@@ -1926,7 +1930,7 @@ fn maybe_collect(state: &mut VmState, driver: &mut GcDriver) -> bool {
         return false;
     }
     patina_core::census::stack_shape(
-        state.execution.frames().len(),
+        state.execution.depth().frame_count(),
         state.execution.registers().len(),
     );
     state.execution.retire_registers();
@@ -2019,7 +2023,7 @@ pub(crate) fn collect_for_loader(state: &mut VmState) -> bool {
     };
     if state.mutator.no_gc_depth() == 0 {
         patina_core::census::stack_shape(
-            state.execution.frames().len(),
+            state.execution.depth().frame_count(),
             state.execution.registers().len(),
         );
         state.execution.retire_registers();
@@ -2056,7 +2060,7 @@ fn collect_at_call(state: &mut VmState, kind: CollectKind) -> bool {
     };
     if state.mutator.no_gc_depth() == 0 {
         patina_core::census::stack_shape(
-            state.execution.frames().len(),
+            state.execution.depth().frame_count(),
             state.execution.registers().len(),
         );
         state.execution.retire_registers();
@@ -2218,7 +2222,7 @@ fn dispatch_one_instruction(
     // ── Trace: before instruction ────────────────────────────────────
     if let Some(tracer) = state.tracer.clone() {
         let f = state.execution.frames().last().unwrap();
-        let depth = state.execution.frames().len();
+        let depth = state.execution.depth().frame_count();
         tracer.borrow_mut().pre_instruction_with_depth(
             state.execution.registers(),
             f,
