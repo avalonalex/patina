@@ -243,6 +243,19 @@ impl RegisterMaps {
         RegisterMaps { index, maps, width }
     }
 
+    /// Maps that keep every register at every pc of code `instructions`
+    /// long, the pc past the end included: the runtime's stubs' (#905),
+    /// whose register protocols are not compiler output and whose windows
+    /// are at most 64 registers and never grow (`push_stub_frame`,
+    /// `restart_stub`).
+    pub(crate) fn all_live(instructions: usize) -> Self {
+        RegisterMaps {
+            index: vec![0; instructions + 1].into_boxed_slice(),
+            maps: Rc::from([u64::MAX]),
+            width: 1,
+        }
+    }
+
     /// The map of a frame suspended at `pc`, or `None` where no frame can be
     /// suspended: an entry of [`Self::NEVER`], or a pc past the end of the
     /// index.

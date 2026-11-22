@@ -540,7 +540,7 @@ fn written_register(instruction: &Instruction) -> Option<u16> {
         | ResumeForce
         | ResumePrimitive
         | CollectAtCall { .. } => {
-            unreachable!("runtime stubs use conservative register roots")
+            unreachable!("never compiled: the runtime builds its stubs with every register live")
         }
     }
 }

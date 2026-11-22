@@ -18,7 +18,7 @@ use super::control::{
     tail_call_value_with_probe, tail_invoke_delimited, unpack_values, vm_raise_value, wind_step,
 };
 use crate::error::{VmError, frame_refusal};
-use crate::types::code_object::{Arity, CodeObject};
+use crate::types::code_object::{Arity, CodeObject, RegisterMaps};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, VmContinuation, VmDelimitedContinuation,
 };
@@ -462,7 +462,7 @@ impl VmState {
                 num_regs: 0,
                 arity: Arity::Fixed(0),
                 source_map: Vec::new(),
-                register_roots: None,
+                register_roots: Some(RegisterMaps::all_live(0)),
                 links: LinkTable::empty(),
                 live_closures: Cell::new(0),
             }),
