@@ -251,3 +251,53 @@ fn prune_store<T>(store: &std::cell::RefCell<FxHashMap<u64, T>>, visitor: &GcVis
         store.shrink_to_fit();
     }
 }
+
+/// What `test_support::collect_with_a_frame_at_an_unmapped_pc` does (#905):
+/// on a fresh machine, push a frame of code whose map index has no map at
+/// the frame's pc, the pc after a `LoadImmediate`, which is what a compiler
+/// that missed a suspension point would leave; then collect, as a library
+/// load's collection does, outside any run (`collect_for_loader`), which
+/// retires the frame's registers first. A check build panics there, naming
+/// the frame ([`unmapped_pc`]). A plain release build keeps every register
+/// of the frame, though the code's one map calls them all dead; this
+/// answers whether both still hold what they held.
+#[cfg(feature = "test-support")]
+pub(crate) fn collect_with_a_frame_at_an_unmapped_pc() -> bool {
+    use crate::types::code_object::{Arity, CodeObject, RegisterMaps};
+    use crate::types::instruction::Instruction;
+    use std::rc::Rc;
+
+    let mut state = VmState::on_a_fresh_heap();
+    let instructions = vec![
+        Instruction::LoadImmediate {
+            dst: 0,
+            val: TaggedValue::fixnum(1),
+        },
+        Instruction::Move { dst: 1, src: 0 },
+        Instruction::Return { val: 1 },
+    ];
+    let never = RegisterMaps::NEVER;
+    // One map, of no live register, at every pc but 1.
+    let index = vec![0, never, 0, 0].into_boxed_slice();
+    let id = state.load(CodeObject {
+        id: CodeObjectId::label(),
+        name: Some(Rc::from("unmapped-pc-control")),
+        links: patina_core::LinkTable::empty(),
+        live_closures: Cell::new(0),
+        instructions,
+        constants: Vec::new(),
+        num_regs: 2,
+        arity: Arity::Fixed(0),
+        source_map: Vec::new(),
+        register_roots: Some(RegisterMaps::from_parts(index, Rc::from([0]), 1)),
+    });
+    let code = state.code_object(id).expect("the control's code is loaded");
+    state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0);
+    let held = [TaggedValue::fixnum(1), TaggedValue::fixnum(2)];
+    for (reg, value) in (0..).zip(held) {
+        state.set_reg(reg, value);
+    }
+    state.execution.set_pc(1);
+    super::collect_for_loader(&mut state);
+    (0..).zip(held).all(|(reg, value)| state.reg(reg) == value)
+}

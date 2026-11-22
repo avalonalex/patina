@@ -6,6 +6,8 @@
 
 pub(super) mod gc_roots;
 
+#[cfg(feature = "test-support")]
+pub(crate) use gc_roots::collect_with_a_frame_at_an_unmapped_pc;
 use gc_roots::switches;
 
 use super::control::{

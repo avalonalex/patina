@@ -28,6 +28,10 @@
 //! whose value is a constant loaded after it, and the switch drops the
 //! argument before it.
 //!
+//! One more control, of another check: a frame at a pc its code has no map
+//! for panics where a collection retires it (#905,
+//! [`a_check_build_refuses_a_frame_at_an_unmapped_pc`]).
+//!
 //! They run in every check build: every debug `cargo test`, and a release one
 //! with this crate's `gc-check` feature, which the release GC lane enables.
 //! A build without the checks reports them ignored. In such a build the
@@ -121,6 +125,33 @@ control!(
     "read of a retired register as a call's argument",
     FIXED
 );
+
+/// A frame at a pc its code has no register map for (#905): its map index
+/// marks every pc no frame of the code can be suspended at `0xFFFF`, so a
+/// frame found at one means the compiler missed a suspension point, and a
+/// check build refuses it where a collection retires its registers, rather
+/// than guessing which are live. patina-vm builds such a frame by hand on a
+/// machine of its own and collects (`test_support::
+/// collect_with_a_frame_at_an_unmapped_pc`), so no switch is involved.
+#[test]
+#[cfg_attr(
+    not(any(debug_assertions, feature = "gc-check")),
+    ignore = "needs a check build"
+)]
+#[should_panic(expected = "which has no register map")]
+fn a_check_build_refuses_a_frame_at_an_unmapped_pc() {
+    patina_vm::test_support::collect_with_a_frame_at_an_unmapped_pc();
+}
+
+/// A plain release build keeps every register of that frame, although the
+/// code's one map calls them all dead. Compiled out of a check build, where
+/// the frame panics, rather than ignored, so that `--include-ignored` in
+/// CI's controls step runs only controls.
+#[test]
+#[cfg(not(any(debug_assertions, feature = "gc-check")))]
+fn a_plain_release_build_keeps_every_register_of_a_frame_at_an_unmapped_pc() {
+    assert!(patina_vm::test_support::collect_with_a_frame_at_an_unmapped_pc());
+}
 
 /// What the controls see is the switch, not the programs: without it each
 /// one collects where its control does and answers correctly.
