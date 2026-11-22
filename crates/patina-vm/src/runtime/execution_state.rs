@@ -9,7 +9,7 @@ use crate::types::code_object::CodeObject;
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use crate::types::{CallFrame, FrameCode};
+use crate::types::{CallFrame, Depth, FrameCode};
 use patina_core::heap::Heap;
 use patina_core::{SlotVisitor, TaggedValue, Trace};
 use std::cell::Cell;
@@ -119,6 +119,24 @@ impl ExecutionState {
     #[inline(always)]
     pub(super) fn handlers(&self) -> &[ExceptionHandler] {
         &self.exception_handlers
+    }
+
+    /// How deep the frame stack is: the one reading of its depth (#903).
+    /// The dispatch loops stop at it. A count of frames until GC stage 4d.7
+    /// (#908), which makes it a byte offset from the register stack's base
+    /// (`PRD/GC_PRD.md` §11.1) by changing what [`Depth`] holds.
+    #[inline(always)]
+    pub(super) fn depth(&self) -> Depth {
+        Depth::of_frames(self.frames.len())
+    }
+
+    /// The depth the top frame was pushed at: [`Self::depth`] less that
+    /// frame, or [`Depth::BASE`] with no frame. An accessor rather than a
+    /// [`Depth`] method because once depths are byte offsets (4d.7) it is the
+    /// top frame's own offset, which a depth alone does not give.
+    #[inline(always)]
+    pub(super) fn top_frame_depth(&self) -> Depth {
+        self.depth().lowered_by(1)
     }
 
     /// Enter one loaded code object with its matching window. Caller fills

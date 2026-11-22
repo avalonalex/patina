@@ -123,7 +123,7 @@ use crate::error::VmError;
 use crate::types::code_object::{Arity, CodeObject};
 use crate::types::continuation::{ExceptionHandler, VmContinuation, VmDelimitedContinuation};
 use crate::types::instruction::{ControlForm, Instruction, PrimitiveFnId};
-use crate::types::{CallFrame, CodeObjectId};
+use crate::types::{CallFrame, CodeObjectId, Depth};
 use patina_core::continuation::{WindStep, next_wind_step};
 use patina_core::heap::{PromiseState, SharedHeap};
 use patina_core::procedure::Procedure;
@@ -396,9 +396,9 @@ pub(super) fn call_any(
     args: &[TaggedValue],
     return_reg: u16,
 ) -> Result<Option<TaggedValue>, VmError> {
-    let depth_before = state.execution.frames().len();
+    let depth_before = state.execution.depth();
     call_value(state, func_val, args, return_reg)?;
-    if state.execution.frames().len() != depth_before {
+    if state.execution.depth() != depth_before {
         return Ok(None);
     }
     Ok(Some(state.reg(return_reg)))
@@ -1161,8 +1161,9 @@ fn pop_resolved_prompts(state: &mut VmState) {
 /// Requires completed value delivery after a frame return, not an in-flight
 /// transfer. Pops resolved prompts/handlers except at the driver exit depth;
 /// leaves frames, registers and winds untouched.
-pub(super) fn pop_resolved_extents(state: &mut VmState, exit_depth: usize) {
-    if state.execution.frames().len() == exit_depth || state.execution.frames().is_empty() {
+pub(super) fn pop_resolved_extents(state: &mut VmState, exit_depth: Depth) {
+    let depth = state.execution.depth();
+    if depth == exit_depth || depth == Depth::BASE {
         return;
     }
     pop_resolved_prompts(state);
@@ -1922,13 +1923,16 @@ fn set_suspension(state: &mut VmState, base: usize, suspension: Suspension) {
 ///
 /// Requires the stub frame on top. Writes one register of the frame below it
 /// when that frame is this loop's; changes no frame and calls no Scheme.
-pub(super) fn deliver_before_collecting(state: &mut VmState, exit_depth: usize) {
-    let frames = state.execution.frames();
-    let depth = frames.len();
-    if depth < 2 || depth - 1 <= exit_depth {
+pub(super) fn deliver_before_collecting(state: &mut VmState, exit_depth: Depth) {
+    // The frame below the stub is this loop's when the stub sits above the
+    // loop's exit depth.
+    if state.execution.top_frame_depth() <= exit_depth {
         return;
     }
-    let slot = frames[depth - 2].register_base + frames[depth - 1].return_reg as usize;
+    let [.., caller, stub] = state.execution.frames() else {
+        return;
+    };
+    let slot = caller.register_base + stub.return_reg as usize;
     state.execution.registers()[slot].set(TaggedValue::UNSPECIFIED);
 }
 
@@ -2052,7 +2056,7 @@ fn vm_step(
             // a raise in a library body can reach a handler of the program's
             // that escapes. The frames every caller is about to push onto or
             // rewrite are then gone (#482).
-            let depth_before = state.execution.frames().len();
+            let depth_before = state.execution.depth();
             #[expect(
                 clippy::disallowed_methods,
                 reason = "holds `kept`, the primitive's state, and the step's `env` across the \
@@ -2125,7 +2129,7 @@ fn tail_start_resumable(
     state: &mut VmState,
     index: usize,
     args: &[TaggedValue],
-    exit_depth: usize,
+    exit_depth: Depth,
 ) -> Result<Option<TaggedValue>, VmError> {
     let registry = Rc::clone(state.primitive_registry());
     let ctx = VmApplyContext {
@@ -2139,7 +2143,7 @@ fn tail_start_resumable(
 
     match step {
         VmStep::Done(value) => {
-            if state.execution.frames().len() == exit_depth {
+            if state.execution.depth() == exit_depth {
                 return Ok(Some(value));
             }
             state.set_reg(return_reg, value);
@@ -2404,7 +2408,7 @@ pub(super) enum Reentry {
 /// it performs no dynamic-stack cleanup or transaction rollback.
 pub(super) fn across_reentry<T>(
     state: &mut VmState,
-    depth_before: usize,
+    depth_before: Depth,
     body: impl FnOnce(&mut VmState) -> Result<T, VmError>,
     value_of: impl FnOnce(&T) -> TaggedValue,
 ) -> Result<T, Reentry> {
@@ -2440,7 +2444,7 @@ pub(super) fn across_reentry<T>(
     // depth test stays as the rule it always was, for a stack cut below the
     // boundary by a route that is not an arrival.
     let left = state.reentry_kept.is_some_and(|kept| kept <= level);
-    if left || state.execution.frames().len() < depth_before {
+    if left || state.execution.depth() < depth_before {
         // Any error here belongs to a call that is being abandoned; what
         // resumes is the continuation's value, not this one's outcome. The
         // loop that saw it arrive has usually parked it already.
@@ -2504,7 +2508,7 @@ impl patina_primitives::ApplyContext for VmApplyContext {
     ) -> Result<TaggedValue, patina_primitives::EvalError> {
         // SAFETY: we have exclusive access (see struct doc comment).
         let state = unsafe { &mut *self.state };
-        let depth_before = state.execution.frames().len();
+        let depth_before = state.execution.depth();
         across_reentry(
             state,
             depth_before,
@@ -2530,7 +2534,7 @@ impl patina_primitives::ApplyContext for VmApplyContext {
         env: &Rc<patina_core::environment::Environment>,
     ) -> Result<TaggedValue, patina_primitives::EvalError> {
         let state = unsafe { &mut *self.state };
-        let depth_before = state.execution.frames().len();
+        let depth_before = state.execution.depth();
         across_reentry(state, depth_before, |s| vm_eval_expr(s, expr, env), |v| *v)
             .map_err(Reentry::into_eval_error)
     }
@@ -2549,7 +2553,7 @@ impl patina_primitives::ApplyContext for VmApplyContext {
         let state = unsafe { &mut *self.state };
         // A library is not a `TaggedValue`; an escape out of a load resumes
         // with whatever the continuation carried, not with the library.
-        let depth_before = state.execution.frames().len();
+        let depth_before = state.execution.depth();
         across_reentry(
             state,
             depth_before,
@@ -2639,7 +2643,7 @@ fn run_apply_proc(
     proc: TaggedValue,
     args: &[TaggedValue],
 ) -> Result<TaggedValue, VmError> {
-    let depth_before = state.execution.frames().len();
+    let depth_before = state.execution.depth();
 
     // Use a scratch return register beyond the current frame's live registers.
     let return_reg = state.execution.scratch_return_reg();
@@ -3378,7 +3382,7 @@ pub(super) fn tail_invoke_delimited(
     cont: TaggedValue,
     dc: Rc<VmDelimitedContinuation>,
     value: TaggedValue,
-    exit_depth: usize,
+    exit_depth: Depth,
     window: AssertNoGc,
 ) -> Result<Option<TaggedValue>, VmError> {
     let frame = state.execution.pop_frame();
@@ -3392,7 +3396,8 @@ pub(super) fn tail_invoke_delimited(
         // abort truncates to its prompt, which may be below this loop's exit
         // depth, and the frame just popped can be the last one.
         DelimitedInvoke::Identity(window) => {
-            if state.execution.frames().len() == exit_depth || state.execution.frames().is_empty() {
+            let depth = state.execution.depth();
+            if depth == exit_depth || depth == Depth::BASE {
                 return Ok(Some(value));
             }
             state.set_reg(return_reg, value);
@@ -3596,7 +3601,7 @@ pub(super) fn tail_call_value(
     state: &mut VmState,
     func_val: TaggedValue,
     arg_vals: &[TaggedValue],
-    exit_depth: usize,
+    exit_depth: Depth,
 ) -> Result<Option<TaggedValue>, VmError> {
     // Same closure-first probe as `call_value` — see there for why probe
     // order is safe.
@@ -3616,7 +3621,7 @@ pub(super) fn tail_call_value_with_probe(
     func_val: TaggedValue,
     closure_code_id: Option<u64>,
     arg_vals: &[TaggedValue],
-    exit_depth: usize,
+    exit_depth: Depth,
 ) -> Result<Option<TaggedValue>, VmError> {
     if closure_code_id.is_none() {
         // Intercept higher-order control primitives in tail position.
@@ -3638,7 +3643,7 @@ pub(super) fn tail_call_value_with_probe(
             let frame = state.execution.pop_frame();
             let return_reg = frame.return_reg;
 
-            let depth = state.execution.frames().len();
+            let depth = state.execution.depth();
             // Now at depth N-1. Handle with dst = return_reg (slot in frame
             // N-2). (At exit depth, return_reg is still the right dst — not
             // 0, which could clobber live registers like MutableCell
@@ -3653,10 +3658,10 @@ pub(super) fn tail_call_value_with_probe(
             // the popped frame's extents close now, as after `Return`; a
             // frame it did push closes them when that frame returns. Then,
             // if this is the exit depth, the enclosing loop is done.
-            if state.execution.frames().len() == depth {
+            if state.execution.depth() == depth {
                 pop_resolved_extents(state, exit_depth);
             }
-            if state.execution.frames().len() == exit_depth {
+            if state.execution.depth() == exit_depth {
                 let result = state.reg(return_reg);
                 return Ok(Some(result));
             }
@@ -3678,7 +3683,7 @@ pub(super) fn tail_call_value_with_probe(
             }
             let result = call_primitive_proc(state, &prim, arg_vals)?;
             let frame = state.execution.pop_frame();
-            if state.execution.frames().len() == exit_depth {
+            if state.execution.depth() == exit_depth {
                 return Ok(Some(result));
             }
             let return_reg = frame.return_reg;
@@ -3710,7 +3715,7 @@ pub(super) fn tail_call_value_with_probe(
         if let Some(result) = try_call_parameter(state, func_val, arg_vals) {
             let result = result?;
             let frame = state.execution.pop_frame();
-            if state.execution.frames().len() == exit_depth {
+            if state.execution.depth() == exit_depth {
                 return Ok(Some(result));
             }
             let return_reg = frame.return_reg;
@@ -3816,7 +3821,7 @@ pub(super) fn exec_call_primitive(
     link: LinkIdx,
     arg_vals: &[TaggedValue],
     dst: u16,
-    exit_depth: usize,
+    exit_depth: Depth,
 ) -> Result<Option<TaggedValue>, VmError> {
     if state.is_primitive_shadowed(func_id.0 as usize) {
         // The site's operand is read only here, through the table of the

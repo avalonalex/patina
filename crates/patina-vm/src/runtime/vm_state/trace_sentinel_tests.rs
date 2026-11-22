@@ -36,7 +36,7 @@ use crate::types::code_object::{Arity, CodeObject};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use crate::types::{CallFrame, CodeObjectId, FrameCode, Instruction};
+use crate::types::{CallFrame, CodeObjectId, Depth, FrameCode, Instruction};
 
 /// Code with these constants and nothing else.
 fn code_holding(constants: Vec<TaggedValue>) -> Rc<CodeObject> {
@@ -858,7 +858,7 @@ fn a_nested_loop_puts_back_the_running_code_when_it_returns() {
         reason = "a nested loop, under its `NoGcScope`, which collects nothing: the sentinels the \
                   test holds across it and reads back after stay where they are"
     )]
-    let exit = run_loop_until_outcome(&mut state, 0, None);
+    let exit = run_loop_until_outcome(&mut state, Depth::BASE, None);
     assert!(matches!(exit, Ok(LoopExit::Returned(_))));
     assert_eq!(state.execution.running(), b.0, "B's id, put back");
 
@@ -886,7 +886,7 @@ fn a_nested_loop_puts_back_the_running_code_when_it_fails() {
         reason = "a nested loop, under its `NoGcScope`, which collects nothing: the sentinels the \
                   test holds across it and reads back after stay where they are"
     )]
-    let exit = run_loop_until_outcome(&mut state, 0, None);
+    let exit = run_loop_until_outcome(&mut state, Depth::BASE, None);
     assert!(exit.is_err(), "a call of the empty list, with no handler");
     assert_eq!(state.execution.running(), b.0, "B's id, put back");
 
