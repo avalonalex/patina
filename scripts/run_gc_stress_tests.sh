@@ -474,7 +474,11 @@ fi
 # trigger comes later, 368 collections without stress where there were 385
 # (385 again with that estimate alone put back at 612), and 10653 at 4096
 # as before, the minimum left; every other target read as it did, at its
-# interval and without stress)
+# interval and without stress; and raise_site_matrix pinned 2026-11-22
+# with #901's raise-site tests, 59546 collections at 16 and 55710 without
+# stress, nearly all of them its zeal interpreters', which collect at every
+# outermost safe point whatever the lane's variable says, so its minimum
+# is midway between the two)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -490,6 +494,7 @@ TARGETS=(
     "library_loading 16 46 9"                 # 129 (0): see the header
     "macro_definition_env 16 16626 62"        # 41070 (129): see the header
     "owned_handles 16 62714 9"                # 125648 (14)
+    "raise_site_matrix 16 57628 6"            # 59546 (55710)
     "rooted_loading 16 371 6"                 # 1269 (10)
     "vm_callprimitive 16 545 23"              # 1899 (0)
     "scheme_suite 4096 1534 11"               # 10653 (368): see the header

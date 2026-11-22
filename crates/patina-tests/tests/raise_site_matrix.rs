@@ -121,6 +121,11 @@
 //! program's `+`'s entry with the site's frame at the `AddImm`'s pc
 //! ([`rows_score_as_recorded_under_zeal`]).
 //!
+//! The file is a target of the per-PR GC stress lane
+//! (`scripts/run_gc_stress_tests.sh`), at 16, which pins its test count and
+//! a floor of collections, nearly all of them the zeal interpreters', so
+//! that it cannot pass without collecting.
+//!
 //! # The oracles
 //!
 //! Measured 2026-11-22 against **chibi 0.12, Gauche 0.9.15 and Chez Scheme
