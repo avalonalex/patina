@@ -273,6 +273,21 @@ pub struct ScopeAddition<'gc> {
     brand: PhantomData<fn(&'gc ()) -> &'gc ()>,
 }
 
+/// A relinked spelling's symbol (#837, #790), made by [`Cx::relinked_name`]
+/// for [`Cx::alloc_relinked_identifier`]: a symbol object the heap's intern
+/// table does not hold, so that a spelling bound nowhere is no name to any
+/// reader and is not kept for good. Opaque, so that no such symbol becomes
+/// a datum: the identifiers that carry it hold it, and stand in quoted data
+/// for their spelling interned ([`Cx::identifier_datum`]).
+///
+/// Branded with its context's lifetime, so it cannot outlive the context,
+/// beneath which nothing collects (#702, #707). Raw (`docs/README.md`), as
+/// are the methods that name it: the desugarer's relinking plumbing.
+#[derive(Clone, Copy)]
+pub struct RelinkedName<'gc> {
+    name: Value<'gc>,
+}
+
 /// A promise's contents, as values: what [`Cx::promise_state`] answers and
 /// [`Cx::alloc_promise`] takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1113,19 +1128,46 @@ impl<'gc> Cx<'gc> {
         Some(self.brand(copy))
     }
 
-    /// An identifier named `name` whose set is `addition`'s scope alone:
-    /// the macro expander's mark of a substituted symbol, its set interned
-    /// once in the memo's life (#788). Raw: it names the raw
-    /// [`ScopeAddition`].
+    /// An identifier for the symbol `symbol` whose set is `addition`'s
+    /// scope alone: the macro expander's mark of a substituted symbol, which
+    /// carries the symbol itself (#790), its set interned once in the memo's
+    /// life (#788). Raw: it names the raw [`ScopeAddition`].
     pub fn alloc_identifier_adding_scope(
         &mut self,
         addition: &mut ScopeAddition<'gc>,
-        name: Rc<str>,
+        symbol: Value<'gc>,
     ) -> Value<'gc> {
-        let word =
-            self.heap
-                .borrow_mut()
-                .identifier_in_scope(&mut addition.made, addition.scope, name);
+        let word = self.heap.borrow_mut().identifier_in_scope(
+            &mut addition.made,
+            addition.scope,
+            symbol.tagged(),
+        );
+        self.brand(word)
+    }
+
+    /// The symbol a relinked spelling's identifiers carry (#790): made once
+    /// for each spelling a relinking gives, for every occurrence it renames
+    /// ([`Cx::alloc_relinked_identifier`]). No table holds it. Raw: it
+    /// answers the raw [`RelinkedName`].
+    pub fn relinked_name(&mut self, spelling: Rc<str>) -> RelinkedName<'gc> {
+        let word = self.heap.borrow_mut().alloc_relinked_name(spelling);
+        RelinkedName {
+            name: self.brand(word),
+        }
+    }
+
+    /// An identifier relinking renamed (#837): `name`'s spelling, which is
+    /// bound nowhere and interned nowhere (#790), with the set `scopes`. Raw:
+    /// it names the raw [`RelinkedName`].
+    pub fn alloc_relinked_identifier(
+        &mut self,
+        name: &RelinkedName<'gc>,
+        scopes: ScopeSet,
+    ) -> Value<'gc> {
+        let word = self
+            .heap
+            .borrow_mut()
+            .alloc_relinked_identifier(name.name.tagged(), scopes);
         self.brand(word)
     }
 

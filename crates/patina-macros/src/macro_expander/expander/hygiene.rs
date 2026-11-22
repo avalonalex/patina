@@ -8,7 +8,6 @@ use crate::macro_expander::Identifier;
 use crate::macro_expander::utils::list_to_vec_with_tail;
 use patina_core::walk::OpenNodes;
 use patina_core::{Cx, ScopeAddition, Value};
-use std::rc::Rc;
 
 impl<'gc> Expander<'gc> {
     /// Rename an identifier for hygiene using Racket-style scope sets
@@ -160,10 +159,10 @@ impl<'gc> Expander<'gc> {
             return Mark::Done(copy);
         }
 
-        // Check if it's a symbol - convert to identifier with macro_scope
-        let name = cx.get_symbol_name(tv).map(|name| Rc::<str>::from(&*name));
-        if let Some(name) = name {
-            return Mark::Done(cx.alloc_identifier_adding_scope(addition, name));
+        // Check if it's a symbol - convert to identifier with macro_scope,
+        // which carries the symbol itself (#790)
+        if cx.is_symbol(tv) {
+            return Mark::Done(cx.alloc_identifier_adding_scope(addition, tv));
         }
 
         // Pairs: walk the *form*, not each tail.

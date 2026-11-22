@@ -368,7 +368,8 @@ fn a_scope_addition_interns_each_set_once_across_calls() {
                     .expect("an identifier")
             })
             .collect();
-        let made = cx.alloc_identifier_adding_scope(&mut addition, "d".into());
+        let d = cx.intern_symbol("d");
+        let made = cx.alloc_identifier_adding_scope(&mut addition, d);
         assert_eq!(cx.add_scope_copying(&mut addition, Value::fixnum(1)), None);
         assert_eq!(set_id_of(cx, copies[0]), set_id_of(cx, copies[1]));
         assert_eq!(set_id_of(cx, copies[2]), set_id_of(cx, copies[3]));
@@ -387,5 +388,99 @@ fn a_scope_addition_interns_each_set_once_across_calls() {
         );
         assert_eq!(cx.get_identifier_data(first).unwrap().1, set);
         assert_eq!(cx.heap.borrow().scope_sets.len(), held + 2);
+    });
+}
+
+/// The word the identifier `v` holds as its name (#790).
+fn name_of(cx: &Cx<'_>, v: Value<'_>) -> TaggedValue {
+    match cx.heap.borrow().get_object(v.tagged()) {
+        HeapObjectData::Identifier { name, .. } => *name,
+        other => panic!("not an identifier: {other:?}"),
+    }
+}
+
+/// An identifier's name is its spelling's interned symbol (#790): each
+/// allocator interns it once, every identifier of one spelling holds the
+/// one word, a copy holds its original's, and quote stripping answers that
+/// word with no lookup. `eqv?` answers as it did, by the words.
+#[test]
+fn an_identifiers_name_is_its_spellings_interned_symbol() {
+    with_cx(|cx| {
+        let symbols = cx.heap.borrow().stats().symbols;
+        let x = cx.intern_symbol("x");
+        let scoped = cx.alloc_identifier("x".into(), ScopeSet::singleton(ScopeId(61)));
+        let written = cx.alloc_source_identifier("x".into());
+        let read = cx.alloc_source_identifier_for(x);
+        let made = cx.alloc_identifier_for(x, ScopeSet::new());
+        let y = cx.alloc_identifier("y".into(), ScopeSet::new());
+        let mut addition = cx.scope_addition(ScopeId(62));
+        let copy = cx.add_scope_copying(&mut addition, written).unwrap();
+        let marked = cx.alloc_identifier_adding_scope(&mut addition, x);
+        for v in [scoped, written, read, made, copy, marked] {
+            assert_eq!(name_of(cx, v), x.tagged());
+            assert_eq!(cx.identifier_datum(v), Some(x));
+            assert!(cx.values_eqv(v, x) && cx.values_eqv(x, v) && cx.values_eqv(v, scoped));
+            assert!(!cx.values_eqv(v, y));
+        }
+        assert_eq!(cx.identifier_datum(x), None, "a symbol is no identifier");
+        assert_eq!(cx.get_identifier_data(copy).unwrap().0.as_ref(), "x");
+        assert_eq!(cx.format_brief(marked), "x");
+        // `x` and `y`, once each.
+        assert_eq!(cx.heap.borrow().stats().symbols, symbols + 2);
+    });
+}
+
+/// A relinked identifier's name is a symbol no table holds (#837, #790):
+/// relinking adds no symbol, two relinked identifiers of one spelling are
+/// `eqv?` to each other and to the interned symbol of it whether or not
+/// they share a name, as every identifier of one spelling was, a copy stays
+/// relinked, and in quoted data one stands for its spelling interned, as
+/// quote stripping always gave it.
+#[test]
+fn a_relinked_identifiers_spelling_stays_uninterned() {
+    with_cx(|cx| {
+        let symbols = cx.heap.borrow().stats().symbols;
+        let name = cx.relinked_name("secret.7-3".into());
+        let other_name = cx.relinked_name("secret.7-3".into());
+        let first = cx.alloc_relinked_identifier(&name, ScopeSet::singleton(ScopeId(71)));
+        let second = cx.alloc_relinked_identifier(&name, ScopeSet::new());
+        let elsewhere = cx.alloc_relinked_identifier(&other_name, ScopeSet::new());
+        let mut addition = cx.scope_addition(ScopeId(72));
+        let copy = cx.add_scope_copying(&mut addition, first).unwrap();
+        assert_eq!(name_of(cx, first), name_of(cx, second));
+        assert_ne!(name_of(cx, first), name_of(cx, elsewhere));
+        assert_eq!(name_of(cx, copy), name_of(cx, first));
+        assert!(
+            matches!(
+                cx.heap.borrow().get_object(copy.tagged()),
+                HeapObjectData::Identifier { relinked: true, .. }
+            ),
+            "a copy of a relinked identifier is relinked"
+        );
+        assert_eq!(
+            cx.heap.borrow().stats().symbols,
+            symbols,
+            "relinking interns nothing"
+        );
+        assert_eq!(
+            cx.get_identifier_data(elsewhere).unwrap().0.as_ref(),
+            "secret.7-3"
+        );
+        assert_eq!(
+            &*cx.get_symbol_or_identifier_name(copy).unwrap(),
+            "secret.7-3"
+        );
+        assert_eq!(cx.format_brief(first), "secret.7-3");
+        assert!(cx.values_eqv(first, second) && cx.values_eqv(first, elsewhere));
+        let plain = cx.alloc_identifier("secret".into(), ScopeSet::new());
+        assert!(!cx.values_eqv(first, plain) && !cx.values_eqv(plain, first));
+        // Stripped, it is its spelling's interned symbol, the one a reader
+        // of the spelling gets, and so `eqv?` to every relinked identifier
+        // of it.
+        let datum = cx.identifier_datum(elsewhere).unwrap();
+        assert_eq!(cx.intern_symbol("secret.7-3"), datum);
+        assert_eq!(cx.identifier_datum(copy), Some(datum));
+        assert!(cx.values_eqv(datum, first) && cx.values_eqv(second, datum));
+        assert_eq!(cx.heap.borrow().stats().symbols, symbols + 2);
     });
 }

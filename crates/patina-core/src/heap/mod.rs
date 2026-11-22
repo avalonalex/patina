@@ -371,12 +371,21 @@ pub enum HeapObjectData {
         fields: Rc<Interior<Vec<TaggedValue>>>,
     },
     Identifier {
-        name: Rc<str>,
+        /// Its spelling's symbol (#790): the interned symbol of the
+        /// spelling, which the identifier's trace visits, except a relinked
+        /// identifier's (`relinked`).
+        name: TaggedValue,
         /// The id of its scope set's entry in the heap's scope-set table
         /// (#788), which holds each set once.
         scopes: ScopeSetId,
         /// A written program name, which has the binding behavior of a symbol.
         written: bool,
+        /// Whether `name` is a relinked spelling's symbol (#837): a symbol
+        /// object the intern table does not hold, so that a spelling bound
+        /// nowhere is no name to any reader and a redefined library's
+        /// spellings are not kept for good (#790). Only the identifiers that
+        /// carry it hold it, and its trace keeps it alive.
+        relinked: bool,
     },
     Continuation(Rc<crate::continuation::CpsContinuation>),
     Parameter {
@@ -1671,24 +1680,90 @@ impl Heap {
         }
     }
 
-    /// Allocate a native identifier with scope set: interned in the heap's
-    /// scope-set table (#788), so that the identifier holds its entry's id.
+    /// Allocate a native identifier with scope set: its spelling interned
+    /// as a symbol, whose word the identifier holds (#790), and its set in
+    /// the heap's scope-set table (#788), whose entry's id it holds.
     pub fn alloc_identifier(
         &mut self,
         name: Rc<str>,
         scopes: crate::scope::ScopeSet,
     ) -> TaggedValue {
+        let symbol = self.intern_symbol(&name);
+        self.alloc_identifier_for(symbol, scopes)
+    }
+
+    /// [`Heap::alloc_identifier`] for a spelling already interned: the
+    /// identifier holds `symbol`, an interned symbol of this heap, with no
+    /// lookup of its spelling (#790).
+    pub fn alloc_identifier_for(
+        &mut self,
+        symbol: TaggedValue,
+        scopes: crate::scope::ScopeSet,
+    ) -> TaggedValue {
         let scopes = self.scope_sets.intern(scopes);
-        self.alloc_identifier_with_set(name, scopes)
+        self.alloc_identifier_with_set(symbol, scopes)
     }
 
     /// A distinct program occurrence with ordinary source-symbol semantics:
-    /// the empty set, id 0, with no lookup.
+    /// the empty set, id 0, with no lookup, and its spelling interned
+    /// (#790).
     pub fn alloc_source_identifier(&mut self, name: Rc<str>) -> TaggedValue {
+        let symbol = self.intern_symbol(&name);
+        self.alloc_source_identifier_for(symbol)
+    }
+
+    /// [`Heap::alloc_source_identifier`] for a spelling already interned:
+    /// the reader's, which interns each spelling it reads once and makes an
+    /// identifier for each occurrence (#790).
+    pub fn alloc_source_identifier_for(&mut self, symbol: TaggedValue) -> TaggedValue {
+        debug_assert!(
+            self.is_interned_symbol(symbol),
+            "an identifier's name is an interned symbol of its heap"
+        );
         self.alloc_object(HeapObjectData::Identifier {
-            name,
+            name: symbol,
             scopes: ScopeSetId::EMPTY,
             written: true,
+            relinked: false,
+        })
+    }
+
+    /// Whether `value` is a symbol the heap's intern table holds: the
+    /// identifier allocators' assertion (#790).
+    pub(crate) fn is_interned_symbol(&self, value: TaggedValue) -> bool {
+        self.get_symbol_name(value).is_some_and(|name| {
+            self.symbol_table
+                .get(name)
+                .is_some_and(|&index| index == value.heap_index())
+        })
+    }
+
+    /// A relinked spelling's symbol (#837, #790): a symbol object the intern
+    /// table does not hold, for [`Heap::alloc_relinked_identifier`]. Nothing
+    /// but the identifiers that carry it holds it, so the sweep frees it
+    /// with them and `symbols` never counts it.
+    pub(crate) fn alloc_relinked_name(&mut self, spelling: Rc<str>) -> TaggedValue {
+        self.alloc_object(HeapObjectData::Symbol(spelling))
+    }
+
+    /// An identifier for a relinked spelling, whose symbol `name` is
+    /// [`Heap::alloc_relinked_name`]'s: the one identifier whose name no
+    /// table interns (#790).
+    pub(crate) fn alloc_relinked_identifier(
+        &mut self,
+        name: TaggedValue,
+        scopes: crate::scope::ScopeSet,
+    ) -> TaggedValue {
+        debug_assert!(
+            self.get_symbol_name(name).is_some() && !self.is_interned_symbol(name),
+            "a relinked identifier's name is a symbol the intern table does not hold"
+        );
+        let scopes = self.scope_sets.intern(scopes);
+        self.alloc_object(HeapObjectData::Identifier {
+            name,
+            scopes,
+            written: false,
+            relinked: true,
         })
     }
 
@@ -1748,17 +1823,38 @@ impl Heap {
         self.scope_sets.carries(scope)
     }
 
-    /// An identifier named `name` whose set is the table's entry `scopes`,
-    /// interned already (#788): a walk's copy, through its memo.
+    /// An identifier for the interned symbol `name` whose set is the
+    /// table's entry `scopes`, interned already (#788).
     pub(crate) fn alloc_identifier_with_set(
         &mut self,
-        name: Rc<str>,
+        name: TaggedValue,
         scopes: ScopeSetId,
     ) -> TaggedValue {
+        self.alloc_identifier_copy(name, scopes, false)
+    }
+
+    /// A walk's copy of an identifier (#788): its name's word, `relinked`
+    /// as the original's was (#790), and the set `scopes`, interned
+    /// already. The copy is no written name.
+    pub(crate) fn alloc_identifier_copy(
+        &mut self,
+        name: TaggedValue,
+        scopes: ScopeSetId,
+        relinked: bool,
+    ) -> TaggedValue {
+        debug_assert!(
+            if relinked {
+                self.get_symbol_name(name).is_some() && !self.is_interned_symbol(name)
+            } else {
+                self.is_interned_symbol(name)
+            },
+            "an identifier's name is an interned symbol of its heap, or a relinked one's symbol"
+        );
         self.alloc_object(HeapObjectData::Identifier {
             name,
             scopes,
             written: false,
+            relinked,
         })
     }
 
@@ -2394,10 +2490,39 @@ impl Heap {
         }
         match self.get_object(tv) {
             HeapObjectData::Identifier { name, scopes, .. } => {
-                Some((name, self.scope_sets.get(*scopes)))
+                Some((self.symbol_spelling(*name), self.scope_sets.get(*scopes)))
             }
             _ => None,
         }
+    }
+
+    /// The spelling of `symbol`, an identifier's name (#790).
+    #[inline]
+    pub(crate) fn symbol_spelling(&self, symbol: TaggedValue) -> &Rc<str> {
+        match self.get_object(symbol) {
+            HeapObjectData::Symbol(spelling) => spelling,
+            _ => unreachable!("an identifier's name is a symbol"),
+        }
+    }
+
+    /// The symbol the identifier `tv` stands for in quoted data (#790): its
+    /// name's, with no lookup, or `None` if `tv` is no identifier. A relinked
+    /// identifier's spelling is interned here, as quote stripping always
+    /// interned every spelling, so that the datum is the symbol any reader
+    /// of that spelling gets.
+    pub fn identifier_datum(&mut self, tv: TaggedValue) -> Option<TaggedValue> {
+        if !tv.is_object() {
+            return None;
+        }
+        let HeapObjectData::Identifier { name, relinked, .. } = self.get_object(tv) else {
+            return None;
+        };
+        let name = *name;
+        if !*relinked {
+            return Some(name);
+        }
+        let spelling = Rc::clone(self.symbol_spelling(name));
+        Some(self.intern_symbol(&spelling))
     }
 
     /// Get identifier data (name and scopes) from a native Identifier object (owned version)
@@ -2551,7 +2676,7 @@ impl Heap {
         }
         match self.get_object(tv) {
             HeapObjectData::Symbol(s) => Some(s.as_ref()),
-            HeapObjectData::Identifier { name, .. } => Some(name.as_ref()),
+            HeapObjectData::Identifier { name, .. } => Some(self.symbol_spelling(*name)),
             _ => None,
         }
     }
@@ -3168,16 +3293,34 @@ impl Heap {
             // Symbol comparison - should have same raw if same symbol (interned)
             // Already checked by raw comparison above
             (HeapObjectData::Symbol(a_sym), HeapObjectData::Symbol(b_sym)) => a_sym == b_sym,
-            // Native Identifier comparison (eqv? compares by name only, like symbols)
+            // Native Identifier comparison (eqv? compares by name only, like
+            // symbols): by the names' words, since each spelling is one
+            // interned symbol (#790). A relinked identifier's name is a
+            // symbol no table interns, which shares its spelling with
+            // another relinked identifier's, or with the symbol quote
+            // stripping interns, so its spelling is compared, as every
+            // identifier's was before.
             (
-                HeapObjectData::Identifier { name: a, .. },
-                HeapObjectData::Identifier { name: b, .. },
-            ) => a.as_ref() == b.as_ref(),
-            (HeapObjectData::Symbol(a), HeapObjectData::Identifier { name: b, .. }) => {
-                a.as_ref() == b.as_ref()
+                HeapObjectData::Identifier {
+                    name: a,
+                    relinked: a_relinked,
+                    ..
+                },
+                HeapObjectData::Identifier {
+                    name: b,
+                    relinked: b_relinked,
+                    ..
+                },
+            ) => {
+                a == b
+                    || ((*a_relinked || *b_relinked)
+                        && self.symbol_spelling(*a) == self.symbol_spelling(*b))
             }
-            (HeapObjectData::Identifier { name: a, .. }, HeapObjectData::Symbol(b)) => {
-                a.as_ref() == b.as_ref()
+            (HeapObjectData::Symbol(_), HeapObjectData::Identifier { name, relinked, .. }) => {
+                *name == a || (*relinked && self.symbol_spelling(a) == self.symbol_spelling(*name))
+            }
+            (HeapObjectData::Identifier { name, relinked, .. }, HeapObjectData::Symbol(_)) => {
+                *name == b || (*relinked && self.symbol_spelling(*name) == self.symbol_spelling(b))
             }
             // Procedure - pointer equality for eqv?
             (HeapObjectData::Procedure(a), HeapObjectData::Procedure(b)) => Rc::ptr_eq(a, b),

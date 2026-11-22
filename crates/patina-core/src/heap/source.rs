@@ -98,16 +98,17 @@ impl Heap {
                     name,
                     scopes,
                     written,
+                    relinked,
                 } = heap.get_object(value)
                 else {
                     unreachable!("the walk hands over identifiers only");
                 };
-                if *written || !picks(name, heap.scope_sets.get(*scopes)) {
+                if *written || !picks(heap.symbol_spelling(*name), heap.scope_sets.get(*scopes)) {
                     return None;
                 }
-                let (name, from) = (Rc::clone(name), *scopes);
+                let (name, from, relinked) = (*name, *scopes, *relinked);
                 let to = heap.scope_sets.edited(&mut made, from, &rescope);
-                Some(heap.alloc_identifier_with_set(name, to))
+                Some(heap.alloc_identifier_copy(name, to, relinked))
             },
         )
     }
@@ -115,7 +116,7 @@ impl Heap {
     /// A copy of the identifier `value` with `scope` added to its set, the
     /// set made through `made` (#788), or `None` if `value` is no
     /// identifier: `Cx::add_scope_copying`'s. The copy is no written name,
-    /// whatever the original was.
+    /// whatever the original was, and holds the original's name (#790).
     pub(crate) fn identifier_adding_scope(
         &mut self,
         made: &mut ScopeSetMemo,
@@ -125,28 +126,35 @@ impl Heap {
         if !value.is_object() {
             return None;
         }
-        let HeapObjectData::Identifier { name, scopes, .. } = self.get_object(value) else {
+        let HeapObjectData::Identifier {
+            name,
+            scopes,
+            relinked,
+            ..
+        } = self.get_object(value)
+        else {
             return None;
         };
-        let (name, from) = (Rc::clone(name), *scopes);
+        let (name, from, relinked) = (*name, *scopes, *relinked);
         let to = self
             .scope_sets
             .edited(made, from, |set| set.with_scope(scope));
-        Some(self.alloc_identifier_with_set(name, to))
+        Some(self.alloc_identifier_copy(name, to, relinked))
     }
 
-    /// An identifier named `name` whose set is `scope` alone: the empty
-    /// set's with `scope` added, made through `made` (#788).
+    /// An identifier for the interned symbol `symbol` whose set is `scope`
+    /// alone: the empty set's with `scope` added, made through `made`
+    /// (#788).
     pub(crate) fn identifier_in_scope(
         &mut self,
         made: &mut ScopeSetMemo,
         scope: ScopeId,
-        name: Rc<str>,
+        symbol: TaggedValue,
     ) -> TaggedValue {
         let to = self
             .scope_sets
             .edited(made, ScopeSetId::EMPTY, |set| set.with_scope(scope));
-        self.alloc_identifier_with_set(name, to)
+        self.alloc_identifier_with_set(symbol, to)
     }
 
     /// The walk under [`Heap::map_syntax_identifiers_memo`] and
@@ -284,6 +292,9 @@ mod tests {
         heap.record_source(live, map.location("test.scm", 1, 1, 1, 5));
         heap.record_source(dead, map.location("test.scm", 1, 6, 1, 10));
         let retained = heap.source(dead).unwrap().clone();
+        // The new identifier's spelling is interned first, so that its
+        // symbol, which the intern table keeps, takes no freed slot (#790).
+        heap.intern_symbol("new");
         MarkSweepCollector::new().collect(&mut heap, &[&Keep(live)]);
         assert!(heap.source(live).is_some());
         assert!(heap.source(dead).is_none());
