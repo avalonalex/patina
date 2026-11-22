@@ -57,6 +57,7 @@ pub use account::{
     PAIR_SLOT_BYTES, STRING_SLOT_BYTES, VECTOR_SLOT_BYTES, descriptor_limit,
     descriptor_pressure_threshold,
 };
+pub use check::CheckCell;
 use check::SlotChecks;
 pub use finalize::teardown;
 use handles::{HandleTable, Owned, OwnedEnvironment};
