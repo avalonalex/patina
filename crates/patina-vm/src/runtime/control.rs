@@ -2765,6 +2765,7 @@ fn run_apply_proc(
 
     if let Some(result) = call_any(state, proc, args, CallFrame::NO_RETURN)? {
         // Primitive — returned immediately.
+        state.execution.debug_assert_windows_tile();
         return Ok(result);
     }
     // VM closure was pushed; run until it returns.
@@ -2775,7 +2776,12 @@ fn run_apply_proc(
     // does not is a transfer, which `across_reentry` catches for every
     // boundary at once. A nested entry: no driver, so it never collects
     // (#702).
-    run_loop_until(state, depth_before, None)
+    let result = run_loop_until(state, depth_before, None);
+    // The callback kept no word past the caller's window (#714).
+    if result.is_ok() {
+        state.execution.debug_assert_windows_tile();
+    }
+    result
 }
 
 /// Recognized VM-intercepted control primitives.

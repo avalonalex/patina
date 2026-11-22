@@ -2751,6 +2751,8 @@ fn dispatch_one_instruction(
                 .get_vm_continuation(target)
                 .is_some_and(|cc| cc.abort_landing);
             step_wind_jump(state, target, value, WindStub::Reuse, window)?;
+            // The step left no window behind it (#714).
+            state.execution.debug_assert_windows_tile();
             // Whether that pushed the next thunk's frames or arrived and
             // replaced the stack, the loop that owns what is now on the stack
             // decides — the same signal every continuation invoke sends.

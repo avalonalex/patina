@@ -256,6 +256,59 @@ impl ExecutionState {
         self.frames.last().expect("no active frame").register_base
     }
 
+    /// Where the top frame's window ends, or 0 with no frame.
+    #[inline(always)]
+    fn top_end(&self) -> usize {
+        self.frames
+            .last()
+            .map_or(0, |top| top.register_base + top.num_regs as usize)
+    }
+
+    /// Assert, in a debug build, that no register lies above the top
+    /// frame's window (#714, `PRD/GC_PRD.md` §11.1, invariant 1): the only
+    /// place a word outside every window could arise, since a push puts its
+    /// window at the end of the register file and a pop truncates it to the
+    /// frame's base. Checked at each push, before it extends the file, at
+    /// each pop, and where `return_into` relies on it.
+    #[inline(always)]
+    fn debug_assert_file_ends_at_top(&self) {
+        debug_assert_eq!(
+            self.registers.len(),
+            self.top_end(),
+            "a register lies past the top frame's window, outside every frame's window \
+             (#714, PRD/GC_PRD.md §11.1, invariant 1)"
+        );
+    }
+
+    /// Assert, in a debug build, that every register lies within a frame's
+    /// window (#714, `PRD/GC_PRD.md` §11.1, invariant 1): the windows tile
+    /// the register file from its start, each beginning where the one below
+    /// ends, and the top one ends the file. O(depth), so checked where words
+    /// were kept outside every window until 4d.3: after a wind step
+    /// (`ResumeWindJump`) and after a higher-order primitive's callback
+    /// (`run_apply_proc`).
+    pub(super) fn debug_assert_windows_tile(&self) {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        let mut end = 0;
+        for (depth, frame) in self.frames.iter().enumerate() {
+            assert_eq!(
+                frame.register_base, end,
+                "the window of the frame at depth {depth} starts at {}, where the window below \
+                 ends at {end}: a register lies outside every frame's window (#714)",
+                frame.register_base
+            );
+            end = frame.register_base + frame.num_regs as usize;
+        }
+        assert_eq!(
+            self.registers.len(),
+            end,
+            "the register file runs past the top frame's window: a register lies outside \
+             every frame's window (#714)"
+        );
+    }
+
     /// Record, in a check build, that the top frame awaits a value
     /// ([`Awaiting`]): it has called a callee that may answer here and now,
     /// through [`Self::return_into`], or something above it has just
@@ -326,6 +379,7 @@ impl ExecutionState {
         if GC_CHECK && frame != ReturnFrame::Caller && !self.top_awaits() {
             returned_into_a_running_frame(reg);
         }
+        self.debug_assert_file_ends_at_top();
         // The top frame's window ends the register file (`PRD/GC_PRD.md`
         // §11.1, invariant 1, asserted at each push), and no window reaches
         // `NO_RETURN`, so the bounds check every write makes is what tells
@@ -427,6 +481,7 @@ impl ExecutionState {
         closure: TaggedValue,
         return_reg: u16,
     ) -> usize {
+        self.debug_assert_file_ends_at_top();
         let base = self.registers.len();
         let num_regs = code.num_regs;
         self.registers
@@ -449,6 +504,7 @@ impl ExecutionState {
     pub(super) fn pop_frame(&mut self) -> CallFrame {
         let frame = self.frames.pop().expect("pop with empty frame stack");
         self.registers.truncate(frame.register_base);
+        self.debug_assert_file_ends_at_top();
         self.mark_awaiting();
         frame
     }
@@ -682,6 +738,7 @@ impl ExecutionState {
         val: TaggedValue,
         cont: TaggedValue,
     ) {
+        self.debug_assert_file_ends_at_top();
         push_abort_stub(
             &mut self.frames,
             &mut self.registers,
