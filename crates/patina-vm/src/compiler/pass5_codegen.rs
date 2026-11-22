@@ -180,9 +180,28 @@ impl UnitMaps {
         })
     }
 
-    /// A member's index: the id of its map at each pc.
-    fn index(&mut self, pc_roots: &[Vec<u64>]) -> Box<[u16]> {
-        pc_roots.iter().map(|roots| self.id(roots)).collect()
+    /// A member's index: the id of its map at each pc a frame of it can be
+    /// suspended at, `RegisterMaps::NEVER` at every other
+    /// ([`is_suspension_point`]).
+    fn index(&mut self, member: &Member) -> Box<[u16]> {
+        debug_assert_eq!(member.pc_roots.len(), member.instructions.len() + 1);
+        self.index_where(&member.pc_roots, |pc| {
+            is_suspension_point(&member.instructions, pc)
+        })
+    }
+
+    /// The index of a member whose map at each pc is `pc_roots`' entry,
+    /// with a map only at each pc `mapped` says.
+    fn index_where(&mut self, pc_roots: &[Vec<u64>], mapped: impl Fn(usize) -> bool) -> Box<[u16]> {
+        (pc_roots.iter().enumerate())
+            .map(|(pc, roots)| {
+                if mapped(pc) {
+                    self.id(roots)
+                } else {
+                    RegisterMaps::NEVER
+                }
+            })
+            .collect()
     }
 
     /// The block every member's maps share, and its width.
@@ -337,12 +356,8 @@ impl Pass5Codegen {
                 .chain(&cg.nested)
                 .map(|member| &member.pc_roots[..]),
         );
-        let top_index = maps.index(&top.pc_roots);
-        let nested_indexes: Vec<_> = cg
-            .nested
-            .iter()
-            .map(|member| maps.index(&member.pc_roots))
-            .collect();
+        let top_index = maps.index(&top);
+        let nested_indexes: Vec<_> = cg.nested.iter().map(|member| maps.index(member)).collect();
         let (block, width) = maps.into_block();
         let register_maps = |index| RegisterMaps::from_parts(index, Rc::clone(&block), width);
         let code = top.into_code(&links, register_maps(top_index));
@@ -534,6 +549,105 @@ fn written_register(instruction: &Instruction) -> Option<u16> {
         | Define { .. }
         | InvokeContinuation { .. }
         | Nop => None,
+        ResumeWindJump
+        | ResumeComposableInvoke
+        | ResumeRaise
+        | ResumeForce
+        | ResumePrimitive
+        | CollectAtCall { .. } => {
+            unreachable!("never compiled: the runtime builds its stubs with every register live")
+        }
+    }
+}
+
+/// Whether a frame running `instructions` can be suspended at `pc`, where a
+/// collection can scan it or a capture copy it (GC_PRD §11.1 invariant 2,
+/// #905): its pc 0, where a frame's entry polls, and the pc after each
+/// instruction [`suspends_after`] names. A frame is never found anywhere
+/// else, so only these pcs have a map, and a check build refuses a frame
+/// found at any other (`retire_registers`).
+fn is_suspension_point(instructions: &[Instruction], pc: usize) -> bool {
+    pc == 0 || suspends_after(&instructions[pc - 1])
+}
+
+/// Whether a frame can be suspended just after `instruction`, with its pc
+/// past it (#905). Exhaustive, as [`written_register`] is, so that a new
+/// opcode has to be placed. Yes for:
+/// - a call that returns to the frame, whose generic return polls and from
+///   whose pc a resumable primitive's stub or a callee runs: `Call`,
+///   `Apply`, `CallWithValues`, `CallPrimitive`, `CallPrimitiveDirect`;
+/// - every inline primitive opcode, the total ones too: each deoptimizes to
+///   a call of whatever its name is bound to once that is shadowed
+///   (`exec_call_primitive`), from this pc, and the partial ones take the
+///   same path on operands the fast path cannot answer (the fused test's
+///   pc after is the kept `JumpUnless`);
+/// - a tail call, which raises from its frame when its callee is no
+///   procedure, and runs a primitive or parameter callee with the frame
+///   still on the stack, so that a capture in its callback holds the frame
+///   at the pc after it;
+/// - an instruction that can raise, whose error a handler may catch with a
+///   raise stub over the frame (`vm_raise_value`): an unbound global's read
+///   or assignment, and the internal errors `LoadConst`, `LoadClosure`,
+///   `ReadCell` and `WriteCell` answer, which `is_catchable` lets a handler
+///   catch too;
+/// - a capture or a jump of a continuation, which holds the frame at the
+///   pc after it or raises from it: `AbortToPrompt`, `CaptureComposable`,
+///   `InvokeContinuation`.
+///
+/// No for an instruction that neither calls, polls, raises nor captures.
+fn suspends_after(instruction: &Instruction) -> bool {
+    use Instruction::*;
+    match *instruction {
+        Call { .. }
+        | Apply { .. }
+        | CallWithValues { .. }
+        | CallPrimitive { .. }
+        | CallPrimitiveDirect { .. }
+        | Add { .. }
+        | Sub { .. }
+        | Mul { .. }
+        | Lt { .. }
+        | NumEq { .. }
+        | Eq { .. }
+        | Cons { .. }
+        | Car { .. }
+        | Cdr { .. }
+        | Not { .. }
+        | TestJumpUnless { .. }
+        | AddImm { .. }
+        | SubImm { .. }
+        | LtImm { .. }
+        | NumEqImm { .. }
+        | NullP { .. }
+        | PairP { .. }
+        | VectorP { .. }
+        | VectorRef { .. }
+        | VectorSet { .. }
+        | TailCall { .. }
+        | TailApply { .. }
+        | TailCallWithValues { .. }
+        | LoadGlobal { .. }
+        | StoreGlobal { .. }
+        | LoadConst { .. }
+        | LoadClosure { .. }
+        | ReadCell { .. }
+        | WriteCell { .. }
+        | AbortToPrompt { .. }
+        | CaptureComposable { .. }
+        | InvokeContinuation { .. } => true,
+        LoadImmediate { .. }
+        | Move { .. }
+        | MakeClosure { .. }
+        | AllocCell { .. }
+        | Jump { .. }
+        | JumpIf { .. }
+        | JumpUnless { .. }
+        | JumpUnlessShadowed { .. }
+        | Return { .. }
+        | Define { .. }
+        | PushWind { .. }
+        | PopWind
+        | Nop => false,
         ResumeWindJump
         | ResumeComposableInvoke
         | ResumeRaise
@@ -1736,8 +1850,8 @@ mod tests {
         let narrow = vec![vec![0b01], vec![0b11], vec![0b01]];
         let wide = vec![vec![0b01, 0], vec![0b11, 1], vec![0, 0]];
         let mut maps = UnitMaps::new([&narrow[..], &wide[..]]);
-        let narrow_index = maps.index(&narrow);
-        let wide_index = maps.index(&wide);
+        let narrow_index = maps.index_where(&narrow, |_| true);
+        let wide_index = maps.index_where(&wide, |_| true);
         assert_eq!(&*narrow_index, &[0, 1, 0]);
         // Its pc 0 is narrow's pc 0, padded; pc 1 is a map of its own.
         assert_eq!(&*wide_index, &[0, 2, 3]);
@@ -1757,6 +1871,34 @@ mod tests {
         assert_eq!(wide_maps.at(3), None, "past the index");
     }
 
+    /// A member has a map at its pc 0 and after each instruction a frame can
+    /// be suspended after, and none at any other pc (#905).
+    #[test]
+    fn only_suspension_points_have_maps() {
+        let (top, nested) = compile(&every_kind_of_operand());
+        let mut unmapped = 0;
+        for code in std::iter::once(&top).chain(&nested) {
+            let maps = code.register_roots.as_ref().unwrap();
+            assert!(
+                maps.at(0).is_some(),
+                "{:?} has no map at its entry",
+                code.id
+            );
+            for (pc, instruction) in code.instructions.iter().enumerate() {
+                let mapped = maps.at(pc + 1).is_some();
+                assert_eq!(
+                    mapped,
+                    suspends_after(instruction),
+                    "{:?}, after {instruction:?} at {pc}",
+                    code.id
+                );
+                unmapped += usize::from(!mapped);
+            }
+            assert_eq!(maps.at(code.instructions.len() + 1), None);
+        }
+        assert!(unmapped > 0, "every pc has a map");
+    }
+
     /// Past the last id, a map has none of its own: it shares one that keeps
     /// every register, the one answer that is never wrong, and the unit
     /// still compiles.
@@ -1765,7 +1907,7 @@ mod tests {
         let distinct = UnitMaps::DISTINCT as u64;
         let pc_roots: Vec<Vec<u64>> = (0..distinct + 3).map(|n| vec![n, 0]).collect();
         let mut maps = UnitMaps::new([&pc_roots[..]]);
-        let index = maps.index(&pc_roots);
+        let index = maps.index_where(&pc_roots, |_| true);
         let (block, width) = maps.into_block();
         let maps = RegisterMaps::from_parts(index, block, width);
         let last = distinct as usize - 1;

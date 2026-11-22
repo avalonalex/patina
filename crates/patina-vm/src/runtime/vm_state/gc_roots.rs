@@ -76,6 +76,11 @@ const RETIRED: TaggedValue = if GC_CHECK {
 /// Keeping the full-vector tracing contract means no captured snapshot or
 /// tracer can later expose an untraced pointer to an already swept slot.
 /// Delimited snapshots use absolute frame bases but store only their slice.
+///
+/// A frame at a pc its code has no map for, one no frame can be suspended
+/// at (#905, GC_PRD §11.1 invariants 2 and 5), means the compiler missed a
+/// suspension point: a check build panics there ([`unmapped_pc`]), and a
+/// plain release build keeps every register of the frame.
 #[cold]
 #[inline(never)]
 pub(in crate::runtime) fn retire_registers(
@@ -89,6 +94,9 @@ pub(in crate::runtime) fn retire_registers(
             continue;
         };
         let Some(roots) = maps.at(frame.pc) else {
+            if GC_CHECK {
+                unmapped_pc(frame);
+            }
             continue;
         };
         let dropped = switches::dropped(roots, frame.num_regs);
@@ -102,6 +110,18 @@ pub(in crate::runtime) fn retire_registers(
             }
         }
     }
+}
+
+/// A check build's refusal of a frame found at a pc with no map (#905).
+#[cold]
+#[inline(never)]
+fn unmapped_pc(frame: &CallFrame) -> ! {
+    let after = (frame.pc.checked_sub(1)).and_then(|pc| frame.code.instructions.get(pc));
+    panic!(
+        "a frame of code {} ({:?}) is at pc {}, after {after:?}, which has no \
+         register map: no frame can be suspended there (#905)",
+        frame.code.id, frame.code.name, frame.pc
+    )
 }
 
 /// The positive controls' switches, read here and at the ends of the load
