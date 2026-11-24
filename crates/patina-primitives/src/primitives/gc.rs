@@ -33,9 +33,10 @@
 //! - `external-bytes`: what is held outside the arenas on heap objects'
 //!   behalf now (GC_PRD §15), charged by its holders: today the tables of
 //!   the live namespaces — the global environment, the libraries', and those
-//!   `environment` and the R5RS constructors build (#615) — and the buffers
-//!   of the open file ports, 8 KiB each (#607). GC_PRD's footprint is
-//!   `committed-bytes` plus `external-bytes`.
+//!   `environment` and the R5RS constructors build (#615) — the buffers of
+//!   the open file ports, 8 KiB each (#607), and the scope-set table's sets
+//!   beyond the empty one (#788). GC_PRD's footprint is `committed-bytes`
+//!   plus `external-bytes`.
 //!
 //! For a tree-walker closure, the payload in the first four keys includes an
 //! estimate of the frame it captures (#637), not a measurement: counted once
@@ -130,6 +131,14 @@
 //!   collection after nothing does. The form that reads the count is
 //!   running, so its own unit is counted. The tree-walker loads no code, and
 //!   reads 0, never `#f`.
+//! - `scope-sets` (#788): the scope sets the heap's scope-set table holds,
+//!   not counting the empty set. Each identifier holds its set's id in the
+//!   table, which keeps each distinct set once; a collection frees every set
+//!   no marked identifier carries. So read after a collection it is the
+//!   sets the live identifiers carry, a macro's literals among them, and
+//!   between collections those and the ones made since. The table charges
+//!   its sets to `external-bytes`. The steady-state driver reads it after
+//!   `(gc) (gc)` with the other per-owner counts.
 //!
 //! `binding-records` and `cells` are running sums: raised as a namespace
 //! makes a record or a cell, `cells` lowered as a record is re-pointed away
@@ -262,6 +271,7 @@ fn gc_stats<'gc>(cx: &mut Cx<'gc>, _args: &[Value<'gc>]) -> Result<Value<'gc>, E
         ("cells", n(cx.cells())),
         ("binding-records", n(cx.binding_records())),
         ("code-units", n(cx.code_units())),
+        ("scope-sets", n(cx.scope_sets())),
     ];
 
     let mut alist: Vec<Value<'gc>> = entries

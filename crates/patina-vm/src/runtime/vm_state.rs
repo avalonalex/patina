@@ -6,6 +6,8 @@
 
 pub(super) mod gc_roots;
 
+#[cfg(feature = "test-support")]
+pub(crate) use gc_roots::collect_with_a_frame_at_an_unmapped_pc;
 use gc_roots::switches;
 
 use super::control::{
@@ -18,7 +20,7 @@ use super::control::{
     tail_call_value_with_probe, tail_invoke_delimited, unpack_values, vm_raise_value, wind_step,
 };
 use crate::error::{VmError, frame_refusal};
-use crate::types::code_object::{Arity, CodeObject};
+use crate::types::code_object::{Arity, CodeObject, RegisterMapCensus, RegisterMaps};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, VmContinuation, VmDelimitedContinuation,
 };
@@ -462,7 +464,7 @@ impl VmState {
                 num_regs: 0,
                 arity: Arity::Fixed(0),
                 source_map: Vec::new(),
-                register_roots: None,
+                register_roots: Some(RegisterMaps::all_live(0)),
                 links: LinkTable::empty(),
                 live_closures: Cell::new(0),
             }),
@@ -556,6 +558,18 @@ impl VmState {
     }
     pub(crate) fn code_store_slots(&self) -> usize {
         self.code_store.len()
+    }
+
+    /// What the loaded code's register maps hold (#905), each unit's table
+    /// counted once.
+    pub(crate) fn register_map_census(&self) -> RegisterMapCensus {
+        let mut census = RegisterMapCensus::default();
+        let mut tables = rustc_hash::FxHashSet::default();
+        let loaded = (self.code_store.iter()).filter(|code| !Rc::ptr_eq(code, &self.empty_code));
+        for maps in loaded.filter_map(|code| code.register_roots.as_ref()) {
+            maps.count(&mut census, &mut tables);
+        }
+        census
     }
 
     /// Record that the primitive at `index` had its global binding
