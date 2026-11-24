@@ -753,6 +753,21 @@ mod level_tests {
         assert_eq!(capture(&own, &deeper).mark_levels(), 0);
     }
 
+    /// A marked frame ends the walk: nothing below it is visited. Here the
+    /// continuation that resumes in a marked frame is given a chain no
+    /// capture has walked, which the evaluator never builds, so that a walk
+    /// that went on would count it.
+    #[test]
+    fn a_marked_frame_ends_the_walk() {
+        let global = namespace();
+        let marked = frame(&global);
+        assert_eq!(capture(&marked, &ContEnv::new()).mark_levels(), 1);
+
+        let unwalked = recursion(&global, &ContEnv::new(), 5);
+        let chain = returning_to(local(&marked, &unwalked));
+        assert_eq!(capture(&frame(&global), &chain).mark_levels(), 1);
+    }
+
     /// A capture made where no frame is, at a top level: its chain is
     /// counted, and nothing for the namespace.
     #[test]
@@ -775,6 +790,21 @@ mod level_tests {
         assert_eq!(capture(&frame(&global), &above).mark_levels(), 7);
         let later = recursion(&global, &top_level, 1);
         assert_eq!(capture(&frame(&global), &later).mark_levels(), 2);
+    }
+
+    /// A namespace's continuation is entered once in a walk, however many
+    /// entries hold it. Forty environments of two entries each, both holding
+    /// the namespace's continuation over the environment below: a walk that
+    /// entered it from each would take 2⁴⁰ steps.
+    #[test]
+    fn a_namespaces_continuation_is_entered_once_in_a_walk() {
+        let global = namespace();
+        let mut cont_env = recursion(&global, &ContEnv::new(), 1);
+        for _ in 0..40 {
+            let held = local(&global, &cont_env);
+            cont_env = returning_to(held.clone()).insert(Rc::from("j"), held);
+        }
+        assert_eq!(capture(&frame(&global), &cont_env).mark_levels(), 2);
     }
 
     /// A `let-cont`'s entry is followed by the environment its continuation
