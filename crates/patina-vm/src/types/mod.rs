@@ -6,12 +6,14 @@
 
 pub mod code_object;
 pub mod continuation;
+mod depth;
 pub mod instruction;
 
 pub use code_object::{Arity, CodeObject, CodeObjectId, ConstIdx};
 pub use continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
+pub(crate) use depth::Depth;
 pub use instruction::Instruction;
 
 use patina_core::tagged_value::TaggedValue;

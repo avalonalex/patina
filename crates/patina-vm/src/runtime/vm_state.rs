@@ -25,7 +25,7 @@ use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, VmContinuation, VmDelimitedContinuation,
 };
 use crate::types::instruction::{ControlForm, Instruction, TestOp};
-use crate::types::{CallFrame, CodeObjectId};
+use crate::types::{CallFrame, CodeObjectId, Depth};
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
@@ -985,8 +985,12 @@ impl VmState {
         reg: u16,
         how: &str,
     ) -> ! {
-        let frames = self.execution.frames();
-        let frame = &frames[frames.len() - 1 - frame_from_top];
+        let frame = self
+            .execution
+            .frames()
+            .iter()
+            .nth_back(frame_from_top)
+            .expect("the reading frame is on the stack");
         panic!(
             "read of a retired register {how}: r{reg} at pc {} of #{} \
              (a liveness map said it was dead; #625, docs/GC_DESIGN.md §11)",
@@ -1280,7 +1284,7 @@ fn vm_evaluate_parsed_library(
             // literals' words, before the form runs (#869, M2).
             let unit = state.load_unit(top, nested, &lib_env, literals);
             let top_id = unit.id();
-            let depth_before = state.execution.frames().len();
+            let depth_before = state.execution.depth();
             #[expect(
                 clippy::disallowed_methods,
                 reason = "holds `parsed` (the body's later forms) and `lib_env` across the form's \
@@ -1626,7 +1630,7 @@ fn run_top_frame(state: &mut VmState) -> Result<TaggedValue, VmError> {
         reason = "the state is in the machine: the frame the caller pushed is the run's root, and \
                   this frame holds nothing"
     )]
-    let result = run_loop_until(state, 0, driver);
+    let result = run_loop_until(state, Depth::BASE, driver);
     // Where the outermost loop returns, an interrupt posted during the
     // form's last returns, which pass no poll, stops this form rather than
     // the next one (#700, #701). Its handlers have gone with it.
@@ -1683,7 +1687,7 @@ pub(super) fn execute_nested(
     state: &mut VmState,
     unit: LoadedUnit,
 ) -> Result<TaggedValue, VmError> {
-    let depth_before = state.execution.frames().len();
+    let depth_before = state.execution.depth();
     push_top_frame(state, unit)?;
 
     // A nested entry: no driver, so the run never collects (#702).
@@ -1721,16 +1725,17 @@ impl LoopExit {
 )]
 pub(super) fn run_loop_until(
     state: &mut VmState,
-    exit_depth: usize,
+    exit_depth: Depth,
     driver: Option<GcDriver>,
 ) -> Result<TaggedValue, VmError> {
     run_loop_until_outcome(state, exit_depth, driver).map(LoopExit::value)
 }
 
-/// The main dispatch loop. Runs until `state.execution.frames().len() == exit_depth`.
+/// The main dispatch loop. Runs until `state.execution.depth() == exit_depth`.
 ///
-/// Use `exit_depth = 0` to run until the frame stack is fully empty (top-level).
-/// Use `exit_depth = N` to run a nested thunk until it returns to depth N.
+/// Use `exit_depth = Depth::BASE` to run until the frame stack is fully empty
+/// (top-level). Use the depth a nested thunk is called at to run it until it
+/// returns there.
 ///
 /// This is the only place that decides whether a continuation invocation is
 /// this loop's business: the frames it restored are either ones this loop
@@ -1746,7 +1751,7 @@ pub(super) fn run_loop_until(
 /// nested and passes `None`: its loop never collects.
 pub(super) fn run_loop_until_outcome(
     state: &mut VmState,
-    exit_depth: usize,
+    exit_depth: Depth,
     driver: Option<GcDriver>,
 ) -> Result<LoopExit, VmError> {
     // A nested entry's caller has live values in Rust locals — capture-time
@@ -1771,7 +1776,7 @@ pub(super) fn run_loop_until_outcome(
 }
 
 /// [`run_loop_until_outcome`]'s loop, run with `VmState::driver` set for it.
-fn dispatch_loop(state: &mut VmState, exit_depth: usize) -> Result<LoopExit, VmError> {
+fn dispatch_loop(state: &mut VmState, exit_depth: Depth) -> Result<LoopExit, VmError> {
     // The open `AssertNoGc` windows, checked at every poll (#624).
     let assert_no_gc = AssertNoGcCount::of(&state.heap);
 
@@ -1856,7 +1861,7 @@ fn dispatch_loop(state: &mut VmState, exit_depth: usize) -> Result<LoopExit, VmE
                 // to a `guard`. See `VmState::pending_escape`.
                 if let Some(value) = state.pending_escape.take() {
                     let left = state.reentry_kept.is_some_and(|kept| kept < reentry_level);
-                    if left || state.execution.frames().len() <= exit_depth {
+                    if left || state.execution.depth() <= exit_depth {
                         // Still in flight: this loop does not own the frame
                         // the escape landed in, so the one that does must
                         // still find it parked. Returning it in `Escaped`
@@ -1939,7 +1944,7 @@ fn maybe_collect(state: &mut VmState, driver: &mut GcDriver) -> bool {
         return false;
     }
     patina_core::census::stack_shape(
-        state.execution.frames().len(),
+        state.execution.depth().frame_count(),
         state.execution.registers().len(),
     );
     state.execution.retire_registers();
@@ -2032,7 +2037,7 @@ pub(crate) fn collect_for_loader(state: &mut VmState) -> bool {
     };
     if state.mutator.no_gc_depth() == 0 {
         patina_core::census::stack_shape(
-            state.execution.frames().len(),
+            state.execution.depth().frame_count(),
             state.execution.registers().len(),
         );
         state.execution.retire_registers();
@@ -2069,7 +2074,7 @@ fn collect_at_call(state: &mut VmState, kind: CollectKind) -> bool {
     };
     if state.mutator.no_gc_depth() == 0 {
         patina_core::census::stack_shape(
-            state.execution.frames().len(),
+            state.execution.depth().frame_count(),
             state.execution.registers().len(),
         );
         state.execution.retire_registers();
@@ -2214,7 +2219,7 @@ macro_rules! inline_primitive {
 fn dispatch_one_instruction(
     state: &mut VmState,
     cur_code: &mut Rc<CodeObject>,
-    exit_depth: usize,
+    exit_depth: Depth,
 ) -> Result<Option<TaggedValue>, VmError> {
     // One frame access per dispatch: refresh the loop's cached code object
     // (no Rc clone per instruction — only when the frame's code changed),
@@ -2231,7 +2236,7 @@ fn dispatch_one_instruction(
     // ── Trace: before instruction ────────────────────────────────────
     if let Some(tracer) = state.tracer.clone() {
         let f = state.execution.frames().last().unwrap();
-        let depth = state.execution.frames().len();
+        let depth = state.execution.depth().frame_count();
         tracer.borrow_mut().pre_instruction_with_depth(
             state.execution.registers(),
             f,
@@ -2494,7 +2499,8 @@ fn dispatch_one_instruction(
         Instruction::Return { val } => {
             let result = state.reg_at(base, val);
             let frame = state.execution.pop_frame();
-            if state.execution.frames().len() == exit_depth || state.execution.frames().is_empty() {
+            let depth = state.execution.depth();
+            if depth == exit_depth || depth == Depth::BASE {
                 // Reached target depth (or absolute bottom) — this loop is
                 // done. Handlers installed under it close in the loop itself.
                 return Ok(Some(result));
@@ -2608,10 +2614,10 @@ fn dispatch_one_instruction(
                 // clause invokes. An absolute index would name a frame in the
                 // stack the raise happened on, and after either of those the
                 // live stack is a different one.
-                let stub_index = state.execution.frames().len().saturating_sub(1);
+                let stub_depth = state.execution.top_frame_depth();
                 state.execution.restore_handler(ExceptionHandler {
                     handler,
-                    stack_depth: stub_index.saturating_sub(below),
+                    stack_depth: stub_depth.lowered_by(below),
                 });
                 // The `Return` after this one delivers the handler's value as
                 // the value of `(raise-continuable …)`.

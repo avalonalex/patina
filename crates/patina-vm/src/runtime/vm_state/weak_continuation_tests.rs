@@ -15,7 +15,7 @@
 
 use super::VmState;
 use crate::types::{
-    CallFrame, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
+    CallFrame, Depth, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
 use patina_core::heap::gc::collect_for_tests;
 use patina_core::tagged_value::TaggedValue;
@@ -62,7 +62,7 @@ fn delimited_continuation_pinning(payload: TaggedValue) -> VmDelimitedContinuati
         registers: vec![Cell::new(payload)],
         base_at_capture: 0,
         deliver_reg: None,
-        depth_at_capture: 0,
+        depth_at_capture: Depth::BASE,
         wind_depth_at_capture: 0,
         handler_depth_at_capture: 0,
         prompt_stack: vec![],
@@ -98,12 +98,12 @@ fn a_carried_prompt_and_handler_are_traced() {
         registers: vec![],
         base_at_capture: 0,
         deliver_reg: None,
-        depth_at_capture: 0,
+        depth_at_capture: Depth::BASE,
         wind_depth_at_capture: 0,
         handler_depth_at_capture: 0,
         prompt_stack: vec![PromptFrame {
             tag,
-            stack_depth: 0,
+            stack_depth: Depth::BASE,
             handler: prompt_handler,
             dst: 0,
             dynamic_wind_depth: 0,
@@ -111,7 +111,7 @@ fn a_carried_prompt_and_handler_are_traced() {
         }],
         exception_handlers: vec![ExceptionHandler {
             handler: exception_handler,
-            stack_depth: 0,
+            stack_depth: Depth::BASE,
         }],
     };
     let cont_ref = state.alloc_vm_delimited_continuation(cont);
