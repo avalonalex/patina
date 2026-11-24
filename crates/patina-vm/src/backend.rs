@@ -196,6 +196,24 @@ impl VmBackend {
         Self::with_fs_and_gc_mode(fs, patina_core::GcMode::from_env())
     }
 
+    /// A VM backend under `config` (#907): its stack's cap is the
+    /// configuration's ([`HeapConfig::stack_cap`](patina_core::HeapConfig::stack_cap)),
+    /// whatever `PATINA_STACK_MAX` says. [`Self::new`] and [`Self::with_fs`]
+    /// take [`HeapConfig::from_env`](patina_core::HeapConfig::from_env),
+    /// which reads the variable. The configuration is read here and not
+    /// kept.
+    pub fn with_config(config: &patina_core::HeapConfig) -> Self {
+        Self::with_fs_and_config(std::sync::Arc::new(patina_core::NativeFs), config)
+    }
+
+    /// [`Self::with_config`] over a custom filesystem.
+    pub fn with_fs_and_config(
+        fs: std::sync::Arc<dyn patina_core::FileSystem>,
+        config: &patina_core::HeapConfig,
+    ) -> Self {
+        Self::build(fs, patina_core::GcMode::from_env(), config)
+    }
+
     /// A VM backend collecting in `mode`, whatever `PATINA_GC`,
     /// `PATINA_GC_STRESS` or `PATINA_GC_ZEAL` say: for a test that compares
     /// collecting with not collecting, whose not-collecting side a stress
@@ -212,6 +230,16 @@ impl VmBackend {
         fs: std::sync::Arc<dyn patina_core::FileSystem>,
         mode: patina_core::GcMode,
     ) -> Self {
+        Self::build(fs, mode, &patina_core::HeapConfig::from_env())
+    }
+
+    /// Every constructor's work: a backend over `fs`, collecting in `mode`,
+    /// under `config`.
+    fn build(
+        fs: std::sync::Arc<dyn patina_core::FileSystem>,
+        mode: patina_core::GcMode,
+        config: &patina_core::HeapConfig,
+    ) -> Self {
         let heap = patina_core::new_shared_heap();
         let global_env = Rc::new(Environment::with_heap(&heap));
         // Name this backend to `cond-expand` and `(features)`, once, on the
@@ -224,6 +252,9 @@ impl VmBackend {
         // code that reaches it through a `Cx`.
         heap.borrow().instance().set_fs(fs.clone());
         let mut state = VmState::with_gc_mode(heap.clone(), Rc::clone(&global_env), mode);
+        // The stack's cap (#907), before any Scheme runs: the bootstrap
+        // below is held to it like any program.
+        state.set_stack_cap(config.stack_cap());
         // Deliberately *not* `install_primitives()` — that bound every
         // registered primitive into globals regardless of the import set
         // (`cadddr` was callable with only `(scheme base)` imported).

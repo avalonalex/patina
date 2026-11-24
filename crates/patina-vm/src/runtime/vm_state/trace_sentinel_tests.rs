@@ -185,6 +185,9 @@ fn every_vm_state_root_is_traced() {
         instance,
         driver: None,
         assert_no_gc,
+        stack_cap: usize::MAX,
+        stack_soft: patina_core::Mutator::NO_LIMIT,
+        stack_reserve_open: false,
     };
     // A value a frame returned into nothing, which only the cell holds
     // (`CallFrame::NO_RETURN`, #714).

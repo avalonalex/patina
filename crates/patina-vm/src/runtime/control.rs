@@ -1058,7 +1058,7 @@ pub(super) fn vm_raise_value(
 /// pending_escape first, since a wrapped escape can have a catchable error type.
 pub(super) fn is_catchable(err: &VmError) -> bool {
     match err {
-        VmError::StackOverflow | VmError::Compile(_) | VmError::ContinuationEscape => false,
+        VmError::StackOverflow { .. } | VmError::Compile(_) | VmError::ContinuationEscape => false,
         VmError::WithLocation { error, .. } | VmError::WithDiagnostic { error, .. } => {
             is_catchable(error)
         }
@@ -1126,14 +1126,38 @@ pub(super) fn classify_error(err: &VmError) -> (patina_core::ExceptionKind, Stri
         VmError::Primitive(e) => e.to_exception(),
         VmError::SchemeException { message } => (ExceptionKind::Error, message.clone()),
         VmError::Interrupt => (ExceptionKind::Interrupt, err.to_string()),
+        // The message a program reads is the condition's name; the cap is
+        // its irritant (`exception_irritants`).
+        VmError::StackExhausted { .. } => {
+            (ExceptionKind::StackExhausted, "stack exhausted".to_string())
+        }
         // Unwrap location wrapper and classify the inner error.
         VmError::WithLocation { error, .. } | VmError::WithDiagnostic { error, .. } => {
             classify_error(error)
         }
         // Non-catchable (shouldn't reach here due to is_catchable check)
-        VmError::StackOverflow | VmError::Compile(_) | VmError::ContinuationEscape => {
+        VmError::StackOverflow { .. } | VmError::Compile(_) | VmError::ContinuationEscape => {
             (ExceptionKind::Error, err.to_string())
         }
+    }
+}
+
+/// The irritants of the condition a `VmError` raises: the cap in bytes for
+/// `&stack-exhausted` (#907), and none for the rest, whose message says
+/// everything they have.
+///
+/// # State contract
+///
+/// Pure error conversion, as [`classify_error`] is.
+pub(super) fn exception_irritants(err: &VmError) -> Vec<TaggedValue> {
+    match err {
+        VmError::StackExhausted { cap } => {
+            vec![TaggedValue::fixnum(i64::try_from(*cap).unwrap_or(i64::MAX))]
+        }
+        VmError::WithLocation { error, .. } | VmError::WithDiagnostic { error, .. } => {
+            exception_irritants(error)
+        }
+        _ => vec![],
     }
 }
 
@@ -1370,6 +1394,9 @@ pub(super) fn step_wind_jump(
         .count();
     state.reentry_kept = (kept == cc.reentry.len() && kept < state.reentry.len()).then_some(kept);
     state.execution.restore(&cc);
+    // A continuation's arrival has replaced the stack: where the soft limit
+    // is armed again if the reserve was open (#907).
+    state.rearm_stack_limit();
     // A snapshot can carry a prompt whose body is already finished, and this
     // is the one moment that can tell (issue #176).
     //
@@ -3036,6 +3063,9 @@ pub(super) fn abort_to_prompt(
     // interleaved against the previous release.
     if state.execution.winds().len() == wind_depth {
         state.execution.truncate_to_prompt(prompt_idx);
+        // An abort's landing has cut the stack: where the soft limit is
+        // armed again if the reserve was open (#907).
+        state.rearm_stack_limit();
         state
             .execution
             .push_abort_stub(stub, prompt.dst, prompt.handler, val, cont_tv);
