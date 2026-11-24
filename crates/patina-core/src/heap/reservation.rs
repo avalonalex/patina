@@ -145,7 +145,8 @@ impl Reservation {
     /// page in it does nothing. It takes the reservation exclusively:
     /// nothing may be reading a page while it goes.
     ///
-    /// An error is the system's, and leaves every page as it was.
+    /// An error is the system's. After one, each page of the range is as
+    /// it was or reads as zero: the call may have given some back first.
     ///
     /// # Panics
     ///
@@ -277,7 +278,14 @@ fn map(size: usize) -> io::Result<NonNull<u8>> {
     if memory == libc::MAP_FAILED {
         return Err(io::Error::last_os_error());
     }
-    NonNull::new(memory.cast()).ok_or_else(|| io::Error::other("a mapping at address zero"))
+    let Some(base) = NonNull::new(memory.cast()) else {
+        // No kernel is known to answer page zero where no address was
+        // asked for. A mapping there is no use to anyone, and is not kept.
+        // SAFETY: the range is the mapping just made, which nothing uses.
+        unsafe { libc::munmap(memory, size) };
+        return Err(io::Error::other("a mapping at address zero"));
+    };
+    Ok(base)
 }
 
 /// Give back the `len` bytes of whole pages at `first`, inside a mapping
@@ -319,7 +327,9 @@ fn release(first: NonNull<u8>, len: usize) -> io::Result<()> {
     std::process::abort()
 }
 
-#[cfg(test)]
+// The sizes these tests ask for and reckon with, the main stack's 8 GiB
+// ceiling and more, are a 64-bit address space's.
+#[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;
 
