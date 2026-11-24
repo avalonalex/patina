@@ -113,9 +113,12 @@
 //! constant, whatever its frames bind; a frame a closure captured is
 //! charged by the closure too; a level's mark outlives the capture charged
 //! for it, so a later capture that holds the level after the first has died
-//! is not charged again; and a chain that has no frame of its own, as
-//! nested `call-with-values` wrappers make, counts nothing. Exact
-//! accounting is stage 4f's.
+//! is not charged again; a chain that has no frame of its own, as nested
+//! `call-with-values` wrappers make, counts nothing; and a frame that more
+//! than one evaluation runs in, as a raw frame a host hands to `eval`
+//! through a specifier of its own is (#831), ends the walk once it is
+//! marked, though each evaluation returns somewhere else. Exact accounting
+//! is stage 4f's.
 //!
 //! [`cps_lambda_payload`] measures it, and [`HeapObjectData::payload_bytes`]
 //! does not: that match runs on every object allocation, the VM's closures

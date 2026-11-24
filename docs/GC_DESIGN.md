@@ -1312,8 +1312,11 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   charged the one constant, whatever it binds; a frame a closure captured
   is charged by the closure as well; a level's mark outlives the capture
   charged for it, so a later capture that still holds the level after the
-  first has died is not charged again; and a chain with no frame of its
-  own, as nested `call-with-values` wrappers make, counts nothing. Across
+  first has died is not charged again; a chain with no frame of its own,
+  as nested `call-with-values` wrappers make, counts nothing; and a frame
+  that more than one evaluation runs in, as a raw frame a host hands to
+  `eval` through a specifier of its own is (#831), ends the walk once it is
+  marked, though each evaluation returns somewhere else. Across
   eleven shapes of recursion the account saw 1.03 to 1.71 times what the
   footprint grew by (#656's PR has the table). Exact accounting is stage
   4f's. Other shared `Rc`

@@ -332,6 +332,9 @@ impl CpsContinuation {
     /// below it, since a frame belongs to one call and a call returns into
     /// one continuation. So a tail that many captures share is walked and
     /// charged once, and a capture costs the levels made since the last.
+    /// (The one frame that is not a call's is a raw frame a host has `eval`
+    /// run in, #831: the walk ends there too, and misses what a later
+    /// evaluation in it returns into.)
     ///
     /// A loop over a stack of its own, since a chain is as deep as the
     /// program's recursion (#725).
