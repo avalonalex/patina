@@ -28,6 +28,7 @@ pub mod budget;
 #[cfg(feature = "gc-census")]
 mod census;
 mod check;
+pub mod config;
 pub mod cx;
 mod finalize;
 pub mod gc;
