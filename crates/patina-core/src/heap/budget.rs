@@ -10,7 +10,9 @@
 //! - **the cgroup limit** (Linux): the memory limit of the process's own
 //!   cgroup, v2's `memory.max` or v1's `memory.limit_in_bytes`, and of each
 //!   cgroup above it, which binds the process as its own does; the smallest
-//!   of them;
+//!   of them. (A v1 hierarchy without hierarchical accounting, which older
+//!   kernels allowed, is read the same way: an ancestor's limit that does
+//!   not bind there can only make the reading smaller.)
 //! - **the soft `RLIMIT_AS`**, the address space the process may map.
 //!
 //! **B**, the budget every default derives from, is the smaller of the
@@ -283,9 +285,13 @@ fn cgroup_mount(mountinfo: &str, wanted: impl Fn(&str, &str) -> bool) -> Option<
         }
         let mut mount = mount.split(' ').skip(3);
         let (root, point) = (mount.next()?, mount.next()?);
-        Some(CgroupMount {
+        // A mount point is an absolute path. Anything else is no line the
+        // kernel wrote, and a limit file must not be looked for under the
+        // working directory.
+        let point = PathBuf::from(unescape(point)?);
+        point.is_absolute().then_some(CgroupMount {
             root: unescape(root)?,
-            point: PathBuf::from(unescape(point)?),
+            point,
         })
     })
 }
@@ -717,6 +723,21 @@ mod tests {
             tree.write("cg/a/memory.max", "1024\n");
             assert_eq!(tree.limit(), None, "{name}");
         }
+
+        // A mount point that is not an absolute path names no mount: no
+        // limit file is looked for under the working directory.
+        for line in [
+            "31 22 0:26 / cg rw - cgroup2 cgroup2 rw\n",
+            "31 22 0:26 /  rw - cgroup2 cgroup2 rw\n",
+            "31 22 0:26 / ./cg rw - cgroup2 cgroup2 rw\n",
+        ] {
+            assert!(
+                cgroup_mount(line, |fstype, _| fstype == "cgroup2").is_none(),
+                "{line:?}"
+            );
+        }
+        let absolute = "31 22 0:26 / /cg rw - cgroup2 cgroup2 rw\n";
+        assert!(cgroup_mount(absolute, |fstype, _| fstype == "cgroup2").is_some());
 
         let tree = Tree::new("not-a-number", "0::/a\n", V2_MOUNTS);
         for text in [
