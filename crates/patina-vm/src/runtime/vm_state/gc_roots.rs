@@ -477,3 +477,192 @@ pub(crate) fn collect_with_a_frame_at_an_unmapped_pc() -> bool {
     super::collect_for_loader(&mut state);
     (0..).zip(held).all(|(reg, value)| state.reg(reg) == value)
 }
+
+/// The walk's own arithmetic (#906): which registers a window's scan hands
+/// on and which it clears, and what the walk does with a register outside
+/// every window. What a collection then keeps and frees is
+/// `trace_sentinel_tests.rs`'s.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::FrameCode;
+    use crate::types::code_object::{Arity, CodeObject};
+    use std::rc::Rc;
+
+    /// A window of `len` registers, register `r` holding the fixnum `r`.
+    fn window(len: usize) -> Vec<Cell<TaggedValue>> {
+        (0..len as i64)
+            .map(|reg| Cell::new(TaggedValue::fixnum(reg)))
+            .collect()
+    }
+
+    /// The registers `scan_window` hands to `live`, by number, in the order
+    /// it hands them, with the runs it handed them in.
+    fn scan(
+        window: &[Cell<TaggedValue>],
+        roots: &[u64],
+        dropped: Option<usize>,
+    ) -> (Vec<usize>, Vec<std::ops::Range<usize>>) {
+        let mut reported = Vec::new();
+        let mut runs = Vec::new();
+        let mut live = |run: &[Cell<TaggedValue>]| {
+            // Where the run lies in the window: the walk reports each
+            // register where it lives, not a copy.
+            let start = window
+                .iter()
+                .position(|slot| std::ptr::eq(slot, &run[0]))
+                .expect("a run of the window's own slots");
+            assert!(std::ptr::eq(&window[start..start + run.len()], run));
+            reported.extend(start..start + run.len());
+            runs.push(start..start + run.len());
+        };
+        scan_window(window, roots, dropped, &mut live);
+        (reported, runs)
+    }
+
+    /// Against the definition, register by register, over windows on both
+    /// sides of each word boundary, maps narrower and wider than the window,
+    /// and each register dropped in turn: `scan_window` hands on exactly
+    /// the registers whose bit is set and that the control does not drop,
+    /// each once and in order, in maximal runs, none empty; it leaves those
+    /// holding what they held; and it overwrites every other register.
+    #[test]
+    fn a_windows_scan_reports_what_its_map_keeps_and_clears_the_rest() {
+        // A fixed sequence of words, of every density.
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut maps: Vec<Vec<u64>> = vec![
+            vec![0],
+            vec![u64::MAX],
+            vec![u64::MAX, u64::MAX, u64::MAX],
+            vec![1 << 63, 1],
+            vec![!(1 << 63), !1],
+        ];
+        for words in 1..=3 {
+            for _ in 0..8 {
+                maps.push((0..words).map(|_| next()).collect());
+                maps.push((0..words).map(|_| next() & next()).collect());
+                maps.push((0..words).map(|_| next() | next()).collect());
+            }
+        }
+        for len in [0, 1, 2, 3, 17, 63, 64, 65, 127, 128, 129, 130, 200] {
+            for roots in &maps {
+                let kept = |reg: usize| {
+                    roots
+                        .get(reg / 64)
+                        .is_some_and(|word| word & (1 << (reg % 64)) != 0)
+                };
+                for dropped in std::iter::once(None).chain((0..len).map(Some)) {
+                    let registers = window(len);
+                    let (reported, runs) = scan(&registers, roots, dropped);
+                    let expected: Vec<usize> = (0..len)
+                        .filter(|&reg| kept(reg) && dropped != Some(reg))
+                        .collect();
+                    assert_eq!(
+                        reported, expected,
+                        "{len} registers, {roots:x?}, {dropped:?}"
+                    );
+                    for pair in runs.windows(2) {
+                        assert!(
+                            pair[0].end < pair[1].start,
+                            "runs {runs:?} are not maximal: {len} registers, {roots:x?}"
+                        );
+                    }
+                    assert!(runs.iter().all(|run| !run.is_empty()));
+                    for (reg, slot) in registers.iter().enumerate() {
+                        let held = if expected.contains(&reg) {
+                            TaggedValue::fixnum(reg as i64)
+                        } else {
+                            RETIRED
+                        };
+                        assert_eq!(slot.get(), held, "r{reg} of {len}, {roots:x?}, {dropped:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// A frame of hand-built code, which has no maps and keeps every
+    /// register, whose window is `num_regs` registers from `register_base`.
+    fn frame(register_base: usize, num_regs: u16) -> CallFrame {
+        CallFrame {
+            pc: 0,
+            register_base,
+            num_regs,
+            closure: Cell::new(CallFrame::NO_CLOSURE),
+            return_reg: 0,
+            code: FrameCode(Rc::new(CodeObject {
+                id: CodeObjectId::label(),
+                name: None,
+                links: patina_core::LinkTable::empty(),
+                live_closures: Cell::new(0),
+                instructions: Vec::new(),
+                constants: Vec::new(),
+                num_regs,
+                arity: Arity::Fixed(0),
+                source_map: Vec::new(),
+                register_roots: None,
+            })),
+        }
+    }
+
+    /// The registers `scan_windows` hands to `live`, by number, and the
+    /// first register it found outside every window.
+    fn walk(registers: &[Cell<TaggedValue>], frames: &[CallFrame]) -> (Vec<i64>, Option<usize>) {
+        let mut reported = Vec::new();
+        let outside = scan_windows(registers, frames, 0, |run| {
+            reported.extend(run.iter().map(|slot| slot.get().as_fixnum().unwrap()));
+        });
+        (reported, outside)
+    }
+
+    /// A register outside every frame's window, which #714 left none of, is
+    /// handed on with the rest and never passed over: below the first
+    /// window, between two, and past the top one, in a build of any kind.
+    /// The walk answers the first, which a collection's refuses in a debug
+    /// build ([`a_debug_build_refuses_a_register_outside_every_window`]).
+    #[test]
+    fn a_register_outside_every_window_is_reported_with_the_rest() {
+        let registers = window(9);
+        let tiled = [frame(0, 4), frame(4, 5)];
+        assert_eq!(walk(&registers, &tiled), ((0..9).collect(), None));
+
+        // r0 lies below the first window, r4 and r5 between the two, and r8
+        // past the top one.
+        let gapped = [frame(1, 3), frame(6, 2)];
+        assert_eq!(walk(&registers, &gapped), ((0..9).collect(), Some(0)));
+        let between = [frame(0, 4), frame(6, 3)];
+        assert_eq!(walk(&registers, &between), ((0..9).collect(), Some(4)));
+        let past = [frame(0, 4), frame(4, 4)];
+        assert_eq!(walk(&registers, &past), ((0..9).collect(), Some(8)));
+        // No frame at all: the whole file.
+        assert_eq!(walk(&registers, &[]), ((0..9).collect(), Some(0)));
+        assert_eq!(walk(&[], &[]), (Vec::new(), None));
+    }
+
+    /// A collection's walk refuses that register in a debug build, where
+    /// `ExecutionState`'s own assertions hold the windows to tiling the file
+    /// (#714). Only a debug build: a release build reports the register and
+    /// goes on.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "lies outside every frame's window")]
+    fn a_debug_build_refuses_a_register_outside_every_window() {
+        struct Ignore;
+        impl SlotVisitor for Ignore {
+            fn slot(&mut self, _slot: &Cell<TaggedValue>) {}
+            fn pinned(&mut self, _value: TaggedValue) {}
+            fn env(&mut self, _env: &Rc<patina_core::environment::Environment>) {}
+            fn continuation(&mut self, _k: &Rc<patina_core::CpsContinuation>) {}
+            fn cont_env(&mut self, _cont_env: &patina_core::cont_value::ContEnv) {}
+            fn expr_literals(&mut self, _expr: &patina_core::CpsExpr) {}
+            fn code(&mut self, _id: u64) {}
+        }
+        trace_frames(&window(5), &[frame(0, 4)], &mut Ignore);
+    }
+}

@@ -8,7 +8,9 @@
 //! directly, through `collect_for_tests`, as in `weak_continuation_tests.rs`.
 //!
 //! Beside them, the test that the provider reports its slots where they live,
-//! by a visitor that writes into each and puts it back (#682); and the
+//! by a visitor that writes into each and puts it back (#682); the tests of
+//! the walk of the frames (#906), which reports the registers a frame's map
+//! keeps and clears the rest, at a collection and in a capture's copy; and the
 //! tests of tracing by code id (#836), each of which loads a unit, which
 //! `load_unit` links in a namespace the test then drops, and puts the unit
 //! in one place only, to show that a holder there keeps the table, its
@@ -32,7 +34,7 @@ use super::super::control::resume_step;
 use super::super::execution_state::{ExecutionState, ReturnFrame};
 use super::{LoopExit, VmState, execute, run_loop_until_outcome};
 use crate::tracer::StepTracer;
-use crate::types::code_object::{Arity, CodeObject};
+use crate::types::code_object::{Arity, CodeObject, RegisterMaps};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
@@ -422,6 +424,281 @@ fn for_each_slot(state: &VmState, mut each: impl FnMut(&Cell<TaggedValue>)) {
     {
         each(slot);
     }
+}
+
+// ----------------------------------------------------------------------------
+// The walk of the frames (#906)
+// ----------------------------------------------------------------------------
+
+/// What the walk writes into a register its frame's map calls dead
+/// (`gc_roots::RETIRED`), spelled out again here, so that a test says what
+/// a reader of the register finds in each build.
+fn retired() -> TaggedValue {
+    if patina_core::GC_CHECK {
+        TaggedValue::DEAD_SLOT
+    } else {
+        TaggedValue::UNSPECIFIED
+    }
+}
+
+/// Code of `num_regs` registers whose frame, suspended at pc `n`, keeps the
+/// registers `maps[n]` names, bit `r % 64` of word `r / 64` for register
+/// `r`: as pass 5 lays a unit's maps out, one table of maps padded to the
+/// widest, and an index of one entry a pc, the pc past the end included.
+fn mapped_code(num_regs: u16, maps: &[&[u64]]) -> Rc<CodeObject> {
+    let width = maps.iter().map(|map| map.len()).max().expect("a map");
+    let mut table = Vec::new();
+    for map in maps {
+        table.extend_from_slice(map);
+        table.resize(table.len() + width - map.len(), 0);
+    }
+    let index = (0..maps.len() as u16).collect();
+    Rc::new(CodeObject {
+        id: CodeObjectId::label(),
+        instructions: vec![Instruction::Nop; maps.len() - 1],
+        num_regs,
+        register_roots: Some(RegisterMaps::from_parts(index, Rc::from(table), width)),
+        ..(*code_holding(Vec::new())).clone()
+    })
+}
+
+/// A frame of `code` suspended at `pc`, whose window is `num_regs`
+/// registers from `register_base`.
+fn suspended(code: &Rc<CodeObject>, pc: usize, register_base: usize, num_regs: u16) -> CallFrame {
+    CallFrame {
+        pc,
+        register_base,
+        num_regs,
+        ..frame(code, CallFrame::NO_CLOSURE)
+    }
+}
+
+/// A pair nothing but the place a test puts it reaches, and no sentinel:
+/// the test shows it freed.
+fn garbage(heap: &mut Heap) -> TaggedValue {
+    heap.alloc_pair(TaggedValue::fixnum(-2), TaggedValue::NULL)
+}
+
+/// Every register of the machine, in order.
+fn register_values(state: &VmState) -> Vec<TaggedValue> {
+    (state.execution.register_cells().iter())
+        .map(Cell::get)
+        .collect()
+}
+
+/// The walk of the frames under a map (#906, `PRD/GC_PRD.md` §11.1,
+/// invariant 3): two frames of one code, each at a pc of its own, so each
+/// read against its own map and its own window. A register the map keeps
+/// holds a sentinel only it reaches, which survives; a register the map
+/// calls dead holds a value only it reaches, which the collection frees
+/// while the frame is still on the stack; and the dead register is cleared,
+/// not passed over, so it no longer names what was freed.
+#[test]
+fn a_frame_s_live_registers_are_kept_and_its_dead_ones_cleared() {
+    let mut state = VmState::on_a_fresh_heap();
+    let shared = state.heap.clone();
+    let mut heap = shared.borrow_mut();
+    let mut s = Sentinels::new(&mut heap);
+    let h: &mut Heap = &mut heap;
+    // At pc 1 a frame keeps r0 and r2; at pc 2, r1 alone.
+    let code = mapped_code(3, &[&[0b111], &[0b101], &[0b010]]);
+    let lower = [
+        s.pair(h, "the lower frame's r0, which its map keeps"),
+        garbage(h),
+        s.vector(h, "the lower frame's r2, which its map keeps"),
+    ];
+    let upper = [
+        garbage(h),
+        s.string(h, "the upper frame's r1, which its map keeps"),
+        garbage(h),
+    ];
+    drop(heap);
+    state.execution = running(
+        lower.iter().chain(&upper).copied().collect(),
+        vec![suspended(&code, 1, 0, 3), suspended(&code, 2, 3, 3)],
+    );
+
+    collect(&state);
+    let heap = state.heap.borrow();
+    s.assert_survived(&heap);
+    assert_eq!(state.execution.frames().len(), 2, "both frames live");
+    for (dead, what) in [
+        (lower[1], "the lower frame's r1, which its map calls dead"),
+        (upper[0], "the upper frame's r0, which its map calls dead"),
+        (upper[2], "the upper frame's r2, which its map calls dead"),
+    ] {
+        assert_freed(&heap, dead, what);
+    }
+    assert_eq!(
+        register_values(&state),
+        [
+            lower[0],
+            retired(),
+            lower[2],
+            retired(),
+            upper[1],
+            retired()
+        ],
+        "each dead register is overwritten, and no longer names what the collection freed"
+    );
+}
+
+/// A window wider than one map word, and wider than its code's map: a map
+/// is `width` words, register `r` its bit `r % 64` of word `r / 64`, and a
+/// register past the map's words is dead, as in the window a tail call
+/// reuses for code that needs fewer registers (`tail_replace`), which
+/// nothing else clears.
+#[test]
+fn a_window_wider_than_its_map_is_cleared_past_the_map() {
+    let mut state = VmState::on_a_fresh_heap();
+    let shared = state.heap.clone();
+    let mut heap = shared.borrow_mut();
+    let mut s = Sentinels::new(&mut heap);
+    let h: &mut Heap = &mut heap;
+    // Two words: r0, r63, r64 and r65 kept, of a window of 130 registers.
+    let code = mapped_code(66, &[&[1 | 1 << 63, 0b11]]);
+    let mut registers = vec![TaggedValue::NULL; 130];
+    for (reg, field) in [
+        (0, "r0, the first word's first bit"),
+        (63, "r63, the first word's last bit"),
+        (64, "r64, the second word's first bit"),
+        (65, "r65, the second word's second bit"),
+    ] {
+        registers[reg] = s.pair(h, field);
+    }
+    let dead = [1, 62, 66, 127, 128, 129];
+    for reg in dead {
+        registers[reg] = garbage(h);
+    }
+    drop(heap);
+    let held = registers.clone();
+    state.execution = running(registers, vec![suspended(&code, 0, 0, 130)]);
+
+    collect(&state);
+    let heap = state.heap.borrow();
+    s.assert_survived(&heap);
+    for reg in dead {
+        assert_freed(
+            &heap,
+            held[reg],
+            &format!("r{reg}, which the map calls dead"),
+        );
+    }
+    let expected: Vec<_> = (0..130)
+        .map(|reg| match reg {
+            0 | 63 | 64 | 65 => held[reg],
+            _ => retired(),
+        })
+        .collect();
+    assert_eq!(register_values(&state), expected);
+}
+
+/// A capture clears its copy by the same walk (#906, `PRD/GC_PRD.md` §13):
+/// the registers the snapshot's frames' maps call dead, and its hole, the
+/// register of its top frame `deliver_reg` names, which the map keeps as a
+/// call's destination and the capture clears all the same. What only they
+/// reached is freed while the continuation lives, and what the maps keep
+/// survives through the snapshot alone.
+#[test]
+fn a_full_capture_clears_its_copy_s_dead_registers_and_its_hole() {
+    let mut state = VmState::on_a_fresh_heap();
+    let shared = state.heap.clone();
+    let mut heap = shared.borrow_mut();
+    let mut s = Sentinels::new(&mut heap);
+    let h: &mut Heap = &mut heap;
+    // At pc 1 a frame keeps r0 and r2, and at pc 2 all three.
+    let code = mapped_code(3, &[&[0b111], &[0b101], &[0b111]]);
+    let kept = [
+        s.pair(h, "VmContinuation.registers: the lower frame's r0"),
+        s.vector(h, "VmContinuation.registers: the lower frame's r2"),
+        s.string(h, "VmContinuation.registers: the top frame's r0"),
+        s.object(h, "VmContinuation.registers: the top frame's r2"),
+    ];
+    let (dead, hole) = (garbage(h), garbage(h));
+    drop(heap);
+    let registers = [kept[0], dead, kept[1], kept[2], hole, kept[3]];
+    let continuation = state.alloc_vm_continuation(VmContinuation {
+        frames: vec![suspended(&code, 1, 0, 3), suspended(&code, 2, 3, 3)],
+        registers: registers.into_iter().map(Cell::new).collect(),
+        // The top frame's r1, which its map keeps.
+        deliver_reg: 1,
+        ..full_capture_of(&code)
+    });
+    let copy: Vec<_> = {
+        let store = state.continuation_store.borrow();
+        let snapshot = store.values().next().expect("the capture");
+        snapshot.registers.iter().map(Cell::get).collect()
+    };
+    assert_eq!(
+        copy,
+        [kept[0], retired(), kept[1], kept[2], retired(), kept[3]],
+        "the dead register and the hole are cleared in the copy, at the capture"
+    );
+    state.execution = running(vec![continuation], Vec::new());
+
+    collect(&state);
+    let heap = state.heap.borrow();
+    assert_eq!(state.continuation_store.borrow().len(), 1);
+    s.assert_survived(&heap);
+    assert_freed(
+        &heap,
+        dead,
+        "the lower frame's r1, which its map calls dead",
+    );
+    assert_freed(&heap, hole, "the hole, the top frame's r1");
+}
+
+/// As the full capture's, for a delimited one, whose frames keep their
+/// absolute bases over a register file that is only its slice: the walk
+/// reads each window from `base_at_capture`. Its top frame runs hand-built
+/// code, which has no map and keeps every register but the hole.
+#[test]
+fn a_delimited_capture_clears_its_copy_from_its_base() {
+    let mut state = VmState::on_a_fresh_heap();
+    let shared = state.heap.clone();
+    let mut heap = shared.borrow_mut();
+    let mut s = Sentinels::new(&mut heap);
+    let h: &mut Heap = &mut heap;
+    let code = mapped_code(3, &[&[0b111], &[0b110]]);
+    let unmapped = code_holding(Vec::new());
+    let kept = [
+        s.pair(h, "VmDelimitedContinuation.registers: the lower frame's r1"),
+        s.vector(h, "VmDelimitedContinuation.registers: the lower frame's r2"),
+        s.string(h, "VmDelimitedContinuation.registers: the top frame's r0"),
+    ];
+    let (dead, hole) = (garbage(h), garbage(h));
+    drop(heap);
+    let registers = [dead, kept[0], kept[1], kept[2], hole];
+    let continuation = state.alloc_vm_delimited_continuation(VmDelimitedContinuation {
+        // The slice starts at register 40 of the stack it was cut from.
+        frames: vec![suspended(&code, 1, 40, 3), suspended(&unmapped, 0, 43, 2)],
+        registers: registers.into_iter().map(Cell::new).collect(),
+        base_at_capture: 40,
+        deliver_reg: Some(1),
+        ..delimited_capture_of(&code)
+    });
+    let copy: Vec<_> = {
+        let store = state.delimited_continuation_store.borrow();
+        let snapshot = store.values().next().expect("the capture");
+        snapshot.registers.iter().map(Cell::get).collect()
+    };
+    assert_eq!(
+        copy,
+        [retired(), kept[0], kept[1], kept[2], retired()],
+        "the dead register and the hole are cleared in the copy, at the capture"
+    );
+    state.execution = running(vec![continuation], Vec::new());
+
+    collect(&state);
+    let heap = state.heap.borrow();
+    assert_eq!(state.delimited_continuation_store.borrow().len(), 1);
+    s.assert_survived(&heap);
+    assert_freed(
+        &heap,
+        dead,
+        "the lower frame's r0, which its map calls dead",
+    );
+    assert_freed(&heap, hole, "the hole, the top frame's r1");
 }
 
 // ----------------------------------------------------------------------------
