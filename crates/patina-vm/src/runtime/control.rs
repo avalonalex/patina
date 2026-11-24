@@ -375,6 +375,12 @@ fn spread_apply_tail(state: &VmState, last: TaggedValue) -> Result<Vec<TaggedVal
 /// `TailCallWithValues` goes through — always leaves a caller behind. Every
 /// other loop exits at a depth of 1 or more.
 ///
+/// `return_reg` may be [`CallFrame::NO_RETURN`], a call with no destination
+/// (a higher-order primitive's callback, [`run_apply_proc`], #714): a frame
+/// the call pushes returns into nothing, and the value of a callee that
+/// answers here and now comes back through `return_into`'s no-destination
+/// form rather than a register ([`answered`]).
+///
 /// It did hold its own until 2026-09-05, one probe short: primitive →
 /// parameter → continuation → closure, with **no control primitive**, which is
 /// claimed by name before any of those and so matched nothing and fell through
@@ -401,7 +407,19 @@ pub(super) fn call_any(
     if state.execution.depth() != depth_before {
         return Ok(None);
     }
-    Ok(Some(state.reg(return_reg)))
+    Ok(Some(answered(state, return_reg)))
+}
+
+/// What a callee that answered here and now delivered to `return_reg` of the
+/// top frame: the register, or for [`CallFrame::NO_RETURN`], which writes
+/// none, the value `return_into` handed back (#714).
+#[inline(always)]
+fn answered(state: &VmState, return_reg: u16) -> TaggedValue {
+    if return_reg == CallFrame::NO_RETURN {
+        state.execution.take_answer()
+    } else {
+        state.reg(return_reg)
+    }
 }
 
 /// Try to call a parameter object with no argument, which reads it. Returns
@@ -486,8 +504,9 @@ fn store_args_in_window(state: &mut VmState, base: usize, arity: Arity, arg_vals
 fn retired_register_as_argument(index: usize) -> ! {
     panic!(
         "a retired register reached a call as its argument {index}: it was \
-         read out of a register a liveness map said was dead, by a path that \
-         does not check (#625, docs/GC_DESIGN.md §11)"
+         read out of a register a liveness map said was dead, or one its \
+         activation never wrote, by a path that does not check (#625, #714, \
+         docs/GC_DESIGN.md §11)"
     )
 }
 
@@ -710,7 +729,13 @@ fn handle_control_primitive(
                 // Never read: arriving ends the process first.
                 reentry: captured_reentry(state),
             });
-            step_wind_jump(state, target, TaggedValue::UNSPECIFIED, window)?;
+            step_wind_jump(
+                state,
+                target,
+                TaggedValue::UNSPECIFIED,
+                WindStub::Push,
+                window,
+            )?;
             return Err(park_escape(state, TaggedValue::UNSPECIFIED));
         }
 
@@ -1200,6 +1225,19 @@ pub(super) mod wind_step {
     pub(in crate::runtime) const NUM_REGS: u16 = 4;
 }
 
+/// Where a jump's next step finds its stub frame (#714): pushed now, at the
+/// travel's first step, or on top already, where `ResumeWindJump` takes the
+/// step after a thunk returned into the travel's own stub.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum WindStub {
+    /// The travel starts here: a continuation invoke, `exit`, an abort's
+    /// travel. A step pushes the stub.
+    Push,
+    /// `ResumeWindJump`, in the travel's stub on top: a step restarts it in
+    /// place, at pc 0, keeping the target and value in its window.
+    Reuse,
+}
+
 /// Take the next step of a jump to the full continuation `target`: run one
 /// wind thunk between the live wind stack and the target's, or, with none
 /// left, arrive — restore the target's state and deliver `value`.
@@ -1210,7 +1248,11 @@ pub(super) mod wind_step {
 /// remaining extents outermost first (run `before`, push the record). Each
 /// thunk runs under a stub frame whose only instruction comes back here
 /// ([`Instruction::ResumeWindJump`]), so the thunks are ordinary frames of
-/// the machine the jump was made on rather than nested Rust calls.
+/// the machine the jump was made on rather than nested Rust calls. The stub
+/// frame stays for the whole travel (#714): the first step pushes it
+/// (`stub` is [`WindStub::Push`]), each later one restarts it in place
+/// ([`WindStub::Reuse`]), and arrival replaces it with the target's frames,
+/// so the target and value are in a frame's window from the first step on.
 ///
 /// Each thunk also runs in the dynamic environment of its own `dynamic-wind`
 /// call (R7RS §6.10): the wind stack below its record, and the handler stack
@@ -1232,21 +1274,24 @@ pub(super) mod wind_step {
 /// left the machine's roots — or before the lookup, if they never did. From
 /// the lookup in the weak store to the copy-back, no safe point may run: an
 /// unrooted `target` at a collecting one would have its payload pruned
-/// (`gc_roots.rs`). The window closes where they are back: at arrival, once
-/// the snapshot is restored and the value delivered; on a step, once
-/// `push_wind_step` has written them into the stub, before the thunk is
-/// called (#624).
+/// (`gc_roots.rs`), and `cc`, the store's clone, is never held across a
+/// collecting poll (#836). The window closes where they are back: at
+/// arrival, once the snapshot is restored and the value delivered; on a
+/// step, once `push_wind_step` has written them into a pushed stub, or
+/// restarted the stub that holds them, before the thunk is called (#624).
 ///
 /// # State contract
 ///
-/// Requires a live full-continuation handle. A scheduled step mutates winds,
-/// handlers, frames and registers; arrival replaces all five components and
-/// delivers value. Ok does not mean an ordinary call returned: the caller
-/// must park the transfer and yield to the owning driver.
+/// Requires a live full-continuation handle, and with [`WindStub::Reuse`]
+/// the travel's stub frame on top. A scheduled step mutates winds, handlers,
+/// frames and registers; arrival replaces all five components and delivers
+/// value. Ok does not mean an ordinary call returned: the caller must park
+/// the transfer and yield to the owning driver.
 pub(super) fn step_wind_jump(
     state: &mut VmState,
     target: TaggedValue,
     value: TaggedValue,
+    stub: WindStub,
     window: AssertNoGc,
 ) -> Result<(), VmError> {
     let cc = state
@@ -1262,10 +1307,10 @@ pub(super) fn step_wind_jump(
             .execution
             .pop_wind()
             .expect("longer than its own prefix");
+        let base = wind_step_frame(state, target, value, stub)?;
         return push_wind_step(
             state,
-            target,
-            value,
+            base,
             TaggedValue::FALSE,
             record.after,
             &record.handlers,
@@ -1279,10 +1324,10 @@ pub(super) fn step_wind_jump(
     if let WindStep::Enter(index) = step {
         let record = &cc.dynamic_winds[index];
         let entering = TaggedValue::fixnum(index as i64);
+        let base = wind_step_frame(state, target, value, stub)?;
         return push_wind_step(
             state,
-            target,
-            value,
+            base,
             entering,
             record.before,
             &record.handlers,
@@ -1384,33 +1429,78 @@ pub(super) fn exit_in_progress(state: &VmState) -> Option<i32> {
         })
 }
 
-/// Push a stub frame carrying the rest of the jump, install the handler stack
-/// the thunk's `dynamic-wind` call had, and call the thunk under it.
+/// The stub frame a wind step's thunk runs above, which carries the rest of
+/// the jump (#714): pushed at the travel's first step ([`WindStub::Push`]),
+/// with the target and value written into it, or the travel's own, on top,
+/// restarted in place at pc 0 with both kept ([`WindStub::Reuse`]). Answers
+/// its window's base. Its other two registers are the push's or the
+/// restart's fill until [`push_wind_step`] writes `ENTERING` and the thunk's
+/// return `THUNK_RESULT`.
+///
+/// # State contract
+///
+/// Requires, for `Reuse`, the travel's stub frame on top, holding `target`
+/// and `value`. Pushes or restarts that one frame; writes only its window;
+/// calls no Scheme.
+fn wind_step_frame(
+    state: &mut VmState,
+    target: TaggedValue,
+    value: TaggedValue,
+    stub: WindStub,
+) -> Result<usize, VmError> {
+    let code = wind_jump_stub(state)?;
+    match stub {
+        WindStub::Push => {
+            let base = push_stub_frame(state, code, wind_step::NUM_REGS);
+            // `set_top` for the reason the value form's stub gives: the
+            // frame is pushed, so the assert holds and keeps holding.
+            state.execution.set_top(base, wind_step::TARGET, target);
+            state.execution.set_top(base, wind_step::VALUE, value);
+            Ok(base)
+        }
+        WindStub::Reuse => {
+            debug_assert!(
+                state.execution.frames().last().is_some_and(|top| {
+                    top.code.id == code.id
+                        && state
+                            .execution
+                            .registers()
+                            .values(
+                                top.register_base + wind_step::TARGET as usize
+                                    ..top.register_base + wind_step::ENTERING as usize,
+                            )
+                            .eq([target, value])
+                }),
+                "a wind step reuses its travel's own stub frame"
+            );
+            Ok(state.execution.restart_stub(code, wind_step::ENTERING))
+        }
+    }
+}
+
+/// Run a wind step's thunk above its stub frame at `base`
+/// ([`wind_step_frame`]): install the handler stack the thunk's
+/// `dynamic-wind` call had, write which record the step enters, and call the
+/// thunk under it.
 ///
 /// Closes the jump's `window` once the stub holds the operands, before the
 /// call: a thunk may run a nested loop, which polls.
 ///
 /// # State contract
 ///
-/// Requires a valid target handle and a popped exiting record, or an
-/// unpushed entering record. Installs the supplied handlers, roots transfer
-/// operands in a stub, and calls the thunk. Calls can change all dynamic state.
+/// Requires the step's stub frame on top at `base`, holding the target and
+/// value, and a popped exiting record or an unpushed entering record.
+/// Installs the supplied handlers, writes `ENTERING`, and calls the thunk.
+/// Calls can change all dynamic state.
 fn push_wind_step(
     state: &mut VmState,
-    target: TaggedValue,
-    value: TaggedValue,
+    base: usize,
     entering: TaggedValue,
     thunk: TaggedValue,
     handlers: &[ExceptionHandler],
     window: AssertNoGc,
 ) -> Result<(), VmError> {
     install_thunk_handlers(state, handlers);
-    let code = wind_jump_stub(state)?;
-    let base = push_stub_frame(state, code, wind_step::NUM_REGS);
-    // `set_top` for the reason the value form's stub gives: the frame is
-    // pushed, so the assert holds and keeps holding.
-    state.execution.set_top(base, wind_step::TARGET, target);
-    state.execution.set_top(base, wind_step::VALUE, value);
     state.execution.set_top(base, wind_step::ENTERING, entering);
     drop(window);
     // The caller's clone of the jump's continuation (`step_wind_jump`'s `cc`,
@@ -1444,7 +1534,9 @@ fn push_wind_step(
 /// or, on a re-entry, above it. `pop_exception_handlers` reads them
 /// literally and would drop a handler as soon as a frame at or above its
 /// recorded depth returned, so each is clamped to the depth the thunk starts
-/// at. Clamping against one constant preserves the stack's non-decreasing
+/// at: the depth the step's stub frame was pushed at, below it, which is the
+/// same at every step since the stub stays for the whole travel (#714).
+/// Clamping against one constant preserves the stack's non-decreasing
 /// order, and nothing else reads the field.
 ///
 /// There is no restore, and none is owed — *for a jump*, whose target replaces
@@ -1464,8 +1556,8 @@ fn push_wind_step(
 ///
 /// # State contract
 ///
-/// Requires the wind thunk's current frame depth. Replaces only handlers,
-/// clamping their saved depths to the live stack; does not call Scheme.
+/// Requires the step's stub frame on top. Replaces only handlers, clamping
+/// their saved depths to that frame's depth; does not call Scheme.
 fn install_thunk_handlers(state: &mut VmState, handlers: &[ExceptionHandler]) {
     state.execution.install_thunk_handlers(handlers);
 }
@@ -1534,8 +1626,10 @@ fn runtime_stub(
 /// one of two call sites reads as the decision it is.
 ///
 /// The two thunk-stepping stubs leave `return_reg` at 0 and nothing ever
-/// returns *into* their frames: the instruction pops the frame itself and
-/// either starts the next thunk or finishes the transfer.
+/// returns *into* their frames: the instruction either starts the next
+/// thunk or finishes the transfer. The invoke pops its frame to do so; the
+/// jump restarts its frame in place for the next thunk, and its arrival
+/// replaces the frame (#714).
 ///
 /// `raise_step_stub` is the third caller and breaks that: its `Call handler`
 /// **does** return into the frame, and its own `Return` delivers the
@@ -1895,15 +1989,10 @@ fn set_suspension(state: &mut VmState, base: usize, suspension: Suspension) {
             }
         }
         StubWork::Collect(_) => {
-            // Nothing to call. A frame going round again keeps the last
-            // call's callee, arguments and result in these registers, which
-            // the collection would otherwise keep alive.
-            for reg in [resume_step::CALLEE, resume_step::RESULT]
-                .into_iter()
-                .chain((0..resume_step::INLINE_ARGS as u16).map(|i| resume_step::ARGS + i))
-            {
-                state.execution.set_top(base, reg, TaggedValue::UNSPECIFIED);
-            }
+            // Nothing to call. The push or the restart has filled the
+            // callee, argument and result registers (#714), so a frame
+            // going round again keeps nothing of the last call alive through
+            // the collection; until then it cleared them here.
             state
                 .execution
                 .set_top(base, resume_step::EVAL, TaggedValue::FALSE);
@@ -2236,9 +2325,12 @@ pub(super) fn resume_primitive(state: &mut VmState, base: usize) -> Result<(), V
             // argument count, or the one that collects; the loop picks up a
             // changed code object. Restarted before its operands are
             // written, so that they are the next round's own (`set_top`,
-            // #904); `set_suspension` reads neither the pc nor the code.
+            // #904); `set_suspension` reads neither the pc nor the code. The
+            // primitive's index carries over, and every other register is
+            // filled (#714): a round with fewer arguments, or one that
+            // collects, keeps nothing of the last call.
             let code = stub_for(state, &suspension.work)?;
-            state.execution.restart_stub(code);
+            state.execution.restart_stub(code, resume_step::STATE);
             set_suspension(state, base, suspension);
         }
     }
@@ -2651,11 +2743,19 @@ impl patina_primitives::ApplyContext for VmApplyContext {
 /// Apply a procedure (VmClosure or primitive) to args within the VM,
 /// running the execution loop if needed. Used by `VmApplyContext::apply_proc`.
 ///
+/// The call has no destination ([`CallFrame::NO_RETURN`], #714): a callee
+/// that answers here and now hands its value back through `call_any`, and a
+/// closure's frame, which this loop runs to its `Return` at `depth_before`,
+/// hands it back from there, writing no register. So no word is kept past
+/// the caller's window, where a scratch slot for the callee's value was
+/// until then, and a continuation that re-enters the callback after the
+/// primitive has returned returns into nothing.
+///
 /// # State contract
 ///
-/// Requires a live caller under across_reentry. Uses a scratch return slot
-/// and may run a nested loop, changing all dynamic state. Its caller must
-/// interpret transfer flags before accepting the returned value.
+/// Requires a live caller under across_reentry. Writes no register of the
+/// caller, and may run a nested loop, changing all dynamic state. Its caller
+/// must interpret transfer flags before accepting the returned value.
 #[expect(
     clippy::disallowed_methods,
     reason = "the state is in the machine: `call_any` put `proc`'s arguments in its frame, which \
@@ -2669,11 +2769,9 @@ fn run_apply_proc(
 ) -> Result<TaggedValue, VmError> {
     let depth_before = state.execution.depth();
 
-    // Use a scratch return register beyond the current frame's live registers.
-    let return_reg = state.execution.scratch_return_reg();
-
-    if let Some(result) = call_any(state, proc, args, return_reg)? {
+    if let Some(result) = call_any(state, proc, args, CallFrame::NO_RETURN)? {
         // Primitive — returned immediately.
+        state.execution.debug_assert_windows_tile();
         return Ok(result);
     }
     // VM closure was pushed; run until it returns.
@@ -2684,7 +2782,12 @@ fn run_apply_proc(
     // does not is a transfer, which `across_reentry` catches for every
     // boundary at once. A nested entry: no driver, so it never collects
     // (#702).
-    run_loop_until(state, depth_before, None)
+    let result = run_loop_until(state, depth_before, None);
+    // The callback kept no word past the caller's window (#714).
+    if result.is_ok() {
+        state.execution.debug_assert_windows_tile();
+    }
+    result
 }
 
 /// Recognized VM-intercepted control primitives.
@@ -2836,7 +2939,7 @@ fn try_invoke_full_continuation(
     }
     let window = AssertNoGc::new(state.heap());
     let deliver_val = deliver_value(state, args);
-    step_wind_jump(state, func_val, deliver_val, window)?;
+    step_wind_jump(state, func_val, deliver_val, WindStub::Push, window)?;
     Ok(Some(deliver_val))
 }
 
@@ -2970,7 +3073,7 @@ pub(super) fn abort_to_prompt(
         reentry: captured_reentry(state),
     };
     let target_tv = state.alloc_vm_continuation(target);
-    match step_wind_jump(state, target_tv, val, window) {
+    match step_wind_jump(state, target_tv, val, WindStub::Push, window) {
         Ok(()) => park_transfer(state, val),
         Err(e) => e,
     }
@@ -3257,8 +3360,12 @@ pub(super) fn capture_delimited(
         // — the capturing call never returns a value into it — so whatever it
         // still holds would be retained for the continuation's whole life.
         // `call/cc`'s capture clears its own `dst` for this reason, with 296
-        // MB of measured retention behind the comment there.
-        registers[top.register_base - base_at_capture + hole as usize].set(TaggedValue::NULL);
+        // MB of measured retention behind the comment there. An abort made
+        // as a primitive's callback has no hole in any window
+        // (`CallFrame::NO_RETURN`, #714), and nothing to clear.
+        if hole != CallFrame::NO_RETURN {
+            registers[top.register_base - base_at_capture + hole as usize].set(TaggedValue::NULL);
+        }
         hole
     });
     let captured = VmDelimitedContinuation {
@@ -3700,7 +3807,7 @@ pub(super) fn tail_call_value_with_probe(
                 pop_resolved_extents(state, exit_depth);
             }
             if state.execution.depth() == exit_depth {
-                let result = state.reg(return_reg);
+                let result = answered(state, return_reg);
                 return Ok(Some(result));
             }
             return Ok(None);

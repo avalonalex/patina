@@ -11,8 +11,8 @@ pub(crate) use gc_roots::collect_with_a_frame_at_an_unmapped_pc;
 use gc_roots::switches;
 
 use super::control::{
-    Reentry, abort_to_prompt, across_reentry, call_any, call_closure_from_regs, call_value,
-    call_value_with_probe, capture_delimited, captured_handlers, classify_error,
+    Reentry, WindStub, abort_to_prompt, across_reentry, call_any, call_closure_from_regs,
+    call_value, call_value_with_probe, capture_delimited, captured_handlers, classify_error,
     deliver_before_collecting, exec_call_primitive, exec_call_primitive_direct, find_prompt,
     finish_delimited_invoke, invoke_step, is_catchable, park_escape, park_transfer,
     pop_resolved_extents, push_invoke_step, raise_step, resume_step, self_tail_call,
@@ -970,7 +970,9 @@ impl VmState {
     /// The panic of a read of a register the last retirement filled with
     /// `DEAD_SLOT` (#625): its frame's liveness map, at the pc where a
     /// collection or a capture retired it, called a register dead that was
-    /// still to be read. `frame_from_top` names the reading frame (0 for the
+    /// still to be read. Or a register the push of its window filled with
+    /// it, which the activation reads without having written (#714).
+    /// `frame_from_top` names the reading frame (0 for the
     /// top one); the pc reported is the reading instruction's, the one its
     /// frame's `pc` is one past.
     #[cold]
@@ -989,7 +991,8 @@ impl VmState {
             .expect("the reading frame is on the stack");
         panic!(
             "read of a retired register {how}: r{reg} at pc {} of #{} \
-             (a liveness map said it was dead; #625, docs/GC_DESIGN.md §11)",
+             (a liveness map said it was dead, or its activation never wrote \
+             it; #625, #714, docs/GC_DESIGN.md §11)",
             frame.pc.saturating_sub(1),
             frame.code.id
         )
@@ -2654,14 +2657,16 @@ fn dispatch_one_instruction(
                 .ok_or_else(malformed)? as usize;
             let window = AssertNoGc::new(state.heap());
             state.execution.pop_frame();
-            // Freed, unlike `ResumeWindJump`'s — and copying that rule without
-            // its reason is what made this leak. A jump's arrival *replaces*
-            // the register file, so an un-freed window costs one travel; a
+            // Freed with its frame. `ResumeWindJump`'s window was once kept
+            // when its frame popped, and copying that rule without its reason
+            // is what made this leak: a jump's arrival *replaces* the
+            // register file, so an un-freed window cost one travel; a
             // composable invoke *extends* it, so the window is stranded under
             // everything appended after it and is reclaimed only when the
             // enclosing frame returns — which for a tail-recursive loop of
             // invokes is never. Measured: 27 MB against `main`'s 10 at 400k
-            // invokes, growing without bound.
+            // invokes, growing without bound. (A jump's stub frame now stays
+            // for its whole travel, #714, so no window outlives its frame.)
             //
             // Safe because the four values are already in Rust locals, and
             // nothing between here and the next write of `cont` — into the
@@ -2708,21 +2713,20 @@ fn dispatch_one_instruction(
             let value = state.reg_at(base, wind_step::VALUE);
             let entering = state.reg_at(base, wind_step::ENTERING);
             let window = AssertNoGc::new(state.heap());
-            state.execution.finish_wind_step();
-            // The stub's register window is deliberately **not** freed here.
-            // It is the only root for `target` and `value` — and `target` is a
-            // `VmContinuationRef` whose payload lives in a *weak* store
-            // (`gc_roots.rs`), so an unrooted one at a collecting safe point
-            // would have its payload pruned. Freeing it would leave both
-            // reachable from Rust locals alone until the next step writes them
-            // back. No safe point runs in that window today, which is what
-            // makes this cheap insurance rather than a fix; the same reasoning
-            // roots `pending_escape`. The window costs `NUM_REGS` per step and
-            // is reclaimed wholesale when the travel ends: arrival replaces
-            // the register file, and so does any jump that abandons this one.
+            // The stub frame stays on top for the whole travel (#714): the
+            // next step restarts it in place, and arrival replaces it with
+            // the target's frames. So `target`, a `VmContinuationRef` whose
+            // payload lives in a *weak* store (`gc_roots.rs`), stays rooted
+            // in its window, with `value`, and no word is left outside a
+            // frame's window. The frame was popped here until then, its
+            // window kept on the register file as the two's only root, a
+            // word outside every window that an interleaved stack cannot
+            // keep (`PRD/GC_PRD.md` §11.1, invariant 1).
             //
-            // `window` asserts the "no safe point" half (#624): it runs from
-            // here to the next write, inside `step_wind_jump`, which closes it.
+            // `window` asserts no safe point from here to the step's end,
+            // inside `step_wind_jump`, which closes it (#624): the step reads
+            // the weak store, holds its clone, and on arrival holds `value`
+            // in a Rust local from the restore to the delivery.
 
             // A before-thunk's record is pushed only now, after it returned:
             // while the thunk runs, its extent is not entered, so a jump out
@@ -2760,7 +2764,9 @@ fn dispatch_one_instruction(
             let abort_landing = state
                 .get_vm_continuation(target)
                 .is_some_and(|cc| cc.abort_landing);
-            step_wind_jump(state, target, value, window)?;
+            step_wind_jump(state, target, value, WindStub::Reuse, window)?;
+            // The step left no window behind it (#714).
+            state.execution.debug_assert_windows_tile();
             // Whether that pushed the next thunk's frames or arrived and
             // replaced the stack, the loop that owns what is now on the stack
             // decides — the same signal every continuation invoke sends.
@@ -2830,7 +2836,7 @@ fn dispatch_one_instruction(
                 // repeating it here would only buy a second wording of the
                 // same error that no test can reach.
                 let window = AssertNoGc::new(state.heap());
-                step_wind_jump(state, cont_tv, deliver_val, window)?;
+                step_wind_jump(state, cont_tv, deliver_val, WindStub::Push, window)?;
                 return Err(park_escape(state, deliver_val));
             }
         }
@@ -3452,6 +3458,123 @@ fn mark_if_import_rebound(
     }
 }
 
+/// What `test_support::read_an_unwritten_register` does (#714): on a fresh
+/// machine, run hand-assembled code in which an activation that reuses a
+/// window first reads a register it never wrote, one the window's earlier
+/// occupant wrote 99 into, and answer what the read found. The reuse is
+/// the push the fill covers: a tail call (`tail_replace`), a self tail call
+/// (`restart_closure`), or a stub's next round (`restart_stub`). A check
+/// build panics at the read, in `reg_at`; a plain release build finds the
+/// fill, `NULL`; with the fill gone, either finds 99.
+#[cfg(feature = "test-support")]
+pub(crate) fn read_an_unwritten_register(after: crate::test_support::Reuse) -> TaggedValue {
+    use crate::test_support::Reuse;
+    let stale = TaggedValue::fixnum(99);
+    let code = |name: &str, num_regs, arity, instructions, constants| CodeObject {
+        id: CodeObjectId::label(),
+        name: Some(Rc::from(name)),
+        links: patina_core::LinkTable::empty(),
+        live_closures: Cell::new(0),
+        instructions,
+        constants,
+        num_regs,
+        arity,
+        source_map: Vec::new(),
+        register_roots: None,
+    };
+    let mut state = VmState::on_a_fresh_heap();
+    match after {
+        Reuse::TailCall => {
+            // A writes r2 and tail-calls B, whose `Return` reads r2.
+            let b = state.load(code(
+                "unwritten-control-b",
+                3,
+                Arity::Fixed(0),
+                vec![Instruction::Return { val: 2 }],
+                Vec::new(),
+            ));
+            let closure = state.heap.borrow_mut().alloc_vm_closure(b.0, Vec::new());
+            state.note_closure_made(b);
+            let a = state.load(code(
+                "unwritten-control-a",
+                3,
+                Arity::Fixed(0),
+                vec![
+                    Instruction::LoadImmediate { dst: 2, val: stale },
+                    Instruction::LoadConst { dst: 0, idx: 0 },
+                    Instruction::TailCall {
+                        func: 0,
+                        args: Vec::new(),
+                    },
+                ],
+                vec![closure],
+            ));
+            let a = state.code_object(a).expect("the control's code is loaded");
+            state.execution.push_frame(a, CallFrame::NO_CLOSURE, 0);
+        }
+        Reuse::SelfTailCall => {
+            // C(self, first): the first activation writes r2 and calls
+            // itself in tail position with `first` false; the second's
+            // `Return` reads r2.
+            let c = state.load(code(
+                "unwritten-control-c",
+                4,
+                Arity::Fixed(2),
+                vec![
+                    Instruction::JumpUnless { cond: 1, target: 4 },
+                    Instruction::LoadImmediate { dst: 2, val: stale },
+                    Instruction::LoadImmediate {
+                        dst: 3,
+                        val: TaggedValue::FALSE,
+                    },
+                    Instruction::TailCall {
+                        func: 0,
+                        args: vec![0, 3],
+                    },
+                    Instruction::Return { val: 2 },
+                ],
+                Vec::new(),
+            ));
+            let closure = state.heap.borrow_mut().alloc_vm_closure(c.0, Vec::new());
+            state.note_closure_made(c);
+            let c = state.code_object(c).expect("the control's code is loaded");
+            let base = state.execution.push_frame(c, closure, 0);
+            state.execution.init_arg(base, 0, closure);
+            state.execution.init_arg(base, 1, TaggedValue::TRUE);
+        }
+        Reuse::StubRestart => {
+            // A stub frame whose first round kept r0 and wrote r1, started
+            // on its next round, which keeps r0, in code whose `Return`
+            // reads r1 before the round has written it.
+            let first = state.load(code(
+                "unwritten-control-first-round",
+                2,
+                Arity::Fixed(0),
+                vec![Instruction::Return { val: 1 }],
+                Vec::new(),
+            ));
+            let next = state.load(code(
+                "unwritten-control-next-round",
+                2,
+                Arity::Fixed(0),
+                vec![Instruction::Return { val: 1 }],
+                Vec::new(),
+            ));
+            let first = state
+                .code_object(first)
+                .expect("the control's code is loaded");
+            let next = state
+                .code_object(next)
+                .expect("the control's code is loaded");
+            let base = state.execution.push_frame(first, CallFrame::NO_CLOSURE, 0);
+            state.execution.set_top(base, 0, TaggedValue::fixnum(1));
+            state.execution.set_top(base, 1, stale);
+            state.execution.restart_stub(next, 1);
+        }
+    }
+    run_top_frame(&mut state).expect("the control's code runs")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3488,9 +3611,18 @@ mod tests {
         assert!(state.execution.frames().is_empty());
     }
 
-    /// Code that returns register 0, compiled by no one.
+    /// Code that returns register 0, compiled by no one. It writes the
+    /// register first, as compiled code does: a check build fills a pushed
+    /// window with `DEAD_SLOT`, which a `Return` of an unwritten register
+    /// would read (#714).
     pub(super) fn code() -> CodeObject {
-        let instructions = vec![Instruction::Return { val: 0 }];
+        let instructions = vec![
+            Instruction::LoadImmediate {
+                dst: 0,
+                val: TaggedValue::UNSPECIFIED,
+            },
+            Instruction::Return { val: 0 },
+        ];
         CodeObject {
             id: CodeObjectId::label(),
             name: None,

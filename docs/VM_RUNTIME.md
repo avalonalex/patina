@@ -66,11 +66,18 @@ frame/window removal, tail replacement, full capture/arrival, prompt landing,
 and composable append are named operations on this owner. The continuation
 representations and transfer algorithms are unchanged.
 
-The deliberate exception to paired frame/window removal is
-`finish_wind_step`: a full jump's finished stub retains its register window
-as roots until arrival replaces the register file. A composable invoke instead
-uses paired removal, since it appends to that file. Keep this distinction when
-adding drivers; see §5.3 and `GC_DESIGN.md` §5.2.
+Every register lies in a frame's window: the windows tile the register file,
+each beginning where the one below ends, and the top one ends the file
+(`PRD/GC_PRD.md` §11.1, invariant 1; #714). A debug build asserts it at every
+push, pop and `return_into`, and in full after a wind step and a higher-order
+primitive's callback. Until #714 two places kept words outside every window:
+a full jump's finished wind-step stub left its window on the file as the
+only root of the jump's target and value (`finish_wind_step`), and
+`run_apply_proc` took a scratch slot one past the caller's window for its
+callee's value. A jump's stub frame now stays for its whole travel (§5.3),
+and a callback has no destination (§4.4). A composable invoke pops its stub
+frame with its window, since it appends to that file. Keep both rules when
+adding drivers; see `GC_DESIGN.md` §5.2.
 
 Beside the five components `ExecutionState` holds the id of the code the
 innermost running dispatch loop runs (`RunningCode`, #836), traced as a
@@ -334,7 +341,20 @@ and a push (#904):
   (`PRD/GC_PRD.md` §11.1).
 - A push initializes its frame's window: `push_frame`, `push_abort_stub`, a
   call's arguments (`init_arg`, `init_args`), and a stub's operands through
-  `set_top`, the stub being the top frame.
+  `set_top`, the stub being the top frame. Every register of the window
+  that no argument or operand writes gets an immediate, `FILL` (#714,
+  `PRD/GC_PRD.md` §11.1, invariant 1): `NULL` in a plain release build,
+  `DEAD_SLOT` in a check build, which `reg_at` refuses, so a read of a
+  register the activation never wrote panics there. A fresh window is
+  filled whole. A reused one is filled past what it keeps: `tail_replace`
+  (a tail call) and `restart_closure` (a self tail call) fill the new
+  code's registers past its arguments' (`[0, n)` for `Fixed(n)`, `[0, k+1)`
+  for `Variadic(k)`, which `store_args_in_window` writes), one store each,
+  and `restart_stub` a stub's next round from the registers it keeps (a
+  resume stub keeps the primitive's index, a wind step its target and
+  value). Registers a larger earlier occupant left past the new code's
+  count are not filled: the new code cannot name them, and retirement
+  clears them at every safe point.
 
 A check build asserts the choice: `return_into` writes a frame below the top
 or a top frame that awaits a value, and `set_top` and a push's writes never
@@ -372,11 +392,13 @@ thunks both use `call_any`.
 
 ### 4.3 Tail Call
 
-For `TailCall`, the current frame is reused:
+For `TailCall` to a closure, the current frame is reused:
 - Read all arg values into temporaries first
-- Pop current frame, free registers
-- Push new frame with callee's code
+- Give the frame the callee's code (`tail_replace`), or, for the frame's own
+  code, its closure (`restart_closure`): pc 0, the window grown if the code
+  needs more registers, and every register past the arguments' filled (§3.4)
 - Write args to param slots
+- Poll at the callee's entry
 
 ### 4.4 Return
 
@@ -385,7 +407,16 @@ On `Return { val }`:
 2. Pop current frame, free registers
 3. If at exit depth, return result
 4. Write result to caller's `return_reg`, through `return_into` (§3.4), where
-   stage 7 lowers the stack watermark when the caller is below it
+   stage 7 lowers the stack watermark when the caller is below it. A frame
+   pushed with `return_reg` `CallFrame::NO_RETURN` (`u16::MAX`, #714) has no
+   destination: a higher-order primitive's callback (`run_apply_proc`),
+   whose value the loop it runs on hands back at its exit depth. No window
+   reaches `NO_RETURN`, so `return_into` finds it past the end of the
+   register file with the bounds check it makes anyway, and writes no
+   register; a continuation that re-enters the callback after the
+   primitive has returned returns into nothing. A callee that answers such
+   a call here and now (a primitive, `values`, a parameter) hands its value
+   to `ExecutionState::answer`, which `call_any` takes back at once
 5. Run cleanup: `pop_resolved_prompts()`, `pop_exception_handlers()`. Wind
    records are not swept here — `PopWind` pops each one (§5.3)
 
@@ -408,7 +439,8 @@ There are **two** probe sets, one per call shape, and they differ in order:
   instruction behind them: a `call-with-values` consumer (instruction and tail
   instruction), a prompt body, an exception-handler thunk,
   `call/cc`'s procedure, a jump's wind thunks, a composable invoke's re-entry thunks, a higher-order primitive's
-  callback, and a parameter converter. It adds the one thing those callers
+  callback (with no destination, `CallFrame::NO_RETURN`, §4.4), and a
+  parameter converter. It adds the one thing those callers
   cannot get from the dispatch loop: whether the callee finished. `Some(v)` is
   a callee that needed no frame, `None` a frame still to run — and the **frame
   depth** is what decides, since no `Ok` path through `call_value()` shortens
@@ -433,8 +465,9 @@ There are **two** probe sets, one per call shape, and they differ in order:
   collect (a nested loop, a holder's extent). It skips the clearing when the
   stub frame sits at the loop's `exit_depth`, whose frame below belongs to
   another loop. The stub frame keeps the primitive's state and nothing of
-  the call: its callee, argument and result registers are cleared, so they
-  keep nothing alive through the collection
+  the call: its callee, argument and result registers are filled by the
+  push or the restart (§3.4), so they keep nothing alive through the
+  collection
 - A `with-exception-handler` thunk that finishes without a frame closes its
   handler extent by truncating to the handler-stack length recorded before
   installation. A prompt body does the same for prompts. Neither can rely on
@@ -585,13 +618,21 @@ intercepted at call dispatch time.
   instruction is `ResumeWindJump`, which comes back to `step_wind_jump`. So
   "the rest of the jump" is a frame: a continuation captured inside a thunk
   captures it, and re-entering that continuation finishes the thunk and then
-  the jump. Thunks ran on a nested Rust call until 2026-09-02, and a
-  continuation captured in one re-entered the *jump site's* frame instead —
-  mid-sequence, at its `PopWind` (Track L §6, the `finally` rule)
+  the jump. The stub frame stays for the whole travel (#714): the first step
+  pushes it with the target and value (`WindStub::Push`), each later step
+  restarts it in place at pc 0, keeping both and filling the rest
+  (`WindStub::Reuse`, `restart_stub`), and arrival replaces it with the
+  target's frames. Until #714 `ResumeWindJump` popped it and kept its window
+  on the register file as the two values' only root, a word outside every
+  frame's window, `NUM_REGS` of them a step until arrival. Thunks ran on a
+  nested Rust call until 2026-09-02, and a continuation captured in one
+  re-entered the *jump site's* frame instead — mid-sequence, at its
+  `PopWind` (Track L §6, the `finally` rule)
 - The handler stack a thunk runs under comes from its record, not from the
   machine. `install_thunk_handlers` clamps the recorded frame depths to the
-  live stack first; `pop_exception_handlers` reads them, and they belong to a
-  stack that has moved on
+  depth the stub frame was pushed at first, which is the same at every step;
+  `pop_exception_handlers` reads them, and they belong to a stack that has
+  moved on
 - The common prefix is keyed on `DynamicWindRecord::id`, unique per
   `dynamic-wind` *call* and minted by `patina_core::next_dynamic_wind_id`. The
   `before` thunk is not an identity — two calls may share one closure
@@ -1046,7 +1087,8 @@ it.
 
 | Location | What it holds |
 |---|---|
-| `vm.registers` | All live register values |
+| `vm.registers` | All live register values; every register lies in a frame's window (§2.2) |
+| `vm.execution.answer` | The value a callee answered to a call with no destination, until `call_any` takes it (§4.4) |
 | Closure `free_vars` (on heap) | Captured variables |
 | `vm.value_buffer` | Multiple-value buffer |
 | `vm.prompt_stack[*].tag/handler` | Prompt tags and handlers |

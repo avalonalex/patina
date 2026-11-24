@@ -99,6 +99,24 @@
 //!   re-enters after a collection: control returns into the `AddImm`'s pc in
 //!   the site's reinstated frame, which reads `mine` again.
 //!
+//! # The positions
+//!
+//! Each row calls its site from one of two positions (#714), the two ways a
+//! frame comes to be at a raise site:
+//!
+//! - **`tail`**: the site's call ends the thunk or the `guard` body, or for a
+//!   `callee` row a thunk applied on the spot, `((lambda () (site …)))`. The
+//!   site's frame reuses the thunk's window (`tail_replace`), which a push
+//!   fills past the arguments.
+//! - **`non-tail`**: the site's call is a `let` binding's operand in the thunk
+//!   or the `guard` body, `(let ((r (site …))) r)`, or for a `callee` row
+//!   `run`'s own binding. The site's frame is pushed fresh above the thunk's.
+//!
+//! The answers do not depend on the position, and every oracle agrees.
+//! [`each_row_calls_its_site_from_the_position_it_names`] checks the VM
+//! compiles each row's call as the `TailCall` or the `Call` its position
+//! names, so that the axis cannot fold into one position unnoticed.
+//!
 //! # What is checked
 //!
 //! Every program answers `(list results keep)`: `results`, each value its
@@ -147,11 +165,13 @@
 //! backends; the rows run the site first, which is the order that sends the
 //! VM down the `AddImm`'s shadow path.
 //!
-//! One row has two oracles. On `plus/return/reenter` Gauche refuses to return
-//! a second time from the handler call it made for `raise-continuable`
-//! ("attempt to return from a ghost continuation"; under the row's `guard`,
-//! `(secondary #t)`), where chibi and Chez return again, as Patina does.
-//! Gauche is left out of that row's `oracles`, not counted as agreement.
+//! Two rows have two oracles. On `plus/return/reenter`, in either position,
+//! Gauche refuses to return a second time from the handler call it made for
+//! `raise-continuable` ("attempt to return from a ghost continuation"; under
+//! the row's `guard`, `(secondary #t)`), where chibi and Chez return again,
+//! as Patina does. Gauche is left out of those rows' `oracles`, not counted
+//! as agreement. The position axis's 26 rows were measured 2026-11-22 too,
+//! with the same three; the first 26 were re-run then, and still agree.
 //!
 //! No row differs from its oracles today on either backend.
 //!
@@ -159,7 +179,9 @@
 //!
 //! Run 2026-11-22 in the debug build, each mutation of `retire_registers`
 //! (`crates/patina-vm/src/runtime/vm_state/gc_roots.rs`) applied alone and
-//! then removed, as a 4d defect in the maps would look:
+//! then removed, as a 4d defect in the maps would look. The rows named are
+//! the 26 there were then: the handler rows in their `tail` position, the
+//! `callee` rows in their `non-tail` one, before the position axis (#714).
 //!
 //! - **A frame at the `AddImm`'s pc scanned with an empty map.** Both row
 //!   tests panic with "read of a retired register as an instruction's
@@ -207,11 +229,12 @@
 //!
 //! # Adding axes
 //!
-//! Under a handler, each site is called in tail position from a thunk, so
-//! the frame a raise stub sits on reuses the thunk's window (`tail_replace`,
-//! #714). A position axis, the site called from a non-tail position so that
-//! its frame is pushed fresh, would cover the other way a frame comes to be
-//! at a raise site; only the `callee` rows call the site that way today.
+//! An axis is a field of [`Row`], a component of its name, a loop in
+//! [`the_matrix_is_a_complete_cross_product`], and rows for each new point,
+//! measured against the oracles through [`dump_programs`]. The position
+//! axis (#714) is the model: [`positioned_call`] puts the call in place, and
+//! [`each_row_calls_its_site_from_the_position_it_names`] checks the shape
+//! the axis exists to vary, as compiled.
 
 mod common;
 
@@ -260,6 +283,20 @@ enum Action {
     Reenter,
 }
 
+/// Where the site is called from (#714): how the frame at the site comes to
+/// be there.
+#[derive(Clone, Copy, PartialEq)]
+enum Position {
+    /// In tail position: of the thunk or `guard` body under a handler, or,
+    /// for a `callee` row, of a thunk applied on the spot. The site's frame
+    /// reuses the thunk's window (`tail_replace`).
+    Tail,
+    /// From a non-tail position: the operand of a `let` binding in the thunk
+    /// or `guard` body, or, for a `callee` row, `run`'s own binding. The
+    /// site's frame is pushed fresh above the thunk's (`push_frame`).
+    NonTail,
+}
+
 const SITES: [Site; 4] = [Site::Car, Site::VectorRef, Site::Unbound, Site::Plus];
 const HANDLERS: [Handler; 4] = [
     Handler::Guard,
@@ -268,6 +305,7 @@ const HANDLERS: [Handler; 4] = [
     Handler::None,
 ];
 const ACTIONS: [Action; 2] = [Action::Collect, Action::Reenter];
+const POSITIONS: [Position; 2] = [Position::Tail, Position::NonTail];
 
 impl Site {
     fn name(self) -> &'static str {
@@ -325,6 +363,15 @@ impl Action {
     }
 }
 
+impl Position {
+    fn name(self) -> &'static str {
+        match self {
+            Position::Tail => "tail",
+            Position::NonTail => "non-tail",
+        }
+    }
+}
+
 /// Where a `plus` program defines its `+`: after the site, as the rows run
 /// it, or before, as the oracles run it (see the header).
 #[derive(Clone, Copy, PartialEq)]
@@ -338,6 +385,7 @@ struct Row {
     site: Site,
     handler: Handler,
     action: Action,
+    position: Position,
     /// The answer the implementations in `oracles` give.
     correct: &'static str,
     /// What the VM answers today.
@@ -354,10 +402,11 @@ struct Row {
 impl Row {
     fn name(&self) -> String {
         format!(
-            "{}/{}/{}",
+            "{}/{}/{}/{}",
             self.site.name(),
             self.handler.name(),
-            self.action.name()
+            self.action.name(),
+            self.position.name()
         )
     }
 }
@@ -395,10 +444,23 @@ fn plus_definition(handler: Handler, action: Action) -> &'static str {
     }
 }
 
-/// The expression whose value `run` binds: the site's call under the row's
-/// handler.
-fn transfer(row: &Row) -> String {
+/// The site's call in the row's position, in the place its handler puts it:
+/// the thunk or `guard` body under a handler, or `run`'s binding for a
+/// `callee` row, which is already a non-tail position.
+fn positioned_call(row: &Row) -> String {
     let call = row.site.call();
+    match (row.handler, row.position) {
+        (Handler::None, Position::NonTail) => call.to_string(),
+        (Handler::None, Position::Tail) => format!("((lambda () {call}))"),
+        (_, Position::Tail) => call.to_string(),
+        (_, Position::NonTail) => format!("(let ((r {call})) r)"),
+    }
+}
+
+/// The expression whose value `run` binds: the site's call under the row's
+/// handler, in the row's position.
+fn transfer(row: &Row) -> String {
+    let call = positioned_call(row);
     match (row.handler, row.action) {
         (Handler::Guard, Action::Collect) => format!(
             "(guard (e ((begin (collect!) #f) 'never)\n                   (#t (list 'caught (describe e))))\n             {call})"
@@ -418,7 +480,7 @@ fn transfer(row: &Row) -> String {
         (Handler::Return, Action::Reenter) => format!(
             "(guard (o (#t (list 'secondary (error-object? o))))\n             (with-exception-handler\n               (lambda (e) (let ((v (capture!))) (list v (describe e))))\n               (lambda () {call})))"
         ),
-        (Handler::None, _) => call.to_string(),
+        (Handler::None, _) => call,
     }
 }
 
@@ -489,69 +551,123 @@ fn answers(code: &str, mode: Mode) -> [String; 2] {
     }
 }
 
-/// Every row, as it answers on 2026-11-22. All 26 agree with their oracles
+/// Every row, as it answers on 2026-11-22. All 52 agree with their oracles
 /// on both backends.
 #[rustfmt::skip]
 const ROWS: &[Row] = &[
     // ---- car: an inline `Car` of 5 ---------------------------------------
-    Row { site: Site::Car, handler: Handler::Guard, action: Action::Collect,
+    Row { site: Site::Car, handler: Handler::Guard, action: Action::Collect, position: Position::Tail,
           correct: "(((caught error-object)) (keep #(k)))", vm: "(((caught error-object)) (keep #(k)))", tw: "(((caught error-object)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::Car, handler: Handler::Guard, action: Action::Reenter,
+    Row { site: Site::Car, handler: Handler::Guard, action: Action::Collect, position: Position::NonTail,
+          correct: "(((caught error-object)) (keep #(k)))", vm: "(((caught error-object)) (keep #(k)))", tw: "(((caught error-object)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Car, handler: Handler::Guard, action: Action::Reenter, position: Position::Tail,
           correct: "(((outer error-object)) (keep #(k)))", vm: "(((outer error-object)) (keep #(k)))", tw: "(((outer error-object)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::Car, handler: Handler::Escape, action: Action::Collect,
+    Row { site: Site::Car, handler: Handler::Guard, action: Action::Reenter, position: Position::NonTail,
+          correct: "(((outer error-object)) (keep #(k)))", vm: "(((outer error-object)) (keep #(k)))", tw: "(((outer error-object)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Car, handler: Handler::Escape, action: Action::Collect, position: Position::Tail,
           correct: "(((escaped error-object)) (keep #(k)))", vm: "(((escaped error-object)) (keep #(k)))", tw: "(((escaped error-object)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::Car, handler: Handler::Escape, action: Action::Reenter,
+    Row { site: Site::Car, handler: Handler::Escape, action: Action::Collect, position: Position::NonTail,
+          correct: "(((escaped error-object)) (keep #(k)))", vm: "(((escaped error-object)) (keep #(k)))", tw: "(((escaped error-object)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Car, handler: Handler::Escape, action: Action::Reenter, position: Position::Tail,
           correct: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))", vm: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))", tw: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::Car, handler: Handler::Return, action: Action::Collect,
+    Row { site: Site::Car, handler: Handler::Escape, action: Action::Reenter, position: Position::NonTail,
+          correct: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))", vm: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))", tw: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Car, handler: Handler::Return, action: Action::Collect, position: Position::Tail,
           correct: "(((secondary #t)) (keep #(k)))", vm: "(((secondary #t)) (keep #(k)))", tw: "(((secondary #t)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::Car, handler: Handler::Return, action: Action::Reenter,
+    Row { site: Site::Car, handler: Handler::Return, action: Action::Collect, position: Position::NonTail,
+          correct: "(((secondary #t)) (keep #(k)))", vm: "(((secondary #t)) (keep #(k)))", tw: "(((secondary #t)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Car, handler: Handler::Return, action: Action::Reenter, position: Position::Tail,
+          correct: "(((secondary #t) (secondary #t)) (keep #(k)))", vm: "(((secondary #t) (secondary #t)) (keep #(k)))", tw: "(((secondary #t) (secondary #t)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Car, handler: Handler::Return, action: Action::Reenter, position: Position::NonTail,
           correct: "(((secondary #t) (secondary #t)) (keep #(k)))", vm: "(((secondary #t) (secondary #t)) (keep #(k)))", tw: "(((secondary #t) (secondary #t)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
 
     // ---- vector-ref: an inline `VectorRef` past the end ------------------
-    Row { site: Site::VectorRef, handler: Handler::Guard, action: Action::Collect,
+    Row { site: Site::VectorRef, handler: Handler::Guard, action: Action::Collect, position: Position::Tail,
           correct: "(((caught error-object)) (keep #(k)))", vm: "(((caught error-object)) (keep #(k)))", tw: "(((caught error-object)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::VectorRef, handler: Handler::Guard, action: Action::Reenter,
+    Row { site: Site::VectorRef, handler: Handler::Guard, action: Action::Collect, position: Position::NonTail,
+          correct: "(((caught error-object)) (keep #(k)))", vm: "(((caught error-object)) (keep #(k)))", tw: "(((caught error-object)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::VectorRef, handler: Handler::Guard, action: Action::Reenter, position: Position::Tail,
           correct: "(((outer error-object)) (keep #(k)))", vm: "(((outer error-object)) (keep #(k)))", tw: "(((outer error-object)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::VectorRef, handler: Handler::Escape, action: Action::Collect,
+    Row { site: Site::VectorRef, handler: Handler::Guard, action: Action::Reenter, position: Position::NonTail,
+          correct: "(((outer error-object)) (keep #(k)))", vm: "(((outer error-object)) (keep #(k)))", tw: "(((outer error-object)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::VectorRef, handler: Handler::Escape, action: Action::Collect, position: Position::Tail,
           correct: "(((escaped error-object)) (keep #(k)))", vm: "(((escaped error-object)) (keep #(k)))", tw: "(((escaped error-object)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::VectorRef, handler: Handler::Escape, action: Action::Reenter,
+    Row { site: Site::VectorRef, handler: Handler::Escape, action: Action::Collect, position: Position::NonTail,
+          correct: "(((escaped error-object)) (keep #(k)))", vm: "(((escaped error-object)) (keep #(k)))", tw: "(((escaped error-object)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::VectorRef, handler: Handler::Escape, action: Action::Reenter, position: Position::Tail,
           correct: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))", vm: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))", tw: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::VectorRef, handler: Handler::Return, action: Action::Collect,
+    Row { site: Site::VectorRef, handler: Handler::Escape, action: Action::Reenter, position: Position::NonTail,
+          correct: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))", vm: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))", tw: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::VectorRef, handler: Handler::Return, action: Action::Collect, position: Position::Tail,
           correct: "(((secondary #t)) (keep #(k)))", vm: "(((secondary #t)) (keep #(k)))", tw: "(((secondary #t)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::VectorRef, handler: Handler::Return, action: Action::Reenter,
+    Row { site: Site::VectorRef, handler: Handler::Return, action: Action::Collect, position: Position::NonTail,
+          correct: "(((secondary #t)) (keep #(k)))", vm: "(((secondary #t)) (keep #(k)))", tw: "(((secondary #t)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::VectorRef, handler: Handler::Return, action: Action::Reenter, position: Position::Tail,
+          correct: "(((secondary #t) (secondary #t)) (keep #(k)))", vm: "(((secondary #t) (secondary #t)) (keep #(k)))", tw: "(((secondary #t) (secondary #t)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::VectorRef, handler: Handler::Return, action: Action::Reenter, position: Position::NonTail,
           correct: "(((secondary #t) (secondary #t)) (keep #(k)))", vm: "(((secondary #t) (secondary #t)) (keep #(k)))", tw: "(((secondary #t) (secondary #t)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
 
     // ---- unbound: a `LoadGlobal` of a name nothing defines ---------------
     // chibi warns on stderr when it compiles the reference, and raises when
     // it runs, as the others do.
-    Row { site: Site::Unbound, handler: Handler::Guard, action: Action::Collect,
+    Row { site: Site::Unbound, handler: Handler::Guard, action: Action::Collect, position: Position::Tail,
           correct: "(((caught error-object)) (keep #(k)))", vm: "(((caught error-object)) (keep #(k)))", tw: "(((caught error-object)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::Unbound, handler: Handler::Guard, action: Action::Reenter,
+    Row { site: Site::Unbound, handler: Handler::Guard, action: Action::Collect, position: Position::NonTail,
+          correct: "(((caught error-object)) (keep #(k)))", vm: "(((caught error-object)) (keep #(k)))", tw: "(((caught error-object)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Unbound, handler: Handler::Guard, action: Action::Reenter, position: Position::Tail,
           correct: "(((outer error-object)) (keep #(k)))", vm: "(((outer error-object)) (keep #(k)))", tw: "(((outer error-object)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::Unbound, handler: Handler::Escape, action: Action::Collect,
+    Row { site: Site::Unbound, handler: Handler::Guard, action: Action::Reenter, position: Position::NonTail,
+          correct: "(((outer error-object)) (keep #(k)))", vm: "(((outer error-object)) (keep #(k)))", tw: "(((outer error-object)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Unbound, handler: Handler::Escape, action: Action::Collect, position: Position::Tail,
           correct: "(((escaped error-object)) (keep #(k)))", vm: "(((escaped error-object)) (keep #(k)))", tw: "(((escaped error-object)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::Unbound, handler: Handler::Escape, action: Action::Reenter,
+    Row { site: Site::Unbound, handler: Handler::Escape, action: Action::Collect, position: Position::NonTail,
+          correct: "(((escaped error-object)) (keep #(k)))", vm: "(((escaped error-object)) (keep #(k)))", tw: "(((escaped error-object)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Unbound, handler: Handler::Escape, action: Action::Reenter, position: Position::Tail,
           correct: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))", vm: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))", tw: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::Unbound, handler: Handler::Return, action: Action::Collect,
+    Row { site: Site::Unbound, handler: Handler::Escape, action: Action::Reenter, position: Position::NonTail,
+          correct: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))", vm: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))", tw: "(((escaped first error-object) (escaped again error-object)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Unbound, handler: Handler::Return, action: Action::Collect, position: Position::Tail,
           correct: "(((secondary #t)) (keep #(k)))", vm: "(((secondary #t)) (keep #(k)))", tw: "(((secondary #t)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::Unbound, handler: Handler::Return, action: Action::Reenter,
+    Row { site: Site::Unbound, handler: Handler::Return, action: Action::Collect, position: Position::NonTail,
+          correct: "(((secondary #t)) (keep #(k)))", vm: "(((secondary #t)) (keep #(k)))", tw: "(((secondary #t)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Unbound, handler: Handler::Return, action: Action::Reenter, position: Position::Tail,
+          correct: "(((secondary #t) (secondary #t)) (keep #(k)))", vm: "(((secondary #t) (secondary #t)) (keep #(k)))", tw: "(((secondary #t) (secondary #t)) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Unbound, handler: Handler::Return, action: Action::Reenter, position: Position::NonTail,
           correct: "(((secondary #t) (secondary #t)) (keep #(k)))", vm: "(((secondary #t) (secondary #t)) (keep #(k)))", tw: "(((secondary #t) (secondary #t)) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
 
@@ -559,33 +675,57 @@ const ROWS: &[Row] = &[
     // The oracles ran each with the program's `+` defined first (see the
     // header). `(site 5)` in each value is `mine`, which only the site's
     // frame held across the `AddImm`.
-    Row { site: Site::Plus, handler: Handler::Guard, action: Action::Collect,
+    Row { site: Site::Plus, handler: Handler::Guard, action: Action::Collect, position: Position::Tail,
           correct: "(((caught (plus 5 1))) (keep #(k)))", vm: "(((caught (plus 5 1))) (keep #(k)))", tw: "(((caught (plus 5 1))) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::Plus, handler: Handler::Guard, action: Action::Reenter,
+    Row { site: Site::Plus, handler: Handler::Guard, action: Action::Collect, position: Position::NonTail,
+          correct: "(((caught (plus 5 1))) (keep #(k)))", vm: "(((caught (plus 5 1))) (keep #(k)))", tw: "(((caught (plus 5 1))) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Plus, handler: Handler::Guard, action: Action::Reenter, position: Position::Tail,
           correct: "(((outer (plus 5 1))) (keep #(k)))", vm: "(((outer (plus 5 1))) (keep #(k)))", tw: "(((outer (plus 5 1))) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::Plus, handler: Handler::Escape, action: Action::Collect,
+    Row { site: Site::Plus, handler: Handler::Guard, action: Action::Reenter, position: Position::NonTail,
+          correct: "(((outer (plus 5 1))) (keep #(k)))", vm: "(((outer (plus 5 1))) (keep #(k)))", tw: "(((outer (plus 5 1))) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Plus, handler: Handler::Escape, action: Action::Collect, position: Position::Tail,
           correct: "(((escaped (plus 5 1))) (keep #(k)))", vm: "(((escaped (plus 5 1))) (keep #(k)))", tw: "(((escaped (plus 5 1))) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    Row { site: Site::Plus, handler: Handler::Escape, action: Action::Reenter,
+    Row { site: Site::Plus, handler: Handler::Escape, action: Action::Collect, position: Position::NonTail,
+          correct: "(((escaped (plus 5 1))) (keep #(k)))", vm: "(((escaped (plus 5 1))) (keep #(k)))", tw: "(((escaped (plus 5 1))) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Plus, handler: Handler::Escape, action: Action::Reenter, position: Position::Tail,
+          correct: "(((escaped first (plus 5 1)) (escaped again (plus 5 1))) (keep #(k)))", vm: "(((escaped first (plus 5 1)) (escaped again (plus 5 1))) (keep #(k)))", tw: "(((escaped first (plus 5 1)) (escaped again (plus 5 1))) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Plus, handler: Handler::Escape, action: Action::Reenter, position: Position::NonTail,
           correct: "(((escaped first (plus 5 1)) (escaped again (plus 5 1))) (keep #(k)))", vm: "(((escaped first (plus 5 1)) (escaped again (plus 5 1))) (keep #(k)))", tw: "(((escaped first (plus 5 1)) (escaped again (plus 5 1))) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
     // The handler's value goes back through `+` into the `AddImm`'s
     // destination, after the collection.
-    Row { site: Site::Plus, handler: Handler::Return, action: Action::Collect,
+    Row { site: Site::Plus, handler: Handler::Return, action: Action::Collect, position: Position::Tail,
           correct: "((((plus 5 1) (site 5))) (keep #(k)))", vm: "((((plus 5 1) (site 5))) (keep #(k)))", tw: "((((plus 5 1) (site 5))) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
-    // Gauche refuses the second return: see the header.
-    Row { site: Site::Plus, handler: Handler::Return, action: Action::Reenter,
+    Row { site: Site::Plus, handler: Handler::Return, action: Action::Collect, position: Position::NonTail,
+          correct: "((((plus 5 1) (site 5))) (keep #(k)))", vm: "((((plus 5 1) (site 5))) (keep #(k)))", tw: "((((plus 5 1) (site 5))) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    // Gauche refuses the second return, in either position: see the header.
+    Row { site: Site::Plus, handler: Handler::Return, action: Action::Reenter, position: Position::Tail,
           correct: "((((first (plus 5 1)) (site 5)) ((again (plus 5 1)) (site 5))) (keep #(k)))", vm: "((((first (plus 5 1)) (site 5)) ((again (plus 5 1)) (site 5))) (keep #(k)))", tw: "((((first (plus 5 1)) (site 5)) ((again (plus 5 1)) (site 5))) (keep #(k)))",
           oracles: "chibi, chez", issue: "" },
-    Row { site: Site::Plus, handler: Handler::None, action: Action::Collect,
+    Row { site: Site::Plus, handler: Handler::Return, action: Action::Reenter, position: Position::NonTail,
+          correct: "((((first (plus 5 1)) (site 5)) ((again (plus 5 1)) (site 5))) (keep #(k)))", vm: "((((first (plus 5 1)) (site 5)) ((again (plus 5 1)) (site 5))) (keep #(k)))", tw: "((((first (plus 5 1)) (site 5)) ((again (plus 5 1)) (site 5))) (keep #(k)))",
+          oracles: "chibi, chez", issue: "" },
+    Row { site: Site::Plus, handler: Handler::None, action: Action::Collect, position: Position::NonTail,
+          correct: "(((6 (site 5))) (keep #(k)))", vm: "(((6 (site 5))) (keep #(k)))", tw: "(((6 (site 5))) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Plus, handler: Handler::None, action: Action::Collect, position: Position::Tail,
           correct: "(((6 (site 5))) (keep #(k)))", vm: "(((6 (site 5))) (keep #(k)))", tw: "(((6 (site 5))) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
     // The re-entry into the `AddImm`'s pc: `again` is the value `+` returns the
     // second time, delivered into the site's reinstated frame.
-    Row { site: Site::Plus, handler: Handler::None, action: Action::Reenter,
+    Row { site: Site::Plus, handler: Handler::None, action: Action::Reenter, position: Position::NonTail,
+          correct: "(((6 (site 5)) (again (site 5))) (keep #(k)))", vm: "(((6 (site 5)) (again (site 5))) (keep #(k)))", tw: "(((6 (site 5)) (again (site 5))) (keep #(k)))",
+          oracles: "chibi, gauche, chez", issue: "" },
+    Row { site: Site::Plus, handler: Handler::None, action: Action::Reenter, position: Position::Tail,
           correct: "(((6 (site 5)) (again (site 5))) (keep #(k)))", vm: "(((6 (site 5)) (again (site 5))) (keep #(k)))", tw: "(((6 (site 5)) (again (site 5))) (keep #(k)))",
           oracles: "chibi, gauche, chez", issue: "" },
 ];
@@ -744,6 +884,68 @@ fn each_site_compiles_to_the_instruction_it_names() {
     );
 }
 
+/// How the VM calls `site` where the row's handler puts the call: in the
+/// thunk or `guard` body, `(lambda () <call>)`, or for a `callee` row in
+/// `run`'s binding, `(lambda () (let ((r <call>)) r))`. One entry for each
+/// call of `site`, `TailCall` or `Call`, compiled on `vm`, where the row's
+/// site is defined.
+fn site_call_kinds(vm: &Interpreter<patina_vm::VmBackend>, row: &Row) -> Vec<&'static str> {
+    let place = match row.handler {
+        Handler::None => format!("(lambda () (let ((r {})) r))", positioned_call(row)),
+        _ => format!("(lambda () {})", positioned_call(row)),
+    };
+    let inspected = vm
+        .backend()
+        .compile_for_inspection(&place)
+        .expect("the place compiles");
+    let mut kinds = Vec::new();
+    for (top, nested) in inspected.units() {
+        for code in std::iter::once(top).chain(nested) {
+            // The registers this code object loads `site` into.
+            let mut site_regs = Vec::new();
+            for instr in &code.instructions {
+                match instr {
+                    Instruction::LoadGlobal { dst, link }
+                        if &**code.links.name(*link) == "site" =>
+                    {
+                        site_regs.push(*dst)
+                    }
+                    Instruction::Call { func, .. } if site_regs.contains(func) => {
+                        kinds.push("Call")
+                    }
+                    Instruction::TailCall { func, .. } if site_regs.contains(func) => {
+                        kinds.push("TailCall")
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    kinds
+}
+
+/// Each row calls its site from the position it names, as the VM compiles
+/// it: a tail row's call is a `TailCall`, so the site's frame takes the
+/// thunk's window, and a non-tail row's a `Call`, so it is pushed fresh. A
+/// compiler change that turned the `let` binding into a tail call, or put
+/// the applied thunk's body in place, would fail here rather than leave
+/// the axis testing one position twice.
+#[test]
+fn each_row_calls_its_site_from_the_position_it_names() {
+    for site in SITES {
+        let vm = common::vm_interpreter();
+        vm.eval_program_owned(&format!("(import (scheme base)) {}", site.definition()))
+            .expect("the site's definition runs");
+        for row in ROWS.iter().filter(|row| row.site == site) {
+            let expected = match row.position {
+                Position::Tail => "TailCall",
+                Position::NonTail => "Call",
+            };
+            assert_eq!(site_call_kinds(&vm, row), [expected], "{}", row.name());
+        }
+    }
+}
+
 /// How many rows each backend gets wrong, asserted as a number, and the
 /// table's own consistency.
 #[test]
@@ -777,21 +979,24 @@ fn the_defect_count_is_what_it_says() {
     }
 }
 
-/// The table is the space's every point, sites by handlers by actions, less
-/// the callee rows of the sites with no program's procedure, with no row
-/// written twice.
+/// The table is the space's every point, sites by handlers by actions by
+/// positions, less the callee rows of the sites with no program's
+/// procedure, with no row written twice.
 #[test]
 fn the_matrix_is_a_complete_cross_product() {
     let mut expected = Vec::new();
     for site in SITES {
         for handler in HANDLERS.into_iter().filter(|h| h.applies_to(site)) {
             for action in ACTIONS {
-                expected.push(format!(
-                    "{}/{}/{}",
-                    site.name(),
-                    handler.name(),
-                    action.name()
-                ));
+                for position in POSITIONS {
+                    expected.push(format!(
+                        "{}/{}/{}/{}",
+                        site.name(),
+                        handler.name(),
+                        action.name(),
+                        position.name()
+                    ));
+                }
             }
         }
     }

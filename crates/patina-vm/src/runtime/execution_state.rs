@@ -5,7 +5,7 @@
 
 use super::control::abort_step;
 use crate::error::VmError;
-use crate::types::code_object::CodeObject;
+use crate::types::code_object::{Arity, CodeObject};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
@@ -39,6 +39,16 @@ pub(super) struct ExecutionState {
     /// the register writes (#904).
     #[trace(skip, reason = "a frame depth, which only a check build writes")]
     awaiting: Awaiting,
+    /// The value [`ExecutionState::return_into`] was last handed for
+    /// [`CallFrame::NO_RETURN`], which writes no register (#714): a callee
+    /// that answered here and now a call that asked for no destination
+    /// (`run_apply_proc`'s), which `call_any` takes back at once
+    /// ([`ExecutionState::take_answer`]), with no safe point between. A
+    /// value a frame returned into nothing (a continuation that re-entered
+    /// a callback after its primitive returned) stays until the next one
+    /// replaces it, or the stack goes (`clear`). Pinned, as
+    /// `VmState::pending_escape` is.
+    answer: Cell<Option<TaggedValue>>,
 }
 
 /// A check build's record of the top frame that awaits a value (#904): the
@@ -48,8 +58,8 @@ pub(super) struct ExecutionState {
 /// starts its own work again.
 ///
 /// Set where the top frame comes to await a value: where the stack shrinks
-/// under it or is reinstated (`pop_frame`, `finish_wind_step`,
-/// `truncate_to_prompt`, `restore`, `append_delimited`), and where it calls
+/// under it or is reinstated (`pop_frame`, `truncate_to_prompt`, `restore`,
+/// `append_delimited`), and where it calls
 /// a callee that may answer here and now, which a callback's frames may
 /// have run above it before then ([`ExecutionState::mark_awaiting`]).
 /// Cleared where the top frame starts its own work (`dispatch_frame`,
@@ -72,6 +82,54 @@ impl Default for Awaiting {
 
 // A plain build keeps no word for it.
 const _: () = assert!(GC_CHECK || std::mem::size_of::<Awaiting>() == 0);
+
+/// What a push writes into every register of the window it initializes that
+/// no argument or operand of its own fills (#714, `PRD/GC_PRD.md` §11.1,
+/// frame invariant 1): a fresh window whole (`push_frame`, `push_abort_stub`),
+/// and a reused one past the registers it keeps (`tail_replace`,
+/// `restart_closure`, `restart_stub`), so that no window holds a word of an
+/// activation that has gone. A plain release build writes `NULL`, which
+/// `push_frame` always wrote. A check build writes `DEAD_SLOT`, which the
+/// machine refuses to read (`VmState::reg_at`, #625), so a read of a register
+/// the activation never wrote panics there, rather than answering what an
+/// earlier occupant of the window left.
+const FILL: TaggedValue = if GC_CHECK {
+    TaggedValue::DEAD_SLOT
+} else {
+    TaggedValue::NULL
+};
+
+/// [`FILL`], through an opaque copy (`std::hint::black_box`), so that a
+/// fill stays a run of inline stores. With the constant, LLVM turns each
+/// fill loop, and `Vec::resize`'s, into a call of `memset_pattern16` on
+/// macOS, which cost a tail call into a window of 16 registers some 55
+/// instructions, and every push the same; measured 2026-11-22 (#714).
+#[inline(always)]
+fn fill_value() -> TaggedValue {
+    std::hint::black_box(FILL)
+}
+
+/// Write [`FILL`] into every register of `window`: one store each, with no
+/// test per register.
+#[inline(always)]
+fn fill(window: &[Cell<TaggedValue>]) {
+    let value = fill_value();
+    for slot in window {
+        slot.set(value);
+    }
+}
+
+/// The registers a call's arguments occupy in a window of code of `arity`:
+/// the fixed parameters, and for a variadic one the register of its rest
+/// list after them, which `store_args_in_window` writes. A reused window is
+/// filled from here up.
+#[inline(always)]
+fn argument_slots(arity: Arity) -> usize {
+    match arity {
+        Arity::Fixed(n) => n as usize,
+        Arity::Variadic(n) => n as usize + 1,
+    }
+}
 
 /// The code the innermost running dispatch loop's `cur_code` holds (#836),
 /// by id: written when `cur_code` changes (where a loop starts or an escape
@@ -123,6 +181,7 @@ impl ExecutionState {
             exception_handlers,
             running: RunningCode::default(),
             awaiting: Awaiting::default(),
+            answer: Cell::new(None),
         }
     }
 
@@ -194,8 +253,10 @@ impl ExecutionState {
     // The only ways to write a live register: the top frame's own write
     // (`set_top`), a write into a frame something has returned into or one
     // below the top (`return_into`), and a push's initializing writes
-    // (`push_frame`, `push_abort_stub`, and the arguments the call paths
-    // copy into a callee's window, `init_arg` and `init_args`).
+    // (`push_frame`, `push_abort_stub`, the fill of a reused window in
+    // `tail_replace`, `restart_closure` and `restart_stub`, #714, and the
+    // arguments the call paths copy into a callee's window, `init_arg` and
+    // `init_args`).
     // `inline(always)`, as the register helpers they replace were:
     // `dispatch_one_instruction` is too large for LLVM to inline them
     // otherwise (PRD §1.6 finding 1).
@@ -204,6 +265,59 @@ impl ExecutionState {
     #[inline(always)]
     fn top_base(&self) -> usize {
         self.frames.last().expect("no active frame").register_base
+    }
+
+    /// Where the top frame's window ends, or 0 with no frame.
+    #[inline(always)]
+    fn top_end(&self) -> usize {
+        self.frames
+            .last()
+            .map_or(0, |top| top.register_base + top.num_regs as usize)
+    }
+
+    /// Assert, in a debug build, that no register lies above the top
+    /// frame's window (#714, `PRD/GC_PRD.md` §11.1, invariant 1): the only
+    /// place a word outside every window could arise, since a push puts its
+    /// window at the end of the register file and a pop truncates it to the
+    /// frame's base. Checked at each push, before it extends the file, at
+    /// each pop, and where `return_into` relies on it.
+    #[inline(always)]
+    fn debug_assert_file_ends_at_top(&self) {
+        debug_assert_eq!(
+            self.registers.len(),
+            self.top_end(),
+            "a register lies past the top frame's window, outside every frame's window \
+             (#714, PRD/GC_PRD.md §11.1, invariant 1)"
+        );
+    }
+
+    /// Assert, in a debug build, that every register lies within a frame's
+    /// window (#714, `PRD/GC_PRD.md` §11.1, invariant 1): the windows tile
+    /// the register file from its start, each beginning where the one below
+    /// ends, and the top one ends the file. O(depth), so checked where words
+    /// were kept outside every window until 4d.3: after a wind step
+    /// (`ResumeWindJump`) and after a higher-order primitive's callback
+    /// (`run_apply_proc`).
+    pub(super) fn debug_assert_windows_tile(&self) {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        let mut end = 0;
+        for (depth, frame) in self.frames.iter().enumerate() {
+            assert_eq!(
+                frame.register_base, end,
+                "the window of the frame at depth {depth} starts at {}, where the window below \
+                 ends at {end}: a register lies outside every frame's window (#714)",
+                frame.register_base
+            );
+            end = frame.register_base + frame.num_regs as usize;
+        }
+        assert_eq!(
+            self.registers.len(),
+            end,
+            "the register file runs past the top frame's window: a register lies outside \
+             every frame's window (#714)"
+        );
     }
 
     /// Record, in a check build, that the top frame awaits a value
@@ -249,6 +363,15 @@ impl ExecutionState {
     ///
     /// A check build asserts that `frame` is below the top, or is a top frame
     /// that awaits a value ([`Awaiting`]).
+    ///
+    /// **The no-destination form** (#714): `reg` is [`CallFrame::NO_RETURN`]
+    /// for the value of a call that asked for none, a higher-order
+    /// primitive's callback (`run_apply_proc`). It writes no register: the
+    /// value goes to [`Self::take_answer`], for a callee that answered here
+    /// and now, and otherwise nowhere. It is the same choke point, asserted
+    /// alike, since the frame something returned into awaits its value even
+    /// when the value goes nowhere, and stage 7 lowers the watermark for the
+    /// activation as for a write.
     #[inline(always)]
     pub(super) fn return_into(&mut self, frame: ReturnFrame, reg: u16, value: TaggedValue) {
         let base = match frame {
@@ -267,7 +390,46 @@ impl ExecutionState {
         if GC_CHECK && frame != ReturnFrame::Caller && !self.top_awaits() {
             returned_into_a_running_frame(reg);
         }
-        self.registers[base + reg as usize].set(value);
+        self.debug_assert_file_ends_at_top();
+        // The top frame's window ends the register file (`PRD/GC_PRD.md`
+        // §11.1, invariant 1, asserted at each push), and no window reaches
+        // `NO_RETURN`, so the bounds check every write makes is what tells
+        // the no-destination form apart, at no cost on a `Return`: its cold
+        // arm takes the place of the panic's. The frame below the top is
+        // tested by name, since its base plus `NO_RETURN` can fall in the
+        // top frame's window.
+        match self.registers.get(base + reg as usize) {
+            Some(slot) if frame != ReturnFrame::Caller || reg != CallFrame::NO_RETURN => {
+                slot.set(value)
+            }
+            _ => self.no_destination(reg, value),
+        }
+    }
+
+    /// The no-destination form of [`Self::return_into`], a write past the
+    /// end of the register file: hand `value` to [`Self::take_answer`], or
+    /// panic, as indexing would have, for any register but
+    /// [`CallFrame::NO_RETURN`].
+    #[cold]
+    #[inline(never)]
+    fn no_destination(&self, reg: u16, value: TaggedValue) {
+        assert_eq!(
+            reg,
+            CallFrame::NO_RETURN,
+            "return_into wrote r{reg}, past the end of the register file"
+        );
+        self.answer.set(Some(value));
+    }
+
+    /// The value a callee answered here and now to a call whose destination
+    /// was [`CallFrame::NO_RETURN`] (#714): what [`Self::return_into`]'s
+    /// no-destination form was last handed, taken, so that nothing stays.
+    /// For `call_any` and the tail path of a control primitive, which read
+    /// a register here for any other destination.
+    pub(super) fn take_answer(&self) -> TaggedValue {
+        self.answer
+            .take()
+            .expect("a callee that answered here and now answers through return_into")
     }
 
     /// The top frame's own write, during its own instruction: `reg` of the
@@ -321,18 +483,20 @@ impl ExecutionState {
         &self.frames[depth.frame_count()..]
     }
 
-    /// Enter one loaded code object with its matching window. Caller fills
-    /// operands before the next safe point. Dynamic extents are unchanged.
+    /// Enter one loaded code object with its matching window, every register
+    /// of it [`FILL`]ed (#714). Caller fills operands before the next safe
+    /// point. Dynamic extents are unchanged.
     pub(super) fn push_frame(
         &mut self,
         code: Rc<CodeObject>,
         closure: TaggedValue,
         return_reg: u16,
     ) -> usize {
+        self.debug_assert_file_ends_at_top();
         let base = self.registers.len();
         let num_regs = code.num_regs;
         self.registers
-            .resize(base + num_regs as usize, Cell::new(TaggedValue::NULL));
+            .resize(base + num_regs as usize, Cell::new(fill_value()));
         self.frames.push(CallFrame {
             pc: 0,
             register_base: base,
@@ -344,28 +508,30 @@ impl ExecutionState {
         base
     }
 
-    /// Remove a frame and its window together. Extents stay live until value
-    /// delivery: a tail-called raise must still find its caller's handler.
+    /// Remove a frame and its window together, as every frame goes (a wind
+    /// step's frame too, since #714: it stays for its whole travel, and
+    /// arrival replaces it). Extents stay live until value delivery: a
+    /// tail-called raise must still find its caller's handler.
     pub(super) fn pop_frame(&mut self) -> CallFrame {
         let frame = self.frames.pop().expect("pop with empty frame stack");
         self.registers.truncate(frame.register_base);
+        self.debug_assert_file_ends_at_top();
         self.mark_awaiting();
         frame
     }
 
-    /// A jump step is the one deliberate exception to paired removal: its
-    /// operands remain roots until the next stub holds them or arrival replaces
-    /// the register file. This preserves the existing weak-store root contract.
-    pub(super) fn finish_wind_step(&mut self) {
-        self.frames
-            .pop()
-            .expect("ResumeWindJump runs in its own frame");
-        self.mark_awaiting();
-    }
-
-    /// Reuse the top window for another closure. Keep excess capacity as the
-    /// existing tail-call path does; the GC retirement map clears dead slots.
+    /// Reuse the top window for another closure, a tail call's push: the
+    /// window grows to the new code's registers if it needs more, and every
+    /// register of the new code past its arguments' is [`FILL`]ed (#714), so
+    /// the new activation reads nothing the replaced one wrote. The caller
+    /// writes the arguments (`store_args_in_window`), into the registers the
+    /// fill leaves alone. A window larger than the new code needs keeps its
+    /// spare registers, which the new code cannot name and retirement clears
+    /// at every collection and capture.
     pub(super) fn tail_replace(&mut self, code: Rc<CodeObject>, closure: TaggedValue) -> usize {
+        if GC_CHECK && self.top_awaits() {
+            wrote_an_awaiting_frame("tail_replace", 0);
+        }
         let frame = self
             .frames
             .last_mut()
@@ -374,34 +540,55 @@ impl ExecutionState {
             let extra = code.num_regs - frame.num_regs;
             self.registers.resize(
                 self.registers.len() + extra as usize,
-                Cell::new(TaggedValue::NULL),
+                Cell::new(fill_value()),
             );
             frame.num_regs = code.num_regs;
         }
+        let base = frame.register_base;
+        fill(&self.registers[base + argument_slots(code.arity)..base + code.num_regs as usize]);
         frame.pc = 0;
         frame.closure.set(closure);
         frame.code = FrameCode(code);
-        frame.register_base
+        base
     }
 
+    /// Give the top window to another activation of its own code, a self
+    /// tail call's push: every register of the code past its arguments' is
+    /// [`FILL`]ed (#714). The caller has written the arguments, which the
+    /// fill leaves alone.
     pub(super) fn restart_closure(&mut self, closure: TaggedValue) {
+        if GC_CHECK && self.top_awaits() {
+            wrote_an_awaiting_frame("restart_closure", 0);
+        }
         let frame = self
             .frames
             .last_mut()
             .expect("tail call with empty frame stack");
         frame.pc = 0;
         frame.closure.set(closure);
+        let base = frame.register_base;
+        let code = &frame.code;
+        fill(&self.registers[base + argument_slots(code.arity)..base + code.num_regs as usize]);
     }
 
-    /// Resume variants share one window size; only their instruction stream
-    /// changes. The stub starts its next round as its own work, so its
-    /// operands are written with `set_top` after this.
-    pub(super) fn restart_stub(&mut self, code: Rc<CodeObject>) {
+    /// Start the top stub frame's next round in `code`, at pc 0, as its own
+    /// work: the registers below `keep` carry over from the round before,
+    /// and the rest of `code`'s are [`FILL`]ed (#714), for the round to
+    /// write its operands into with `set_top`. Answers the window's base.
+    /// Resume variants share one window size, and only their instruction
+    /// stream changes (`resume_primitive`, which keeps the primitive's
+    /// index); a wind step restarts in its own code (`push_wind_step`, which
+    /// keeps the jump's target and value).
+    pub(super) fn restart_stub(&mut self, code: Rc<CodeObject>, keep: u16) -> usize {
+        self.clear_awaiting();
         let frame = self.frames.last_mut().expect("the stub frame");
         debug_assert!(code.num_regs <= frame.num_regs);
+        debug_assert!(keep <= code.num_regs);
+        let base = frame.register_base;
+        fill(&self.registers[base + keep as usize..base + code.num_regs as usize]);
         frame.code = FrameCode(code);
         frame.pc = 0;
-        self.clear_awaiting();
+        base
     }
 
     #[inline(always)]
@@ -424,19 +611,6 @@ impl ExecutionState {
     }
     pub(super) fn set_return_reg(&mut self, dst: u16) {
         self.frames.last_mut().expect("the stub frame").return_reg = dst;
-    }
-
-    /// Reserve a scratch destination without changing the frame's live window.
-    pub(super) fn scratch_return_reg(&mut self) -> u16 {
-        let return_reg = self.frames.last().map(|f| f.num_regs).unwrap_or(0);
-        if let Some(f) = self.frames.last() {
-            let needed = f.register_base + return_reg as usize + 1;
-            if self.registers.len() < needed {
-                self.registers
-                    .resize(needed, Cell::new(TaggedValue::UNSPECIFIED));
-            }
-        }
-        return_reg
     }
 
     pub(super) fn push_prompt(
@@ -502,8 +676,12 @@ impl ExecutionState {
             self.exception_handlers.pop();
         }
     }
+    /// Make `handlers` the live handler stack for a wind step's thunk, each
+    /// recorded depth clamped to the depth the step's stub frame, on top, was
+    /// pushed at: the depth the thunk is called above. The stub stays for
+    /// the whole travel (#714), so that depth is the same at every step.
     pub(super) fn install_thunk_handlers(&mut self, handlers: &[ExceptionHandler]) {
-        let depth = self.depth();
+        let depth = self.top_frame_depth();
         self.exception_handlers.clear();
         self.exception_handlers
             .extend(handlers.iter().map(|h| ExceptionHandler {
@@ -573,6 +751,7 @@ impl ExecutionState {
         val: TaggedValue,
         cont: TaggedValue,
     ) {
+        self.debug_assert_file_ends_at_top();
         push_abort_stub(
             &mut self.frames,
             &mut self.registers,
@@ -592,6 +771,7 @@ impl ExecutionState {
         self.dynamic_winds.clear();
         self.exception_handlers.clear();
         self.clear_awaiting();
+        self.answer.set(None);
     }
 
     pub(super) fn retire_registers(&mut self) {
@@ -812,7 +992,7 @@ pub(super) fn push_abort_stub(
     let base = registers.len();
     registers.resize(
         base + abort_step::NUM_REGS as usize,
-        Cell::new(TaggedValue::NULL),
+        Cell::new(fill_value()),
     );
     registers[base + abort_step::HANDLER as usize].set(handler);
     registers[base + abort_step::VAL as usize].set(val);

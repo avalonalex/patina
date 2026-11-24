@@ -195,6 +195,31 @@ pub(crate) fn skip_link_entries() -> bool {
     SKIP_LINK_ENTRIES.get()
 }
 
+/// The push a reused window was given in, for
+/// [`read_an_unwritten_register`].
+#[derive(Clone, Copy, Debug)]
+pub enum Reuse {
+    /// A tail call to other code (`tail_replace`).
+    TailCall,
+    /// A self tail call (`restart_closure`).
+    SelfTailCall,
+    /// A stub frame's next round (`restart_stub`).
+    StubRestart,
+}
+
+/// The control of the fill of a reused window (#714, the
+/// `an_unwritten_register_…` tests in
+/// `crates/patina-tests/tests/retired_registers.rs`): run hand-assembled
+/// code in which an activation given a window by `after`'s push first reads
+/// a register it never wrote, one the window's earlier occupant wrote 99
+/// into, and answer what the read found. A check build panics at the read,
+/// which finds the fill, `DEAD_SLOT`; a plain release build answers the
+/// fill, `NULL`; with the fill gone, either answers 99. A machine of its
+/// own, so no switch, and nothing another test's thread sees.
+pub fn read_an_unwritten_register(after: Reuse) -> patina_core::TaggedValue {
+    crate::runtime::vm_state::read_an_unwritten_register(after)
+}
+
 /// The control of the check that refuses a frame at a pc with no register
 /// map (#905, `a_check_build_refuses_a_frame_at_an_unmapped_pc` in
 /// `crates/patina-tests/tests/retired_registers.rs`): push a frame of code

@@ -29,7 +29,7 @@ use patina_primitives::PrimitiveRegistry;
 use rustc_hash::FxHashMap;
 
 use super::super::control::resume_step;
-use super::super::execution_state::ExecutionState;
+use super::super::execution_state::{ExecutionState, ReturnFrame};
 use super::{LoopExit, VmState, execute, run_loop_until_outcome};
 use crate::tracer::StepTracer;
 use crate::types::code_object::{Arity, CodeObject};
@@ -104,8 +104,8 @@ fn collect(state: &VmState) {
 }
 
 /// `VmState`, every field, and through it `ExecutionState` (registers,
-/// frames, prompts, winds, handlers), the code store's constants, the
-/// globals and the step tracer's snapshots. The continuation stores are weak
+/// frames, prompts, winds, handlers, the no-destination answer), the code
+/// store's constants, the globals and the step tracer's snapshots. The continuation stores are weak
 /// and have a test of their own below.
 #[test]
 fn every_vm_state_root_is_traced() {
@@ -122,6 +122,7 @@ fn every_vm_state_root_is_traced() {
     let after = s.vector(h, "ExecutionState.dynamic_winds: WindRecord.after");
     let wind_handler = s.string(h, "ExecutionState.dynamic_winds: WindRecord.handlers");
     let installed = s.object(h, "ExecutionState.exception_handlers");
+    let answered = s.pair(h, "ExecutionState.answer");
     let escaping = s.pair(h, "VmState.pending_escape");
     let constant = s.vector(h, "VmState.code_store: CodeObject.constants");
     let global = s.string(h, "VmState.globals");
@@ -135,7 +136,7 @@ fn every_vm_state_root_is_traced() {
     globals.define(&shared, "global", global);
 
     let code = code_holding(vec![constant]);
-    let state = VmState {
+    let mut state = VmState {
         execution: ExecutionState::from_parts(
             vec![Cell::new(register)],
             vec![frame(&code, closure)],
@@ -183,6 +184,10 @@ fn every_vm_state_root_is_traced() {
         driver: None,
         assert_no_gc,
     };
+    // A value a frame returned into nothing, which only the cell holds
+    // (`CallFrame::NO_RETURN`, #714).
+    state.execution.mark_awaiting();
+    (state.execution).return_into(ReturnFrame::Top, CallFrame::NO_RETURN, answered);
 
     collect(&state);
     s.assert_survived(&state.heap.borrow());
