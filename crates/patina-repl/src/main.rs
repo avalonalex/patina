@@ -130,7 +130,6 @@ fn parse_args(args: &[String]) -> CliOptions {
     opts
 }
 
-/// Take the value following a flag, or exit with a usage error.
 /// `--stack-max SIZE` (#907): the VM's stack cap, checked here and handed on
 /// as the variable the backends' constructors read
 /// (`HeapConfig::from_env`), as `--allow-r6rs` hands on its own: the flag is
@@ -148,6 +147,7 @@ fn set_stack_max(size: &str) {
     };
 }
 
+/// Take the value following a flag, or exit with a usage error.
 fn require_value(iter: &mut std::slice::Iter<'_, String>, flag: &str, what: &str) -> String {
     iter.next().cloned().unwrap_or_else(|| {
         eprintln!("Error: {} requires {}", flag, what);

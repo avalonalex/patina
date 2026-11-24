@@ -40,8 +40,11 @@
 //! handler's room; the hard cap; a second catch in the same form, which the
 //! "1 MiB below" re-arming this replaced would lose, since under a 2 MiB cap
 //! every `guard` is within the reserve's distance of the soft limit; a
-//! clause that crosses the limit again; after thunks on a `guard`'s escape
-//! and on the hard-cap path; and a delimited continuation's re-entry.
+//! clause that crosses the limit again; a handler that aborts to a prompt
+//! outside it, and to one of its own inside the reserve, directly and
+//! through a wind; a `guard` that declines, whose re-entry of its handler
+//! finds the reserve open again; after thunks on a `guard`'s escape and on the hard-cap path;
+//! and a delimited continuation's re-entry.
 
 mod common;
 
@@ -164,6 +167,42 @@ const ROWS: &[Row] = &[
 (list (once) (once))",
         capped: "(aborted aborted)",
         free: "(20000 20000)",
+    },
+    Row {
+        name: "a handler's own prompt, aborted to inside the reserve",
+        program: "(define tag (make-continuation-prompt-tag 'p))
+(guard (e ((stack-exhausted? e) 'a-second-condition))
+  (call/cc
+    (lambda (out)
+      (with-exception-handler
+        (lambda (e)
+          (out (call-with-continuation-prompt
+                 (lambda () (abort-current-continuation tag 'aborted))
+                 tag
+                 (lambda (v k) (deep 2000) v))))
+        (lambda () (deep 20000))))))",
+        capped: "aborted",
+        free: "20000",
+    },
+    Row {
+        name: "the same through a wind: the landing an abort travels to keeps the reserve",
+        program: "(define tag (make-continuation-prompt-tag 'p))
+(guard (e ((stack-exhausted? e) 'a-second-condition))
+  (call/cc
+    (lambda (out)
+      (with-exception-handler
+        (lambda (e)
+          (out (call-with-continuation-prompt
+                 (lambda ()
+                   (dynamic-wind
+                     (lambda () #f)
+                     (lambda () (abort-current-continuation tag 'aborted))
+                     (lambda () #f)))
+                 tag
+                 (lambda (v k) (deep 2000) v))))
+        (lambda () (deep 20000))))))",
+        capped: "aborted",
+        free: "20000",
     },
     Row {
         name: "a guard that declines raises the same condition again, not a second one",
@@ -489,9 +528,12 @@ fn stack_limit_reads_the_cap() {
 }
 
 /// The default cap holds what runs today (#907's acceptance): a recursion
-/// 10 M deep, 1.37 GB of stack, where the machine's default is at least
-/// 1.5 GiB, as it is on both CI runners (a quarter of 7 GB is 1.75 GB).
-/// On a smaller machine the same recursion meets the cap and is caught.
+/// 10 M deep, 1.36 GB of stack as the cap counts it (136 bytes a frame),
+/// where the machine's default is at least 1.5 GiB, as it is on both CI
+/// runners (a quarter of 7 GB is 1.75 GB). On a machine whose default is
+/// under 1 GiB the same recursion meets the cap and is caught; between the
+/// two, which of them happens turns on the frame's exact size, and either
+/// is right.
 #[test]
 fn the_default_cap_holds_a_ten_million_frame_recursion() {
     let cap = HeapConfig::new().stack_cap();
@@ -503,7 +545,14 @@ fn the_default_cap_holds_a_ten_million_frame_recursion() {
     if cap >= 3 << 29 {
         assert_eq!(got, "10000000", "under a default cap of {cap} bytes");
     } else {
-        eprintln!("the default cap here is {cap} bytes: the recursion is expected to meet it");
-        assert_eq!(got, "exhausted", "under a default cap of {cap} bytes");
+        eprintln!("the default cap here is {cap} bytes: the recursion may meet it");
+        if cap < 1 << 30 {
+            assert_eq!(got, "exhausted", "under a default cap of {cap} bytes");
+        } else {
+            assert!(
+                got == "10000000" || got == "exhausted",
+                "{got}, under a default cap of {cap} bytes"
+            );
+        }
     }
 }

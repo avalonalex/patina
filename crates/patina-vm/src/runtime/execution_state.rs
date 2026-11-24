@@ -718,8 +718,14 @@ impl ExecutionState {
 
     /// Capture every dynamic component together; handle allocation clears
     /// the copy's dead temporaries and its hole, `deliver_reg`, and installs
-    /// the weak-store payload before a safe point.
-    pub(super) fn capture_full(&self, deliver_reg: u16, reentry: Rc<[u64]>) -> VmContinuation {
+    /// the weak-store payload before a safe point. `stack_reserve_open` is
+    /// the machine's, which the snapshot carries (#907).
+    pub(super) fn capture_full(
+        &self,
+        deliver_reg: u16,
+        reentry: Rc<[u64]>,
+        stack_reserve_open: bool,
+    ) -> VmContinuation {
         patina_core::census::capture_full(self.depth().frame_count(), self.registers.len());
         VmContinuation {
             frames: self.frames.clone(),
@@ -731,6 +737,7 @@ impl ExecutionState {
             exit_status: None,
             abort_landing: false,
             reentry,
+            stack_reserve_open,
         }
     }
 

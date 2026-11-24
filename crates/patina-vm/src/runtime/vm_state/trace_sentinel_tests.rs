@@ -262,6 +262,7 @@ fn every_continuation_snapshot_field_is_traced() {
         exit_status: None,
         abort_landing: false,
         reentry: Rc::from(Vec::new()),
+        stack_reserve_open: false,
     });
     let [
         register,
@@ -372,6 +373,7 @@ fn every_slot_the_vm_reports_is_where_its_value_lives() {
         exit_status: None,
         abort_landing: false,
         reentry: Rc::from(Vec::new()),
+        stack_reserve_open: false,
     });
     state.alloc_vm_delimited_continuation(VmDelimitedContinuation {
         frames: vec![frame(&code, fixnum(7))],
@@ -755,6 +757,7 @@ fn full_capture_of(code: &Rc<CodeObject>) -> VmContinuation {
         exit_status: None,
         abort_landing: false,
         reentry: Rc::from(Vec::new()),
+        stack_reserve_open: false,
     }
 }
 

@@ -333,13 +333,20 @@ at which the cap is met does not move when that lands).
   the next handler out gets a new condition. A margin under the limit would
   leave a `guard` near it with one catchable exhaustion and then the hard
   cap, the design CPython withdrew after 3.9.9.
-- **Arriving above the soft limit** opens the reserve again
-  (`VmState::stack_limit_after_arrival`). A continuation captured above the
-  limit was captured in a handler's extent, since nothing else runs there,
-  and re-entering it re-enters that extent. A `guard` whose clauses all
-  decline does exactly this, to raise the condition again from the raise
-  site (R7RS 7.3): with the limit left armed, the poll at the re-entry
-  would raise a second `&stack-exhausted` in place of the first.
+- **A full continuation carries the reserve's state**
+  (`VmContinuation::stack_reserve_open`), and its arrival puts the limit
+  back to it (`VmState::stack_limit_after_arrival`), as it puts back the
+  handler stack. Captured in the extent of a handler for `&stack-exhausted`,
+  it finds the reserve open again; captured anywhere else, the soft limit
+  armed. A `guard` whose clauses all decline does the first, to raise the
+  condition again from the raise site (R7RS 7.3): with the limit left
+  armed, the poll at the re-entry would raise a second `&stack-exhausted`
+  in place of the first. The state is carried and not read off the stack's
+  height: that every stack above the soft limit is a handler's is an
+  argument about where the polls are, and the snapshot's own word needs
+  none. An abort's landing keeps the reserve open only where the stack
+  under its prompt is above the soft limit, on both of its paths
+  (`stack_reserve_open_over`).
 - **Pushes that take no poll** ask the cap first (`check_stack_room`): a
   stub's frame, and a delimited continuation's re-entry, which appends its
   whole region (`finish_delimited_invoke`). What would not fit is an

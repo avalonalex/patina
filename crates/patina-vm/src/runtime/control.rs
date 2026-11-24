@@ -695,7 +695,11 @@ fn handle_control_primitive(
             // `AssertNoGc` would assert (and that poll would trip it).
             let cont_tv = {
                 let _window = AssertNoGc::new(state.heap());
-                let cont = state.execution.capture_full(dst, captured_reentry(state));
+                let cont = state.execution.capture_full(
+                    dst,
+                    captured_reentry(state),
+                    state.stack_reserve_open(),
+                );
                 state.alloc_vm_continuation(cont)
             };
             // Call proc with the continuation object.
@@ -731,6 +735,7 @@ fn handle_control_primitive(
                 abort_landing: false,
                 // Never read: arriving ends the process first.
                 reentry: captured_reentry(state),
+                stack_reserve_open: false,
             });
             step_wind_jump(
                 state,
@@ -1397,10 +1402,11 @@ pub(super) fn step_wind_jump(
         .count();
     state.reentry_kept = (kept == cc.reentry.len() && kept < state.reentry.len()).then_some(kept);
     state.execution.restore(&cc);
-    // A continuation's arrival has replaced the stack: the soft limit is
-    // armed again where the stack is now at or below it, and the reserve
-    // is open again where the continuation was captured in it (#907).
-    state.stack_limit_after_arrival();
+    // A continuation's arrival has replaced the stack, and the stack's
+    // limit goes with it (#907): the reserve is open again where the
+    // continuation was captured in it, and the soft limit is armed anywhere
+    // else.
+    state.stack_limit_after_arrival(cc.stack_reserve_open);
     // A snapshot can carry a prompt whose body is already finished, and this
     // is the one moment that can tell (issue #176).
     //
@@ -3091,6 +3097,15 @@ pub(super) fn abort_to_prompt(
     // the machine cannot be cut back until it arrives.
     let mut frames = state.execution.frames_below(landing_depth).to_vec();
     let mut registers = state.execution.registers().copy(..registers_end);
+    // What the path above decides by cutting the machine and asking
+    // (`rearm_stack_limit`), decided here for the landing it describes: the
+    // reserve stays open only if it is open now and the stack the prompt
+    // delimits, before the handler's stub goes on it, is still above the
+    // soft limit (#907). The two paths must not differ in where they end up.
+    let stack_reserve_open = state.stack_reserve_open_over(
+        frames.len() * super::execution_state::FRAME_HEADER_BYTES
+            + registers.len() * std::mem::size_of::<TaggedValue>(),
+    );
     push_abort_stub(
         &mut frames,
         &mut registers,
@@ -3116,6 +3131,7 @@ pub(super) fn abort_to_prompt(
         // `pending_transfer`'s to say, as it was before continuations carried
         // these, so its landing keeps every one.
         reentry: captured_reentry(state),
+        stack_reserve_open,
     };
     let target_tv = state.alloc_vm_continuation(target);
     match step_wind_jump(state, target_tv, val, WindStub::Push, window) {

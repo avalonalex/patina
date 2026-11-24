@@ -221,6 +221,16 @@ pub struct VmContinuation {
     /// abandoned — whatever the frame depths say; see `step_wind_jump`.
     #[trace(skip, reason = "re-entry boundary ids")]
     pub reentry: Rc<[u64]>,
+
+    /// Whether the stack's reserve was open where this was captured (#907):
+    /// `true` in the extent of a handler for `&stack-exhausted`, which has
+    /// the last MiB under the cap, and `false` anywhere else. Arriving puts
+    /// the limit back to what this says (`VmState::stack_limit_after_arrival`),
+    /// as it puts back the handler stack: a `guard` whose clauses all decline
+    /// re-enters its handler to raise the condition again, and finds the
+    /// reserve open again.
+    #[trace(skip, reason = "a flag")]
+    pub stack_reserve_open: bool,
 }
 
 /// The bytes of a buffer of `T`, at capacity.
@@ -251,6 +261,7 @@ impl VmContinuation {
             exit_status: _,
             abort_landing: _,
             reentry,
+            stack_reserve_open: _,
         } = self;
         size_of::<Rc<()>>() * 2
             + size_of::<Self>()

@@ -2076,7 +2076,16 @@ pub type VmInterpreter = Interpreter<VmBackend>;
 
 #[cfg(feature = "vm")]
 impl Interpreter<VmBackend> {
-    /// Construct the recommended VM interpreter.
+    /// Construct the recommended VM interpreter. Its memory settings are
+    /// the environment's ([`HeapConfig::from_env`]: `PATINA_STACK_MAX`, the
+    /// stack's cap); [`Interpreter::new_vm_with_config`] takes the host's
+    /// own instead.
+    ///
+    /// # Panics
+    ///
+    /// Where `PATINA_STACK_MAX` is set to something that is not a size, as
+    /// [`HeapConfig::from_env`] does: a host that would rather report it
+    /// calls [`HeapConfig::try_from_env`] and passes the configuration.
     pub fn new_vm() -> Self {
         Self::new(VmBackend::new())
     }

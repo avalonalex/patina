@@ -568,21 +568,52 @@ impl VmState {
         VmError::StackExhausted { cap }
     }
 
+    /// Whether the reserve is open: a handler for `&stack-exhausted` has the
+    /// last MiB under the cap (#907). What a full continuation captured now
+    /// carries (`VmContinuation::stack_reserve_open`).
+    #[inline]
+    pub(super) fn stack_reserve_open(&self) -> bool {
+        self.stack_reserve_open
+    }
+
+    /// Whether the reserve would still be open with the stack cut back to
+    /// `bytes`: it is open now and `bytes` is above the soft limit. What
+    /// [`Self::rearm_stack_limit`] decides for the live stack, for a landing
+    /// an abort describes before it travels there.
+    #[inline]
+    pub(super) fn stack_reserve_open_over(&self, bytes: usize) -> bool {
+        self.stack_reserve_open && bytes > self.stack_soft
+    }
+
     /// A continuation has arrived and replaced the stack
-    /// (`ExecutionState::restore`): set the limit to what the new stack
-    /// asks (#907). At or below the soft limit, the soft limit is armed, as
-    /// at any landing. Above it, the reserve is open: a continuation
-    /// captured above the soft limit was captured in a handler's extent,
-    /// since nothing else runs there, and re-entering it re-enters that
-    /// extent. A `guard` whose clauses all decline does exactly this, to
-    /// raise the condition again from the raise site (R7RS 7.3); with the
-    /// limit left armed, the re-entry's own poll would raise a second,
-    /// different `&stack-exhausted` in place of the first.
-    pub(super) fn stack_limit_after_arrival(&mut self) {
-        let above = self.execution.top_bytes() > self.stack_soft;
-        if above != self.stack_reserve_open && self.stack_cap != usize::MAX {
-            self.stack_reserve_open = above;
-            self.mutator.set_stack_limit(if above {
+    /// (`ExecutionState::restore`): put the limit back to what the
+    /// continuation was captured under (#907), `reserve_was_open`. The
+    /// reserve's state is part of what a continuation restores, as the
+    /// handler stack is. Captured in the extent of a handler for
+    /// `&stack-exhausted`, it finds the reserve open again: a `guard` whose
+    /// clauses all decline re-enters its handler to raise the condition
+    /// again from the raise site (R7RS 7.3), and with the limit armed the
+    /// re-entry's own poll would raise a second, different
+    /// `&stack-exhausted` in place of the first. Captured anywhere else, it
+    /// finds the soft limit armed, whatever the handler it was invoked from
+    /// had.
+    ///
+    /// The state is carried and not read off the stack's height. Taking
+    /// every stack above the soft limit for a handler's rests on an
+    /// argument about where the polls are: that no closure runs above the
+    /// limit, armed, long enough to capture. Where that failed, an arrival
+    /// would open the reserve with no condition raised, and the next
+    /// exhaustion in the form would be the hard cap. The snapshot's own
+    /// word rests on nothing.
+    ///
+    /// The compare is for a snapshot that says "open" over a stack at or
+    /// below the limit, which no capture makes: it keeps the reserve
+    /// closed there, as [`Self::rearm_stack_limit`] would.
+    pub(super) fn stack_limit_after_arrival(&mut self, reserve_was_open: bool) {
+        let open = reserve_was_open && self.execution.top_bytes() > self.stack_soft;
+        if open != self.stack_reserve_open {
+            self.stack_reserve_open = open;
+            self.mutator.set_stack_limit(if open {
                 self.stack_cap
             } else {
                 self.stack_soft
@@ -4297,6 +4328,95 @@ mod tests {
         assert!(!state.is_primitive_shadowed(car));
         define_global(&mut state, &global, Rc::from("car"), TaggedValue::fixnum(1));
         assert!(state.is_primitive_shadowed(car));
+    }
+
+    /// A machine under a 2 MiB cap, with `frames` frames of 60,000 registers
+    /// on its stack: 480,040 bytes each as the cap counts them, so two are
+    /// under the soft limit of 1 MiB and three are in the reserve.
+    fn capped_with_frames(frames: usize) -> VmState {
+        let mut state = VmState::on_a_fresh_heap();
+        state.set_stack_cap(2 << 20);
+        let mut wide = code();
+        wide.num_regs = 60_000;
+        let id = load_in_globals(&mut state, wide, Vec::new()).id();
+        let wide = state.code_object(id).unwrap();
+        for _ in 0..frames {
+            state
+                .execution
+                .push_frame(Rc::clone(&wide), CallFrame::NO_CLOSURE, 0);
+        }
+        state
+    }
+
+    /// The limit a full continuation's arrival sets is the one it was
+    /// captured under, not one read off the stack's height (#907): a
+    /// snapshot that says the limit was armed arrives with it armed, above
+    /// the soft limit too, where taking every stack above the limit for a
+    /// handler's would open the reserve with no condition raised. No
+    /// program in the suites captures one there, since every closure's
+    /// entry is polled; this holds the rule itself.
+    #[test]
+    fn an_arrival_sets_the_limit_its_continuation_was_captured_under() {
+        const CAP: usize = 2 << 20;
+        const SOFT: usize = CAP - STACK_RESERVE;
+        let limits = |state: &VmState| (state.stack_reserve_open(), state.mutator.limit());
+
+        // Above the soft limit.
+        let mut state = capped_with_frames(3);
+        assert!(state.execution.top_bytes() > SOFT);
+        assert_eq!(limits(&state), (false, SOFT), "armed when built");
+        state.stack_limit_after_arrival(false);
+        assert_eq!(limits(&state), (false, SOFT), "captured armed: armed");
+        assert!(
+            matches!(poll(&mut state), Err(VmError::StackExhausted { .. })),
+            "and the arrival's poll raises the condition"
+        );
+        assert_eq!(limits(&state), (true, CAP), "which opens the reserve");
+        state.stack_limit_after_arrival(false);
+        assert_eq!(
+            limits(&state),
+            (false, SOFT),
+            "captured armed, from a handler"
+        );
+        state.stack_limit_after_arrival(true);
+        assert_eq!(limits(&state), (true, CAP), "captured in a handler: open");
+        assert!(poll(&mut state).is_ok(), "the handler has the reserve");
+
+        // At or below it, the reserve is closed whatever the snapshot says.
+        let mut state = capped_with_frames(2);
+        assert!(state.execution.top_bytes() <= SOFT);
+        state.stack_limit_after_arrival(true);
+        assert_eq!(limits(&state), (false, SOFT));
+        assert!(poll(&mut state).is_ok());
+    }
+
+    /// The landing an abort describes before it travels there keeps the
+    /// reserve open only where cutting the live machine would
+    /// (`rearm_stack_limit`): it is open now, and the stack under the
+    /// prompt is above the soft limit.
+    #[test]
+    fn an_aborts_landing_keeps_the_reserve_only_above_the_soft_limit() {
+        const SOFT: usize = (2 << 20) - STACK_RESERVE;
+        let mut state = capped_with_frames(3);
+        assert!(
+            !state.stack_reserve_open_over(SOFT + 8),
+            "armed: no landing opens the reserve"
+        );
+        assert!(matches!(
+            poll(&mut state),
+            Err(VmError::StackExhausted { .. })
+        ));
+        assert!(state.stack_reserve_open());
+        assert!(state.stack_reserve_open_over(SOFT + 8));
+        assert!(!state.stack_reserve_open_over(SOFT), "at the limit: armed");
+        assert!(!state.stack_reserve_open_over(0));
+        // What the path that cuts the machine in place answers for the same
+        // two landings.
+        state.rearm_stack_limit();
+        assert!(state.stack_reserve_open(), "three frames: above the limit");
+        state.execution.pop_frame();
+        state.rearm_stack_limit();
+        assert!(!state.stack_reserve_open(), "two frames: at or below it");
     }
 }
 
