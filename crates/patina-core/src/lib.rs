@@ -100,7 +100,8 @@ pub use error::{ErrorDetail, ErrorKind, ExceptionKind, ExceptionObject, SourceLo
 pub use heap::PromiseState;
 pub use heap::cx::{
     CellValue, ClosureFree, ConvertedParamValue, Cx, Fresh, MachinePromiseBox, MachineVectorElem,
-    PairCar, PairCdr, ParamValue, PromiseBox, PromiseView, RecordField, Slot, VectorElem,
+    PairCar, PairCdr, ParamValue, PromiseBox, PromiseView, RecordField, ScopeAddition, Slot,
+    VectorElem,
 };
 pub use instance::{CurrentPort, Instance};
 pub use library::Library;

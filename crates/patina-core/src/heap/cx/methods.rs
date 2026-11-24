@@ -1165,6 +1165,12 @@ impl<'gc> Cx<'gc> {
             .record_source(value.tagged(), location)
     }
 
+    /// [`Heap::scope_sets`](crate::Heap::scope_sets) on this context's heap.
+    #[inline]
+    pub fn scope_sets(&self) -> usize {
+        self.heap.borrow().scope_sets()
+    }
+
     /// [`Heap::set_held`](crate::Heap::set_held) on this context's heap.
     #[inline]
     pub fn set_held(&self, handle: &Owned, value: Value<'gc>) {

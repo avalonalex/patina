@@ -6,8 +6,9 @@
 //! the location of each element of a list or vector too, immediate datums
 //! included, but nothing outside tests read those spans (#643).
 
-use super::Heap;
-use crate::{SourceLocation, TaggedValue};
+use super::scope_sets::{ScopeSetId, ScopeSetMemo};
+use super::{Heap, HeapObjectData};
+use crate::{ScopeId, ScopeSet, SourceLocation, TaggedValue};
 use std::rc::Rc;
 
 impl Heap {
@@ -70,6 +71,93 @@ impl Heap {
             crate::ScopeSet,
         ) -> Option<TaggedValue>,
     ) -> TaggedValue {
+        self.walk_syntax_identifiers(root, replacements, |heap, value| {
+            let (name, scopes) = heap.get_identifier_data_any(value)?;
+            transform(heap, value, name, scopes)
+        })
+    }
+
+    /// `Cx::rescope_identifiers`' walk (#788): each identifier `picks` picks,
+    /// other than one the reader wrote, copied with the set `rescope` makes
+    /// of its own, which is made and interned once for each distinct set the
+    /// walk meets, by its id. `picks` reads each set where the table holds
+    /// it, with no copy. The memo lives for this call, beneath the context
+    /// that called it, where nothing collects.
+    pub(crate) fn rescope_identifiers(
+        &mut self,
+        root: TaggedValue,
+        picks: impl Fn(&str, &ScopeSet) -> bool,
+        rescope: impl Fn(&ScopeSet) -> ScopeSet,
+    ) -> TaggedValue {
+        let mut made = ScopeSetMemo::default();
+        self.walk_syntax_identifiers(
+            root,
+            &mut std::collections::HashMap::new(),
+            |heap, value| {
+                let HeapObjectData::Identifier {
+                    name,
+                    scopes,
+                    written,
+                } = heap.get_object(value)
+                else {
+                    unreachable!("the walk hands over identifiers only");
+                };
+                if *written || !picks(name, heap.scope_sets.get(*scopes)) {
+                    return None;
+                }
+                let (name, from) = (Rc::clone(name), *scopes);
+                let to = heap.scope_sets.edited(&mut made, from, &rescope);
+                Some(heap.alloc_identifier_with_set(name, to))
+            },
+        )
+    }
+
+    /// A copy of the identifier `value` with `scope` added to its set, the
+    /// set made through `made` (#788), or `None` if `value` is no
+    /// identifier: `Cx::add_scope_copying`'s. The copy is no written name,
+    /// whatever the original was.
+    pub(crate) fn identifier_adding_scope(
+        &mut self,
+        made: &mut ScopeSetMemo,
+        scope: ScopeId,
+        value: TaggedValue,
+    ) -> Option<TaggedValue> {
+        if !value.is_object() {
+            return None;
+        }
+        let HeapObjectData::Identifier { name, scopes, .. } = self.get_object(value) else {
+            return None;
+        };
+        let (name, from) = (Rc::clone(name), *scopes);
+        let to = self
+            .scope_sets
+            .edited(made, from, |set| set.with_scope(scope));
+        Some(self.alloc_identifier_with_set(name, to))
+    }
+
+    /// An identifier named `name` whose set is `scope` alone: the empty
+    /// set's with `scope` added, made through `made` (#788).
+    pub(crate) fn identifier_in_scope(
+        &mut self,
+        made: &mut ScopeSetMemo,
+        scope: ScopeId,
+        name: Rc<str>,
+    ) -> TaggedValue {
+        let to = self
+            .scope_sets
+            .edited(made, ScopeSetId::EMPTY, |set| set.with_scope(scope));
+        self.alloc_identifier_with_set(name, to)
+    }
+
+    /// The walk under [`Heap::map_syntax_identifiers_memo`] and
+    /// [`Heap::rescope_identifiers`]: `copy_of` is asked of each identifier
+    /// it meets, and answers its copy or `None` to leave it as it is.
+    fn walk_syntax_identifiers(
+        &mut self,
+        root: TaggedValue,
+        replacements: &mut std::collections::HashMap<u64, TaggedValue>,
+        mut copy_of: impl FnMut(&mut Heap, TaggedValue) -> Option<TaggedValue>,
+    ) -> TaggedValue {
         use std::collections::{HashMap, HashSet};
         if let Some(&copy) = replacements.get(&root.raw_bits()) {
             return copy;
@@ -88,8 +176,8 @@ impl Heap {
                 }
                 continue;
             }
-            if let Some((name, scopes)) = self.get_identifier_data_any(value) {
-                if let Some(copy) = transform(self, value, name, scopes) {
+            if self.is_identifier(value) {
+                if let Some(copy) = copy_of(self, value) {
                     if self.get_symbol_name(copy).is_none() {
                         self.inherit_source(value, copy);
                     }

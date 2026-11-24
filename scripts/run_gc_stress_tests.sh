@@ -474,7 +474,23 @@ fi
 # trigger comes later, 368 collections without stress where there were 385
 # (385 again with that estimate alone put back at 612), and 10653 at 4096
 # as before, the minimum left; every other target read as it did, at its
-# interval and without stress)
+# interval and without stress; and gc_vm's and gc_tree_walker's test
+# counts and minimums re-pinned 2026-11-21 for #788's shared test that a
+# live macro's literals keep their scope sets, which makes 197 collections
+# at 16 on the VM and 158 without stress, and 640 and 598 on the
+# tree-walker, nearly all its zeal halves, and for the `scope-sets` reading
+# `a_redefined_library_is_released` gained, one more form in each of its
+# readings, which raised its counts by 10 on the VM and by 140 on the
+# tree-walker, at 16 and without stress alike, from its zeal halves: so
+# 58404 at 16 and 31262 without stress on the VM, and 129981 and 96696 on
+# the tree-walker, each count without stress above half its count at 16,
+# so each minimum midway between its two counts; and macro_definition_env's
+# and scheme_suite's counts without stress re-measured that day, since the
+# scope-set table's charge to the external bytes (#788) brings the byte
+# trigger sooner: 140 collections where there were 129, and 375 where there
+# were 368, their counts at their intervals, 41070 at 16 and 10653 at
+# 4096, as before, the minimums left; every other target read as it did,
+# at its interval and without stress)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -482,17 +498,17 @@ TARGETS=(
     "ephemerons 16 289 30"                    # 5738 (204)
     "escape_from_primitive 16 3669 19"        # 9789 (94)
     "finished_forms_release_code 16 2040 12"  # 4057 (15)
-    "gc_tree_walker 16 112579 41"             # 129201 (95958)
-    "gc_vm 16 44645 54"                       # 58197 (31094)
+    "gc_tree_walker 16 113338 42"             # 129981 (96696)
+    "gc_vm 16 44833 55"                       # 58404 (31262)
     "host_environments 16 83806 36"           # 167847 (765)
     "hygiene_matrix 16 11136 25"              # 22757 (6)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
-    "macro_definition_env 16 16626 62"        # 41070 (129): see the header
+    "macro_definition_env 16 16626 62"        # 41070 (140): see the header
     "owned_handles 16 62714 9"                # 125648 (14)
     "rooted_loading 16 371 6"                 # 1269 (10)
     "vm_callprimitive 16 545 23"              # 1899 (0)
-    "scheme_suite 4096 1534 11"               # 10653 (368): see the header
+    "scheme_suite 4096 1534 11"               # 10653 (375): see the header
 )
 
 OUT=$(mktemp -d)

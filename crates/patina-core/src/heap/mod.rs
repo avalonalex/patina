@@ -36,6 +36,7 @@ pub mod mutator;
 mod numeric;
 mod port_table;
 mod root_set;
+mod scope_sets;
 // Sentinel values for the collector's field tests (#623): patina-core's own
 // tests, and other crates' under `test-support`.
 #[cfg(any(test, feature = "test-support"))]
@@ -65,6 +66,7 @@ pub use port_table::PortId;
 #[cfg(any(test, feature = "test-support"))]
 pub use port_table::registered_port_tables;
 pub(crate) use port_table::{PortTable, open_output_files};
+use scope_sets::{ScopeSetId, ScopeSetTable};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -362,7 +364,9 @@ pub enum HeapObjectData {
     },
     Identifier {
         name: Rc<str>,
-        scopes: crate::scope::ScopeSet,
+        /// The id of its scope set's entry in the heap's scope-set table
+        /// (#788), which holds each set once.
+        scopes: ScopeSetId,
         /// A written program name, which has the binding behavior of a symbol.
         written: bool,
     },
@@ -535,6 +539,12 @@ pub struct Heap {
 
     /// Symbol intern table (name -> object index)
     symbol_table: std::collections::HashMap<String, HeapIndex>,
+
+    /// Every scope set an identifier carries, once, by the id the identifier
+    /// holds (`heap/scope_sets.rs`, #788). A plain field under the heap's
+    /// borrow, as `symbol_table` is: no id leaves core (decision 18 on #782,
+    /// pending the owner's ruling).
+    scope_sets: ScopeSetTable,
 
     /// Syntactic-keyword intern table, the exact shape of `symbol_table`:
     /// keyed by the thing being interned. Allocated lazily on first use and
@@ -777,6 +787,8 @@ impl Heap {
         let telemetry = telemetry::Telemetry::new();
         let handles = HandleTable::new(telemetry.heap_id);
         port_table::register(handles.ports());
+        let account = ByteAccount::new(Rc::clone(&mutator));
+        let scope_sets = ScopeSetTable::new(account.external_bytes_handle());
         Self {
             syntax_sources: std::collections::HashMap::new(),
             instance: Rc::new(crate::instance::Instance::default()),
@@ -785,6 +797,7 @@ impl Heap {
             strings: Vec::with_capacity(strings),
             objects: Vec::new(),
             symbol_table: std::collections::HashMap::new(),
+            scope_sets,
             core_syntax_table: std::collections::HashMap::new(),
             free_pairs: Vec::new(),
             free_vectors: Vec::new(),
@@ -795,7 +808,7 @@ impl Heap {
             string_checks: SlotChecks::new(),
             object_checks: SlotChecks::new(),
             allocs_since_gc: 0,
-            account: ByteAccount::new(Rc::clone(&mutator)),
+            account,
             gc_threshold: GcThreshold::NEVER,
             mutator,
             gc_freed_closure_code_ids: None,
@@ -1645,25 +1658,44 @@ impl Heap {
         }
     }
 
-    /// Allocate a native identifier with scope set
+    /// Allocate a native identifier with scope set: interned in the heap's
+    /// scope-set table (#788), so that the identifier holds its entry's id.
     pub fn alloc_identifier(
         &mut self,
         name: Rc<str>,
         scopes: crate::scope::ScopeSet,
     ) -> TaggedValue {
+        let scopes = self.scope_sets.intern(scopes);
+        self.alloc_identifier_with_set(name, scopes)
+    }
+
+    /// A distinct program occurrence with ordinary source-symbol semantics:
+    /// the empty set, id 0, with no lookup.
+    pub fn alloc_source_identifier(&mut self, name: Rc<str>) -> TaggedValue {
+        self.alloc_object(HeapObjectData::Identifier {
+            name,
+            scopes: ScopeSetId::EMPTY,
+            written: true,
+        })
+    }
+
+    /// The scope set at `id` in the heap's table (#788).
+    #[inline]
+    pub(crate) fn scope_set(&self, id: ScopeSetId) -> &crate::scope::ScopeSet {
+        self.scope_sets.get(id)
+    }
+
+    /// An identifier named `name` whose set is the table's entry `scopes`,
+    /// interned already (#788): a walk's copy, through its memo.
+    pub(crate) fn alloc_identifier_with_set(
+        &mut self,
+        name: Rc<str>,
+        scopes: ScopeSetId,
+    ) -> TaggedValue {
         self.alloc_object(HeapObjectData::Identifier {
             name,
             scopes,
             written: false,
-        })
-    }
-
-    /// A distinct program occurrence with ordinary source-symbol semantics.
-    pub fn alloc_source_identifier(&mut self, name: Rc<str>) -> TaggedValue {
-        self.alloc_object(HeapObjectData::Identifier {
-            name,
-            scopes: crate::ScopeSet::new(),
-            written: true,
         })
     }
 
@@ -2287,7 +2319,8 @@ impl Heap {
         self.get_object(ptr).object_type()
     }
 
-    /// Get identifier data (name and scopes) from a native Identifier object
+    /// Get identifier data (name and scopes) from a native Identifier object:
+    /// its set lent from the heap's scope-set table (#788).
     #[inline]
     pub fn get_identifier_data(
         &self,
@@ -2297,7 +2330,9 @@ impl Heap {
             return None;
         }
         match self.get_object(tv) {
-            HeapObjectData::Identifier { name, scopes, .. } => Some((name, scopes)),
+            HeapObjectData::Identifier { name, scopes, .. } => {
+                Some((name, self.scope_sets.get(*scopes)))
+            }
             _ => None,
         }
     }
@@ -2305,18 +2340,14 @@ impl Heap {
     /// Get identifier data (name and scopes) from a native Identifier object (owned version)
     ///
     /// Returns owned `(Rc<str>, ScopeSet)` for cases where the caller needs
-    /// owned data (e.g., when the heap borrow must be released).
+    /// owned data (e.g., when the heap borrow must be released): the set
+    /// cloned from the heap's scope-set table (#788).
     pub fn get_identifier_data_any(
         &self,
         tv: TaggedValue,
     ) -> Option<(Rc<str>, crate::scope::ScopeSet)> {
-        if !tv.is_object() {
-            return None;
-        }
-        match self.get_object(tv) {
-            HeapObjectData::Identifier { name, scopes, .. } => Some((name.clone(), scopes.clone())),
-            _ => None,
-        }
+        let (name, scopes) = self.get_identifier_data(tv)?;
+        Some((name.clone(), scopes.clone()))
     }
 
     // =========================================================================

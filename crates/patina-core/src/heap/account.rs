@@ -21,11 +21,11 @@
 //! capacity is fixed by the type system; a record's field count and a
 //! closure's free variables are fixed at construction, and the heap writes
 //! them in place; the other payloads charged — a bignum's limbs, an
-//! exception's message and irritants, a `values` object, a symbol's name, an
-//! identifier's scopes, a continuation's snapshot — are never written after
-//! allocation. A parameter's value stack, which `parameterize` grows and
-//! shrinks, is not charged: it is as deep as the `parameterize` forms active,
-//! which their frames already pay for.
+//! exception's message and irritants, a `values` object, a symbol's name, a
+//! continuation's snapshot — are never written after allocation. A
+//! parameter's value stack, which `parameterize` grows and shrinks, is not
+//! charged: it is as deep as the `parameterize` forms active, which their
+//! frames already pay for.
 //!
 //! **Shared `Rc` payloads are not charged** — a procedure's body and
 //! environment (a tree-walker closure is charged an estimate of its frame
@@ -41,7 +41,11 @@
 //! host namespace, whose parent is the global one (#835) — charges its own
 //! tables, once when it is made and again as they grow, and gives them back
 //! when it drops (#615; `Environment`'s `NamespaceCharge` says what it
-//! counts). [`Heap::charge_external_bytes`] is the entry point
+//! counts). So does the heap's scope-set table (#788), which holds each set
+//! an identifier carries once: an identifier's slot holds its set's id, and
+//! the table charges what it holds beyond the empty set's entry as it grows,
+//! and gives it back as the sweep frees sets and it shrinks.
+//! [`Heap::charge_external_bytes`] is the entry point
 //! for a holder with the heap in hand, and an [`ExternalBytes`] handle for
 //! one without: the handle needs no heap borrow, because such a holder
 //! usually dies when the last `Rc` naming it drops, and that is often inside
@@ -300,11 +304,6 @@ impl HeapObjectData {
                 record_type: _,
                 fields,
             } => fields.borrow().capacity() * VALUE_BYTES,
-            HeapObjectData::Identifier {
-                name: _,
-                scopes,
-                written: _,
-            } => scopes.heap_bytes(),
             HeapObjectData::Values(values) => values.capacity() * VALUE_BYTES,
             HeapObjectData::VmClosure {
                 code_id: _,
@@ -324,8 +323,12 @@ impl HeapObjectData {
             | HeapObjectData::VmDelimitedContinuationRef { id: _, bytes } => *bytes,
             // Nothing outside the slot. A port's slot holds its `PortTable`
             // entry's number; an open file port is charged as external bytes.
+            // An identifier's holds its set's id in the heap's scope-set
+            // table, which charges its sets as external bytes (#788), and a
+            // name, an `Rc` the account does not charge.
             HeapObjectData::Real(_)
             | HeapObjectData::Port(_)
+            | HeapObjectData::Identifier { .. }
             | HeapObjectData::Complex { .. }
             | HeapObjectData::LabelPlaceholder(_)
             | HeapObjectData::MutableCell(_)
@@ -450,6 +453,13 @@ impl ByteAccount {
             live: 0,
             closures: 0,
         }
+    }
+
+    /// A handle to this account's external bytes, for a holder made with
+    /// the heap, before the heap exists to answer
+    /// [`Heap::external_bytes_handle`]: the scope-set table (#788).
+    pub(super) fn external_bytes_handle(&self) -> ExternalBytes {
+        ExternalBytes(Rc::clone(&self.shared))
     }
 }
 
@@ -921,6 +931,14 @@ impl Heap {
     #[doc(hidden)]
     pub fn set_code_units(&self, n: usize) {
         self.account.shared.code_units.set(n);
+    }
+
+    /// The scope sets the heap's scope-set table holds, not counting the
+    /// empty set (#788): read after a collection, the sets the marked
+    /// identifiers carry; between collections, those and the ones interned
+    /// since. `(gc-stats)`'s `scope-sets`.
+    pub fn scope_sets(&self) -> usize {
+        self.scope_sets.len()
     }
 
     /// The memory the arenas hold now, live or not: every arena's capacity in

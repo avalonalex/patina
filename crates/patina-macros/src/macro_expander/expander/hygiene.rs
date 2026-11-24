@@ -7,7 +7,7 @@ use super::{ExpandError, Expander};
 use crate::macro_expander::Identifier;
 use crate::macro_expander::utils::list_to_vec_with_tail;
 use patina_core::walk::OpenNodes;
-use patina_core::{Cx, Value};
+use patina_core::{Cx, ScopeAddition, Value};
 use std::rc::Rc;
 
 impl<'gc> Expander<'gc> {
@@ -84,6 +84,10 @@ impl<'gc> Expander<'gc> {
     /// would refuse the expansion that holds it — and before it got there,
     /// each level of such a form would copy all the levels below.
     ///
+    /// Each identifier's copy takes its set with the macro scope added
+    /// through one memo for the walk ([`ScopeAddition`]), so each distinct
+    /// set is interned once (#788).
+    ///
     /// [`MAX_FORM_DEPTH`]: patina_core::walk::MAX_FORM_DEPTH
     pub(super) fn mark_substituted_tagged(
         &self,
@@ -91,11 +95,12 @@ impl<'gc> Expander<'gc> {
         tv: Value<'gc>,
     ) -> Result<Value<'gc>, ExpandError> {
         let mut open = OpenNodes::default();
+        let mut addition = cx.scope_addition(self.macro_scope);
         // The lists being marked, innermost last.
         let mut lists: Vec<MarkedList<'gc>> = Vec::new();
         let mut next = tv;
         loop {
-            let mut marked = match self.mark_node(cx, next) {
+            let mut marked = match self.mark_node(cx, &mut addition, next) {
                 Mark::Done(marked) => marked,
                 Mark::Circular => return Ok(tv),
                 Mark::List { elements, tail } => {
@@ -138,25 +143,27 @@ impl<'gc> Expander<'gc> {
     }
 
     /// Mark one node, or say it is a list to walk.
-    fn mark_node(&self, cx: &mut Cx<'gc>, tv: Value<'gc>) -> Mark<'gc> {
+    fn mark_node(
+        &self,
+        cx: &mut Cx<'gc>,
+        addition: &mut ScopeAddition<'gc>,
+        tv: Value<'gc>,
+    ) -> Mark<'gc> {
         // Fast path: immediate values don't need marking
         if tv.is_fixnum() || tv.is_char() || tv.is_special() {
             return Mark::Done(tv);
         }
 
-        // Check if it's an identifier (native or boxed) - add macro_scope
-        if let Some((name, scopes)) = cx.get_identifier_data_any(tv) {
-            let new_scopes = scopes.with_scope(self.macro_scope);
-            let copy = cx.alloc_identifier(name, new_scopes);
-            cx.inherit_source(tv, copy);
+        // An identifier: its copy, with macro_scope added to its set and its
+        // location.
+        if let Some(copy) = cx.add_scope_copying(addition, tv) {
             return Mark::Done(copy);
         }
 
         // Check if it's a symbol - convert to identifier with macro_scope
         let name = cx.get_symbol_name(tv).map(|name| Rc::<str>::from(&*name));
         if let Some(name) = name {
-            let scopes = patina_runtime::ScopeSet::new().with_scope(self.macro_scope);
-            return Mark::Done(cx.alloc_identifier(name, scopes));
+            return Mark::Done(cx.alloc_identifier_adding_scope(addition, name));
         }
 
         // Pairs: walk the *form*, not each tail.
