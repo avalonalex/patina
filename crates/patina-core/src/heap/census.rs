@@ -262,6 +262,7 @@ mod tests {
             let (_, len, bytes) = object_info(&HeapObjectData::Macro {
                 body: body(),
                 literals: literals.into_boxed_slice(),
+                scopes: crate::heap::scope_sets::ScopeSetId::EMPTY,
                 relinks: relinks.into_boxed_slice(),
             });
             (len, bytes)

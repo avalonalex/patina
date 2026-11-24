@@ -386,21 +386,28 @@ impl Template {
     /// Pattern variables (`Template::Var`) are excluded by construction: they
     /// are substituted from the macro call, not introduced by the template.
     pub fn for_each_symbol(&self, f: &mut dyn FnMut(Rc<str>)) {
+        self.for_each_identifier(&mut |id| f(id.name().clone()));
+    }
+
+    /// Visit every `Template::Symbol`'s identifier in this template, in
+    /// order: [`for_each_symbol`](Self::for_each_symbol)'s walk, with the
+    /// identifier's scopes as well as its name.
+    pub(crate) fn for_each_identifier(&self, f: &mut dyn FnMut(&Identifier)) {
         // As deep as the template: grown as it goes (#617).
         crate::walk::ensure_sufficient_stack_if(self.is_nested(), || match self {
-            Template::Symbol(id) => f(id.name().clone()),
+            Template::Symbol(id) => f(id),
             Template::List(items) | Template::Vector(items) => {
                 for i in items {
-                    i.for_each_symbol(f);
+                    i.for_each_identifier(f);
                 }
             }
             Template::DottedList { templates, tail } => {
                 for i in templates {
-                    i.for_each_symbol(f);
+                    i.for_each_identifier(f);
                 }
-                tail.for_each_symbol(f);
+                tail.for_each_identifier(f);
             }
-            Template::Ellipsis { subtemplate, .. } => subtemplate.for_each_symbol(f),
+            Template::Ellipsis { subtemplate, .. } => subtemplate.for_each_identifier(f),
             Template::Literal(_) | Template::Var(_) => {}
         })
     }
@@ -508,6 +515,18 @@ pub struct CompiledRule {
 /// Its trace (derived, #686) reports the environments it keeps live; the
 /// object traces the literals. Pinned by the sentinel test
 /// `compiled_macro_fields`.
+///
+/// It also holds scopes off the heap: `definition_scopes`, each
+/// `Template::Symbol` identifier's scopes, the sets in
+/// `inherited_identifiers` and the scopes of `foreign_expansions`. The
+/// object interns their union once when it is made (`template_scopes`,
+/// `HeapObjectData::Macro.scopes`) and marks it as an identifier's set is,
+/// so the heap's live-scope report,
+/// `Heap::scope_is_carried`, counts them while the macro lives (#789,
+/// `docs/GC_DESIGN.md` §9.10). Only binding scopes, which the desugarer
+/// mints, are its own: the other two places copy what its literals carry,
+/// so an expansion scope it can put on a reference is in the table through
+/// a literal anyway. Pinned by `a_macros_template_scopes_live_with_it`.
 #[derive(Clone, Debug, Trace)]
 pub struct CompiledMacro {
     /// Macro name (for error messages)
@@ -621,6 +640,38 @@ impl CompiledMacro {
             });
         }
         out
+    }
+
+    /// Every scope this macro holds off the heap (#789): `definition_scopes`,
+    /// each `Template::Symbol` identifier's scopes, each set in
+    /// `inherited_identifiers`, and each scope of `foreign_expansions`, as one
+    /// set. Its macro object interns it when it is made and marks it as it
+    /// marks an identifier's (`HeapObjectData::Macro.scopes`), so that the
+    /// heap's scope-set report counts it while the macro lives. Empty for a
+    /// macro written at top level, which costs the table nothing.
+    ///
+    /// Each place is read, whatever the compiler puts there: today a
+    /// symbol's scopes are `definition_scopes` or none, and the other two
+    /// copy what the object's literals carry, so most of the union is in the
+    /// table already.
+    pub(crate) fn template_scopes(&self) -> ScopeSet {
+        let mut scopes = self.definition_scopes.clone();
+        for rule in &self.rules {
+            rule.template.for_each_identifier(&mut |id| {
+                for &scope in id.definition_scopes().iter().flat_map(|set| set.iter()) {
+                    scopes.add_scope(scope);
+                }
+            });
+        }
+        for set in self.inherited_identifiers.values().flatten() {
+            for &scope in set.iter() {
+                scopes.add_scope(scope);
+            }
+        }
+        for &(scope, _) in &self.foreign_expansions {
+            scopes.add_scope(scope);
+        }
+        scopes
     }
 }
 

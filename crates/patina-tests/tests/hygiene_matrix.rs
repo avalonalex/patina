@@ -2531,6 +2531,204 @@ fn an_introduced_definition_only_templates_reach_survives_a_collection() {
     }
 }
 
+// ----------------------------------------------------------------------------
+// The live-scope report (#789, GC stage 4c.3): `Heap::scope_is_carried`, which
+// 5c reads beside the link tables to decide whether an introduced top-level
+// definition can still be reached. Each test reads the scope from the binder
+// (`Environment::introduced_records`, the VM's introduced-global table and the
+// tree-walker's scoped entry), never from a constant, and asks the report right
+// after a `(gc)`, where it is exact for what it counts.
+// ----------------------------------------------------------------------------
+
+/// `program`'s answer on `interp`, written.
+fn run_owned<B: patina_interpreter::Backend>(
+    interp: &patina_interpreter::Interpreter<B>,
+    program: &str,
+) -> String {
+    let answer = interp
+        .eval_program_owned(program)
+        .unwrap_or_else(|e| panic!("{e:?}\n{program}"));
+    interp.display_tagged(&answer)
+}
+
+/// Each introduced definition of `spelling` in `interp`'s global namespace:
+/// its record's `scope`, its identity's introducing scope (#834), and what
+/// its cell holds, written. Read through the raw layer, `backend().heap()`
+/// and `backend().global_namespace()`, which no deprecated method reaches.
+fn introduced<B: patina_interpreter::Backend>(
+    interp: &patina_interpreter::Interpreter<B>,
+    spelling: &str,
+) -> Vec<(patina_core::ScopeId, String)> {
+    let heap = interp.backend().heap();
+    let global = interp.backend().global_namespace();
+    let namespace = heap.borrow().held_environment(&global);
+    namespace
+        .introduced_records(heap, spelling)
+        .iter()
+        .map(|record| {
+            let scope = record.scope.expect("an introduced record has a scope");
+            (scope, interp.display_tagged(record.value))
+        })
+        .collect()
+}
+
+/// What the report answers for `scope` on `interp`'s heap.
+fn carried<B: patina_interpreter::Backend>(
+    interp: &patina_interpreter::Interpreter<B>,
+    scope: patina_core::ScopeId,
+) -> bool {
+    interp.backend().heap().borrow().scope_is_carried(scope)
+}
+
+/// The scope of `interp`'s one introduced `secret`, and what it holds.
+fn the_secret<B: patina_interpreter::Backend>(
+    interp: &patina_interpreter::Interpreter<B>,
+    what: &str,
+) -> (patina_core::ScopeId, String) {
+    let records = introduced(interp, "secret");
+    assert_eq!(
+        records.len(),
+        1,
+        "{what}: one introduced `secret`: {records:?}"
+    );
+    records.into_iter().next().unwrap()
+}
+
+const DEF_GETTER: &str = "
+    (define-syntax def-getter
+      (syntax-rules ()
+        ((_ get set)
+         (begin
+           (define secret 42)
+           (define-syntax get (syntax-rules () ((_) secret)))
+           (define-syntax set (syntax-rules () ((_ v) (set! secret v))))))))";
+
+/// The `def-getter` shape (#789's first acceptance test): after
+/// `(def-getter get-secret set-secret!)` and a `(gc)`, the scope of
+/// `secret`'s binder, the expansion's, is reported carried: the getter's
+/// and the setter's literal vectors hold `secret` as an identifier carrying
+/// it (#788). Once both names are rebound and a `(gc)` has freed the two
+/// macros, it is reported uncarried: nothing else holds it, the binder's own
+/// set (the namespace's entry) not being counted. The definition itself is
+/// still there, holding 7: reclaiming it is 5c's, not the report's.
+#[test]
+fn an_introduced_definitions_scope_is_carried_while_its_templates_live() {
+    fn run<B: patina_interpreter::Backend>(interp: patina_interpreter::Interpreter<B>, what: &str) {
+        let answer = run_owned(
+            &interp,
+            &format!(
+                "(import (scheme base) (patina debug)) {DEF_GETTER}
+                 (def-getter get-secret set-secret!)
+                 (set-secret! 7)
+                 (define got (get-secret))
+                 (gc)
+                 got"
+            ),
+        );
+        assert_eq!(answer, "7", "{what}");
+        let (secret, held) = the_secret(&interp, what);
+        assert_eq!(held, "7", "{what}");
+        assert!(
+            carried(&interp, secret),
+            "{what}: {secret:?} while the getter and setter live"
+        );
+        run_owned(
+            &interp,
+            "(define get-secret #f) (define set-secret! #f) (gc)",
+        );
+        assert_eq!(
+            the_secret(&interp, what),
+            (secret, "7".to_string()),
+            "{what}: the same binder, holding what it held"
+        );
+        assert!(
+            !carried(&interp, secret),
+            "{what}: {secret:?} is still carried once both macros are gone"
+        );
+    }
+    run(common::vm_interpreter(), "vm");
+    run(common::tree_walker_interpreter(), "tree-walker");
+}
+
+/// The closest shape to an expansion scope that only a compiled template's
+/// own sets hold (#789): `get-secret` is compiled under a non-empty
+/// definition scope, the `splicing-let-syntax`'s, so its template's `sym`
+/// is a `Template::Symbol` carrying that scope, which reaches the user's
+/// `secret` by name, while the introduced `secret` reaches the binder at
+/// the expansion's scope through a heap literal. It answers `(user 42)` on
+/// both backends, as chibi 0.12 does (Gauche 0.9.15, which has no `(srfi
+/// 188)`, answers it with `begin` in place of `splicing-let-syntax`). While
+/// `get-secret` is bound, the introduced `secret`'s scope is reported
+/// carried.
+#[test]
+fn the_closest_shape_answers_and_its_introduced_scope_is_carried() {
+    fn run<B: patina_interpreter::Backend>(interp: patina_interpreter::Interpreter<B>, what: &str) {
+        let answer = run_owned(
+            &interp,
+            "(import (scheme base) (srfi 188) (patina debug))
+             (define-syntax def-secret
+               (syntax-rules ()
+                 ((_ get sym)
+                  (begin
+                    (define secret 42)
+                    (splicing-let-syntax ()
+                      (define-syntax get (syntax-rules () ((_) (list sym secret)))))))))
+             (define secret 'user)
+             (def-secret get-secret secret)
+             (define got (get-secret))
+             (gc)
+             got",
+        );
+        assert_eq!(answer, "(user 42)", "{what}");
+        let (secret, _) = the_secret(&interp, what);
+        assert!(
+            carried(&interp, secret),
+            "{what}: {secret:?} while `get-secret` is bound"
+        );
+    }
+    run(common::vm_interpreter(), "vm");
+    run(common::tree_walker_interpreter(), "tree-walker");
+}
+
+/// What the report misses (#789): tree-walker code. `peek` is compiled while
+/// the getter is bound, then both macros are rebound and a `(gc)` frees
+/// them, so the report says `secret`'s scope is uncarried on both backends;
+/// and `(peek)` still answers 7. The VM's `peek` reaches the definition by
+/// its renamed global, through its code's link table, which is §11.6's other
+/// test; the tree-walker's resolves `secret` by its scopes at run time,
+/// through that very scope, which its `CpsExpr` holds and the report does
+/// not count. Chibi 0.12 and Gauche 0.9.15 print 7 without the collection.
+///
+/// Decision 19 on #782 left this gap for 5c to decide: to reclaim
+/// introduced definitions on the VM only, or to count `CpsExpr`'s scope
+/// sets too. If 5c counts them, the tree-walker's expectation here changes
+/// to carried.
+#[test]
+fn tree_walker_code_is_not_counted() {
+    fn run<B: patina_interpreter::Backend>(interp: patina_interpreter::Interpreter<B>, what: &str) {
+        run_owned(
+            &interp,
+            &format!(
+                "(import (scheme base) (patina debug)) {DEF_GETTER}
+                 (def-getter get-secret set-secret!)
+                 (set-secret! 7)
+                 (define (peek) (get-secret))
+                 (define get-secret #f)
+                 (define set-secret! #f)
+                 (gc)"
+            ),
+        );
+        let (secret, _) = the_secret(&interp, what);
+        assert!(
+            !carried(&interp, secret),
+            "{what}: {secret:?} is carried with only `peek` left to reach it"
+        );
+        assert_eq!(run_owned(&interp, "(peek)"), "7", "{what}");
+    }
+    run(common::vm_interpreter(), "vm");
+    run(common::tree_walker_interpreter(), "tree-walker");
+}
+
 /// Set when this test binary runs itself as the child of
 /// [`an_introduced_definitions_record_carries_its_identity_and_scope`]:
 /// `<shape>/<backend>`, the [`RecordShape`] it runs and the backend.

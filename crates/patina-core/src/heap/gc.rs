@@ -1856,12 +1856,17 @@ impl<'h> GcVisitor<'h> {
             HeapObjectData::Macro {
                 body,
                 literals,
+                scopes,
                 relinks,
             } => {
                 body.as_ref().trace(self);
                 for &literal in literals.iter() {
                     self.visit(literal);
                 }
+                // No value: the id of the set of scopes its compiled
+                // templates hold, recorded as an identifier's is so that the
+                // sweep keeps it while the macro lives (#789).
+                self.marks.scope_sets.set(scopes.index());
                 // Each carried relink's record (#837), through its derived
                 // trace, which names its wordless fields as skipped.
                 for relink in relinks.iter() {

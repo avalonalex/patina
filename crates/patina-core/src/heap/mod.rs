@@ -352,6 +352,14 @@ pub enum HeapObjectData {
     Macro {
         body: Rc<crate::compiled_macro::CompiledMacro>,
         literals: Box<[TaggedValue]>,
+        /// The id of the set of every scope `body` holds off the heap
+        /// (`CompiledMacro::template_scopes`), interned in the heap's
+        /// scope-set table when the object is made and marked when it is
+        /// traced, as an identifier's set is, so that the table's report
+        /// counts those scopes while the macro lives (#789). Here, not in
+        /// `body`, so that the body can move without it. The empty set's
+        /// id, 0, for a macro whose templates hold no scope.
+        scopes: ScopeSetId,
         /// The relinked identifiers among `literals`, each with the record
         /// it was relinked to (#837): held and traced here for the same
         /// reason. Empty, and no allocation, for a macro that carries none.
@@ -1516,8 +1524,9 @@ impl Heap {
     }
 
     /// Allocate a macro object: `body`, and the `literals` its patterns and
-    /// templates name by index (#718). It carries no relinks, whatever its
-    /// body: `Cx::alloc_macro_with_relinks` makes one that does.
+    /// templates name by index (#718), with the set of the scopes `body`
+    /// holds interned in the scope-set table (#789). It carries no relinks,
+    /// whatever its body: `Cx::alloc_macro_with_relinks` makes one that does.
     pub fn alloc_macro(
         &mut self,
         body: Rc<crate::compiled_macro::CompiledMacro>,
@@ -1562,9 +1571,13 @@ impl Heap {
                 }
             }
         }
+        // Every macro object is made here, so every one's template scopes
+        // are in the table: id 0, with no lookup, where they are none.
+        let scopes = self.scope_sets.intern(body.template_scopes());
         self.alloc_object(HeapObjectData::Macro {
             body,
             literals: literals.into_boxed_slice(),
+            scopes,
             relinks: relinks.into_boxed_slice(),
         })
     }
@@ -1683,6 +1696,56 @@ impl Heap {
     #[inline]
     pub(crate) fn scope_set(&self, id: ScopeSetId) -> &crate::scope::ScopeSet {
         self.scope_sets.get(id)
+    }
+
+    /// Whether a scope set the heap still holds contains `scope` (#789,
+    /// GC stage 4c.3): the report 5c reads to decide whether an introduced
+    /// top-level definition's expansion scope is still carried, beside
+    /// whether a live link table references its record (`PRD/GC_PRD.md`
+    /// §11.6). Raw, Rust only, and computed when asked, by a scan of the
+    /// scope-set table, so no collection pays for it.
+    ///
+    /// **What counts:** every set in the table. That is each identifier's
+    /// that the last collection marked, a macro object's literals among
+    /// them, and each live macro object's template scopes
+    /// (`HeapObjectData::Macro.scopes`: its compiled templates'
+    /// `definition_scopes`, symbols, inherited identifiers and foreign
+    /// expansions, as one set), and every set interned since.
+    ///
+    /// **What does not:** an environment's binders (the tree-walker's
+    /// scoped entries, the VM's introduced-global table), which hold a
+    /// binder's scopes, not a reference's; the desugarer's and the
+    /// expander's transient sets, which last a form; and tree-walker code,
+    /// whose `CpsExpr` references hold owned sets they resolve at run time.
+    /// So on the tree-walker a closure can still reach a definition by a
+    /// scope this reports uncarried: the gap 5c decides (decision 19 on
+    /// #782), pinned by `hygiene_matrix.rs`' `tree_walker_code_is_not_counted`.
+    ///
+    /// **Conservative between collections:** a set no live holder carries
+    /// any more still counts until a collection frees it. Until stage 7
+    /// every collection is whole-heap, so right after one the answer is
+    /// exact for what it counts; from stage 7 a minor collection marks
+    /// young sets only and keeps the old ones, so it is exact for old
+    /// carriers only after a major, which is where 5c reads it.
+    ///
+    /// **Why a compiled template's own sets cannot hide an expansion
+    /// scope.** A reference reaches a binder by its scopes only if it
+    /// carries every scope of the binder (`scope_resolve::is_candidate`); an
+    /// introduced top-level binder carries the scope of the expansion that
+    /// introduced it (the expander's flip puts it on every identifier the
+    /// template introduced, and only a splicing `let-syntax`'s own scope is
+    /// stripped from a definition); and a template's own sets are binding
+    /// scopes, which the desugarer mints (its `current_scopes`, which only a
+    /// lambda's body, a `define` shorthand's body, a `let-syntax` and a
+    /// `letrec-syntax` extend, each by a scope of its own), while
+    /// `inherited_identifiers` and `foreign_expansions` copy what the
+    /// object's literals carry. So an expansion scope that a live macro's
+    /// expansion can put on a reference comes from one of its literals,
+    /// whose set the table holds. The template's own sets are counted
+    /// anyway (decision 19), so the report stays conservative whatever the
+    /// compiler puts in them.
+    pub fn scope_is_carried(&self, scope: crate::scope::ScopeId) -> bool {
+        self.scope_sets.carries(scope)
     }
 
     /// An identifier named `name` whose set is the table's entry `scopes`,

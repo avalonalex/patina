@@ -490,7 +490,14 @@ fi
 # trigger sooner: 140 collections where there were 129, and 375 where there
 # were 368, their counts at their intervals, 41070 at 16 and 10653 at
 # 4096, as before, the minimums left; every other target read as it did,
-# at its interval and without stress)
+# at its interval and without stress; and hygiene_matrix's test count
+# re-pinned 2026-11-21 for #789's three tests of the live-scope report (the
+# def-getter shape's scope carried and then not, the closest shape, and the
+# tree-walker code the report does not count), each on both backends, which
+# raised its count at 16 from 22757 to 22979 and without stress from 6 to
+# 14, their own eight `(gc)`s, the minimum left; the macro objects' template
+# scope sets (#789) moved no other target's count, at its interval or
+# without stress)
 TARGETS=(
     "callability 16 31 13"                    # 2131 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -501,7 +508,7 @@ TARGETS=(
     "gc_tree_walker 16 113338 42"             # 129981 (96696)
     "gc_vm 16 44833 55"                       # 58404 (31262)
     "host_environments 16 83806 36"           # 167847 (765)
-    "hygiene_matrix 16 11136 25"              # 22757 (6)
+    "hygiene_matrix 16 11136 28"              # 22979 (14)
     "interpreter_api 16 138 28"               # 3050 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
     "macro_definition_env 16 16626 62"        # 41070 (140): see the header

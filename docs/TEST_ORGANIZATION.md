@@ -2500,6 +2500,16 @@ introduced definition's binding record (#834) to the scope trace
 identity is the one the definition was bound at, and its scope that
 identity's largest, the expansion's that introduced it, in six shapes, among
 them a generated macro's, where the largest scope and the smallest differ.
+Three more hold the live-scope report 5c reads (`Heap::scope_is_carried`,
+#789; `docs/GC_DESIGN.md` §9.10) on both backends, each reading the scope
+from the binder (`Environment::introduced_records`) after a `(gc)`:
+`an_introduced_definitions_scope_is_carried_while_its_templates_live` (the
+`def-getter` shape's scope carried while its getter and setter live, and not
+once both are rebound and collected), the closest shape to a scope that only
+a compiled template holds (`(user 42)`, through `(srfi 188)`'s
+`splicing-let-syntax`), and `tree_walker_code_is_not_counted`, the gap
+decision 19 on #782 leaves to 5c: uncarried after the rebinding, while
+`(peek)` still answers 7.
 
 **GC benchmarks (#649).** `scripts/run_gc_benchmarks.sh` (the `gc` mode of
 `scripts/benchmarks.py`, in `scripts/gc_bench.py`) runs the workloads of
