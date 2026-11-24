@@ -170,9 +170,10 @@ pub struct CodeObject {
     /// The possible register roots of a frame suspended at each pc, after
     /// completed expression temporaries have been retired (#423): a dense
     /// index into the unit's deduplicated bitsets (#905, [`RegisterMaps`]).
-    /// Locals stay conservative. The collector and continuation capture
-    /// clear excluded slots before tracing; normal dispatch does no work for
-    /// these maps. Hand-built code uses `None` to retain every slot.
+    /// Locals stay conservative. A collection's walk of the frames reports
+    /// the included slots and clears the excluded ones, and a continuation
+    /// capture clears them in its copy (#906); normal dispatch does no work
+    /// for these maps. Hand-built code uses `None` to retain every slot.
     #[trace(skip, reason = "liveness bitsets, which hold no values")]
     pub register_roots: Option<RegisterMaps>,
 
@@ -212,7 +213,8 @@ impl TraceThroughRc for CodeObject {}
 /// code it now runs needs.
 ///
 /// Opaque outside the VM: pass 5 builds it ([`Self::from_parts`]) and the
-/// runtime builds the stubs' ([`Self::all_live`]); only retirement reads it.
+/// runtime builds the stubs' ([`Self::all_live`]); only the walk of the
+/// frames reads it, at a collection and at a capture.
 #[derive(Debug, Clone)]
 pub struct RegisterMaps {
     /// The map id of each pc, `0..=instructions.len()`, or [`Self::NEVER`]

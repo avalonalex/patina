@@ -51,10 +51,12 @@ use std::sync::Arc;
 /// The complete mutable state of the VM during execution.
 ///
 /// Its trace (derived, #686) is the VM's root set, which the running machine
-/// lends to each collection (#682): the register file, frames and dynamic
+/// lends to each collection (#682): the frames and dynamic
 /// extents, the parked escape value and the scratch arguments, every loaded
 /// code object's constants, the global environment and the ones set aside,
-/// and the step tracer's snapshots. The continuation stores are weak, traced
+/// and the step tracer's snapshots; and, by the walk of the frames that
+/// `trace_roots` runs after it, the register file (#906,
+/// `gc_roots::trace_frames`). The continuation stores are weak, traced
 /// by `trace_weak_ids` for the ids marking reached, and the units' link
 /// tables are traced by `trace_code_ids` for the code ids marking reached
 /// (#836): a frame's, a marked closure's, the running code's. Pinned by the
@@ -1016,9 +1018,14 @@ impl VmState {
     ///
     /// The handle is charged the snapshot's bytes (#606), so that a capture
     /// deep in the stack costs the collection trigger what it copied.
-    pub(super) fn alloc_vm_continuation(&mut self, mut cont: VmContinuation) -> TaggedValue {
+    ///
+    /// The snapshot's dead registers are cleared first, in the copy, and
+    /// with them the hole its `deliver_reg` names in its top frame
+    /// (`gc_roots::retire_snapshot`, #906): every snapshot the store holds
+    /// has been through it.
+    pub(super) fn alloc_vm_continuation(&mut self, cont: VmContinuation) -> TaggedValue {
         let _no_gc = AssertNoGc::new(&self.heap);
-        gc_roots::retire_registers(&mut cont.registers, &cont.frames, 0);
+        gc_roots::retire_snapshot(&cont.registers, &cont.frames, 0, Some(cont.deliver_reg));
         let bytes = cont.payload_bytes();
         let (tv, id) = self.heap.borrow_mut().alloc_vm_continuation_ref(bytes);
         self.continuation_store
@@ -1028,13 +1035,20 @@ impl VmState {
     }
 
     /// Allocate a delimited VM continuation, returning its heap `TaggedValue`
-    /// handle. The same window as [`Self::alloc_vm_continuation`].
+    /// handle. The same window as [`Self::alloc_vm_continuation`], and the
+    /// same clearing of the copy, whose frames keep their absolute bases
+    /// over a file that starts at `base_at_capture`.
     pub(super) fn alloc_vm_delimited_continuation(
         &mut self,
-        mut cont: VmDelimitedContinuation,
+        cont: VmDelimitedContinuation,
     ) -> TaggedValue {
         let _no_gc = AssertNoGc::new(&self.heap);
-        gc_roots::retire_registers(&mut cont.registers, &cont.frames, cont.base_at_capture);
+        gc_roots::retire_snapshot(
+            &cont.registers,
+            &cont.frames,
+            cont.base_at_capture,
+            cont.deliver_reg,
+        );
         let bytes = cont.payload_bytes();
         let (tv, id) = self
             .heap
@@ -1928,19 +1942,16 @@ fn route_error(state: &mut VmState, e: VmError) -> Result<(), VmError> {
 ///
 /// The protocol — `(gc)` honored in every mode, only the driver collects and
 /// only at depth 0, one borrow spans the collection — lives in
-/// `GcController::safe_point`; this supplies only what is VM-specific. It
-/// asks the depth first as well, so that it retires registers only for a
-/// collection that will run (#702).
+/// `GcController::safe_point`; this supplies only what is VM-specific: the
+/// machine's state, whose trace clears each frame's dead registers as it
+/// reports the live ones (#906, `gc_roots::trace_frames`), so only in a
+/// collection that runs (#702). It asks the depth first as well, which
+/// answers a poll made beneath a `NoGcScope` without the call.
 #[inline]
 fn maybe_collect(state: &mut VmState, driver: &mut GcDriver) -> bool {
     if !state.mutator.poll_due() || state.mutator.no_gc_depth() != 0 {
         return false;
     }
-    patina_core::census::stack_shape(
-        state.execution.depth().frame_count(),
-        state.execution.registers().len(),
-    );
-    state.execution.retire_registers();
     // The machine's own state, lent to the collection; the library registry
     // is registered with the heap, which waits while a load holds it (#682).
     GcController::safe_point(&state.gc, driver, |collect| collect(&[state]))
@@ -2028,13 +2039,6 @@ pub(crate) fn collect_for_loader(state: &mut VmState) -> bool {
         GcController::post_at_call(&state.heap, CollectKind::Major);
         return false;
     };
-    if state.mutator.no_gc_depth() == 0 {
-        patina_core::census::stack_shape(
-            state.execution.depth().frame_count(),
-            state.execution.registers().len(),
-        );
-        state.execution.retire_registers();
-    }
     let collected =
         GcController::collect_at_call(&state.gc, &mut driver, CollectKind::Major, |collect| {
             collect(&[&*state])
@@ -2056,22 +2060,16 @@ pub(crate) fn collect_for_loader(state: &mut VmState) -> bool {
 /// The poll is inside an instruction, where nothing is held in Rust: the
 /// stub frame has just been entered, so every value the call needs is in its
 /// registers or the caller's, and `cur_code` (the stub's) is in the code
-/// store. Registers are retired first, as `maybe_collect` retires them, but
-/// only where the collection can run, with the driver at depth 0. A nested
-/// loop never gets that far: the frames below it are suspended in the middle
-/// of an instruction, which may read its operands again when it resumes.
+/// store. Dead registers are cleared by the collection's own trace, as at
+/// `maybe_collect`'s (#906), and so only where the collection runs, with
+/// the driver at depth 0. A nested loop never gets that far: the frames
+/// below it are suspended in the middle of an instruction, which may read
+/// its operands again when it resumes.
 fn collect_at_call(state: &mut VmState, kind: CollectKind) -> bool {
     let Some(mut driver) = state.driver.take() else {
         GcController::post_at_call(&state.heap, kind);
         return false;
     };
-    if state.mutator.no_gc_depth() == 0 {
-        patina_core::census::stack_shape(
-            state.execution.depth().frame_count(),
-            state.execution.registers().len(),
-        );
-        state.execution.retire_registers();
-    }
     // As at a safe point: the registered registry makes the collection wait
     // while a load holds it, which posts it (#682).
     let collected =

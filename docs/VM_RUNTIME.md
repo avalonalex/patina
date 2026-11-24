@@ -273,6 +273,15 @@ Collections that run inside dispatch:
 - the polls themselves, at a closure's entry and a generic call's return;
 - `CollectAtCall`'s, a resumable primitive's collection at its call (§4.5).
 
+Each collection traces the register file by walking the frames (#906,
+`gc_roots::trace_frames`): for each frame it reports the registers the map
+at the frame's pc keeps and, in the same pass, overwrites the rest, the
+completed temporaries (`docs/GC_DESIGN.md` §5.2, "Temporary retirement").
+The safe points themselves no longer retire registers first; they lend the
+machine's state, and nothing is cleared where no collection runs. A capture
+clears its copy by the same walk, with the hole its `deliver_reg` names
+(`gc_roots::retire_snapshot`).
+
 **Interrupts** (#701). A poll also services a posted `SIGNAL`: Ctrl-C's,
 through the REPL's SIGINT handler, or a host's, through
 `Interpreter::interrupt_handle()` from another thread. Every loop services
@@ -354,7 +363,8 @@ and a push (#904):
   resume stub keeps the primitive's index, a wind step its target and
   value). Registers a larger earlier occupant left past the new code's
   count are not filled: the new code cannot name them, and retirement
-  clears them at every safe point.
+  clears them at every collection and capture, as it walks the frames
+  (`docs/GC_DESIGN.md` §5.2, #906).
 
 A check build asserts the choice: `return_into` writes a frame below the top
 or a top frame that awaits a value, and `set_top` and a push's writes never

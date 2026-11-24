@@ -1,8 +1,9 @@
 //! A liveness map that calls a live register dead panics where the register
 //! is read, in a check build (#625).
 //!
-//! Before a collection or a continuation capture, the VM retires every
-//! register its per-pc liveness map calls dead (#423). Retirement wrote
+//! At a collection, as it traces the frames, and at a continuation capture,
+//! in the copy, the VM retires every register its per-pc liveness map calls
+//! dead (#423, #906). Retirement wrote
 //! `UNSPECIFIED`, a legal value, so a wrong map turned a live value into a
 //! plausible one: the program failed later, at an unrelated instruction, or
 //! not at all. In a check build retirement writes `DEAD_SLOT` instead, and
@@ -39,7 +40,7 @@
 //! (`test_support::read_an_unwritten_register`), and no switch is involved.
 //!
 //! One more control, of another check: a frame at a pc its code has no map
-//! for panics where a collection retires it (#905,
+//! for panics where a collection's walk of the frames meets it (#905,
 //! [`a_check_build_refuses_a_frame_at_an_unmapped_pc`]).
 //!
 //! They run in every check build: every debug `cargo test`, and a release one
@@ -189,7 +190,7 @@ fn a_plain_release_build_reads_the_fill_in_a_reused_window() {
 /// A frame at a pc its code has no register map for (#905): its map index
 /// marks every pc no frame of the code can be suspended at `0xFFFF`, so a
 /// frame found at one means the compiler missed a suspension point, and a
-/// check build refuses it where a collection retires its registers, rather
+/// check build refuses it where a collection traces its registers, rather
 /// than guessing which are live. patina-vm builds such a frame by hand on a
 /// machine of its own and collects (`test_support::
 /// collect_with_a_frame_at_an_unmapped_pc`), so no switch is involved.
