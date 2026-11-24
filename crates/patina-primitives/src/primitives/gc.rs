@@ -272,7 +272,7 @@ fn gc_stats<'gc>(cx: &mut Cx<'gc>, _args: &[Value<'gc>]) -> Result<Value<'gc>, E
             "descriptor-limit",
             patina_core::heap::descriptor_limit().map_or(Value::FALSE, n),
         ),
-        ("stack-limit", n(cx.stack_limit())),
+        ("stack-limit", n(cx.stack_cap())),
         ("namespaces", n(cx.namespaces())),
         ("cells", n(cx.cells())),
         ("binding-records", n(cx.binding_records())),

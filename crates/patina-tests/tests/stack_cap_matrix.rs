@@ -151,6 +151,31 @@ const ROWS: &[Row] = &[
         free: "20000",
     },
     Row {
+        name: "caught twice by a handler that aborts to a prompt",
+        program: "(define tag (make-continuation-prompt-tag 'p))
+(define (once)
+  (call-with-continuation-prompt
+    (lambda ()
+      (with-exception-handler
+        (lambda (e) (abort-current-continuation tag 'aborted))
+        (lambda () (deep 20000))))
+    tag
+    (lambda (v k) v)))
+(list (once) (once))",
+        capped: "(aborted aborted)",
+        free: "(20000 20000)",
+    },
+    Row {
+        name: "a guard that declines raises the same condition again, not a second one",
+        program: "(let ((seen #f))
+  (guard (outer ((stack-exhausted? outer)
+                 (if (eq? outer seen) 'the-same-object 'another-object)))
+    (guard (inner ((begin (set! seen inner) #f) 'never))
+      (deep 20000))))",
+        capped: "the-same-object",
+        free: "20000",
+    },
+    Row {
         name: "an after thunk runs on the guard's escape, with the reserve",
         program: "(let ((log '()))
   (guard (e ((stack-exhausted? e) (reverse (cons 'caught log))))
@@ -294,8 +319,11 @@ fn the_limit_is_met_where_the_bytes_say() {
     };
     let at_two = depth_at(2 << 20);
     let at_three = depth_at(3 << 20);
-    // A megabyte of frames between 100 and 170 bytes each.
-    assert!((6_000..=10_500).contains(&at_two), "{at_two}");
+    // A megabyte of `count`'s frames, 136 bytes each today (a 40-byte
+    // header and twelve registers): 7,706 deep. The range allows a register
+    // more or less, and not a frame counted without its header (10,900) or
+    // with two (6,000).
+    assert!((7_000..=8_400).contains(&at_two), "{at_two}");
     // The soft limit doubles, from 1 MiB to 2: so does the depth, within a
     // frame or two of the first form's own.
     assert!(
@@ -374,6 +402,69 @@ fn a_reentry_that_would_not_fit_raises_the_condition() {
       (k 0))",
     );
     assert_eq!(caught, "(exhausted 16000)");
+}
+
+/// A re-entry refused under the soft limit raises the condition with the
+/// limit still armed: its handler runs below the limit, and when it goes on
+/// to cross it, that is a new catchable condition for the next handler out,
+/// not the hard cap.
+#[test]
+fn a_reentry_refused_under_the_soft_limit_leaves_it_armed() {
+    let interp = vm(4 << 20);
+    let got = answer(
+        &interp,
+        "(define tag (make-continuation-prompt-tag 'p))
+(define (deep-abort n)
+  (if (= n 0) (abort-current-continuation tag 0) (+ 1 (deep-abort (- n 1)))))
+(define k (call-with-continuation-prompt
+            (lambda () (deep-abort 16000)) tag (lambda (v k) k)))
+(guard (outer ((stack-exhausted? outer) 'a-second-condition))
+  (at-depth 16000
+    (lambda ()
+      (with-exception-handler
+        (lambda (e) (deep 40000))
+        (lambda () (k 0))))))",
+    );
+    assert_eq!(got, "a-second-condition");
+}
+
+/// A primitive that calls back on a nested loop: the internal `member`
+/// with a comparator (`AGENTS.md`, "A procedure that calls back into the
+/// program"). The condition raised inside its callback, with no handler
+/// there, leaves the nested loop as the primitive's error and still
+/// reaches a handler outside as `&stack-exhausted`, with its irritant.
+#[test]
+fn the_condition_keeps_its_kind_across_a_nested_loop() {
+    let got = answer(
+        &vm(CAP),
+        "(import (prefix (only (patina internal lists) member) internal:))
+(guard (e ((stack-exhausted? e) (list 'kept-its-kind (error-object-irritants e))))
+  (internal:member 1 '(1) (lambda (a b) (deep 20000))))",
+    );
+    assert_eq!(got, "(kept-its-kind (2097152))");
+}
+
+/// The hard cap met inside such a callback abandons the form all the same:
+/// the error comes back from the nested loop as a primitive's, which a
+/// `guard` outside would otherwise catch as an ordinary error.
+#[test]
+fn the_hard_cap_inside_a_nested_loop_is_not_caught() {
+    let interp = vm(CAP);
+    let lost = answer(
+        &interp,
+        "(import (prefix (only (patina internal lists) member) internal:))
+(guard (e (#t 'caught-the-hard-cap))
+  (with-exception-handler
+    (lambda (e) (internal:member 1 '(1) (lambda (a b) (deep 20000))))
+    (lambda () (deep 20000))))",
+    );
+    assert!(lost.contains("ran out of room"), "{lost}");
+    // And the next form starts afresh.
+    let again = interp
+        .eval_program_owned("(guard (e ((stack-exhausted? e) 'again)) (deep 20000))")
+        .map(|value| interp.display_tagged(&value))
+        .unwrap_or_else(|e| e.to_string());
+    assert_eq!(again, "again");
 }
 
 /// `(gc-stats)`'s `stack-limit` is the cap in bytes on the VM, the

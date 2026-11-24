@@ -350,7 +350,7 @@ impl<'gc> Cx<'gc> {
     /// ([`Carrier::stack_cap`](crate::Carrier::stack_cap), #907): 0 on the
     /// tree-walker, which keeps none. `(gc-stats)`'s `stack-limit`.
     #[inline]
-    pub fn stack_limit(&self) -> usize {
+    pub fn stack_cap(&self) -> usize {
         self.heap.borrow().mutator().stack_cap()
     }
 
