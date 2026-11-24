@@ -116,6 +116,11 @@ impl BitSet {
         self.words[i / 64] & (1u64 << (i % 64)) != 0
     }
 
+    /// The bits the set was made with.
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
     fn count_ones(&self) -> usize {
         self.words.iter().map(|w| w.count_ones() as usize).sum()
     }
@@ -130,6 +135,11 @@ pub struct MarkBits {
     pub(crate) vectors: BitSet,
     pub(crate) strings: BitSet,
     pub(crate) objects: BitSet,
+    /// One bit per entry of the heap's scope-set table (#788): set for id 0
+    /// when it is made, so that the empty set is never freed, and for the
+    /// set of each identifier marking traces. The sweep frees the entries
+    /// whose bit is clear (`heap/scope_sets.rs`).
+    pub(crate) scope_sets: BitSet,
     /// The payloads of the marked objects (`heap/account.rs`), counted as
     /// marking reaches each one: a vector's elements when it is traced, a
     /// string's characters when it is marked, an object's payload when it
@@ -164,11 +174,15 @@ impl MarkBits {
     }
 
     fn for_heap(heap: &Heap) -> Self {
+        let mut scope_sets = BitSet::new(heap.scope_sets.entries());
+        // The empty set, id 0, is never given up.
+        scope_sets.set(0);
         Self {
             pairs: BitSet::new(heap.pairs.len()),
             vectors: BitSet::new(heap.vectors.len()),
             strings: BitSet::new(heap.strings.len()),
             objects: BitSet::new(heap.objects.len()),
+            scope_sets,
             live_payload: 0,
             live_closures: 0,
         }
@@ -1744,14 +1758,6 @@ impl<'h> GcVisitor<'h> {
             | HeapObjectData::Port(_)
             // An id, a name and field names.
             | HeapObjectData::RecordType(_)
-            | HeapObjectData::Identifier {
-                // A spelling.
-                name: _,
-                // Scope ids.
-                scopes: _,
-                // A flag.
-                written: _,
-            }
             // A name and an id.
             | HeapObjectData::PromptTag(_)
             // A datum label's number.
@@ -1786,6 +1792,24 @@ impl<'h> GcVisitor<'h> {
                 if self.live_weak_ids.insert(*id) {
                     self.new_weak_ids.push(*id);
                 }
+            }
+
+            // Its name's symbol (#790): interned, and so a root until the
+            // weak symbol table (5c), for every identifier but a relinked
+            // one, whose symbol no table holds and only this edge keeps.
+            // Its set's id, recorded so that the sweep keeps the set (#788):
+            // the table holds sets of scope ids, which hold no value, and is
+            // no root.
+            HeapObjectData::Identifier {
+                name,
+                scopes,
+                // A flag.
+                written: _,
+                // A flag: whether `name` is a relinked spelling's symbol.
+                relinked: _,
+            } => {
+                self.visit(*name);
+                self.marks.scope_sets.set(scopes.index());
             }
 
             HeapObjectData::Complex { real, imag } => {
@@ -1837,12 +1861,17 @@ impl<'h> GcVisitor<'h> {
             HeapObjectData::Macro {
                 body,
                 literals,
+                scopes,
                 relinks,
             } => {
                 body.as_ref().trace(self);
                 for &literal in literals.iter() {
                     self.visit(literal);
                 }
+                // No value: the id of the set of scopes its compiled
+                // templates hold, recorded as an identifier's is so that the
+                // sweep keeps it while the macro lives (#789).
+                self.marks.scope_sets.set(scopes.index());
                 // Each carried relink's record (#837), through its derived
                 // trace, which names its wordless fields as skipped.
                 for relink in relinks.iter() {
@@ -1974,10 +2003,11 @@ impl Heap {
     /// except a file port's, which the drain after the collection takes
     /// (`heap/finalize.rs`, #785), and so is every namespace's placeholder
     /// and weak read-through record that nothing marked (`PlaceholderList`,
-    /// #836). Pairs are `Copy` with nothing to drop, so a plain release
-    /// build skips the store; a check build writes a poison value, so a
-    /// stale reference that marking reaches traces nothing from the dead
-    /// pair.
+    /// #836), and every scope set that no marked identifier carries
+    /// (`heap/scope_sets.rs`, #788). Pairs are `Copy` with nothing to drop,
+    /// so a plain release build skips the store; a check build writes a
+    /// poison value, so a stale reference that marking reaches traces
+    /// nothing from the dead pair.
     ///
     /// Use-after-free detection does not depend on the tombstones: in a
     /// check build every arena accessor refuses a reference to a freed slot,
@@ -2049,6 +2079,9 @@ impl Heap {
         if self.syntax_sources.capacity() > self.syntax_sources.len().saturating_mul(4).max(64) {
             self.syntax_sources.shrink_to(64);
         }
+        // Nor are the scope sets (#788): every set no marked identifier
+        // carries is freed, and its id reused.
+        self.scope_sets.sweep(&marks.scope_sets);
         // Moved out so the object arena's recording closure can hold it while
         // the arenas themselves are mutably borrowed.
         let mut freed_closures = self.gc_freed_closure_code_ids.take();
@@ -3194,9 +3227,13 @@ mod tests {
         heap.intern_symbol("a-symbol-the-table-roots");
         // The tree-walker closures' namespace, charged once however many
         // name it: in the bytes allocated and in L, and never reclaimed
-        // while it lives.
+        // while it lives. Beside it, the scope-set table's charge for the
+        // identifiers' one set, spilled, which both identifiers share
+        // (#788).
         let external = heap.external_bytes() as u64;
-        assert_eq!(Some(external as usize), env.charged_bytes());
+        let sets = heap.scope_sets.charged() as u64;
+        assert!(sets > 0, "the table charges the identifiers' set");
+        assert_eq!(Some((external - sets) as usize), env.charged_bytes());
         assert_eq!(heap.bytes_allocated(), occupied(&heap) + external);
         assert_eq!(heap.bytes_reclaimed(), 0);
         assert_eq!(heap.committed_bytes(), committed(&heap));
@@ -3211,14 +3248,18 @@ mod tests {
         assert_eq!(heap.committed_bytes(), committed(&heap));
 
         // Dropping the roots frees the rest, and the account still balances.
+        // The table gives its charge back as the sweep frees the set, which
+        // is no reclamation: it leaves the external bytes, and L.
         let allocated = heap.bytes_allocated();
         MarkSweepCollector::new().collect(&mut heap, &[&TestRoots::default()]);
         assert_eq!(heap.bytes_allocated(), allocated);
+        assert_eq!(heap.scope_sets.charged(), 0);
+        assert_eq!(heap.external_bytes() as u64, external - sets);
         assert_eq!(
             heap.bytes_allocated() - heap.bytes_reclaimed(),
             occupied(&heap) + external
         );
-        assert_eq!(heap.live_bytes() as u64, occupied(&heap) + external);
+        assert_eq!(heap.live_bytes() as u64, occupied(&heap) + external - sets);
         assert_eq!(heap.committed_bytes(), committed(&heap));
     }
 

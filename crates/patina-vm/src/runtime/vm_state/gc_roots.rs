@@ -76,6 +76,11 @@ const RETIRED: TaggedValue = if GC_CHECK {
 /// Keeping the full-vector tracing contract means no captured snapshot or
 /// tracer can later expose an untraced pointer to an already swept slot.
 /// Delimited snapshots use absolute frame bases but store only their slice.
+///
+/// A frame at a pc its code has no map for, one no frame can be suspended
+/// at (#905, GC_PRD §11.1 invariants 2 and 5), means the compiler missed a
+/// suspension point: a check build panics there ([`unmapped_pc`]), and a
+/// plain release build keeps every register of the frame.
 #[cold]
 #[inline(never)]
 pub(in crate::runtime) fn retire_registers(
@@ -84,10 +89,14 @@ pub(in crate::runtime) fn retire_registers(
     base_at_capture: usize,
 ) {
     for frame in frames {
+        // Hand-built code has no maps, and keeps every register.
         let Some(maps) = &frame.code.register_roots else {
             continue;
         };
-        let Some(roots) = maps.get(frame.pc) else {
+        let Some(roots) = maps.at(frame.pc) else {
+            if GC_CHECK {
+                unmapped_pc(frame);
+            }
             continue;
         };
         let dropped = switches::dropped(roots, frame.num_regs);
@@ -101,6 +110,18 @@ pub(in crate::runtime) fn retire_registers(
             }
         }
     }
+}
+
+/// A check build's refusal of a frame found at a pc with no map (#905).
+#[cold]
+#[inline(never)]
+fn unmapped_pc(frame: &CallFrame) -> ! {
+    let after = (frame.pc.checked_sub(1)).and_then(|pc| frame.code.instructions.get(pc));
+    panic!(
+        "a frame of code {} ({:?}) is at pc {}, after {after:?}, which has no \
+         register map: no frame can be suspended there (#905)",
+        frame.code.id, frame.code.name, frame.pc
+    )
 }
 
 /// The positive controls' switches, read here and at the ends of the load
@@ -229,4 +250,54 @@ fn prune_store<T>(store: &std::cell::RefCell<FxHashMap<u64, T>>, visitor: &GcVis
     if store.len() * 8 < store.capacity() {
         store.shrink_to_fit();
     }
+}
+
+/// What `test_support::collect_with_a_frame_at_an_unmapped_pc` does (#905):
+/// on a fresh machine, push a frame of code whose map index has no map at
+/// the frame's pc, the pc after a `LoadImmediate`, which is what a compiler
+/// that missed a suspension point would leave; then collect, as a library
+/// load's collection does, outside any run (`collect_for_loader`), which
+/// retires the frame's registers first. A check build panics there, naming
+/// the frame ([`unmapped_pc`]). A plain release build keeps every register
+/// of the frame, though the code's one map calls them all dead; this
+/// answers whether both still hold what they held.
+#[cfg(feature = "test-support")]
+pub(crate) fn collect_with_a_frame_at_an_unmapped_pc() -> bool {
+    use crate::types::code_object::{Arity, CodeObject, RegisterMaps};
+    use crate::types::instruction::Instruction;
+    use std::rc::Rc;
+
+    let mut state = VmState::on_a_fresh_heap();
+    let instructions = vec![
+        Instruction::LoadImmediate {
+            dst: 0,
+            val: TaggedValue::fixnum(1),
+        },
+        Instruction::Move { dst: 1, src: 0 },
+        Instruction::Return { val: 1 },
+    ];
+    let never = RegisterMaps::NEVER;
+    // One map, of no live register, at every pc but 1.
+    let index = vec![0, never, 0, 0].into_boxed_slice();
+    let id = state.load(CodeObject {
+        id: CodeObjectId::label(),
+        name: Some(Rc::from("unmapped-pc-control")),
+        links: patina_core::LinkTable::empty(),
+        live_closures: Cell::new(0),
+        instructions,
+        constants: Vec::new(),
+        num_regs: 2,
+        arity: Arity::Fixed(0),
+        source_map: Vec::new(),
+        register_roots: Some(RegisterMaps::from_parts(index, Rc::from([0]), 1)),
+    });
+    let code = state.code_object(id).expect("the control's code is loaded");
+    let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0);
+    let held = [TaggedValue::fixnum(1), TaggedValue::fixnum(2)];
+    for (reg, value) in (0..).zip(held) {
+        state.execution.set_top(base, reg, value);
+    }
+    state.execution.set_pc(1);
+    super::collect_for_loader(&mut state);
+    (0..).zip(held).all(|(reg, value)| state.reg(reg) == value)
 }

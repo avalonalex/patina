@@ -1,5 +1,6 @@
-//! The one wrapper every table the heap keeps in Rust takes (#687, addition
-//! C3; `PRD/GC_PRD.md` §18.2, rule 9, and §18.6).
+//! The one wrapper every table the heap keeps in Rust takes where it is
+//! reached outside the heap's borrow (#687, addition C3; `PRD/GC_PRD.md`
+//! §18.2, rule 9, and §18.6).
 //!
 //! The redesign gives each heap tables that Rust owns and more than one
 //! owner reaches: the handle table, its standard port parameters, the root
@@ -10,6 +11,13 @@
 //! Under N carriers each needs a lock. Behind one wrapper from the start,
 //! that is one change in one place, not a hunt through every table for the
 //! cells it picked.
+//!
+//! A table reached only under the heap's borrow is a plain field of `Heap`
+//! instead, which that borrow already guards and a threaded build
+//! synchronizes with the heap itself: `symbol_table`, `core_syntax_table`,
+//! `syntax_sources`, and the scope-set table (4c, #788), whose readers
+//! borrow a set out of it in the scope-edit walks, which this wrapper's
+//! closure could not lend (decision 18 on #782).
 
 #[cfg(not(feature = "threaded"))]
 use std::cell::{RefCell, RefMut};

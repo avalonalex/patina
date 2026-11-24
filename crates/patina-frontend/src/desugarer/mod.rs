@@ -80,7 +80,8 @@ use patina_core::scope_trace::RelinkKind;
 use patina_core::source_document::ExpansionChain;
 use patina_core::walk::OpenNodes;
 use patina_core::{
-    CoreForm, Cx, Link, LinkKind, Lit, LiteralPool, NamespaceView, RelinkTarget, Value,
+    CoreForm, Cx, Link, LinkKind, Lit, LiteralPool, NamespaceView, RelinkTarget, RelinkedName,
+    Value,
 };
 use patina_ir::{CoreExpr, CoreExprKind};
 use patina_macros::IdentifierKey;
@@ -233,26 +234,28 @@ fn stamp_expansion_source<'gc>(
 
 /// The spellings one expansion's relinking gave, keyed by the spelling the
 /// template wrote, and the scope that says which occurrences they apply to.
-struct Renames<'a> {
-    aliases: &'a HashMap<Rc<str>, Aliases>,
+struct Renames<'a, 'gc> {
+    aliases: &'a HashMap<Rc<str>, Aliases<'gc>>,
     /// The expansion's own scope — see `MacroExpansion::scope`.
     expansion_scope: ScopeId,
     /// The pairs and vectors the rewrite is inside (`rewrite_refs`).
     open: RefCell<OpenNodes>,
 }
 
-/// The spellings relinking gave the mentions of one written spelling.
-enum Aliases {
+/// The spellings relinking gave the mentions of one written spelling, each
+/// as the symbol its renamed occurrences carry, which no table interns
+/// (`Cx::relinked_name`, #790).
+enum Aliases<'gc> {
     /// The macro mentions the spelling under one identity, so every
     /// occurrence the expansion introduced is that mention. All a written
     /// macro has, and the usual case for a generated one.
-    Sole(Rc<str>),
+    Sole(RelinkedName<'gc>),
     /// The macro mentions it under several, which only a generated macro can
     /// (`CompiledMacro::inherited_identifiers`), and they need not mean one
     /// binding. Each identity that was relinked, as the scopes the mention
     /// carries in the template — an occurrence in the expansion carries those
     /// and the expansion's scope — with its own spelling.
-    PerIdentity(Vec<(ScopeSet, Rc<str>)>),
+    PerIdentity(Vec<(ScopeSet, RelinkedName<'gc>)>),
 }
 
 /// `name` as relinking spells the mention `identity` of it by a macro defined
@@ -1679,7 +1682,7 @@ impl<'a> Desugarer<'a> {
         // keeps the tree walk to a map lookup per leaf, and skips it entirely
         // when nothing needs relinking — which is the usual outcome, since
         // `let`, `cond` and friends only reference primitives.
-        let mut renames: HashMap<Rc<str>, Aliases> = HashMap::new();
+        let mut renames: HashMap<Rc<str>, Aliases<'gc>> = HashMap::new();
         // The spellings this call has given, which no other mention of it
         // may be given (`relink_spelling`'s `taken`).
         let mut given: Vec<Rc<str>> = Vec::new();
@@ -1928,8 +1931,14 @@ impl<'a> Desugarer<'a> {
             }
             let aliases = match made.as_slice() {
                 [] => continue,
-                [(_, spelling)] if one_identity => Aliases::Sole(Rc::clone(spelling)),
-                _ => Aliases::PerIdentity(made),
+                [(_, spelling)] if one_identity => {
+                    Aliases::Sole(cx.relinked_name(Rc::clone(spelling)))
+                }
+                _ => Aliases::PerIdentity(
+                    made.into_iter()
+                        .map(|(identity, spelling)| (identity, cx.relinked_name(spelling)))
+                        .collect(),
+                ),
             };
             renames.insert(name.clone(), aliases);
         }
@@ -2309,15 +2318,15 @@ impl<'a> Desugarer<'a> {
     fn introduced_alias<'gc>(
         &self,
         tv: Value<'gc>,
-        renames: &Renames<'_>,
+        renames: &Renames<'_, 'gc>,
         cx: &mut FormCx<'_, 'gc>,
-    ) -> Option<Rc<str>> {
+    ) -> Option<RelinkedName<'gc>> {
         let (name, scopes) = cx.get_identifier_data(tv)?;
         if !scopes.contains(&renames.expansion_scope) {
             return None;
         }
         match renames.aliases.get(&*name)? {
-            Aliases::Sole(alias) => Some(Rc::clone(alias)),
+            Aliases::Sole(alias) => Some(*alias),
             // Which mention this occurrence is: the output flip added the
             // expansion's scope to what the template held, and nothing else
             // has touched it yet.
@@ -2326,7 +2335,7 @@ impl<'a> Desugarer<'a> {
                 aliases
                     .iter()
                     .find(|(mention, _)| *mention == identity)
-                    .map(|(_, alias)| Rc::clone(alias))
+                    .map(|(_, alias)| *alias)
             }
         }
     }
@@ -2363,7 +2372,7 @@ impl<'a> Desugarer<'a> {
     fn rewrite_form<'gc>(
         &self,
         tv: Value<'gc>,
-        renames: &Renames<'_>,
+        renames: &Renames<'_, 'gc>,
         quote_depth: u32,
         cx: &mut FormCx<'_, 'gc>,
     ) -> Value<'gc> {
@@ -2472,7 +2481,7 @@ impl<'a> Desugarer<'a> {
     fn rewrite_refs<'gc>(
         &self,
         tv: Value<'gc>,
-        renames: &Renames<'_>,
+        renames: &Renames<'_, 'gc>,
         quote_depth: u32,
         cx: &mut FormCx<'_, 'gc>,
     ) -> Value<'gc> {
@@ -2515,7 +2524,7 @@ impl<'a> Desugarer<'a> {
             .map(|(_, scopes)| scopes)
             .unwrap_or_default();
         let source = cx.source(tv);
-        let copy = cx.alloc_identifier(alias, scopes);
+        let copy = cx.alloc_relinked_identifier(&alias, scopes);
         if let Some(source) = source {
             cx.record_source(copy, source);
         }
@@ -2530,7 +2539,7 @@ impl<'a> Desugarer<'a> {
     fn rewrite_vector<'gc>(
         &self,
         tv: Value<'gc>,
-        renames: &Renames<'_>,
+        renames: &Renames<'_, 'gc>,
         quote_depth: u32,
         cx: &mut FormCx<'_, 'gc>,
     ) -> Value<'gc> {

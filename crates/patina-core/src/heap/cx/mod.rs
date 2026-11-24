@@ -158,6 +158,7 @@ use num_bigint::BigInt;
 use num_rational::BigRational;
 
 use super::mutator::Mutator;
+use super::scope_sets::ScopeSetMemo;
 use super::{Heap, HeapObjectData, PromiseState};
 use crate::compiled_macro::{CompiledMacro, LiteralId};
 use crate::environment::{BindingLocation, Environment, IntroducedDefinition, RelinkTarget};
@@ -168,7 +169,7 @@ use crate::literal_pool::{Link, LinkKind, LiteralPool};
 use crate::namespace_view::NamespaceView;
 use crate::port::Port;
 use crate::record_type::RecordTypeDescriptor;
-use crate::scope::ScopeSet;
+use crate::scope::{ScopeId, ScopeSet};
 use crate::scope_resolve::AmbiguousReference;
 use crate::tagged_value::TaggedValue;
 use crate::value::Value;
@@ -252,6 +253,39 @@ impl Drop for Cx<'_> {
     fn drop(&mut self) {
         self.mutator.exit_cx();
     }
+}
+
+/// One walk's addition of a scope to identifiers (#788): the scope, and a
+/// memo from each scope set the walk has added it to, by its entry in the
+/// heap's scope-set table, to the entry of the set it made, so that the walk
+/// interns each distinct set once. [`Cx::scope_addition`] makes one, and
+/// [`Cx::add_scope_copying`] and [`Cx::alloc_identifier_adding_scope`] use
+/// it.
+///
+/// Branded with its context's lifetime, so it cannot outlive the context,
+/// beneath which nothing collects (#702, #707): no entry it names is freed
+/// while it lives. Raw (`docs/README.md`), as are the methods that name it:
+/// the macro expander's plumbing.
+pub struct ScopeAddition<'gc> {
+    scope: ScopeId,
+    made: ScopeSetMemo,
+    /// Invariant in `'gc`, as [`Cx`]'s brand is.
+    brand: PhantomData<fn(&'gc ()) -> &'gc ()>,
+}
+
+/// A relinked spelling's symbol (#837, #790), made by [`Cx::relinked_name`]
+/// for [`Cx::alloc_relinked_identifier`]: a symbol object the heap's intern
+/// table does not hold, so that a spelling bound nowhere is no name to any
+/// reader and is not kept for good. Opaque, so that no such symbol becomes
+/// a datum: the identifiers that carry it hold it, and stand in quoted data
+/// for their spelling interned ([`Cx::identifier_datum`]).
+///
+/// Branded with its context's lifetime, so it cannot outlive the context,
+/// beneath which nothing collects (#702, #707). Raw (`docs/README.md`), as
+/// are the methods that name it: the desugarer's relinking plumbing.
+#[derive(Clone, Copy)]
+pub struct RelinkedName<'gc> {
+    name: Value<'gc>,
 }
 
 /// A promise's contents, as values: what [`Cx::promise_state`] answers and
@@ -1045,9 +1079,11 @@ impl<'gc> Cx<'gc> {
     /// The walk copies only the pairs and vectors above an identifier that
     /// changes, keeps every other part of `root` as it is, shared structure
     /// and cycles included, and answers `root` itself when nothing changes.
-    /// It is the heap's own walk ([`Heap::map_syntax_identifiers`]) under
-    /// one borrow, since it is the hottest walk the expander makes; neither
-    /// function sees the heap.
+    /// It is the heap's own walk under one borrow, since it is the hottest
+    /// walk the expander makes; neither function sees the heap. `rescope`
+    /// depends on the set alone, so it runs, and its set is interned in the
+    /// heap's scope-set table, once for each distinct set the walk changes
+    /// (#788).
     pub fn rescope_identifiers(
         &mut self,
         root: Value<'gc>,
@@ -1057,15 +1093,81 @@ impl<'gc> Cx<'gc> {
         if !picks_any_identifier(&self.heap.borrow(), root.tagged(), &picks) {
             return root;
         }
-        let word = self.heap.borrow_mut().map_syntax_identifiers(
-            root.tagged(),
-            |heap, value, name, scopes| {
-                if heap.is_source_identifier(value) || !picks(&name, &scopes) {
-                    return None;
-                }
-                Some(heap.alloc_identifier(name, rescope(&scopes)))
-            },
+        let word = self
+            .heap
+            .borrow_mut()
+            .rescope_identifiers(root.tagged(), picks, rescope);
+        self.brand(word)
+    }
+
+    /// A memo for one walk that adds `scope` to identifiers (#788), for
+    /// [`Cx::add_scope_copying`] and [`Cx::alloc_identifier_adding_scope`].
+    pub fn scope_addition(&self, scope: ScopeId) -> ScopeAddition<'gc> {
+        ScopeAddition {
+            scope,
+            made: ScopeSetMemo::default(),
+            brand: PhantomData,
+        }
+    }
+
+    /// A copy of the identifier `v` whose set is its own with `addition`'s
+    /// scope added, located where `v` is ([`Cx::inherit_source`]), or `None`
+    /// if `v` is no identifier: the macro expander's mark of a substituted
+    /// identifier. The copy is no written name, whatever `v` was. Each
+    /// distinct set is added to, and the result interned, once in the
+    /// memo's life (#788). Raw: it names the raw [`ScopeAddition`].
+    pub fn add_scope_copying(
+        &mut self,
+        addition: &mut ScopeAddition<'gc>,
+        v: Value<'gc>,
+    ) -> Option<Value<'gc>> {
+        let mut heap = self.heap.borrow_mut();
+        let copy = heap.identifier_adding_scope(&mut addition.made, addition.scope, v.tagged())?;
+        heap.inherit_source(v.tagged(), copy);
+        drop(heap);
+        Some(self.brand(copy))
+    }
+
+    /// An identifier for the symbol `symbol` whose set is `addition`'s
+    /// scope alone: the macro expander's mark of a substituted symbol, which
+    /// carries the symbol itself (#790), its set interned once in the memo's
+    /// life (#788). Raw: it names the raw [`ScopeAddition`].
+    pub fn alloc_identifier_adding_scope(
+        &mut self,
+        addition: &mut ScopeAddition<'gc>,
+        symbol: Value<'gc>,
+    ) -> Value<'gc> {
+        let word = self.heap.borrow_mut().identifier_in_scope(
+            &mut addition.made,
+            addition.scope,
+            symbol.tagged(),
         );
+        self.brand(word)
+    }
+
+    /// The symbol a relinked spelling's identifiers carry (#790): made once
+    /// for each spelling a relinking gives, for every occurrence it renames
+    /// ([`Cx::alloc_relinked_identifier`]). No table holds it. Raw: it
+    /// answers the raw [`RelinkedName`].
+    pub fn relinked_name(&mut self, spelling: Rc<str>) -> RelinkedName<'gc> {
+        let word = self.heap.borrow_mut().alloc_relinked_name(spelling);
+        RelinkedName {
+            name: self.brand(word),
+        }
+    }
+
+    /// An identifier relinking renamed (#837): `name`'s spelling, which is
+    /// bound nowhere and interned nowhere (#790), with the set `scopes`. Raw:
+    /// it names the raw [`RelinkedName`].
+    pub fn alloc_relinked_identifier(
+        &mut self,
+        name: &RelinkedName<'gc>,
+        scopes: ScopeSet,
+    ) -> Value<'gc> {
+        let word = self
+            .heap
+            .borrow_mut()
+            .alloc_relinked_identifier(name.name.tagged(), scopes);
         self.brand(word)
     }
 
@@ -1088,6 +1190,36 @@ impl<'gc> Cx<'gc> {
         replacements: &mut std::collections::HashMap<Value<'gc>, Value<'gc>>,
         mut transform: impl FnMut(&mut Cx<'gc>, Value<'gc>, Rc<str>, ScopeSet) -> Option<Value<'gc>>,
     ) -> Value<'gc> {
+        self.walk_identifiers_memo(root, replacements, |cx, value| {
+            let (name, scopes) = cx.get_identifier_data_any(value)?;
+            transform(cx, value, name, scopes)
+        })
+    }
+
+    /// `root` as quoted data: each identifier in it replaced by the symbol
+    /// it stands for ([`Cx::identifier_datum`]), its name's, with no lookup
+    /// of its spelling (#790). The walk of
+    /// [`Cx::map_syntax_identifiers_memo`], sharing `replacements` across
+    /// the roots of one form as it does. Raw (`docs/README.md`): quote
+    /// stripping's plumbing.
+    pub fn strip_identifiers_memo(
+        &mut self,
+        root: Value<'gc>,
+        replacements: &mut std::collections::HashMap<Value<'gc>, Value<'gc>>,
+    ) -> Value<'gc> {
+        self.walk_identifiers_memo(root, replacements, |cx, value| cx.identifier_datum(value))
+    }
+
+    /// The walk under [`Cx::map_syntax_identifiers_memo`] and
+    /// [`Cx::strip_identifiers_memo`]: `copy_of` is asked of each value it
+    /// meets that is no pair or vector, and answers an identifier's copy, or
+    /// `None` to leave the value as it is.
+    fn walk_identifiers_memo(
+        &mut self,
+        root: Value<'gc>,
+        replacements: &mut std::collections::HashMap<Value<'gc>, Value<'gc>>,
+        mut copy_of: impl FnMut(&mut Cx<'gc>, Value<'gc>) -> Option<Value<'gc>>,
+    ) -> Value<'gc> {
         use std::collections::{HashMap, HashSet};
         if let Some(&copy) = replacements.get(&root) {
             return copy;
@@ -1106,8 +1238,8 @@ impl<'gc> Cx<'gc> {
                 }
                 continue;
             }
-            if let Some((name, scopes)) = self.get_identifier_data_any(value) {
-                if let Some(copy) = transform(self, value, name, scopes) {
+            if self.is_identifier(value) {
+                if let Some(copy) = copy_of(self, value) {
                     if self.get_symbol_name(copy).is_none() {
                         self.inherit_source(value, copy);
                     }

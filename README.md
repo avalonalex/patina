@@ -127,9 +127,11 @@ The architecture is designed to support future exploration:
   entries in the port table, `namespaces`, `binding-records` and
   `cells`, what the live namespaces hold, host namespaces among them
   (#835), and on the VM the placeholders a loaded unit links for names not
-  yet bound, until no code links one (#836), and `code-units`, the code
+  yet bound, until no code links one (#836), `code-units`, the code
   units the VM has loaded and not
-  released (0 on the tree-walker, #836), beside its arena counts
+  released (0 on the tree-walker, #836), and `scope-sets`, the scope sets
+  the heap's scope-set table holds for its identifiers (#788), beside its
+  arena counts
   (`docs/GC_DESIGN.md` §6), and the pauses, the MMU at 10 ms, how much was
   allocated where collection was deferred, and the process's resident size
   and CPU time (§6.2). `PATINA_GC_LOG=<path>` writes a CSV line per
