@@ -424,14 +424,16 @@ its imports (2026-11-22) the index and tables hold 601,586 B over 127,353
 PCs, 54,919 of them `0xFFFF`, where a `Vec` per PC held 5,094,120 B, 40 B a
 PC.
 
-These are GC metadata, with no extra bytecode instructions. The VM clears
-excluded slots just before collection and in full/delimited continuation
-snapshots at capture, then traces the complete register vectors as before.
+These are GC metadata, with no extra bytecode instructions. A collection
+walks the frames, traces the slots each frame's map includes and clears the
+excluded ones in the same pass (#906, `docs/GC_DESIGN.md` §5.2); a capture
+clears them in a full or delimited continuation's snapshot, whose complete
+register vector is then traced as before.
 A check build clears them to `DEAD_SLOT` and panics where an instruction or a
 call's argument copy reads one, so a map that excludes a register still to be
 read fails at that read (#625, `docs/GC_DESIGN.md` §11 item 6). A frame found
-at a `0xFFFF` PC means a missed suspension point: a check build panics at its
-retirement, naming the code, the PC and the instruction before it, and a
+at a `0xFFFF` PC means a missed suspension point: a check build panics where
+the walk meets it, naming the code, the PC and the instruction before it, and a
 plain release build keeps every register of the frame (#905).
 The entry map also retires stale slots in a reused tail-call window. Pending
 earlier operands and local bindings remain roots; this is expression lifetime

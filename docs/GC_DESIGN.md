@@ -922,7 +922,7 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 
 | Field | Root? | Notes |
 |-------|-------|-------|
-| `registers` | **yes** | Slots (`Cell`s, #682), the whole vector, after completed expression temporaries are cleared using per-PC compiler maps (#423); local bindings remain conservative. Every register lies in a frame's window (`PRD/GC_PRD.md` §11.1, invariant 1; #714, asserted in debug builds): a push fills each register no argument or operand writes, a reused window's too, and nothing keeps a word past the top window. Until #714 two did, rooted by the whole-vector trace and left alone by retirement, which reads only windows: the window a finished wind step left behind (`finish_wind_step`) and `run_apply_proc`'s scratch slot past the caller's window |
+| `registers` | **yes** | Slots (`Cell`s, #682), reported by the walk of the frames (`gc_roots::trace_frames`, #906), which `trace_roots` runs after the derived trace, whose `ExecutionState` skips the field for it: for each frame, the registers the per-PC compiler map at its pc keeps, a run at a time, and every other register of its window, a completed expression temporary (#423), overwritten as the walk passes it ("Temporary retirement" below); local bindings remain conservative. Every register lies in a frame's window (`PRD/GC_PRD.md` §11.1, invariant 1; #714, asserted in debug builds): a push fills each register no argument or operand writes, a reused window's too, and nothing keeps a word past the top window. The walk still reports a register it finds outside every window, between two or past the top one, with the rest, at one compare a frame, and a debug build refuses it there. Until #714 two words lay outside, rooted by the whole-vector trace of the time and left alone by retirement, which read only windows: the window a finished wind step left behind (`finish_wind_step`) and `run_apply_proc`'s scratch slot past the caller's window |
 | `answer` | **yes** | Pinned (#714). The value `return_into` was handed for a destination of `CallFrame::NO_RETURN`, a higher-order primitive's callback, which writes no register: `call_any` takes back an immediate callee's at once, with no safe point between; one a frame returned into nothing (a continuation that re-entered the callback after its primitive returned) stays until the next replaces it, or `clear` |
 | `frames[*].closure` | **yes** | A slot, reported as the registers are: the frame's `VmClosure`, or the immediate `CallFrame::NO_CLOSURE` (`types/mod.rs`). A bare `Option<ObjectIndex>` with a visitor method of its own until #683 |
 | `frames[*].code`, `running` | by id | Each frame's code (`FrameCode`, `types/mod.rs`) and the code the dispatch loop's `cur_code` holds (`RunningCode`, `execution_state.rs`, written where `cur_code` changes and put back when a nested loop ends) report their code id through `SlotVisitor::code`; the code-id round of the fixpoint (§9.5) hands each id once to `trace_code_ids`, which traces that unit's link table once a collection (`LinkTable::trace_once`, by `trace_epoch`), generation-checked. The constants stay traced from `code_store`, which never traces a table (#836). `load_unit` links each unit's table in the namespace the unit was compiled in, before any read goes through it, so a table traced marks the records its unit links, and with them the placeholders and weak read-through records nothing else marks, the heap's by-name record, and the namespace it was linked in (`LinkTable.namespace`, §8). A table's entries are dereferenced only by the code of a unit something holds: a frame, a marked closure or the running code, each of which reports the unit's id |
@@ -967,27 +967,69 @@ dropped a placeholder a traced table links would leave
 instruction boundaries (`docs/VM_COMPILER.md` §10.4), kept only at the pcs a
 frame can be suspended at, through a dense `pc → u16` index into the unit's
 deduplicated bitsets, `0xFFFF` everywhere else (#905, GC_PRD §11.1
-invariant 2). Before an outermost
-collection, the VM replaces excluded slots with `UNSPECIFIED`, including
+invariant 2). An outermost
+collection replaces excluded slots with `UNSPECIFIED`, including
 excess capacity in reused tail-call windows; a check build writes `DEAD_SLOT`
 instead and panics where one is read (#625, §11 item 6). A push fills the
 registers of its window that no argument or operand writes the same way
 (#714), reused windows included, past the arguments up to the new code's
 register count: so a register a map calls live was written by its
 activation, and the excess capacity past the code's count, which no fill
-reaches, is what retirement alone clears. Full and delimited
-continuation snapshots receive the same cleanup at capture, with the
-delimited base offset accounted for. Tracing still visits complete vectors,
-so snapshots and tracer register views never carry deliberately untraced
-pointers to swept objects.
+reaches, is what retirement alone clears.
+
+Retirement is the collection's own trace of the register file, in one pass
+(#906, GC_PRD §11.1 invariant 3; `gc_roots::trace_frames`): the root
+provider walks the frames, and for each reports the slots its map keeps, a
+run at a time, and overwrites the rest. Until #906 a pass of its own
+(`retire_registers`) cleared them before each collection, at the three
+places the VM collects (`maybe_collect`, `collect_for_loader`,
+`collect_at_call`), and the derived trace then reported the whole vector;
+now `ExecutionState`'s derived trace skips the registers for the walk, and
+those places only lend the state. Clearing, not skipping: a slot the walk
+does not report holds no reference once the walk returns, so a wrong map
+retains garbage or panics at a read, and never leaves a pointer to a swept
+object for a capture's copy, a tracer's register view or the frame's own
+next instruction to find. The walk runs only inside a collection, which
+only the driver runs, at depth 0 (§7): a nested loop clears nothing, since
+the frames beneath it are suspended in the middle of an instruction, which
+may read its operands again. A frame's closure and its code id stay the
+frame's own derived trace's.
+
+Full and delimited continuation snapshots are cleared by the same walk at
+capture, in the copy (`gc_roots::retire_snapshot`, where the handle is
+allocated), with the delimited base offset accounted for, and with their
+hole: the register of the snapshot's top frame its `deliver_reg` names,
+which the capturing call never returns into and an arrival writes before
+the frame runs, and which the map keeps as a call's destination. (`call/cc`
+clears it in the live frame too, as it did before the capture cleared its
+own copy: the frame waits on the call while its procedure runs.) A
+snapshot's trace still visits its complete vector, so snapshots and tracer
+register views never carry deliberately untraced pointers to swept objects.
+
 Runtime stubs are no longer conservative by omission: each carries a map
 that keeps every register at every pc, so a stub's frame is kept by its map
 rather than skipped; only hand-built code has no map. A frame at a pc with
-no map is the compiler's miss: a check build panics at its retirement, and a
-plain release build keeps every register of the frame (§11 item 6). Local
+no map is the compiler's miss: a check build panics where the walk meets it,
+and a plain release build keeps every register of the frame (§11 item 6). Local
 bindings are not retired at their last textual use: `reference-barrier`
 still roots its argument through the call, and a focused test pins that
 contract.
+
+The pause at depth, where the frames are most of a collection's work
+(2026-11-23; release builds, a `(gc)` at the bottom of a non-tail recursion
+whose frames have 17 registers each, timed in `collect_at_call` from before
+the retirement pass to the collection's return, the two binaries
+interleaved, three runs each):
+
+| depth | before #906: retirement pass + collection | of which the pass | after: the collection, the walk in it |
+|---|---|---|---|
+| 1 M frames, 17 M registers | 28.7–29.5 ms | 10.6–11.2 ms | 16.7–17.4 ms |
+| 3 M frames, 51 M registers | 90.6–90.8 ms | 36.7–37.0 ms | 54.7–56.3 ms |
+
+`(gc-stats)`'s `last-pause-us` left the pass out before #906 (18.1–18.3 ms
+and 53.5–54.1 ms at those depths) and includes the clearing now (16.7–17.4
+and 54.7–56.3 ms). With the recursion returned the same `(gc)` takes 65–77
+µs on either.
 
 Rust-stack temporaries (continuation-capture register clones, primitive args
 in `VmApplyContext` callbacks): **not rooted — handled by safe-point
@@ -1102,7 +1144,9 @@ a traced struct, or a root provider meets two rules:
    its `trace_code_ids`, and the hand-written traces of a frame's code
    (`FrameCode`, `types/mod.rs`) and of the running code (`RunningCode`,
    `execution_state.rs`), each its one field by name, which report an id the
-   derive cannot; and each root provider's `trace_roots`, a call to its
+   derive cannot; the VM's walk of its frames (#906), `trace_frames` with
+   the `scan_windows` and `scan_window` a capture shares, which takes each
+   frame apart by name; and each root provider's `trace_roots`, a call to its
    derived trace — `VmState`'s, the tree-walker's `Evaluator`'s and
    `StepRoots`', the library registry's and a compilation's literal pool's
    (`literal_pool.rs`). A new trace function joins that list,
@@ -1125,7 +1169,10 @@ a traced struct, or a root provider meets two rules:
    broadcast (#836); the
    `gc_edge_tests` modules of `environment.rs` and `library.rs`;
    `link_table.rs`'s `link_table_fields` for a unit's link table (#836);
-   `vm_state/trace_sentinel_tests.rs` for the VM's records, on the VM, and
+   `vm_state/trace_sentinel_tests.rs` for the VM's records, on the VM,
+   for the walk of the frames under a map, where a kept register's value
+   survives and a dead register's is freed while its frame lives, and the
+   register cleared, at a collection and in a capture's copy (#906), and
    for each holder that reports a unit's code id (a closure, a frame, a
    frame of either continuation kind, the running code), with the code
    store alone, and a stale id, keeping none (#836);
@@ -1902,7 +1949,8 @@ instruction:
   clears the register the call's value goes to — a liveness map keeps a
   call's destination as a root from the call on, so until something is
   delivered there its old value would survive the collection — then
-  retires registers and collects, and leaves whether it collected for
+  collects, the collection's trace clearing each frame's dead registers
+  (§5.2, #906), and leaves whether it collected for
   `ResumePrimitive`, which resumes the primitive and delivers its value.
 - **Tree-walker:** the step becomes `StepResult::CollectAtCall` under the
   primitive's `ResumePrimitive` continuation, and the trampoline runs it at
@@ -2924,8 +2972,9 @@ visitor exists, and the stress lane is the real safety net.
 6. **Retired registers are `DEAD_SLOT` (#625, GC_PRD §11.1 invariant 3):** in
    every check build, register retirement (§5.2) writes
    `TaggedValue::DEAD_SLOT` rather than `UNSPECIFIED` into each register its
-   frame's per-pc map calls dead, at a collection and at a continuation
-   capture; and a push writes it into each register of its window that no
+   frame's per-pc map calls dead, at a collection, as its walk of the frames
+   passes the register (#906), and at a continuation capture, in the copy,
+   with the copy's hole; and a push writes it into each register of its window that no
    argument or operand writes, a tail call's, a self tail call's and a
    stub restart's reused window included, where a plain release build
    writes `NULL` (#714). Every read of a register checks for it: `VmState::reg_at`, which
@@ -2957,7 +3006,7 @@ visitor exists, and the stress lane is the real safety net.
    check sees a wrong map only at a pc where a collection or a capture
    happens, which is why item 7 exists. Beside it, a frame at a pc
    whose code has no map at all, `0xFFFF` in its index (#905, GC_PRD §11.1
-   invariants 2 and 5): retirement panics there in every check build,
+   invariants 2 and 5): the walk panics there in every check build,
    naming the code, the pc and the instruction before it, since the
    compiler missed a suspension point; a plain release build keeps every
    register of the frame. Its control, in the same file, collects over a
