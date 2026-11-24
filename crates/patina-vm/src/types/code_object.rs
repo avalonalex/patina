@@ -167,14 +167,14 @@ pub struct CodeObject {
     #[trace(skip, reason = "source positions")]
     pub source_map: Vec<(usize, SourceLocation)>,
 
-    /// Bitsets of possible register roots before each instruction, after completed
-    /// expression temporaries have been retired. Locals stay conservative.
-    /// Register `r` uses bit `r % 64` in word `r / 64`.
-    /// The collector and continuation capture clear excluded slots before
-    /// tracing; normal dispatch does no work for these maps (#423).
-    /// Runtime stubs and hand-built code use `None` to retain every slot.
-    #[trace(skip, reason = "liveness bitsets")]
-    pub register_roots: Option<Vec<Vec<u64>>>,
+    /// The possible register roots of a frame suspended at each pc, after
+    /// completed expression temporaries have been retired (#423): a dense
+    /// index into the unit's deduplicated bitsets (#905, [`RegisterMaps`]).
+    /// Locals stay conservative. The collector and continuation capture
+    /// clear excluded slots before tracing; normal dispatch does no work for
+    /// these maps. Hand-built code uses `None` to retain every slot.
+    #[trace(skip, reason = "liveness bitsets, which hold no values")]
+    pub register_roots: Option<RegisterMaps>,
 
     /// The unit's link table (#836): the spelling of each global operand
     /// (`LoadGlobal`, `StoreGlobal`, `Define`, `CallPrimitive` and the
@@ -202,6 +202,127 @@ pub struct CodeObject {
 }
 
 impl TraceThroughRc for CodeObject {}
+
+/// A code object's register maps (#905, GC_PRD §11.1 invariant 2): for each
+/// pc, the id of the bitset of registers a frame suspended there may still
+/// read, in a table of distinct bitsets its whole unit shares.
+///
+/// Register `r` is bit `r % 64` of word `r / 64` of its map. A register past
+/// the map's words is dead: a tail call can leave a window larger than the
+/// code it now runs needs.
+///
+/// Opaque outside the VM: pass 5 builds it ([`Self::from_parts`]) and the
+/// runtime builds the stubs' ([`Self::all_live`]); only retirement reads it.
+#[derive(Debug, Clone)]
+pub struct RegisterMaps {
+    /// The map id of each pc, `0..=instructions.len()`, or [`Self::NEVER`]
+    /// for a pc no frame is ever suspended at.
+    index: Box<[u16]>,
+    /// The unit's distinct maps, `width` words each, in one block that every
+    /// member of the unit holds through its own `Rc`.
+    maps: Rc<[u64]>,
+    /// Words per map: the most any member of the unit needs, at least one.
+    /// A member's maps are padded with zero words to it.
+    width: usize,
+}
+
+impl RegisterMaps {
+    /// The index entry of a pc no frame is ever suspended at.
+    pub(crate) const NEVER: u16 = u16::MAX;
+
+    /// A code object's maps over its unit's table `maps`, of `width` words a
+    /// map, which `index` names by id.
+    pub(crate) fn from_parts(index: Box<[u16]>, maps: Rc<[u64]>, width: usize) -> Self {
+        debug_assert!(width > 0 && maps.len().is_multiple_of(width));
+        debug_assert!(
+            index
+                .iter()
+                .all(|&id| id == Self::NEVER || (id as usize + 1) * width <= maps.len()),
+            "an index names a map past its unit's table"
+        );
+        RegisterMaps { index, maps, width }
+    }
+
+    /// Maps that keep every register at every pc of code `instructions`
+    /// long, the pc past the end included: the runtime's stubs' (#905),
+    /// whose register protocols are not compiler output and whose windows
+    /// are at most 64 registers and never grow (`push_stub_frame`,
+    /// `restart_stub`).
+    pub(crate) fn all_live(instructions: usize) -> Self {
+        RegisterMaps {
+            index: vec![0; instructions + 1].into_boxed_slice(),
+            maps: Rc::from([u64::MAX]),
+            width: 1,
+        }
+    }
+
+    /// The map of a frame suspended at `pc`, or `None` where no frame can be
+    /// suspended: an entry of [`Self::NEVER`], or a pc past the end of the
+    /// index.
+    #[inline]
+    pub(crate) fn at(&self, pc: usize) -> Option<&[u64]> {
+        let id = *self.index.get(pc)?;
+        if id == Self::NEVER {
+            return None;
+        }
+        let start = id as usize * self.width;
+        self.maps.get(start..start + self.width)
+    }
+
+    /// The unit's table, which every member's maps share.
+    #[cfg(test)]
+    pub(crate) fn table(&self) -> &Rc<[u64]> {
+        &self.maps
+    }
+
+    /// Words per map in the unit's table.
+    #[cfg(test)]
+    pub(crate) fn width(&self) -> usize {
+        self.width
+    }
+
+    /// Add these maps to `census`, counting their unit's table only if
+    /// `tables`, the tables counted so far, does not hold it yet.
+    pub(crate) fn count(
+        &self,
+        census: &mut RegisterMapCensus,
+        tables: &mut rustc_hash::FxHashSet<*const u64>,
+    ) {
+        census.code_objects += 1;
+        census.pcs += self.index.len();
+        census.unmapped_pcs += self.index.iter().filter(|&&id| id == Self::NEVER).count();
+        census.index_bytes += std::mem::size_of_val(&*self.index);
+        if tables.insert(self.maps.as_ptr()) {
+            census.units += 1;
+            census.maps += self.maps.len() / self.width;
+            census.map_bytes += std::mem::size_of_val(&*self.maps);
+        }
+    }
+}
+
+/// What the register maps of a machine's loaded code hold (#905), summed
+/// over its code store by `VmBackend::register_map_census`: what a test
+/// reads to measure their memory. Not an interface. Bytes are those the
+/// blocks hold, before the allocator rounds them up, and without the five
+/// words the maps take in each code object, or an `Rc`'s two counts.
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RegisterMapCensus {
+    /// Code objects with maps: every loaded one but hand-built code.
+    pub code_objects: usize,
+    /// Index entries, one per pc and one past each code object's end.
+    pub pcs: usize,
+    /// Of those, the entries of pcs no frame can be suspended at.
+    pub unmapped_pcs: usize,
+    /// The indexes' bytes, two an entry.
+    pub index_bytes: usize,
+    /// Distinct tables: one a unit, and one each stub.
+    pub units: usize,
+    /// The maps in those tables.
+    pub maps: usize,
+    /// The tables' bytes.
+    pub map_bytes: usize,
+}
 
 impl CodeObject {
     /// Look up the source location for a given program counter.

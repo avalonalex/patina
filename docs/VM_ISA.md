@@ -61,7 +61,7 @@ pub struct CodeObject {
     pub num_regs:     u16,                  // registers needed
     pub arity:        Arity,                // fixed / variadic
     pub source_map:   Vec<(usize, SourceLocation)>, // pc → source loc
-    pub register_roots: Option<Vec<Vec<u64>>>, // pc → possible-root bitset
+    pub register_roots: Option<RegisterMaps>, // pc → id of a possible-root bitset in the unit's table
     pub links:        Rc<LinkTable>,        // the unit's globals, linked at load (§3)
 }
 
@@ -76,8 +76,10 @@ indexed by the slot in a `CodeObjectId`) and looked up by ID at runtime.
 
 `register_roots` records completed temporary lifetimes (#423). Collection and
 continuation capture clear excluded slots; ordinary instruction dispatch
-does not consult the maps. `None` retains all registers for hand-built code
-and runtime stubs. See `VM_COMPILER.md` §10.4.
+does not consult the maps. It is a dense index, one `u16` per pc, into the
+unit's deduplicated bitsets, with `0xFFFF` at every pc no frame can be
+suspended at (#905). Runtime stubs map every register live at every pc;
+`None` retains all registers for hand-built code. See `VM_COMPILER.md` §10.4.
 
 The compiler names code by a label, which `MakeClosure` in the code around it
 uses too. `VmState::load_unit` gives each code object a slot and replaces both,

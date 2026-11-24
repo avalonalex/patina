@@ -510,7 +510,11 @@ fi
 # vm_callprimitive's rose from 1899 to 1901, and scheme_suite's from 10653
 # to 10676 at 4096 and from 375 to 377 without stress; every other count,
 # at its interval and without stress, read as it did, and no test count or
-# minimum moved: #790's tests are patina-core's and patina-macros' own)
+# minimum moved: #790's tests are patina-core's and patina-macros' own;
+# and raise_site_matrix pinned 2026-11-22 with #901's raise-site tests,
+# 59546 collections at 16 and 55710 without stress, nearly all of them its
+# zeal interpreters', which collect at every outermost safe point whatever
+# the lane's variable says, so its minimum is midway between the two)
 TARGETS=(
     "callability 16 31 13"                    # 2134 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -526,6 +530,7 @@ TARGETS=(
     "library_loading 16 46 9"                 # 129 (0): see the header
     "macro_definition_env 16 16626 62"        # 41021 (140): see the header
     "owned_handles 16 62714 9"                # 125649 (14)
+    "raise_site_matrix 16 57628 6"            # 59546 (55710)
     "rooted_loading 16 371 6"                 # 1268 (10)
     "vm_callprimitive 16 545 23"              # 1901 (0)
     "scheme_suite 4096 1534 11"               # 10676 (377): see the header

@@ -120,7 +120,7 @@ use super::vm_state::{
     vm_eval_expr, vm_load_library,
 };
 use crate::error::VmError;
-use crate::types::code_object::{Arity, CodeObject};
+use crate::types::code_object::{Arity, CodeObject, RegisterMaps};
 use crate::types::continuation::{ExceptionHandler, VmContinuation, VmDelimitedContinuation};
 use crate::types::instruction::{ControlForm, Instruction, PrimitiveFnId};
 use crate::types::{CallFrame, CodeObjectId};
@@ -1504,6 +1504,10 @@ fn runtime_stub(
     // Built only here, on the first call: a stub is fetched on every call of
     // what it serves, and the cached one is all but those first.
     let instructions = instructions();
+    // Every register live at every pc (#905): a stub's frame keeps its whole
+    // window, which its one word covers.
+    debug_assert!(num_regs <= 64, "a stub's window is wider than its map");
+    let register_roots = Some(RegisterMaps::all_live(instructions.len()));
     let id = state.load(CodeObject {
         id: CodeObjectId::label(),
         name: Some(Rc::from(name)),
@@ -1514,7 +1518,7 @@ fn runtime_stub(
         num_regs,
         arity: Arity::Fixed(0),
         source_map: Vec::new(),
-        register_roots: None,
+        register_roots,
     });
     set_slot(state, id);
     state.code_object(id)
@@ -3957,4 +3961,43 @@ fn call_primitive_proc(
         .primitive_registry()
         .apply_cached(qualified_name, registry_index, args, &ctx)
         .map_err(eval_to_vm_error)
+}
+
+#[cfg(test)]
+mod stub_map_tests {
+    use super::*;
+
+    /// Every kind of stub keeps every register of its frame at every pc,
+    /// the pc past its end included (#905): a frame of one is never
+    /// retired, as it was not while stubs had no maps at all.
+    #[test]
+    fn every_stub_keeps_every_register_at_every_pc() {
+        let mut state = VmState::on_a_fresh_heap();
+        let mut stubs = vec![
+            wind_jump_stub(&mut state),
+            value_wind_stub(&mut state),
+            value_cwv_stub(&mut state),
+            collect_stub(&mut state, CollectKind::Major),
+            force_stub(&mut state),
+            raise_step_stub(&mut state),
+            invoke_step_stub(&mut state),
+            abort_handler_stub(&mut state),
+        ];
+        stubs.extend((0..=resume_step::INLINE_ARGS + 1).map(|argc| resume_stub(&mut state, argc)));
+        for code in stubs {
+            let code = code.expect("the stub is built");
+            let maps = code.register_roots.as_ref().expect("a stub has maps");
+            let len = code.instructions.len();
+            for pc in 0..=len {
+                assert_eq!(
+                    maps.at(pc),
+                    Some(&[u64::MAX][..]),
+                    "{:?}, pc {pc}",
+                    code.name
+                );
+            }
+            assert_eq!(maps.at(len + 1), None, "{:?}, past its index", code.name);
+            assert!(code.num_regs <= 64, "{:?}", code.name);
+        }
+    }
 }
