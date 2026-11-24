@@ -1729,6 +1729,32 @@ start at a pause's start, which between them hold the worst of each length,
 over a ring of the intervals a window can still reach. `PATINA_GC_LOG=<path>`
 writes each record as a CSV line (`docs/TEST_ORGANIZATION.md`, "GC lanes").
 
+### 6.3 The memory budget, detected (#907)
+
+`crates/patina-core/src/heap/budget.rs` reads what the process can find out
+about the memory it may use (`MemoryLimits::detect`, `PRD/GC_PRD.md` §17.3),
+each reading `None` where there is nothing to read, so that detection never
+fails startup:
+
+| reading | from |
+|---|---|
+| physical memory | `hw.memsize` on macOS; `_SC_PHYS_PAGES` pages of `_SC_PAGESIZE` on Linux |
+| the cgroup limit (Linux) | the smallest memory limit on the process's own cgroup or a cgroup above it, up to the hierarchy's mount point: `memory.limit_in_bytes` where a v1 hierarchy has the memory controller, v2's `memory.max` otherwise. The cgroup is the one `/proc/self/cgroup` names, found under the mount `/proc/self/mountinfo` lists, below that mount's root |
+| the soft `RLIMIT_AS` | `getrlimit` |
+
+B, the budget the PRD's defaults derive from, is the smaller of the first
+two (`MemoryLimits::budget`). `MemoryLimits::default_stack_cap` is the main
+stack's default cap from it: min(8 GiB, 25%·B), at most a quarter of
+`RLIMIT_AS` where one is set, and never below 2 MiB; with no memory known it
+is the 8 GiB.
+
+**Nothing reads it yet.** The cap itself, `&stack-exhausted` and the knobs
+that override the default are #907's second half; the heap's ceiling is
+fitted at stage 5e. The fitting logic and the cgroup lookup are unit-tested
+on both CI legs, the lookup against a procfs and a hierarchy of the test's
+own; on the Linux leg a child process run under `ulimit -v` reads the limit
+set (macOS refuses to set `RLIMIT_AS`).
+
 ## 7. Safe Points and Re-entrancy
 
 **Invariant: GC runs only when every live value is reachable from a registered
