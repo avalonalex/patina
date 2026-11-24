@@ -227,8 +227,9 @@ pub fn capture_delimited(frames: usize, registers: usize) {
     let _ = (frames, registers);
 }
 
-/// The VM's stack as a collection starts at a safe point: the next
-/// collection's log line reports it.
+/// The VM's stack as a collection traces it: read where the collection's
+/// walk of the frames starts (#906), and reported on that collection's log
+/// line.
 #[inline(always)]
 pub fn stack_shape(frames: usize, registers: usize) {
     #[cfg(feature = "gc-census")]

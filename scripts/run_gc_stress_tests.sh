@@ -519,7 +519,10 @@ fi
 # a tail and a non-tail position and so doubles its rows, and adds a test
 # that the VM compiles each row's call as its position names: 119089
 # collections at 16 and 111441 without stress, its minimum midway again,
-# and 7 tests)
+# and 7 tests; and its count at 16 read again 2026-11-24 on `main` at
+# 76fc5b77, where that pin met #790's reader for the first time: 119114,
+# as #790 moved the others, the count without stress as it was and the
+# minimum midway, 115277)
 TARGETS=(
     "callability 16 31 13"                    # 2134 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
@@ -535,7 +538,7 @@ TARGETS=(
     "library_loading 16 46 9"                 # 129 (0): see the header
     "macro_definition_env 16 16626 62"        # 41021 (140): see the header
     "owned_handles 16 62714 9"                # 125649 (14)
-    "raise_site_matrix 16 115265 7"           # 119089 (111441)
+    "raise_site_matrix 16 115277 7"           # 119114 (111441)
     "rooted_loading 16 371 6"                 # 1268 (10)
     "vm_callprimitive 16 545 23"              # 1901 (0)
     "scheme_suite 4096 1534 11"               # 10676 (377): see the header

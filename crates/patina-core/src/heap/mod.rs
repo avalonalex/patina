@@ -24,6 +24,7 @@
 
 mod account;
 pub mod attrs;
+pub mod budget;
 #[cfg(feature = "gc-census")]
 mod census;
 mod check;

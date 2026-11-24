@@ -287,7 +287,12 @@ Test crates, the REPL and test and example targets are exempt (`clippy.toml`'s h
    trace (`patina_core::Trace`, #686): the derive takes it apart by name, a
    field whose type has no `Trace` does not compile, and a field that holds
    no value is `#[trace(skip, reason = "…")]`. Its sentinel test is the
-   same, run once with the field marked `skip`.
+   same, run once with the field marked `skip`. One field that holds values
+   is skipped too, the VM's register file (#906): a walk of the frames
+   traces it, under each frame's map, and its `reason` names the walk,
+   which is on the script's list. A field like it needs the same three: a
+   hand-written trace on the list, the reason naming it, and a sentinel
+   test of what the walk keeps and what it does not.
 
 **New CoreExpr form** (rare — prefer macros):
 1. Extend `CoreExprKind` in `patina-core/src/core_expr.rs`
