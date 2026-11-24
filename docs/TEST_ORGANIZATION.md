@@ -799,6 +799,24 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   window, and from a non-tail one, its frame pushed fresh (#714), on both
   backends, on default and zeal interpreters, each row naming the oracles
   behind its answer (chibi, Gauche, Chez)
+- `stack_cap_matrix.rs` — the VM's stack cap and `&stack-exhausted` (#907):
+  eleven rows, each a recursion of 20,000 frames run on the VM under a 2 MiB
+  cap, on the VM with room and on the tree-walker, which keeps no cap. A row
+  records the capped answer and the free one, which is also what chibi,
+  Gauche and Chez answer, none of which stops at that depth. The rows: the
+  condition caught by `guard`, by an escaping handler and by one that
+  returns; uncaught; the handler's room; the hard cap; a second catch in the
+  same form, which a re-arming margin would lose; a clause that crosses the
+  limit again; an after thunk on the escape; a delimited continuation's
+  re-entry. Seven more tests: three rows under zeal; the depth the limit is
+  met at against the bytes; the interpreter going on after the hard cap; no
+  after thunk on that path (#776); a re-entry that would not fit;
+  `stack-limit`; and a 10 M-frame recursion under the default cap.
+  `crates/patina-repl/tests/stack_max_cli.rs` holds the runner's side:
+  `--stack-max` and `PATINA_STACK_MAX`, their precedence, the size grammar
+  and its floor, a malformed size refused before anything runs, the exit
+  status of an uncaught exhaustion, `-k` after the hard cap, and, on Linux,
+  the default cap under `ulimit -v`
 
 #### **Library Tests**
 - `sld_file_loading.rs` — library loading from `.sld` files

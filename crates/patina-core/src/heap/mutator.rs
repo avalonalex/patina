@@ -11,7 +11,11 @@
 //! (`heap/interrupt.rs`, #701).
 //!
 //! **Live words.** Today only the event words are live:
-//! - `reg_limit`, the poll word, which a post zeroes;
+//! - `reg_limit`, the poll word, which a post zeroes. While nothing is
+//!   posted it holds the VM's stack limit in bytes (#907), so a frame entry
+//!   makes one compare for both: the stack's top against this word. The
+//!   limit to put back after a post is serviced is the [`Carrier`]'s, since
+//!   every word here is spoken for;
 //! - `pending`, the events the owner posts;
 //! - `event`, the events posted from anywhere else: signal handlers, timers,
 //!   profilers, and later other carriers.
@@ -28,7 +32,9 @@
 //! **Reserved words.** The rest stay zero until the stage that needs each:
 //! - the allocation buffer, `ap` and `alloc_limit`, at 5a;
 //! - the barrier's words, `meta_bias`, `remset_cur` and `remset_soft`, at 7;
-//! - the register stack's `reg_top` at 4d;
+//! - the register stack's `reg_top`, still reserved after 4d.6 (#907 counts
+//!   the stack's bytes from its vectors' lengths) and after 4d.7 (decision
+//!   A4 on #782);
 //! - `ticks` with SRFI 18's deterministic scheduler;
 //! - the words C1 and C10 reserve, so that adding them later breaks no ABI:
 //!   `fenced_ap`, `quiesce_epoch` and `handshake`.
@@ -186,10 +192,11 @@ pub struct Mutator {
     /// 0x28. The running green thread's register-stack top (4d).
     reg_top: words::Ptr<u64>,
     /// 0x30. The poll word: zero while an event is posted. A frame entry
-    /// will compare the register-stack top against it (§12), so it is the
-    /// stack's limit otherwise. Until stage 4d gives the VM a reserved stack
-    /// it is [`Mutator::NO_LIMIT`]. Non-zero values are written only by the
-    /// owner, through [`Mutator::set_limit`].
+    /// compares the stack's top in bytes against it (§12, #907), so it is
+    /// the stack's limit otherwise: the VM's soft limit, its cap while a
+    /// handler has the reserve, and [`Mutator::NO_LIMIT`] where a machine
+    /// has no cap, as the tree-walker has none. Non-zero values are written
+    /// only by the owner, through [`Mutator::set_limit`].
     reg_limit: AtomicUsize,
     /// 0x38. Events posted from outside the owner, by `fetch_or`.
     event: AtomicU32,
@@ -259,8 +266,9 @@ impl Mutator {
     /// The offset of `reg_limit`, which a poll reads (`GcAttrs::poll`).
     pub const REG_LIMIT_OFFSET: u16 = std::mem::offset_of!(Mutator, reg_limit) as u16;
 
-    /// `reg_limit` while nothing is posted and the VM has no stack limit:
-    /// the largest value, so that a frame entry's `top > reg_limit` never
+    /// `reg_limit` while nothing is posted and the machine has no stack
+    /// limit: the largest value, so that a frame entry's `top >= reg_limit`
+    /// never
     /// fires on it.
     pub const NO_LIMIT: usize = usize::MAX;
 

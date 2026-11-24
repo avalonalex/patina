@@ -1217,6 +1217,17 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
     takes the GC bits and restores the word through `set_limit`, whose fence
     and re-read make a Dekker pair with a remote post (OCaml's protocol), so
     no post is lost.
+  - **The poll word is the stack's limit too** (#907, §12). While nothing
+    is posted it holds the VM's stack limit in bytes, so a frame entry makes
+    one compare for both: the stack's top, counted at 40 bytes a frame and 8
+    a register as 4d.7's layout will hold it, against the word. The limit is
+    the soft limit, 1 MiB under the cap; the cap while a handler for
+    `&stack-exhausted` has that MiB; and the largest value where a machine
+    has no cap, as the tree-walker has none. The `Mutator`'s words are all
+    spoken for, so the limit to put back after a post is serviced is kept
+    beside them on the `Carrier` (`Carrier::set_stack_limit`), which also
+    holds the cap for `(gc-stats)`'s `stack-limit`. `docs/VM_RUNTIME.md`
+    §3.2 has the machine's side.
   - **Shared by `Rc`.** The heap, its byte account and both machines share the
     heap's `Carrier` (`Heap::mutator`), which derefs to its `Mutator`, as
     they shared the `Rc<Cell<bool>>` flag it replaced. In `Heap` it holds
@@ -1248,8 +1259,9 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
     no poll since (blocked in a read, or in a long primitive), ends the
     process by SIGINT's default action, as before forwarding.
   - **Reserved words.** They stay zero until a later stage uses them: the
-    allocation buffer (5a), the barrier (7), the register stack (4d), Tick
-    mode's count, and the words C1 and C10 reserve.
+    allocation buffer (5a), the barrier (7), the register stack's top
+    (reserved past 4d, decision A4 on #782), Tick mode's count, and the
+    words C1 and C10 reserve.
   - **`GcAttrs::ARENA`** (`heap/attrs.rs`) describes today's collector to a
     future JIT: no barrier, no inline allocation, nothing moves, and polls
     fold into `reg_limit`.
@@ -1829,8 +1841,13 @@ placement + deferral:
        here, so a collection posted in a form's last returns waits through
        the next form's reading and expansion.
 
-     **What a poll costs.** A poll is a load of the `Mutator`'s poll word,
-     made only at these sites; no other instruction pays for it. The
+     **What a poll costs.** A poll is a load of the `Mutator`'s poll word
+     and a compare of the stack's top with it (#907),
+     made only at these sites; no other instruction pays for it. Counting
+     the top from the two vectors' lengths costs a call about six
+     instructions more than the load alone did, 0.5–0.7% on `fib`, `tak`
+     and a deep recursion (2026-11-24), until 4d.7 makes the top an address
+     the frame entry already has. The
      alternative measured worse: testing every dispatched pc for 0 caught
      every frame entry by construction, and saved the instructions but not
      the cycles. A branch taken on almost every instruction cost the

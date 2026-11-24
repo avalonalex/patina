@@ -296,6 +296,55 @@ leaves as `VmError::Interrupt` (`vm_raise_value`). A form's last returns pass
 no poll, so `run_top_frame` takes an interrupt posted during them where the
 outermost loop returns, and the form, not the next one, answers it (#700).
 
+**The stack's cap** (#907; `PRD/GC_PRD.md` §11.1; the owner's rulings of
+2026-11-24 on #782). The poll is the frame-entry check as well. The poll
+word holds the stack's limit in bytes while nothing is posted, and `poll`
+compares the stack's top with it (`ExecutionState::top_bytes`: 40 bytes a
+frame and 8 a register, what 4d.7's interleaved stack will hold, so the depth
+at which the cap is met does not move when that lands).
+
+- **The cap** is the backend's configuration's (`HeapConfig::max_stack`,
+  `--stack-max`, `PATINA_STACK_MAX`) or the machine's default, min(8 GiB, a
+  quarter of B, a quarter of `RLIMIT_AS`), never under 2 MiB
+  (`VmState::set_stack_cap`). `(gc-stats)`'s `stack-limit` reads it.
+- **The soft limit** is the cap less 1 MiB (`STACK_RESERVE`). The frame entry
+  that takes the stack to it gets `VmError::StackExhausted` from its poll,
+  which the loop routes as it routes an interrupt: raised non-continuably in
+  the innermost handler as `&stack-exhausted`, an error object whose message
+  is "stack exhausted" and whose irritant is the cap, which
+  `(patina limits)`'s `stack-exhausted?` recognises; or returned when no
+  handler is installed, an uncaught error like any other.
+- **The reserve.** The raise moves the limit to the cap, so the handler,
+  which runs at the raise site, has the last MiB. So does a `guard`: its
+  handler captures a continuation there, which copies the stack (decision A7
+  on #782), and escapes.
+- **The hard cap.** A frame entry at the cap while the reserve is open is a
+  handler that ran through it: `VmError::StackOverflow`, which nothing
+  catches. The form is abandoned by the path an uncaught error takes
+  (`run_top_frame` clears the machine), with no handler and no after thunk
+  run, as #776 records for any abandoned form.
+- **Re-arming.** The soft limit is armed again when the stack top is at or
+  below it, with no margin (`VmState::rearm_stack_limit`), asked in three
+  kinds of place: where a transfer has cut the stack (a continuation's
+  arrival, an abort's landing), after a collection (`after_collection`),
+  and where a form ends or is abandoned (`run_top_frame`). The after thunks
+  of an escape run before it lands, so they still have the reserve; a
+  `guard`'s clause runs after it, armed, and if it crosses the limit again
+  the next handler out gets a new condition. A margin under the limit would
+  leave a `guard` near it with one catchable exhaustion and then the hard
+  cap, the design CPython withdrew after 3.9.9.
+- **Pushes that take no poll** ask the cap first (`check_stack_room`): a
+  stub's frame, and a delimited continuation's re-entry, which appends its
+  whole region (`finish_delimited_invoke`). What would not fit is an
+  exhaustion at that call: the catchable condition where the soft limit is
+  armed, the hard cap where the reserve is open. A closure's entry polls
+  after its push instead, so until 4d.7 puts the stack in a reservation a
+  frame can sit one frame past the cap when the hard cap is raised.
+- **The tree-walker** keeps no cap (decision A9 on #782).
+
+`crates/patina-tests/tests/stack_cap_matrix.rs` holds each of these to a
+row.
+
 ### 3.3 Instruction Dispatch
 
 ```rust

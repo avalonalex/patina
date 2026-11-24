@@ -299,12 +299,41 @@ fn main() {
     replacements(&handles);
     #[cfg(any(feature = "vm", feature = "defaults"))]
     check(patina_interpreter::VmInterpreter::new_vm());
+    // A configuration built and passed as a host does it (#907): the VM's
+    // stack cap, set by a method, read when the interpreter is built.
+    #[cfg(any(feature = "vm", feature = "defaults"))]
+    {
+        use patina_interpreter::{HeapConfig, VmInterpreter};
+        let mut config = HeapConfig::new();
+        config.max_stack(64 << 20);
+        let capped = VmInterpreter::new_vm_with_config(&config);
+        let limit = capped
+            .eval_program_owned(
+                "(import (scheme base) (patina debug)) (cdr (assq 'stack-limit (gc-stats)))",
+            )
+            .unwrap();
+        assert_eq!(capped.display_tagged(&limit), (64 << 20).to_string());
+        check(VmInterpreter::new_vm_with_config(
+            HeapConfig::new().max_stack(8 << 20),
+        ));
+    }
     #[cfg(any(
         feature = "tree-walker",
         feature = "legacy-pipeline",
         feature = "defaults"
     ))]
     check(patina_interpreter::TreeWalkInterpreter::new_tree_walker());
+    // The tree-walker takes a configuration too, and keeps no cap (#907).
+    #[cfg(any(
+        feature = "tree-walker",
+        feature = "legacy-pipeline",
+        feature = "defaults"
+    ))]
+    check(
+        patina_interpreter::TreeWalkInterpreter::new_tree_walker_with_config(
+            patina_interpreter::HeapConfig::new().max_stack(8 << 20),
+        ),
+    );
     #[cfg(any(feature = "legacy-pipeline", feature = "defaults"))]
     {
         use patina_interpreter::{Pipeline, SimpleInterpreter, StandardPipeline};
