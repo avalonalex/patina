@@ -1755,6 +1755,49 @@ on both CI legs, the lookup against a procfs and a hierarchy of the test's
 own; on the Linux leg a child process run under `ulimit -v` reads the limit
 set (macOS refuses to set `RLIMIT_AS`).
 
+### 6.4 A reservation of address space (#908)
+
+`crates/patina-core/src/heap/reservation.rs` reserves a range of address
+space that never moves, takes physical pages as they are written and gives
+them back a range at a time (`Reservation`; `PRD/GC_PRD.md` §11.1, §17.3
+and K13). The register stack is to live in one, and the heap's own follows
+at stage 5.
+
+| | Linux | macOS, other unix | elsewhere (CI builds none) |
+|---|---|---|---|
+| reserving | one `mmap`: private, anonymous, read-write, `MAP_NORESERVE` | the same without the flag | one zeroed allocation |
+| a page is the process's | from its first write | from its first write | from the start |
+| `decommit` of a range | `madvise(MADV_DONTNEED)`, which splits no mapping | a fresh mapping of the same kind over it, `mmap(MAP_FIXED)` | the pages zeroed, and nothing returned |
+
+- **Sizes.** `Reservation::new(wanted, floor)` rounds up to a page. Where
+  the system refuses the size (a soft `RLIMIT_AS`, strict overcommit, an
+  address space already full) it tries half, and half again, down to the
+  floor, rather than fail, and `size` says what there is. By halves, since
+  what a smaller reservation leaves is for the allocations after it: the
+  arenas are `malloc`'d until stage 5e. An error is the refusal of the
+  floor.
+- **Decommit** gives back the whole pages inside a byte range, which read as
+  zero when next touched; a page the range covers in part keeps its bytes.
+- **Why a fresh mapping on macOS.** With 256 MiB written and one call made
+  over it (macOS 27.2, 2026-11-24): `MADV_DONTNEED` and `MADV_FREE` left the
+  footprint at 257.3 MiB, every page in memory and its bytes as written;
+  `MADV_FREE_REUSABLE` took the footprint to 1.3 MiB and left it there after
+  the pages were written again, until a `MADV_FREE_REUSE` that every push
+  would owe; the fresh mapping took it to 1.1 MiB, the resident size to
+  1.7 MiB and the pages to zero, in 1.7 ms. Writing the range again took
+  12 ms, 47 µs a MiB. The kernel takes the old mapping out before it puts
+  the new one in, so a failure could leave a hole that a later mapping of
+  anyone's would fill: nothing is known to make the call fail there, and if
+  it does the process aborts, as it does where memory cannot be allocated.
+- **No guard page**: whoever writes into a reservation checks its end first.
+
+**Nothing uses it yet.** The register stack moves into one with #908's 7c,
+and its pages are returned by #909. The sizes are unit-tested under an
+injected limit; reserving, writing and decommitting on both CI legs, with
+`mincore` reading that the pages have gone, and on the allocated backing
+too; on the Linux leg a child process run under `ulimit -v` of 4 GiB asks
+for 8 GiB and gets 2 GiB.
+
 ## 7. Safe Points and Re-entrancy
 
 **Invariant: GC runs only when every live value is reachable from a registered
