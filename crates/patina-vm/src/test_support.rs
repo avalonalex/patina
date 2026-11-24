@@ -20,11 +20,12 @@ thread_local! {
 
 /// The wrong-map switch behind the `DEAD_SLOT` controls (#625,
 /// `crates/patina-tests/tests/retired_registers.rs`). While one is alive,
-/// register retirement on this thread treats the highest register each
-/// per-pc liveness map calls live as dead, which is what a wrong map does:
-/// the register is filled although it is still to be read. In a check build
-/// that read panics; elsewhere it reads `UNSPECIFIED` and the program goes
-/// wrong somewhere unrelated, or not at all.
+/// the walk of the frames on this thread, a collection's and a capture's,
+/// treats the highest register each per-pc liveness map calls live as dead,
+/// which is what a wrong map does: the register is not reported, and is
+/// filled although it is still to be read. In a check build that read
+/// panics; elsewhere it reads `UNSPECIFIED` and the program goes wrong
+/// somewhere unrelated, or not at all.
 ///
 /// Thread-local, because the test harness runs tests in parallel and an
 /// interpreter runs on the thread that drives it.
@@ -224,11 +225,12 @@ pub fn read_an_unwritten_register(after: Reuse) -> patina_core::TaggedValue {
 /// map (#905, `a_check_build_refuses_a_frame_at_an_unmapped_pc` in
 /// `crates/patina-tests/tests/retired_registers.rs`): push a frame of code
 /// whose map index has no map at the frame's pc, as a compiler that missed
-/// a suspension point would leave, and collect. A check build panics at the
-/// collection's retirement of the frame. A plain release build keeps every
-/// register of the frame, though the code's one map calls them all dead;
-/// this answers whether they all still hold what they held. A machine of
-/// its own, so no switch, and nothing another test's thread sees.
+/// a suspension point would leave, and collect. A check build panics where
+/// the collection's walk of the frames meets the frame. A plain release
+/// build keeps every register of the frame, though the code's one map calls
+/// them all dead; this answers whether they all still hold what they held.
+/// A machine of its own, so no switch, and nothing another test's thread
+/// sees.
 pub fn collect_with_a_frame_at_an_unmapped_pc() -> bool {
     crate::runtime::vm_state::collect_with_a_frame_at_an_unmapped_pc()
 }

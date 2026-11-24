@@ -251,7 +251,9 @@ fn every_continuation_snapshot_field_is_traced() {
         prompt_stack: vec![prompt(tag, prompt_handler)],
         exception_handlers: vec![handler(installed)],
         registers: vec![Cell::new(register)],
-        deliver_reg: 0,
+        // No hole in the window: the capture clears the register its
+        // `deliver_reg` names (#906), and this one holds the sentinel.
+        deliver_reg: CallFrame::NO_RETURN,
         exit_status: None,
         abort_landing: false,
         reentry: Rc::from(Vec::new()),
@@ -271,7 +273,7 @@ fn every_continuation_snapshot_field_is_traced() {
         dynamic_winds: vec![wind(before, after, wind_handler)],
         registers: vec![Cell::new(register)],
         base_at_capture: 0,
-        deliver_reg: Some(0),
+        deliver_reg: Some(CallFrame::NO_RETURN),
         depth_at_capture: Depth::BASE,
         wind_depth_at_capture: 0,
         handler_depth_at_capture: 0,
@@ -343,7 +345,13 @@ fn every_slot_the_vm_reports_is_where_its_value_lives() {
     let code = code_holding(Vec::new());
     state.execution = ExecutionState::from_parts(
         vec![Cell::new(fixnum(1)), Cell::new(fixnum(2))],
-        vec![frame(&code, fixnum(3))],
+        // Both registers are its window: the walk of the frames reports a
+        // window's registers, and a debug build refuses one outside every
+        // window (#906).
+        vec![CallFrame {
+            num_regs: 2,
+            ..frame(&code, fixnum(3))
+        }],
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -354,7 +362,8 @@ fn every_slot_the_vm_reports_is_where_its_value_lives() {
         prompt_stack: Vec::new(),
         exception_handlers: Vec::new(),
         registers: vec![Cell::new(fixnum(4))],
-        deliver_reg: 0,
+        // No hole in the window, which the capture would clear (#906).
+        deliver_reg: CallFrame::NO_RETURN,
         exit_status: None,
         abort_landing: false,
         reentry: Rc::from(Vec::new()),
@@ -486,8 +495,17 @@ fn delimited_capture_of(code: &Rc<CodeObject>) -> VmDelimitedContinuation {
 }
 
 /// A machine state whose registers are `registers` and whose frames are
-/// `frames`, with no extent.
-fn running(registers: Vec<TaggedValue>, frames: Vec<CallFrame>) -> ExecutionState {
+/// `frames`, with no extent. With no frame given, the registers are the
+/// window of one frame of [`holder_code`]: every register lies in a frame's
+/// window (#714), and the walk of the frames reports them through it
+/// (#906).
+fn running(registers: Vec<TaggedValue>, mut frames: Vec<CallFrame>) -> ExecutionState {
+    if frames.is_empty() {
+        frames.push(CallFrame {
+            num_regs: registers.len() as u16,
+            ..frame(&holder_code(), CallFrame::NO_CLOSURE)
+        });
+    }
     ExecutionState::from_parts(
         registers.into_iter().map(Cell::new).collect(),
         frames,
@@ -495,6 +513,16 @@ fn running(registers: Vec<TaggedValue>, frames: Vec<CallFrame>) -> ExecutionStat
         Vec::new(),
         Vec::new(),
     )
+}
+
+/// Hand-built code that only holds a window: no instructions, no constants
+/// and no maps, so its frame keeps every register; and a label for its id,
+/// which names no loaded code, so its frame reports no unit's table.
+fn holder_code() -> Rc<CodeObject> {
+    Rc::new(CodeObject {
+        id: CodeObjectId::label(),
+        ..(*code_holding(Vec::new())).clone()
+    })
 }
 
 /// (a) A unit whose only holder is a closure of it in a register: marking

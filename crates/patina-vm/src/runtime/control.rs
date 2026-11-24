@@ -44,7 +44,7 @@
 //! | [`call_any`] | `Some(v)`: immediate value; `None`: drive scheduled frames | Same as `call_value` |
 //! | [`tail_call_value`] | `Some(v)`: driver returns; `None`: continue dispatch | Reuses/pops caller; may change all dynamic components |
 //! | [`vm_raise_value`] | Schedules handler and resumable raise remainder | Pops a handler; pushes frame/registers; leaves winds/prompts alone |
-//! | [`capture_delimited`] | Detached snapshot; caller must root an allocated handle before yielding | Reads live state; clears the hole only in the copy |
+//! | [`capture_delimited`] | Detached snapshot; caller must root an allocated handle before yielding | Reads live state; the hole is cleared only in the copy, where its handle is allocated |
 //! | [`step_wind_jump`] | Schedules a wind step or installs target | May replace all five components; caller must signal transfer |
 //! | [`abort_to_prompt`] | No normal result: return its `VmError` | Builds/installs a landing or schedules travel, then parks transfer |
 //! | [`invoke_delimited`] | Identity or scheduled resumed region | Appends relocated frames/registers/prompts/handlers; re-enters winds |
@@ -669,12 +669,14 @@ fn handle_control_primitive(
             // `dst` is dead at this point — the only writes it will ever
             // see are this call's result or a value delivered through the
             // continuation — so whatever it still holds must not go into
-            // the snapshot. Left in, it chains: `guard`'s expansion is
-            // `((call/cc …))`, so `dst` holds the thunk the *previous* guard
-            // delivered, that thunk closes over its `handler-k`, and that
-            // continuation's snapshot holds the one before. A loop catching
-            // one raise per iteration retained nine heap objects per
-            // iteration for the life of its frame (296 MB at 160k).
+            // the snapshot: it is the capture's hole, which the capture
+            // clears in its copy with the copy's dead registers
+            // (`gc_roots::retire_snapshot`, which has the 296 MB the hole
+            // once retained). Cleared here in the live frame too, as it was
+            // before the capture cleared its own copy (#906): the frame
+            // waits on this call for as long as `proc` runs, its map keeps
+            // a call's destination, and what the register held would be
+            // kept with it.
             state
                 .execution
                 .return_into(ReturnFrame::Top, dst, TaggedValue::NULL);
@@ -3355,19 +3357,11 @@ pub(super) fn capture_delimited(
         .first()
         .map_or(state.execution.registers().len(), |f| f.register_base);
     let registers = state.execution.registers().copy(base_at_capture..);
-    let deliver_reg = frames.last().map(|top| {
-        // Cleared, not copied as it stands: the hole is dead by construction
-        // — the capturing call never returns a value into it — so whatever it
-        // still holds would be retained for the continuation's whole life.
-        // `call/cc`'s capture clears its own `dst` for this reason, with 296
-        // MB of measured retention behind the comment there. An abort made
-        // as a primitive's callback has no hole in any window
-        // (`CallFrame::NO_RETURN`, #714), and nothing to clear.
-        if hole != CallFrame::NO_RETURN {
-            registers[top.register_base - base_at_capture + hole as usize].set(TaggedValue::NULL);
-        }
-        hole
-    });
+    // The hole is dead by construction — the capturing call never returns a
+    // value into it — and is cleared in the copy, not kept as it stands,
+    // where the handle's allocation clears the copy's dead registers
+    // (`gc_roots::retire_snapshot`, #906, as `call/cc`'s is).
+    let deliver_reg = frames.last().map(|_top| hole);
     let captured = VmDelimitedContinuation {
         frames,
         dynamic_winds,

@@ -17,17 +17,27 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::slice::SliceIndex;
 
-/// Its trace (derived, #686) is all five components and the running code's
-/// id, a root of every collection through `VmState`'s. The sentinel test
-/// `every_vm_state_root_is_traced` pins each component, and
-/// `the_running_code_keeps_its_units_link_table` the running code.
+/// Its trace is all five components and the running code's id, a root of
+/// every collection through `VmState`'s: derived (#686) but for the
+/// register file, which the walk of the frames reports
+/// ([`ExecutionState::trace_frames`], #906). The sentinel test
+/// `every_vm_state_root_is_traced` pins each component,
+/// `a_frame_s_live_registers_are_kept_and_its_dead_ones_cleared` the walk
+/// under a map, and `the_running_code_keeps_its_units_link_table` the
+/// running code.
 #[derive(Default, Trace)]
 pub(super) struct ExecutionState {
     /// Slots, so that the root provider reports each register where it
-    /// lives, through `&self` (#682): the whole register file in one call
-    /// (`Trace::trace_slice`), after the safe point has retired completed
-    /// expression temporaries (#423). Continuation snapshots are retired at
-    /// capture, so they obey the same full-vector contract.
+    /// lives, and clears one, through `&self` (#682). Not the derived
+    /// trace's: a collection walks the frames, reports the registers each
+    /// frame's map keeps at its pc, a run at a time, and overwrites the
+    /// completed expression temporaries the map leaves out (#423, #906). A
+    /// continuation snapshot is cleared the same way at capture, and its
+    /// trace reports its whole register file.
+    #[trace(
+        skip,
+        reason = "reported by the walk of the frames, which `VmState`'s `trace_roots` runs after the derived trace: each frame's live registers, the rest cleared (`gc_roots::trace_frames`, #906)"
+    )]
     registers: Vec<Cell<TaggedValue>>,
     frames: Vec<CallFrame>,
     prompt_stack: Vec<PromptFrame>,
@@ -204,10 +214,10 @@ impl ExecutionState {
     pub(super) fn registers(&self) -> Registers<'_> {
         Registers(&self.registers)
     }
-    /// The register file's slots, for the one test that reports each where
-    /// it lives (`every_slot_the_vm_reports_is_where_its_value_lives`). The
-    /// collector reaches them through the derived trace, and retirement
-    /// through [`Self::retire_registers`], both inside this module.
+    /// The register file's slots, for the tests that read each where it
+    /// lives (`every_slot_the_vm_reports_is_where_its_value_lives`, and
+    /// the walk's). The collector reaches them through
+    /// [`Self::trace_frames`], inside this module.
     #[cfg(test)]
     pub(super) fn register_cells(&self) -> &[Cell<TaggedValue>] {
         &self.registers
@@ -526,8 +536,8 @@ impl ExecutionState {
     /// the new activation reads nothing the replaced one wrote. The caller
     /// writes the arguments (`store_args_in_window`), into the registers the
     /// fill leaves alone. A window larger than the new code needs keeps its
-    /// spare registers, which the new code cannot name and retirement clears
-    /// at every collection and capture.
+    /// spare registers, which the new code cannot name and the walk of the
+    /// frames clears at every collection and capture.
     pub(super) fn tail_replace(&mut self, code: Rc<CodeObject>, closure: TaggedValue) -> usize {
         if GC_CHECK && self.top_awaits() {
             wrote_an_awaiting_frame("tail_replace", 0);
@@ -690,8 +700,9 @@ impl ExecutionState {
             }));
     }
 
-    /// Capture every dynamic component together; handle allocation retires
-    /// dead temporaries and installs the weak-store payload before a safe point.
+    /// Capture every dynamic component together; handle allocation clears
+    /// the copy's dead temporaries and its hole, `deliver_reg`, and installs
+    /// the weak-store payload before a safe point.
     pub(super) fn capture_full(&self, deliver_reg: u16, reentry: Rc<[u64]>) -> VmContinuation {
         patina_core::census::capture_full(self.depth().frame_count(), self.registers.len());
         VmContinuation {
@@ -774,8 +785,12 @@ impl ExecutionState {
         self.answer.set(None);
     }
 
-    pub(super) fn retire_registers(&mut self) {
-        super::vm_state::gc_roots::retire_registers(&mut self.registers, &self.frames, 0);
+    /// The register file's trace (#906): a collection's walk of the frames,
+    /// which reports each frame's live registers to `visitor` and clears
+    /// the rest (`gc_roots::trace_frames`). Called by `VmState`'s
+    /// `trace_roots` and by nothing else, so only inside a collection.
+    pub(super) fn trace_frames(&self, visitor: &mut dyn SlotVisitor) {
+        super::vm_state::gc_roots::trace_frames(&self.registers, &self.frames, visitor);
     }
 
     /// Re-entry thunks have already pushed the captured winds. Relocate and
@@ -906,8 +921,8 @@ impl<'a> Registers<'a> {
     }
 
     /// A copy of the registers `range` takes: a snapshot's own file, which
-    /// the capture and retirement may then write, as they write a
-    /// continuation's, never the machine's.
+    /// the capture may then write, as it clears a continuation's dead
+    /// registers, never the machine's.
     pub(crate) fn copy<R>(self, range: R) -> Vec<Cell<TaggedValue>>
     where
         R: SliceIndex<[Cell<TaggedValue>], Output = [Cell<TaggedValue>]>,

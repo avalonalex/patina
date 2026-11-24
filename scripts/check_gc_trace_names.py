@@ -14,8 +14,10 @@ hand: the heap kinds' traces until `declare_layouts!` (stage 5a), the
 marker's walks, the VM's weak continuation tables until stage 4e, the VM's
 tracing by code id (#836) — its provider's `trace_code_ids`, the frame's
 code, `FrameCode`, and the running code, `RunningCode`, whose traces report
-an id the derive cannot — and each root provider's `trace_roots`, a call to
-its derived trace.
+an id the derive cannot — the VM's walk of its frames, which reports the
+registers each frame's map keeps and clears the rest (#906: `trace_frames`
+and the `scan_windows` and `scan_window` it shares with a capture) — and
+each root provider's `trace_roots`, a call to its derived trace.
 
 For each function in TRACE_FUNCTIONS this fails on:
 - a rest pattern, `..` closing a struct, tuple or slice pattern
@@ -61,12 +63,16 @@ TRACE_FUNCTIONS = {
         "trace_object_children",
         "run_mark_phase",
     ],
-    # The VM's weak continuation tables, until stage 4e deletes them, and
-    # its units' link tables, traced by code id (#836).
+    # The VM's weak continuation tables, until stage 4e deletes them, its
+    # units' link tables, traced by code id (#836), and the walk of its
+    # frames, the register file's trace (#906).
     "crates/patina-vm/src/runtime/vm_state/gc_roots.rs": [
         "trace_roots",
         "trace_weak_ids",
         "trace_code_ids",
+        "trace_frames",
+        "scan_windows",
+        "scan_window",
     ],
     # A frame's code and the running code, reported by id (`FrameCode`,
     # `RunningCode`, #836).
