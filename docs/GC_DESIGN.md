@@ -963,7 +963,10 @@ dropped a placeholder a traced table links would leave
 (`link_table::tests::a_check_build_refuses_a_linked_placeholder_out_of_its_store`).
 
 **Temporary retirement (#423):** the compiler records possible-root bitsets at
-instruction boundaries (`docs/VM_COMPILER.md` §10.4). Before an outermost
+instruction boundaries (`docs/VM_COMPILER.md` §10.4), kept only at the pcs a
+frame can be suspended at, through a dense `pc → u16` index into the unit's
+deduplicated bitsets, `0xFFFF` everywhere else (#905, GC_PRD §11.1
+invariant 2). Before an outermost
 collection, the VM replaces excluded slots with `UNSPECIFIED`, including
 excess capacity in reused tail-call windows; a check build writes `DEAD_SLOT`
 instead and panics where one is read (#625, §11 item 6). Full and delimited
@@ -971,9 +974,14 @@ continuation snapshots receive the same cleanup at capture, with the
 delimited base offset accounted for. Tracing still visits complete vectors,
 so snapshots and tracer register views never carry deliberately untraced
 pointers to swept objects.
-Runtime stubs without maps remain conservative. Local bindings are not
-retired at their last textual use: `reference-barrier` still roots its
-argument through the call, and a focused test pins that contract.
+Runtime stubs are no longer conservative by omission: each carries a map
+that keeps every register at every pc, so a stub's frame is kept by its map
+rather than skipped; only hand-built code has no map. A frame at a pc with
+no map is the compiler's miss: a check build panics at its retirement, and a
+plain release build keeps every register of the frame (§11 item 6). Local
+bindings are not retired at their last textual use: `reference-barrier`
+still roots its argument through the call, and a focused test pins that
+contract.
 
 Rust-stack temporaries (continuation-capture register clones, primitive args
 in `VmApplyContext` callbacks): **not rooted — handled by safe-point
@@ -2931,7 +2939,14 @@ visitor exists, and the stress lane is the real safety net.
    `test-support` feature, which only patina-tests' dev-dependencies
    enable), and the store controls in `heap/check.rs`; the release GC lane
    runs both. The check sees a wrong map only at a pc where a collection or
-   a capture happens, which is why item 7 exists.
+   a capture happens, which is why item 7 exists. Beside it, a frame at a pc
+   whose code has no map at all, `0xFFFF` in its index (#905, GC_PRD §11.1
+   invariants 2 and 5): retirement panics there in every check build,
+   naming the code, the pc and the instruction before it, since the
+   compiler missed a suspension point; a plain release build keeps every
+   register of the frame. Its control, in the same file, collects over a
+   hand-built frame at such a pc (`test_support::
+   collect_with_a_frame_at_an_unmapped_pc`).
 7. **Zeal lane (#625):** `scripts/run_gc_zeal.sh` runs the files of
    `crates/patina-tests/tests/scheme/control/` except `tail-recursion.scm`
    under `PATINA_GC_ZEAL=entry` (§6), on both backends, in a check build,

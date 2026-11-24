@@ -1,9 +1,10 @@
 //! Test-only hooks into the VM, compiled only with the `test-support`
 //! feature, which only `patina-tests`' [dev-dependencies] enable. Resolver 2
 //! keeps a dev-dependency's features out of normal builds, so no build that
-//! ships has any of this. Each hook is a switch per test thread, which a
-//! check build's positive control turns on to make the machine do what the
-//! check exists to catch.
+//! ships has any of this. Each hook but the last is a switch per test
+//! thread, which a check build's positive control turns on to make the
+//! machine do what the check exists to catch; the last does it on a machine
+//! of its own.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -192,4 +193,17 @@ impl Drop for SkipLinkEntries {
 /// a collection has marked traced.
 pub(crate) fn skip_link_entries() -> bool {
     SKIP_LINK_ENTRIES.get()
+}
+
+/// The control of the check that refuses a frame at a pc with no register
+/// map (#905, `a_check_build_refuses_a_frame_at_an_unmapped_pc` in
+/// `crates/patina-tests/tests/retired_registers.rs`): push a frame of code
+/// whose map index has no map at the frame's pc, as a compiler that missed
+/// a suspension point would leave, and collect. A check build panics at the
+/// collection's retirement of the frame. A plain release build keeps every
+/// register of the frame, though the code's one map calls them all dead;
+/// this answers whether they all still hold what they held. A machine of
+/// its own, so no switch, and nothing another test's thread sees.
+pub fn collect_with_a_frame_at_an_unmapped_pc() -> bool {
+    crate::runtime::vm_state::collect_with_a_frame_at_an_unmapped_pc()
 }
