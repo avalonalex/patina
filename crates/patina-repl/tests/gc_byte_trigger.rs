@@ -224,11 +224,12 @@ fn kept_tree_walker_captures_raise_the_interval() {
 
 /// Captures that share a tail are charged for it once (#656): 20,000 made
 /// in a loop at the bottom of one 1,000-deep recursion, `samedepth1000`'s
-/// shape. The first is charged the thousand levels and each later one the
-/// level its own iteration made, so the loop allocates a few thousand bytes
-/// a capture and collects a handful of times. Charged the whole chain each,
-/// it would allocate about a megabyte a capture, 20 GB, and collect about
-/// 2,400 times.
+/// shape. The first is charged the thousand levels and each later one its
+/// own allocation and the level its iteration made, so the loop allocates
+/// about 2,160 bytes a capture and collects a handful of times. Charged
+/// the whole chain each, it would allocate about a megabyte a capture,
+/// 20 GB, and collect about 2,400 times; charged nothing for its levels, as
+/// before #656, about 910 bytes a capture, which the lower bound is above.
 #[test]
 fn tree_walker_captures_over_one_tail_are_charged_for_it_once() {
     const CAPTURES: u64 = 20_000;
@@ -239,8 +240,9 @@ fn tree_walker_captures_over_one_tail_are_charged_for_it_once() {
       (when (< i 20000) (call/cc (lambda (k) k)) (loop (+ i 1))))
     0))";
     let r = run(&["--tree-walker"], workload);
-    // The tail once, about a megabyte, and each capture's own.
-    assert!(r.allocated > 1000 * 900, "{r:?}");
+    // Each capture is charged its own allocation and a level, and the first
+    // the tail as well; none is charged the tail again.
+    assert!(r.allocated > CAPTURES * 1_500, "{r:?}");
     assert!(r.allocated < CAPTURES * 8_000, "{r:?}");
     assert!(r.collections < 10, "{r:?}");
 }

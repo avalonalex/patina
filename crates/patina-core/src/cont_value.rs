@@ -338,6 +338,15 @@ impl CpsContinuation {
     ///
     /// A loop over a stack of its own, since a chain is as deep as the
     /// program's recursion (#725).
+    ///
+    /// What it passes at every capture, marked or not: the capturing call's
+    /// own pending continuations, and every wrapper above the first frame it
+    /// meets, since a wrapper has no mark. A recursion through
+    /// `call-with-values` in tail position is a chain of wrappers with no
+    /// frame between them, so there a capture costs the chain's length. That
+    /// shape already costs the tree-walker its length at every call (#769):
+    /// 20,000 captures under 10,000 such wrappers ran 53.78 G instructions
+    /// before this walk and 53.73 G with it.
     pub(crate) fn mark_levels(&self) -> usize {
         let mut walk = LevelWalk::default();
         // The capture is a local continuation taken apart: its frame, and the

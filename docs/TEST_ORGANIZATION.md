@@ -1547,8 +1547,9 @@ at least once per 16 MiB of that, reclaim nine tenths and grow the heap by
 under 32 MiB, where charged their slots alone they allocated about 200 KB
 and did not collect; 100 kept ones, about 98 MB, collect three times,
 because L counts them; and 20,000 made over one 1,000-deep tail,
-`samedepth1000`'s shape, allocate under 8,000 bytes a capture and collect
-fewer than ten times, because the tail is charged to the first of them.
+`samedepth1000`'s shape, allocate between 1,500 and 8,000 bytes a capture and
+collect fewer than ten times, because each is charged its own level and the
+tail is charged to the first of them.
 `crates/patina-repl/tests/gc_namespace_bytes.rs` does the same
 for #615's namespaces on both backends: loops of `environment`, of it with
 an `eval`, of `scheme-report-environment` and of `null-environment`, at a
