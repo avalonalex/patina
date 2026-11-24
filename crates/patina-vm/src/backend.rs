@@ -233,6 +233,17 @@ impl VmBackend {
         Self::build(fs, mode, &patina_core::HeapConfig::from_env())
     }
 
+    /// A VM backend collecting in `mode` under `config`: for a test of the
+    /// stack's cap that must hold with a collection at every safe point
+    /// (#907). Not an interface.
+    #[doc(hidden)]
+    pub fn with_gc_mode_and_config(
+        mode: patina_core::GcMode,
+        config: &patina_core::HeapConfig,
+    ) -> Self {
+        Self::build(std::sync::Arc::new(patina_core::NativeFs), mode, config)
+    }
+
     /// Every constructor's work: a backend over `fs`, collecting in `mode`,
     /// under `config`.
     fn build(

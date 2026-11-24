@@ -56,8 +56,9 @@ pub enum VmError {
     DivideByZero,
 
     /// The stack reached its soft limit, 1 MiB under its cap (#907,
-    /// `PRD/GC_PRD.md` §11.1): raised at the frame entry that crossed it as
-    /// a non-continuable `&stack-exhausted`, an error object, with the last
+    /// `PRD/GC_PRD.md` §11.1): raised at the frame entry that crossed it, or
+    /// at a continuation's re-entry that would not fit under the cap, as a
+    /// non-continuable `&stack-exhausted`, an error object, with the last
     /// MiB left for its handler. Uncaught, it is an uncaught error like any
     /// other. `cap` is the cap in bytes.
     #[error(

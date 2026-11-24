@@ -590,7 +590,7 @@ impl VmState {
     /// the cap, so that nothing grows the stack beyond it: `num_regs` is the
     /// frame's registers. A closure's entry polls instead, after its push.
     #[inline]
-    pub(super) fn check_stack_room(&self, num_regs: u16) -> Result<(), VmError> {
+    pub(super) fn check_stack_room(&mut self, num_regs: u16) -> Result<(), VmError> {
         self.check_stack_bytes(
             super::execution_state::FRAME_HEADER_BYTES
                 + num_regs as usize * std::mem::size_of::<TaggedValue>(),
@@ -599,12 +599,14 @@ impl VmState {
 
     /// [`Self::check_stack_room`] for `bytes` more of stack, whatever they
     /// hold: a delimited continuation's re-entry appends its whole region.
+    /// What would not fit is an exhaustion at this call: the catchable
+    /// condition where the soft limit is armed, as when a region larger
+    /// than the reserve is re-entered just under the limit, and the hard
+    /// cap where a handler already has the reserve.
     #[inline]
-    pub(super) fn check_stack_bytes(&self, bytes: usize) -> Result<(), VmError> {
+    pub(super) fn check_stack_bytes(&mut self, bytes: usize) -> Result<(), VmError> {
         if self.execution.top_bytes().saturating_add(bytes) > self.stack_cap {
-            return Err(VmError::StackOverflow {
-                cap: self.stack_cap as u64,
-            });
+            return Err(self.stack_exhausted());
         }
         Ok(())
     }

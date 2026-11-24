@@ -58,11 +58,8 @@ impl HeapConfig {
     /// where that panics.
     pub fn try_from_env() -> Result<Self, SizeError> {
         let mut config = Self::new();
-        if let Some(text) = std::env::var_os(STACK_MAX_VAR) {
-            if !text.is_empty() {
-                let text = text.to_string_lossy();
-                config.max_stack(parse_size(&text)?);
-            }
+        if let Some(text) = std::env::var_os(STACK_MAX_VAR).filter(|text| !text.is_empty()) {
+            config.max_stack(parse_size(&text.to_string_lossy())?);
         }
         Ok(config)
     }
