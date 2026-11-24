@@ -1152,34 +1152,15 @@ pub(super) fn classify_error(err: &VmError) -> (patina_core::ExceptionKind, Stri
 /// # State contract
 ///
 /// Pure error conversion, as [`classify_error`] is.
-///
-/// `cap` is the machine's cap, for a `&stack-exhausted` that came back
-/// through a nested loop's boundary as a primitive's error
-/// (`Reentry::into_eval_error`), which carries its kind and not its cap.
-pub(super) fn exception_irritants(err: &VmError, cap: u64) -> Vec<TaggedValue> {
-    let cap_irritant = |cap: u64| vec![TaggedValue::fixnum(i64::try_from(cap).unwrap_or(i64::MAX))];
+pub(super) fn exception_irritants(err: &VmError) -> Vec<TaggedValue> {
     match err {
-        VmError::StackExhausted { cap } => cap_irritant(*cap),
-        VmError::Primitive(e)
-            if e.to_exception().0 == patina_core::ExceptionKind::StackExhausted =>
-        {
-            cap_irritant(cap)
+        VmError::StackExhausted { cap } => {
+            vec![TaggedValue::fixnum(i64::try_from(*cap).unwrap_or(i64::MAX))]
         }
         VmError::WithLocation { error, .. } | VmError::WithDiagnostic { error, .. } => {
-            exception_irritants(error, cap)
+            exception_irritants(error)
         }
         _ => vec![],
-    }
-}
-
-/// Whether `err` is the catchable stack exhaustion, under any wrapper.
-fn is_stack_exhausted(err: &VmError) -> bool {
-    match err {
-        VmError::StackExhausted { .. } => true,
-        VmError::WithLocation { error, .. } | VmError::WithDiagnostic { error, .. } => {
-            is_stack_exhausted(error)
-        }
-        _ => false,
     }
 }
 
@@ -2661,17 +2642,6 @@ impl Reentry {
     fn into_eval_error(self) -> patina_primitives::EvalError {
         match self {
             Reentry::Escaped => patina_primitives::EvalError::ContinuationEscape,
-            // `&stack-exhausted` keeps its kind across the boundary (#907),
-            // so that a handler outside the primitive's call still gets the
-            // condition and not an error that only reads like it.
-            Reentry::Failed(e) if is_stack_exhausted(&e) => {
-                patina_primitives::EvalError::SchemeException {
-                    kind: patina_core::ExceptionKind::StackExhausted,
-                    message: "stack exhausted".to_string(),
-                    irritants_display: String::new(),
-                }
-                .with_diagnostic(e.diagnostic())
-            }
             Reentry::Failed(e) => patina_primitives::EvalError::InternalError(e.to_string())
                 .with_diagnostic(e.diagnostic()),
         }

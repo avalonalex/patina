@@ -352,12 +352,6 @@ pub struct VmState {
     /// ruling on Q6, 2026-11-24, on #782).
     #[trace(skip, reason = "a flag")]
     stack_reserve_open: bool,
-    /// Whether the hard cap was met in the form that is running: from then
-    /// until the form ends, no error is routed to a handler, however it is
-    /// wrapped on its way out of a nested loop (`route_error`), so that
-    /// nothing catches the abandonment (the owner's ruling on Q6).
-    #[trace(skip, reason = "a flag")]
-    stack_hard_cap_met: bool,
 }
 
 /// The room a handler for `&stack-exhausted` runs in: the last MiB under
@@ -531,7 +525,6 @@ impl VmState {
             stack_cap: usize::MAX,
             stack_soft: patina_core::Mutator::NO_LIMIT,
             stack_reserve_open: false,
-            stack_hard_cap_met: false,
         }
     }
 
@@ -566,7 +559,6 @@ impl VmState {
     fn stack_exhausted(&mut self) -> VmError {
         let cap = self.stack_cap as u64;
         if self.stack_reserve_open {
-            self.stack_hard_cap_met = true;
             return VmError::StackOverflow { cap };
         }
         if self.execution.top_bytes() >= self.stack_soft {
@@ -574,20 +566,6 @@ impl VmState {
             self.mutator.set_stack_limit(self.stack_cap);
         }
         VmError::StackExhausted { cap }
-    }
-
-    /// Whether the hard cap was met in the running form
-    /// ([`Self::stack_hard_cap_met`](VmState)): `route_error` routes nothing
-    /// while it holds.
-    #[inline]
-    pub(super) fn hard_cap_met(&self) -> bool {
-        self.stack_hard_cap_met
-    }
-
-    /// The stack's cap in bytes, as the condition's irritant gives it.
-    #[inline]
-    pub(super) fn stack_cap_bytes(&self) -> u64 {
-        self.stack_cap as u64
     }
 
     /// A continuation has arrived and replaced the stack
@@ -1839,19 +1817,8 @@ fn run_top_frame(state: &mut VmState) -> Result<TaggedValue, VmError> {
         state.pending_escape = None;
     }
     // The form has ended, returned or abandoned: with the stack empty, the
-    // soft limit is armed again whatever the form left open (#907). An
-    // outermost form's end also ends its abandonment at the hard cap, whose
-    // error is reported as that, whatever a nested loop's boundary wrapped
-    // it in on the way out.
+    // soft limit is armed again whatever the form left open (#907).
     state.rearm_stack_limit();
-    if outermost && state.stack_hard_cap_met {
-        state.stack_hard_cap_met = false;
-        if result.is_err() {
-            return Err(VmError::StackOverflow {
-                cap: state.stack_cap as u64,
-            });
-        }
-    }
     result
 }
 
@@ -2085,13 +2052,10 @@ fn route_error(state: &mut VmState, e: VmError) -> Result<(), VmError> {
     // Attach source location from the current frame's code object if available.
     let e = attach_source_location(state, e);
 
-    // Route catchable errors through exception handlers. None is routed
-    // once the form has met the hard cap (#907): its error may come back
-    // from a nested loop wrapped as a primitive's, which would otherwise
-    // look catchable.
-    if is_catchable(&e) && !state.hard_cap_met() && !state.execution.handlers().is_empty() {
+    // Route catchable errors through exception handlers
+    if is_catchable(&e) && !state.execution.handlers().is_empty() {
         let (kind, message) = classify_error(&e);
-        let irritants = super::control::exception_irritants(&e, state.stack_cap_bytes());
+        let irritants = super::control::exception_irritants(&e);
         let exception = state
             .heap
             .borrow_mut()

@@ -322,10 +322,7 @@ at which the cap is met does not move when that lands).
   handler that ran through it: `VmError::StackOverflow`, which nothing
   catches. The form is abandoned by the path an uncaught error takes
   (`run_top_frame` clears the machine), with no handler and no after thunk
-  run, as #776 records for any abandoned form. From there until the form
-  ends, `route_error` routes nothing to a handler (`stack_hard_cap_met`):
-  the error may come back from a nested loop wrapped as a primitive's,
-  which would otherwise look catchable.
+  run, as #776 records for any abandoned form.
 - **Re-arming.** The soft limit is armed again when the stack top is at or
   below it, with no margin (`VmState::rearm_stack_limit`), asked in three
   kinds of place: where a transfer has cut the stack (a continuation's
@@ -348,9 +345,11 @@ at which the cap is met does not move when that lands).
   whole region (`finish_delimited_invoke`). What would not fit is an
   exhaustion at that call: the catchable condition where the soft limit is
   armed, raised with the limit still armed if the stack is under it, and
-  the hard cap where the reserve is open. The condition keeps its kind
-  where it leaves a nested loop as a primitive's error
-  (`Reentry::into_eval_error`). A closure's entry polls
+  the hard cap where the reserve is open.
+- **Inside a primitive's callback** (a nested loop) nothing differs: the
+  handler stack is the machine's, so the condition raised there reaches a
+  handler installed outside the primitive's call, and the hard cap met
+  there is no more catchable than anywhere else. A closure's entry polls
   after its push instead, so until 4d.7 puts the stack in a reservation a
   frame can sit one frame past the cap when the hard cap is raised.
 - **The tree-walker** keeps no cap (decision A9 on #782).

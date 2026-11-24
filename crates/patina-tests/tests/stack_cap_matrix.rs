@@ -430,11 +430,11 @@ fn a_reentry_refused_under_the_soft_limit_leaves_it_armed() {
 
 /// A primitive that calls back on a nested loop: the internal `member`
 /// with a comparator (`AGENTS.md`, "A procedure that calls back into the
-/// program"). The condition raised inside its callback, with no handler
-/// there, leaves the nested loop as the primitive's error and still
-/// reaches a handler outside as `&stack-exhausted`, with its irritant.
+/// program"). The handler stack is the machine's, so the condition raised
+/// inside the callback reaches a handler installed outside the primitive's
+/// call as `&stack-exhausted`, with its irritant.
 #[test]
-fn the_condition_keeps_its_kind_across_a_nested_loop() {
+fn the_condition_reaches_a_handler_outside_a_nested_loop() {
     let got = answer(
         &vm(CAP),
         "(import (prefix (only (patina internal lists) member) internal:))
@@ -445,8 +445,7 @@ fn the_condition_keeps_its_kind_across_a_nested_loop() {
 }
 
 /// The hard cap met inside such a callback abandons the form all the same:
-/// the error comes back from the nested loop as a primitive's, which a
-/// `guard` outside would otherwise catch as an ordinary error.
+/// a `guard` outside the primitive's call does not catch it.
 #[test]
 fn the_hard_cap_inside_a_nested_loop_is_not_caught() {
     let interp = vm(CAP);
