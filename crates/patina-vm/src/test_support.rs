@@ -219,3 +219,16 @@ pub enum Reuse {
 pub fn read_an_unwritten_register(after: Reuse) -> patina_core::TaggedValue {
     crate::runtime::vm_state::read_an_unwritten_register(after)
 }
+
+/// The control of the check that refuses a frame at a pc with no register
+/// map (#905, `a_check_build_refuses_a_frame_at_an_unmapped_pc` in
+/// `crates/patina-tests/tests/retired_registers.rs`): push a frame of code
+/// whose map index has no map at the frame's pc, as a compiler that missed
+/// a suspension point would leave, and collect. A check build panics at the
+/// collection's retirement of the frame. A plain release build keeps every
+/// register of the frame, though the code's one map calls them all dead;
+/// this answers whether they all still hold what they held. A machine of
+/// its own, so no switch, and nothing another test's thread sees.
+pub fn collect_with_a_frame_at_an_unmapped_pc() -> bool {
+    crate::runtime::vm_state::collect_with_a_frame_at_an_unmapped_pc()
+}

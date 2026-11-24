@@ -85,6 +85,21 @@ impl<'gc> Cx<'gc> {
         self.brand(r)
     }
 
+    /// [`Heap::alloc_identifier_for`](crate::Heap::alloc_identifier_for) on this context's heap.
+    /// Raw (`docs/README.md`, #790).
+    #[inline]
+    pub fn alloc_identifier_for(
+        &mut self,
+        symbol: Value<'gc>,
+        scopes: crate::scope::ScopeSet,
+    ) -> Value<'gc> {
+        let r = self
+            .heap
+            .borrow_mut()
+            .alloc_identifier_for(symbol.tagged(), scopes);
+        self.brand(r)
+    }
+
     /// [`Heap::alloc_label_placeholder`](crate::Heap::alloc_label_placeholder) on this context's heap.
     #[inline]
     pub fn alloc_label_placeholder(&mut self, label: usize) -> Value<'gc> {
@@ -203,6 +218,17 @@ impl<'gc> Cx<'gc> {
     #[inline]
     pub fn alloc_source_identifier(&mut self, name: Rc<str>) -> Value<'gc> {
         let r = self.heap.borrow_mut().alloc_source_identifier(name);
+        self.brand(r)
+    }
+
+    /// [`Heap::alloc_source_identifier_for`](crate::Heap::alloc_source_identifier_for) on this context's heap.
+    /// Raw (`docs/README.md`, #790).
+    #[inline]
+    pub fn alloc_source_identifier_for(&mut self, symbol: Value<'gc>) -> Value<'gc> {
+        let r = self
+            .heap
+            .borrow_mut()
+            .alloc_source_identifier_for(symbol.tagged());
         self.brand(r)
     }
 
@@ -399,6 +425,14 @@ impl<'gc> Cx<'gc> {
         tv: Value<'gc>,
     ) -> Option<(Rc<str>, crate::scope::ScopeSet)> {
         self.heap.borrow().get_identifier_data_any(tv.tagged())
+    }
+
+    /// [`Heap::identifier_datum`](crate::Heap::identifier_datum) on this context's heap.
+    /// Raw (`docs/README.md`, #790).
+    #[inline]
+    pub fn identifier_datum(&mut self, tv: Value<'gc>) -> Option<Value<'gc>> {
+        let r = self.heap.borrow_mut().identifier_datum(tv.tagged())?;
+        Some(self.brand(r))
     }
 
     /// [`Heap::get_pair`](crate::Heap::get_pair) on this context's heap.
@@ -1163,6 +1197,12 @@ impl<'gc> Cx<'gc> {
         self.heap
             .borrow_mut()
             .record_source(value.tagged(), location)
+    }
+
+    /// [`Heap::scope_sets`](crate::Heap::scope_sets) on this context's heap.
+    #[inline]
+    pub fn scope_sets(&self) -> usize {
+        self.heap.borrow().scope_sets()
     }
 
     /// [`Heap::set_held`](crate::Heap::set_held) on this context's heap.

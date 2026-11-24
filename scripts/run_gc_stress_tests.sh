@@ -474,34 +474,71 @@ fi
 # trigger comes later, 368 collections without stress where there were 385
 # (385 again with that estimate alone put back at 612), and 10653 at 4096
 # as before, the minimum left; every other target read as it did, at its
-# interval and without stress; and raise_site_matrix pinned 2026-11-22
-# with #901's raise-site tests, 59546 collections at 16 and 55710 without
-# stress, nearly all of them its zeal interpreters', which collect at every
-# outermost safe point whatever the lane's variable says, so its minimum
-# is midway between the two; and re-pinned that day for #714's position
-# axis, which calls each site from a tail and a non-tail position and so
-# doubles its rows, and adds a test that the VM compiles each row's call as
-# its position names: 119089 collections at 16 and 111441 without stress,
-# its minimum midway again, and 7 tests)
+# interval and without stress; and gc_vm's and gc_tree_walker's test
+# counts and minimums re-pinned 2026-11-21 for #788's shared test that a
+# live macro's literals keep their scope sets, which makes 197 collections
+# at 16 on the VM and 158 without stress, and 640 and 598 on the
+# tree-walker, nearly all its zeal halves, and for the `scope-sets` reading
+# `a_redefined_library_is_released` gained, one more form in each of its
+# readings, which raised its counts by 10 on the VM and by 140 on the
+# tree-walker, at 16 and without stress alike, from its zeal halves: so
+# 58404 at 16 and 31262 without stress on the VM, and 129981 and 96696 on
+# the tree-walker, each count without stress above half its count at 16,
+# so each minimum midway between its two counts; and macro_definition_env's
+# and scheme_suite's counts without stress re-measured that day, since the
+# scope-set table's charge to the external bytes (#788) brings the byte
+# trigger sooner: 140 collections where there were 129, and 375 where there
+# were 368, their counts at their intervals, 41070 at 16 and 10653 at
+# 4096, as before, the minimums left; every other target read as it did,
+# at its interval and without stress; and hygiene_matrix's test count
+# re-pinned 2026-11-21 for #789's three tests of the live-scope report (the
+# def-getter shape's scope carried and then not, the closest shape, and the
+# tree-walker code the report does not count), each on both backends, which
+# raised its count at 16 from 22757 to 22979 and without stress from 6 to
+# 14, their own eight `(gc)`s, the minimum left; the macro objects' template
+# scope sets (#789) moved no other target's count, at its interval or
+# without stress; and every target's count at its interval re-measured
+# 2026-11-21 for #790, whose reader interns each spelling and whose
+# relinking makes a symbol for each spelling it gives, so that a program
+# allocates a symbol where it allocated none and its collections fall at
+# other allocations: callability's rose from 2131 to 2134, ephemerons's
+# fell from 5738 to 5736, escape_from_primitive's rose from 9789 to 9790,
+# gc_tree_walker's from 129981 to 129984, gc_vm's from 58404 to 58411,
+# host_environments's from 167847 to 167851, interpreter_api's from 3050
+# to 3052, macro_definition_env's fell from 41070 to 41021, owned_handles's
+# rose from 125648 to 125649, rooted_loading's fell from 1269 to 1268,
+# vm_callprimitive's rose from 1899 to 1901, and scheme_suite's from 10653
+# to 10676 at 4096 and from 375 to 377 without stress; every other count,
+# at its interval and without stress, read as it did, and no test count or
+# minimum moved: #790's tests are patina-core's and patina-macros' own;
+# and raise_site_matrix pinned 2026-11-22 with #901's raise-site tests,
+# 59546 collections at 16 and 55710 without stress, nearly all of them its
+# zeal interpreters', which collect at every outermost safe point whatever
+# the lane's variable says, so its minimum is midway between the two; and
+# re-pinned that day for #714's position axis, which calls each site from
+# a tail and a non-tail position and so doubles its rows, and adds a test
+# that the VM compiles each row's call as its position names: 119089
+# collections at 16 and 111441 without stress, its minimum midway again,
+# and 7 tests)
 TARGETS=(
-    "callability 16 31 13"                    # 2131 (0)
+    "callability 16 31 13"                    # 2134 (0)
     "control_flow_matrix 16 340 3"            # 4698 (0)
     "cps_features 16 530 3"                   # 1009 (2)
-    "ephemerons 16 289 30"                    # 5738 (204)
-    "escape_from_primitive 16 3669 19"        # 9789 (94)
+    "ephemerons 16 289 30"                    # 5736 (204)
+    "escape_from_primitive 16 3669 19"        # 9790 (94)
     "finished_forms_release_code 16 2040 12"  # 4057 (15)
-    "gc_tree_walker 16 112579 41"             # 129201 (95958)
-    "gc_vm 16 44645 54"                       # 58197 (31094)
-    "host_environments 16 83806 36"           # 167847 (765)
-    "hygiene_matrix 16 11136 25"              # 22757 (6)
-    "interpreter_api 16 138 28"               # 3050 (4)
+    "gc_tree_walker 16 113338 42"             # 129984 (96696)
+    "gc_vm 16 44833 55"                       # 58411 (31262)
+    "host_environments 16 83806 36"           # 167851 (765)
+    "hygiene_matrix 16 11136 28"              # 22979 (14)
+    "interpreter_api 16 138 28"               # 3052 (4)
     "library_loading 16 46 9"                 # 129 (0): see the header
-    "macro_definition_env 16 16626 62"        # 41070 (129): see the header
-    "owned_handles 16 62714 9"                # 125648 (14)
+    "macro_definition_env 16 16626 62"        # 41021 (140): see the header
+    "owned_handles 16 62714 9"                # 125649 (14)
     "raise_site_matrix 16 115265 7"           # 119089 (111441)
-    "rooted_loading 16 371 6"                 # 1269 (10)
-    "vm_callprimitive 16 545 23"              # 1899 (0)
-    "scheme_suite 4096 1534 11"               # 10653 (368): see the header
+    "rooted_loading 16 371 6"                 # 1268 (10)
+    "vm_callprimitive 16 545 23"              # 1901 (0)
+    "scheme_suite 4096 1534 11"               # 10676 (377): see the header
 )
 
 OUT=$(mktemp -d)

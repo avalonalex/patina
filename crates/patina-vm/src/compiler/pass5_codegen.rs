@@ -28,7 +28,7 @@ use super::pass4_registers::{AllocatedExpr, CaptureSource, RegExpr, RegExprKind,
 use super::primitive_calls::{InlineOp, PrimitiveCallMap, ResolvedPrimitive};
 use super::{LinkedOperand, OperandKey};
 use crate::error::CompileError;
-use crate::types::code_object::{Arity, CodeObject, CodeObjectId};
+use crate::types::code_object::{Arity, CodeObject, CodeObjectId, RegisterMaps};
 use crate::types::instruction::{ControlForm, Instruction, TestOp};
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
@@ -79,9 +79,10 @@ struct UnitLinks {
 }
 
 /// A member of the unit being compiled, all of its `CodeObject` but the
-/// link table, which exists only once the whole unit is compiled:
-/// `Pass5Codegen::run` makes every member's `CodeObject` with the unit's
-/// one table, so no member is ever given another.
+/// link table and the register maps, which exist only once the whole unit
+/// is compiled: `Pass5Codegen::run` makes every member's `CodeObject` with
+/// the unit's one table and its one block of maps, so no member is ever
+/// given another.
 struct Member {
     id: CodeObjectId,
     name: Option<Symbol>,
@@ -90,11 +91,13 @@ struct Member {
     num_regs: u16,
     arity: Arity,
     source_map: Vec<(usize, SourceLocation)>,
-    register_roots: Vec<Vec<u64>>,
+    /// The possible roots at each pc, `register_root_maps`' answer, which
+    /// the unit's maps index (`UnitMaps`).
+    pc_roots: Vec<Vec<u64>>,
 }
 
 impl Member {
-    fn into_code(self, links: &Rc<LinkTable>) -> CodeObject {
+    fn into_code(self, links: &Rc<LinkTable>, register_roots: RegisterMaps) -> CodeObject {
         CodeObject {
             id: self.id,
             name: self.name,
@@ -105,8 +108,105 @@ impl Member {
             num_regs: self.num_regs,
             arity: self.arity,
             source_map: self.source_map,
-            register_roots: Some(self.register_roots),
+            register_roots: Some(register_roots),
         }
+    }
+}
+
+/// The unit's distinct register maps as pass 5 interns them (#905): each
+/// member's map at each pc, padded with zero words to the unit's width,
+/// takes an id in the order the maps are first met, and the table becomes
+/// the one block every member's [`RegisterMaps`] holds. Padding keeps every
+/// answer: a register past a member's own words was dead, and a zero word
+/// says so too.
+struct UnitMaps {
+    /// Words per map: the most any member's maps have, at least one.
+    width: usize,
+    ids: FxHashMap<Box<[u64]>, u16>,
+    /// Each id's map, `width` words, in id order.
+    words: Vec<u64>,
+    /// The id of the all-ones map that stands for every map met once the
+    /// table holds [`Self::DISTINCT`]: past that a map has no id of its own,
+    /// and keeping every register is the one answer that is never wrong.
+    overflow: Option<u16>,
+}
+
+impl UnitMaps {
+    /// The most distinct maps a unit's table holds: every id but
+    /// `RegisterMaps::NEVER` and the overflow map's.
+    const DISTINCT: usize = RegisterMaps::NEVER as usize - 1;
+
+    /// The table of the unit whose members' per-pc maps are `members`.
+    fn new<'a>(members: impl IntoIterator<Item = &'a [Vec<u64>]>) -> Self {
+        let width = members
+            .into_iter()
+            .flat_map(|maps| maps.first())
+            .map(Vec::len)
+            .max()
+            .unwrap_or(0)
+            .max(1);
+        UnitMaps {
+            width,
+            ids: FxHashMap::default(),
+            words: Vec::new(),
+            overflow: None,
+        }
+    }
+
+    /// The id of `roots`, given now if the table does not hold it yet.
+    fn id(&mut self, roots: &[u64]) -> u16 {
+        debug_assert!(roots.len() <= self.width);
+        let padded: std::borrow::Cow<'_, [u64]> = if roots.len() == self.width {
+            roots.into()
+        } else {
+            let mut padded = roots.to_vec();
+            padded.resize(self.width, 0);
+            padded.into()
+        };
+        if let Some(&id) = self.ids.get(&*padded) {
+            return id;
+        }
+        if self.ids.len() < Self::DISTINCT {
+            let id = self.ids.len() as u16;
+            self.words.extend_from_slice(&padded);
+            self.ids.insert(padded.into_owned().into_boxed_slice(), id);
+            return id;
+        }
+        let (words, width) = (&mut self.words, self.width);
+        *self.overflow.get_or_insert_with(|| {
+            let id = (words.len() / width) as u16;
+            words.resize(words.len() + width, u64::MAX);
+            id
+        })
+    }
+
+    /// A member's index: the id of its map at each pc a frame of it can be
+    /// suspended at, `RegisterMaps::NEVER` at every other
+    /// ([`is_suspension_point`]).
+    fn index(&mut self, member: &Member) -> Box<[u16]> {
+        debug_assert_eq!(member.pc_roots.len(), member.instructions.len() + 1);
+        self.index_where(&member.pc_roots, |pc| {
+            is_suspension_point(&member.instructions, pc)
+        })
+    }
+
+    /// The index of a member whose map at each pc is `pc_roots`' entry,
+    /// with a map only at each pc `mapped` says.
+    fn index_where(&mut self, pc_roots: &[Vec<u64>], mapped: impl Fn(usize) -> bool) -> Box<[u16]> {
+        (pc_roots.iter().enumerate())
+            .map(|(pc, roots)| {
+                if mapped(pc) {
+                    self.id(roots)
+                } else {
+                    RegisterMaps::NEVER
+                }
+            })
+            .collect()
+    }
+
+    /// The block every member's maps share, and its width.
+    fn into_block(self) -> (Rc<[u64]>, usize) {
+        (Rc::from(self.words), self.width)
     }
 }
 
@@ -232,14 +332,14 @@ impl Pass5Codegen {
         // Top-level: emit a Return of the expression's result.
         cg.emit(Instruction::Return { val: expr.dst });
         thread_returns(&mut cg.instructions);
-        let register_roots = register_root_maps(&cg, allocated.num_regs.max(1), 0);
+        let pc_roots = register_root_maps(&cg, allocated.num_regs.max(1), 0);
         let UnitLinks { names, links, .. } = cg.links;
         let links = Rc::new(if links.iter().any(Option::is_some) {
             LinkTable::with_links(names.into_boxed_slice(), &links)
         } else {
             LinkTable::new(names.into_boxed_slice())
         });
-        let code = Member {
+        let top = Member {
             id,
             name: cg.name,
             instructions: cg.instructions,
@@ -248,13 +348,24 @@ impl Pass5Codegen {
             num_regs: allocated.num_regs.max(1),
             arity: Arity::Fixed(0),
             source_map: cg.source_map,
-            register_roots,
-        }
-        .into_code(&links);
+            pc_roots,
+        };
+        // The unit's maps, interned across its members, top first.
+        let mut maps = UnitMaps::new(
+            std::iter::once(&top)
+                .chain(&cg.nested)
+                .map(|member| &member.pc_roots[..]),
+        );
+        let top_index = maps.index(&top);
+        let nested_indexes: Vec<_> = cg.nested.iter().map(|member| maps.index(member)).collect();
+        let (block, width) = maps.into_block();
+        let register_maps = |index| RegisterMaps::from_parts(index, Rc::clone(&block), width);
+        let code = top.into_code(&links, register_maps(top_index));
         let nested = cg
             .nested
             .into_iter()
-            .map(|member| member.into_code(&links))
+            .zip(nested_indexes)
+            .map(|(member, index)| member.into_code(&links, register_maps(index)))
             .collect();
         Ok((code, nested))
     }
@@ -444,7 +555,106 @@ fn written_register(instruction: &Instruction) -> Option<u16> {
         | ResumeForce
         | ResumePrimitive
         | CollectAtCall { .. } => {
-            unreachable!("runtime stubs use conservative register roots")
+            unreachable!("never compiled: the runtime builds its stubs with every register live")
+        }
+    }
+}
+
+/// Whether a frame running `instructions` can be suspended at `pc`, where a
+/// collection can scan it or a capture copy it (GC_PRD §11.1 invariant 2,
+/// #905): its pc 0, where a frame's entry polls, and the pc after each
+/// instruction [`suspends_after`] names. A frame is never found anywhere
+/// else, so only these pcs have a map, and a check build refuses a frame
+/// found at any other (`retire_registers`).
+fn is_suspension_point(instructions: &[Instruction], pc: usize) -> bool {
+    pc == 0 || suspends_after(&instructions[pc - 1])
+}
+
+/// Whether a frame can be suspended just after `instruction`, with its pc
+/// past it (#905). Exhaustive, as [`written_register`] is, so that a new
+/// opcode has to be placed. Yes for:
+/// - a call that returns to the frame, whose generic return polls and from
+///   whose pc a resumable primitive's stub or a callee runs: `Call`,
+///   `Apply`, `CallWithValues`, `CallPrimitive`, `CallPrimitiveDirect`;
+/// - every inline primitive opcode, the total ones too: each deoptimizes to
+///   a call of whatever its name is bound to once that is shadowed
+///   (`exec_call_primitive`), from this pc, and the partial ones take the
+///   same path on operands the fast path cannot answer (the fused test's
+///   pc after is the kept `JumpUnless`);
+/// - a tail call, which raises from its frame when its callee is no
+///   procedure, and runs a primitive or parameter callee with the frame
+///   still on the stack, so that a capture in its callback holds the frame
+///   at the pc after it;
+/// - an instruction that can raise, whose error a handler may catch with a
+///   raise stub over the frame (`vm_raise_value`): an unbound global's read
+///   or assignment, and the internal errors `LoadConst`, `LoadClosure`,
+///   `ReadCell` and `WriteCell` answer, which `is_catchable` lets a handler
+///   catch too;
+/// - a capture or a jump of a continuation, which holds the frame at the
+///   pc after it or raises from it: `AbortToPrompt`, `CaptureComposable`,
+///   `InvokeContinuation`.
+///
+/// No for an instruction that neither calls, polls, raises nor captures.
+fn suspends_after(instruction: &Instruction) -> bool {
+    use Instruction::*;
+    match *instruction {
+        Call { .. }
+        | Apply { .. }
+        | CallWithValues { .. }
+        | CallPrimitive { .. }
+        | CallPrimitiveDirect { .. }
+        | Add { .. }
+        | Sub { .. }
+        | Mul { .. }
+        | Lt { .. }
+        | NumEq { .. }
+        | Eq { .. }
+        | Cons { .. }
+        | Car { .. }
+        | Cdr { .. }
+        | Not { .. }
+        | TestJumpUnless { .. }
+        | AddImm { .. }
+        | SubImm { .. }
+        | LtImm { .. }
+        | NumEqImm { .. }
+        | NullP { .. }
+        | PairP { .. }
+        | VectorP { .. }
+        | VectorRef { .. }
+        | VectorSet { .. }
+        | TailCall { .. }
+        | TailApply { .. }
+        | TailCallWithValues { .. }
+        | LoadGlobal { .. }
+        | StoreGlobal { .. }
+        | LoadConst { .. }
+        | LoadClosure { .. }
+        | ReadCell { .. }
+        | WriteCell { .. }
+        | AbortToPrompt { .. }
+        | CaptureComposable { .. }
+        | InvokeContinuation { .. } => true,
+        LoadImmediate { .. }
+        | Move { .. }
+        | MakeClosure { .. }
+        | AllocCell { .. }
+        | Jump { .. }
+        | JumpIf { .. }
+        | JumpUnless { .. }
+        | JumpUnlessShadowed { .. }
+        | Return { .. }
+        | Define { .. }
+        | PushWind { .. }
+        | PopWind
+        | Nop => false,
+        ResumeWindJump
+        | ResumeComposableInvoke
+        | ResumeRaise
+        | ResumeForce
+        | ResumePrimitive
+        | CollectAtCall { .. } => {
+            unreachable!("never compiled: the runtime builds its stubs with every register live")
         }
     }
 }
@@ -1273,7 +1483,7 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
     };
 
     thread_returns(&mut child_cg.instructions);
-    let register_roots = register_root_maps(&child_cg, lam.num_regs, lam.num_params);
+    let pc_roots = register_root_maps(&child_cg, lam.num_regs, lam.num_params);
     let child_code = Member {
         id: child_id,
         name: None,
@@ -1282,7 +1492,7 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
         num_regs: lam.num_regs,
         arity,
         source_map: child_cg.source_map,
-        register_roots,
+        pc_roots,
     };
 
     // Collect nested from child.
@@ -1333,6 +1543,7 @@ mod tests {
     use super::*;
     use crate::compiler::compile_with_qq_resolving;
     use crate::runtime::VmState;
+    use crate::types::code_object::RegisterMapCensus;
     use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
     use patina_core::{Lit, LiteralPool};
 
@@ -1615,6 +1826,145 @@ mod tests {
             "every operand is at index 0: {:?}",
             table(&top)
         );
+    }
+
+    /// Every member holds the unit's one block of register maps (#905), as
+    /// it holds the unit's one link table.
+    #[test]
+    fn every_member_shares_the_units_register_maps() {
+        let (top, nested) = compile(&every_kind_of_operand());
+        let maps = |code: &CodeObject| Rc::clone(code.register_roots.as_ref().unwrap().table());
+        for member in &nested {
+            assert!(
+                Rc::ptr_eq(&maps(member), &maps(&top)),
+                "{:?} has maps of its own",
+                member.id
+            );
+        }
+    }
+
+    /// The unit's maps are interned across its members, each padded to the
+    /// widest member's words, and each pc's entry answers the pc's map with
+    /// the padding (#905).
+    #[test]
+    fn a_units_maps_are_interned_across_members_and_padded() {
+        let narrow = vec![vec![0b01], vec![0b11], vec![0b01]];
+        let wide = vec![vec![0b01, 0], vec![0b11, 1], vec![0, 0]];
+        let mut maps = UnitMaps::new([&narrow[..], &wide[..]]);
+        let narrow_index = maps.index_where(&narrow, |_| true);
+        let wide_index = maps.index_where(&wide, |_| true);
+        assert_eq!(&*narrow_index, &[0, 1, 0]);
+        // Its pc 0 is narrow's pc 0, padded; pc 1 is a map of its own.
+        assert_eq!(&*wide_index, &[0, 2, 3]);
+        let (block, width) = maps.into_block();
+        assert_eq!(width, 2);
+        assert_eq!(&*block, &[0b01, 0, 0b11, 0, 0b11, 1, 0, 0]);
+        let narrow_maps = RegisterMaps::from_parts(narrow_index, Rc::clone(&block), width);
+        let wide_maps = RegisterMaps::from_parts(wide_index, block, width);
+        for (pc, roots) in narrow.iter().enumerate() {
+            let mut padded = roots.clone();
+            padded.resize(2, 0);
+            assert_eq!(narrow_maps.at(pc), Some(&padded[..]), "narrow, pc {pc}");
+        }
+        for (pc, roots) in wide.iter().enumerate() {
+            assert_eq!(wide_maps.at(pc), Some(&roots[..]), "wide, pc {pc}");
+        }
+        assert_eq!(wide_maps.at(3), None, "past the index");
+    }
+
+    /// A member has a map at its pc 0 and after each instruction a frame can
+    /// be suspended after, and none at any other pc (#905).
+    #[test]
+    fn only_suspension_points_have_maps() {
+        let (top, nested) = compile(&every_kind_of_operand());
+        let mut unmapped = 0;
+        for code in std::iter::once(&top).chain(&nested) {
+            let maps = code.register_roots.as_ref().unwrap();
+            assert!(
+                maps.at(0).is_some(),
+                "{:?} has no map at its entry",
+                code.id
+            );
+            for (pc, instruction) in code.instructions.iter().enumerate() {
+                let mapped = maps.at(pc + 1).is_some();
+                assert_eq!(
+                    mapped,
+                    suspends_after(instruction),
+                    "{:?}, after {instruction:?} at {pc}",
+                    code.id
+                );
+                unmapped += usize::from(!mapped);
+            }
+            assert_eq!(maps.at(code.instructions.len() + 1), None);
+        }
+        assert!(unmapped > 0, "every pc has a map");
+    }
+
+    /// The census of a machine's maps (#905) counts each code object's index
+    /// and its unit's table once, and nothing for an empty slot of the code
+    /// store.
+    #[test]
+    fn the_census_counts_each_index_and_each_units_table_once() {
+        let mut state = VmState::on_a_fresh_heap();
+        state.install_primitives();
+        let heap = state.heap().clone();
+        let env = state.global_env().clone();
+        let literals = LiteralPool::new(&heap.borrow());
+        let (top, nested) = compile_with_qq_resolving(
+            &every_kind_of_operand(),
+            &literals,
+            &heap,
+            &env,
+            state.primitive_registry(),
+        )
+        .expect("compiles");
+        let members = std::iter::once(&top).chain(&nested);
+        let pcs: usize = members
+            .clone()
+            .map(|code| code.instructions.len() + 1)
+            .sum();
+        let unmapped: usize = members
+            .clone()
+            .map(|code| {
+                let maps = code.register_roots.as_ref().unwrap();
+                (0..=code.instructions.len())
+                    .filter(|&pc| maps.at(pc).is_none())
+                    .count()
+            })
+            .sum();
+        let table = Rc::clone(top.register_roots.as_ref().unwrap().table());
+        let width = top.register_roots.as_ref().unwrap().width();
+        let expected = RegisterMapCensus {
+            code_objects: 1 + nested.len(),
+            pcs,
+            unmapped_pcs: unmapped,
+            index_bytes: 2 * pcs,
+            units: 1,
+            maps: table.len() / width,
+            map_bytes: 8 * table.len(),
+        };
+        assert_eq!(state.register_map_census(), RegisterMapCensus::default());
+        let unit = state.load_unit(top, nested, &env, literals);
+        assert_eq!(state.register_map_census(), expected);
+        drop(unit);
+    }
+
+    /// Past the last id, a map has none of its own: it shares one that keeps
+    /// every register, the one answer that is never wrong, and the unit
+    /// still compiles.
+    #[test]
+    fn maps_past_the_last_id_keep_every_register() {
+        let distinct = UnitMaps::DISTINCT as u64;
+        let pc_roots: Vec<Vec<u64>> = (0..distinct + 3).map(|n| vec![n, 0]).collect();
+        let mut maps = UnitMaps::new([&pc_roots[..]]);
+        let index = maps.index_where(&pc_roots, |_| true);
+        let (block, width) = maps.into_block();
+        let maps = RegisterMaps::from_parts(index, block, width);
+        let last = distinct as usize - 1;
+        assert_eq!(maps.at(last), Some(&[last as u64, 0][..]));
+        for pc in last + 1..pc_roots.len() {
+            assert_eq!(maps.at(pc), Some(&[u64::MAX, u64::MAX][..]), "pc {pc}");
+        }
     }
 
     #[test]

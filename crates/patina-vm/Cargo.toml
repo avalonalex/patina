@@ -28,9 +28,11 @@ patina-core = { path = "../patina-core", features = ["test-support"] }
 # the units' link tables, which `release_dead_code`'s check refuses, and the
 # one that skips their entries, whose placeholders the sweep then frees (#836,
 # crates/patina-tests/tests/gc_vm.rs), and the one that polls at the end of
-# each load window (#836, crates/patina-tests/tests/gc_protocol.rs); and
-# hand-assembled code that reads a register a reused window's push filled
-# (#714, retired_registers.rs again). Only
+# each load window (#836, crates/patina-tests/tests/gc_protocol.rs); a
+# collection over a hand-built frame at a pc with no register map (#905,
+# retired_registers.rs again); and hand-assembled code that reads a
+# register a reused window's push filled (#714, retired_registers.rs
+# again). Only
 # patina-tests' [dev-dependencies] enable it, and resolver 2 keeps a
 # dev-dependency's features out of normal builds, so no build that ships has
 # the switches.

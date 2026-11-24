@@ -70,18 +70,19 @@ crates/patina-macros/
 │       └── utils.rs              # Shared utilities
 ```
 
-### Shared Types (in patina-runtime)
+### Shared Types (in patina-core)
 
-Core types are defined in `patina-runtime` for cross-crate sharing:
+Core types are defined in `patina-core` for cross-crate sharing, and
+`patina-runtime` re-exports them (`pub use patina_core::*`):
 
 ```
-crates/patina-runtime/src/
-├── pattern.rs      # Pattern enum
-├── template.rs     # Template enum, Identifier
-├── match_env.rs    # MatchEnv, MatchValue
-├── pvref.rs        # PVRef (pattern variable reference)
-├── scope.rs        # ScopeId, ScopeSet
-└── value/hygiene.rs # IdentifierData on Value
+crates/patina-core/src/
+├── compiled_macro.rs   # CompiledMacro, Pattern, Template, Identifier
+├── pvref.rs            # PVRef, MatchEnv, MatchValue
+├── scope.rs            # ScopeId, ScopeSet
+└── heap/
+    ├── mod.rs          # HeapObjectData::Identifier, a syntax identifier
+    └── scope_sets.rs   # the heap's scope-set table, which holds its sets (#788)
 ```
 
 ### Processing Pipeline
@@ -213,20 +214,46 @@ MatchEnv:
 
 ```rust
 pub struct ScopeSet {
-    scopes: SmallVec<[ScopeId; 4]>,  // Usually small
+    scopes: SmallVec<[ScopeId; 3]>,  // sorted; spills past three
 }
 
-pub struct ScopeId(u32);  // Fresh ID per macro expansion
+pub struct ScopeId(pub usize);  // fresh from a process-wide counter, never reused
 ```
 
-### IdentifierData (hygienic identifier)
+### The identifier (hygienic identifier)
+
+A syntax identifier is a heap object. Since #790 it holds its spelling's
+interned symbol, and since #788 its scope set's id in the heap's scope-set
+table, which keeps each distinct set once and frees a set at the first
+collection after no live identifier carries it:
 
 ```rust
-pub struct IdentifierData {
-    pub name: Rc<str>,
-    pub scopes: ScopeSet,
+HeapObjectData::Identifier {
+    name: TaggedValue,    // its spelling's symbol: interned, but for a relinked identifier's
+    scopes: ScopeSetId,   // its set's entry in the heap's ScopeSetTable; 0 is the empty set
+    written: bool,        // a name the reader wrote, with a symbol's binding behavior
+    relinked: bool,       // `name` is a relinked spelling's symbol, which no table holds
 }
 ```
+
+No code outside `patina-core` names a `ScopeSetId`: `Heap::get_identifier_data`
+lends the set, `Cx::get_identifier_data` answers an owned one, and
+`alloc_identifier` takes a `ScopeSet` and interns it. The accessors answer
+the name's spelling, read through its symbol, and `alloc_identifier` interns
+the spelling it is given; the reader, the copies, template instantiation and
+quote stripping take or answer the symbol itself, with no lookup
+(`docs/GC_DESIGN.md` §9.1). A relinked identifier's spelling is bound nowhere
+and interned nowhere: its name is a symbol object only the identifiers that
+carry it hold, made once per spelling a relinking gives (`Cx::relinked_name`),
+and it stands in quoted data for its spelling interned, as it always did.
+#791 gives the identifier its source id.
+
+A macro object holds a set's id too (#789): `HeapObjectData::Macro.scopes`,
+the union of every scope its `CompiledMacro` holds off the heap
+(`definition_scopes`, each `Template::Symbol`'s scopes, `inherited_identifiers`
+and `foreign_expansions`), interned when the object is made, so that
+`Heap::scope_is_carried`, the report 5c reads, counts them while the macro
+lives (`docs/GC_DESIGN.md` §9.10).
 
 ---
 
@@ -1097,8 +1124,8 @@ The current scope-set hygiene system is **fully compatible** with syntax-case:
 | `crates/patina-macros/src/macro_expander/matcher.rs` | Pattern matching |
 | `crates/patina-macros/src/macro_expander/expander.rs` | Template expansion |
 | `crates/patina-macros/src/macro_expander/interface.rs` | Entry point, flip-scope |
-| `crates/patina-runtime/src/scope.rs` | ScopeId, ScopeSet |
-| `crates/patina-runtime/src/value/hygiene.rs` | IdentifierData |
+| `crates/patina-core/src/scope.rs` | ScopeId, ScopeSet |
+| `crates/patina-core/src/heap/scope_sets.rs` | The heap's scope-set table, which an identifier's scopes are an id in (#788) |
 | `lib/scheme/base-extras.scm` | Core macros (let, cond, case, do, etc.) |
 
 ### Test Files

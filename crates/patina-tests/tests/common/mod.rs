@@ -924,12 +924,13 @@ macro_rules! gc_shared_tests {
             // and in the order the lane lists them (`driver.scm`'s
             // `steady-per-owner-keys`, the runner's `PER_OWNER_KEYS`), where
             // a key joins last in the PR that adds it to `(gc-stats)`:
-            // `code-units` after `binding-records` (#836). Every one answers
-            // a count on both backends, `code-units` 0 on the tree-walker.
+            // `code-units` after `binding-records` (#836), `scope-sets` after
+            // `code-units` (#788). Every one answers a count on both
+            // backends, `code-units` 0 on the tree-walker.
             assert_gc_eval_to(
                 r#"
                 (import (scheme base) (patina debug))
-                (define per-owner '(symbols ports namespaces cells binding-records code-units))
+                (define per-owner '(symbols ports namespaces cells binding-records code-units scope-sets))
                 (define stats (gc-stats))
                 (define (owned entries)
                   (cond ((null? entries) '())
@@ -942,7 +943,42 @@ macro_rules! gc_shared_tests {
                         (and (exact-integer? n) (>= n 0) (counts? (cdr keys))))))
                 (list (owned stats) (counts? per-owner))
                 "#,
-                "((symbols ports namespaces cells binding-records code-units) #t)",
+                "((symbols ports namespaces cells binding-records code-units scope-sets) #t)",
+            );
+        }
+
+        #[test]
+        fn a_live_macros_literals_keep_their_scope_sets() {
+            // `(gc-stats)`'s `scope-sets` (#788) after a collection: the sets
+            // the live identifiers carry. In the `def-getter` shape the
+            // getter's literals keep `secret` with the expansion's scope
+            // across forms (#788's body), so while the getter and setter
+            // live the count reads above what it read before them, and once
+            // both names are bound to macros that keep no such identifier,
+            // and the old ones are garbage, it reads what it read before.
+            // Under zeal too, which collects at every outermost safe point.
+            assert_gc_and_zeal_eval_to(
+                r#"
+                (import (scheme base) (patina debug))
+                (define (scope-sets) (gc) (gc) (cdr (assq 'scope-sets (gc-stats))))
+                (define before (scope-sets))
+                (define-syntax def-getter
+                  (syntax-rules ()
+                    ((_ get set)
+                     (begin
+                       (define secret 42)
+                       (define-syntax get (syntax-rules () ((_) secret)))
+                       (define-syntax set (syntax-rules () ((_ v) (set! secret v))))))))
+                (def-getter get-secret set-secret!)
+                (define during (scope-sets))
+                (set-secret! 7)
+                (define got (get-secret))
+                (define-syntax get-secret (syntax-rules () ((_) 0)))
+                (define-syntax set-secret! (syntax-rules () ((_ v) 0)))
+                (define after (scope-sets))
+                (list got (> during before) (- after before))
+                "#,
+                "(7 #t 0)",
             );
         }
 
@@ -1546,7 +1582,7 @@ macro_rules! gc_shared_tests {
             (import (tmp steady))\n(m 1)\n";
 
         /// The keys [`release_readings`] reads, in the order it writes them.
-        const RELEASE_KEYS: [&str; 12] = [
+        const RELEASE_KEYS: [&str; 13] = [
             "live objects",
             "namespaces",
             "cells",
@@ -1559,6 +1595,7 @@ macro_rules! gc_shared_tests {
             "live strings",
             "live-bytes",
             "bytes-allocated",
+            "scope-sets",
         ];
 
         /// After `prelude`, run `form` 200 times, read [`RELEASE_KEYS`], run
@@ -1596,7 +1633,8 @@ macro_rules! gc_shared_tests {
                        (vector-set! r (+ at 8) (live 'vectors 'free-vectors))
                        (vector-set! r (+ at 9) (live 'strings 'free-strings))
                        (vector-set! r (+ at 10) (key 'live-bytes))
-                       (vector-set! r (+ at 11) (key 'bytes-allocated))))
+                       (vector-set! r (+ at 11) (key 'bytes-allocated))
+                       (vector-set! r (+ at 12) (key 'scope-sets))))
                    {first}(gc) (gc) (keys! 0)
                    {rest}(gc) (gc) (keys! 16)
                    (append (vector->list r) (list (cdr (assq 'collections (gc-stats)))))"#,
@@ -1641,10 +1679,13 @@ macro_rules! gc_shared_tests {
             );
             for (i, key) in RELEASE_KEYS.iter().enumerate() {
                 // Every key reads above 0 at each reading but the code
-                // units, which the tree-walker has none of: a key that
-                // reads 0 is one the reading lost, and its delta would be
-                // 0 whatever the run kept.
-                if *key != "code-units" {
+                // units, which the tree-walker has none of, and the scope
+                // sets, which every variant reads 0 on both backends: after
+                // its `(gc)`s no live identifier carries a scope (#788). A
+                // key that reads 0 is otherwise one the reading lost, and its
+                // delta would be 0 whatever the run kept; a key `(gc-stats)`
+                // lacks fails the reading's `assq` instead.
+                if *key != "code-units" && *key != "scope-sets" {
                     assert!(
                         at_200[i] > 0 && at_800[i] > 0,
                         "{key} read 0, so the reading does not read it{report}"
@@ -1689,10 +1730,11 @@ macro_rules! gc_shared_tests {
             // #614's program 1 and its macro variant, each redefining the
             // library 800 times: between the readings at 200 and at 800,
             // every count of what lives — objects, namespaces, cells,
-            // binding records, code units, symbols, and the pair, vector
-            // and string arenas — is exactly where it was, and the external
-            // bytes within 16 KiB, where one kept namespace a cycle would
-            // read 600 namespaces and about 19 MB more. The arena counts
+            // binding records, code units, symbols, scope sets (#788), and
+            // the pair, vector and string arenas — is exactly where it was,
+            // and the external bytes within 16 KiB, where one kept
+            // namespace a cycle would read 600 namespaces and about 19 MB
+            // more. The arena counts
             // see a record or a cell that outlived its namespace, which
             // `binding-records` and `cells` do not count (GC_DESIGN §3.3).
             // Each backend is compared with itself. Under zeal too, which

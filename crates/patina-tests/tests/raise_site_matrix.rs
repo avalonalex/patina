@@ -201,6 +201,19 @@
 //!
 //! The tree-walker's rows pass under each: the mutations are the VM's.
 //!
+//! Run again 2026-11-22 against 4d's dense map index (#905), in the debug
+//! build, each applied alone and removed, rows run one at a time:
+//!
+//! - **The raise stub's pc 0 marked `0xFFFF`** (in `runtime_stub`). Nine
+//!   rows fail on the VM under zeal, at the collection on the raise's
+//!   return described above, with "which has no register map": the
+//!   `guard/reenter` rows of all four sites, and `plus`'s `guard/collect`,
+//!   `escape` and `return` rows. With an empty map there instead, the same
+//!   nine panic at the stub's read of its handler.
+//! - **The `AddImm`'s return pc marked `0xFFFF`** (in pass 5's
+//!   `suspends_after`). All eight `plus` rows fail on the VM, on default
+//!   and zeal interpreters, with "which has no register map".
+//!
 //! # Re-measuring
 //!
 //! [`dump_programs`] writes every program out per implementation, ready to
