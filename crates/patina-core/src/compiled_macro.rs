@@ -243,6 +243,11 @@ pub struct Identifier {
     /// - `Some(scopes)` = FREE VARIABLE with definition-time scopes.
     /// - `None` = INTRODUCED IDENTIFIER (will get expansion scope via flip-scope).
     definition_scopes: Option<ScopeSet>,
+    /// The macro object's literal that holds `name`'s interned symbol, which
+    /// the identifier each use makes of this one carries, read with no
+    /// lookup of its spelling (#790). `None` for an identifier compiled with
+    /// no macro object to hold it, whose uses intern `name`.
+    symbol: Option<LiteralId>,
 }
 
 impl Identifier {
@@ -252,6 +257,7 @@ impl Identifier {
             name: name.into(),
             source: None,
             definition_scopes: None,
+            symbol: None,
         }
     }
 
@@ -261,12 +267,25 @@ impl Identifier {
             name: name.into(),
             source: None,
             definition_scopes: Some(scopes),
+            symbol: None,
         }
     }
 
     /// Get the identifier's name
     pub fn name(&self) -> &Rc<str> {
         &self.name
+    }
+
+    /// The macro object's literal that holds the name's interned symbol
+    /// (#790), if the compiler put it there.
+    pub fn symbol(&self) -> Option<LiteralId> {
+        self.symbol
+    }
+
+    /// Name the macro object's literal `symbol`, which holds the name's
+    /// interned symbol (#790): the template compiler's.
+    pub fn set_symbol(&mut self, symbol: LiteralId) {
+        self.symbol = Some(symbol);
     }
 
     /// Check if this is a free variable (has definition scopes)

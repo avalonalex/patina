@@ -8,7 +8,6 @@ use crate::macro_expander::Identifier;
 use crate::macro_expander::utils::list_to_vec_with_tail;
 use patina_core::walk::OpenNodes;
 use patina_core::{Cx, ScopeAddition, Value};
-use std::rc::Rc;
 
 impl<'gc> Expander<'gc> {
     /// Rename an identifier for hygiene using Racket-style scope sets
@@ -47,8 +46,15 @@ impl<'gc> Expander<'gc> {
             patina_runtime::ScopeSet::new()
         };
 
-        // Create native Identifier with scopes (Racket-style hygiene)
-        let value = cx.alloc_identifier(name.clone(), scopes);
+        // Create native Identifier with scopes (Racket-style hygiene), for
+        // the symbol the macro object holds (#790)
+        let value = match id.symbol() {
+            Some(symbol) => {
+                let symbol = self.literal(cx, symbol);
+                cx.alloc_identifier_for(symbol, scopes)
+            }
+            None => cx.alloc_identifier(name.clone(), scopes),
+        };
         if let Some(source) = &id.source {
             cx.record_source(value, source.clone());
         }
@@ -160,10 +166,10 @@ impl<'gc> Expander<'gc> {
             return Mark::Done(copy);
         }
 
-        // Check if it's a symbol - convert to identifier with macro_scope
-        let name = cx.get_symbol_name(tv).map(|name| Rc::<str>::from(&*name));
-        if let Some(name) = name {
-            return Mark::Done(cx.alloc_identifier_adding_scope(addition, name));
+        // Check if it's a symbol - convert to identifier with macro_scope,
+        // which carries the symbol itself (#790)
+        if cx.is_symbol(tv) {
+            return Mark::Done(cx.alloc_identifier_adding_scope(addition, tv));
         }
 
         // Pairs: walk the *form*, not each tail.

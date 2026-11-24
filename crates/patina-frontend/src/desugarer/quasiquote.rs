@@ -72,16 +72,10 @@ impl Derivation<'_> {
         // Identifiers → convert to plain symbol (strip scope marks), as
         // `quote` does. Without this, identifiers inside quasiquote templates
         // retain hygiene marks and won't be `eq?` to the same-named symbol
-        // from a quote.
-        if cx.is_identifier(template) {
-            let name: Option<String> = cx
-                .get_symbol_or_identifier_name(template)
-                .map(|name| String::from(&*name));
-            if let Some(name) = name {
-                let sym = cx.intern_symbol(&name);
-                return Ok(QuasiTemplate::Datum(cx.literals.add(sym)));
-            }
-            return Ok(QuasiTemplate::Datum(cx.literals.add(template)));
+        // from a quote. The symbol is the one the identifier carries, with
+        // no lookup of its spelling (#790).
+        if let Some(sym) = cx.identifier_datum(template) {
+            return Ok(QuasiTemplate::Datum(cx.literals.add(sym)));
         }
 
         // Strings, bytevectors → quote

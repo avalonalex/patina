@@ -326,8 +326,9 @@ impl HeapObjectData {
             // Nothing outside the slot. A port's slot holds its `PortTable`
             // entry's number; an open file port is charged as external bytes.
             // An identifier's holds its set's id in the heap's scope-set
-            // table, which charges its sets as external bytes (#788), and a
-            // name, an `Rc` the account does not charge.
+            // table, which charges its sets as external bytes (#788), and
+            // its name's symbol, a word: the symbol is charged its spelling
+            // (#790).
             HeapObjectData::Real(_)
             | HeapObjectData::Port(_)
             | HeapObjectData::Identifier { .. }

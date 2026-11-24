@@ -1794,16 +1794,21 @@ impl<'h> GcVisitor<'h> {
                 }
             }
 
-            // No value: its set's id, recorded so that the sweep keeps the
-            // set (#788). The table holds sets of scope ids, which hold no
-            // value, and is no root.
+            // Its name's symbol (#790): interned, and so a root until the
+            // weak symbol table (5c), for every identifier but a relinked
+            // one, whose symbol no table holds and only this edge keeps.
+            // Its set's id, recorded so that the sweep keeps the set (#788):
+            // the table holds sets of scope ids, which hold no value, and is
+            // no root.
             HeapObjectData::Identifier {
-                // A spelling.
-                name: _,
+                name,
                 scopes,
                 // A flag.
                 written: _,
+                // A flag: whether `name` is a relinked spelling's symbol.
+                relinked: _,
             } => {
+                self.visit(*name);
                 self.marks.scope_sets.set(scopes.index());
             }
 

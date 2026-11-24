@@ -397,7 +397,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs`):
 | Variant | Children |
 |---------|----------|
 | `BigInt`, `Rational`, `Real`, `Symbol`, `Bytevector`, `Port` (its `PortTable` entry's number, #785), `RecordType`, `Library`*, `PromptTag`, `LabelPlaceholder` | leaf |
-| `Identifier` | no value: sets its scope set's bit in `MarkBits::scope_sets` (§4.2, §9.9, #788); `name` and `written` hold none |
+| `Identifier` | `name`, its spelling's symbol (§9.1, #790): interned, and so a root until 5c's weak table, for every identifier but a relinked one, whose symbol no table holds and only this edge keeps; sets its scope set's bit in `MarkBits::scope_sets` (§4.2, §9.9, #788); `written` and `relinked` hold none |
 | `Complex` | `real`, `imag` |
 | `Exception` | each of `irritants` |
 | `Record` | each of `fields` (through the `Rc<Interior<Vec<_>>>`); `record_type`, an `Rc`'d descriptor rather than a value, is not traced |
@@ -2528,7 +2528,44 @@ quotes in one form preserves sharing across separate insertions of a macro
 argument; it lives in the form's context (`FormCx`) and is dropped with it, so
 it outlives no form and sees no collection (#704).
 
-This table is **not a root**. Before reclaiming slots, sweep retains only entries
+**An identifier carries its spelling's symbol** (#790). Since GC stage 4c.4
+`Identifier.name` is a symbol's word, not an `Rc<str>` of its own. The reader
+interns each spelling it reads (`Parser::identifier`: one lookup per
+occurrence, one symbol per distinct spelling) and makes each occurrence's
+identifier for that symbol (`alloc_source_identifier_for`). A copy takes the
+symbol it already has, with no lookup: the scope-edit walk
+(`Cx::rescope_identifiers`), the expander's mark of a substituted identifier,
+and its mark of a substituted symbol, whose identifier carries that symbol. A
+template's `Template::Symbol` names its symbol among the macro object's
+literals by `LiteralId` (#718), interned once when the template is compiled,
+so each use reads it there; the escaped ellipsis a template compiles interns.
+Quote stripping and the quasiquote derivation answer the identifier's symbol
+(`Cx::identifier_datum`, `Cx::strip_identifiers_memo`), and `eqv?` compares
+the words. `alloc_identifier` and `alloc_source_identifier` still take a
+spelling and intern it, the accessors answer the spelling, read through the
+symbol, and the holders off the heap keep `Rc<str>` names (`CoreExpr`,
+`CpsExpr`, `Environment`, `CompiledMacro`, `IdentifierKey`).
+
+**A relinked spelling is the one name no table interns.** `rewrite_refs` gives
+a relinked identifier a spelling that is bound nowhere (#837), and interning
+it would keep a symbol for good for each redefinition of a library whose macro
+relinks (`a_redefined_library_is_released`'s `relinkv`, `relinkk` and
+`relinkki` hold `symbols` flat). So its name is a symbol object the intern
+table does not hold, made once for each spelling a relinking gives
+(`Cx::relinked_name`, an opaque `RelinkedName`, so that no such symbol becomes
+a datum) and flagged on the identifier (`relinked`), which the copies carry.
+Only the identifiers that carry it keep it, by their trace, and the sweep
+frees it with them; `symbols` never counts it. `eqv?` compares the spellings
+where either name is relinked, so two relinked identifiers of one spelling,
+and one and the interned symbol of its spelling, stay `eqv?`, as every
+identifier of one spelling was. `identifier_datum` interns a relinked
+spelling, as quote stripping always did, so a relinked identifier that
+reaches a quote is the same datum as before: the open defect
+`PRD/GC_PRD.md` §11.6's binding-records row records. The identifier allocators
+assert in debug builds that a name is an interned symbol of its heap, and
+that a relinked one's is a symbol the table does not hold.
+
+The `syntax_sources` table is **not a root**. Before reclaiming slots, sweep retains only entries
 whose values are marked, then shrinks excess table capacity. This visits annotated
 syntax rather than doing a lookup for every freed datum, and removes entries
 before slots can be reused. There is no drain shared between nested loaders,
@@ -2573,6 +2610,15 @@ discarded.
 symbols are immortal. This is correct (symbols are `eq?`-identity-bearing) and
 cheap (symbols are small). A weak intern table with post-sweep pruning is
 future work; nothing in the design blocks it.
+
+Since #790 the table holds every spelling a program's text holds, since the
+reader interns each (§9.1): a spelling stays interned until 5c's weak table,
+where it used to go with its identifiers. That is bounded by the program text
+(M2); a REPL or stdin session keeps each new name it types, as it keeps a
+quoted symbol. After libload's 25 imports and `(patina debug)` `symbols`
+reads 4,304 on both backends, where it read 620. A relinked identifier's
+name is not in the table (§9.1). Once the table is weak, an identifier's
+trace (§4.3) is what keeps its name's symbol alive.
 
 ### 9.3 Transient raw-bits sets
 

@@ -51,6 +51,11 @@ impl<'gc> Compiler<'gc> {
                     }
                     loc
                 });
+                // The symbol every use's identifier carries, held by the
+                // macro object as a literal, so that no use looks its
+                // spelling up (#790).
+                let symbol = cx.intern_symbol(identifier.name());
+                identifier.set_symbol(self.literal_id(symbol));
             }
             template
         });

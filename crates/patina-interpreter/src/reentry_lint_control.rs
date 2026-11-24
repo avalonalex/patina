@@ -255,7 +255,6 @@ const SHARED_PAYLOADS: &[&str] = &[
     "Continuation.0",
     "Ephemeron.0",
     "EnvironmentSpecifier.env",
-    "Identifier.name",
     "Library.0",
     "Macro.body",
     // Shared, immutable state (#837): each `CarriedRelink` holds two
