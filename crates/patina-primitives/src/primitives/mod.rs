@@ -60,4 +60,7 @@ pub fn register_all(registry: &mut PrimitiveRegistry) {
     // Primitives added since go after them, for the same reason: an index
     // shift of one cost `string-ports` about 1% in cycles (#608).
     parameters::register_last(registry);
+    // After that one, for the same reason (#907): a later primitive goes
+    // after this.
+    exceptions::register_last(registry);
 }

@@ -576,6 +576,7 @@ fn handle_control_primitive(
             // along with the frame, rather than a Rust frame it cannot
             // (issue #157, and PR #156's move for a jump's wind thunks).
             let code = value_wind_stub(state)?;
+            state.check_stack_room(code.num_regs)?;
             let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, dst);
 
             // Through `set_top`: the frame is already pushed, so `base` *is*
@@ -773,6 +774,7 @@ fn handle_control_primitive(
                 }
                 Some(PromiseState::Delayed(thunk)) => {
                     let code = force_stub(state)?;
+                    state.check_stack_room(code.num_regs)?;
                     let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, dst);
 
                     state.execution.set_top(base, force_step::PROMISE, obj);
@@ -797,6 +799,7 @@ fn handle_control_primitive(
             // come back through the consumer: a producer returning by
             // `(k 1 2)` answered `#<procedure>`.
             let code = value_cwv_stub(state)?;
+            state.check_stack_room(code.num_regs)?;
             let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, dst);
 
             state.execution.set_top(base, value_cwv::PRODUCER, args[0]);
@@ -1003,7 +1006,7 @@ pub(super) fn vm_raise_value(
                 handler_entry.stack_depth.max(prompt.stack_depth)
             });
         let below = state.execution.depth().distance_above(floor);
-        let base = push_stub_frame(state, code, raise_step::NUM_REGS);
+        let base = push_stub_frame(state, code, raise_step::NUM_REGS)?;
         // `push_stub_frame` leaves `return_reg` at 0, which is right for the
         // stubs that deliver their own value. This one returns through the
         // ordinary `Return`, so it needs the raise's own destination.
@@ -1480,7 +1483,7 @@ fn wind_step_frame(
     let code = wind_jump_stub(state)?;
     match stub {
         WindStub::Push => {
-            let base = push_stub_frame(state, code, wind_step::NUM_REGS);
+            let base = push_stub_frame(state, code, wind_step::NUM_REGS)?;
             // `set_top` for the reason the value form's stub gives: the
             // frame is pushed, so the assert holds and keeps holding.
             state.execution.set_top(base, wind_step::TARGET, target);
@@ -1672,9 +1675,17 @@ fn runtime_stub(
 /// Requires loaded stub code and its matching register count. Appends one
 /// frame/window, initially returning to r0; caller fills operands before yielding.
 /// Does not change winds, prompts or handlers.
-fn push_stub_frame(state: &mut VmState, code: Rc<CodeObject>, num_regs: u16) -> usize {
+///
+/// A stub's frame takes no poll, so the push asks the stack's cap itself
+/// (#907): past it, the hard-cap error, which nothing catches.
+fn push_stub_frame(
+    state: &mut VmState,
+    code: Rc<CodeObject>,
+    num_regs: u16,
+) -> Result<usize, VmError> {
     debug_assert_eq!(num_regs, code.num_regs);
-    state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0)
+    state.check_stack_room(num_regs)?;
+    Ok(state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0))
 }
 
 /// The one-instruction code object every wind step's frame runs.
@@ -2300,6 +2311,7 @@ fn push_resume_frame(
     return_reg: u16,
 ) -> Result<(), VmError> {
     let code = stub_for(state, &suspension.work)?;
+    state.check_stack_room(code.num_regs)?;
     let base = state
         .execution
         .push_frame(code, CallFrame::NO_CLOSURE, return_reg);
@@ -3242,7 +3254,7 @@ pub(super) fn push_invoke_step(
     window: AssertNoGc,
 ) -> Result<(), VmError> {
     let code = invoke_step_stub(state)?;
-    let base = push_stub_frame(state, code, invoke_step::NUM_REGS);
+    let base = push_stub_frame(state, code, invoke_step::NUM_REGS)?;
     state.execution.set_top(base, invoke_step::CONT, cont);
     state.execution.set_top(base, invoke_step::VALUE, value);
     state
@@ -3518,6 +3530,14 @@ pub(super) fn finish_delimited_invoke(
     value: TaggedValue,
     dst: u16,
 ) -> Result<(), VmError> {
+    // A re-entry grows the stack by the whole captured region with no frame
+    // entry (#907): refused where it would pass the cap. Short of that, the
+    // poll on the generic call's return raises `&stack-exhausted` once the
+    // region has taken the stack to the soft limit.
+    state.check_stack_bytes(
+        dc.frames.len() * super::execution_state::FRAME_HEADER_BYTES
+            + dc.registers.len() * std::mem::size_of::<TaggedValue>(),
+    )?;
     state.execution.append_delimited(dc, value, dst)
 }
 

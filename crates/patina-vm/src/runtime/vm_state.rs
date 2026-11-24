@@ -540,11 +540,8 @@ impl VmState {
         self.stack_soft = cap.saturating_sub(STACK_RESERVE);
         self.stack_reserve_open = false;
         self.mutator.set_stack_limit(self.stack_soft);
-    }
-
-    /// The stack's cap in bytes, for `(gc-stats)`'s `stack-limit`.
-    pub(crate) fn stack_cap(&self) -> usize {
-        self.stack_cap
+        // For `(gc-stats)`'s `stack-limit`.
+        self.mutator.set_stack_cap(cap);
     }
 
     /// The stack met the limit the poll word held (#907). With the soft
@@ -594,10 +591,17 @@ impl VmState {
     /// frame's registers. A closure's entry polls instead, after its push.
     #[inline]
     pub(super) fn check_stack_room(&self, num_regs: u16) -> Result<(), VmError> {
-        let after = self.execution.top_bytes()
-            + super::execution_state::FRAME_HEADER_BYTES
-            + num_regs as usize * std::mem::size_of::<TaggedValue>();
-        if after > self.stack_cap {
+        self.check_stack_bytes(
+            super::execution_state::FRAME_HEADER_BYTES
+                + num_regs as usize * std::mem::size_of::<TaggedValue>(),
+        )
+    }
+
+    /// [`Self::check_stack_room`] for `bytes` more of stack, whatever they
+    /// hold: a delimited continuation's re-entry appends its whole region.
+    #[inline]
+    pub(super) fn check_stack_bytes(&self, bytes: usize) -> Result<(), VmError> {
+        if self.execution.top_bytes().saturating_add(bytes) > self.stack_cap {
             return Err(VmError::StackOverflow {
                 cap: self.stack_cap as u64,
             });

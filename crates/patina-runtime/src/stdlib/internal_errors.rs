@@ -35,6 +35,9 @@ pub fn build_internal_errors(
         ("read-error?", Arity::Exact(1)),
         // An interrupt's predicate, which `(patina interrupt)` exports (#701)
         ("interrupt?", Arity::Exact(1)),
+        // A stack at its limit's predicate, which `(patina limits)` exports
+        // (#907)
+        ("stack-exhausted?", Arity::Exact(1)),
         // Exception handling (stubs)
         ("raise", Arity::Exact(1)),
         ("raise-continuable", Arity::Exact(1)),

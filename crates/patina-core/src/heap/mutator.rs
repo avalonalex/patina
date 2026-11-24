@@ -486,6 +486,11 @@ pub struct Carrier {
     /// What the poll word holds while nothing is posted: the stack's limit
     /// in bytes. The owner's alone.
     stack_limit: Cell<usize>,
+    /// The stack's cap in bytes, for `(gc-stats)`'s `stack-limit`: what the
+    /// machine was built with, and 0 where it has none, as the tree-walker
+    /// has none. The limit above moves under it: the soft limit while it is
+    /// armed, the cap while a handler has the reserve.
+    stack_cap: Cell<usize>,
 }
 
 impl Carrier {
@@ -495,6 +500,7 @@ impl Carrier {
             mutator: Mutator::new(),
             interrupt: Arc::new(InterruptCell::new()),
             stack_limit: Cell::new(Mutator::NO_LIMIT),
+            stack_cap: Cell::new(0),
         });
         carrier.interrupt.attach(&carrier.mutator);
         carrier
@@ -521,6 +527,17 @@ impl Carrier {
     #[inline]
     pub fn stack_limit(&self) -> usize {
         self.stack_limit.get()
+    }
+
+    /// Record the stack's cap, in bytes, for [`Carrier::stack_cap`]. The
+    /// machine calls it once, when it is given its cap.
+    pub fn set_stack_cap(&self, cap: usize) {
+        self.stack_cap.set(cap);
+    }
+
+    /// The stack's cap in bytes, or 0 where the machine keeps none.
+    pub fn stack_cap(&self) -> usize {
+        self.stack_cap.get()
     }
 
     /// Take what was posted from elsewhere, at a poll whose word read 0:
