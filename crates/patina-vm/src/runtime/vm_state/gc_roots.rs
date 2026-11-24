@@ -292,10 +292,10 @@ pub(crate) fn collect_with_a_frame_at_an_unmapped_pc() -> bool {
         register_roots: Some(RegisterMaps::from_parts(index, Rc::from([0]), 1)),
     });
     let code = state.code_object(id).expect("the control's code is loaded");
-    state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0);
+    let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0);
     let held = [TaggedValue::fixnum(1), TaggedValue::fixnum(2)];
     for (reg, value) in (0..).zip(held) {
-        state.set_reg(reg, value);
+        state.execution.set_top(base, reg, value);
     }
     state.execution.set_pc(1);
     super::collect_for_loader(&mut state);

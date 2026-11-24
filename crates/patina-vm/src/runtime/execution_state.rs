@@ -11,9 +11,11 @@ use crate::types::continuation::{
 };
 use crate::types::{CallFrame, Depth, FrameCode};
 use patina_core::heap::Heap;
-use patina_core::{SlotVisitor, TaggedValue, Trace};
+use patina_core::{CheckCell, GC_CHECK, SlotVisitor, TaggedValue, Trace};
 use std::cell::Cell;
+use std::ops::Range;
 use std::rc::Rc;
+use std::slice::SliceIndex;
 
 /// Its trace (derived, #686) is all five components and the running code's
 /// id, a root of every collection through `VmState`'s. The sentinel test
@@ -33,7 +35,43 @@ pub(super) struct ExecutionState {
     exception_handlers: Vec<ExceptionHandler>,
     /// The code the innermost running dispatch loop runs, by id (#836).
     running: RunningCode,
+    /// Which top frame awaits a value, for the check builds' assertions on
+    /// the register writes (#904).
+    #[trace(skip, reason = "a frame depth, which only a check build writes")]
+    awaiting: Awaiting,
 }
+
+/// A check build's record of the top frame that awaits a value (#904): the
+/// depth of the stack whose top frame something has returned into, or
+/// [`Depth::BASE`] when none does. [`ExecutionState::return_into`] writes
+/// that frame, and [`ExecutionState::set_top`] may not until the frame
+/// starts its own work again.
+///
+/// Set where the top frame comes to await a value: where the stack shrinks
+/// under it or is reinstated (`pop_frame`, `finish_wind_step`,
+/// `truncate_to_prompt`, `restore`, `append_delimited`), and where it calls
+/// a callee that may answer here and now, which a callback's frames may
+/// have run above it before then ([`ExecutionState::mark_awaiting`]).
+/// Cleared where the top frame starts its own work (`dispatch_frame`,
+/// `restart_stub`) and where the stack goes (`clear`). A push leaves it, and
+/// every shrink sets it, so it is `BASE` or no deeper than the stack, and
+/// equal to the stack's depth only while its top frame awaits a value.
+///
+/// A [`CheckCell`], since the VM cannot name core's `gc-check` feature in a
+/// `#[cfg]`: zero-sized in a plain release build, so `ExecutionState`, and
+/// `VmState` around it, keep that build's layout. A word held in every
+/// build reordered `VmState` and split the dispatch loop's paired loads
+/// (#904's measurement).
+struct Awaiting(CheckCell<Depth>);
+
+impl Default for Awaiting {
+    fn default() -> Self {
+        Awaiting(CheckCell::new(Depth::BASE))
+    }
+}
+
+// A plain build keeps no word for it.
+const _: () = assert!(GC_CHECK || std::mem::size_of::<Awaiting>() == 0);
 
 /// The code the innermost running dispatch loop's `cur_code` holds (#836),
 /// by id: written when `cur_code` changes (where a loop starts or an escape
@@ -84,6 +122,7 @@ impl ExecutionState {
             dynamic_winds,
             exception_handlers,
             running: RunningCode::default(),
+            awaiting: Awaiting::default(),
         }
     }
 
@@ -100,8 +139,18 @@ impl ExecutionState {
         self.running.0.set(id);
     }
 
+    /// The register file, lent for reading ([`Registers`]). The writes are
+    /// this module's: `set_top`, `return_into` and a push's (#904).
     #[inline(always)]
-    pub(super) fn registers(&self) -> &[Cell<TaggedValue>] {
+    pub(super) fn registers(&self) -> Registers<'_> {
+        Registers(&self.registers)
+    }
+    /// The register file's slots, for the one test that reports each where
+    /// it lives (`every_slot_the_vm_reports_is_where_its_value_lives`). The
+    /// collector reaches them through the derived trace, and retirement
+    /// through [`Self::retire_registers`], both inside this module.
+    #[cfg(test)]
+    pub(super) fn register_cells(&self) -> &[Cell<TaggedValue>] {
         &self.registers
     }
     #[inline(always)]
@@ -138,6 +187,128 @@ impl ExecutionState {
     #[inline(always)]
     pub(super) fn top_frame_depth(&self) -> Depth {
         self.depth().lowered_by(1)
+    }
+
+    // ── Register writes (#904) ──────────────────────────────────────────
+    //
+    // The only ways to write a live register: the top frame's own write
+    // (`set_top`), a write into a frame something has returned into or one
+    // below the top (`return_into`), and a push's initializing writes
+    // (`push_frame`, `push_abort_stub`, and the arguments the call paths
+    // copy into a callee's window, `init_arg` and `init_args`).
+    // `inline(always)`, as the register helpers they replace were:
+    // `dispatch_one_instruction` is too large for LLVM to inline them
+    // otherwise (PRD §1.6 finding 1).
+
+    /// The top frame's window base.
+    #[inline(always)]
+    fn top_base(&self) -> usize {
+        self.frames.last().expect("no active frame").register_base
+    }
+
+    /// Record, in a check build, that the top frame awaits a value
+    /// ([`Awaiting`]): it has called a callee that may answer here and now,
+    /// through [`Self::return_into`], or something above it has just
+    /// returned or a transfer has reinstated it. With no frame, none does.
+    #[inline(always)]
+    pub(super) fn mark_awaiting(&self) {
+        if GC_CHECK {
+            self.awaiting.0.set(self.depth());
+        }
+    }
+
+    /// Record, in a check build, that the top frame starts its own work.
+    #[inline(always)]
+    fn clear_awaiting(&self) {
+        if GC_CHECK {
+            self.awaiting.0.set(Depth::BASE);
+        }
+    }
+
+    /// Whether the top frame awaits a value. Kept only by a check build: a
+    /// plain one answers `false`.
+    fn top_awaits(&self) -> bool {
+        self.awaiting
+            .0
+            .get()
+            .is_some_and(|awaiting| awaiting != Depth::BASE && awaiting == self.depth())
+    }
+
+    /// The one way to write a register of a frame something has returned
+    /// into, or of a frame below the top (`PRD/GC_PRD.md` §11.1): a value
+    /// delivered after a pop (`Return`, a tail call's delivery), a callee's
+    /// answer once its callback's frames have run above the caller, a jump's
+    /// or a composable invoke's arrival into the frame it reinstated, and the
+    /// register `deliver_before_collecting` clears in the frame a stub
+    /// returns into.
+    ///
+    /// At 4d it writes and nothing more. Stage 7 adds the stack watermark
+    /// here: it lowers the watermark below `frame` first, and sets the
+    /// thread's `ran_since_gc`, so that a minor collection that scans only
+    /// the frames above the watermark sees every reference written below it.
+    ///
+    /// A check build asserts that `frame` is below the top, or is a top frame
+    /// that awaits a value ([`Awaiting`]).
+    #[inline(always)]
+    pub(super) fn return_into(&mut self, frame: ReturnFrame, reg: u16, value: TaggedValue) {
+        let base = match frame {
+            ReturnFrame::Top => self.top_base(),
+            ReturnFrame::TopAt(base) => {
+                debug_assert_eq!(base, self.top_base());
+                base
+            }
+            ReturnFrame::Caller => {
+                let [.., caller, _] = self.frames.as_slice() else {
+                    panic!("no frame below the top");
+                };
+                caller.register_base
+            }
+        };
+        if GC_CHECK && frame != ReturnFrame::Caller && !self.top_awaits() {
+            returned_into_a_running_frame(reg);
+        }
+        self.registers[base + reg as usize].set(value);
+    }
+
+    /// The top frame's own write, during its own instruction: `reg` of the
+    /// window at `base`, the base the dispatch prologue hoisted, or the one
+    /// `push_frame` answered for a stub's operands. Only an instruction arm
+    /// that cannot push or pop a frame before the write may pass a hoisted
+    /// base; the debug assert holds it to the top frame's. A check build
+    /// asserts that the top frame awaits no value ([`Awaiting`]): a write
+    /// into one is [`Self::return_into`]'s.
+    #[inline(always)]
+    pub(super) fn set_top(&mut self, base: usize, reg: u16, value: TaggedValue) {
+        debug_assert_eq!(base, self.top_base());
+        if GC_CHECK && self.top_awaits() {
+            wrote_an_awaiting_frame("set_top", reg as usize);
+        }
+        self.registers[base + reg as usize].set(value);
+    }
+
+    /// A push's initializing write: argument `index` into the window at
+    /// `base`, of the frame just pushed (`push_frame`) or given to a callee
+    /// in place (`tail_replace`, `restart_closure`).
+    #[inline(always)]
+    pub(super) fn init_arg(&mut self, base: usize, index: usize, value: TaggedValue) {
+        debug_assert_eq!(base, self.top_base());
+        if GC_CHECK && self.top_awaits() {
+            wrote_an_awaiting_frame("init_arg", index);
+        }
+        self.registers[base + index].set(value);
+    }
+
+    /// [`Self::init_arg`] for the first `slots` registers of that window,
+    /// from `values`, as many as both have, under one range check.
+    #[inline(always)]
+    pub(super) fn init_args(&mut self, base: usize, slots: usize, values: &[TaggedValue]) {
+        debug_assert_eq!(base, self.top_base());
+        if GC_CHECK && self.top_awaits() {
+            wrote_an_awaiting_frame("init_args", 0);
+        }
+        for (slot, &value) in self.registers[base..base + slots].iter().zip(values) {
+            slot.set(value);
+        }
     }
 
     /// The frames below `depth`: the ones a stack cut back to it keeps.
@@ -178,6 +349,7 @@ impl ExecutionState {
     pub(super) fn pop_frame(&mut self) -> CallFrame {
         let frame = self.frames.pop().expect("pop with empty frame stack");
         self.registers.truncate(frame.register_base);
+        self.mark_awaiting();
         frame
     }
 
@@ -188,6 +360,7 @@ impl ExecutionState {
         self.frames
             .pop()
             .expect("ResumeWindJump runs in its own frame");
+        self.mark_awaiting();
     }
 
     /// Reuse the top window for another closure. Keep excess capacity as the
@@ -220,12 +393,15 @@ impl ExecutionState {
         frame.closure.set(closure);
     }
 
-    /// Resume variants share one window size; only their instruction stream changes.
+    /// Resume variants share one window size; only their instruction stream
+    /// changes. The stub starts its next round as its own work, so its
+    /// operands are written with `set_top` after this.
     pub(super) fn restart_stub(&mut self, code: Rc<CodeObject>) {
         let frame = self.frames.last_mut().expect("the stub frame");
         debug_assert!(code.num_regs <= frame.num_regs);
         frame.code = FrameCode(code);
         frame.pc = 0;
+        self.clear_awaiting();
     }
 
     #[inline(always)]
@@ -237,7 +413,9 @@ impl ExecutionState {
         }
         let pc = frame.pc;
         frame.pc = pc + 1;
-        (pc, frame.register_base)
+        let base = frame.register_base;
+        self.clear_awaiting();
+        (pc, base)
     }
 
     #[inline(always)]
@@ -360,6 +538,7 @@ impl ExecutionState {
         self.dynamic_winds = cc.dynamic_winds.clone();
         self.prompt_stack = cc.prompt_stack.clone();
         self.exception_handlers = cc.exception_handlers.clone();
+        self.mark_awaiting();
     }
 
     /// Abort fast path, only when there is no wind thunk left to run. The
@@ -383,6 +562,7 @@ impl ExecutionState {
                 .min(self.exception_handlers.len()),
         );
         self.prompt_stack.truncate(prompt_idx);
+        self.mark_awaiting();
     }
 
     pub(super) fn push_abort_stub(
@@ -411,6 +591,7 @@ impl ExecutionState {
         self.prompt_stack.clear();
         self.dynamic_winds.clear();
         self.exception_handlers.clear();
+        self.clear_awaiting();
     }
 
     pub(super) fn retire_registers(&mut self) {
@@ -499,17 +680,75 @@ impl ExecutionState {
         // them, and the frames it appends are the ones the depth sweep follows.
 
         self.frames[outermost.frame_count()].return_reg = dst;
-        let top_base = self
-            .frames
-            .last()
-            .expect("deliver_reg is Some only for a non-empty capture")
-            .register_base;
         let deliver_reg = dc
             .deliver_reg
             .expect("the caller returns Identity when there is no hole");
-        self.registers[top_base + deliver_reg as usize].set(value);
+        // Into the innermost appended frame, which the append reinstated;
+        // `deliver_reg` is Some only for a non-empty capture.
+        self.mark_awaiting();
+        self.return_into(ReturnFrame::Top, deliver_reg, value);
         Ok(())
     }
+}
+
+/// The register file, lent for reading: what [`ExecutionState::registers`]
+/// answers. No method writes, so a holder of `&VmState` cannot write a
+/// register (#904); the step tracer and the snapshot copies read through it.
+#[derive(Clone, Copy)]
+pub(crate) struct Registers<'a>(&'a [Cell<TaggedValue>]);
+
+impl<'a> Registers<'a> {
+    #[inline(always)]
+    pub(crate) fn len(self) -> usize {
+        self.0.len()
+    }
+
+    /// The register at `index`, panicking past the end as indexing does.
+    #[inline(always)]
+    pub(crate) fn at(self, index: usize) -> TaggedValue {
+        self.0[index].get()
+    }
+
+    /// The register at `index`, if the file reaches it.
+    #[inline(always)]
+    pub(crate) fn get(self, index: usize) -> Option<TaggedValue> {
+        self.0.get(index).map(Cell::get)
+    }
+
+    /// The registers in `range`, in order.
+    pub(crate) fn values(self, range: Range<usize>) -> impl Iterator<Item = TaggedValue> + 'a {
+        self.0[range].iter().map(Cell::get)
+    }
+
+    /// Every register, in order.
+    pub(crate) fn iter(self) -> impl Iterator<Item = TaggedValue> + 'a {
+        self.0.iter().map(Cell::get)
+    }
+
+    /// A copy of the registers `range` takes: a snapshot's own file, which
+    /// the capture and retirement may then write, as they write a
+    /// continuation's, never the machine's.
+    pub(crate) fn copy<R>(self, range: R) -> Vec<Cell<TaggedValue>>
+    where
+        R: SliceIndex<[Cell<TaggedValue>], Output = [Cell<TaggedValue>]>,
+    {
+        self.0[range].to_vec()
+    }
+}
+
+/// The frame an [`ExecutionState::return_into`] writes into (#904).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReturnFrame {
+    /// The top frame, which something has just returned into: the frame
+    /// above it popped, a jump or a composable invoke reinstated it, or a
+    /// callee it called answered here and now.
+    Top,
+    /// [`ReturnFrame::Top`], whose window base the caller holds already:
+    /// the base the dispatch prologue hoisted, which a primitive's call
+    /// keeps across the callback it may make.
+    TopAt(usize),
+    /// The frame below the top: the one the top frame returns into.
+    Caller,
 }
 
 /// Move a count recorded against one wind or handler stack onto another:
@@ -519,6 +758,33 @@ impl ExecutionState {
 /// lands at `to` rather than near 2^64.
 fn relocate_count(value: usize, from: usize, to: usize) -> usize {
     (to + value).saturating_sub(from)
+}
+
+/// The panic of a write into a top frame that awaits a value made by its own
+/// write path (#904): something has returned into the frame since its last
+/// instruction began, so the write is [`ExecutionState::return_into`]'s,
+/// where stage 7 lowers the stack watermark.
+#[cold]
+#[inline(never)]
+fn wrote_an_awaiting_frame(path: &str, index: usize) -> ! {
+    panic!(
+        "{path} wrote register {index} of a top frame that awaits a value: something \
+         returned into it, or it called a callee that answered, since its instruction \
+         began, so the write goes through `return_into` (#904, PRD/GC_PRD.md §11.1)"
+    )
+}
+
+/// The panic of a [`ExecutionState::return_into`] into a top frame that
+/// awaits no value (#904): nothing has returned into it since its
+/// instruction began, so the write is its own, `set_top`'s.
+#[cold]
+#[inline(never)]
+fn returned_into_a_running_frame(reg: u16) -> ! {
+    panic!(
+        "return_into wrote r{reg} of a top frame that awaits no value: nothing returned \
+         into it, and it called nothing that answered, since its instruction began, so the \
+         write is its own and goes through `set_top` (#904)"
+    )
 }
 
 /// Put the frame an abort lands in on top of `frames`, with its window on the

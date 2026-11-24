@@ -19,6 +19,7 @@ use super::control::{
     spread_apply_args, step_wind_jump, tail_call_closure_resolved, tail_call_value,
     tail_call_value_with_probe, tail_invoke_delimited, unpack_values, vm_raise_value, wind_step,
 };
+use super::execution_state::ReturnFrame;
 use crate::error::{VmError, frame_refusal};
 use crate::types::code_object::{Arity, CodeObject, RegisterMapCensus, RegisterMaps};
 use crate::types::continuation::{
@@ -943,18 +944,13 @@ impl VmState {
         self.reg_at(self.frame_base(), reg)
     }
 
-    #[inline(always)]
-    pub(super) fn set_reg(&mut self, reg: u16, val: TaggedValue) {
-        let base = self.frame_base();
-        self.set_reg_at(base, reg, val);
-    }
-
-    // Base-relative variants for the dispatch loop: `base` is the top
+    // The base-relative read for the dispatch loop: `base` is the top
     // frame's `register_base`, hoisted once per dispatch. Only instruction
-    // arms that cannot push or pop a frame before the access may use these
-    // — after a frame change the hoisted base addresses the wrong window
-    // (a `set_reg` at a dispatch site means "the frame changed here"). The
+    // arms that cannot push or pop a frame before the access may use it —
+    // after a frame change the hoisted base addresses the wrong window. The
     // debug assert makes that rule machine-checked across the test suite.
+    // The top frame's own writes are `ExecutionState::set_top`, under the
+    // same rule (#904).
     //
     // The primitive-call arms are the exception that proves it: they hand the
     // hoisted base to a callee that *can* pop frames, because a higher-order
@@ -964,7 +960,7 @@ impl VmState {
     #[inline(always)]
     pub(super) fn reg_at(&self, base: usize, reg: u16) -> TaggedValue {
         debug_assert_eq!(base, self.frame_base());
-        let value = self.execution.registers()[base + reg as usize].get();
+        let value = self.execution.registers().at(base + reg as usize);
         if GC_CHECK && value == TaggedValue::DEAD_SLOT {
             self.read_of_a_retired_register(0, reg, "as an instruction's operand");
         }
@@ -997,12 +993,6 @@ impl VmState {
             frame.pc.saturating_sub(1),
             frame.code.id
         )
-    }
-
-    #[inline(always)]
-    pub(super) fn set_reg_at(&mut self, base: usize, reg: u16, val: TaggedValue) {
-        debug_assert_eq!(base, self.frame_base());
-        self.execution.registers()[base + reg as usize].set(val);
     }
 
     /// Allocate a full VM continuation, returning its heap `TaggedValue` handle.
@@ -2202,7 +2192,7 @@ macro_rules! inline_primitive {
             None
         };
         match fast {
-            Some(val) => $state.set_reg_at($base, $dst, val),
+            Some(val) => $state.execution.set_top($base, $dst, val),
             None => {
                 if let Some(escaped) = exec_call_primitive(
                     $state, $base, $func_id, $link, &[$($arg),+], $dst, $exit_depth,
@@ -2225,7 +2215,7 @@ fn dispatch_one_instruction(
     // (no Rc clone per instruction — only when the frame's code changed),
     // read `pc` and fold in its advance (instructions that jump overwrite
     // it), and hoist the register window base for the frame-stable arms
-    // (`reg_at`/`set_reg_at`).
+    // (`reg_at`/`ExecutionState::set_top`).
     let (pc, base) = state.execution.dispatch_frame(cur_code);
     let code: &CodeObject = cur_code;
 
@@ -2251,7 +2241,7 @@ fn dispatch_one_instruction(
     match *instr {
         // ── Load / Store ────────────────────────────────────────────────
         Instruction::LoadImmediate { dst, val } => {
-            state.set_reg_at(base, dst, val);
+            state.execution.set_top(base, dst, val);
         }
 
         Instruction::LoadConst { dst, idx } => {
@@ -2262,12 +2252,12 @@ fn dispatch_one_instruction(
                     .ok_or_else(|| VmError::Runtime {
                         message: format!("constant index {} out of bounds", idx),
                     })?;
-            state.set_reg_at(base, dst, val);
+            state.execution.set_top(base, dst, val);
         }
 
         Instruction::Move { dst, src } => {
             let val = state.reg_at(base, src);
-            state.set_reg_at(base, dst, val);
+            state.execution.set_top(base, dst, val);
         }
 
         Instruction::LoadClosure { dst, slot } => {
@@ -2286,7 +2276,7 @@ fn dispatch_one_instruction(
                 .ok_or_else(|| VmError::Runtime {
                     message: format!("closure slot {} out of range", slot),
                 })?;
-            state.set_reg_at(base, dst, val);
+            state.execution.set_top(base, dst, val);
         }
 
         Instruction::LoadGlobal { dst, link } => {
@@ -2303,7 +2293,7 @@ fn dispatch_one_instruction(
                 Some(val) => val,
                 None => load_global_cold(state, &code.links, link)?,
             };
-            state.set_reg_at(base, dst, val);
+            state.execution.set_top(base, dst, val);
         }
 
         Instruction::StoreGlobal { link, src } => {
@@ -2356,7 +2346,7 @@ fn dispatch_one_instruction(
                 .borrow_mut()
                 .alloc_vm_closure(child_id.0, captured);
             state.note_closure_made(child_id);
-            state.set_reg_at(base, dst, closure_val);
+            state.execution.set_top(base, dst, closure_val);
         }
 
         // ── Control Flow ────────────────────────────────────────────────
@@ -2507,7 +2497,9 @@ fn dispatch_one_instruction(
             }
             // Write result into caller's return_reg.
             let return_reg = frame.return_reg;
-            state.set_reg(return_reg, result);
+            state
+                .execution
+                .return_into(ReturnFrame::Top, return_reg, result);
             pop_resolved_extents(state, exit_depth);
         }
 
@@ -2520,7 +2512,7 @@ fn dispatch_one_instruction(
             let consumer_val = state.reg_at(base, consumer);
             let produced_vals = unpack_values(state, state.reg_at(base, producer_result));
             if let Some(result) = call_any(state, consumer_val, &produced_vals, dst)? {
-                state.set_reg(dst, result);
+                state.execution.return_into(ReturnFrame::Top, dst, result);
             }
             poll(state)?;
         }
@@ -2577,7 +2569,9 @@ fn dispatch_one_instruction(
             // [`Instruction::CollectAtCall`]. Deliver first, then collect.
             deliver_before_collecting(state, exit_depth);
             let collected = collect_at_call(state, kind);
-            state.set_reg_at(base, resume_step::RESULT, TaggedValue::boolean(collected));
+            state
+                .execution
+                .set_top(base, resume_step::RESULT, TaggedValue::boolean(collected));
         }
 
         Instruction::ResumeForce => {
@@ -2800,7 +2794,7 @@ fn dispatch_one_instruction(
             let _window = AssertNoGc::new(state.heap());
             let cont = capture_delimited(state, prompt_idx, dst);
             let cont_tv = state.alloc_vm_delimited_continuation(cont);
-            state.set_reg_at(base, dst, cont_tv);
+            state.execution.set_top(base, dst, cont_tv);
         }
 
         Instruction::InvokeContinuation {
@@ -3083,7 +3077,9 @@ fn dispatch_one_instruction(
                     // this pc rely on it), then branch — to the else target
                     // when the test is false, over the kept `JumpUnless`
                     // otherwise.
-                    state.set_reg_at(base, dst, TaggedValue::boolean(truthy));
+                    state
+                        .execution
+                        .set_top(base, dst, TaggedValue::boolean(truthy));
                     debug_assert!(
                         target > pc,
                         "a backward jump at pc {pc} would loop without a poll"
@@ -3275,7 +3271,7 @@ fn dispatch_one_instruction(
         Instruction::AllocCell { dst, src } => {
             let val = state.reg_at(base, src);
             let cell = state.heap.borrow_mut().alloc_mutable_cell(val);
-            state.set_reg_at(base, dst, cell);
+            state.execution.set_top(base, dst, cell);
         }
 
         Instruction::ReadCell { dst, cell } => {
@@ -3287,7 +3283,7 @@ fn dispatch_one_instruction(
                 .ok_or_else(|| VmError::Runtime {
                     message: "ReadCell: not a MutableCell".into(),
                 })?;
-            state.set_reg_at(base, dst, val);
+            state.execution.set_top(base, dst, val);
         }
 
         Instruction::WriteCell { cell, src } => {

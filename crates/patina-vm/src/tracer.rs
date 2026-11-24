@@ -18,13 +18,14 @@
 //! - `format_log()` — human-readable, indented by frame depth
 //! - `format_jsonl()` — one JSON object per line for programmatic analysis
 
+use crate::runtime::Registers;
 use crate::types::CallFrame;
 use crate::types::code_object::CodeObjectId;
 use crate::types::instruction::Instruction;
 use patina_core::heap::SharedHeap;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{Trace, TraceThroughRc};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -350,9 +351,9 @@ impl StepTracer {
 
     /// Called before each instruction dispatch. Snapshots registers.
     #[allow(clippy::too_many_arguments)]
-    pub fn pre_instruction_with_depth(
+    pub(crate) fn pre_instruction_with_depth(
         &mut self,
-        registers: &[Cell<TaggedValue>],
+        registers: Registers<'_>,
         frame: &CallFrame,
         code_id: CodeObjectId,
         pc: usize,
@@ -368,11 +369,11 @@ impl StepTracer {
         // Snapshot current frame's registers
         let base = frame.register_base;
         let end = (base + frame.num_regs as usize).min(registers.len());
-        self.pre_regs = registers[base..end].iter().map(Cell::get).collect();
+        self.pre_regs = registers.values(base..end).collect();
 
         // Snapshot all registers for watchpoints
         if !self.filter.watchpoints.is_empty() {
-            self.pre_all_regs = registers.iter().map(Cell::get).collect();
+            self.pre_all_regs = registers.iter().collect();
         }
 
         if self.filter.is_full(self.events.len()) {
@@ -397,9 +398,9 @@ impl StepTracer {
     }
 
     /// Called after each instruction dispatch. Diffs registers and checks watchpoints.
-    pub fn post_instruction(
+    pub(crate) fn post_instruction(
         &mut self,
-        registers: &[Cell<TaggedValue>],
+        registers: Registers<'_>,
         frame: Option<&CallFrame>,
         heap: &SharedHeap,
     ) {
@@ -417,11 +418,10 @@ impl StepTracer {
         {
             let base = f.register_base;
             let end = (base + f.num_regs as usize).min(registers.len());
-            let after = &registers[base..end];
             for (i, (&old, new)) in self
                 .pre_regs
                 .iter()
-                .zip(after.iter().map(Cell::get))
+                .zip(registers.values(base..end))
                 .enumerate()
             {
                 if old != new {
@@ -444,7 +444,7 @@ impl StepTracer {
         if !self.filter.watchpoints.is_empty() {
             for &idx in &self.filter.watchpoints {
                 let old = self.pre_all_regs.get(idx).copied();
-                let new = registers.get(idx).map(Cell::get);
+                let new = registers.get(idx);
                 if old != new {
                     pending.push(TraceEvent::Watchpoint {
                         step: self.step,

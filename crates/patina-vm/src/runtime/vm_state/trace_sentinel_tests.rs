@@ -399,7 +399,7 @@ fn for_each_slot(state: &VmState, mut each: impl FnMut(&Cell<TaggedValue>)) {
     let delimited = state.delimited_continuation_store.borrow();
     let full = full.values().next().expect("one full capture");
     let delimited = delimited.values().next().expect("one delimited capture");
-    for slot in (execution.registers().iter())
+    for slot in (execution.register_cells().iter())
         .chain(execution.frames().iter().map(|f| &f.closure))
         .chain(&full.registers)
         .chain(full.frames.iter().map(|f| &f.closure))
@@ -930,8 +930,8 @@ fn a_tail_call_where_an_escape_lands_keeps_the_landing_units_link_table() {
     )
     .id();
     let w = state.code_object(w).expect("loaded");
-    state.execution.push_frame(w, CallFrame::NO_CLOSURE, 0);
-    state.set_reg(0, k);
+    let base = state.execution.push_frame(w, CallFrame::NO_CLOSURE, 0);
+    state.execution.set_top(base, 0, k);
     let collections = state.heap.borrow().gc_collections();
 
     let result = super::run_top_frame(&mut state);

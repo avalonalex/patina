@@ -113,7 +113,7 @@
 //! are `control_flow_matrix.rs`, `escape_from_primitive.rs`, and the Scheme
 //! control suites (including their existing backend-specific expectations).
 
-use super::execution_state::push_abort_stub;
+use super::execution_state::{ReturnFrame, push_abort_stub};
 use super::vm_state::gc_roots::switches;
 use super::vm_state::{
     EvalCallee, VmState, eval_closure, load_global_cold, poll_in_window, run_loop_until,
@@ -187,7 +187,7 @@ pub(super) fn call_closure_from_regs(
         let fixed = *fixed as usize;
         for (i, &r) in arg_regs.iter().take(fixed).enumerate() {
             let value = argument_reg(state, caller_base, r);
-            state.execution.registers()[base + i].set(value);
+            state.execution.init_arg(base, i, value);
         }
         // Cons the rest list straight from the caller's registers — no
         // staging Vec. Variadic calls are hot in practice: `map` and every
@@ -197,11 +197,11 @@ pub(super) fn call_closure_from_regs(
                 .iter()
                 .map(|&r| argument_reg(state, caller_base, r)),
         );
-        state.execution.registers()[base + fixed].set(rest);
+        state.execution.init_arg(base, fixed, rest);
     } else {
         for (i, &r) in arg_regs.iter().enumerate() {
             let value = argument_reg(state, caller_base, r);
-            state.execution.registers()[base + i].set(value);
+            state.execution.init_arg(base, i, value);
         }
     }
     // The callee's entry: a poll site (§12, #700), with its frame complete
@@ -217,7 +217,7 @@ pub(super) fn call_closure_from_regs(
 /// the reading frame is the one below the top.
 #[inline(always)]
 fn argument_reg(state: &VmState, caller_base: usize, reg: u16) -> TaggedValue {
-    let value = state.execution.registers()[caller_base + reg as usize].get();
+    let value = state.execution.registers().at(caller_base + reg as usize);
     if GC_CHECK && value == TaggedValue::DEAD_SLOT {
         state.read_of_a_retired_register(1, reg, "as a call's argument");
     }
@@ -367,7 +367,7 @@ fn spread_apply_tail(state: &VmState, last: TaggedValue) -> Result<Vec<TaggedVal
 /// `Call` instruction.
 ///
 /// **A live frame is a precondition**, for the read below and for the
-/// `set_reg` inside `call_value` that it reads back. It holds because the only
+/// `return_into` inside `call_value` that it reads back. It holds because the only
 /// dispatch loop whose `exit_depth` is 0 is [`super::vm_state::execute`]'s, and that loop's one
 /// frame is never popped by a tail call: pass 3 marks top-level expressions as
 /// **not** in tail position (`pass3_tail.rs`), so `tail_call_value_with_probe`
@@ -470,24 +470,14 @@ fn store_args_in_window(state: &mut VmState, base: usize, arity: Arity, arg_vals
     }
     if let Arity::Variadic(fixed) = arity {
         let fixed = fixed as usize;
-        for (dst, &val) in state.execution.registers()[base..base + fixed]
-            .iter()
-            .zip(arg_vals)
-        {
-            dst.set(val);
-        }
+        state.execution.init_args(base, fixed, arg_vals);
         let rest = state
             .heap()
             .borrow_mut()
             .list_from_iter(arg_vals[fixed..].iter().copied());
-        state.execution.registers()[base + fixed].set(rest);
+        state.execution.init_arg(base, fixed, rest);
     } else {
-        for (dst, &val) in state.execution.registers()[base..base + arg_vals.len()]
-            .iter()
-            .zip(arg_vals)
-        {
-            dst.set(val);
-        }
+        state.execution.init_args(base, arg_vals.len(), arg_vals);
     }
 }
 
@@ -569,13 +559,12 @@ fn handle_control_primitive(
             let code = value_wind_stub(state)?;
             let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, dst);
 
-            // Through `set_reg_at`, not the raw slice: the frame is already
-            // pushed, so `base` *is* `frame_base()`, and the debug assert
-            // keeps that machine-checked if these writes are ever moved above
-            // the push.
-            state.set_reg_at(base, value_wind::BEFORE, args[0]);
-            state.set_reg_at(base, value_wind::BODY, args[1]);
-            state.set_reg_at(base, value_wind::AFTER, args[2]);
+            // Through `set_top`: the frame is already pushed, so `base` *is*
+            // the top frame's, and the debug assert keeps that
+            // machine-checked if these writes are ever moved above the push.
+            state.execution.set_top(base, value_wind::BEFORE, args[0]);
+            state.execution.set_top(base, value_wind::BODY, args[1]);
+            state.execution.set_top(base, value_wind::AFTER, args[2]);
         }
 
         VmControlPrimitive::CallWithContinuationPrompt => {
@@ -626,7 +615,7 @@ fn handle_control_primitive(
                 // closing someone else's and leaving this one live for the
                 // next abort to land on.
                 state.execution.close_prompts(prompt_idx);
-                state.set_reg(dst, result);
+                state.execution.return_into(ReturnFrame::Top, dst, result);
             }
         }
 
@@ -667,7 +656,9 @@ fn handle_control_primitive(
             // continuation's snapshot holds the one before. A loop catching
             // one raise per iteration retained nine heap objects per
             // iteration for the life of its frame (296 MB at 160k).
-            state.set_reg(dst, TaggedValue::NULL);
+            state
+                .execution
+                .return_into(ReturnFrame::Top, dst, TaggedValue::NULL);
             // Capture a full continuation: snapshot of entire current state.
             // No safe point from the capture to the store entry: the
             // weak-table rule (`gc_roots.rs`), asserted (#624).
@@ -688,7 +679,7 @@ fn handle_control_primitive(
             // Call proc with the continuation object.
             // Proc could be a primitive or a VM closure.
             if let Some(result) = call_any(state, proc, &[cont_tv], dst)? {
-                state.set_reg(dst, result);
+                state.execution.return_into(ReturnFrame::Top, dst, result);
             }
         }
 
@@ -731,7 +722,7 @@ fn handle_control_primitive(
             // channel: a register-only protocol cannot go stale when a
             // `values` call is discarded.
             let packed = state.heap().borrow_mut().values_from(args.to_vec());
-            state.set_reg(dst, packed);
+            state.execution.return_into(ReturnFrame::Top, dst, packed);
         }
 
         VmControlPrimitive::Force => {
@@ -749,14 +740,16 @@ fn handle_control_primitive(
             let obj = args[0];
             let state_now = state.heap().borrow().promise_state(obj);
             match state_now {
-                None => state.set_reg(dst, obj),
-                Some(PromiseState::Forced(value)) => state.set_reg(dst, value),
+                None => state.execution.return_into(ReturnFrame::Top, dst, obj),
+                Some(PromiseState::Forced(value)) => {
+                    state.execution.return_into(ReturnFrame::Top, dst, value)
+                }
                 Some(PromiseState::Delayed(thunk)) => {
                     let code = force_stub(state)?;
                     let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, dst);
 
-                    state.set_reg_at(base, force_step::PROMISE, obj);
-                    state.set_reg_at(base, force_step::THUNK, thunk);
+                    state.execution.set_top(base, force_step::PROMISE, obj);
+                    state.execution.set_top(base, force_step::THUNK, thunk);
                 }
             }
         }
@@ -779,8 +772,8 @@ fn handle_control_primitive(
             let code = value_cwv_stub(state)?;
             let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, dst);
 
-            state.set_reg_at(base, value_cwv::PRODUCER, args[0]);
-            state.set_reg_at(base, value_cwv::CONSUMER, args[1]);
+            state.execution.set_top(base, value_cwv::PRODUCER, args[0]);
+            state.execution.set_top(base, value_cwv::CONSUMER, args[1]);
         }
 
         VmControlPrimitive::Apply => {
@@ -842,7 +835,7 @@ fn handle_control_primitive(
             // On an error/transfer, leave cleanup to the owning dispatch loop.
             if let Some(result) = call_any(state, thunk, &[], dst)? {
                 state.execution.close_handlers(handler_index);
-                state.set_reg(dst, result);
+                state.execution.return_into(ReturnFrame::Top, dst, result);
             }
         }
 
@@ -988,14 +981,18 @@ pub(super) fn vm_raise_value(
         // stubs that deliver their own value. This one returns through the
         // ordinary `Return`, so it needs the raise's own destination.
         state.execution.set_return_reg(dst);
-        state.set_reg_at(base, raise_step::HANDLER, handler_entry.handler);
-        state.set_reg_at(base, raise_step::EXCEPTION, exception);
-        state.set_reg_at(
+        state
+            .execution
+            .set_top(base, raise_step::HANDLER, handler_entry.handler);
+        state
+            .execution
+            .set_top(base, raise_step::EXCEPTION, exception);
+        state.execution.set_top(
             base,
             raise_step::DEPTH_BELOW,
             TaggedValue::fixnum(below as i64),
         );
-        state.set_reg_at(
+        state.execution.set_top(
             base,
             raise_step::CONTINUABLE,
             TaggedValue::boolean(continuable),
@@ -1348,9 +1345,10 @@ pub(super) fn step_wind_jump(
     pop_resolved_prompts(state);
     // Deliver into `deliver_reg` of the top frame. Any `base` the caller
     // hoisted is stale here — the whole register file was just replaced.
-    if let Some(top) = state.execution.frames().last() {
-        let top_base = top.register_base;
-        state.execution.registers()[top_base + cc.deliver_reg as usize].set(value);
+    if !state.execution.frames().is_empty() {
+        state
+            .execution
+            .return_into(ReturnFrame::Top, cc.deliver_reg, value);
     }
     drop(window);
     Ok(())
@@ -1381,8 +1379,7 @@ pub(super) fn exit_in_progress(state: &VmState) -> Option<i32> {
             let target = state
                 .execution
                 .registers()
-                .get(frame.register_base + wind_step::TARGET as usize)?
-                .get();
+                .get(frame.register_base + wind_step::TARGET as usize)?;
             state.get_vm_continuation(target)?.exit_status
         })
 }
@@ -1410,11 +1407,11 @@ fn push_wind_step(
     install_thunk_handlers(state, handlers);
     let code = wind_jump_stub(state)?;
     let base = push_stub_frame(state, code, wind_step::NUM_REGS);
-    // `set_reg_at` for the reason the value form's stub gives: the frame is
+    // `set_top` for the reason the value form's stub gives: the frame is
     // pushed, so the assert holds and keeps holding.
-    state.set_reg_at(base, wind_step::TARGET, target);
-    state.set_reg_at(base, wind_step::VALUE, value);
-    state.set_reg_at(base, wind_step::ENTERING, entering);
+    state.execution.set_top(base, wind_step::TARGET, target);
+    state.execution.set_top(base, wind_step::VALUE, value);
+    state.execution.set_top(base, wind_step::ENTERING, entering);
     drop(window);
     // The caller's clone of the jump's continuation (`step_wind_jump`'s `cc`,
     // whose record lends `handlers` when the step enters an extent) outlives
@@ -1874,23 +1871,27 @@ fn stub_for(state: &mut VmState, work: &StubWork) -> Result<Rc<CodeObject>, VmEr
 /// `CALLEE` register, which roots it from there on.
 fn set_suspension(state: &mut VmState, base: usize, suspension: Suspension) {
     let Suspension { work, kept } = suspension;
-    state.set_reg_at(base, resume_step::STATE, kept);
+    state.execution.set_top(base, resume_step::STATE, kept);
     match work {
         StubWork::Call { callee, args, eval } => {
             let is_eval = eval.is_some();
             if is_eval {
                 poll_in_window(state, switches::poll_before_callee_write());
             }
-            state.set_reg_at(base, resume_step::CALLEE, callee);
+            state.execution.set_top(base, resume_step::CALLEE, callee);
             drop(eval);
-            state.set_reg_at(base, resume_step::EVAL, TaggedValue::boolean(is_eval));
+            state
+                .execution
+                .set_top(base, resume_step::EVAL, TaggedValue::boolean(is_eval));
             if args.len() <= resume_step::INLINE_ARGS {
                 for (i, arg) in args.into_iter().enumerate() {
-                    state.set_reg_at(base, resume_step::ARGS + i as u16, arg);
+                    state
+                        .execution
+                        .set_top(base, resume_step::ARGS + i as u16, arg);
                 }
             } else {
                 let list = state.heap().borrow_mut().list_from_iter(args);
-                state.set_reg_at(base, resume_step::ARGS, list);
+                state.execution.set_top(base, resume_step::ARGS, list);
             }
         }
         StubWork::Collect(_) => {
@@ -1901,9 +1902,11 @@ fn set_suspension(state: &mut VmState, base: usize, suspension: Suspension) {
                 .into_iter()
                 .chain((0..resume_step::INLINE_ARGS as u16).map(|i| resume_step::ARGS + i))
             {
-                state.set_reg_at(base, reg, TaggedValue::UNSPECIFIED);
+                state.execution.set_top(base, reg, TaggedValue::UNSPECIFIED);
             }
-            state.set_reg_at(base, resume_step::EVAL, TaggedValue::FALSE);
+            state
+                .execution
+                .set_top(base, resume_step::EVAL, TaggedValue::FALSE);
         }
     }
 }
@@ -1933,11 +1936,13 @@ pub(super) fn deliver_before_collecting(state: &mut VmState, exit_depth: Depth) 
     if state.execution.top_frame_depth() <= exit_depth {
         return;
     }
-    let [.., caller, stub] = state.execution.frames() else {
+    let [.., _caller, stub] = state.execution.frames() else {
         return;
     };
-    let slot = caller.register_base + stub.return_reg as usize;
-    state.execution.registers()[slot].set(TaggedValue::UNSPECIFIED);
+    let return_reg = stub.return_reg;
+    state
+        .execution
+        .return_into(ReturnFrame::Caller, return_reg, TaggedValue::UNSPECIFIED);
 }
 
 /// The registry index of `prim`, if it is a resumable primitive
@@ -2112,7 +2117,7 @@ fn start_resumable(
         state: state as *mut VmState,
     };
     match vm_step(state, registry.start(index, args, &ctx))? {
-        VmStep::Done(value) => state.set_reg(dst, value),
+        VmStep::Done(value) => state.execution.return_into(ReturnFrame::Top, dst, value),
         VmStep::Suspend(suspension) => push_resume_frame(state, index, suspension, dst)?,
     }
     Ok(())
@@ -2150,7 +2155,9 @@ fn tail_start_resumable(
             if state.execution.depth() == exit_depth {
                 return Ok(Some(value));
             }
-            state.set_reg(return_reg, value);
+            state
+                .execution
+                .return_into(ReturnFrame::Top, return_reg, value);
             // The popped frame's extents close now, as after `Return`.
             pop_resolved_extents(state, exit_depth);
         }
@@ -2179,7 +2186,9 @@ fn push_resume_frame(
         .execution
         .push_frame(code, CallFrame::NO_CLOSURE, return_reg);
 
-    state.set_reg_at(base, resume_step::INDEX, TaggedValue::fixnum(index as i64));
+    state
+        .execution
+        .set_top(base, resume_step::INDEX, TaggedValue::fixnum(index as i64));
     set_suspension(state, base, suspension);
     Ok(())
 }
@@ -2211,15 +2220,26 @@ pub(super) fn resume_primitive(state: &mut VmState, base: usize) -> Result<(), V
     let ctx = VmApplyContext {
         state: state as *mut VmState,
     };
+    // The stub awaits the primitive's answer, which may come after nested
+    // loops ran above it (#904).
+    state.execution.mark_awaiting();
     match vm_step(state, registry.resume(index, kept, result, &ctx))? {
-        VmStep::Done(value) => state.set_reg_at(base, resume_step::RESULT, value),
+        // The primitive's second half can call back, and a `Step::Eval`'s
+        // expansion load libraries, on nested loops above this frame.
+        VmStep::Done(value) => {
+            state
+                .execution
+                .return_into(ReturnFrame::TopAt(base), resume_step::RESULT, value)
+        }
         VmStep::Suspend(suspension) => {
             // Round again from the top, in the variant for this call's
             // argument count, or the one that collects; the loop picks up a
-            // changed code object.
+            // changed code object. Restarted before its operands are
+            // written, so that they are the next round's own (`set_top`,
+            // #904); `set_suspension` reads neither the pc nor the code.
             let code = stub_for(state, &suspension.work)?;
-            set_suspension(state, base, suspension);
             state.execution.restart_stub(code);
+            set_suspension(state, base, suspension);
         }
     }
     Ok(())
@@ -2308,7 +2328,7 @@ pub(super) fn resume_force(state: &mut VmState, base: usize) -> Result<(), VmErr
                 match next {
                     PromiseState::Forced(value) => Some(value),
                     PromiseState::Delayed(thunk) => {
-                        state.set_reg_at(base, force_step::THUNK, thunk);
+                        state.execution.set_top(base, force_step::THUNK, thunk);
                         None
                     }
                 }
@@ -2331,7 +2351,7 @@ pub(super) fn resume_force(state: &mut VmState, base: usize) -> Result<(), VmErr
         }
     };
     match settled {
-        Some(value) => state.set_reg_at(base, force_step::RESULT, value),
+        Some(value) => state.execution.set_top(base, force_step::RESULT, value),
         // Not done: round again from the `Call`, in this same frame, so a
         // chain of `delay-force`s runs in constant space.
         None => state.execution.set_pc(0),
@@ -2922,7 +2942,7 @@ pub(super) fn abort_to_prompt(
     // travel needs the live wind stack intact to know what it is leaving, so
     // the machine cannot be cut back until it arrives.
     let mut frames = state.execution.frames_below(landing_depth).to_vec();
-    let mut registers = state.execution.registers()[..registers_end].to_vec();
+    let mut registers = state.execution.registers().copy(..registers_end);
     push_abort_stub(
         &mut frames,
         &mut registers,
@@ -3088,10 +3108,14 @@ pub(super) fn push_invoke_step(
 ) -> Result<(), VmError> {
     let code = invoke_step_stub(state)?;
     let base = push_stub_frame(state, code, invoke_step::NUM_REGS);
-    state.set_reg_at(base, invoke_step::CONT, cont);
-    state.set_reg_at(base, invoke_step::VALUE, value);
-    state.set_reg_at(base, invoke_step::DST, TaggedValue::fixnum(dst as i64));
-    state.set_reg_at(base, invoke_step::INDEX, TaggedValue::fixnum(index as i64));
+    state.execution.set_top(base, invoke_step::CONT, cont);
+    state.execution.set_top(base, invoke_step::VALUE, value);
+    state
+        .execution
+        .set_top(base, invoke_step::DST, TaggedValue::fixnum(dst as i64));
+    state
+        .execution
+        .set_top(base, invoke_step::INDEX, TaggedValue::fixnum(index as i64));
     drop(window);
 
     // The caller's clone of the delimited continuation (`invoke_delimited`'s
@@ -3227,7 +3251,7 @@ pub(super) fn capture_delimited(
     let base_at_capture = frames
         .first()
         .map_or(state.execution.registers().len(), |f| f.register_base);
-    let registers = state.execution.registers()[base_at_capture..].to_vec();
+    let registers = state.execution.registers().copy(base_at_capture..);
     let deliver_reg = frames.last().map(|top| {
         // Cleared, not copied as it stands: the hole is dead by construction
         // — the capturing call never returns a value into it — so whatever it
@@ -3408,7 +3432,9 @@ pub(super) fn tail_invoke_delimited(
             if depth == exit_depth || depth == Depth::BASE {
                 return Ok(Some(value));
             }
-            state.set_reg(return_reg, value);
+            state
+                .execution
+                .return_into(ReturnFrame::Top, return_reg, value);
             drop(window);
             pop_resolved_extents(state, exit_depth);
             Ok(None)
@@ -3540,6 +3566,10 @@ pub(super) fn call_value_with_probe(
     dst: u16,
 ) -> Result<(), VmError> {
     if closure_code_id.is_none() {
+        // The calling frame awaits the callee's value: one that answers here
+        // and now is written into `dst` by `return_into`, after whatever
+        // frames its callbacks ran above the caller (#904).
+        state.execution.mark_awaiting();
         // Intercept higher-order control primitives that need VM cooperation.
         if let Some(ctrl) = vm_control_primitive(state, func_val) {
             return handle_control_primitive(state, ctrl, arg_vals, dst);
@@ -3549,14 +3579,14 @@ pub(super) fn call_value_with_probe(
                 return start_resumable(state, index, arg_vals, dst);
             }
             let result = call_primitive_proc(state, &prim, arg_vals);
-            state.set_reg(dst, result?);
+            state.execution.return_into(ReturnFrame::Top, dst, result?);
             return Ok(());
         }
         if let Some(index) = parameter_set_call(state, func_val, arg_vals) {
             return start_resumable(state, index, &[func_val, arg_vals[0]], dst);
         }
         if let Some(result) = try_call_parameter(state, func_val, arg_vals) {
-            state.set_reg(dst, result?);
+            state.execution.return_into(ReturnFrame::Top, dst, result?);
             return Ok(());
         }
         if let Some(delivered) = try_invoke_full_continuation(state, func_val, arg_vals)? {
@@ -3570,7 +3600,7 @@ pub(super) fn call_value_with_probe(
             {
                 // The identity continuation resumes nothing, so nothing will
                 // deliver `value` but this.
-                state.set_reg(dst, value);
+                state.execution.return_into(ReturnFrame::Top, dst, value);
             }
             return Ok(());
         }
@@ -3695,7 +3725,9 @@ pub(super) fn tail_call_value_with_probe(
                 return Ok(Some(result));
             }
             let return_reg = frame.return_reg;
-            state.set_reg(return_reg, result);
+            state
+                .execution
+                .return_into(ReturnFrame::Top, return_reg, result);
 
             // The popped frame's extents close now, as after `Return`.
             pop_resolved_extents(state, exit_depth);
@@ -3727,7 +3759,9 @@ pub(super) fn tail_call_value_with_probe(
                 return Ok(Some(result));
             }
             let return_reg = frame.return_reg;
-            state.set_reg(return_reg, result);
+            state
+                .execution
+                .return_into(ReturnFrame::Top, return_reg, result);
 
             pop_resolved_extents(state, exit_depth);
             return Ok(None);
@@ -3915,13 +3949,16 @@ pub(super) fn exec_call_primitive_direct(
             .check_arity(index, arg_vals.len())
             .map_err(eval_to_vm_error)?;
         let value = state.call_cx(handler, arg_vals).map_err(eval_to_vm_error)?;
-        state.set_reg_at(base, dst, value);
+        state.execution.set_top(base, dst, value);
         return Ok(None);
     }
     let registry = Rc::clone(state.primitive_registry());
     let ctx = VmApplyContext {
         state: state as *mut VmState,
     };
+    // The calling frame awaits the primitive's value, which may come after
+    // a callback's frames ran above it (#904).
+    state.execution.mark_awaiting();
     let step = vm_step(state, registry.start(index, arg_vals, &ctx))?;
     // No frame check here: a continuation escaping out of a re-entrant
     // primitive is signalled at the boundary (`across_reentry`) and unwinds
@@ -3929,7 +3966,11 @@ pub(super) fn exec_call_primitive_direct(
     // call started with. An earlier fix guarded it here instead, which caught
     // only primitives in call position.
     match step {
-        VmStep::Done(result) => state.set_reg_at(base, dst, result),
+        // Into the frame the call started in: a callback's frames may have
+        // run above it, and returned.
+        VmStep::Done(result) => state
+            .execution
+            .return_into(ReturnFrame::TopAt(base), dst, result),
         // A resumable primitive's call or collection runs in `resume_stub`'s
         // frame, which returns the primitive's value to `dst` (#477, #478,
         // #639).

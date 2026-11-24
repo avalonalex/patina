@@ -217,6 +217,67 @@ mod unchecked {
     }
 }
 
+/// A cell that only a check build keeps ([`GC_CHECK`](super::GC_CHECK)), for
+/// state that exists to be asserted on (#904). In a check build it is a
+/// `Cell`; in a plain one it is zero-sized, so a structure that holds one
+/// keeps the plain build's layout, as [`SlotChecks`] keeps `Heap`'s. It is
+/// for a crate that cannot name core's `gc-check` feature in a `#[cfg]`:
+/// the VM's `ExecutionState` held its check-only word in every build, and
+/// the 8 bytes reordered `VmState` around it, splitting the dispatch loop's
+/// paired loads (`nucleic` +3.7% aligned cycles at equal instructions).
+///
+/// A plain build stores nothing, and [`get`](Self::get) answers `None`
+/// there, so no build reads a value it never kept.
+#[cfg(any(debug_assertions, feature = "gc-check"))]
+pub struct CheckCell<T: Copy>(std::cell::Cell<T>);
+
+/// A cell that only a check build keeps: in this build, a plain one,
+/// nothing. `PhantomData<Cell<T>>` keeps the check build's auto traits, so
+/// code that compiles in one build compiles in the other.
+#[cfg(not(any(debug_assertions, feature = "gc-check")))]
+pub struct CheckCell<T: Copy>(std::marker::PhantomData<std::cell::Cell<T>>);
+
+impl<T: Copy> CheckCell<T> {
+    /// A cell holding `value`, in a check build.
+    #[inline(always)]
+    pub fn new(value: T) -> Self {
+        #[cfg(any(debug_assertions, feature = "gc-check"))]
+        {
+            CheckCell(std::cell::Cell::new(value))
+        }
+        #[cfg(not(any(debug_assertions, feature = "gc-check")))]
+        {
+            let _ = value;
+            CheckCell(std::marker::PhantomData)
+        }
+    }
+
+    /// The value, in a check build; `None` in a plain one.
+    #[inline(always)]
+    pub fn get(&self) -> Option<T> {
+        #[cfg(any(debug_assertions, feature = "gc-check"))]
+        {
+            Some(self.0.get())
+        }
+        #[cfg(not(any(debug_assertions, feature = "gc-check")))]
+        {
+            None
+        }
+    }
+
+    /// Store `value`, in a check build; a plain one stores nothing.
+    #[inline(always)]
+    pub fn set(&self, value: T) {
+        #[cfg(any(debug_assertions, feature = "gc-check"))]
+        self.0.set(value);
+        #[cfg(not(any(debug_assertions, feature = "gc-check")))]
+        let _ = value;
+    }
+}
+
+// What the type is for: a plain build's cell takes no space.
+const _: () = assert!(super::GC_CHECK || std::mem::size_of::<CheckCell<u64>>() == 0);
+
 // ============================================================================
 // Positive controls
 // ============================================================================
