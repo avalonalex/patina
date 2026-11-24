@@ -1527,8 +1527,8 @@ the 940 KB it frees would satisfy a bound of thousands of pairs on its own);
 the cycle proof also requires the pairs in use not to grow by the cycles,
 since each iteration's other garbage outweighs its pair, and the arena
 comparison requires `bytes-reclaimed` to grow in the run it measures.
-`crates/patina-repl/tests/gc_byte_trigger.rs`, in the Test Suite, runs #606's
-and #637's shapes through the CLI with no GC variable, each bound on the
+`crates/patina-repl/tests/gc_byte_trigger.rs`, in the Test Suite, runs #606's,
+#637's and #656's shapes through the CLI with no GC variable, each bound on the
 growth of a key across the workload, after the same `(gc)`, so that the
 bootstrap counts against none of them: 200 garbage vectors of 100,000
 elements and 1,000 VM captures 1,000 frames deep each collect about every
@@ -1540,7 +1540,16 @@ closure, collect at least once per 8 MiB of that (five times), reclaim nine
 tenths of what they allocated and grow the heap by under 32 MiB, because
 each is charged an estimate of the frame it captures (#637); charged their
 72-byte slots alone, as before #637, they allocated about 7 MB and did not
-collect. `crates/patina-repl/tests/gc_namespace_bytes.rs` does the same
+collect. Tree-walker captures are charged an estimate of the continuation
+levels each is the first to hold (#656): 200 made and dropped at the bottom
+of a 1,000-deep recursion must allocate more than 900 bytes a level, collect
+at least once per 16 MiB of that, reclaim nine tenths and grow the heap by
+under 32 MiB, where charged their slots alone they allocated about 200 KB
+and did not collect; 100 kept ones, about 98 MB, collect three times,
+because L counts them; and 20,000 made over one 1,000-deep tail,
+`samedepth1000`'s shape, allocate under 8,000 bytes a capture and collect
+fewer than ten times, because the tail is charged to the first of them.
+`crates/patina-repl/tests/gc_namespace_bytes.rs` does the same
 for #615's namespaces on both backends: loops of `environment`, of it with
 an `eval`, of `scheme-report-environment` and of `null-environment`, at a
 size and four times it, each collect about every 8 MiB of namespaces, hold
@@ -2448,7 +2457,7 @@ The REPL rows declare SS1, SS4 and SS5,
 since their growth shows in L and the counts and their footprints are the
 deferred library loads' high-water (#616); the server and churn rows declare
 SS2 as well. A clause a row fails today is marked red in the runner's table
-with the issue or stage that fixes it — #616, #656, #866, stage 5c —
+with the issue or stage that fixes it — #616, #866, stage 5c —
 and is reported, not failed; a red clause that passes is called out for
 promotion. A mark names one clause, or one clause on one backend
 (`SS1/vm`), and SS5's by its key (`SS5:symbols`), so that it silences no

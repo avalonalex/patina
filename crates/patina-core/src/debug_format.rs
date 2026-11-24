@@ -516,7 +516,7 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, printer: &
         HeapObjectData::Record { record_type, .. } => {
             write!(buf, "#<record {}>", record_type.name).unwrap()
         }
-        HeapObjectData::Continuation(_) => buf.push_str("#<continuation>"),
+        HeapObjectData::Continuation { .. } => buf.push_str("#<continuation>"),
         HeapObjectData::Parameter { .. } => buf.push_str("#<parameter>"),
         HeapObjectData::Promise(_) => buf.push_str("#<promise>"),
         HeapObjectData::Library(lib) => write!(buf, "{}", lib).unwrap(),

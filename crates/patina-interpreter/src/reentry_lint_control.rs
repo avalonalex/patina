@@ -252,7 +252,7 @@ fn no_crate_declares_a_static_mut() {
 /// heap by stage 5 (§18.3), and an entry comes off as its payload goes. A new
 /// one is added on purpose: the test below fails until it is listed (C9).
 const SHARED_PAYLOADS: &[&str] = &[
-    "Continuation.0",
+    "Continuation.k",
     "Ephemeron.0",
     "EnvironmentSpecifier.env",
     "Library.0",

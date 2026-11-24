@@ -93,9 +93,29 @@
 //! charged for it; a closure made where no frame is — at top level, in a
 //! library body, or by `eval` in a namespace — captures a namespace, whose
 //! tables are external bytes already, and is charged a frame it does not
-//! capture; and frame chains, and frames only a tree-walker continuation
-//! holds, are missed. Exact accounting is stage 4f's, which charges the
-//! tree-walker's `Rc` payloads (`PRD/GC_PRD.md`).
+//! capture; and frame chains are missed. Exact accounting is stage 4f's,
+//! which charges the tree-walker's `Rc` payloads (`PRD/GC_PRD.md`).
+//!
+//! **A tree-walker capture** (#656) is charged its `Rc<CpsContinuation>`
+//! allocation, the three stacks it copies, and `CAPTURED_LEVEL_BYTES` for
+//! each continuation level it is the first to capture
+//! ([`cps_continuation_payload`]). A capture holds the chain of levels
+//! below it, the frames and continuation environments of every pending
+//! call, and charged its slot alone, 6,000 captures at the bottom of a
+//! 1,000-deep recursion made no collection and peaked at 5.36 GiB. The
+//! levels are counted by a walk that marks each frame it charges for
+//! (`CpsContinuation::mark_levels`) and stops at a marked one, so a tail
+//! that many captures share is charged to the first of them, and the walk
+//! costs a capture the levels made since the last. The capture's heap object
+//! carries the number, which [`HeapObjectData::payload_bytes`] reads as a
+//! field: allocation, marking and sweep see one number, and the match stays
+//! a leaf. What the estimate misses: every level is charged the one
+//! constant, whatever its frames bind; a frame a closure captured is
+//! charged by the closure too; a level's mark outlives the capture charged
+//! for it, so a later capture that holds the level after the first has died
+//! is not charged again; and a chain that has no frame of its own, as
+//! nested `call-with-values` wrappers make, counts nothing. Exact
+//! accounting is stage 4f's.
 //!
 //! [`cps_lambda_payload`] measures it, and [`HeapObjectData::payload_bytes`]
 //! does not: that match runs on every object allocation, the VM's closures
@@ -132,6 +152,8 @@ use num_bigint::BigInt;
 
 use super::mutator::{Carrier, event};
 use super::{Heap, HeapObjectData};
+use crate::cont_value::{CAPTURED_LEVEL_BYTES, ExceptionHandler, PromptFrame};
+use crate::continuation::{CpsContinuation, DynamicWindRecord};
 use crate::core_expr::ScopedParam;
 pub(crate) use crate::environment::CAPTURED_FRAME_BYTES;
 use crate::environment::RC_COUNTS;
@@ -242,6 +264,21 @@ pub(crate) fn cps_lambda_payload(
         + CAPTURED_FRAME_BYTES
 }
 
+/// A tree-walker capture's payload (#656; the module comment says what the
+/// estimate misses): its `Rc<CpsContinuation>` allocation, the three stacks
+/// it copies, at capacity, and [`CAPTURED_LEVEL_BYTES`] for each
+/// continuation level no earlier capture was charged for. Measuring it marks
+/// those levels, so it is measured once, when the capture is made, and the
+/// capture's heap object carries the number.
+pub(crate) fn cps_continuation_payload(k: &CpsContinuation) -> usize {
+    RC_COUNTS
+        + size_of::<CpsContinuation>()
+        + k.dynamic_winds.capacity() * size_of::<DynamicWindRecord>()
+        + k.prompt_stack.capacity() * size_of::<PromptFrame>()
+        + k.exception_handlers.capacity() * size_of::<ExceptionHandler>()
+        + k.mark_levels() * CAPTURED_LEVEL_BYTES
+}
+
 /// A procedure's payload: a tree-walker closure's ([`cps_lambda_payload`]),
 /// and none for a primitive, which is charged its slot alone, as before
 /// #637 — a backend makes one per registry entry when it installs them, and
@@ -323,6 +360,10 @@ impl HeapObjectData {
             }
             HeapObjectData::VmContinuationRef { id: _, bytes }
             | HeapObjectData::VmDelimitedContinuationRef { id: _, bytes } => *bytes,
+            // A tree-walker capture's own allocation and its estimate
+            // (`cps_continuation_payload`), measured when it was made: a
+            // field read, which keeps this match a leaf.
+            HeapObjectData::Continuation { k: _, bytes } => *bytes,
             // Nothing outside the slot. A port's slot holds its `PortTable`
             // entry's number; an open file port is charged as external bytes.
             // An identifier's holds its set's id in the heap's scope-set
@@ -344,7 +385,6 @@ impl HeapObjectData {
             // (`procedure_payload`), which keeps this match a leaf.
             HeapObjectData::Procedure(_)
             | HeapObjectData::RecordType(_)
-            | HeapObjectData::Continuation(_)
             | HeapObjectData::Parameter { .. }
             | HeapObjectData::Promise(_)
             | HeapObjectData::Library(_)

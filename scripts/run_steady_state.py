@@ -269,10 +269,8 @@ ROWS = [
     Row('form-eval-fresh', 'churn', 'form-eval-fresh.scm', {'vm': 4000, 'tree-walker': 4000}, clauses=REPL,
         pr=True),
     Row('cont-churn-10', 'churn', 'cont-churn.scm', {'vm': 20000, 'tree-walker': 10000}, ('10',), pr=True),
-    Row('cont-churn-100', 'churn', 'cont-churn.scm', {'vm': 5000, 'tree-walker': 2000}, ('100',),
-        red={'SS2/tree-walker': '#656'}),
-    Row('cont-churn-1000', 'churn', 'cont-churn.scm', {'vm': 1000, 'tree-walker': 500}, ('1000',),
-        red={'SS2/tree-walker': '#656'}),
+    Row('cont-churn-100', 'churn', 'cont-churn.scm', {'vm': 5000, 'tree-walker': 2000}, ('100',)),
+    Row('cont-churn-1000', 'churn', 'cont-churn.scm', {'vm': 1000, 'tree-walker': 500}, ('1000',)),
 ]
 
 READING = re.compile(r'(STEADY(?:-AFTER)?) at=(\d+)((?: [a-z-]+=\S+)*)')

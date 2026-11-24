@@ -1287,9 +1287,38 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   where no frame is — at top level, in a library body, or by `eval` in a
   namespace — captures a namespace, whose tables are external bytes already
   (below), and is charged a frame it does not capture; and frame chains are
-  missed: exact accounting is stage 4f's. Other shared `Rc`
-  payloads (procedures' bodies and environments, macros, libraries,
-  tree-walker continuations) are not charged, and a port has none: its slot
+  missed: exact accounting is stage 4f's.
+  **A tree-walker capture (#656)** is charged its `Rc<CpsContinuation>`, the
+  three stacks it copies, and `CAPTURED_LEVEL_BYTES` for each continuation
+  level it is the first to capture: the level a non-tail call leaves
+  pending, which is the call's frame, a frame of temporaries and two entries
+  of continuation environment, 980 bytes. The chain of levels below a
+  capture is Rust memory the heap did not count, so 6,000 captures at the
+  bottom of a 1,000-deep recursion made no collection and peaked at
+  5.36 GiB of footprint; charged, they collect 666 times and peak at
+  16.8 MiB (release, macOS arm64, 2026-11-24, `main` at 8e83f889 against
+  #656's branch). `Heap::alloc_continuation` measures the payload once
+  (`account::cps_continuation_payload`). The measuring is a walk from the
+  capture down its chain (`CpsContinuation::mark_levels`), a loop over a
+  stack of its own, which marks the frame each level resumes in
+  (`Environment::mark_captured`) and stops at a frame an earlier capture
+  marked: a frame belongs to one call and a call returns into one
+  continuation, so what lies below a marked frame was walked by the capture
+  that marked it. A tail many captures share is therefore walked and
+  charged once, and each capture costs the levels made since the last. The
+  capture's heap object carries the number (`Continuation { k, bytes }`),
+  as a VM capture's handle does, so `payload_bytes` reads a field, and
+  allocation, marking and sweep agree. It is an estimate: every level is
+  charged the one constant, whatever it binds; a frame a closure captured
+  is charged by the closure as well; a level's mark outlives the capture
+  charged for it, so a later capture that still holds the level after the
+  first has died is not charged again; and a chain with no frame of its
+  own, as nested `call-with-values` wrappers make, counts nothing. Across
+  eleven shapes of recursion the account saw 1.03 to 1.71 times what the
+  footprint grew by (#656's PR has the table). Exact accounting is stage
+  4f's. Other shared `Rc`
+  payloads (procedures' bodies and environments, macros, libraries) are not
+  charged, and a port has none: its slot
   holds only its `PortTable` entry's number (#785), and an open file port's
   buffer is charged as external bytes (below); GC_PRD §15 charges what they
   hold as **external bytes**, through `Heap::charge_external_bytes`, which
@@ -1424,8 +1453,8 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   itself, not the forms a body expands.
 
   The rest of what sits behind those `Rc`s is still charged only as
-  slots: a string port's buffer, the frames above the one a tree-walker
-  closure is charged for, and frames that only a continuation holds. The
+  slots: a string port's buffer, and the frames above the one a tree-walker
+  closure is charged for. The
   8 MiB floor is more slots than the 65,536 objects that bounded it before
   #606 (524,288 pairs, or 116,508 of the 72-byte object slots that
   procedures and ports take), so a program whose memory sits there keeps
@@ -1568,7 +1597,8 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   it captures (#637, above) as part of its payload: an estimate, not a
   measurement, counted once per closure, so a frame several closures share
   is counted for each, and a closure that captures a namespace adds a frame
-  the footprint does not hold.
+  the footprint does not hold. A tree-walker capture's estimate of the
+  levels it was the first to capture (#656, above) is in them the same way.
 
 ### 6.1 Trigger cost — measured, redesigned (2026-08-03, #8), re-measured
 

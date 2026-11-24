@@ -53,6 +53,8 @@ pub(crate) mod trace_sentinels;
 use crate::tagged_value::{HeapIndex, TaggedValue};
 use account::ByteAccount;
 pub(crate) use account::FilePortCharge;
+#[cfg(test)]
+pub(crate) use account::cps_continuation_payload;
 pub use account::{
     ExternalAccounter, ExternalBytes, FILE_PORT_BYTES, GcThreshold, OBJECT_SLOT_BYTES,
     PAIR_SLOT_BYTES, STRING_SLOT_BYTES, VECTOR_SLOT_BYTES, descriptor_limit,
@@ -389,7 +391,15 @@ pub enum HeapObjectData {
         /// carry it hold it, and its trace keeps it alive.
         relinked: bool,
     },
-    Continuation(Rc<crate::continuation::CpsContinuation>),
+    /// A tree-walker capture: a first-class continuation.
+    Continuation {
+        k: Rc<crate::continuation::CpsContinuation>,
+        /// What the account holds for it outside its slot (#656): its own
+        /// allocation and an estimate of the continuation levels it was the
+        /// first to capture (`account::cps_continuation_payload`), measured
+        /// when it was made, as a VM capture carries what it copied (#635).
+        bytes: usize,
+    },
     Parameter {
         values: Rc<Interior<Vec<TaggedValue>>>,
         converter: Option<TaggedValue>,
@@ -477,7 +487,7 @@ impl HeapObjectData {
             HeapObjectData::RecordType(_) => HeapObjectType::RecordType,
             HeapObjectData::Record { .. } => HeapObjectType::Record,
             HeapObjectData::Identifier { .. } => HeapObjectType::Identifier,
-            HeapObjectData::Continuation(_) => HeapObjectType::Continuation,
+            HeapObjectData::Continuation { .. } => HeapObjectType::Continuation,
             HeapObjectData::Parameter { .. } => HeapObjectType::Parameter,
             HeapObjectData::Promise(_) => HeapObjectType::Promise,
             HeapObjectData::Library(_) => HeapObjectType::Library,
@@ -1868,12 +1878,16 @@ impl Heap {
             )
     }
 
-    /// Allocate a native Continuation object (first-class continuation)
+    /// Allocate a native Continuation object (first-class continuation),
+    /// charged for its own allocation and for the continuation levels no
+    /// earlier capture was charged for, which this marks (#656,
+    /// `account::cps_continuation_payload`).
     pub fn alloc_continuation(
         &mut self,
         k: Rc<crate::continuation::CpsContinuation>,
     ) -> TaggedValue {
-        self.alloc_object(HeapObjectData::Continuation(k))
+        let bytes = account::cps_continuation_payload(&k);
+        self.alloc_object(HeapObjectData::Continuation { k, bytes })
     }
 
     /// Allocate a native Parameter object whose value is `init`, with
@@ -2715,7 +2729,7 @@ impl Heap {
         tv.is_object()
             && matches!(
                 self.get_object(tv),
-                HeapObjectData::Continuation(_)
+                HeapObjectData::Continuation { .. }
                     | HeapObjectData::VmContinuationRef { .. }
                     | HeapObjectData::VmDelimitedContinuationRef { .. }
             )
@@ -2868,7 +2882,7 @@ impl Heap {
             return None;
         }
         match self.get_object(tv) {
-            HeapObjectData::Continuation(k) => Some(k.clone()),
+            HeapObjectData::Continuation { k, bytes: _ } => Some(k.clone()),
             _ => None,
         }
     }
@@ -3046,7 +3060,7 @@ impl Heap {
                 HeapObjectData::RecordType(_) => "record-type",
                 HeapObjectData::Record { .. } => "record",
                 HeapObjectData::Identifier { .. } => "identifier",
-                HeapObjectData::Continuation(_) => "continuation",
+                HeapObjectData::Continuation { .. } => "continuation",
                 HeapObjectData::Parameter { .. } => "parameter",
                 HeapObjectData::Promise(_) => "promise",
                 HeapObjectData::Library(_) => "library",
