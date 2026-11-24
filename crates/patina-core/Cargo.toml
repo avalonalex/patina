@@ -27,8 +27,12 @@ patina-trace-derive = { path = "../patina-trace-derive" }
 
 # `getrlimit(RLIMIT_NOFILE)`, which sets descriptor pressure's threshold
 # (`heap/account.rs`, #607), and `sigaction`, which forwards SIGINT to a
-# heap's interrupt handle (`heap/interrupt.rs`, #701). The binary had it
-# already, through rustyline.
+# heap's interrupt handle (`heap/interrupt.rs`, #701). Since then also the
+# process's footprint and CPU time (`heap/telemetry.rs`), the census's
+# `atexit` (`census.rs`), the memory budget's readings (`heap/budget.rs`,
+# #907: `sysctlbyname`, `sysconf`, `getrlimit(RLIMIT_AS)`) and a
+# reservation's `mmap`, `madvise` and `munmap` (`heap/reservation.rs`,
+# #908). The binary had it already, through rustyline.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

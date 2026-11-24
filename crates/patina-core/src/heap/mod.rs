@@ -36,6 +36,7 @@ pub mod interrupt;
 pub mod mutator;
 mod numeric;
 mod port_table;
+pub mod reservation;
 mod root_set;
 mod scope_sets;
 // Sentinel values for the collector's field tests (#623): patina-core's own
