@@ -335,19 +335,25 @@ Notes:
   backend that makes one (`LibraryRegistry::register_roots`), and is not
   ready while a load holds it, so a collection then waits, as each backend's
   safe point waited for it before #682.
-- Every table the heap keeps in Rust takes one wrapper, `HeapTable` (#687,
-  addition C3): the handle table's entries, its standard port parameters, the
-  root set, the literal pool, the `PortTable` and the `FinalRegistry`
-  (#785), and the namespaces' placeholder stores and the heap's list of them
-  (#836) now, and the `CodeStore`, `HostPayloadTable` and thread table as the
-  stages that build them land. It is plain in the default build
+- Every table the heap keeps in Rust that is reached outside the heap's
+  borrow takes one wrapper, `HeapTable` (#687, addition C3): the handle
+  table's entries, its standard port parameters, the root set, the literal
+  pool, the `PortTable` and the `FinalRegistry` (#785), and the namespaces'
+  placeholder stores and the heap's list of them (#836) now, and the
+  `CodeStore`, `HostPayloadTable` and thread table as the stages that build
+  them land. It is plain in the default build
   and the one place a `threaded` build puts a lock (`PRD/GC_PRD.md` §18.2,
   rule 9). Access is scoped to a closure and hands out nothing that holds the
   table, and code that is not the table's — a provider's `ready`, the drop of
   what an entry held — runs after the access ends. An access inside another
   panics, a read inside a read too, which a lock would deadlock on. Where
   carriers will register entries (`FinalRegistry`, `HostPayloadTable`), they
-  add per-mutator young registration lists: C3's later half.
+  add per-mutator young registration lists: C3's later half. A table
+  reached only under the heap's borrow is a plain field of `Heap`, which
+  that borrow already guards, and which a threaded build synchronizes with
+  the heap itself: `symbol_table`, `core_syntax_table`, `syntax_sources`,
+  and the scope-set table (§9.9, #788), whose readers borrow a set out of
+  it in the scope-edit walks.
 - Borrow discipline: `collect` needs `&mut Heap`, so the caller must hold the
   single `borrow_mut()` for the whole collection — which is exactly why safe
   points must be borrow-free (§7). But `visit_env` and object-variant tracing
@@ -365,7 +371,12 @@ Side bit-vectors, one per arena (`MarkBits`), sized to arena length at
 collection start. Owned by the `GcVisitor` and created fresh per collection —
 no persistent mark state on `Heap`, so there is no clearing step and no idle
 memory between collections. No `TaggedValue` or `HeapObjectData` change.
-The visitor also roots the intern table at construction (a dangling
+A fifth bitmap, `scope_sets`, has a bit for each entry of the heap's
+scope-set table, sized the same way, with id 0's bit set when it is made:
+marking an identifier sets its set's bit, as marking a macro object sets
+its template scopes' (#789), and the sweep frees every entry whose bit is
+clear (§4.5, §9.9, #788). It is not the weak-id seam, which
+4e deletes. The visitor also roots the intern table at construction (a dangling
 `symbol_table` index would break *any* collector — heap invariant, not
 policy), marking symbols without a worklist round-trip since they are leaves
 by construction. It visits the hosts' handles there too (§5.3), on the same
@@ -385,7 +396,8 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs`):
 
 | Variant | Children |
 |---------|----------|
-| `BigInt`, `Rational`, `Real`, `Symbol`, `Bytevector`, `Port` (its `PortTable` entry's number, #785), `RecordType`, `Identifier`, `Library`*, `PromptTag`, `LabelPlaceholder` | leaf |
+| `BigInt`, `Rational`, `Real`, `Symbol`, `Bytevector`, `Port` (its `PortTable` entry's number, #785), `RecordType`, `Library`*, `PromptTag`, `LabelPlaceholder` | leaf |
+| `Identifier` | `name`, its spelling's symbol (§9.1, #790): interned, and so a root until 5c's weak table, for every identifier but a relinked one, whose symbol no table holds and only this edge keeps; sets its scope set's bit in `MarkBits::scope_sets` (§4.2, §9.9, #788); `written` and `relinked` hold none |
 | `Complex` | `real`, `imag` |
 | `Exception` | each of `irritants` |
 | `Record` | each of `fields` (through the `Rc<Interior<Vec<_>>>`); `record_type`, an `Rc`'d descriptor rather than a value, is not traced |
@@ -395,7 +407,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs`):
 | `MutableCell` | inner value |
 | `VmClosure` | each of `free_vars` + queues `code_id` for `trace_code_ids`, unless retired (#836); no environment: its unit's link table holds the namespace, traced by that id |
 | `Procedure` | captured env (`visit_env`) + **body-expression literals** (§4.4) |
-| `Macro` | each of its `literals`, which its patterns and templates name by index (#718, §9.6); each of its `relinks`' records (#837, §9.6: `CarriedRelink`'s derived trace, its spellings and scope id skipped by name); and its body, `CompiledMacro`: `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623; the registry also roots each while its library is registered, and since #834 nothing else need once a redefinition replaces it, since an importer holds the library's cells and not its environment (`CompiledMacro`'s derived trace, #686) |
+| `Macro` | each of its `literals`, which its patterns and templates name by index (#718, §9.6); each of its `relinks`' records (#837, §9.6: `CarriedRelink`'s derived trace, its spellings and scope id skipped by name); no value but its `scopes`, the id of its template scopes' set, whose bit it sets in `MarkBits::scope_sets` as an identifier does (§9.9, #789); and its body, `CompiledMacro`: `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623; the registry also roots each while its library is registered, and since #834 nothing else need once a redefinition replaces it, since an importer holds the library's cells and not its environment (`CompiledMacro`'s derived trace, #686) |
 | `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` — each record's before/after thunks and the handler stack it captured at its `dynamic-wind` call (`WindRecord`'s derived trace, the one tracing point for a record wherever it sits: a stack, a continuation, a prompt frame, or a `DynamicWindSetup`/`Jump` cont value), `exception_handlers`, `prompt_stack` — each frame's handler and the continuation below it (derived; the tag is a plain `Rc` struct), `captured_cont_env` (deduplicated worklist), `resume` (`ContValue`'s derived trace), body literals (§4.4) |
 | `EnvironmentSpecifier` | `visit_env(env)` |
 | `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id, the two kinds sharing the heap's ids; the payload in `VmState`'s side tables is traced only for recorded ids, via the `RootProvider::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5). VM code ids — a marked closure's, each frame's code's (`FrameCode`), the running code's (`RunningCode`) — are recorded in a set of their own, since a `VmState` mints them from 0 too, and broadcast through `RootProvider::trace_code_ids` in the same fixpoint, which traces each one's unit's link table (#836) |
@@ -499,14 +511,31 @@ see — a slot the sweep frees keeps its bit clear, so the pass would drop the
 same entries — so its place and its comment are what hold it before the pair
 sweep.
 
-*The passes' order deviates from §9.9's.* Both passes are step 6's (the weak
-tables), and both run inside `Heap::sweep`, so after classification, step 7
+The scope sets leave in a third pass, beside the `syntax_sources` prune and
+before the arenas' sweeps (#788, §9.9): `ScopeSetTable::sweep` frees every
+entry whose bit in `MarkBits::scope_sets` is clear, which no marked identifier
+carries and no marked macro object holds as its template scopes' set (#789). Its set leaves the index and drops its spill, the free entries at the
+end of the table are dropped, and the free list is made again from the rest,
+lowest last, which interning reuses first. Id 0, the empty set, has its bit
+set when the bitmap is made, so it is never freed, and teardown's sweep,
+which marks nothing, leaves the table holding it alone. A free entry holds the
+empty set, so a check build panics on reading one, as #621's checks do for a
+freed slot (`a_check_build_refuses_a_free_scope_set`). The table then shrinks
+any buffer that holds four times what it uses, and all of them once it holds
+no set but the empty one, and gives back the external bytes it no longer
+holds, before the sweep reads them to set L. Every collection is a major
+today, so every collection recycles; from stage 7 a minor prunes young
+entries only.
+
+*The passes' order deviates from `PRD/GC_PRD.md` §9.9's.* The three passes
+are step 6's (the weak tables), and all run inside `Heap::sweep`, so after
+classification, step 7
 (`queue_dead_finals`, which `MarkSweepCollector::collect` runs before the
-sweep): GC_PRD's order puts step 6 first. The two touch nothing in common —
+sweep): GC_PRD's order puts step 6 first. They touch nothing in common —
 classification reads the `FinalRegistry` and the objects' marks, the passes
-the port table's other entries and the stores — so the order is not
-observable, and the passes stay where the mark bits are consumed (#818,
-#836).
+the port table's other entries, the stores and the scope-set table — so the
+order is not observable, and the passes stay where the mark bits are
+consumed (#818, #836, #788).
 
 Sweep completion is the "collection happened" boundary: it resets the
 allocation counter and clears any pending `(gc)` request, so alternative
@@ -586,7 +615,7 @@ Scheme resumes (`PRD/GC_PRD.md` §9.6, F2–F5). `heap/finalize.rs` holds the
   (§6.2), counted in the pause and the MMU, so moving the flush out of the
   sweep moved time between columns and hid none. The census's
   `sweep_ns_per_slot` falls on I/O workloads for that reason alone.
-- **The order deviates from §9.9's until stage 4e.** The drain runs inside
+- **The order deviates from `PRD/GC_PRD.md` §9.9's until stage 4e.** The drain runs inside
   the collection entry, so before the VM's code release, which the backend
   runs once the entry returns (`VmState::after_collection`). GC_PRD §9.9 puts
   code release (step 8) before the finalizers (step 11); the two touch
@@ -1453,7 +1482,8 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   arena's capacity in slots and the payloads of the occupied slots: what
   the arenas hold now, live or not) and `external-bytes` (what holders
   outside the arenas have charged and not given back: the live
-  namespaces' tables, #615, and the open file ports' buffers, #607).
+  namespaces' tables, #615, the open file ports' buffers, #607, and the
+  scope-set table's sets beyond the empty one, #788).
   GC_PRD's footprint is the last two together. Two keys report descriptor
   pressure (#607): `descriptors-since-gc`, the file ports opened since the
   last collection and not closed since, and `descriptor-collections`, the
@@ -1508,7 +1538,14 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   that unit is never let go: the constant, the procedure's unit, the
   namespace and the closure are a cycle through the roots, kept for good
   (R-D, §8; #866's fix ends it). The reading form's own unit is counted.
-  The tree-walker loads no code, and reads 0, never `#f`. A trigger the GC mode does not use reads `#f`.
+  The tree-walker loads no code, and reads 0, never `#f`. `scope-sets`
+  (#788) counts the sets the heap's scope-set table holds, not counting
+  the empty set (§9.9): read after a collection, the sets the marked
+  identifiers carry, a live macro's literals among them, and each live
+  macro's template scopes' set (#789); between collections, those and the
+  ones interned since. The steady-state driver
+  reads it after `(gc) (gc)`, last of the per-owner keys. A trigger the GC
+  mode does not use reads `#f`.
   `minors` and `majors` count collections by kind: every one is a major
   until a nursery.
   For a tree-walker closure, the first four count the estimate of the frame
@@ -2499,7 +2536,44 @@ quotes in one form preserves sharing across separate insertions of a macro
 argument; it lives in the form's context (`FormCx`) and is dropped with it, so
 it outlives no form and sees no collection (#704).
 
-This table is **not a root**. Before reclaiming slots, sweep retains only entries
+**An identifier carries its spelling's symbol** (#790). Since GC stage 4c.4
+`Identifier.name` is a symbol's word, not an `Rc<str>` of its own. The reader
+interns each spelling it reads (`Parser::identifier`: one lookup per
+occurrence, one symbol per distinct spelling) and makes each occurrence's
+identifier for that symbol (`alloc_source_identifier_for`). A copy takes the
+symbol it already has, with no lookup: the scope-edit walk
+(`Cx::rescope_identifiers`), the expander's mark of a substituted identifier,
+and its mark of a substituted symbol, whose identifier carries that symbol. A
+template's `Template::Symbol` names its symbol among the macro object's
+literals by `LiteralId` (#718), interned once when the template is compiled,
+so each use reads it there; the escaped ellipsis a template compiles interns.
+Quote stripping and the quasiquote derivation answer the identifier's symbol
+(`Cx::identifier_datum`, `Cx::strip_identifiers_memo`), and `eqv?` compares
+the words. `alloc_identifier` and `alloc_source_identifier` still take a
+spelling and intern it, the accessors answer the spelling, read through the
+symbol, and the holders off the heap keep `Rc<str>` names (`CoreExpr`,
+`CpsExpr`, `Environment`, `CompiledMacro`, `IdentifierKey`).
+
+**A relinked spelling is the one name no table interns.** `rewrite_refs` gives
+a relinked identifier a spelling that is bound nowhere (#837), and interning
+it would keep a symbol for good for each redefinition of a library whose macro
+relinks (`a_redefined_library_is_released`'s `relinkv`, `relinkk` and
+`relinkki` hold `symbols` flat). So its name is a symbol object the intern
+table does not hold, made once for each spelling a relinking gives
+(`Cx::relinked_name`, an opaque `RelinkedName`, so that no such symbol becomes
+a datum) and flagged on the identifier (`relinked`), which the copies carry.
+Only the identifiers that carry it keep it, by their trace, and the sweep
+frees it with them; `symbols` never counts it. `eqv?` compares the spellings
+where either name is relinked, so two relinked identifiers of one spelling,
+and one and the interned symbol of its spelling, stay `eqv?`, as every
+identifier of one spelling was. `identifier_datum` interns a relinked
+spelling, as quote stripping always did, so a relinked identifier that
+reaches a quote is the same datum as before: the open defect
+`PRD/GC_PRD.md` §11.6's binding-records row records. The identifier allocators
+assert in debug builds that a name is an interned symbol of its heap, and
+that a relinked one's is a symbol the table does not hold.
+
+The `syntax_sources` table is **not a root**. Before reclaiming slots, sweep retains only entries
 whose values are marked, then shrinks excess table capacity. This visits annotated
 syntax rather than doing a lookup for every freed datum, and removes entries
 before slots can be reused. There is no drain shared between nested loaders,
@@ -2544,6 +2618,15 @@ discarded.
 symbols are immortal. This is correct (symbols are `eq?`-identity-bearing) and
 cheap (symbols are small). A weak intern table with post-sweep pruning is
 future work; nothing in the design blocks it.
+
+Since #790 the table holds every spelling a program's text holds, since the
+reader interns each (§9.1): a spelling stays interned until 5c's weak table,
+where it used to go with its identifiers. That is bounded by the program text
+(M2); a REPL or stdin session keeps each new name it types, as it keeps a
+quoted symbol. After libload's 25 imports and `(patina debug)` `symbols`
+reads 4,304 on both backends, where it read 620. A relinked identifier's
+name is not in the table (§9.1). Once the table is weak, an identifier's
+trace (§4.3) is what keeps its name's symbol alive.
 
 ### 9.3 Transient raw-bits sets
 
@@ -2799,7 +2882,9 @@ more than one carrier, which no lane runs before stage 9:
 - **State implemented in Rust synchronizes itself:** ports, tables,
   registries, promise forcing, the source map. In the default build it is
   plain, behind one wrapper (`HeapTable`, #687), which the threaded build
-  puts its lock in.
+  puts its lock in. A table reached only under the heap's borrow, as
+  `symbol_table` and the scope-set table are (§9.9), is a plain field of
+  `Heap` instead, synchronized with the heap itself (§4.1).
 - **Structures built in Scheme do not synchronize:** hashtables, records,
   vectors. Their users lock them, as in Chez.
 
@@ -2844,6 +2929,178 @@ second.
 **C11:** the types every carrier shares are `Send + Sync`, asserted in one
 test (`crates/patina-tests/tests/carrier_types.rs`): the `InterruptHandle`
 (#701) and the `PrimitiveRegistry` (#710).
+
+### 9.9 The scope-set table (#788)
+
+An identifier used to own its scope set, a sorted `SmallVec` of scope ids
+that spilled past three, and each scope edit built a set for each identifier
+it changed. Since GC stage 4c.2 (#788) it holds the id of its set's entry in
+the heap's `ScopeSetTable` (`heap/scope_sets.rs`): `Identifier.scopes` is a
+`ScopeSetId`, a `u32`, and equal sets share an entry, found by an index by
+contents. Id 0 is the empty set, made with the table and never given up.
+`Heap::alloc_identifier` interns the set it is given, and
+`alloc_source_identifier`, the reader's, takes id 0 with no lookup.
+
+- **Ids stay in core.** `ScopeSetId` is opaque and in a private module, so no
+  code outside `patina-core` can name one. The accessors stay set-valued:
+  `Heap::get_identifier_data` lends the set from the table, the owned and
+  `Cx` forms clone it, and `alloc_identifier` takes a `ScopeSet`. So every
+  holder off the heap keeps owned sets, as decision 13 on #782 has it:
+  `CoreExpr`, `CpsExpr` and its linked references (#872), `Environment`'s
+  scoped bindings, `CompiledMacro`, the VM's `alpha_rename`, and #837's
+  `EarlyBinding.relinked` (keyed by `ScopeId`), `RelinkedEmit.scopes` and
+  `CarriedRelink.guard`, a `ScopeId` in the heap's `Macro.relinks`.
+- **A `ScopeId` is never reused; a set's id is.** Scopes are still minted by
+  `ScopeId::fresh`, in increasing order, and #788 calls it nowhere:
+  `ScopeSet::introducing_scope`, #613's scoped index and #837's relinked
+  spellings all rest on that order.
+- **Not a root, and no `Trace`.** The table holds sets of scope ids, which
+  hold no value, as `syntax_sources` holds none (§9.1). Marking an identifier
+  sets its id's bit in `MarkBits::scope_sets` (§4.2, §4.3), as marking a
+  macro object sets its template scopes' (§9.10, #789), and the sweep frees
+  every entry whose bit is clear (§4.5). So right after a collection the
+  table holds exactly the sets the marked identifiers carry, a macro
+  object's literals among them, and the live macro objects' template
+  scopes, and between collections those and the ones interned since
+  (decision 19 on #782). A set a macro's literal vector keeps
+  outlives the form that made it (#788's `def-getter` shape), which is why
+  the table is per heap rather than per form.
+- **Walks intern once per distinct set.** `Cx::rescope_identifiers`, the
+  expander's flips and the desugarer's scope additions, reads each identifier
+  in place, lends its set to `picks`, and runs `rescope`, and interns its
+  result, once per distinct input set, through a memo from input id to
+  output id for the call. `mark_substituted_tagged` keeps one memo for its
+  whole walk: a `ScopeAddition<'gc>` (`Cx::scope_addition`,
+  `add_scope_copying`, `alloc_identifier_adding_scope`), branded with the
+  context's lifetime as `Cx` is. Each memo lives beneath a context, where
+  nothing collects (#702, #707), so no id it holds is freed while it lives.
+  `rename_identifier_tagged` and the desugarer's `rewrite_refs` intern per
+  allocation.
+- **A plain field of `Heap`**, beside `symbol_table`, under the heap's
+  borrow (decision 18 on #782; §4.1). Every access holds that borrow already,
+  and `get_identifier_data` lends a set out of the table, which `HeapTable`'s
+  closure could not.
+- **Check builds.** A free entry holds the empty set, which no live entry but
+  id 0 holds, so in debug and `gc-check` builds a read of one panics: an
+  identifier the sweep freed, or an id kept past a collection, as #621's
+  checks do for a freed slot.
+- **Charged** (M3). An identifier's slot is charged nothing for its set. The
+  table charges what it holds beyond the empty set's entry as external bytes
+  (its entries, the index, the free list, and each spilled set twice, for its
+  entry and its index key), as it grows, and gives them back as the sweep
+  frees sets and it shrinks, before the sweep reads the external bytes to set
+  L. A table of the empty set alone charges nothing. `(gc-stats)`'s
+  `scope-sets` counts its sets (§6).
+
+The sentinels (`heap/trace_sentinels.rs`) hold it: a set only one identifier
+carries keeps its id and contents across a collection
+(`an_identifiers_scope_set_lives_with_it`, which fails with the identifier's
+arm recording nothing); a set no identifier carries is recycled, and the next
+set interned takes its id, asserted equal, since a set id carries no
+generation stamp (`a_scope_set_no_identifier_carries_is_recycled`); id 0 is
+never recycled (`the_empty_scope_set_is_never_recycled`); and a check build
+refuses a free entry (`a_check_build_refuses_a_free_scope_set`). Through the
+CLI, `gc_shared_tests!`' `a_live_macros_literals_keep_their_scope_sets` reads
+`scope-sets` above its base while the `def-getter` shape's macros live, and
+at it once they are gone.
+
+### 9.10 The live-scope report (#789)
+
+From 5c a macro-introduced top-level definition is reclaimed only when no
+live link table references its record and no live holder carries the
+expansion scope that introduced it (`PRD/GC_PRD.md` §11.6). GC stage 4c.3
+(#789) answers the second half from the scope-set table (§9.9):
+`Heap::scope_is_carried(ScopeId)`, true when a set the table holds contains
+the scope. It is raw, Rust only, with no Scheme surface and no `(gc-stats)`
+key, and is computed when asked, by a scan of the table's entries
+(`ScopeSetTable::carries`; a free entry holds the empty set, so the scan
+needs no free-list test), so no collection pays for it. 5c is its consumer.
+
+- **The macro object's set.** A compiled macro holds scopes off the heap: its
+  `definition_scopes`, each `Template::Symbol` identifier's scopes, the sets
+  of the identifiers it inherited from an enclosing expansion
+  (`inherited_identifiers`) and the scopes of its `foreign_expansions`.
+  `CompiledMacro::template_scopes` takes their union, and
+  `Heap::alloc_macro_with_relinks`, which every allocator of a macro object
+  reaches, interns it once. Its id is `HeapObjectData::Macro.scopes`,
+  beside `literals` and not in the body, so that 4g's item can move the body
+  into 4f's `HostPayloadTable` without touching it. The `Macro` arm of
+  `trace_object_children` sets its bit as the identifier's arm does (§4.3),
+  so the set lives exactly as long as the macro. A macro whose templates hold
+  no scope, as one written at top level, takes id 0 and costs nothing; the
+  others' sets are charged with the table's (§9.9).
+- **What counts:** every set in the table — the marked identifiers', a
+  macro object's literals among them, and the live macro objects' template
+  scopes — and every set interned since the last collection.
+- **What does not:** an environment's binders (the tree-walker's scoped
+  entries, the VM's introduced-global table), which hold a binder's scopes,
+  not a reference's; the desugarer's and the expander's transient sets,
+  which last a form; and tree-walker code. `CpsExpr`'s `Var`, `Set` and
+  `Define` hold owned sets they resolve at run time (`lookup_var_tagged`),
+  so a tree-walker closure compiled while a getter was bound still reaches
+  the definition by its expansion scope once the getter is gone, where the
+  report says that scope is uncarried. The VM resolved the same reference at
+  compile time, to the renamed global, which its code's link table holds:
+  §11.6's other test. Decision 19 on #782 leaves the gap to 5c: to reclaim
+  introduced definitions on the VM only, or to count `CpsExpr` too.
+- **Conservative between collections.** A set no live holder carries any
+  more counts until a collection frees it. Until stage 7 every collection is
+  whole-heap, so right after one the answer is exact for what it counts.
+  From stage 7 a minor marks young sets only and keeps the old ones, so the
+  report is exact for old carriers only after a major, which is where 5c
+  reads it (`PRD/GC_PRD.md` §9.9 step 6, in the stage's corrections PR's
+  wording).
+- **No expansion scope hides in a template's own sets.** The template sets
+  are counted anyway (decision 19), so the report is conservative whatever
+  they hold; and no program needs them for an expansion scope, by three
+  steps, each checked against the code at #789:
+  1. A reference reaches a binder by its scopes only if it carries every
+     scope of the binder: the candidacy test of `scope_resolve::resolve_scoped`
+     is `binding.is_subset_of(reference)` (`is_candidate`), through which the
+     desugarer, the VM's `alpha_rename` and the tree-walker's lookups all
+     resolve. A binder at `{}` is reached by name, with nothing to carry; an
+     early-bound or relinked reference (#438, #837) and VM code reach the
+     record, which the link tables answer for.
+  2. An introduced top-level binder carries the scope of the expansion that
+     introduced it: the expander mints one `macro_scope` per expansion and
+     flips it onto every identifier the template introduced, and the binder
+     is filed at its own scopes, less only a splicing `let-syntax`'s
+     (`spliced_definition_scopes`), which the desugarer mints. A
+     non-splicing `let-syntax` or `letrec-syntax` body defines into a frame
+     of its own, not the namespace, so its definitions are no records here.
+  3. A template's own sets are binding scopes, and the other two places copy
+     the literals: `definition_scopes` is the desugarer's `current_scopes`
+     where the macro is defined, or that with the `let-syntax`'s scope or a
+     fresh transformer scope, and `current_scopes` starts empty and grows
+     only by scopes the desugarer mints (a lambda's body, a `define`
+     shorthand's body, a `let-syntax` or `letrec-syntax`, a `let-syntax`
+     transformer), while expansion scopes are minted only by the expander
+     and `ScopeId::fresh` is one counter; a `Template::Symbol`'s identifier
+     carries `definition_scopes` or nothing (`compile_template_node`);
+     `inherited_identifiers` records the scopes of exactly the identifier
+     the same branch puts in the literal vector (the substituted-identifier
+     case); and `foreign_expansions` keeps only scopes found in those sets
+     (`foreign_expansions_carried_by`).
+
+  So an expansion scope that a live macro's expansion puts on a reference
+  comes from one of its literals, whose set the table holds while the macro
+  lives. The closest shape (below) reaches the user's binding through a
+  `Template::Symbol` under a non-empty definition scope and the introduced
+  one through a literal.
+
+The tests: core's sentinel `a_macros_template_scopes_live_with_it` builds a
+`CompiledMacro` by a literal with four scopes, each in exactly one of the
+four places, and checks each carried while the macro is rooted, its set's id
+kept across the collection, and each uncarried once the macro is swept; it
+fails with the arm's mark deleted (#164's rule). `hygiene_matrix.rs` holds
+three, each on both backends, each reading the scope from the binder
+(`Environment::introduced_records`) after a `(gc)`:
+`an_introduced_definitions_scope_is_carried_while_its_templates_live` (the
+`def-getter` shape: carried, then uncarried once both macros are rebound and
+collected — no holder but the two macros);
+`the_closest_shape_answers_and_its_introduced_scope_is_carried` (`(user
+42)`); and `tree_walker_code_is_not_counted` (the gap: uncarried, and
+`(peek)` still answers 7).
 
 ## 10. Staging
 

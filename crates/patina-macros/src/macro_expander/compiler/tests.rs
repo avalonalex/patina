@@ -379,7 +379,14 @@ fn test_identifiers_from_an_outer_expansion_are_recorded() {
         let (compiled, literals) = compiler
             .compile_macro(cx, "m".into(), vec![(pattern, template)])
             .unwrap();
-        assert_eq!(literals, [helper], "the inherited `helper` is a literal");
+        // `written`'s symbol follows it: each template symbol's is one too
+        // (#790).
+        let written = sym("written", cx);
+        assert_eq!(
+            literals,
+            [helper, written],
+            "the inherited `helper` is a literal"
+        );
 
         assert_eq!(
             compiled.inherited_identifiers.get("helper"),
@@ -401,8 +408,9 @@ fn test_identifiers_from_an_outer_expansion_are_recorded() {
             .compile_macro(cx, "n".into(), vec![(pattern, template)])
             .unwrap();
         assert!(second.inherited_identifiers.is_empty());
-        assert!(
-            literals.is_empty(),
+        assert_eq!(
+            literals,
+            [written],
             "nor does the first's literal carry over"
         );
 
@@ -427,7 +435,7 @@ fn test_identifiers_from_an_outer_expansion_are_recorded() {
             .compile_macro(cx, "n".into(), vec![(pattern, template)])
             .unwrap();
         assert!(third.inherited_identifiers.is_empty());
-        assert!(literals.is_empty(), "nor the failed one's literal");
+        assert_eq!(literals, [written], "nor the failed one's literal");
     });
 }
 
@@ -444,7 +452,8 @@ fn each_literal_is_collected_once() {
         let (compiled, literals) = compiler
             .compile_macro(cx, "m".into(), vec![(pattern, template)])
             .unwrap();
-        assert_eq!(literals, [one]);
+        // And `list`'s symbol, the template's symbol's (#790).
+        assert_eq!(literals, [one, sym("list", cx)]);
         let rule = &compiled.rules[0];
         let Pattern::List(patterns) = &rule.pattern else {
             panic!("a list pattern: {}", rule.pattern);
@@ -456,5 +465,32 @@ fn each_literal_is_collected_once() {
         assert!(matches!(patterns[1], Pattern::Literal(id) if id == first));
         assert!(matches!(templates[1], Template::Literal(id) if id == first));
         assert!(matches!(templates[2], Template::Literal(id) if id == first));
+        assert!(
+            matches!(&templates[0], Template::Symbol(list) if list.symbol() == Some(LiteralId::new(1)))
+        );
+    });
+}
+
+/// A template's symbol names its interned symbol among the macro object's
+/// literals (#790), once however often the template writes it, so that each
+/// use's identifier carries that symbol with no lookup of its spelling.
+#[test]
+fn a_template_symbol_names_its_symbol_among_the_literals() {
+    with_cx(|cx| {
+        let mut compiler = Compiler::new(vec![], Some("...".into()));
+        let pat = list(vec![sym("m", cx), sym("x", cx)], cx);
+        compiler.compile_pattern(cx, pat, 0).unwrap();
+        let form = list(vec![sym("if", cx), sym("x", cx), sym("if", cx)], cx);
+        let template = compiler.compile_template(cx, form, 0).unwrap();
+        let Template::List(templates) = &template else {
+            panic!("a list template");
+        };
+        let symbol_of = |template: &Template| match template {
+            Template::Symbol(identifier) => identifier.symbol().expect("its symbol's literal"),
+            other => panic!("not a symbol: {other:?}"),
+        };
+        let (first, last) = (symbol_of(&templates[0]), symbol_of(&templates[2]));
+        assert_eq!(first, last);
+        assert_eq!(compiler.literals[first.index()], sym("if", cx));
     });
 }

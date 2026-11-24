@@ -1571,11 +1571,13 @@ redefinition, on both backends
 `a_redefined_library_is_released` redefines #614's program 1 and its
 macro variant 800 times each and reads, at 200 and at 800, every count of
 what lives (objects, `namespaces`, `cells`, `binding-records`,
-`code-units`, `symbols`, and the pair, vector and string arenas, which see
-a record or cell that outlived its namespace), each exactly where it was,
-and `external-bytes` within 16 KiB, where one kept namespace a cycle would
-read 600 more namespaces; each reading also has every key but
-`code-units` above 0, and `bytes-allocated` grow by at least 600 × 16 KiB
+`code-units`, `symbols`, `scope-sets` (#788), and the pair, vector and
+string arenas, which see a record or cell that outlived its namespace),
+each exactly where it was, and `external-bytes` within 16 KiB, where one
+kept namespace a cycle would read 600 more namespaces; each reading also
+has every key but `code-units` and `scope-sets` above 0 (every variant
+reads `scope-sets` 0 on both backends: after its `(gc)`s no live identifier
+carries a scope), and `bytes-allocated` grow by at least 600 × 16 KiB
 between them, so a reading that lost a key, or two that do not straddle
 the redefinitions, fails rather than reading every delta 0; under zeal it
 also asserts more collections than one a cycle. `a_value_from_a_replaced_library_still_runs` keeps the old
@@ -2413,10 +2415,11 @@ per cycle (`cpu-us` less `pause-total-us`) over [3N, 4N) ≤ 1.5× that over
 [N, 2N), each segment the minimum of the three runs; **SS5**, each per-owner
 count of `(gc-stats)` at 4N within max(16, 5%) of N, one clause per key:
 `SS5:symbols` and `SS5:ports` since #832, `SS5:namespaces`, `SS5:cells`
-and `SS5:binding-records` since #834, and `SS5:code-units`, the VM's loaded
+and `SS5:binding-records` since #834, `SS5:code-units`, the VM's loaded
 code units, which the tree-walker reads as 0, since #836's second PR, ahead
-of 4b.9's link tables so that the PRs that build them hold it. The runner's
-`PER_OWNER_KEYS` and
+of 4b.9's link tables so that the PRs that build them hold it, and
+`SS5:scope-sets`, the sets the heap's scope-set table holds, since #788.
+The runner's `PER_OWNER_KEYS` and
 `driver.scm`'s `steady-per-owner-keys` are that list, a test keeps them equal,
 and a key joins both in the PR that adds it to `(gc-stats)`. A row that
 drops a peak also requires L below a
@@ -2504,6 +2507,16 @@ introduced definition's binding record (#834) to the scope trace
 identity is the one the definition was bound at, and its scope that
 identity's largest, the expansion's that introduced it, in six shapes, among
 them a generated macro's, where the largest scope and the smallest differ.
+Three more hold the live-scope report 5c reads (`Heap::scope_is_carried`,
+#789; `docs/GC_DESIGN.md` §9.10) on both backends, each reading the scope
+from the binder (`Environment::introduced_records`) after a `(gc)`:
+`an_introduced_definitions_scope_is_carried_while_its_templates_live` (the
+`def-getter` shape's scope carried while its getter and setter live, and not
+once both are rebound and collected), the closest shape to a scope that only
+a compiled template holds (`(user 42)`, through `(srfi 188)`'s
+`splicing-let-syntax`), and `tree_walker_code_is_not_counted`, the gap
+decision 19 on #782 leaves to 5c: uncarried after the rebinding, while
+`(peek)` still answers 7.
 
 **GC benchmarks (#649).** `scripts/run_gc_benchmarks.sh` (the `gc` mode of
 `scripts/benchmarks.py`, in `scripts/gc_bench.py`) runs the workloads of

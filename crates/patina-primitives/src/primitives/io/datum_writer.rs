@@ -337,7 +337,13 @@ fn format_leaf_object<'gc>(cx: &Cx<'gc>, tv: Value<'gc>, display_mode: bool, out
 
     match &*cx.get_object(tv) {
         HeapObjectData::Symbol(name) => write_symbol_name(name, display_mode, out),
-        HeapObjectData::Identifier { name, .. } => write_symbol_name(name, display_mode, out),
+        // Its name's spelling, read through its symbol (#790).
+        HeapObjectData::Identifier { .. } => {
+            let name = cx
+                .get_symbol_or_identifier_name(tv)
+                .expect("an identifier's name is a symbol");
+            write_symbol_name(&name, display_mode, out)
+        }
         HeapObjectData::BigInt(n) => out.push_str(&n.to_string()),
         HeapObjectData::Rational(r) => out.push_str(&r.to_string()),
         HeapObjectData::Real(f) => format_real_number(*f, out),

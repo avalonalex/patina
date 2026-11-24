@@ -1175,3 +1175,266 @@ fn ephemeron_datum_under_a_live_key() {
     collect_from(&mut heap, &[ephemeron, key]);
     s.assert_survived(&heap);
 }
+
+// ----------------------------------------------------------------------------
+// The scope-set table (#788): an identifier's set lives while the identifier
+// does, and an entry no marked identifier holds is recycled. A set's id
+// carries no generation stamp, so a test of reuse asserts that the new set
+// took the freed id, which holds in a check build as in any other.
+// ----------------------------------------------------------------------------
+
+/// The set made of these scope ids. Not minted (`ScopeId::fresh`), so the
+/// tests leave the process's scope counter as it was.
+fn scope_set_of(ids: &[usize]) -> ScopeSet {
+    let mut set = ScopeSet::new();
+    for &id in ids {
+        set.add_scope(ScopeId(id));
+    }
+    set
+}
+
+/// The id of `identifier`'s set in its heap's table.
+fn scope_set_id(heap: &Heap, identifier: TaggedValue) -> super::scope_sets::ScopeSetId {
+    match heap.get_object(identifier) {
+        HeapObjectData::Identifier { scopes, .. } => *scopes,
+        other => panic!("not an identifier: {other:?}"),
+    }
+}
+
+/// A set only one identifier carries, the identifier reachable only through
+/// a pair, keeps its entry across a collection: its id, and its contents. A
+/// new set interned after the collection takes another entry, which it would
+/// not if the sweep had freed this one. Fails with the identifier's arm in
+/// `trace_object_children` recording nothing (#164's rule).
+#[test]
+fn an_identifiers_scope_set_lives_with_it() {
+    let mut heap = Heap::new();
+    let decoy = heap.alloc_pair(TaggedValue::fixnum(-1), TaggedValue::NULL);
+    // Four scopes, so the set spills past the inline three.
+    let set = scope_set_of(&[901, 902, 903, 904]);
+    let identifier = heap.alloc_identifier(Rc::from("x"), set.clone());
+    let id = scope_set_id(&heap, identifier);
+    let root = heap.alloc_pair(identifier, TaggedValue::NULL);
+    collect_from(&mut heap, &[root]);
+    super::sentinels::assert_freed(&heap, decoy, "the decoy");
+    assert_eq!(scope_set_id(&heap, identifier), id);
+    let newcomer = heap.scope_sets.intern(scope_set_of(&[905]));
+    assert_ne!(newcomer, id, "the live identifier's entry was reused");
+    assert_eq!(heap.scope_set(id), &set);
+    assert_eq!(heap.get_identifier_data(identifier).unwrap().1, &set);
+    assert_eq!(heap.scope_sets.intern(set), id);
+}
+
+/// An identifier, its name (#790): built by a literal, with a fresh object
+/// in `name` that the intern table does not hold, so that only the trace
+/// keeps it. An interned symbol would survive through the table whether or
+/// not the trace visits it (they are roots until 5c's weak table), so it
+/// would test nothing here. The allocators make the one exception, a
+/// relinked identifier, whose name is a symbol no table holds: this is its
+/// shape, flagged as one. Fails with the visit of `name` in the
+/// identifier's arm of `trace_object_children` deleted (#164's rule).
+#[test]
+fn identifier_fields() {
+    let mut heap = Heap::new();
+    let mut s = Sentinels::new(&mut heap);
+    let name = s.object(&mut heap, "HeapObjectData::Identifier.name");
+    let identifier = heap.alloc_object(HeapObjectData::Identifier {
+        name,
+        scopes: super::scope_sets::ScopeSetId::EMPTY,
+        written: false,
+        relinked: true,
+    });
+    collect_from(&mut heap, &[identifier]);
+    s.assert_survived(&heap);
+}
+
+/// A relinked identifier's name (#837, #790), a symbol no table holds,
+/// lives while an identifier carries it, reads its spelling, and is freed
+/// with the last identifier that does: the name `symbols` never counts, so
+/// that a redefined library's spellings are not kept for good.
+#[test]
+fn a_relinked_name_lives_and_dies_with_its_identifiers() {
+    let mut heap = Heap::new();
+    let symbols = heap.stats().symbols;
+    let name = heap.alloc_relinked_name(Rc::from("secret.9-1"));
+    let first = heap.alloc_relinked_identifier(name, ScopeSet::new());
+    let second = heap.alloc_relinked_identifier(name, scope_set_of(&[941]));
+    let root = heap.alloc_pair(second, TaggedValue::NULL);
+    collect_from(&mut heap, &[root]);
+    super::sentinels::assert_freed(&heap, first, "the identifier no root reaches");
+    assert_eq!(heap.get_symbol_name(name), Some("secret.9-1"));
+    assert_eq!(
+        heap.get_identifier_data(second).unwrap().0.as_ref(),
+        "secret.9-1"
+    );
+    assert_eq!(heap.stats().symbols, symbols);
+    collect_from(&mut heap, &[]);
+    super::sentinels::assert_freed(&heap, second, "the last identifier");
+    super::sentinels::assert_freed(&heap, name, "the relinked name");
+}
+
+/// A set no marked identifier carries is freed, and the next set interned
+/// takes its entry: the same id, asserted equal (the section's note), with
+/// every live identifier's set as it was. The freed entry lies between two
+/// live ones, so it is the free list that hands it back.
+#[test]
+fn a_scope_set_no_identifier_carries_is_recycled() {
+    let mut heap = Heap::new();
+    let low = heap.alloc_identifier(Rc::from("low"), scope_set_of(&[911]));
+    let dead = heap.alloc_identifier(Rc::from("dead"), scope_set_of(&[912, 913, 914, 915]));
+    let high = heap.alloc_identifier(Rc::from("high"), scope_set_of(&[916, 917]));
+    let freed = scope_set_id(&heap, dead);
+    assert_eq!(heap.scope_sets.len(), 3);
+    collect_from(&mut heap, &[low, high]);
+    super::sentinels::assert_freed(&heap, dead, "the identifier no root reaches");
+    assert_eq!(heap.scope_sets.len(), 2);
+    let set = scope_set_of(&[918, 919, 920]);
+    let newcomer = heap.alloc_identifier(Rc::from("new"), set.clone());
+    assert_eq!(scope_set_id(&heap, newcomer), freed);
+    assert_eq!(heap.get_identifier_data(newcomer).unwrap().1, &set);
+    assert_eq!(
+        heap.get_identifier_data(low).unwrap().1,
+        &scope_set_of(&[911])
+    );
+    assert_eq!(
+        heap.get_identifier_data(high).unwrap().1,
+        &scope_set_of(&[916, 917])
+    );
+}
+
+/// The empty set's entry, id 0, survives a collection that marks no
+/// identifier at all, written or not: a set interned after it takes another
+/// entry, and an identifier made after it still reads the empty set.
+#[test]
+fn the_empty_scope_set_is_never_recycled() {
+    let mut heap = Heap::new();
+    let written = heap.alloc_source_identifier(Rc::from("written"));
+    let plain = heap.alloc_identifier(Rc::from("plain"), ScopeSet::new());
+    let scoped = heap.alloc_identifier(Rc::from("scoped"), scope_set_of(&[921]));
+    collect_from(&mut heap, &[]);
+    for (identifier, what) in [(written, "written"), (plain, "plain"), (scoped, "scoped")] {
+        super::sentinels::assert_freed(&heap, identifier, what);
+    }
+    let set = scope_set_of(&[922]);
+    let newcomer = heap.alloc_identifier(Rc::from("new"), set.clone());
+    let fresh = heap.alloc_source_identifier(Rc::from("fresh"));
+    assert_ne!(
+        scope_set_id(&heap, newcomer),
+        super::scope_sets::ScopeSetId::EMPTY
+    );
+    assert_eq!(heap.get_identifier_data(newcomer).unwrap().1, &set);
+    assert_eq!(
+        scope_set_id(&heap, fresh),
+        super::scope_sets::ScopeSetId::EMPTY
+    );
+    assert!(heap.get_identifier_data(fresh).unwrap().1.is_empty());
+}
+
+/// In a check build, reading a free entry panics: here an id kept past the
+/// collection that freed it. The entry lies between two live ones, so the
+/// sweep keeps it as a free entry rather than dropping it from the end.
+#[test]
+#[cfg(any(debug_assertions, feature = "gc-check"))]
+#[should_panic(expected = "is free")]
+fn a_check_build_refuses_a_free_scope_set() {
+    let mut heap = Heap::new();
+    let low = heap.alloc_identifier(Rc::from("low"), scope_set_of(&[931]));
+    let dead = heap.alloc_identifier(Rc::from("dead"), scope_set_of(&[932]));
+    let high = heap.alloc_identifier(Rc::from("high"), scope_set_of(&[933]));
+    let freed = scope_set_id(&heap, dead);
+    collect_from(&mut heap, &[low, high]);
+    heap.scope_set(freed);
+}
+
+/// The id of the macro object `mac`'s template scopes' set (#789).
+fn macro_scope_set_id(heap: &Heap, mac: TaggedValue) -> super::scope_sets::ScopeSetId {
+    match heap.get_object(mac) {
+        HeapObjectData::Macro { scopes, .. } => *scopes,
+        other => panic!("not a macro: {other:?}"),
+    }
+}
+
+/// A macro object's template scopes live with it, and are reported carried
+/// while they do (#789): a `CompiledMacro` built by a literal holds each of
+/// four scopes in exactly one place, its `definition_scopes`, one
+/// `Template::Symbol`'s identifier, `inherited_identifiers` and
+/// `foreign_expansions`, with no literal and no identifier on the heap that
+/// carries any of them. While the macro is rooted, through a pair, each is
+/// reported carried across a collection, and its set keeps its id: a set
+/// interned after the collection takes another, which it would not if the
+/// sweep had freed this one. Once the macro is unreachable, the collection
+/// that frees it frees its set, and none of the four is carried. A macro
+/// whose templates hold no scope takes the empty set, id 0. Fails with the
+/// `Macro` arm in `trace_object_children` recording nothing (#164's rule).
+#[test]
+fn a_macros_template_scopes_live_with_it() {
+    use crate::compiled_macro::Identifier;
+    let mut heap = Heap::new();
+    let [defined, symbol, inherited, foreign] = [941, 942, 943, 944].map(ScopeId);
+    let template = Template::List(vec![
+        Template::Symbol(Identifier::new("plain")),
+        Template::Symbol(Identifier::with_scopes("free", ScopeSet::singleton(symbol))),
+    ]);
+    let compiled = CompiledMacro {
+        name: Rc::from("m"),
+        rules: vec![CompiledRule {
+            pattern: Pattern::Wildcard,
+            template,
+            num_pvars: 0,
+            max_level: 0,
+            pvar_names: HashMap::new(),
+        }],
+        max_pvars: 0,
+        definition_scopes: ScopeSet::singleton(defined),
+        template_symbols: HashSet::from([Rc::from("plain"), Rc::from("free")]),
+        inherited_identifiers: HashMap::from([(
+            Rc::from("inherited"),
+            vec![ScopeSet::singleton(inherited)],
+        )]),
+        definition_env: None,
+        foreign_expansions: vec![(foreign, Rc::new(Environment::namespace(&heap)))],
+    };
+    let all = [defined, symbol, inherited, foreign];
+
+    let none_carried = |heap: &Heap| all.iter().all(|&scope| !heap.scope_is_carried(scope));
+    assert!(none_carried(&heap), "no set holds them before the macro");
+    let mac = heap.alloc_macro(Rc::new(compiled), vec![]);
+    let id = macro_scope_set_id(&heap, mac);
+    assert_ne!(id, super::scope_sets::ScopeSetId::EMPTY);
+    assert_eq!(heap.scope_set(id), &all.into_iter().collect::<ScopeSet>());
+    let root = heap.alloc_pair(mac, TaggedValue::NULL);
+    collect_from(&mut heap, &[root]);
+    for scope in all {
+        assert!(
+            heap.scope_is_carried(scope),
+            "{scope:?} while the macro lives"
+        );
+    }
+    assert_eq!(macro_scope_set_id(&heap, mac), id);
+    let newcomer = heap.scope_sets.intern(scope_set_of(&[945]));
+    assert_ne!(newcomer, id, "the live macro's entry was reused");
+    assert_eq!(heap.scope_set(id), &all.into_iter().collect::<ScopeSet>());
+
+    collect_from(&mut heap, &[]);
+    super::sentinels::assert_freed(&heap, mac, "the macro no root reaches");
+    assert!(
+        none_carried(&heap),
+        "the macro was swept, and its scopes are still carried"
+    );
+
+    let bare = CompiledMacro {
+        name: Rc::from("bare"),
+        rules: vec![],
+        max_pvars: 0,
+        definition_scopes: ScopeSet::new(),
+        template_symbols: HashSet::new(),
+        inherited_identifiers: HashMap::new(),
+        definition_env: None,
+        foreign_expansions: vec![],
+    };
+    let bare = heap.alloc_macro(Rc::new(bare), vec![]);
+    assert_eq!(
+        macro_scope_set_id(&heap, bare),
+        super::scope_sets::ScopeSetId::EMPTY
+    );
+}
