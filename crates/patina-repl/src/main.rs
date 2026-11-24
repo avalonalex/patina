@@ -103,6 +103,7 @@ fn parse_args(args: &[String]) -> CliOptions {
             "--allow-r6rs" => unsafe { std::env::set_var("PATINA_ALLOW_R6RS", "1") },
             "--dump" | "--vm-dump" => opts.dump = true,
             "--trace" | "--vm-trace" => opts.trace = true,
+            "--stack-max" => set_stack_max(&require_value(&mut iter, "--stack-max", "a size")),
             // Accept --vm for backwards compatibility (it's now the default).
             "--vm" => {}
             "-A" => opts
@@ -130,6 +131,23 @@ fn parse_args(args: &[String]) -> CliOptions {
 }
 
 /// Take the value following a flag, or exit with a usage error.
+/// `--stack-max SIZE` (#907): the VM's stack cap, checked here and handed on
+/// as the variable the backends' constructors read
+/// (`HeapConfig::from_env`), as `--allow-r6rs` hands on its own: the flag is
+/// the variable's discoverable spelling, and wins over a value the
+/// environment already held.
+fn set_stack_max(size: &str) {
+    if let Err(error) = patina_core::heap::config::parse_size(size) {
+        eprintln!("Error: --stack-max: {error}");
+        process::exit(1);
+    }
+    // SAFETY: argument parsing runs before any threads are started.
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::set_var(patina_core::heap::config::STACK_MAX_VAR, size)
+    };
+}
+
 fn require_value(iter: &mut std::slice::Iter<'_, String>, flag: &str, what: &str) -> String {
     iter.next().cloned().unwrap_or_else(|| {
         eprintln!("Error: {} requires {}", flag, what);
@@ -267,6 +285,17 @@ fn main() {
             eprintln!("Error opening diagnostics file '{path}': {error}");
             process::exit(1);
         }
+    }
+
+    // A malformed `PATINA_STACK_MAX` is reported here, before either backend
+    // is built: their constructors would panic on it rather than run under
+    // a cap nobody set (#907). `--stack-max` was checked as it was parsed.
+    if let Err(error) = patina_core::HeapConfig::try_from_env() {
+        eprintln!(
+            "Error: {}: {error}",
+            patina_core::heap::config::STACK_MAX_VAR
+        );
+        process::exit(1);
     }
 
     // Tracing is a VM instrument (`patina_vm::tracer`), so the two flags
@@ -562,6 +591,10 @@ fn print_help() {
     eprintln!("                 (library ...), and versioned library names");
     eprintln!("  --dump         Compile to bytecode and disassemble (no execution)");
     eprintln!("  --trace        Execute with instruction-level tracing to stderr");
+    eprintln!("  --stack-max <size>  Cap the VM's stack: bytes, or a number with K, M or G");
+    eprintln!("                 (default: a quarter of memory, at most 8G). A call that");
+    eprintln!("                 reaches it raises a catchable error. PATINA_STACK_MAX is");
+    eprintln!("                 the same setting; the tree-walker keeps no cap");
     eprintln!("  -k, --keep-going  Report each error and run the next top-level form");
     eprintln!("                 anyway; the exit status still reports the failure");
     eprintln!("  -I <dir>       Prepend a directory to the library search path");

@@ -78,6 +78,23 @@ impl TreeWalker {
         }
     }
 
+    /// A tree-walker under `config` (#907), for a host that builds either
+    /// backend from one configuration. The tree-walker keeps no stack cap,
+    /// so it ignores `max_stack`: a runaway recursion runs until memory
+    /// runs out, as before, and `(gc-stats)`'s `stack-limit` reads 0. The
+    /// settings later stages add to the configuration will apply here too.
+    pub fn with_config(config: &patina_core::HeapConfig) -> Self {
+        Self::with_fs_and_config(std::sync::Arc::new(patina_core::NativeFs), config)
+    }
+
+    /// [`Self::with_config`] over a custom filesystem.
+    pub fn with_fs_and_config(
+        fs: std::sync::Arc<dyn patina_core::FileSystem>,
+        _config: &patina_core::HeapConfig,
+    ) -> Self {
+        Self::with_fs(fs)
+    }
+
     /// A tree-walker collecting in `mode`, whatever the environment says: see
     /// [`Evaluator::with_gc_mode`]. Not an interface.
     #[doc(hidden)]
