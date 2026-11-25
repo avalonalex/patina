@@ -83,7 +83,7 @@ fn stack_of(registers: Vec<TaggedValue>, frames: Vec<Frame>) -> FrameStack {
     let mut registers = registers.into_iter();
     for frame in frames {
         let base = stack.push(
-            frame.code,
+            &frame.code,
             frame.closure,
             0,
             frame.num_regs,

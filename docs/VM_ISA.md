@@ -46,9 +46,11 @@ fp+40  r0 … rₙ₋₁
 
 - `link`: how far below this frame's header its caller's is, in bytes, and
   the window's size. The bottom frame's distance is its own header's size.
+  Its last flag, bit 62, marks the first frame of a run of frames in the
+  same code, until 4e.
 - `code`: the address of the code object the frame runs. A side vector of
-  `Rc<CodeObject>`, one a frame, keeps that code's unit loaded until 4e
-  makes the word a reference.
+  `Rc<CodeObject>`, one for each run of frames in the same code, keeps that
+  code's unit loaded until 4e makes the word a reference.
 - `meta`: the pc the frame resumes at, an instruction index below 2²⁹, and
   `return_reg`, the register of the caller that `Return` writes.
 - `closure`: read only for a closure's free variables (`LoadClosure`).

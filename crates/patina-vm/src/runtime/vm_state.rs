@@ -16,8 +16,9 @@ use super::control::{
     deliver_before_collecting, exec_call_primitive, exec_call_primitive_direct, find_prompt,
     finish_delimited_invoke, invoke_step, is_catchable, park_escape, park_transfer,
     pop_resolved_extents, push_invoke_step, raise_step, resume_step, self_tail_call,
-    spread_apply_args, step_wind_jump, tail_call_closure_resolved, tail_call_value,
-    tail_call_value_with_probe, tail_invoke_delimited, unpack_values, vm_raise_value, wind_step,
+    spread_apply_args, step_wind_jump, tail_call_closure_resolved, tail_call_other_closure,
+    tail_call_value, tail_call_value_with_probe, tail_invoke_delimited, unpack_values,
+    vm_raise_value, wind_step,
 };
 use super::execution_state::ReturnFrame;
 use crate::error::{VmError, frame_refusal};
@@ -950,6 +951,8 @@ impl VmState {
         let Some(nested) = self.code_units.get(&top) else {
             return;
         };
+        // The stack's spent runs hold code for no frame (#908).
+        self.execution.drop_spent_code();
         if unit_in_use(&self.code_store, top, nested) {
             return;
         }
@@ -1066,6 +1069,11 @@ impl VmState {
                     .set(code.live_closures.get().saturating_sub(1));
             }
         }
+        // The stack's spent runs hold code for no frame, and report none to
+        // the collection: let go before the question is asked, a unit they
+        // alone held is released, and none is kept with its link table
+        // untraced (#908).
+        self.execution.drop_spent_code();
         let store = &mut self.code_store;
         let free = &mut self.free_code_ids;
         let empty = &self.empty_code;
@@ -1098,6 +1106,23 @@ impl VmState {
         self.loaded_code(id)
             .cloned()
             .ok_or_else(|| missing_code_object(id))
+    }
+
+    /// The loaded code for `id`, borrowed from the store, beside the
+    /// execution state: what a closure's call or tail call pushes with. The
+    /// stack counts a reference of its own only for a run of code it does
+    /// not already hold (`FrameStack`'s comment), so a call of the procedure
+    /// called last from here, and every call of a recursion, counts none
+    /// (GC stage 4d.7b, #908).
+    #[inline(always)]
+    pub(super) fn loaded_code_and_execution(
+        &mut self,
+        id: CodeObjectId,
+    ) -> Result<(&Rc<CodeObject>, &mut super::execution_state::ExecutionState), VmError> {
+        match loaded(&self.code_store, id) {
+            Some(code) => Ok((code, &mut self.execution)),
+            None => Err(missing_code_object(id)),
+        }
     }
 
     // ── Register helpers ───────────────────────────────────────────────────
@@ -2455,7 +2480,7 @@ fn dispatch_one_instruction(
         Instruction::LoadClosure { dst, slot } => {
             let closure = state
                 .execution
-                .top_closure()
+                .closure_of_top(base)
                 .ok_or_else(|| VmError::Runtime {
                     message: "LoadClosure in non-closure frame".into(),
                 })?;
@@ -2625,7 +2650,7 @@ fn dispatch_one_instruction(
                     if CodeObjectId(id) == code.id {
                         self_tail_call(state, base, code.arity, func_val, &buf[..args.len()])?;
                     } else {
-                        tail_call_closure_resolved(
+                        tail_call_other_closure(
                             state,
                             func_val,
                             CodeObjectId(id),

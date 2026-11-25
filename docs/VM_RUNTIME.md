@@ -26,7 +26,8 @@ No value conversion is needed.
 ```rust
 pub struct FrameStack {
     words:    Vec<Cell<TaggedValue>>,  // headers and registers, bottom first
-    codes:    Vec<CodeRun>,            // the frames' code: an Rc<CodeObject> a run
+    codes:    Vec<FrameCode>,          // the frames' code: an Rc<CodeObject> a run
+    runs:     usize,                   // how many of `codes` are the frames' runs
     base:     usize,                   // the top frame's first register, in words
     pc:       usize,                   // the top frame's next instruction
     top_code: usize,                   // the address of the top frame's code
@@ -53,20 +54,41 @@ fp+40  r0 … rₙ₋₁
   somewhere else is still walked. The bottom frame's distance is its own
   header's size, so a pop is one subtraction for every frame.
 - **The side vector keeps code loaded.** The `code` word is an address that
-  nothing counts. `codes` holds the `Rc` of the frames' code, pushed, popped
-  and copied with the frames, in a newtype, `FrameCode`, whose trace reports
-  the code's id, which the collector resolves to the unit's link table
+  nothing counts. `codes` holds the `Rc` of the frames' code, copied with
+  the frames, in a newtype, `FrameCode`, whose trace reports the code's id,
+  which the collector resolves to the unit's link table
   (`VmState::trace_code_ids`, #836); the constants are traced from the code
-  store. It holds a run for each stretch of consecutive frames that run the
-  same code, the object once and how many frames: a push whose code is the
-  top frame's adds to the last run's count, and a pop takes from it. So a
-  recursion is one run however deep, and a capture of it copies one
-  reference. One reference a frame, measured first, cost a count up at
-  every capture and a count down at every drop, 14% of `samedepth1000`'s
-  instructions. A closure names its code by `CodeObjectId`, a slot in
+  store. It holds the object once for each *run*, a stretch of consecutive
+  frames that run the same code, and the first frame of a run says so in
+  the last flag of its `link` word (bit 62). A frame pushed in the top
+  frame's code joins its run and touches the vector neither then nor when
+  it is popped; a pop takes the frame's flag from `runs`. So a recursion is
+  one run however deep, and a capture of it copies one reference. One
+  reference a frame, measured first, cost a count up at every capture and a
+  count down at every drop, 14% of `samedepth1000`'s instructions. A
+  closure names its code by `CodeObjectId`, a slot in
   `VmState::code_store` and the generation of the code in it (VM_ISA.md
-  §2.3), and a call looks it up there. 4e makes the word a reference to a
-  code descriptor, and the vector goes.
+  §2.3), and a call looks it up there and pushes with the code borrowed
+  (`VmState::loaded_code_and_execution`). 4e makes the word a reference to
+  a code descriptor, and the vector and the flag go.
+- **A run that ends is spent, not dropped.** When the first frame of a run
+  returns, the run's entry stays in `codes`, past the `runs` entries of the
+  frames there are. The next run started there takes it back if it is of
+  the same code, as the callee of a loop is at every call, and then no
+  reference is counted up or down; a run of other code takes the place and
+  a reference, and the spent entry's goes. A tail call between two
+  procedures, which is what a `let` in a loop compiles to, changes the top
+  run's code with the spent entry's above it. A spent entry still holds
+  its code, so the code store drops them before it asks whether a frame
+  holds a code object (`FrameStack::drop_spent`, from
+  `release_unit_if_unused` and `release_dead_code`): at a form's end and
+  after every collection, so a unit is let go exactly when it was, and
+  none is kept by a holder that reports nothing to the collection. No copy
+  has a spent entry. Measured 2026-11-24 against a vector pushed and popped
+  with every run, each counting its frames: that bookkeeping cost a call
+  and its return about 20 instructions within one procedure and 30
+  between two, and left a row of the benchmark set in fifteen over 1% in
+  instructions against `main`.
 - **The top frame's pc is a field, not a header word.** The dispatch loop
   reads and advances a pc once an instruction, so the top frame's lives in
   `pc`, beside `base` and `top_code`: three loads from fixed offsets. A
@@ -557,7 +579,8 @@ The dispatcher resolves a compiled closure's code id before reaching this
 helper. It checks arity, pushes the frame, its header and its window in one
 write at the stack's top (`FrameStack::push`), copies arguments and builds
 any rest list. The push first writes the caller's pc into the caller's
-header (§2.1). It is not a general procedure entry
+header (§2.1). The code is borrowed from the store: the stack counts a
+reference only for a run of code whose place holds other code. It is not a general procedure entry
 point. The old closure-only `call_closure` wrapper and unused `CallWithPrompt`
 instruction were removed with #190; prompt bodies and exception-handler
 thunks both use `call_any`.
@@ -568,7 +591,9 @@ For `TailCall` to a closure, the current frame is reused:
 - Read all arg values into temporaries first
 - Give the frame the callee's code (`tail_replace`), or, for the frame's own
   code, its closure (`restart_closure`): pc 0, the window grown if the code
-  needs more registers, and every register past the arguments' filled (§3.4)
+  needs more registers, and every register past the arguments' filled
+  (§3.4). The header's `link`, `code` and `closure` words are written under
+  one range check, and the frame starts a run of its own from there (§2.1)
 - Write args to param slots
 - Poll at the callee's entry
 
@@ -577,8 +602,9 @@ For `TailCall` to a closure, the current frame is reused:
 On `Return { val }`:
 1. Read result value
 2. Pop the current frame, header and window together: the stack is cut at
-   the frame's header, and the caller's pc and code are taken up from its
-   header and the side vector (§2.1)
+   the frame's header, and the caller's pc and its code's address are taken
+   up from its header; the side vector is not read, and the frame's run, if
+   it started one, is spent (§2.1)
 3. If at exit depth, return result
 4. Write result to caller's `return_reg`, through `return_into` (§3.4), where
    stage 7 lowers the stack watermark when the caller is below it. A frame

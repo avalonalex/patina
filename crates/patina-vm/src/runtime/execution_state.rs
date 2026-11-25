@@ -232,10 +232,10 @@ impl ExecutionState {
     pub(super) fn top_frame(&self) -> Option<CallFrame<'_>> {
         self.stack.top()
     }
-    /// How many frames the stack holds, which the census hooks and the
-    /// step tracer report. Nothing in the machine's control reads it: a
-    /// depth is a byte offset ([`Self::depth`]). It is summed from the
-    /// runs of code, so it costs a walk of them.
+    /// How many frames the stack holds, which the step tracer reports
+    /// while one is attached. Nothing in the machine's control reads it: a
+    /// depth is a byte offset ([`Self::depth`]). It is a walk of the
+    /// frames (`FrameStack::frame_count`).
     pub(super) fn frame_count(&self) -> usize {
         self.stack.frame_count()
     }
@@ -249,12 +249,13 @@ impl ExecutionState {
     pub(super) fn has_caller(&self) -> bool {
         self.stack.caller_base().is_some()
     }
-    /// The closure the top frame runs, if it runs one (`LoadClosure`).
+    /// The closure the top frame runs, if it runs one, for the dispatch
+    /// loop, which has the frame's `base` in hand (`LoadClosure`): the
+    /// read is one range check.
     #[inline(always)]
-    pub(super) fn top_closure(&self) -> Option<TaggedValue> {
-        self.stack
-            .top_closure()
-            .filter(|closure| closure.is_object())
+    pub(super) fn closure_of_top(&self, base: usize) -> Option<TaggedValue> {
+        debug_assert_eq!(base, self.top_base());
+        Some(self.stack.closure_at(base)).filter(|closure| closure.is_object())
     }
     /// The top frame's code.
     #[inline(always)]
@@ -519,23 +520,25 @@ impl ExecutionState {
         closure: TaggedValue,
         return_reg: u16,
     ) -> usize {
-        self.push_closure_frame(code, closure, return_reg)
+        self.push_closure_frame(&code, closure, return_reg)
     }
 
     /// [`Self::push_frame`], in line: for the closure call paths, where the
     /// push is most of what a call does. The stubs' pushes call the one
-    /// copy above.
+    /// copy above. The code is borrowed, from the store on a call's path
+    /// (`VmState::loaded_code_and_execution`): the stack takes a reference
+    /// of its own only where it has none for the frame's run
+    /// (`FrameStack`'s comment).
     #[inline(always)]
     pub(super) fn push_closure_frame(
         &mut self,
-        code: Rc<CodeObject>,
+        code: &Rc<CodeObject>,
         closure: TaggedValue,
         return_reg: u16,
     ) -> usize {
         self.debug_assert_file_ends_at_top();
-        let num_regs = code.num_regs;
         self.stack
-            .push(code, closure, return_reg, num_regs, fill_value())
+            .push(code, closure, return_reg, code.num_regs, fill_value())
     }
 
     /// Remove a frame and its window together, as every frame goes (a wind
@@ -544,10 +547,17 @@ impl ExecutionState {
     /// tail-called raise must still find its caller's handler.
     #[inline(always)]
     pub(super) fn pop_frame(&mut self) -> Popped {
-        let (return_reg, _code) = self.stack.pop();
+        let return_reg = self.stack.pop();
         self.debug_assert_file_ends_at_top();
         self.mark_awaiting();
-        Popped { return_reg, _code }
+        Popped { return_reg }
+    }
+
+    /// Let go of the code the stack holds for no frame: the store calls
+    /// this before it asks whether a frame holds a code object
+    /// (`FrameStack::drop_spent`).
+    pub(super) fn drop_spent_code(&mut self) {
+        self.stack.drop_spent();
     }
 
     /// Reuse the top window for another closure, a tail call's push: the
@@ -558,14 +568,13 @@ impl ExecutionState {
     /// fill leaves alone. A window larger than the new code needs keeps its
     /// spare registers, which the new code cannot name and the walk of the
     /// frames clears at every collection and capture.
-    pub(super) fn tail_replace(&mut self, code: Rc<CodeObject>, closure: TaggedValue) -> usize {
+    pub(super) fn tail_replace(&mut self, code: &Rc<CodeObject>, closure: TaggedValue) -> usize {
         if GC_CHECK && self.top_awaits() {
             wrote_an_awaiting_frame("tail_replace", 0);
         }
         let base = self.top_base();
-        self.stack.grow_top(code.num_regs, fill_value());
+        self.stack.replace_top(code, closure, fill_value());
         fill(&self.stack.words()[base + argument_slots(code.arity)..base + code.num_regs as usize]);
-        self.stack.replace_top(code, closure);
         base
     }
 
@@ -597,7 +606,7 @@ impl ExecutionState {
         debug_assert!(base + code.num_regs as usize <= self.stack.top_end());
         debug_assert!(keep <= code.num_regs);
         fill(&self.stack.words()[base + keep as usize..base + code.num_regs as usize]);
-        self.stack.recode_top(code);
+        self.stack.recode_top(&code);
         base
     }
 
@@ -711,7 +720,8 @@ impl ExecutionState {
         reentry: Rc<[u64]>,
         stack_reserve_open: bool,
     ) -> VmContinuation {
-        patina_core::census::capture_full(self.stack.frame_count(), self.stack.register_count());
+        let (frames, registers) = self.stack.census_shape();
+        patina_core::census::capture_full(frames, registers);
         VmContinuation {
             stack: self.stack.clone(),
             dynamic_winds: self.dynamic_winds.clone(),
@@ -728,7 +738,8 @@ impl ExecutionState {
     /// Full arrival replaces every component. The control layer decides
     /// which Rust re-entry boundaries it leaves and when to deliver the value.
     pub(super) fn restore(&mut self, cc: &VmContinuation) {
-        patina_core::census::restore_full(cc.stack.frame_count(), cc.stack.register_count());
+        let (frames, registers) = cc.stack.census_shape();
+        patina_core::census::restore_full(frames, registers);
         // Into the buffers the live stack has: an arrival frees none and
         // takes none, and leaves room for the next push.
         self.stack.clone_from(&cc.stack);
@@ -916,11 +927,9 @@ impl<'a> Registers<'a> {
 }
 
 /// What a pop answers of the frame it removed: the register of its caller
-/// that the frame returns into, and its code if the frame was the last of
-/// its run, which goes where the caller drops this (`FrameStack::pop`).
+/// that the frame returns into.
 pub(super) struct Popped {
     pub(super) return_reg: u16,
-    _code: Option<crate::types::FrameCode>,
 }
 
 /// The frame an [`ExecutionState::return_into`] writes into (#904).
@@ -994,7 +1003,7 @@ pub(super) fn push_abort_stub(
     cont: TaggedValue,
 ) {
     let base = stack.push(
-        code,
+        &code,
         CallFrame::NO_CLOSURE,
         return_reg,
         abort_step::NUM_REGS,

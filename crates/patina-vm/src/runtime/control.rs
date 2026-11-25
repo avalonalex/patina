@@ -147,14 +147,12 @@ fn call_closure_resolved(
     args: &[TaggedValue],
     return_reg: u16,
 ) -> Result<(), VmError> {
-    let code = state.code_object(code_id)?;
+    let (code, execution) = state.loaded_code_and_execution(code_id)?;
 
     check_arity(code.arity, args.len())?;
 
     let arity = code.arity;
-    let base = state
-        .execution
-        .push_closure_frame(code, closure_val, return_reg);
+    let base = execution.push_closure_frame(code, closure_val, return_reg);
     store_args_in_window(state, base, arity, args);
 
     Ok(())
@@ -179,14 +177,12 @@ pub(super) fn call_closure_from_regs(
     arg_regs: &[u16],
     return_reg: u16,
 ) -> Result<(), VmError> {
-    let code = state.code_object(code_id)?;
+    let (code, execution) = state.loaded_code_and_execution(code_id)?;
 
     check_arity(code.arity, arg_regs.len())?;
 
     let arity = code.arity;
-    let base = state
-        .execution
-        .push_closure_frame(code, closure_val, return_reg);
+    let base = execution.push_closure_frame(code, closure_val, return_reg);
     if let Arity::Variadic(fixed) = &arity {
         let fixed = *fixed as usize;
         for (i, &r) in arg_regs.iter().take(fixed).enumerate() {
@@ -3413,10 +3409,8 @@ pub(super) fn capture_delimited(
         prompt_stack,
         exception_handlers,
     };
-    patina_core::census::capture_delimited(
-        captured.stack.frame_count(),
-        captured.stack.register_count(),
-    );
+    let (frames, registers) = captured.stack.census_shape();
+    patina_core::census::capture_delimited(frames, registers);
     captured
 }
 
@@ -3948,13 +3942,29 @@ pub(super) fn tail_call_closure_resolved(
         let (arity, base) = (top_code.arity, state.execution.top_base());
         return self_tail_call(state, base, arity, func_val, arg_vals);
     }
+    tail_call_other_closure(state, func_val, new_code_id, arg_vals)
+}
 
-    let new_code = state.code_object(new_code_id)?;
+/// [`tail_call_closure_resolved`] for a callee that is not the top frame's
+/// own code, which the `TailCall` instruction has already told from the
+/// code it is running: the window is given to the callee's code.
+///
+/// # State contract
+///
+/// As `tail_call_closure_resolved`'s, and `new_code_id` is not the id of the
+/// top frame's code.
+pub(super) fn tail_call_other_closure(
+    state: &mut VmState,
+    func_val: TaggedValue,
+    new_code_id: CodeObjectId,
+    arg_vals: &[TaggedValue],
+) -> Result<(), VmError> {
+    let (new_code, execution) = state.loaded_code_and_execution(new_code_id)?;
 
     check_arity(new_code.arity, arg_vals.len())?;
 
     let arity = new_code.arity;
-    let base = state.execution.tail_replace(new_code, func_val);
+    let base = execution.tail_replace(new_code, func_val);
     store_args_in_window(state, base, arity, arg_vals);
     // The callee's entry, in the reused window (§12, #700).
     super::vm_state::poll(state)?;

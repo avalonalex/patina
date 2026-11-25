@@ -825,15 +825,20 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   the limit armed.
   The register stack itself (#908, frames and registers in one buffer of
   words) has unit tests beside it, in
-  `patina-vm/src/types/frame_stack.rs`: a header word keeps both its
-  fields, and the pc is the low half of `meta`; frames are walked from the
-  top with the top frame's pc; a pop takes up the caller's pc; the dispatch
-  prologue follows the top frame's code; a cut, and the copies below and
-  above a depth; appended frames are walked through to the frame they sit
-  above, on a stack whose top frame is another size and on an empty one;
-  a tail call's reuse and growth of a window; and frames that share code
-  share one reference, through a split run, a tail call out of a run and a
-  clone into a stack that held other frames.
+  `patina-vm/src/types/frame_stack.rs`: a header word keeps its fields,
+  the run flag is the last of `link`'s, and the pc is the low half of
+  `meta`; frames are walked from the top with the top frame's pc; a pop
+  takes up the caller's pc; the dispatch prologue follows the top frame's
+  code; a cut, and the copies below and above a depth; appended frames are
+  walked through to the frame they sit above, on a stack whose top frame is
+  another size and on an empty one; a tail call's reuse and growth of a
+  window; frames that share code share one reference, through a split run,
+  a tail call out of a run and a clone into a stack that held other frames;
+  a run that ends is spent and taken back by the same code with no
+  reference counted, replaced by other code, left out of every copy and
+  dropped where the store asks; tail calls between two procedures count
+  none; and a copy cut inside a run starts the run again. Each of those
+  pins `Rc::strong_count` of its code objects at every step.
   `gc_roots.rs`'s `the_walk_reports_each_frames_code_closure_and_registers`
   holds a collection's walk to a frame's code, closure and registers and
   nothing else of its header.

@@ -872,8 +872,10 @@ body has fewer than 2²⁹ instructions, checked at load (decision A3 on #782). 
 header when it pushes a frame above it, and keeps the top frame's in a field beside the stack, which every reader of a pc
 goes through (4d.7b, #908). `code` is a descriptor reference from
 4e; from 4d to 4e it holds the code object's address, an 8-aligned pointer that the scan reads as a fixnum and skips,
-and a per-thread side vector of `Rc<CodeObject>`, pushed and popped with frames and cloned by capture, keeps each
-frame's unit loaded (DESIGN E.5). The interpreter keeps its calling protocol (`return_reg` in the callee's frame);
+and a per-thread side vector of `Rc<CodeObject>`, cloned by capture, keeps each frame's unit loaded (DESIGN E.5). The
+vector holds a reference for each run of consecutive frames in the same code, the first frame of a run is marked in
+the last of `link`'s flags (bit 62) until 4e, and the entry of a run that has returned is kept, to be taken back by
+the next call of the same code, until the code store next asks whether a frame holds a code object (4d.7b, #908). The interpreter keeps its calling protocol (`return_reg` in the callee's frame);
 prompts, handlers and winds record byte offsets from the stack base. The JIT delivers a result as the first
 `CallConv::Tail` argument of the caller's resume entry (`x2` on aarch64, `rdi` on x64 [S]).
 

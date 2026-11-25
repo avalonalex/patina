@@ -114,7 +114,8 @@ const RETIRED: TaggedValue = if GC_CHECK {
 ///
 /// The census reads the stack's shape here, as the collection starts.
 pub(in crate::runtime) fn trace_frames(stack: &FrameStack, visitor: &mut dyn SlotVisitor) {
-    patina_core::census::stack_shape(stack.frame_count(), stack.register_count());
+    let (frames, registers) = stack.census_shape();
+    patina_core::census::stack_shape(frames, registers);
     if cfg!(debug_assertions) {
         stack.assert_frames_tile();
     }
@@ -613,13 +614,7 @@ mod tests {
         let mut next = 0;
         for (code, closure) in [(&lower, 100), (&upper, 200)] {
             let n = code.num_regs;
-            let base = stack.push(
-                Rc::clone(code),
-                TaggedValue::fixnum(closure),
-                0,
-                n,
-                TaggedValue::NULL,
-            );
+            let base = stack.push(code, TaggedValue::fixnum(closure), 0, n, TaggedValue::NULL);
             for slot in &stack.words()[base..base + n as usize] {
                 slot.set(TaggedValue::fixnum(next));
                 next += 1;
