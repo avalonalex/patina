@@ -911,6 +911,23 @@ mod tests {
         stack.assert_frames_tile();
     }
 
+    /// A return inside a recursion: the caller runs the callee's code, so
+    /// the pop takes up its pc and nothing else. Without it the caller
+    /// resumes where the callee stopped, and a recursion never ends.
+    #[test]
+    fn a_pop_inside_a_run_takes_up_the_callers_pc() {
+        let f = code(1, 1);
+        let mut stack = FrameStack::default();
+        stack.push(Rc::clone(&f), TaggedValue::FALSE, 0, 1, FILL);
+        stack.set_pc(6);
+        stack.push(Rc::clone(&f), TaggedValue::FALSE, 3, 1, FILL);
+        stack.set_pc(4);
+        let mut cur = Rc::clone(&f);
+        let (return_reg, ended) = stack.pop();
+        assert_eq!((return_reg, ended.is_none(), stack.pc()), (3, true, 6));
+        assert_eq!(stack.dispatch(&mut cur), (6, false));
+    }
+
     #[test]
     fn the_dispatch_prologue_follows_the_top_frames_code() {
         let mut stack = three();
