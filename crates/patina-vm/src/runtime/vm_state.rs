@@ -4552,6 +4552,34 @@ mod tests {
         assert!(!state.stack_reserve_open(), "two frames: at or below it");
     }
 
+    /// The cap a machine holds its stack to is the smaller of the one asked
+    /// for and what its reservation holds (#908's 7c): where the system
+    /// reserved less address space than the cap, the reservation's end is
+    /// the cap, the soft limit is a reserve under that, and `(gc-stats)`'s
+    /// `stack-limit` reads it. A cap the reservation holds is the cap.
+    #[test]
+    fn a_cap_past_the_reservation_is_held_to_the_reservation() {
+        let mut state = VmState::on_a_fresh_heap();
+        state.set_stack_cap(2 << 20);
+        let held = state.execution.stack_capacity();
+        assert!(((2 << 20)..(4 << 20)).contains(&held), "2 MiB, to a page");
+        let limit = |state: &VmState| state.mutator.limit() - state.execution.stack_address(0);
+
+        state.arm_stack_cap(8 << 20);
+        assert_eq!(state.stack_cap, held, "the reservation holds less");
+        assert_eq!(
+            state.mutator.stack_cap(),
+            held,
+            "and the statistic reads it"
+        );
+        assert_eq!(limit(&state), held - STACK_RESERVE);
+
+        state.arm_stack_cap(held - 4096);
+        assert_eq!(state.stack_cap, held - 4096, "a cap it holds is the cap");
+        assert_eq!(state.mutator.stack_cap(), held - 4096);
+        assert_eq!(limit(&state), held - 4096 - STACK_RESERVE);
+    }
+
     /// A machine under a 2 MiB cap whose stack ends `under` bytes below
     /// it, a prompt recorded there, and one frame of `above` registers
     /// over the prompt.
