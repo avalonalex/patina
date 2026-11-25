@@ -27,7 +27,9 @@ Register stack:  … | ret | link | code | meta | closure | r0 | r1 | ... | rN |
 ```
 
 - The frames and their registers are one buffer of words (GC stage 4d.7b,
-  #908). A frame is a header of five words followed by its window.
+  #908), which for the machine's own stack is a reservation of address
+  space that never moves (4d.7c). A frame is a header of five words
+  followed by its window.
 - Each frame owns the words `[register_base .. register_base + num_regs]`.
 - Register `r0` in a frame = word `register_base + 0` of the stack.
 - Instructions always use **frame-relative** indices (u16).

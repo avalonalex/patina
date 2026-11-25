@@ -833,13 +833,20 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   walked through to the frame they sit above, on a stack whose top frame is
   another size and on an empty one; a tail call's reuse and growth of a
   window; frames that share code share one reference, through a split run,
-  a tail call out of a run and a clone into a stack that held other frames;
+  a tail call out of a run and an arrival into a stack that held other
+  frames;
   a run that ends is spent and taken back by the same code with no
   reference counted, replaced by other code, left out of every copy and
   dropped where the store asks; tail calls between two procedures count
   none; a copy cut inside a run starts the run again; and the census's
   shape is walked only in a census build. Each of the tests of runs pins
-  `Rc::strong_count` of its code objects at every step.
+  `Rc::strong_count` of its code objects at every step. Three more hold
+  the live stack's reservation (4d.7c), in one page: its words are where
+  it starts however many there are, and a frame that would end past it is
+  refused with nothing written, while one that ends at it is pushed; a
+  tail call whose window cannot grow is refused with the frame as it was;
+  and an append or an arrival the reservation cannot hold is refused with
+  the stack as it was.
   `gc_roots.rs`'s `the_walk_reports_each_frames_code_closure_and_registers`
   holds a collection's walk to a frame's code, closure and registers and
   nothing else of its header.
