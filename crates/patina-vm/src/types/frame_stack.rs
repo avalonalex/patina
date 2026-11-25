@@ -52,7 +52,9 @@
 //! its code, so whatever asks whether a frame holds a code object drops
 //! them first ([`FrameStack::drop_spent`]): the store, before it lets a
 //! unit go (`unit_in_use`), at a form's end and after every collection. No
-//! copy has one. (Measured 2026-11-24 against a vector pushed and popped
+//! copy has one, and a store has one live stack, so one drop reaches every
+//! spent entry there is; stage 9's green threads each have a stack, and
+//! the store's question drops each one's then. (Measured 2026-11-24 against a vector pushed and popped
 //! with every run, each run counting its frames: the bookkeeping cost a
 //! call and its return about 20 instructions within one procedure and 30
 //! between two.)
@@ -1068,6 +1070,23 @@ mod tests {
         assert_eq!(stack.top_frame_bytes(), 12 * 8);
         assert_eq!(stack.caller_base(), Some(12));
         stack.assert_frames_tile();
+    }
+
+    /// The census's hooks are handed the stack's shape, which is a walk of
+    /// the frames, and a build without the census must not make it: a
+    /// collection or a capture of a deep stack would pay for a number
+    /// nothing reads.
+    #[test]
+    fn the_census_shape_is_walked_only_in_a_census_build() {
+        let stack = three();
+        let walked = (stack.frame_count(), stack.register_count());
+        assert_eq!(walked, (3, 5));
+        let expected = if patina_core::census::GC_CENSUS {
+            walked
+        } else {
+            (0, 0)
+        };
+        assert_eq!(stack.census_shape(), expected);
     }
 
     #[test]

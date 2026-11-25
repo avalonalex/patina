@@ -837,8 +837,9 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   a run that ends is spent and taken back by the same code with no
   reference counted, replaced by other code, left out of every copy and
   dropped where the store asks; tail calls between two procedures count
-  none; and a copy cut inside a run starts the run again. Each of those
-  pins `Rc::strong_count` of its code objects at every step.
+  none; a copy cut inside a run starts the run again; and the census's
+  shape is walked only in a census build. Each of the tests of runs pins
+  `Rc::strong_count` of its code objects at every step.
   `gc_roots.rs`'s `the_walk_reports_each_frames_code_closure_and_registers`
   holds a collection's walk to a frame's code, closure and registers and
   nothing else of its header.
