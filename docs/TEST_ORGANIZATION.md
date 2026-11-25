@@ -822,7 +822,10 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   keeps, are unit tests beside the machine
   (`patina-vm/src/runtime/vm_state.rs`): they hold the rule for a snapshot
   no program in the suites makes, one captured above the soft limit with
-  the limit armed.
+  the limit armed. A third holds an abort's landing to the cap (#908's
+  7c): one whose stub would end past it is refused with nothing cut, as
+  the catchable condition and then as the hard cap, and one that ends at
+  the cap is made.
   The register stack itself (#908, frames and registers in one buffer of
   words) has unit tests beside it, in
   `patina-vm/src/types/frame_stack.rs`: a header word keeps its fields,

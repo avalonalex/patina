@@ -1405,14 +1405,15 @@ pub(super) fn step_wind_jump(
         .zip(&state.reentry)
         .take_while(|(captured, active)| captured == active)
         .count();
-    state.reentry_kept = (kept == cc.reentry.len() && kept < state.reentry.len()).then_some(kept);
     // The snapshot's stack goes into the reservation the live one has
     // (#908's 7c). A snapshot fits: it is a copy of this stack, or of the
-    // part of it under a prompt with the abort's stub on top, taken under
-    // the cap that holds now. Were one not to, nothing has been replaced.
+    // part of it under a prompt with the abort's stub on top, which
+    // `abort_to_prompt` held to the cap. Were one not to, nothing has been
+    // replaced.
     if let Err(refused) = state.execution.restore(&cc) {
         return Err(state.no_stack_room(refused));
     }
+    state.reentry_kept = (kept == cc.reentry.len() && kept < state.reentry.len()).then_some(kept);
     // A continuation's arrival has replaced the stack, and the stack's
     // limit goes with it (#907): the reserve is open again where the
     // continuation was captured in it, and the soft limit is armed anywhere
@@ -3042,6 +3043,19 @@ pub(super) fn abort_to_prompt(
     dst: u16,
 ) -> VmError {
     let prompt = state.execution.prompts()[prompt_idx].clone();
+    // Where the abort lands is the stack under the prompt with the
+    // handler's stub on it, and a stub can be larger than the frames the
+    // abort drops: a prompt whose frames end within a stub's bytes of the
+    // cap has a landing past it. Refused here, as the stack's exhaustion at
+    // this call, before anything is captured, cut or left, so that the two
+    // paths below agree and each has room for what it builds (#907, #908's
+    // 7c).
+    let under_prompt = prompt.stack_depth.min(state.execution.depth());
+    let stub_bytes = crate::types::frame_stack::FRAME_HEADER_BYTES
+        + abort_step::NUM_REGS as usize * crate::types::frame_stack::WORD_BYTES;
+    if let Err(exhausted) = state.check_stack_landing(under_prompt.bytes() + stub_bytes) {
+        return exhausted;
+    }
     // From the capture until the stub or the landing's snapshot holds the
     // handle, `cont_tv` (and then `target_tv`) is in Rust locals alone: no
     // safe point in between, asserted (#624). The window ends at the stub
@@ -3090,9 +3104,9 @@ pub(super) fn abort_to_prompt(
         // An abort's landing has cut the stack: where the soft limit is
         // armed again if the reserve was open (#907).
         state.rearm_stack_limit();
-        // The stub may be larger than the frames the cut dropped, and the
-        // stack's reservation refuses a frame that would end past it
-        // (#908's 7c): the stack is then at its cap.
+        // The landing is within the cap (checked above), so the stack's
+        // reservation has room for the stub; were it refused, the stack is
+        // at its cap (#908's 7c).
         if let Err(refused) =
             state
                 .execution
@@ -3115,8 +3129,8 @@ pub(super) fn abort_to_prompt(
     // delimits, before the handler's stub goes on it, is still above the
     // soft limit (#907). The two paths must not differ in where they end up.
     let stack_reserve_open = state.stack_reserve_open_over(stack.bytes());
-    // Onto a copy, whose buffer grows: the push is not refused. Whether
-    // the landing fits the live stack is its arrival's to say.
+    // Onto a copy, whose buffer grows: the push is not refused. The
+    // landing is within the cap (checked above), so its arrival has room.
     let _ = push_abort_stub(&mut stack, stub, prompt.dst, prompt.handler, val, cont_tv);
     let target = VmContinuation {
         stack,

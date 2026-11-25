@@ -748,6 +748,18 @@ impl VmState {
         Ok(())
     }
 
+    /// Refuse a transfer that would leave the stack holding `bytes`, where
+    /// that is past the cap: an abort's landing, which is the stack under
+    /// its prompt with the handler's stub on it (`abort_to_prompt`). The
+    /// exhaustion is this call's, as [`Self::check_stack_bytes`]'s is.
+    #[inline]
+    pub(super) fn check_stack_landing(&mut self, bytes: usize) -> Result<(), VmError> {
+        if bytes > self.stack_cap {
+            return Err(self.stack_exhausted());
+        }
+        Ok(())
+    }
+
     /// The current global environment. The environment/heap retain their own
     /// interior-mutability APIs; this cannot replace the machine's heap pair.
     pub fn global_env(&self) -> &Rc<Environment> {
@@ -4538,6 +4550,84 @@ mod tests {
         state.execution.pop_frame();
         state.rearm_stack_limit();
         assert!(!state.stack_reserve_open(), "two frames: at or below it");
+    }
+
+    /// A machine under a 2 MiB cap whose stack ends `under` bytes below
+    /// it, a prompt recorded there, and one frame of `above` registers
+    /// over the prompt.
+    fn capped_with_a_prompt(under: usize, above: u16) -> (VmState, usize) {
+        const CAP: usize = 2 << 20;
+        let mut state = capped_with_frames(4);
+        let push = |state: &mut VmState, num_regs: u16| {
+            let mut frame = code();
+            frame.num_regs = num_regs;
+            let id = load_in_globals(state, frame, Vec::new()).id();
+            let frame = state.code_object(id).unwrap();
+            state
+                .execution
+                .push_frame(frame, CallFrame::NO_CLOSURE, 0)
+                .unwrap();
+        };
+        // A frame that takes the stack to `under` bytes below the cap.
+        let filler = CAP - under - state.execution.top_bytes() - 40;
+        assert_eq!(filler % 8, 0);
+        push(&mut state, (filler / 8) as u16);
+        assert_eq!(state.execution.top_bytes(), CAP - under);
+        let prompt = state
+            .execution
+            .push_prompt(TaggedValue::TRUE, TaggedValue::FALSE, 0);
+        push(&mut state, above);
+        (state, prompt)
+    }
+
+    /// An abort lands on the stack under its prompt with the handler's
+    /// stub on it, 72 bytes, which can be more than the frames it drops.
+    /// A landing that would end past the cap is refused where the abort is
+    /// made, as the stack's exhaustion, with nothing cut (#908's 7c): the
+    /// catchable condition while the soft limit is armed, and the hard cap
+    /// once a handler has the reserve. One that ends at the cap is made.
+    #[test]
+    fn an_abort_whose_landing_would_pass_the_cap_is_refused_before_anything_is_cut() {
+        use super::super::control::abort_to_prompt;
+        const CAP: usize = 2 << 20;
+
+        // 48 bytes under the cap, and a frame of 48 over the prompt: the
+        // stack is at the cap, and the stub is 24 bytes more than it drops.
+        let (mut state, prompt) = capped_with_a_prompt(48, 1);
+        assert_eq!(state.execution.top_bytes(), CAP);
+        let held = |state: &VmState| (state.execution.top_bytes(), state.execution.prompts().len());
+        let before = held(&state);
+        let refused = abort_to_prompt(&mut state, prompt, TaggedValue::NULL, 0);
+        assert!(
+            matches!(refused, VmError::StackExhausted { .. }),
+            "{refused:?}"
+        );
+        assert_eq!(held(&state), before, "nothing was cut");
+        assert!(state.stack_reserve_open(), "the first exhaustion");
+        let refused = abort_to_prompt(&mut state, prompt, TaggedValue::NULL, 0);
+        assert!(
+            matches!(refused, VmError::StackOverflow { .. }),
+            "{refused:?}"
+        );
+        assert_eq!(held(&state), before);
+
+        // 72 bytes under the cap: the landing ends at the cap, and the
+        // abort is made.
+        let (mut state, prompt) = capped_with_a_prompt(72, 4);
+        assert_eq!(state.execution.top_bytes(), CAP);
+        let parked = abort_to_prompt(&mut state, prompt, TaggedValue::NULL, 0);
+        assert!(
+            !matches!(
+                parked,
+                VmError::StackExhausted { .. } | VmError::StackOverflow { .. }
+            ),
+            "{parked:?}"
+        );
+        assert_eq!(
+            held(&state),
+            (CAP, 0),
+            "cut to the prompt, with the stub on it"
+        );
     }
 }
 

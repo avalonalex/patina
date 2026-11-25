@@ -113,9 +113,9 @@ fp+40  r0 … rₙ₋₁
     at its cap (`VmState::no_stack_room`): the hard cap where a handler has
     the reserve. The machine's own checks against the cap refuse first
     wherever they are asked (§3.2), so a refusal by the buffer is a closure
-    entry or a tail call in the last frame's worth of the reserve, or an
-    abort's stub where the stack under its prompt ends within a stub's
-    bytes of the cap.
+    entry or a tail call in the last frame's worth of the reserve, or a
+    top-level form's frame, which `eval` and `load` push under a stack of
+    any depth.
   - **A capture copies out of it and an arrival back into it.** The copies
     are vectors, as they were, until 4e makes a continuation a heap object.
 - **The top frame's pc is a field, not a header word.** The dispatch loop
@@ -343,9 +343,11 @@ pub struct VmDelimitedContinuation {
 out of its reservation: its words, as one run of stores, into a vector of
 their size, and the side vector's runs of code. An arrival copies them back
 into the reservation, at its base. The pages the stack had written above
-the arrival stay the process's until #909 returns them: while an arrival
-replaced vectors, and then while it replaced one buffer, an escape out of a
-deep recursion freed what the recursion grew. A delimited one copies
+the arrival stay the process's until #909 returns them, as they do after a
+return. While an arrival replaced vectors, and then one buffer, an escape
+out of a deep recursion gave what the recursion grew back to the allocator,
+which did not reliably take it out of the process's footprint (measured
+2026-11-25, on #924). A delimited one copies
 the words from the prompt's depth to the top, as a stack of its own, whose
 outermost frame is written as a bottom frame. Invoking it appends those
 words to the live stack and writes one of them, that frame's distance to the
@@ -501,6 +503,12 @@ buffer, so the depth at which the cap is met has not moved.
   exhaustion at that call: the catchable condition where the soft limit is
   armed, raised with the limit still armed if the stack is under it, and
   the hard cap where the reserve is open.
+- **An abort's landing is held to the cap where the abort is made**
+  (`check_stack_landing`, 4d.7c). It lands on the stack under its prompt
+  with the handler's stub on it, 72 bytes, which can be more than the
+  frames it drops. A landing that would end past the cap is refused before
+  anything is captured, cut or left, as an exhaustion at the abort's call,
+  so its two paths agree and each has room for what it builds.
 - **Inside a primitive's callback** (a nested loop) nothing differs: the
   handler stack is the machine's, so the condition raised there reaches a
   handler installed outside the primitive's call, and the hard cap met
