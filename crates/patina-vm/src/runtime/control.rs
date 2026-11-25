@@ -152,7 +152,9 @@ fn call_closure_resolved(
     check_arity(code.arity, args.len())?;
 
     let arity = code.arity;
-    let base = state.execution.push_frame(code, closure_val, return_reg);
+    let base = state
+        .execution
+        .push_closure_frame(code, closure_val, return_reg);
     store_args_in_window(state, base, arity, args);
 
     Ok(())
@@ -182,7 +184,9 @@ pub(super) fn call_closure_from_regs(
     check_arity(code.arity, arg_regs.len())?;
 
     let arity = code.arity;
-    let base = state.execution.push_frame(code, closure_val, return_reg);
+    let base = state
+        .execution
+        .push_closure_frame(code, closure_val, return_reg);
     if let Arity::Variadic(fixed) = &arity {
         let fixed = *fixed as usize;
         for (i, &r) in arg_regs.iter().take(fixed).enumerate() {

@@ -3774,12 +3774,14 @@ mod tests {
             state
                 .execution
                 .push_frame(state.code_object(id).unwrap(), CallFrame::NO_CLOSURE, 0);
-        assert_eq!(base, 0);
-        assert_eq!(state.execution.registers().len(), 4);
-        assert_eq!(state.execution.frames().len(), 1);
+        // A header of five words, then the window (#908).
+        assert_eq!(base, 5);
+        assert_eq!(state.execution.registers().len(), 9);
+        assert_eq!(state.execution.top_bytes(), 40 + 4 * 8);
+        assert_eq!(state.execution.frame_count(), 1);
         state.execution.pop_frame();
         assert_eq!(state.execution.registers().len(), 0);
-        assert!(state.execution.frames().is_empty());
+        assert_eq!(state.execution.frame_count(), 0);
     }
 
     /// Code that returns register 0, compiled by no one. It writes the

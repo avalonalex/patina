@@ -216,13 +216,11 @@ impl ExecutionState {
     pub(super) fn registers(&self) -> Registers<'_> {
         Registers(self.stack.words())
     }
-    /// The register stack's slots, for the tests that read each where it
-    /// lives (`every_slot_the_vm_reports_is_where_its_value_lives`, and
-    /// the walk's). The collector reaches them through
-    /// [`Self::trace_frames`], inside this module.
+    /// The register stack itself, for the tests that read a window or a
+    /// header's word where it lives.
     #[cfg(test)]
-    pub(super) fn register_cells(&self) -> &[Cell<TaggedValue>] {
-        self.stack.words()
+    pub(super) fn stack(&self) -> &FrameStack {
+        &self.stack
     }
     /// The frames, top first, each as a view of its header.
     #[inline(always)]
@@ -511,6 +509,19 @@ impl ExecutionState {
         closure: TaggedValue,
         return_reg: u16,
     ) -> usize {
+        self.push_closure_frame(code, closure, return_reg)
+    }
+
+    /// [`Self::push_frame`], in line: for the closure call paths, where the
+    /// push is most of what a call does. The stubs' pushes call the one
+    /// copy above.
+    #[inline(always)]
+    pub(super) fn push_closure_frame(
+        &mut self,
+        code: Rc<CodeObject>,
+        closure: TaggedValue,
+        return_reg: u16,
+    ) -> usize {
         self.debug_assert_file_ends_at_top();
         let num_regs = code.num_regs;
         self.stack
@@ -521,11 +532,12 @@ impl ExecutionState {
     /// step's frame too, since #714: it stays for its whole travel, and
     /// arrival replaces it). Extents stay live until value delivery: a
     /// tail-called raise must still find its caller's handler.
+    #[inline(always)]
     pub(super) fn pop_frame(&mut self) -> Popped {
-        let return_reg = self.stack.pop();
+        let (return_reg, _code) = self.stack.pop();
         self.debug_assert_file_ends_at_top();
         self.mark_awaiting();
-        Popped { return_reg }
+        Popped { return_reg, _code }
     }
 
     /// Reuse the top window for another closure, a tail call's push: the
@@ -892,9 +904,11 @@ impl<'a> Registers<'a> {
 }
 
 /// What a pop answers of the frame it removed: the register of its caller
-/// that the frame returns into.
+/// that the frame returns into, and its code, which goes where the caller
+/// drops this (`FrameStack::pop`).
 pub(super) struct Popped {
     pub(super) return_reg: u16,
+    _code: crate::types::FrameCode,
 }
 
 /// The frame an [`ExecutionState::return_into`] writes into (#904).

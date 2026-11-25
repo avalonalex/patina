@@ -4,7 +4,7 @@
 //! types are accessible. Real VM execution tests are added in milestones A2+.
 
 use patina_core::LinkTable;
-use patina_vm::types::{Arity, CallFrame, CodeObject, CodeObjectId, FrameCode};
+use patina_vm::types::{Arity, CodeObject, CodeObjectId, FrameStack};
 
 #[test]
 fn code_object_constructs() {
@@ -35,29 +35,11 @@ fn variadic_arity_accepts() {
 }
 
 #[test]
-fn call_frame_is_clone() {
-    // CallFrame MUST be Clone — continuations snapshot the entire frame stack.
-    let code = std::rc::Rc::new(CodeObject {
-        id: CodeObjectId(0),
-        name: None,
-        instructions: vec![],
-        constants: vec![],
-        num_regs: 8,
-        arity: Arity::Fixed(0),
-        source_map: vec![],
-        register_roots: None,
-        links: LinkTable::empty(),
-        live_closures: std::cell::Cell::new(0),
-    });
-    let frame = CallFrame {
-        pc: 42,
-        register_base: 0,
-        num_regs: 8,
-        closure: std::cell::Cell::new(CallFrame::NO_CLOSURE),
-        return_reg: 3,
-        code: FrameCode(code),
-    };
-    let cloned = frame.clone();
-    assert_eq!(cloned.pc, 42);
-    assert_eq!(cloned.return_reg, 3);
+fn a_register_stack_is_clone() {
+    // A continuation's snapshot is a clone of the register stack: the
+    // frames' headers and registers in one buffer, with the frames' code
+    // beside it (#908). Until then a `CallFrame` was the stored record, and
+    // its `Clone` was what this pinned.
+    let stack = FrameStack::default();
+    let _copy: FrameStack = stack.clone();
 }

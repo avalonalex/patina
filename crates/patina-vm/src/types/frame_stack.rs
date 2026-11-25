@@ -114,6 +114,14 @@ fn meta_word(pc: usize, return_reg: Reg) -> TaggedValue {
     TaggedValue::fixnum((pc as u64 | (return_reg as u64) << HIGH_SHIFT) as i64)
 }
 
+/// `meta` with its pc replaced: the word's high half kept, and the low one
+/// written, as the one 32-bit store decision A3 describes.
+#[inline(always)]
+fn meta_with_pc(meta: TaggedValue, pc: usize) -> TaggedValue {
+    debug_assert!(pc < MAX_INSTRUCTIONS);
+    TaggedValue::fixnum((((meta.raw() >> 35) << HIGH_SHIFT) | pc as u64) as i64)
+}
+
 /// The pc a `meta` word holds.
 #[inline(always)]
 fn meta_pc(meta: TaggedValue) -> usize {
@@ -310,9 +318,8 @@ impl FrameStack {
     /// be pushed above it, or a copy cut below it, leaves it to be read.
     #[inline(always)]
     fn spill_pc(&self) {
-        if self.base != 0 {
-            let meta = self.header(self.base, META);
-            meta.set(meta_word(self.pc, meta_return_reg(meta.get())));
+        if let Some(meta) = self.words.get(self.base.wrapping_sub(META)) {
+            meta.set(meta_with_pc(meta.get(), self.pc));
         }
     }
 
@@ -344,15 +351,38 @@ impl FrameStack {
         fill: TaggedValue,
     ) -> usize {
         self.spill_pc();
-        let fp = self.words.len();
-        let base = fp + HEADER_WORDS;
-        self.words.resize(base + num_regs as usize, Cell::new(fill));
-        let header = &self.words[fp..base];
-        header[0].set(TaggedValue::fixnum(0));
-        header[HEADER_WORDS - LINK].set(link_word(base - self.base, num_regs));
-        header[HEADER_WORDS - CODE].set(code_word(&code));
-        header[HEADER_WORDS - META].set(meta_word(0, return_reg));
-        header[HEADER_WORDS - CLOSURE].set(closure);
+        let base = self.words.len() + HEADER_WORDS;
+        // The header's five words, then the window, written straight into
+        // the buffer's spare room: the buffer is asked for room once, and
+        // no word is written twice. `Vec`'s own `extend` and `resize` each
+        // ask again, and cost a call a dozen instructions more (measured
+        // 2026-11-24, on `fib`).
+        let num_regs = num_regs as usize;
+        let len = self.words.len();
+        let total = HEADER_WORDS + num_regs;
+        self.words.reserve(total);
+        let header = [
+            TaggedValue::fixnum(0),
+            link_word(base - self.base, num_regs as u16),
+            code_word(&code),
+            meta_word(0, return_reg),
+            closure,
+        ];
+        // SAFETY: `reserve` left room for `total` words past `len`, so every
+        // write below is inside the allocation and past the initialized
+        // words. All `total` are written before `set_len` takes them in,
+        // and a `Cell<TaggedValue>` has no destructor to run on what the
+        // spare room held.
+        unsafe {
+            let at = self.words.as_mut_ptr().add(len);
+            for (i, word) in header.into_iter().enumerate() {
+                at.add(i).write(Cell::new(word));
+            }
+            for i in 0..num_regs {
+                at.add(HEADER_WORDS + i).write(Cell::new(fill));
+            }
+            self.words.set_len(len + total);
+        }
         self.top_code = code_address(&code);
         self.codes.push(FrameCode(code));
         self.base = base;
@@ -360,18 +390,23 @@ impl FrameStack {
         base
     }
 
-    /// Pop the top frame with its window, and answer its `return_reg`.
+    /// Pop the top frame with its window, and answer its `return_reg` and
+    /// its code. The code is handed back and not dropped here, so that the
+    /// pop calls nothing: the last frame of a code object frees it where
+    /// the caller lets it go. Panics with no frame.
     #[inline(always)]
-    pub(crate) fn pop(&mut self) -> Reg {
+    pub(crate) fn pop(&mut self) -> (Reg, FrameCode) {
         let base = self.base;
-        assert!(base != 0, "pop with empty frame stack");
-        let link = self.header(base, LINK).get();
-        let return_reg = meta_return_reg(self.header(base, META).get());
+        // One range check for the header's words; with no frame the range
+        // starts below zero, and the slice refuses it.
+        let header = &self.words[base.wrapping_sub(HEADER_WORDS)..base];
+        let link = header[HEADER_WORDS - LINK].get();
+        let return_reg = meta_return_reg(header[HEADER_WORDS - META].get());
         self.words.truncate(base - HEADER_WORDS);
-        self.codes.pop();
+        let code = self.codes.pop().expect("a frame has its code");
         self.base = base - link_distance(link);
         self.load_top();
-        return_reg
+        (return_reg, code)
     }
 
     /// Grow the top window to `num_regs` registers if it has fewer, the new
@@ -581,6 +616,31 @@ impl FrameStack {
     }
 }
 
+#[cfg(test)]
+impl FrameStack {
+    /// A stack of one frame of `code`, running `closure` at pc 0, whose
+    /// window holds `registers`: for the tests that build a snapshot by
+    /// hand.
+    pub(crate) fn holding(
+        code: &Rc<CodeObject>,
+        closure: TaggedValue,
+        registers: &[TaggedValue],
+    ) -> FrameStack {
+        let mut stack = FrameStack::default();
+        let base = stack.push(
+            Rc::clone(code),
+            closure,
+            0,
+            registers.len() as u16,
+            TaggedValue::NULL,
+        );
+        for (slot, &value) in stack.words[base..].iter().zip(registers) {
+            slot.set(value);
+        }
+        stack
+    }
+}
+
 /// The frames of a [`FrameStack`], top first.
 pub(crate) struct Frames<'a> {
     stack: &'a FrameStack,
@@ -706,12 +766,12 @@ mod tests {
     #[test]
     fn a_pop_answers_the_return_register_and_takes_up_the_callers_pc() {
         let mut stack = three();
-        assert_eq!(stack.pop(), 9);
+        assert_eq!(stack.pop().0, 9);
         assert_eq!((stack.base(), stack.pc(), stack.bytes()), (12, 7, 12 * 8));
-        assert_eq!(stack.pop(), 1);
+        assert_eq!(stack.pop().0, 1);
         assert_eq!((stack.base(), stack.pc(), stack.bytes()), (5, 4, 7 * 8));
         assert_eq!(stack.caller_base(), None);
-        assert_eq!(stack.pop(), 0);
+        assert_eq!(stack.pop().0, 0);
         assert_eq!((stack.base(), stack.pc(), stack.bytes()), (0, 0, 0));
         assert!(stack.is_empty() && stack.top().is_none());
         stack.assert_frames_tile();
@@ -784,8 +844,8 @@ mod tests {
         bare.append(&captured);
         assert_eq!(shape(&bare), [(3, 0, 10, 3, 9), (2, 7, 5, 0, 1)]);
         bare.assert_frames_tile();
-        assert_eq!(bare.pop(), 9);
-        assert_eq!(bare.pop(), 1);
+        assert_eq!(bare.pop().0, 9);
+        assert_eq!(bare.pop().0, 1);
         assert!(bare.is_empty());
     }
 

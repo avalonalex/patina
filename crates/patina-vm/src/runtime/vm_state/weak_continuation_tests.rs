@@ -15,22 +15,23 @@
 
 use super::VmState;
 use crate::types::{
-    CallFrame, Depth, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
+    CallFrame, Depth, ExceptionHandler, FrameStack, PromptFrame, VmContinuation,
+    VmDelimitedContinuation,
 };
 use patina_core::heap::gc::collect_for_tests;
 use patina_core::tagged_value::TaggedValue;
-use std::cell::Cell;
+use std::rc::Rc;
 
 // Root the fixture in an owned frame/window instead of exposing a raw
 // register Vec in the public runtime API.
 fn pin_in_register(state: &mut VmState, value: TaggedValue) {
-    if state.execution.frames().is_empty() {
+    if state.execution.frame_count() == 0 {
         let id = super::tests::load_in_globals(state, super::tests::code(), Vec::new()).id();
         state
             .execution
             .push_frame(state.code_object(id).unwrap(), CallFrame::NO_CLOSURE, 0);
     }
-    let base = state.execution.frames().last().unwrap().register_base;
+    let base = state.execution.top_frame().unwrap().register_base;
     state.execution.set_top(base, 0, value);
 }
 
@@ -41,15 +42,26 @@ fn bare_state() -> VmState {
     VmState::on_a_fresh_heap()
 }
 
+/// A register stack of one frame of hand-built code, which has no maps and
+/// keeps every register, whose one register holds `payload`.
+fn stack_pinning(payload: TaggedValue) -> FrameStack {
+    FrameStack::holding(
+        &Rc::new(super::tests::code()),
+        CallFrame::NO_CLOSURE,
+        &[payload],
+    )
+}
+
 /// A full continuation whose register snapshot pins `payload`.
 fn continuation_pinning(payload: TaggedValue) -> VmContinuation {
     VmContinuation {
-        frames: vec![],
+        stack: stack_pinning(payload),
         dynamic_winds: vec![],
         prompt_stack: vec![],
         exception_handlers: vec![],
-        registers: vec![Cell::new(payload)],
-        deliver_reg: 0,
+        // No hole in the window: a capture clears the register its
+        // `deliver_reg` names (#906), and this one holds the payload.
+        deliver_reg: CallFrame::NO_RETURN,
         exit_status: None,
         abort_landing: false,
         reentry: std::rc::Rc::from(Vec::new()),
@@ -59,10 +71,8 @@ fn continuation_pinning(payload: TaggedValue) -> VmContinuation {
 
 fn delimited_continuation_pinning(payload: TaggedValue) -> VmDelimitedContinuation {
     VmDelimitedContinuation {
-        frames: vec![],
+        stack: stack_pinning(payload),
         dynamic_winds: vec![],
-        registers: vec![Cell::new(payload)],
-        base_at_capture: 0,
         deliver_reg: None,
         depth_at_capture: Depth::BASE,
         wind_depth_at_capture: 0,
@@ -95,10 +105,8 @@ fn a_carried_prompt_and_handler_are_traced() {
         )
     };
     let cont = VmDelimitedContinuation {
-        frames: vec![],
+        stack: FrameStack::default(),
         dynamic_winds: vec![],
-        registers: vec![],
-        base_at_capture: 0,
         deliver_reg: None,
         depth_at_capture: Depth::BASE,
         wind_depth_at_capture: 0,
