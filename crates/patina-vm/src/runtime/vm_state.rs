@@ -813,6 +813,7 @@ impl VmState {
             code.instructions.iter().all(|instr| instr.link().is_none()),
             "a code object loaded alone names a global, which only a unit's link table holds"
         );
+        assert_fits_a_frames_pc(&code);
         let id = self.next_code_id();
         code.id = id;
         self.code_store[id.index()] = Rc::new(code);
@@ -902,6 +903,7 @@ impl VmState {
                 }
             }
             let slot = code.id.index();
+            assert_fits_a_frames_pc(&code);
             self.code_store[slot] = Rc::new(code);
         }
         // Under the window, which covers what the table links as well as
@@ -1722,6 +1724,20 @@ fn release_unit(
             free.extend(id.next_generation());
         }
     }
+}
+
+/// Refuse code whose pcs a frame's header cannot hold (#908, decision A3 on
+/// #782): a pc is 29 bits of the header's `meta` word, so a code object has
+/// fewer than 2²⁹ instructions, the pc one past its last among them.
+/// Checked where code is loaded, once, and not where a pc is written. No
+/// compiler output comes near it: that many instructions are 20 GiB.
+fn assert_fits_a_frames_pc(code: &CodeObject) {
+    assert!(
+        code.instructions.len() < crate::types::frame_stack::MAX_INSTRUCTIONS,
+        "a code object of {} instructions: a frame's pc is below {}",
+        code.instructions.len(),
+        crate::types::frame_stack::MAX_INSTRUCTIONS
+    );
 }
 
 /// Outlined error constructor for a `code_object` miss — `#[cold]` keeps the

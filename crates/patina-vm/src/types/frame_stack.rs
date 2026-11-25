@@ -67,8 +67,9 @@ const CODE: usize = 3;
 const META: usize = 2;
 const CLOSURE: usize = 1;
 
-/// The most instructions a code object may hold: a pc is 29 bits of `meta`
-/// (decision A3 on #782), checked where a code object is loaded.
+/// What a pc is below: it is 29 bits of `meta` (decision A3 on #782). A
+/// code object has fewer instructions than this, checked where it is
+/// loaded, so that the pc one past its last fits too.
 pub(crate) const MAX_INSTRUCTIONS: usize = 1 << 29;
 
 /// The pc's bits of a `meta` word, as a fixnum's payload.
