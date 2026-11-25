@@ -823,6 +823,20 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   (`patina-vm/src/runtime/vm_state.rs`): they hold the rule for a snapshot
   no program in the suites makes, one captured above the soft limit with
   the limit armed.
+  The register stack itself (#908, frames and registers in one buffer of
+  words) has unit tests beside it, in
+  `patina-vm/src/types/frame_stack.rs`: a header word keeps both its
+  fields, and the pc is the low half of `meta`; frames are walked from the
+  top with the top frame's pc; a pop takes up the caller's pc; the dispatch
+  prologue follows the top frame's code; a cut, and the copies below and
+  above a depth; appended frames are walked through to the frame they sit
+  above, on a stack whose top frame is another size and on an empty one;
+  a tail call's reuse and growth of a window; and frames that share code
+  share one reference, through a split run, a tail call out of a run and a
+  clone into a stack that held other frames.
+  `gc_roots.rs`'s `the_walk_reports_each_frames_code_closure_and_registers`
+  holds a collection's walk to a frame's code, closure and registers and
+  nothing else of its header.
   `crates/patina-repl/tests/stack_max_cli.rs` holds the runner's side:
   `--stack-max` and `PATINA_STACK_MAX`, their precedence, the size grammar
   and its floor, a malformed size refused before anything runs, the exit

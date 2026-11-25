@@ -21,28 +21,84 @@ No value conversion is needed.
 
 ## 2. Core Data Structures
 
-### 2.1 `CallFrame`
+### 2.1 Frames and the register stack
 
 ```rust
-#[derive(Clone)]   // ← non-negotiable; required for stack-snapshot continuations
-pub struct CallFrame {
-    pub pc:            usize,           // program counter
-    pub register_base: usize,           // offset into the machine's register file
-    pub num_regs:      u16,             // register window size
-    pub closure:       TaggedValue,     // the VmClosure, or CallFrame::NO_CLOSURE
-    pub return_reg:    Reg,             // where to write result in caller
-    pub code:          FrameCode,       // the code this frame runs: an Rc<CodeObject>
+pub struct FrameStack {
+    words:    Vec<Cell<TaggedValue>>,  // headers and registers, bottom first
+    codes:    Vec<CodeRun>,            // the frames' code: an Rc<CodeObject> a run
+    base:     usize,                   // the top frame's first register, in words
+    pc:       usize,                   // the top frame's next instruction
+    top_code: usize,                   // the address of the top frame's code
 }
 ```
 
-A frame holds the code it runs, resolved once when the frame is pushed, so the
-dispatch loop reads instructions without a store lookup, and the frame's `Rc`
-keeps that code loaded. A closure names its code by `CodeObjectId` — a slot in
-`VmState::code_store` and the generation of the code in it (VM_ISA.md §2.3) —
-and a call looks it up there. The `Rc` sits in a newtype, `FrameCode`, which
-derefs to it and whose trace reports the code's id, which the collector
-resolves to the unit's link table (`VmState::trace_code_ids`, #836); the
-constants are traced from the code store.
+The frames and their registers are one buffer of tagged words
+(`types/frame_stack.rs`; GC stage 4d.7b, #908). A frame is a header of five
+words followed by its window, in `PRD/GC_PRD.md` §11.1's layout:
+
+```text
+fp+0   ret      0 in an interpreter's frame
+fp+8   link     distance to the caller in bytes [3–34] | nregs [35–50] | flags [51–62]
+fp+16  code     the code object's address
+fp+24  meta     pc [3–31] | return_reg [35–50]
+fp+32  closure  the VmClosure, or CallFrame::NO_CLOSURE
+fp+40  r0 … rₙ₋₁
+```
+
+- **Every word is a value.** `ret`, `link` and `meta` are fixnums, and so is
+  `code` as a collector reads it, since an 8-aligned address has a fixnum's
+  tag. A copy of the buffer is traced word by word.
+- **`link` is a distance.** A pop subtracts it, and a run of frames copied
+  somewhere else is still walked. The bottom frame's distance is its own
+  header's size, so a pop is one subtraction for every frame.
+- **The side vector keeps code loaded.** The `code` word is an address that
+  nothing counts. `codes` holds the `Rc` of the frames' code, pushed, popped
+  and copied with the frames, in a newtype, `FrameCode`, whose trace reports
+  the code's id, which the collector resolves to the unit's link table
+  (`VmState::trace_code_ids`, #836); the constants are traced from the code
+  store. It holds a run for each stretch of consecutive frames that run the
+  same code, the object once and how many frames: a push whose code is the
+  top frame's adds to the last run's count, and a pop takes from it. So a
+  recursion is one run however deep, and a capture of it copies one
+  reference. One reference a frame, measured first, cost a count up at
+  every capture and a count down at every drop, 14% of `samedepth1000`'s
+  instructions. A closure names its code by `CodeObjectId`, a slot in
+  `VmState::code_store` and the generation of the code in it (VM_ISA.md
+  §2.3), and a call looks it up there. 4e makes the word a reference to a
+  code descriptor, and the vector goes.
+- **The top frame's pc is a field, not a header word.** The dispatch loop
+  reads and advances a pc once an instruction, so the top frame's lives in
+  `pc`, beside `base` and `top_code`: three loads from fixed offsets. A
+  frame's header takes its pc when another frame is pushed above it, and
+  the top frame's header holds whatever it held last. Every reader of a pc
+  goes through `FrameStack::frames` or `top`, which answer the field for
+  the top frame, so nothing sees the stale word; a copy is a clone, and
+  carries the field. `PRD/GC_PRD.md` §11.1 calls the word "pc of the last
+  suspension point", and decision A3 on #782 had the interpreter write it
+  at every instruction: a pc held in a Rust local would have needed a spill
+  at each suspension point, and a missed one would have had the collector
+  read the wrong map. Held in the stack's own type, with no reader outside
+  it, there is no spill to miss.
+
+`CallFrame` is a read-only view of one frame, which `frames()` and `top()`
+answer and nothing stores:
+
+```rust
+#[derive(Clone, Copy)]
+pub struct CallFrame<'a> {
+    pub pc:            usize,           // program counter
+    pub register_base: usize,           // the frame's r0, as a word of the stack
+    pub num_regs:      u16,             // register window size
+    pub closure:       TaggedValue,     // the VmClosure, or CallFrame::NO_CLOSURE
+    pub return_reg:    Reg,             // where to write result in caller
+    pub code:          &'a Rc<CodeObject>,
+}
+```
+
+**What a frame costs.** 40 bytes of header and 8 a register on the stack,
+which is what the stack's cap counts (§3.2), and 16 bytes of the side
+vector for each run of frames that share code.
 
 ### 2.2 `VmState`
 
@@ -55,19 +111,20 @@ and heap still have their own interior-mutability APIs; these accessors do not
 make them immutable, but cannot replace the machine's heap/environment pair.
 `install_primitives()` remains only for bare compiler/runtime test scaffolding.
 
-The five dynamic components in §5.6 live in
-[`ExecutionState`](../crates/patina-vm/src/runtime/execution_state.rs). Its
-collections are private even to the rest of `runtime`. Instruction handlers
-can inspect slices and write register **slots**, but cannot resize the register
-file or mutate a frame's base/window independently. A register is a
-`Cell<TaggedValue>`, and so is a frame's `closure`, so that the root provider
-reports each one where it lives, through `&self` (#682). Frame entry, paired
-frame/window removal, tail replacement, full capture/arrival, prompt landing,
-and composable append are named operations on this owner. The continuation
-representations and transfer algorithms are unchanged.
+The dynamic components in §5.6 live in
+[`ExecutionState`](../crates/patina-vm/src/runtime/execution_state.rs): the
+register stack, which holds the frames and the registers (§2.1), and the
+prompt, wind and handler stacks. Its collections are private even to the
+rest of `runtime`. Instruction handlers can inspect frames through views and
+write register **slots**, but cannot grow or cut the stack or change a
+frame's header. A word of the stack is a `Cell<TaggedValue>`, a register or
+a frame's `closure`, so that the root provider reports each one where it
+lives, through `&self` (#682). Frame entry, frame removal, tail replacement,
+full capture/arrival, prompt landing, and composable append are named
+operations on this owner. The transfer algorithms are unchanged.
 
-Every register lies in a frame's window: the windows tile the register file,
-each beginning where the one below ends, and the top one ends the file
+Every word lies in a frame: the frames tile the register stack, each header
+beginning where the window below ends, and the top window ends the stack
 (`PRD/GC_PRD.md` §11.1, invariant 1; #714). A debug build asserts it at every
 push, pop and `return_into`, and in full after a wind step and a higher-order
 primitive's callback. Until #714 two places kept words outside every window:
@@ -148,7 +205,7 @@ collections private to `ExecutionState`. Its public inherent methods fell from
 #[derive(Clone)]
 pub struct PromptFrame {
     pub tag:                     TaggedValue,
-    pub stack_depth:             usize,
+    pub stack_depth:             Depth,  // the stack's top, a byte offset from its base
     pub handler:                 TaggedValue,
     pub dst:                     Reg,
     pub dynamic_wind_depth:      usize,
@@ -183,38 +240,63 @@ and each handler, through the handler type's own derived trace.
 ```rust
 pub struct ExceptionHandler {
     pub handler:       TaggedValue,
-    pub stack_depth:   usize,
+    pub stack_depth:   Depth,
 }
 ```
 
 Pushed by `with-exception-handler`, popped on thunk return. Exception handlers
 are captured/restored by `call/cc`.
 
+**A depth is a byte offset** (`types/depth.rs`; #903, #908): the register
+stack's top, measured from its base, where a prompt or a handler was
+established, where a delimited capture starts, and where a dispatch loop
+stops. Until 4d.7b it counted frames. A depth read off a stack names a
+place between two frames, and so does one moved with the frames it was
+recorded among. Two operations can leave a handler's depth inside a frame
+of the stack it lands on: `Depth::relocate`, for a handler recorded below
+the prompt its continuation was delimited by, and `Depth::lowered_by`, for
+the handler a `raise-continuable` puts back below a raise stub that was
+replayed somewhere else. Such a depth is only compared, never cut at: the
+handler is dropped once the stack's top is at or below it. Under a count
+of frames the same two cases named a frame boundary of the new stack that
+was no more the handler's own, so where the two readings differ is in how
+many of the invoking stack's frames return before the stale handler goes.
+No test in the suites tells them apart.
+
 ### 2.6 Continuation Objects
 
 ```rust
 pub struct VmContinuation {
-    pub frames:             Vec<CallFrame>,
+    pub stack:              FrameStack,   // a copy of the whole register stack
     pub dynamic_winds:      Vec<DynamicWindRecord>,
     pub prompt_stack:       Vec<PromptFrame>,
     pub exception_handlers: Vec<ExceptionHandler>,
-    pub registers:          Vec<Cell<TaggedValue>>,  // slots, as the live file
     pub deliver_reg:        Reg,    // where to write value on invocation
 }
 
 pub struct VmDelimitedContinuation {
-    pub frames:             Vec<CallFrame>,
+    pub stack:              FrameStack,   // the frames from the prompt's depth up
     pub dynamic_winds:      Vec<DynamicWindRecord>,
-    pub registers:          Vec<Cell<TaggedValue>>,  // slots, as the live file
-    pub base_at_capture:    usize,
-    pub deliver_reg:        Option<Reg>,  // the hole, in frames.last();
+    pub deliver_reg:        Option<Reg>,  // the hole, in the top frame;
                                           // None = nothing captured (identity)
-    pub depth_at_capture:   usize,        // frame depth the slice started at;
+    pub depth_at_capture:   Depth,        // the depth the slice started at;
                                           // the two below are relative to it
     pub prompt_stack:       Vec<PromptFrame>,
     pub exception_handlers: Vec<ExceptionHandler>,
 }
 ```
+
+**A capture copies words** (#908). A full capture clones the register stack:
+its words, as one run of stores, and the side vector's runs of code. An
+arrival copies them back into the buffers the live stack already has. A delimited one copies
+the words from the prompt's depth to the top, as a stack of its own, whose
+outermost frame is written as a bottom frame. Invoking it appends those
+words to the live stack and writes one of them, that frame's distance to the
+frame it now sits above: the frames between need no fix-up, since each
+records a distance and not a position. Until 4d.7b each frame's
+`register_base` was rebased on every invoke. The prompts and handlers a
+delimited continuation carries still have their depths moved
+(`Depth::relocate`).
 
 **Storage:** Continuations are stored in **side tables** on VmState
 (`continuation_store`, `delimited_continuation_store`), not directly on the heap.
@@ -273,9 +355,10 @@ Collections that run inside dispatch:
 - the polls themselves, at a closure's entry and a generic call's return;
 - `CollectAtCall`'s, a resumable primitive's collection at its call (§4.5).
 
-Each collection traces the register file by walking the frames (#906,
-`gc_roots::trace_frames`): for each frame it reports the registers the map
-at the frame's pc keeps and, in the same pass, overwrites the rest, the
+Each collection traces the register stack by walking the frames (#906,
+`gc_roots::trace_frames`): for each frame it reports the frame's code and
+closure and the registers the map at the frame's pc keeps and, in the same
+pass, overwrites the rest, the
 completed temporaries (`docs/GC_DESIGN.md` §5.2, "Temporary retirement").
 The safe points themselves no longer retire registers first; they lend the
 machine's state, and nothing is cleared where no collection runs. A capture
@@ -377,10 +460,13 @@ fn dispatch_one_instruction(
 Returns `Ok(Some(val))` to exit the loop, `Ok(None)` to continue.
 
 `cur_code` is the loop's cached copy of the top frame's code object; the
-dispatch prologue refreshes it (pointer compare) only when the frame's code
-changed, so no `Rc` clone is paid per instruction. The prologue also reads
-`pc` (folding in its advance) and the frame's `register_base` in the same
-frame access. Each change of `cur_code` is mirrored in `ExecutionState`'s
+dispatch prologue refreshes it only when the frame's code changed, by
+comparing its address with the stack's `top_code`, so no `Rc` clone is paid
+per instruction. The prologue also reads `pc` (folding in its advance) and
+the top frame's `base`. All three are fields of the register stack (§2.1),
+so the prologue is three loads, a store and a compare, with no frame to
+find; until #908 it computed the last frame's address in a vector of frames
+at every instruction. Each change of `cur_code` is mirrored in `ExecutionState`'s
 running code (§2.2): the refresh writes the new code's id, and so does
 `current_code`, which the loop's start and its escape landing take
 `cur_code` from. A self-call or self-return keeps the same code and writes
@@ -400,9 +486,9 @@ impl ExecutionState {
 }
 ```
 
-All index `register_base + r` into the flat register array. `reg_at` takes
-the dispatch prologue's hoisted base, and `registers()` lends the file as a
-read-only view. Only `execution_state.rs` writes a register, by two paths
+All index word `register_base + r` of the register stack. `reg_at` takes
+the dispatch prologue's hoisted base, and `registers()` lends the stack's
+words as a read-only view. Only `execution_state.rs` writes a register, by two paths
 and a push (#904):
 
 - `set_top` is the top frame's own write, during its own instruction, with
@@ -462,8 +548,10 @@ reports whether a frame remains to run (§4.5).
 ### 4.2 `call_closure_resolved`
 
 The dispatcher resolves a compiled closure's code id before reaching this
-helper. It checks arity, allocates a register window, copies arguments, builds
-any rest list, and pushes the call frame. It is not a general procedure entry
+helper. It checks arity, pushes the frame, its header and its window in one
+write at the stack's top (`FrameStack::push`), copies arguments and builds
+any rest list. The push first writes the caller's pc into the caller's
+header (§2.1). It is not a general procedure entry
 point. The old closure-only `call_closure` wrapper and unused `CallWithPrompt`
 instruction were removed with #190; prompt bodies and exception-handler
 thunks both use `call_any`.
@@ -482,7 +570,9 @@ For `TailCall` to a closure, the current frame is reused:
 
 On `Return { val }`:
 1. Read result value
-2. Pop current frame, free registers
+2. Pop the current frame, header and window together: the stack is cut at
+   the frame's header, and the caller's pc and code are taken up from its
+   header and the side vector (§2.1)
 3. If at exit depth, return result
 4. Write result to caller's `return_reg`, through `return_into` (§3.4), where
    stage 7 lowers the stack watermark when the caller is below it. A frame
@@ -490,7 +580,7 @@ On `Return { val }`:
    destination: a higher-order primitive's callback (`run_apply_proc`),
    whose value the loop it runs on hands back at its exit depth. No window
    reaches `NO_RETURN`, so `return_into` finds it past the end of the
-   register file with the bounds check it makes anyway, and writes no
+   register stack with the bounds check it makes anyway, and writes no
    register; a continuation that re-enters the callback after the
    primitive has returned returns into nothing. A callee that answers such
    a call here and now (a primitive, `values`, a parameter) hands its value
@@ -701,7 +791,7 @@ intercepted at call dispatch time.
   restarts it in place at pc 0, keeping both and filling the rest
   (`WindStub::Reuse`, `restart_stub`), and arrival replaces it with the
   target's frames. Until #714 `ResumeWindJump` popped it and kept its window
-  on the register file as the two values' only root, a word outside every
+  on the register stack as the two values' only root, a word outside every
   frame's window, `NUM_REGS` of them a step until arrival. Thunks ran on a
   nested Rust call until 2026-09-02, and a continuation captured in one
   re-entered the *jump site's* frame instead — mid-sequence, at its
@@ -1165,7 +1255,7 @@ it.
 
 | Location | What it holds |
 |---|---|
-| `vm.registers` | All live register values; every register lies in a frame's window (§2.2) |
+| `vm.execution`'s register stack | Each frame's closure and live registers, and its code by id; every word lies in a frame (§2.1, §2.2) |
 | `vm.execution.answer` | The value a callee answered to a call with no destination, until `call_any` takes it (§4.4) |
 | Closure `free_vars` (on heap) | Captured variables |
 | `vm.value_buffer` | Multiple-value buffer |

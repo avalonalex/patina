@@ -1431,7 +1431,7 @@ pub(super) fn step_wind_jump(
     // prompt whose body returned long before.
     pop_resolved_prompts(state);
     // Deliver into `deliver_reg` of the top frame. Any `base` the caller
-    // hoisted is stale here — the whole register file was just replaced.
+    // hoisted is stale here — the whole register stack was just replaced.
     if !state.execution.is_empty() {
         state
             .execution

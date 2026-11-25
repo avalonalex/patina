@@ -21,32 +21,43 @@ within the current window. There is no operand stack.
 ### 2.1 Register Windows
 
 ```
-Global register array:  [ r0 | r1 | r2 | ... | rN ]
-                          ^                        ^
-                          frame.register_base       frame.register_base + frame.num_regs
+Register stack:  … | ret | link | code | meta | closure | r0 | r1 | ... | rN | ret | …
+                     ^ the frame's header                 ^                    ^ the next frame
+                                                          register_base        register_base + num_regs
 ```
 
-- Each `CallFrame` owns a slice `[register_base .. register_base + num_regs]`.
-- Register `r0` in a frame = global index `frame.register_base + 0`.
+- The frames and their registers are one buffer of words (GC stage 4d.7b,
+  #908). A frame is a header of five words followed by its window.
+- Each frame owns the words `[register_base .. register_base + num_regs]`.
+- Register `r0` in a frame = word `register_base + 0` of the stack.
 - Instructions always use **frame-relative** indices (u16).
 - The compiler assigns registers at compile time; no runtime allocation.
 
 ### 2.2 Call Frame
 
-```rust
-#[derive(Clone)]   // ← non-negotiable invariant (stack-snapshot continuations)
-pub struct CallFrame {
-    pub code_id:       CodeObjectId,    // which function is executing
-    pub pc:            usize,           // program counter (instruction index)
-    pub register_base: usize,           // offset into global register array
-    pub num_regs:      u16,             // size of register window
-    pub closure:       TaggedValue,     // the VmClosure, or CallFrame::NO_CLOSURE
-    pub return_reg:    Reg,             // where to write result in caller's frame
-}
+```text
+fp+0   ret      0 in an interpreter's frame
+fp+8   link     distance to the caller in bytes | nregs | flags
+fp+16  code     the code object's address
+fp+24  meta     pc | return_reg
+fp+32  closure  the VmClosure, or CallFrame::NO_CLOSURE
+fp+40  r0 … rₙ₋₁
 ```
 
-`CallFrame` must always be `Clone`. This is the foundation for stack-snapshot
-continuations.
+- `link`: how far below this frame's header its caller's is, in bytes, and
+  the window's size. The bottom frame's distance is its own header's size.
+- `code`: the address of the code object the frame runs. A side vector of
+  `Rc<CodeObject>`, one a frame, keeps that code's unit loaded until 4e
+  makes the word a reference.
+- `meta`: the pc the frame resumes at, an instruction index below 2²⁹, and
+  `return_reg`, the register of the caller that `Return` writes.
+- `closure`: read only for a closure's free variables (`LoadClosure`).
+
+A continuation's snapshot is a copy of the stack's words with the side
+vector's code. `CallFrame` is a read-only view of a header (`pc`,
+`register_base`, `num_regs`, `closure`, `return_reg`, `code`), which the
+step tracer and the collector's walk read a frame through; nothing stores
+one. `docs/VM_DECISIONS.md` §4 has the layout's source.
 
 ### 2.3 Code Object
 

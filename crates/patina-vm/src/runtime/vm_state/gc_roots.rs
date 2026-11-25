@@ -329,9 +329,9 @@ pub(in crate::runtime) use crate::test_support as switches;
 impl RootProvider for VmState {
     /// `VmState`'s derived trace (#686), whose fields say what each holds,
     /// in a new epoch: `trace_roots` runs once, first, in each collection.
-    /// Then the register file, which the derived trace leaves to the walk
-    /// of the frames (#906, [`trace_frames`]): each frame's live registers
-    /// reported, and its dead ones cleared.
+    /// Then the register stack, which the derived trace leaves to the walk
+    /// of the frames (#906, #908, [`trace_frames`]): each frame's code,
+    /// closure and live registers reported, and its dead registers cleared.
     fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
         self.trace_epoch.set(self.trace_epoch.get() + 1);
         Trace::trace(self, visitor);

@@ -51,11 +51,11 @@ use std::sync::Arc;
 /// The complete mutable state of the VM during execution.
 ///
 /// Its trace (derived, #686) is the VM's root set, which the running machine
-/// lends to each collection (#682): the frames and dynamic
-/// extents, the parked escape value and the scratch arguments, every loaded
-/// code object's constants, the global environment and the ones set aside,
-/// and the step tracer's snapshots; and, by the walk of the frames that
-/// `trace_roots` runs after it, the register file (#906,
+/// lends to each collection (#682): the dynamic extents, the parked escape
+/// value and the scratch arguments, every loaded code object's constants,
+/// the global environment and the ones set aside, and the step tracer's
+/// snapshots; and, by the walk of the frames that `trace_roots` runs after
+/// it, the register stack, frames and registers (#906, #908,
 /// `gc_roots::trace_frames`). The continuation stores are weak, traced
 /// by `trace_weak_ids` for the ids marking reached, and the units' link
 /// tables are traced by `trace_code_ids` for the code ids marking reached
