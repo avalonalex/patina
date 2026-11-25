@@ -54,10 +54,10 @@
 //! unit go (`unit_in_use`), at a form's end and after every collection. No
 //! copy has one, and a store has one live stack, so one drop reaches every
 //! spent entry there is; stage 9's green threads each have a stack, and
-//! the store's question drops each one's then. (Measured 2026-11-24 against a vector pushed and popped
-//! with every run, each run counting its frames: the bookkeeping cost a
-//! call and its return about 20 instructions within one procedure and 30
-//! between two.)
+//! the store's question drops each one's then. (Measured 2026-11-24
+//! against a vector pushed and popped with every run, each run counting
+//! its frames: the bookkeeping cost a call and its return about 20
+//! instructions within one procedure and 30 between two.)
 //!
 //! **The top frame's pc is not in its header.** The dispatch loop reads and
 //! advances a pc once an instruction, and here that is a field of this
