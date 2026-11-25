@@ -123,7 +123,7 @@ use crate::error::VmError;
 use crate::types::code_object::{Arity, CodeObject, RegisterMaps};
 use crate::types::continuation::{ExceptionHandler, VmContinuation, VmDelimitedContinuation};
 use crate::types::instruction::{ControlForm, Instruction, PrimitiveFnId};
-use crate::types::{CallFrame, CodeObjectId, Depth};
+use crate::types::{CallFrame, CodeObjectId, Depth, FrameStack};
 use patina_core::continuation::{WindStep, next_wind_step};
 use patina_core::heap::{PromiseState, SharedHeap};
 use patina_core::procedure::Procedure;
@@ -725,11 +725,10 @@ fn handle_control_primitive(
             // The target's handle is held only here until the jump writes it.
             let window = AssertNoGc::new(state.heap());
             let target = state.alloc_vm_continuation(VmContinuation {
-                frames: Vec::new(),
+                stack: FrameStack::default(),
                 dynamic_winds: Vec::new(),
                 prompt_stack: Vec::new(),
                 exception_handlers: Vec::new(),
-                registers: Vec::new(),
                 deliver_reg: 0,
                 exit_status: Some(status),
                 abort_landing: false,
@@ -1429,7 +1428,7 @@ pub(super) fn step_wind_jump(
     pop_resolved_prompts(state);
     // Deliver into `deliver_reg` of the top frame. Any `base` the caller
     // hoisted is stale here — the whole register file was just replaced.
-    if !state.execution.frames().is_empty() {
+    if state.execution.frame_count() != 0 {
         state
             .execution
             .return_into(ReturnFrame::Top, cc.deliver_reg, value);
@@ -1456,8 +1455,6 @@ pub(super) fn exit_in_progress(state: &VmState) -> Option<i32> {
     state
         .execution
         .frames()
-        .iter()
-        .rev()
         .filter(|frame| frame.code.id == stub)
         .find_map(|frame| {
             let target = state
@@ -1499,7 +1496,7 @@ fn wind_step_frame(
         }
         WindStub::Reuse => {
             debug_assert!(
-                state.execution.frames().last().is_some_and(|top| {
+                state.execution.top_frame().is_some_and(|top| {
                     top.code.id == code.id
                         && state
                             .execution
@@ -2072,7 +2069,10 @@ pub(super) fn deliver_before_collecting(state: &mut VmState, exit_depth: Depth) 
     if state.execution.top_frame_depth() <= exit_depth {
         return;
     }
-    let [.., _caller, stub] = state.execution.frames() else {
+    if state.execution.frame_count() < 2 {
+        return;
+    }
+    let Some(stub) = state.execution.top_frame() else {
         return;
     };
     let return_reg = stub.return_reg;
@@ -3068,11 +3068,6 @@ pub(super) fn abort_to_prompt(
     let handler_depth = prompt
         .exception_handler_depth
         .min(state.execution.handlers().len());
-    let registers_end = match state.execution.frames_below(landing_depth).last() {
-        Some(top) => top.register_base + top.num_regs as usize,
-        None => 0,
-    };
-
     // Nothing to leave — no extent between the abort and its prompt, which is
     // the common case — means there is no travel to run, and the landing can
     // be cut out of the live machine in place. Building it as a snapshot and
@@ -3095,29 +3090,16 @@ pub(super) fn abort_to_prompt(
     // Otherwise the same landing has to be described rather than applied: the
     // travel needs the live wind stack intact to know what it is leaving, so
     // the machine cannot be cut back until it arrives.
-    let mut frames = state.execution.frames_below(landing_depth).to_vec();
-    let mut registers = state.execution.registers().copy(..registers_end);
+    let mut stack = state.execution.stack_below(landing_depth);
     // What the path above decides by cutting the machine and asking
     // (`rearm_stack_limit`), decided here for the landing it describes: the
     // reserve stays open only if it is open now and the stack the prompt
     // delimits, before the handler's stub goes on it, is still above the
     // soft limit (#907). The two paths must not differ in where they end up.
-    let stack_reserve_open = state.stack_reserve_open_over(
-        frames.len() * super::execution_state::FRAME_HEADER_BYTES
-            + registers.len() * std::mem::size_of::<TaggedValue>(),
-    );
-    push_abort_stub(
-        &mut frames,
-        &mut registers,
-        stub,
-        prompt.dst,
-        prompt.handler,
-        val,
-        cont_tv,
-    );
+    let stack_reserve_open = state.stack_reserve_open_over(stack.bytes());
+    push_abort_stub(&mut stack, stub, prompt.dst, prompt.handler, val, cont_tv);
     let target = VmContinuation {
-        frames,
-        registers,
+        stack,
         dynamic_winds: state.execution.winds()[..wind_depth].to_vec(),
         prompt_stack: state.execution.prompts()[..prompt_idx].to_vec(),
         exception_handlers: state.execution.handlers()[..handler_depth].to_vec(),
@@ -3378,7 +3360,7 @@ pub(super) fn capture_delimited(
     let handler_depth_at_capture = prompt
         .exception_handler_depth
         .min(state.execution.handlers().len());
-    let frames = state.execution.frames_above(depth_at_capture).to_vec();
+    let stack = state.execution.stack_above(depth_at_capture);
     // An empty capture is the identity continuation, and it carries no dynamic
     // environment at all — no frames to run under means nothing for prompts,
     // handlers or extents to belong to, and an identity invoke appends no
@@ -3388,7 +3370,7 @@ pub(super) fn capture_delimited(
     // the same code object, so the frame running them cannot tail-call away),
     // but a release build that met a counter-example would silently re-enter
     // nothing and push records nothing pops.
-    let dynamic_winds = if frames.is_empty() {
+    let dynamic_winds = if stack.is_empty() {
         Vec::new()
     } else {
         state.execution.winds()[wind_depth_at_capture..].to_vec()
@@ -3404,7 +3386,7 @@ pub(super) fn capture_delimited(
     // an identity invoke appends no frame whose return could sweep it back
     // off. (The set is not always empty: `with-exception-handler` tail-called
     // from a prompt body installs at the prompt's own depth.)
-    let (prompt_stack, exception_handlers) = if frames.is_empty() {
+    let (prompt_stack, exception_handlers) = if stack.is_empty() {
         (Vec::new(), Vec::new())
     } else {
         (
@@ -3412,20 +3394,14 @@ pub(super) fn capture_delimited(
             state.execution.handlers()[handler_depth_at_capture..].to_vec(),
         )
     };
-    let base_at_capture = frames
-        .first()
-        .map_or(state.execution.registers().len(), |f| f.register_base);
-    let registers = state.execution.registers().copy(base_at_capture..);
     // The hole is dead by construction — the capturing call never returns a
     // value into it — and is cleared in the copy, not kept as it stands,
     // where the handle's allocation clears the copy's dead registers
     // (`gc_roots::retire_snapshot`, #906, as `call/cc`'s is).
-    let deliver_reg = frames.last().map(|_top| hole);
+    let deliver_reg = (!stack.is_empty()).then_some(hole);
     let captured = VmDelimitedContinuation {
-        frames,
+        stack,
         dynamic_winds,
-        registers,
-        base_at_capture,
         deliver_reg,
         depth_at_capture,
         wind_depth_at_capture,
@@ -3434,8 +3410,8 @@ pub(super) fn capture_delimited(
         exception_handlers,
     };
     patina_core::census::capture_delimited(
-        captured.depth().frame_count(),
-        captured.registers.len(),
+        captured.stack.frame_count(),
+        captured.stack.register_count(),
     );
     captured
 }
@@ -3551,10 +3527,7 @@ pub(super) fn finish_delimited_invoke(
     // entry (#907): refused where it would pass the cap. Short of that, the
     // poll on the generic call's return raises `&stack-exhausted` once the
     // region has taken the stack to the soft limit.
-    state.check_stack_bytes(
-        dc.frames.len() * super::execution_state::FRAME_HEADER_BYTES
-            + dc.registers.len() * std::mem::size_of::<TaggedValue>(),
-    )?;
+    state.check_stack_bytes(dc.stack.bytes())?;
     state.execution.append_delimited(dc, value, dst)
 }
 
@@ -3962,8 +3935,7 @@ pub(super) fn tail_call_closure_resolved(
 ) -> Result<(), VmError> {
     let top = state
         .execution
-        .frames()
-        .last()
+        .top_frame()
         .expect("tail call with empty frame stack");
     if top.code.id == new_code_id {
         let (arity, base) = (top.code.arity, top.register_base);
@@ -4038,7 +4010,7 @@ pub(super) fn exec_call_primitive(
         // frame running it, the instruction's own unit, linked where it was
         // compiled (#836), so the unshadowed path passes a `u32` and reads no
         // table.
-        let frame = state.execution.frames().last().expect("no active frame");
+        let frame = state.execution.top_frame().expect("no active frame");
         debug_assert_eq!(
             frame
                 .pc

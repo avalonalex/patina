@@ -3,10 +3,9 @@
 //!
 //! See VM_ISA.md §6 and VM_RUNTIME.md §continuations.
 
-use super::{CallFrame, Depth, Reg};
+use super::{Depth, FrameStack, Reg};
 use patina_core::Trace;
 use patina_core::tagged_value::TaggedValue;
-use std::cell::Cell;
 use std::mem::size_of;
 use std::rc::Rc;
 
@@ -67,35 +66,23 @@ pub type DynamicWindRecord = patina_core::WindRecord<ExceptionHandler>;
 /// A captured delimited continuation (created by `AbortToPrompt` or
 /// `CaptureComposable`).
 ///
-/// Contains a snapshot of the call-stack slice between the prompt and the
+/// Contains a copy of the register stack's slice between the prompt and the
 /// capture site, plus the dynamic-wind records in that slice.
 ///
-/// `CallFrame: Clone` is a hard requirement for this to work —
-/// see VM_DECISIONS.md §4 and VM_ISA.md §2.2.
-///
-/// Its trace (derived, #686): its registers and frames' closures are slots,
-/// as the live ones are, and its extents are pinned, as theirs are. The VM
-/// traces one only once marking has reached its ref object (`trace_weak_ids`).
+/// Its trace (derived, #686): every word of its stack is a slot, as a
+/// live register is, and its extents are pinned, as the live ones are. The
+/// VM traces one only once marking has reached its ref object
+/// (`trace_weak_ids`).
 #[derive(Debug, Clone, Trace)]
 pub struct VmDelimitedContinuation {
-    /// Cloned call-stack slice (prompt boundary → capture site, exclusive of
-    /// the prompt frame itself).
-    pub frames: Vec<CallFrame>,
+    /// The frames from the prompt's depth to the capture site, with their
+    /// registers, as a stack of their own (#908): invoking the continuation
+    /// appends its words to the live stack, and writes one of them, the
+    /// outermost frame's distance to its new caller.
+    pub stack: FrameStack,
 
     /// Dynamic-wind records active within the captured slice.
     pub dynamic_winds: Vec<DynamicWindRecord>,
-
-    /// Register snapshot for all frames in this continuation.
-    ///
-    /// Contains `registers[frames[0].register_base .. end]` at capture time.
-    /// On invocation, these values are relocated to a new base in the live
-    /// register array so each frame's `register_base` must be adjusted.
-    pub registers: Vec<Cell<TaggedValue>>,
-
-    /// The `register_base` of `frames[0]` at capture time.
-    /// Used to compute the relocation offset when invoking the continuation.
-    #[trace(skip, reason = "a register index")]
-    pub base_at_capture: usize,
 
     /// Register in the innermost captured frame where invoking this
     /// continuation delivers its value: the hole the captured computation is
@@ -106,7 +93,7 @@ pub struct VmDelimitedContinuation {
     /// the instruction *after* that call, so a value written anywhere else is
     /// one the resumed computation never reads.
     ///
-    /// `None` when `frames` is empty — nothing stood between the capture and
+    /// `None` when the stack is empty — nothing stood between the capture and
     /// its prompt, because an `abort-current-continuation` in tail position of
     /// the prompt body has already popped the body's frame. The continuation
     /// is then the identity and `(k v)` is `v`.
@@ -114,11 +101,12 @@ pub struct VmDelimitedContinuation {
     pub deliver_reg: Option<Reg>,
 
     /// `ExecutionState::depth()` the captured slice started at — the prompt's
-    /// own depth. Invoking the continuation lands `frames[0]` somewhere else,
-    /// and this is what the difference is measured from: the frame depths
-    /// recorded in `prompt_stack` and `exception_handlers` below are relative
-    /// to the stack at capture and have to be shifted by it, exactly as
-    /// `base_at_capture` does for `CallFrame::register_base`.
+    /// own depth. Invoking the continuation lands its outermost frame
+    /// somewhere else, and this is what the difference is measured from: the
+    /// depths recorded in `prompt_stack` and `exception_handlers` below are
+    /// relative to the stack at capture and have to be shifted by it. The
+    /// frames themselves need no such shift, since each records a distance
+    /// to its caller (#908).
     #[trace(skip, reason = "a frame depth")]
     pub(crate) depth_at_capture: Depth,
 
@@ -181,8 +169,9 @@ pub struct ExceptionHandler {
 /// Its trace (derived, #686) is a delimited one's: slots and pinned extents.
 #[derive(Debug, Clone, Trace)]
 pub struct VmContinuation {
-    /// Full cloned frame stack at capture time.
-    pub frames: Vec<CallFrame>,
+    /// A copy of the whole register stack at capture time, frames and
+    /// registers (#908).
+    pub stack: FrameStack,
 
     /// Dynamic-wind records active at capture time.
     pub dynamic_winds: Vec<DynamicWindRecord>,
@@ -192,9 +181,6 @@ pub struct VmContinuation {
 
     /// Exception handler stack at capture time.
     pub exception_handlers: Vec<ExceptionHandler>,
-
-    /// Register snapshot for all live frames (registers[0..end]).
-    pub registers: Vec<Cell<TaggedValue>>,
 
     /// Register in the top frame where the delivered value should be written
     /// when the continuation is invoked. This is the `dst` register from the
@@ -239,24 +225,17 @@ fn buffer_bytes<T>(items: &Vec<T>) -> usize {
 }
 
 impl VmContinuation {
-    /// The depth of the stack this snapshot holds, as
-    /// `ExecutionState::depth` reads the live one's.
-    #[inline(always)]
-    pub(crate) fn depth(&self) -> Depth {
-        Depth::of_frames(self.frames.len())
-    }
-
     /// The bytes this snapshot holds, which its heap handle is charged
     /// (`Heap::alloc_vm_continuation_ref`, #606): the `Rc` box it is stored
-    /// in and its buffers. A wind record's handler slice is an `Rc` shared
+    /// in and its buffers, the stack's words and the side vector of its
+    /// frames' code (#908). A wind record's handler slice is an `Rc` shared
     /// with the live stack, and is not counted.
     pub fn payload_bytes(&self) -> usize {
         let VmContinuation {
-            frames,
+            stack,
             dynamic_winds,
             prompt_stack,
             exception_handlers,
-            registers,
             deliver_reg: _,
             exit_status: _,
             abort_landing: _,
@@ -265,30 +244,20 @@ impl VmContinuation {
         } = self;
         size_of::<Rc<()>>() * 2
             + size_of::<Self>()
-            + buffer_bytes(frames)
+            + stack.buffer_bytes()
             + buffer_bytes(dynamic_winds)
             + buffer_bytes(prompt_stack)
             + buffer_bytes(exception_handlers)
-            + buffer_bytes(registers)
             + std::mem::size_of_val::<[u64]>(reentry)
     }
 }
 
 impl VmDelimitedContinuation {
-    /// The depth of the captured slice, measured from its first frame: how
-    /// far invoking it raises the live stack.
-    #[inline(always)]
-    pub(crate) fn depth(&self) -> Depth {
-        Depth::of_frames(self.frames.len())
-    }
-
     /// As [`VmContinuation::payload_bytes`].
     pub fn payload_bytes(&self) -> usize {
         let VmDelimitedContinuation {
-            frames,
+            stack,
             dynamic_winds,
-            registers,
-            base_at_capture: _,
             deliver_reg: _,
             depth_at_capture: _,
             wind_depth_at_capture: _,
@@ -298,10 +267,9 @@ impl VmDelimitedContinuation {
         } = self;
         size_of::<Rc<()>>() * 2
             + size_of::<Self>()
-            + buffer_bytes(frames)
+            + stack.buffer_bytes()
             + buffer_bytes(dynamic_winds)
             + buffer_bytes(prompt_stack)
             + buffer_bytes(exception_handlers)
-            + buffer_bytes(registers)
     }
 }

@@ -1,7 +1,10 @@
-//! The five coupled components in VM_RUNTIME §5.6, and the id of the code
-//! the running dispatch loop runs. Only this module may resize/rebase live
-//! register windows or replace a dynamic-state snapshot. Transfer policy
-//! (wind travel, re-entry, error routing) stays in `control`.
+//! The coupled components in VM_RUNTIME §5.6, and the id of the code the
+//! running dispatch loop runs: the register stack, whose frames and
+//! registers are one buffer of words since GC stage 4d.7b
+//! (`types::frame_stack`, #908), and the three extent stacks. Only this
+//! module may push, pop, cut or replace the live stack's frames, or replace
+//! a dynamic-state snapshot. Transfer policy (wind travel, re-entry, error
+//! routing) stays in `control`.
 
 use super::control::abort_step;
 use crate::error::VmError;
@@ -9,17 +12,17 @@ use crate::types::code_object::{Arity, CodeObject};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use crate::types::{CallFrame, Depth, FrameCode};
+use crate::types::frame_stack::Frames;
+use crate::types::{CallFrame, Depth, FrameStack};
 use patina_core::heap::Heap;
 use patina_core::{CheckCell, GC_CHECK, SlotVisitor, TaggedValue, Trace};
 use std::cell::Cell;
 use std::ops::Range;
 use std::rc::Rc;
-use std::slice::SliceIndex;
 
-/// Its trace is all five components and the running code's id, a root of
+/// Its trace is every component and the running code's id, a root of
 /// every collection through `VmState`'s: derived (#686) but for the
-/// register file, which the walk of the frames reports
+/// register stack, which the walk of the frames reports
 /// ([`ExecutionState::trace_frames`], #906). The sentinel test
 /// `every_vm_state_root_is_traced` pins each component,
 /// `a_frame_s_live_registers_are_kept_and_its_dead_ones_cleared` the walk
@@ -27,19 +30,19 @@ use std::slice::SliceIndex;
 /// running code.
 #[derive(Default, Trace)]
 pub(super) struct ExecutionState {
-    /// Slots, so that the root provider reports each register where it
+    /// The frames and their registers, interleaved (#908). Its words are
+    /// slots, so that the root provider reports each register where it
     /// lives, and clears one, through `&self` (#682). Not the derived
-    /// trace's: a collection walks the frames, reports the registers each
-    /// frame's map keeps at its pc, a run at a time, and overwrites the
-    /// completed expression temporaries the map leaves out (#423, #906). A
-    /// continuation snapshot is cleared the same way at capture, and its
-    /// trace reports its whole register file.
+    /// trace's: a collection walks the frames, reports each frame's code
+    /// and closure and the registers its map keeps at its pc, a run at a
+    /// time, and overwrites the completed expression temporaries the map
+    /// leaves out (#423, #906). A continuation snapshot is cleared the same
+    /// way at capture, and its trace reports its every word.
     #[trace(
         skip,
-        reason = "reported by the walk of the frames, which `VmState`'s `trace_roots` runs after the derived trace: each frame's live registers, the rest cleared (`gc_roots::trace_frames`, #906)"
+        reason = "reported by the walk of the frames, which `VmState`'s `trace_roots` runs after the derived trace: each frame's code, closure and live registers, the rest cleared (`gc_roots::trace_frames`, #906)"
     )]
-    registers: Vec<Cell<TaggedValue>>,
-    frames: Vec<CallFrame>,
+    stack: FrameStack,
     prompt_stack: Vec<PromptFrame>,
     dynamic_winds: Vec<DynamicWindRecord>,
     exception_handlers: Vec<ExceptionHandler>,
@@ -47,7 +50,7 @@ pub(super) struct ExecutionState {
     running: RunningCode,
     /// Which top frame awaits a value, for the check builds' assertions on
     /// the register writes (#904).
-    #[trace(skip, reason = "a frame depth, which only a check build writes")]
+    #[trace(skip, reason = "a stack depth, which only a check build writes")]
     awaiting: Awaiting,
     /// The value [`ExecutionState::return_into`] was last handed for
     /// [`CallFrame::NO_RETURN`], which writes no register (#714): a callee
@@ -119,11 +122,6 @@ fn fill_value() -> TaggedValue {
     std::hint::black_box(FILL)
 }
 
-/// A frame's header in 4d.7's interleaved layout: five words, `ret`, `link`,
-/// `code`, `meta` and `closure` (`PRD/GC_PRD.md` §11.1). The stack's cap
-/// counts frames at this size from 4d.6 on (#907), ahead of the layout.
-pub(super) const FRAME_HEADER_BYTES: usize = 40;
-
 /// Write [`FILL`] into every register of `window`: one store each, with no
 /// test per register.
 #[inline(always)]
@@ -177,20 +175,18 @@ impl Trace for RunningCode {
 }
 
 impl ExecutionState {
-    /// Build a state from its five components, for tests that fill each with
-    /// a value nothing else holds, with no running code. A struct literal,
-    /// so a new component fails to compile here too.
+    /// Build a state from its components, for tests that fill each with a
+    /// value nothing else holds, with no running code. A struct literal, so
+    /// a new component fails to compile here too.
     #[cfg(test)]
     pub(super) fn from_parts(
-        registers: Vec<Cell<TaggedValue>>,
-        frames: Vec<CallFrame>,
+        stack: FrameStack,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
     ) -> Self {
         ExecutionState {
-            registers,
-            frames,
+            stack,
             prompt_stack,
             dynamic_winds,
             exception_handlers,
@@ -213,23 +209,49 @@ impl ExecutionState {
         self.running.0.set(id);
     }
 
-    /// The register file, lent for reading ([`Registers`]). The writes are
-    /// this module's: `set_top`, `return_into` and a push's (#904).
+    /// The register stack's words, lent for reading ([`Registers`]): a
+    /// frame's registers are the words from its `register_base`. The writes
+    /// are this module's: `set_top`, `return_into` and a push's (#904).
     #[inline(always)]
     pub(super) fn registers(&self) -> Registers<'_> {
-        Registers(&self.registers)
+        Registers(self.stack.words())
     }
-    /// The register file's slots, for the tests that read each where it
+    /// The register stack's slots, for the tests that read each where it
     /// lives (`every_slot_the_vm_reports_is_where_its_value_lives`, and
     /// the walk's). The collector reaches them through
     /// [`Self::trace_frames`], inside this module.
     #[cfg(test)]
     pub(super) fn register_cells(&self) -> &[Cell<TaggedValue>] {
-        &self.registers
+        self.stack.words()
     }
+    /// The frames, top first, each as a view of its header.
     #[inline(always)]
-    pub(super) fn frames(&self) -> &[CallFrame] {
-        &self.frames
+    pub(super) fn frames(&self) -> Frames<'_> {
+        self.stack.frames()
+    }
+    /// The top frame, as a view of its header.
+    #[inline(always)]
+    pub(super) fn top_frame(&self) -> Option<CallFrame<'_>> {
+        self.stack.top()
+    }
+    /// How many frames the stack holds, which the census hooks and the
+    /// step tracer report. Nothing in the machine's control reads it: a
+    /// depth is a byte offset ([`Self::depth`]).
+    #[inline(always)]
+    pub(super) fn frame_count(&self) -> usize {
+        self.stack.frame_count()
+    }
+    /// The closure the top frame runs, if it runs one (`LoadClosure`).
+    #[inline(always)]
+    pub(super) fn top_closure(&self) -> Option<TaggedValue> {
+        self.stack
+            .top_closure()
+            .filter(|closure| closure.is_object())
+    }
+    /// The top frame's code.
+    #[inline(always)]
+    pub(super) fn top_code(&self) -> Option<&Rc<CodeObject>> {
+        self.stack.top_code()
     }
     #[inline(always)]
     pub(super) fn prompts(&self) -> &[PromptFrame] {
@@ -244,34 +266,29 @@ impl ExecutionState {
         &self.exception_handlers
     }
 
-    /// How deep the frame stack is: the one reading of its depth (#903).
+    /// How deep the register stack is: the one reading of its depth (#903).
     /// Prompts, handlers and delimited captures record it, and the dispatch
-    /// loops stop at it. A count of frames until GC stage 4d.7 (#908), which
-    /// makes it a byte offset from the register stack's base
-    /// (`PRD/GC_PRD.md` §11.1) by changing what [`Depth`] holds.
+    /// loops stop at it. The stack's top as a byte offset from its base
+    /// (`PRD/GC_PRD.md` §11.1) since GC stage 4d.7b (#908); a count of
+    /// frames before.
     #[inline(always)]
     pub(super) fn depth(&self) -> Depth {
-        Depth::of_frames(self.frames.len())
+        Depth::of_bytes(self.stack.bytes())
     }
 
-    /// What the stack holds in bytes, as 4d.7's interleaved layout will hold
-    /// it (#907, `PRD/GC_PRD.md` §11.1): [`FRAME_HEADER_BYTES`] a frame and
-    /// 8 a register. The frame-entry check compares it with the poll word,
-    /// so the depth at which the stack's cap is met does not move when that
-    /// layout lands.
+    /// What the stack holds in bytes (#907, `PRD/GC_PRD.md` §11.1): 40 a
+    /// frame and 8 a register, which is its buffer's length. The
+    /// frame-entry check compares it with the poll word.
     #[inline(always)]
     pub(super) fn top_bytes(&self) -> usize {
-        self.frames.len() * FRAME_HEADER_BYTES
-            + self.registers.len() * std::mem::size_of::<TaggedValue>()
+        self.stack.bytes()
     }
 
-    /// The depth the top frame was pushed at: [`Self::depth`] less that
-    /// frame, or [`Depth::BASE`] with no frame. An accessor rather than a
-    /// [`Depth`] method because once depths are byte offsets (4d.7) it is the
-    /// top frame's own offset, which a depth alone does not give.
+    /// The depth the top frame was pushed at: where its header starts, or
+    /// [`Depth::BASE`] with no frame.
     #[inline(always)]
     pub(super) fn top_frame_depth(&self) -> Depth {
-        self.depth().lowered_by(1)
+        Depth::of_bytes(self.stack.top_frame_bytes())
     }
 
     // ── Register writes (#904) ──────────────────────────────────────────
@@ -290,60 +307,38 @@ impl ExecutionState {
     /// The top frame's window base.
     #[inline(always)]
     fn top_base(&self) -> usize {
-        self.frames.last().expect("no active frame").register_base
+        let base = self.stack.base();
+        assert!(base != 0, "no active frame");
+        base
     }
 
-    /// Where the top frame's window ends, or 0 with no frame.
-    #[inline(always)]
-    fn top_end(&self) -> usize {
-        self.frames
-            .last()
-            .map_or(0, |top| top.register_base + top.num_regs as usize)
-    }
-
-    /// Assert, in a debug build, that no register lies above the top
-    /// frame's window (#714, `PRD/GC_PRD.md` §11.1, invariant 1): the only
-    /// place a word outside every window could arise, since a push puts its
-    /// window at the end of the register file and a pop truncates it to the
-    /// frame's base. Checked at each push, before it extends the file, at
-    /// each pop, and where `return_into` relies on it.
+    /// Assert, in a debug build, that no word lies above the top frame's
+    /// window (#714, `PRD/GC_PRD.md` §11.1, invariant 1): the only place a
+    /// word outside every frame could arise, since a push puts its frame at
+    /// the end of the stack and a pop cuts the stack at the frame's header.
+    /// Checked at each push, before it extends the stack, at each pop, and
+    /// where `return_into` relies on it.
     #[inline(always)]
     fn debug_assert_file_ends_at_top(&self) {
         debug_assert_eq!(
-            self.registers.len(),
-            self.top_end(),
-            "a register lies past the top frame's window, outside every frame's window \
+            self.stack.words().len(),
+            self.stack.top_end(),
+            "a word lies past the top frame's window, outside every frame \
              (#714, PRD/GC_PRD.md §11.1, invariant 1)"
         );
     }
 
-    /// Assert, in a debug build, that every register lies within a frame's
-    /// window (#714, `PRD/GC_PRD.md` §11.1, invariant 1): the windows tile
-    /// the register file from its start, each beginning where the one below
-    /// ends, and the top one ends the file. O(depth), so checked where words
-    /// were kept outside every window until 4d.3: after a wind step
+    /// Assert, in a debug build, that every word lies within a frame
+    /// (#714, `PRD/GC_PRD.md` §11.1, invariant 1): the frames tile the
+    /// stack from its base, each header beginning where the window below
+    /// ends, and the top window ends the stack. O(depth), so checked where
+    /// words were kept outside every window until 4d.3: after a wind step
     /// (`ResumeWindJump`) and after a higher-order primitive's callback
     /// (`run_apply_proc`).
     pub(super) fn debug_assert_windows_tile(&self) {
-        if !cfg!(debug_assertions) {
-            return;
+        if cfg!(debug_assertions) {
+            self.stack.assert_frames_tile();
         }
-        let mut end = 0;
-        for (depth, frame) in self.frames.iter().enumerate() {
-            assert_eq!(
-                frame.register_base, end,
-                "the window of the frame at depth {depth} starts at {}, where the window below \
-                 ends at {end}: a register lies outside every frame's window (#714)",
-                frame.register_base
-            );
-            end = frame.register_base + frame.num_regs as usize;
-        }
-        assert_eq!(
-            self.registers.len(),
-            end,
-            "the register file runs past the top frame's window: a register lies outside \
-             every frame's window (#714)"
-        );
     }
 
     /// Record, in a check build, that the top frame awaits a value
@@ -406,25 +401,20 @@ impl ExecutionState {
                 debug_assert_eq!(base, self.top_base());
                 base
             }
-            ReturnFrame::Caller => {
-                let [.., caller, _] = self.frames.as_slice() else {
-                    panic!("no frame below the top");
-                };
-                caller.register_base
-            }
+            ReturnFrame::Caller => self.stack.caller_base().expect("no frame below the top"),
         };
         if GC_CHECK && frame != ReturnFrame::Caller && !self.top_awaits() {
             returned_into_a_running_frame(reg);
         }
         self.debug_assert_file_ends_at_top();
-        // The top frame's window ends the register file (`PRD/GC_PRD.md`
+        // The top frame's window ends the register stack (`PRD/GC_PRD.md`
         // §11.1, invariant 1, asserted at each push), and no window reaches
         // `NO_RETURN`, so the bounds check every write makes is what tells
         // the no-destination form apart, at no cost on a `Return`: its cold
         // arm takes the place of the panic's. The frame below the top is
         // tested by name, since its base plus `NO_RETURN` can fall in the
-        // top frame's window.
-        match self.registers.get(base + reg as usize) {
+        // top frame.
+        match self.stack.words().get(base + reg as usize) {
             Some(slot) if frame != ReturnFrame::Caller || reg != CallFrame::NO_RETURN => {
                 slot.set(value)
             }
@@ -433,7 +423,7 @@ impl ExecutionState {
     }
 
     /// The no-destination form of [`Self::return_into`], a write past the
-    /// end of the register file: hand `value` to [`Self::take_answer`], or
+    /// end of the register stack: hand `value` to [`Self::take_answer`], or
     /// panic, as indexing would have, for any register but
     /// [`CallFrame::NO_RETURN`].
     #[cold]
@@ -442,7 +432,7 @@ impl ExecutionState {
         assert_eq!(
             reg,
             CallFrame::NO_RETURN,
-            "return_into wrote r{reg}, past the end of the register file"
+            "return_into wrote r{reg}, past the end of the register stack"
         );
         self.answer.set(Some(value));
     }
@@ -471,7 +461,7 @@ impl ExecutionState {
         if GC_CHECK && self.top_awaits() {
             wrote_an_awaiting_frame("set_top", reg as usize);
         }
-        self.registers[base + reg as usize].set(value);
+        self.stack.words()[base + reg as usize].set(value);
     }
 
     /// A push's initializing write: argument `index` into the window at
@@ -483,7 +473,7 @@ impl ExecutionState {
         if GC_CHECK && self.top_awaits() {
             wrote_an_awaiting_frame("init_arg", index);
         }
-        self.registers[base + index].set(value);
+        self.stack.words()[base + index].set(value);
     }
 
     /// [`Self::init_arg`] for the first `slots` registers of that window,
@@ -494,19 +484,22 @@ impl ExecutionState {
         if GC_CHECK && self.top_awaits() {
             wrote_an_awaiting_frame("init_args", 0);
         }
-        for (slot, &value) in self.registers[base..base + slots].iter().zip(values) {
+        for (slot, &value) in self.stack.words()[base..base + slots].iter().zip(values) {
             slot.set(value);
         }
     }
 
-    /// The frames below `depth`: the ones a stack cut back to it keeps.
-    pub(super) fn frames_below(&self, depth: Depth) -> &[CallFrame] {
-        &self.frames[..depth.frame_count()]
+    /// A copy of the frames below `depth`, as a stack of its own: what a
+    /// stack cut back to it keeps, for the landing an abort describes
+    /// before it travels there.
+    pub(super) fn stack_below(&self, depth: Depth) -> FrameStack {
+        self.stack.below(depth.bytes())
     }
 
-    /// The frames at and above `depth`: the ones a capture from it copies.
-    pub(super) fn frames_above(&self, depth: Depth) -> &[CallFrame] {
-        &self.frames[depth.frame_count()..]
+    /// A copy of the frames at and above `depth`, as a stack of its own:
+    /// what a capture from it takes.
+    pub(super) fn stack_above(&self, depth: Depth) -> FrameStack {
+        self.stack.above(depth.bytes())
     }
 
     /// Enter one loaded code object with its matching window, every register
@@ -519,31 +512,20 @@ impl ExecutionState {
         return_reg: u16,
     ) -> usize {
         self.debug_assert_file_ends_at_top();
-        let base = self.registers.len();
         let num_regs = code.num_regs;
-        self.registers
-            .resize(base + num_regs as usize, Cell::new(fill_value()));
-        self.frames.push(CallFrame {
-            pc: 0,
-            register_base: base,
-            num_regs,
-            closure: Cell::new(closure),
-            return_reg,
-            code: FrameCode(code),
-        });
-        base
+        self.stack
+            .push(code, closure, return_reg, num_regs, fill_value())
     }
 
     /// Remove a frame and its window together, as every frame goes (a wind
     /// step's frame too, since #714: it stays for its whole travel, and
     /// arrival replaces it). Extents stay live until value delivery: a
     /// tail-called raise must still find its caller's handler.
-    pub(super) fn pop_frame(&mut self) -> CallFrame {
-        let frame = self.frames.pop().expect("pop with empty frame stack");
-        self.registers.truncate(frame.register_base);
+    pub(super) fn pop_frame(&mut self) -> Popped {
+        let return_reg = self.stack.pop();
         self.debug_assert_file_ends_at_top();
         self.mark_awaiting();
-        frame
+        Popped { return_reg }
     }
 
     /// Reuse the top window for another closure, a tail call's push: the
@@ -558,23 +540,10 @@ impl ExecutionState {
         if GC_CHECK && self.top_awaits() {
             wrote_an_awaiting_frame("tail_replace", 0);
         }
-        let frame = self
-            .frames
-            .last_mut()
-            .expect("tail call with empty frame stack");
-        if code.num_regs > frame.num_regs {
-            let extra = code.num_regs - frame.num_regs;
-            self.registers.resize(
-                self.registers.len() + extra as usize,
-                Cell::new(fill_value()),
-            );
-            frame.num_regs = code.num_regs;
-        }
-        let base = frame.register_base;
-        fill(&self.registers[base + argument_slots(code.arity)..base + code.num_regs as usize]);
-        frame.pc = 0;
-        frame.closure.set(closure);
-        frame.code = FrameCode(code);
+        let base = self.top_base();
+        self.stack.grow_top(code.num_regs, fill_value());
+        fill(&self.stack.words()[base + argument_slots(code.arity)..base + code.num_regs as usize]);
+        self.stack.replace_top(code, closure);
         base
     }
 
@@ -586,15 +555,10 @@ impl ExecutionState {
         if GC_CHECK && self.top_awaits() {
             wrote_an_awaiting_frame("restart_closure", 0);
         }
-        let frame = self
-            .frames
-            .last_mut()
-            .expect("tail call with empty frame stack");
-        frame.pc = 0;
-        frame.closure.set(closure);
-        let base = frame.register_base;
-        let code = &frame.code;
-        fill(&self.registers[base + argument_slots(code.arity)..base + code.num_regs as usize]);
+        let base = self.top_base();
+        let code = self.stack.top_code().expect("the top frame's code");
+        fill(&self.stack.words()[base + argument_slots(code.arity)..base + code.num_regs as usize]);
+        self.stack.restart_top(closure);
     }
 
     /// Start the top stub frame's next round in `code`, at pc 0, as its own
@@ -607,36 +571,35 @@ impl ExecutionState {
     /// keeps the jump's target and value).
     pub(super) fn restart_stub(&mut self, code: Rc<CodeObject>, keep: u16) -> usize {
         self.clear_awaiting();
-        let frame = self.frames.last_mut().expect("the stub frame");
-        debug_assert!(code.num_regs <= frame.num_regs);
+        let base = self.top_base();
+        debug_assert!(base + code.num_regs as usize <= self.stack.top_end());
         debug_assert!(keep <= code.num_regs);
-        let base = frame.register_base;
-        fill(&self.registers[base + keep as usize..base + code.num_regs as usize]);
-        frame.code = FrameCode(code);
-        frame.pc = 0;
+        fill(&self.stack.words()[base + keep as usize..base + code.num_regs as usize]);
+        self.stack.recode_top(code);
         base
     }
 
+    /// One instruction's prologue: the top frame's pc, advanced past the
+    /// instruction, and its window's base, with `cur_code` made the top
+    /// frame's code where it is not. Three loads from the stack's own
+    /// fields and a compare (`FrameStack::dispatch`).
     #[inline(always)]
     pub(super) fn dispatch_frame(&mut self, cur_code: &mut Rc<CodeObject>) -> (usize, usize) {
-        let frame = self.frames.last_mut().expect("empty frame stack");
-        if !Rc::ptr_eq(cur_code, &frame.code) {
-            *cur_code = Rc::clone(&frame.code);
-            self.running.0.set(frame.code.id.0);
+        let (pc, switched) = self.stack.dispatch(cur_code);
+        if switched {
+            self.running.0.set(cur_code.id.0);
         }
-        let pc = frame.pc;
-        frame.pc = pc + 1;
-        let base = frame.register_base;
         self.clear_awaiting();
-        (pc, base)
+        (pc, self.stack.base())
     }
 
     #[inline(always)]
     pub(super) fn set_pc(&mut self, pc: usize) {
-        self.frames.last_mut().expect("empty frame stack").pc = pc;
+        self.stack.set_pc(pc);
     }
     pub(super) fn set_return_reg(&mut self, dst: u16) {
-        self.frames.last_mut().expect("the stub frame").return_reg = dst;
+        self.top_base();
+        self.stack.set_top_return_reg(dst);
     }
 
     pub(super) fn push_prompt(
@@ -726,13 +689,12 @@ impl ExecutionState {
         reentry: Rc<[u64]>,
         stack_reserve_open: bool,
     ) -> VmContinuation {
-        patina_core::census::capture_full(self.depth().frame_count(), self.registers.len());
+        patina_core::census::capture_full(self.stack.frame_count(), self.stack.register_count());
         VmContinuation {
-            frames: self.frames.clone(),
+            stack: self.stack.clone(),
             dynamic_winds: self.dynamic_winds.clone(),
             prompt_stack: self.prompt_stack.clone(),
             exception_handlers: self.exception_handlers.clone(),
-            registers: self.registers.clone(),
             deliver_reg,
             exit_status: None,
             abort_landing: false,
@@ -741,12 +703,11 @@ impl ExecutionState {
         }
     }
 
-    /// Full arrival replaces all five components. The control layer decides
+    /// Full arrival replaces every component. The control layer decides
     /// which Rust re-entry boundaries it leaves and when to deliver the value.
     pub(super) fn restore(&mut self, cc: &VmContinuation) {
-        patina_core::census::restore_full(cc.depth().frame_count(), cc.registers.len());
-        self.registers = cc.registers.clone();
-        self.frames = cc.frames.clone();
+        patina_core::census::restore_full(cc.stack.frame_count(), cc.stack.register_count());
+        self.stack = cc.stack.clone();
         self.dynamic_winds = cc.dynamic_winds.clone();
         self.prompt_stack = cc.prompt_stack.clone();
         self.exception_handlers = cc.exception_handlers.clone();
@@ -762,12 +723,7 @@ impl ExecutionState {
             prompt.dynamic_wind_depth.min(self.dynamic_winds.len())
         );
         let landing_depth = prompt.stack_depth.min(self.depth());
-        let registers_end = self
-            .frames_below(landing_depth)
-            .last()
-            .map_or(0, |f| f.register_base + f.num_regs as usize);
-        self.frames.truncate(landing_depth.frame_count());
-        self.registers.truncate(registers_end);
+        self.stack.truncate(landing_depth.bytes());
         self.exception_handlers.truncate(
             prompt
                 .exception_handler_depth
@@ -786,21 +742,12 @@ impl ExecutionState {
         cont: TaggedValue,
     ) {
         self.debug_assert_file_ends_at_top();
-        push_abort_stub(
-            &mut self.frames,
-            &mut self.registers,
-            code,
-            return_reg,
-            handler,
-            val,
-            cont,
-        );
+        push_abort_stub(&mut self.stack, code, return_reg, handler, val, cont);
     }
 
-    /// Abandon an uncaught form: drop all five components without running winds.
+    /// Abandon an uncaught form: drop every component without running winds.
     pub(super) fn clear(&mut self) {
-        self.frames.clear();
-        self.registers.clear();
+        self.stack.clear();
         self.prompt_stack.clear();
         self.dynamic_winds.clear();
         self.exception_handlers.clear();
@@ -808,12 +755,13 @@ impl ExecutionState {
         self.answer.set(None);
     }
 
-    /// The register file's trace (#906): a collection's walk of the frames,
-    /// which reports each frame's live registers to `visitor` and clears
-    /// the rest (`gc_roots::trace_frames`). Called by `VmState`'s
-    /// `trace_roots` and by nothing else, so only inside a collection.
+    /// The register stack's trace (#906): a collection's walk of the
+    /// frames, which reports each frame's code, closure and live registers
+    /// to `visitor` and clears the rest (`gc_roots::trace_frames`). Called
+    /// by `VmState`'s `trace_roots` and by nothing else, so only inside a
+    /// collection.
     pub(super) fn trace_frames(&self, visitor: &mut dyn SlotVisitor) {
-        super::vm_state::gc_roots::trace_frames(&self.registers, &self.frames, visitor);
+        super::vm_state::gc_roots::trace_frames(&self.stack, visitor);
     }
 
     /// Re-entry thunks have already pushed the captured winds. Relocate and
@@ -837,14 +785,11 @@ impl ExecutionState {
             .ok_or_else(|| VmError::Runtime {
                 message: "composable invoke: a re-entered extent left the wind stack".into(),
             })?;
-        // Relocate the captured register windows onto the end of the live array.
-        let shift = self.registers.len().wrapping_sub(dc.base_at_capture);
-        self.registers.extend_from_slice(&dc.registers);
+        // The captured frames go onto the end of the live stack as they
+        // are: each records a distance to its caller, so only the outermost
+        // one's is written, for the frame it now sits above (#908).
         let outermost = self.depth();
-        self.frames.extend(dc.frames.iter().cloned());
-        for f in &mut self.frames[outermost.frame_count()..] {
-            f.register_base = f.register_base.wrapping_add(shift);
-        }
+        self.stack.append(&dc.stack);
 
         // The dynamic environment the captured frames ran in comes back with them:
         // the prompts they established and the handlers they installed. Every
@@ -897,7 +842,7 @@ impl ExecutionState {
         // equivalent, because it appends to the live stacks rather than replacing
         // them, and the frames it appends are the ones the depth sweep follows.
 
-        self.frames[outermost.frame_count()].return_reg = dst;
+        self.stack.set_return_reg_at(outermost.bytes(), dst);
         let deliver_reg = dc
             .deliver_reg
             .expect("the caller returns Identity when there is no hole");
@@ -909,9 +854,11 @@ impl ExecutionState {
     }
 }
 
-/// The register file, lent for reading: what [`ExecutionState::registers`]
-/// answers. No method writes, so a holder of `&VmState` cannot write a
-/// register (#904); the step tracer and the snapshot copies read through it.
+/// The register stack's words, lent for reading: what
+/// [`ExecutionState::registers`] answers. A frame's registers are the words
+/// from its `register_base`; its header is the five below. No method
+/// writes, so a holder of `&VmState` cannot write a register (#904); the
+/// step tracer reads through it.
 #[derive(Clone, Copy)]
 pub(crate) struct Registers<'a>(&'a [Cell<TaggedValue>]);
 
@@ -942,16 +889,12 @@ impl<'a> Registers<'a> {
     pub(crate) fn iter(self) -> impl Iterator<Item = TaggedValue> + 'a {
         self.0.iter().map(Cell::get)
     }
+}
 
-    /// A copy of the registers `range` takes: a snapshot's own file, which
-    /// the capture may then write, as it clears a continuation's dead
-    /// registers, never the machine's.
-    pub(crate) fn copy<R>(self, range: R) -> Vec<Cell<TaggedValue>>
-    where
-        R: SliceIndex<[Cell<TaggedValue>], Output = [Cell<TaggedValue>]>,
-    {
-        self.0[range].to_vec()
-    }
+/// What a pop answers of the frame it removed: the register of its caller
+/// that the frame returns into.
+pub(super) struct Popped {
+    pub(super) return_reg: u16,
 }
 
 /// The frame an [`ExecutionState::return_into`] writes into (#904).
@@ -1005,8 +948,7 @@ fn returned_into_a_running_frame(reg: u16) -> ! {
     )
 }
 
-/// Put the frame an abort lands in on top of `frames`, with its window on the
-/// end of `registers`.
+/// Put the frame an abort lands in on top of `stack`.
 ///
 /// One description of the landing frame, used by both of `abort_to_prompt`'s
 /// paths — the one that cuts the live machine back in place and the one that
@@ -1015,32 +957,25 @@ fn returned_into_a_running_frame(reg: u16) -> ! {
 ///
 /// # State contract
 ///
-/// Requires a matched frame/register prefix and loaded abort-handler code.
-/// Appends one initialized frame/window to those buffers, live or detached;
-/// no other dynamic components are touched.
+/// Requires loaded abort-handler code. Appends one initialized frame to
+/// `stack`, live or detached; no other dynamic components are touched.
 pub(super) fn push_abort_stub(
-    frames: &mut Vec<CallFrame>,
-    registers: &mut Vec<Cell<TaggedValue>>,
+    stack: &mut FrameStack,
     code: Rc<CodeObject>,
     return_reg: u16,
     handler: TaggedValue,
     val: TaggedValue,
     cont: TaggedValue,
 ) {
-    let base = registers.len();
-    registers.resize(
-        base + abort_step::NUM_REGS as usize,
-        Cell::new(fill_value()),
-    );
-    registers[base + abort_step::HANDLER as usize].set(handler);
-    registers[base + abort_step::VAL as usize].set(val);
-    registers[base + abort_step::CONT as usize].set(cont);
-    frames.push(CallFrame {
-        pc: 0,
-        register_base: base,
-        num_regs: abort_step::NUM_REGS,
-        closure: Cell::new(CallFrame::NO_CLOSURE),
+    let base = stack.push(
+        code,
+        CallFrame::NO_CLOSURE,
         return_reg,
-        code: FrameCode(code),
-    });
+        abort_step::NUM_REGS,
+        fill_value(),
+    );
+    let words = stack.words();
+    words[base + abort_step::HANDLER as usize].set(handler);
+    words[base + abort_step::VAL as usize].set(val);
+    words[base + abort_step::CONT as usize].set(cont);
 }

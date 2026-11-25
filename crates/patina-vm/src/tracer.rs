@@ -354,7 +354,7 @@ impl StepTracer {
     pub(crate) fn pre_instruction_with_depth(
         &mut self,
         registers: Registers<'_>,
-        frame: &CallFrame,
+        frame: &CallFrame<'_>,
         code_id: CodeObjectId,
         pc: usize,
         instr: &Instruction,
@@ -401,7 +401,7 @@ impl StepTracer {
     pub(crate) fn post_instruction(
         &mut self,
         registers: Registers<'_>,
-        frame: Option<&CallFrame>,
+        frame: Option<&CallFrame<'_>>,
         heap: &SharedHeap,
     ) {
         if self.filter.is_full(self.events.len()) {

@@ -652,8 +652,8 @@ impl VmState {
     #[inline]
     pub(super) fn check_stack_room(&mut self, num_regs: u16) -> Result<(), VmError> {
         self.check_stack_bytes(
-            super::execution_state::FRAME_HEADER_BYTES
-                + num_regs as usize * std::mem::size_of::<TaggedValue>(),
+            crate::types::frame_stack::FRAME_HEADER_BYTES
+                + num_regs as usize * crate::types::frame_stack::WORD_BYTES,
         )
     }
 
@@ -1107,8 +1107,7 @@ impl VmState {
     #[inline(always)]
     fn frame_base(&self) -> usize {
         self.execution
-            .frames()
-            .last()
+            .top_frame()
             .expect("no active frame")
             .register_base
     }
@@ -1160,8 +1159,7 @@ impl VmState {
         let frame = self
             .execution
             .frames()
-            .iter()
-            .nth_back(frame_from_top)
+            .nth(frame_from_top)
             .expect("the reading frame is on the stack");
         panic!(
             "read of a retired register {how}: r{reg} at pc {} of #{} \
@@ -1197,7 +1195,7 @@ impl VmState {
     /// has been through it.
     pub(super) fn alloc_vm_continuation(&mut self, cont: VmContinuation) -> TaggedValue {
         let _no_gc = AssertNoGc::new(&self.heap);
-        gc_roots::retire_snapshot(&cont.registers, &cont.frames, 0, Some(cont.deliver_reg));
+        gc_roots::retire_snapshot(&cont.stack, Some(cont.deliver_reg));
         let bytes = cont.payload_bytes();
         let (tv, id) = self.heap.borrow_mut().alloc_vm_continuation_ref(bytes);
         self.continuation_store
@@ -1208,19 +1206,13 @@ impl VmState {
 
     /// Allocate a delimited VM continuation, returning its heap `TaggedValue`
     /// handle. The same window as [`Self::alloc_vm_continuation`], and the
-    /// same clearing of the copy, whose frames keep their absolute bases
-    /// over a file that starts at `base_at_capture`.
+    /// same clearing of the copy.
     pub(super) fn alloc_vm_delimited_continuation(
         &mut self,
         cont: VmDelimitedContinuation,
     ) -> TaggedValue {
         let _no_gc = AssertNoGc::new(&self.heap);
-        gc_roots::retire_snapshot(
-            &cont.registers,
-            &cont.frames,
-            cont.base_at_capture,
-            cont.deliver_reg,
-        );
+        gc_roots::retire_snapshot(&cont.stack, cont.deliver_reg);
         let bytes = cont.payload_bytes();
         let (tv, id) = self
             .heap
@@ -1251,8 +1243,7 @@ impl VmState {
     /// where it starts and where an escape lands: recorded as the running
     /// code (`RunningCode`, #836), since each of those polls next.
     pub(super) fn current_code(&self) -> Result<Rc<CodeObject>, VmError> {
-        let top = self.execution.frames().last().expect("no active frame");
-        let code = Rc::clone(&top.code);
+        let code = Rc::clone(self.execution.top_code().expect("no active frame"));
         self.execution.set_running(code.id.0);
         Ok(code)
     }
@@ -2291,7 +2282,7 @@ fn attach_source_location(state: &VmState, e: VmError) -> VmError {
     if e.source_location().is_some() {
         return e;
     }
-    for frame in state.execution.frames().iter().rev() {
+    for frame in state.execution.frames() {
         if frame.code.source_map.is_empty() {
             continue;
         }
@@ -2410,11 +2401,11 @@ fn dispatch_one_instruction(
 
     // ── Trace: before instruction ────────────────────────────────────
     if let Some(tracer) = state.tracer.clone() {
-        let f = state.execution.frames().last().unwrap();
-        let depth = state.execution.depth().frame_count();
+        let f = state.execution.top_frame().unwrap();
+        let depth = state.execution.frame_count();
         tracer.borrow_mut().pre_instruction_with_depth(
             state.execution.registers(),
-            f,
+            &f,
             code.id,
             pc,
             instr,
@@ -2448,9 +2439,7 @@ fn dispatch_one_instruction(
         Instruction::LoadClosure { dst, slot } => {
             let closure = state
                 .execution
-                .frames()
-                .last()
-                .and_then(CallFrame::closure)
+                .top_closure()
                 .ok_or_else(|| VmError::Runtime {
                     message: "LoadClosure in non-closure frame".into(),
                 })?;
@@ -3505,7 +3494,7 @@ fn dispatch_one_instruction(
     if let Some(tracer) = state.tracer.clone() {
         tracer.borrow_mut().post_instruction(
             state.execution.registers(),
-            state.execution.frames().last(),
+            state.execution.top_frame().as_ref(),
             &state.heap,
         );
     }
