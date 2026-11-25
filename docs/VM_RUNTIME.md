@@ -252,16 +252,18 @@ stack's top, measured from its base, where a prompt or a handler was
 established, where a delimited capture starts, and where a dispatch loop
 stops. Until 4d.7b it counted frames. A depth read off a stack names a
 place between two frames, and so does one moved with the frames it was
-recorded among. Two operations can leave a handler's depth inside a frame
-of the stack it lands on: `Depth::relocate`, for a handler recorded below
-the prompt its continuation was delimited by, and `Depth::lowered_by`, for
-the handler a `raise-continuable` puts back below a raise stub that was
-replayed somewhere else. Such a depth is only compared, never cut at: the
-handler is dropped once the stack's top is at or below it. Under a count
-of frames the same two cases named a frame boundary of the new stack that
-was no more the handler's own, so where the two readings differ is in how
-many of the invoking stack's frames return before the stale handler goes.
-No test in the suites tells them apart.
+recorded among: a carried prompt's, and the handler's a `raise-continuable`
+puts back a distance below its stub, whose distance is measured from a
+floor that every region able to replay the stub contains (§5.2). One case
+moves a depth past the frames it was recorded among: `Depth::relocate`'s
+saturating one, for a handler recorded below the prompt its continuation
+was delimited by, which `install_thunk_handlers`' clamp can produce. That
+depth can fall inside a frame of the stack it lands on. It is only
+compared, never cut at: the handler is dropped once the stack's top is at
+or below it. Under a count of frames the same case named a frame boundary
+of the invoking stack that was no more the handler's own, so where the two
+readings differ is in how many of that stack's frames return before the
+stale handler goes. No test in the suites tells them apart.
 
 ### 2.6 Continuation Objects
 
@@ -288,7 +290,11 @@ pub struct VmDelimitedContinuation {
 
 **A capture copies words** (#908). A full capture clones the register stack:
 its words, as one run of stores, and the side vector's runs of code. An
-arrival copies them back into the buffers the live stack already has. A delimited one copies
+arrival copies them back into the buffer the live stack already has, unless
+that buffer is more than four times what the arrival needs: then the buffer
+goes and the arrival takes one of its own size, so the stack a deep
+recursion grew is freed at the escape out of it, as it was while an arrival
+replaced the vectors. A delimited one copies
 the words from the prompt's depth to the top, as a stack of its own, whose
 outermost frame is written as a bottom frame. Invoking it appends those
 words to the live stack and writes one of them, that frame's distance to the

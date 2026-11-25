@@ -166,14 +166,25 @@ struct CodeRun {
     frames: usize,
 }
 
-/// A copy of `words`, as one run of stores. `<[T]>::to_vec` clones a slice
-/// of cells an element at a time under a guard, which costs a capture
-/// several instructions a word.
+/// Put a copy of `words` on the end of `buffer`, as one run of stores.
+/// `<[T]>::to_vec` and `extend_from_slice` clone a slice of cells an
+/// element at a time under a guard, which costs a capture several
+/// instructions a word.
+#[inline(always)]
+fn extend_words(buffer: &mut Vec<Cell<TaggedValue>>, words: &[Cell<TaggedValue>]) {
+    buffer.extend(words.iter().map(|word| Cell::new(word.get())));
+}
+
+/// A copy of `words`, in a buffer of its size.
 fn copy_words(words: &[Cell<TaggedValue>]) -> Vec<Cell<TaggedValue>> {
     let mut copy = Vec::with_capacity(words.len());
-    copy.extend(words.iter().map(|word| Cell::new(word.get())));
+    extend_words(&mut copy, words);
     copy
 }
+
+/// The least buffer, in words, that an arrival keeps whatever it needs:
+/// below it a buffer is too small for its size to matter.
+const KEPT_WORDS: usize = 1 << 12;
 
 /// A stack of frames, live or captured: see the module's comment.
 ///
@@ -206,9 +217,17 @@ pub struct FrameStack {
 }
 
 /// A capture's copy: the words as one run of stores, and a reference for
-/// each run of code. An arrival copies back into the buffers the live stack
+/// each run of code. An arrival copies back into the buffer the live stack
 /// already has (`clone_from`), so that it neither frees and takes a buffer
 /// nor leaves one with no room for the next push.
+///
+/// **Unless that buffer is far larger than the arrival needs:** more than
+/// four times its words. Then the buffer goes, and the arrival takes one of
+/// its own size, as every arrival did while it replaced the vectors. An
+/// escape from the bottom of a deep recursion is such an arrival, and a
+/// `guard` that catches `&stack-exhausted` is one: without this the stack
+/// the recursion grew would stay with the process, gigabytes of it at the
+/// default cap, until 4d.8 returns a stack's pages (#909).
 impl Clone for FrameStack {
     fn clone(&self) -> Self {
         FrameStack {
@@ -221,9 +240,12 @@ impl Clone for FrameStack {
     }
 
     fn clone_from(&mut self, source: &Self) {
-        self.words.clear();
-        self.words
-            .extend(source.words.iter().map(|word| Cell::new(word.get())));
+        if self.words.capacity() / 4 > source.words.len().max(KEPT_WORDS) {
+            self.words = copy_words(&source.words);
+        } else {
+            self.words.clear();
+            extend_words(&mut self.words, &source.words);
+        }
         self.codes.clone_from(&source.codes);
         self.base = source.base;
         self.pc = source.pc;
@@ -679,7 +701,7 @@ impl FrameStack {
         }
         self.spill_pc();
         let at = self.words.len();
-        self.words.extend_from_slice(&captured.words);
+        extend_words(&mut self.words, &captured.words);
         self.codes.extend(captured.codes.iter().cloned());
         let outermost = at + HEADER_WORDS;
         let link = self.header(outermost, LINK);
@@ -743,6 +765,17 @@ impl FrameStack {
             self.codes.iter().all(|run| run.frames != 0),
             "an empty run of code"
         );
+        assert_eq!(
+            self.top_code,
+            self.codes.last().map_or(0, |run| code_address(&run.code)),
+            "the top frame's code is not the last run's"
+        );
+    }
+
+    /// How many words the buffer has room for.
+    #[cfg(test)]
+    pub(crate) fn capacity(&self) -> usize {
+        self.words.capacity()
     }
 }
 
@@ -1057,6 +1090,45 @@ mod tests {
         other.clone_from(&stack);
         assert_eq!(shape(&other), shape(&stack));
         other.assert_frames_tile();
+    }
+
+    /// An arrival keeps the live stack's buffer, so that the next push has
+    /// room, unless the buffer is more than four times what it needs: then
+    /// it takes one of its own size, and a stack a deep recursion grew goes
+    /// back to the allocator at the escape out of it.
+    #[test]
+    fn an_arrival_keeps_a_buffer_near_its_size_and_lets_a_far_larger_one_go() {
+        let f = code(1, 59);
+        let frame_words = HEADER_WORDS + 59;
+        let stack_of = |frames: usize| {
+            let mut stack = FrameStack::default();
+            for _ in 0..frames {
+                stack.push(Rc::clone(&f), TaggedValue::FALSE, 0, 59, FILL);
+            }
+            stack
+        };
+        // A snapshot of 100 frames, 6,400 words.
+        let snapshot = stack_of(100);
+        // A live stack of 200 frames, whose buffer has room for 16,384
+        // words: under four times the snapshot's, so it stays.
+        let mut near = stack_of(200);
+        let kept = near.capacity();
+        near.clone_from(&snapshot);
+        assert_eq!(near.capacity(), kept);
+        assert_eq!(shape(&near), shape(&snapshot));
+        // One of 1,000 frames, 64,000 words: over four times it, so the
+        // buffer goes.
+        let mut deep = stack_of(1000);
+        assert!(deep.capacity() >= 1000 * frame_words);
+        deep.clone_from(&snapshot);
+        assert_eq!(deep.capacity(), 100 * frame_words);
+        assert_eq!(shape(&deep), shape(&snapshot));
+        deep.assert_frames_tile();
+        // A small buffer stays whatever the arrival needs.
+        let mut small = stack_of(40);
+        let kept = small.capacity();
+        small.clone_from(&stack_of(1));
+        assert_eq!(small.capacity(), kept);
     }
 
     #[test]

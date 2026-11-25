@@ -14,13 +14,16 @@
 /// ([`Depth::bytes`]).
 ///
 /// **A depth read off a stack names a place between two frames,** and so
-/// does one moved with the frames it was recorded among. One moved or
-/// lowered past them does not have to: a handler's depth carried below the
-/// prompt its continuation was delimited by ([`Depth::relocate`]'s
-/// saturating case), or put back a distance below a raise stub that was
-/// replayed somewhere else ([`Depth::lowered_by`]), can fall inside a frame
-/// of the stack it lands on. Such a depth is only ever compared, never cut
-/// at: a handler's is dropped once the stack's top is at or below it.
+/// does one moved with the frames it was recorded among: a carried prompt's
+/// ([`Depth::relocate`]), and the handler's a `raise-continuable` puts back
+/// a distance below its stub ([`Depth::lowered_by`]), whose distance is
+/// measured from a floor that every region able to replay the stub
+/// contains (`vm_raise_value`). One case moves a depth past the frames it
+/// was recorded among: a handler's carried below the prompt its
+/// continuation was delimited by, [`Depth::relocate`]'s saturating case.
+/// It can fall inside a frame of the stack it lands on. Such a depth is
+/// only ever compared, never cut at: the handler is dropped once the
+/// stack's top is at or below it.
 ///
 /// Every method is the integer operation it wraps, inlined, so a depth read
 /// or compare on the dispatch loop's paths costs what the `usize` did.
