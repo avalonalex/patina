@@ -811,12 +811,13 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   to a prompt, twice, and to a prompt of its own inside the reserve,
   directly and through a wind; a `guard` that declines, which raises the
   same condition again; an after thunk on the escape; a delimited continuation's
-  re-entry. Ten more tests: three rows under zeal; the depth the limit is
+  re-entry. Eleven more tests: three rows under zeal; the depth the limit is
   met at against the bytes; the interpreter going on after the hard cap; no
   after thunk on that path (#776); a re-entry that would not fit, and one
   refused under the soft limit, which leaves it armed; the condition
   reaching a handler outside a nested loop, and the hard cap met inside
-  one; `stack-limit`; and a 10 M-frame recursion under the default cap. The
+  one; the predicate's `#f` for everything else, on both backends;
+  `stack-limit`; and a 10 M-frame recursion under the default cap. The
   limit a continuation's arrival sets, and the one an abort's landing
   keeps, are unit tests beside the machine
   (`patina-vm/src/runtime/vm_state.rs`): they hold the rule for a snapshot

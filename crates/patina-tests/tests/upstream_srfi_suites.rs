@@ -549,6 +549,10 @@ const NO_SUITE: &[(&str, &str)] = &[
         "patina interrupt",
         "Patina's own interrupt predicate (#701) has no upstream suite; interrupts.rs raises the condition on both backends and pins `interrupt?` and `error-object?` on it",
     ),
+    (
+        "patina limits",
+        "Patina's own stack-exhaustion predicate (#907) has no upstream suite; stack_cap_matrix.rs raises the condition on the VM, the one backend that keeps a cap, pins `stack-exhausted?` and `error-object?` on it, and pins `#f` for everything else on both backends",
+    ),
     // The four re-export shims of #390. Each names functionality R7RS-small
     // already provides, so what there is to test is that the shim loads and
     // that a binding reached through it works — which is behavioural, not

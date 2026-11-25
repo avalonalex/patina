@@ -505,6 +505,23 @@ fn the_hard_cap_inside_a_nested_loop_is_not_caught() {
     assert_eq!(again, "again");
 }
 
+/// `stack-exhausted?` recognises that condition and nothing else: an
+/// ordinary error object, a raised datum, a primitive's error and values
+/// that are no condition answer `#f`, on both backends. The tree-walker
+/// keeps no cap and never raises the condition, and imports the library
+/// all the same.
+#[test]
+fn the_predicate_answers_false_for_anything_else() {
+    const PROGRAM: &str = "(list (stack-exhausted? (guard (e (#t e)) (error \"ordinary\" 1)))
+      (stack-exhausted? (guard (e (#t e)) (raise 'a-datum)))
+      (stack-exhausted? (guard (e (#t e)) (vector-ref (vector) 1)))
+      (stack-exhausted? \"stack exhausted\")
+      (stack-exhausted? 2097152))";
+    let want = "(#f #f #f #f #f)";
+    assert_eq!(answer(&vm(CAP), PROGRAM), want);
+    assert_eq!(answer(&common::tree_walker_interpreter(), PROGRAM), want);
+}
+
 /// `(gc-stats)`'s `stack-limit` is the cap in bytes on the VM, the
 /// configuration's or the machine's default, and 0 on the tree-walker,
 /// which keeps none; and a configuration under the floor is raised to it.
