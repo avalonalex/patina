@@ -1432,7 +1432,7 @@ pub(super) fn step_wind_jump(
     pop_resolved_prompts(state);
     // Deliver into `deliver_reg` of the top frame. Any `base` the caller
     // hoisted is stale here — the whole register file was just replaced.
-    if state.execution.frame_count() != 0 {
+    if !state.execution.is_empty() {
         state
             .execution
             .return_into(ReturnFrame::Top, cc.deliver_reg, value);
@@ -2073,7 +2073,7 @@ pub(super) fn deliver_before_collecting(state: &mut VmState, exit_depth: Depth) 
     if state.execution.top_frame_depth() <= exit_depth {
         return;
     }
-    if state.execution.frame_count() < 2 {
+    if !state.execution.has_caller() {
         return;
     }
     let Some(stub) = state.execution.top_frame() else {

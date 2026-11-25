@@ -71,7 +71,7 @@ TRACE_FUNCTIONS = {
         "trace_weak_ids",
         "trace_code_ids",
         "trace_frames",
-        "scan_windows",
+        "scan_frames",
         "scan_window",
     ],
     # A frame's code and the running code, reported by id (`FrameCode`,

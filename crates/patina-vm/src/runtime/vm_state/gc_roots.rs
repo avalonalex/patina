@@ -81,8 +81,8 @@ const RETIRED: TaggedValue = if GC_CHECK {
 };
 
 /// A collection's walk of the live frames (#906, GC_PRD §11.1 invariant 3):
-/// in one pass, each frame's code is reported by id and its closure where
-/// it lives, each of its registers that the map at its pc keeps is reported
+/// in one pass, each frame's code is reported by id (once for a run of
+/// frames in the same code) and its closure where it lives, each of its registers that the map at its pc keeps is reported
 /// where it lives, a run at a time, and every other register of its window
 /// is overwritten with [`RETIRED`]. This is the register stack's whole
 /// trace: `ExecutionState`'s derived trace skips the field for it, and
@@ -119,9 +119,16 @@ pub(in crate::runtime) fn trace_frames(stack: &FrameStack, visitor: &mut dyn Slo
         stack.assert_frames_tile();
     }
     let words = stack.words();
+    // The code id last reported: frames that follow one another in the same
+    // code, as a recursion's do, report it once.
+    let mut reported = None;
     scan_frames(stack, |scanned| match scanned {
         Scanned::Frame(frame) => {
-            visitor.code(frame.code.id.0);
+            let id = frame.code.id.0;
+            if reported != Some(id) {
+                reported = Some(id);
+                visitor.code(id);
+            }
             // The closure, the word below the frame's first register.
             visitor.slots(&words[frame.register_base - 1..frame.register_base]);
         }

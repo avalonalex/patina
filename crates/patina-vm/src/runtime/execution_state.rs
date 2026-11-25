@@ -234,10 +234,20 @@ impl ExecutionState {
     }
     /// How many frames the stack holds, which the census hooks and the
     /// step tracer report. Nothing in the machine's control reads it: a
-    /// depth is a byte offset ([`Self::depth`]).
-    #[inline(always)]
+    /// depth is a byte offset ([`Self::depth`]). It is summed from the
+    /// runs of code, so it costs a walk of them.
     pub(super) fn frame_count(&self) -> usize {
         self.stack.frame_count()
+    }
+    /// Whether the stack holds no frame.
+    #[inline(always)]
+    pub(super) fn is_empty(&self) -> bool {
+        self.stack.is_empty()
+    }
+    /// Whether a frame lies below the top one.
+    #[inline(always)]
+    pub(super) fn has_caller(&self) -> bool {
+        self.stack.caller_base().is_some()
     }
     /// The closure the top frame runs, if it runs one (`LoadClosure`).
     #[inline(always)]
@@ -719,7 +729,9 @@ impl ExecutionState {
     /// which Rust re-entry boundaries it leaves and when to deliver the value.
     pub(super) fn restore(&mut self, cc: &VmContinuation) {
         patina_core::census::restore_full(cc.stack.frame_count(), cc.stack.register_count());
-        self.stack = cc.stack.clone();
+        // Into the buffers the live stack has: an arrival frees none and
+        // takes none, and leaves room for the next push.
+        self.stack.clone_from(&cc.stack);
         self.dynamic_winds = cc.dynamic_winds.clone();
         self.prompt_stack = cc.prompt_stack.clone();
         self.exception_handlers = cc.exception_handlers.clone();
@@ -904,11 +916,11 @@ impl<'a> Registers<'a> {
 }
 
 /// What a pop answers of the frame it removed: the register of its caller
-/// that the frame returns into, and its code, which goes where the caller
-/// drops this (`FrameStack::pop`).
+/// that the frame returns into, and its code if the frame was the last of
+/// its run, which goes where the caller drops this (`FrameStack::pop`).
 pub(super) struct Popped {
     pub(super) return_reg: u16,
-    _code: crate::types::FrameCode,
+    _code: Option<crate::types::FrameCode>,
 }
 
 /// The frame an [`ExecutionState::return_into`] writes into (#904).

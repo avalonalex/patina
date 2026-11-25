@@ -25,7 +25,7 @@ use std::rc::Rc;
 // Root the fixture in an owned frame/window instead of exposing a raw
 // register Vec in the public runtime API.
 fn pin_in_register(state: &mut VmState, value: TaggedValue) {
-    if state.execution.frame_count() == 0 {
+    if state.execution.is_empty() {
         let id = super::tests::load_in_globals(state, super::tests::code(), Vec::new()).id();
         state
             .execution

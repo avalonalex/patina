@@ -28,11 +28,17 @@
 //! buffer's base, so that a pop is the same subtraction for every frame.
 //!
 //! **Code liveness until 4e.** The `code` word is an address nothing
-//! counts. Beside the buffer is a vector of the frames' code objects,
-//! bottom first, pushed and popped with the frames and copied with them:
-//! it keeps each frame's unit loaded, reports each frame's code id to the
-//! collector, and is what a frame's view hands out. 4e replaces the address
-//! with a reference to a code descriptor, and this vector goes.
+//! counts. Beside the buffer is a vector of the frames' code objects, which
+//! keeps each frame's unit loaded, reports each frame's code id to the
+//! collector, and is what a frame's view hands out. It holds a run for
+//! each stretch of consecutive frames that run the same code ([`CodeRun`]):
+//! the object once, and how many frames. A recursion a million frames deep
+//! is one run, so a frame costs its 40 bytes and its registers and nothing
+//! more, and a capture of it copies one reference, where a reference a
+//! frame cost a count up at every capture and a count down at every drop
+//! (measured 2026-11-24: 14% of `samedepth1000`'s instructions). 4e
+//! replaces the address with a reference to a code descriptor, and the
+//! vector goes.
 //!
 //! **The top frame's pc is not in its header.** The dispatch loop reads and
 //! advances a pc once an instruction, and here that is a field of this
@@ -150,20 +156,40 @@ fn code_word(code: &Rc<CodeObject>) -> TaggedValue {
     TaggedValue::fixnum((code_address(code) >> 3) as i64)
 }
 
+/// A stretch of consecutive frames that run the same code: the code, once,
+/// and how many frames (the module's comment). Its trace reports the
+/// code's id ([`FrameCode`], #836).
+#[derive(Debug, Clone, Trace)]
+struct CodeRun {
+    code: FrameCode,
+    #[trace(skip, reason = "a count of frames")]
+    frames: usize,
+}
+
+/// A copy of `words`, as one run of stores. `<[T]>::to_vec` clones a slice
+/// of cells an element at a time under a guard, which costs a capture
+/// several instructions a word.
+fn copy_words(words: &[Cell<TaggedValue>]) -> Vec<Cell<TaggedValue>> {
+    let mut copy = Vec::with_capacity(words.len());
+    copy.extend(words.iter().map(|word| Cell::new(word.get())));
+    copy
+}
+
 /// A stack of frames, live or captured: see the module's comment.
 ///
 /// Its trace (derived, #686) is a captured copy's: every word a slot, which
 /// reports the closures and the registers and passes over the fixnums, and
-/// each frame's code by id ([`FrameCode`], #836). The live stack's is not
-/// this: a collection walks its frames under their maps
-/// (`gc_roots::trace_frames`, #906), and `ExecutionState` skips the field.
-#[derive(Debug, Clone, Default, Trace)]
+/// each run's code by id. The live stack's is not this: a collection walks
+/// its frames under their maps (`gc_roots::trace_frames`, #906), and
+/// `ExecutionState` skips the field.
+#[derive(Debug, Default, Trace)]
 pub struct FrameStack {
     /// The headers and the registers, bottom first.
     words: Vec<Cell<TaggedValue>>,
-    /// Each frame's code, bottom first: what keeps its unit loaded until 4e
-    /// makes the `code` word a reference.
-    codes: Vec<FrameCode>,
+    /// The frames' code, bottom first, a run for each stretch of frames
+    /// that share one: what keeps a frame's unit loaded until 4e makes the
+    /// `code` word a reference. The last run's code is the top frame's.
+    codes: Vec<CodeRun>,
     /// The index in `words` of the top frame's first register, or 0 with
     /// no frame.
     #[trace(skip, reason = "a word index")]
@@ -173,10 +199,36 @@ pub struct FrameStack {
     #[trace(skip, reason = "an instruction index")]
     pc: usize,
     /// The address of the top frame's code, or 0 with no frame: what the
-    /// dispatch loop compares its own code with. Never dereferenced; the
-    /// last of `codes` is the object.
+    /// dispatch loop compares its own code with, and a push the code it is
+    /// given. Never dereferenced; the last run's code is the object.
     #[trace(skip, reason = "an address, which is compared and never read through")]
     top_code: usize,
+}
+
+/// A capture's copy: the words as one run of stores, and a reference for
+/// each run of code. An arrival copies back into the buffers the live stack
+/// already has (`clone_from`), so that it neither frees and takes a buffer
+/// nor leaves one with no room for the next push.
+impl Clone for FrameStack {
+    fn clone(&self) -> Self {
+        FrameStack {
+            words: copy_words(&self.words),
+            codes: self.codes.clone(),
+            base: self.base,
+            pc: self.pc,
+            top_code: self.top_code,
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.words.clear();
+        self.words
+            .extend(source.words.iter().map(|word| Cell::new(word.get())));
+        self.codes.clone_from(&source.codes);
+        self.base = source.base;
+        self.pc = source.pc;
+        self.top_code = source.top_code;
+    }
 }
 
 impl FrameStack {
@@ -188,20 +240,21 @@ impl FrameStack {
         &self.words
     }
 
-    /// How many frames the stack holds.
-    #[inline(always)]
+    /// How many frames the stack holds: the runs' counts, summed. What
+    /// the census and the step tracer report; nothing on a call's path
+    /// reads it.
     pub(crate) fn frame_count(&self) -> usize {
-        self.codes.len()
+        self.codes.iter().map(|run| run.frames).sum()
     }
 
     #[inline(always)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.codes.is_empty()
+        self.base == 0
     }
 
     /// The registers the stack holds: its words less its headers.
     pub(crate) fn register_count(&self) -> usize {
-        self.words.len() - self.codes.len() * HEADER_WORDS
+        self.words.len() - self.frame_count() * HEADER_WORDS
     }
 
     /// What the stack holds in bytes: the stack's top, as an offset from
@@ -214,8 +267,7 @@ impl FrameStack {
     /// The bytes its buffers hold at capacity, which a snapshot's handle is
     /// charged (#606).
     pub(crate) fn buffer_bytes(&self) -> usize {
-        self.words.capacity() * WORD_BYTES
-            + self.codes.capacity() * std::mem::size_of::<FrameCode>()
+        self.words.capacity() * WORD_BYTES + self.codes.capacity() * std::mem::size_of::<CodeRun>()
     }
 
     /// The index of the top frame's first register, or 0 with no frame.
@@ -252,7 +304,7 @@ impl FrameStack {
     /// The top frame's code.
     #[inline(always)]
     pub(crate) fn top_code(&self) -> Option<&Rc<CodeObject>> {
-        self.codes.last().map(|code| &code.0)
+        self.codes.last().map(|run| &run.code.0)
     }
 
     /// The top frame's window size.
@@ -271,11 +323,16 @@ impl FrameStack {
         }
     }
 
-    /// The first register of the frame below the top one.
+    /// The first register of the frame below the top one, if there are
+    /// two.
     #[inline(always)]
     pub(crate) fn caller_base(&self) -> Option<usize> {
-        (self.codes.len() >= 2)
-            .then(|| self.base - link_distance(self.header(self.base, LINK).get()))
+        if self.base == 0 {
+            return None;
+        }
+        // The bottom frame's distance is its own base.
+        let caller = self.base - link_distance(self.header(self.base, LINK).get());
+        (caller != 0).then_some(caller)
     }
 
     /// The top frame, as a view.
@@ -288,7 +345,8 @@ impl FrameStack {
         Frames {
             stack: self,
             base: self.base,
-            index: self.codes.len(),
+            run: self.codes.len(),
+            left: 0,
         }
     }
 
@@ -329,15 +387,64 @@ impl FrameStack {
     #[inline(always)]
     fn load_top(&mut self) {
         match self.codes.last() {
-            Some(code) => {
+            Some(run) => {
                 self.pc = meta_pc(self.header(self.base, META).get());
-                self.top_code = code_address(code);
+                self.top_code = code_address(&run.code);
             }
             None => {
                 self.pc = 0;
                 self.top_code = 0;
             }
         }
+    }
+
+    /// Give the top frame's place in the side vector to `code`: the last
+    /// run's own, if the frame was the whole of it, and a run of its own
+    /// otherwise.
+    #[inline(always)]
+    fn set_top_code(&mut self, code: Rc<CodeObject>) {
+        self.top_code = code_address(&code);
+        let run = self.codes.last_mut().expect("the top frame's code");
+        if run.frames == 1 {
+            run.code = FrameCode(code);
+        } else {
+            run.frames -= 1;
+            self.codes.push(CodeRun {
+                code: FrameCode(code),
+                frames: 1,
+            });
+        }
+    }
+
+    /// Take the top `frames` frames out of the side vector.
+    fn drop_codes(&mut self, mut frames: usize) {
+        while frames > 0 {
+            let run = self.codes.last_mut().expect("a frame has its code");
+            let taken = frames.min(run.frames);
+            run.frames -= taken;
+            frames -= taken;
+            if run.frames == 0 {
+                self.codes.pop();
+            }
+        }
+    }
+
+    /// The side vector of the top `frames` frames, as a copy.
+    fn top_codes(&self, mut frames: usize) -> Vec<CodeRun> {
+        let mut runs = Vec::new();
+        for run in self.codes.iter().rev() {
+            if frames == 0 {
+                break;
+            }
+            let taken = frames.min(run.frames);
+            runs.push(CodeRun {
+                code: run.code.clone(),
+                frames: taken,
+            });
+            frames -= taken;
+        }
+        runs.reverse();
+        runs
     }
 
     /// Push a frame of `num_regs` registers, each holding `fill`, at pc 0.
@@ -384,19 +491,31 @@ impl FrameStack {
             }
             self.words.set_len(len + total);
         }
-        self.top_code = code_address(&code);
-        self.codes.push(FrameCode(code));
+        // The frame joins the run below it if it runs the same code, as
+        // every frame of a recursion does: the run already holds the code,
+        // and the reference handed in goes.
+        let address = code_address(&code);
+        if address == self.top_code {
+            self.codes.last_mut().expect("the top frame's code").frames += 1;
+        } else {
+            self.top_code = address;
+            self.codes.push(CodeRun {
+                code: FrameCode(code),
+                frames: 1,
+            });
+        }
         self.base = base;
         self.pc = 0;
         base
     }
 
-    /// Pop the top frame with its window, and answer its `return_reg` and
-    /// its code. The code is handed back and not dropped here, so that the
-    /// pop calls nothing: the last frame of a code object frees it where
-    /// the caller lets it go. Panics with no frame.
+    /// Pop the top frame with its window, and answer its `return_reg`, and
+    /// its code if it was the last frame of its run. The code is handed
+    /// back and not dropped here, so that the pop calls nothing: the last
+    /// frame of a code object frees it where the caller lets it go. Panics
+    /// with no frame.
     #[inline(always)]
-    pub(crate) fn pop(&mut self) -> (Reg, FrameCode) {
+    pub(crate) fn pop(&mut self) -> (Reg, Option<FrameCode>) {
         let base = self.base;
         // One range check for the header's words; with no frame the range
         // starts below zero, and the slice refuses it.
@@ -404,10 +523,17 @@ impl FrameStack {
         let link = header[HEADER_WORDS - LINK].get();
         let return_reg = meta_return_reg(header[HEADER_WORDS - META].get());
         self.words.truncate(base - HEADER_WORDS);
-        let code = self.codes.pop().expect("a frame has its code");
         self.base = base - link_distance(link);
+        let run = self.codes.last_mut().expect("a frame has its code");
+        run.frames -= 1;
+        if run.frames != 0 {
+            // The caller runs the same code: only its pc is taken up.
+            self.pc = meta_pc(self.header(self.base, META).get());
+            return (return_reg, None);
+        }
+        let ended = self.codes.pop().map(|run| run.code);
         self.load_top();
-        (return_reg, code)
+        (return_reg, ended)
     }
 
     /// Grow the top window to `num_regs` registers if it has fewer, the new
@@ -430,8 +556,7 @@ impl FrameStack {
         let base = self.base;
         self.header(base, CODE).set(code_word(&code));
         self.header(base, CLOSURE).set(closure);
-        self.top_code = code_address(&code);
-        *self.codes.last_mut().expect("the top frame's code") = FrameCode(code);
+        self.set_top_code(code);
         self.pc = 0;
     }
 
@@ -446,8 +571,7 @@ impl FrameStack {
     /// stub's next round.
     pub(crate) fn recode_top(&mut self, code: Rc<CodeObject>) {
         self.header(self.base, CODE).set(code_word(&code));
-        self.top_code = code_address(&code);
-        *self.codes.last_mut().expect("the top frame's code") = FrameCode(code);
+        self.set_top_code(code);
         self.pc = 0;
     }
 
@@ -497,7 +621,7 @@ impl FrameStack {
         let (base, above) = self.frames_from(cut);
         self.debug_assert_boundary(cut, base);
         self.words.truncate(cut);
-        self.codes.truncate(self.codes.len() - above);
+        self.drop_codes(above);
         self.base = base;
         self.load_top();
     }
@@ -510,12 +634,13 @@ impl FrameStack {
         let (base, above) = self.frames_from(cut);
         self.debug_assert_boundary(cut, base);
         let mut copy = FrameStack {
-            words: self.words[..cut].to_vec(),
-            codes: self.codes[..self.codes.len() - above].to_vec(),
+            words: copy_words(&self.words[..cut]),
+            codes: self.codes.clone(),
             base,
             pc: 0,
             top_code: 0,
         };
+        copy.drop_codes(above);
         copy.load_top();
         copy
     }
@@ -533,8 +658,8 @@ impl FrameStack {
             return FrameStack::default();
         }
         let copy = FrameStack {
-            words: self.words[cut..].to_vec(),
-            codes: self.codes[self.codes.len() - above..].to_vec(),
+            words: copy_words(&self.words[cut..]),
+            codes: self.top_codes(above),
             base: self.base - cut,
             pc: self.pc,
             top_code: self.top_code,
@@ -586,33 +711,37 @@ impl FrameStack {
 
     /// Assert that the frames tile the buffer: each window ends where the
     /// header above it starts, the top one ends the buffer, the walk down
-    /// from the top meets the base after as many frames as there are code
-    /// objects, and each `code` word is the address of its frame's
+    /// from the top meets the base after as many frames as the runs of code
+    /// count, and each `code` word is the address of its frame's
     /// (#714, `PRD/GC_PRD.md` §11.1, invariant 1). O(depth).
     pub(crate) fn assert_frames_tile(&self) {
         let mut end = self.words.len();
-        let mut base = self.base;
-        for code in self.codes.iter().rev() {
-            assert!(base >= HEADER_WORDS, "more code objects than frames");
-            let link = self.header(base, LINK).get();
+        let mut frames = 0;
+        for frame in self.frames() {
             assert_eq!(
-                base + link_num_regs(link) as usize,
+                frame.register_base + frame.num_regs as usize,
                 end,
-                "the window of the frame whose registers start at word {base} does not end \
-                 where the frame above it starts: a word lies outside every frame (#714)"
+                "the window of the frame whose registers start at word {} does not end \
+                 where the frame above it starts: a word lies outside every frame (#714)",
+                frame.register_base
             );
             assert_eq!(
-                self.header(base, CODE).get(),
-                code_word(code),
+                self.header(frame.register_base, CODE).get(),
+                code_word(frame.code),
                 "a frame's code word is not its code object's address"
             );
-            end = base - HEADER_WORDS;
-            base -= link_distance(link);
+            end = frame.register_base - HEADER_WORDS;
+            frames += 1;
         }
+        assert_eq!(end, 0, "the frames do not reach the stack's base");
         assert_eq!(
-            (base, end),
-            (0, 0),
-            "the frames do not reach the stack's base"
+            frames,
+            self.frame_count(),
+            "the runs of code do not count the frames"
+        );
+        assert!(
+            self.codes.iter().all(|run| run.frames != 0),
+            "an empty run of code"
         );
     }
 }
@@ -645,44 +774,48 @@ impl FrameStack {
 /// The frames of a [`FrameStack`], top first.
 pub(crate) struct Frames<'a> {
     stack: &'a FrameStack,
-    /// The first register of the frame to answer next.
+    /// The first register of the frame to answer next, or 0 after the
+    /// bottom one.
     base: usize,
-    /// How many frames are left, which is the next one's place in `codes`,
-    /// plus one.
-    index: usize,
+    /// The run of code the next frame is in, as its place in `codes` plus
+    /// one, and how many of that run's frames are still to answer.
+    run: usize,
+    left: usize,
 }
 
 impl<'a> Iterator for Frames<'a> {
     type Item = CallFrame<'a>;
 
+    #[inline(always)]
     fn next(&mut self) -> Option<CallFrame<'a>> {
-        if self.index == 0 {
+        let base = self.base;
+        if base == 0 {
             return None;
         }
         let stack = self.stack;
-        let base = self.base;
-        let top = self.index == stack.codes.len();
-        let link = stack.header(base, LINK).get();
-        let meta = stack.header(base, META).get();
-        self.index -= 1;
+        let top = base == stack.base;
+        while self.left == 0 {
+            self.run -= 1;
+            self.left = stack.codes[self.run].frames;
+        }
+        self.left -= 1;
+        // One range check for the header's five words.
+        let header = &stack.words[base - HEADER_WORDS..base];
+        let link = header[HEADER_WORDS - LINK].get();
+        let meta = header[HEADER_WORDS - META].get();
+        // The bottom frame's distance is its own base, so this ends at 0.
         self.base = base - link_distance(link);
         Some(CallFrame {
             // The top frame's pc is the stack's own (the module's comment).
             pc: if top { stack.pc } else { meta_pc(meta) },
             register_base: base,
             num_regs: link_num_regs(link),
-            closure: stack.header(base, CLOSURE).get(),
+            closure: header[HEADER_WORDS - CLOSURE].get(),
             return_reg: meta_return_reg(meta),
-            code: &stack.codes[self.index].0,
+            code: &stack.codes[self.run].code.0,
         })
     }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.index, Some(self.index))
-    }
 }
-
-impl ExactSizeIterator for Frames<'_> {}
 
 #[cfg(test)]
 mod tests {
@@ -848,6 +981,65 @@ mod tests {
         assert_eq!(bare.pop().0, 9);
         assert_eq!(bare.pop().0, 1);
         assert!(bare.is_empty());
+    }
+
+    /// A run of code holds its object once, however many frames run it: a
+    /// recursion's frames join one run, a tail call out of the middle of a
+    /// run takes its frame into a run of its own, and the copies below and
+    /// above a depth split a run where the depth falls.
+    #[test]
+    fn frames_that_share_code_share_one_reference() {
+        let (f, g) = (code(1, 1), code(2, 1));
+        let mut stack = FrameStack::default();
+        for _ in 0..3 {
+            stack.push(Rc::clone(&f), TaggedValue::FALSE, 0, 1, FILL);
+        }
+        stack.push(Rc::clone(&g), TaggedValue::FALSE, 0, 1, FILL);
+        stack.push(Rc::clone(&f), TaggedValue::FALSE, 0, 1, FILL);
+        // Three references: the two runs of `f`, and this test's.
+        assert_eq!((Rc::strong_count(&f), Rc::strong_count(&g)), (3, 2));
+        assert_eq!(stack.frame_count(), 5);
+        assert_eq!(
+            stack.frames().map(|f| f.code.id.0).collect::<Vec<_>>(),
+            [1, 2, 1, 1, 1]
+        );
+        stack.assert_frames_tile();
+
+        // The copies split the lower run of `f` after its second frame.
+        let (below, above) = (stack.below(12 * 8), stack.above(12 * 8));
+        assert_eq!((below.frame_count(), above.frame_count()), (2, 3));
+        assert_eq!(
+            above.frames().map(|f| f.code.id.0).collect::<Vec<_>>(),
+            [1, 2, 1]
+        );
+        below.assert_frames_tile();
+        above.assert_frames_tile();
+        drop((below, above));
+        assert_eq!((Rc::strong_count(&f), Rc::strong_count(&g)), (3, 2));
+
+        // A pop inside a run hands no code back; the run's last frame does.
+        assert!(
+            stack.pop().1.is_some(),
+            "the upper run of `f` was one frame"
+        );
+        assert!(stack.pop().1.is_some(), "and so was `g`'s");
+        assert!(stack.pop().1.is_none());
+        // A tail call out of a run of two takes one frame with it.
+        stack.replace_top(Rc::clone(&g), TaggedValue::TRUE);
+        assert_eq!(
+            stack.frames().map(|f| f.code.id.0).collect::<Vec<_>>(),
+            [2, 1]
+        );
+        stack.assert_frames_tile();
+        stack.truncate(0);
+        assert_eq!((Rc::strong_count(&f), Rc::strong_count(&g)), (1, 1));
+
+        // A clone into a stack that held other frames leaves none of them.
+        stack.push(Rc::clone(&g), TaggedValue::FALSE, 0, 4, FILL);
+        let mut other = three();
+        other.clone_from(&stack);
+        assert_eq!(shape(&other), shape(&stack));
+        other.assert_frames_tile();
     }
 
     #[test]
