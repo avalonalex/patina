@@ -3937,12 +3937,15 @@ pub(super) fn tail_call_closure_resolved(
     new_code_id: CodeObjectId,
     arg_vals: &[TaggedValue],
 ) -> Result<(), VmError> {
-    let top = state
+    // The top frame's code and base alone: a view of the whole frame reads
+    // its five header words, each behind a range check, where the tail call
+    // needs none of them (GC stage 4d.7b, #908).
+    let top_code = state
         .execution
-        .top_frame()
+        .top_code()
         .expect("tail call with empty frame stack");
-    if top.code.id == new_code_id {
-        let (arity, base) = (top.code.arity, top.register_base);
+    if top_code.id == new_code_id {
+        let (arity, base) = (top_code.arity, state.execution.top_base());
         return self_tail_call(state, base, arity, func_val, arg_vals);
     }
 

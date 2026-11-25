@@ -314,7 +314,7 @@ impl ExecutionState {
 
     /// The top frame's window base.
     #[inline(always)]
-    fn top_base(&self) -> usize {
+    pub(super) fn top_base(&self) -> usize {
         let base = self.stack.base();
         assert!(base != 0, "no active frame");
         base
