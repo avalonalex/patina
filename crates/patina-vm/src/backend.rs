@@ -262,10 +262,15 @@ impl VmBackend {
         // The interpreter's file system, on its instance too (#704), for the
         // code that reaches it through a `Cx`.
         heap.borrow().instance().set_fs(fs.clone());
-        let mut state = VmState::with_gc_mode(heap.clone(), Rc::clone(&global_env), mode);
-        // The stack's cap (#907), before any Scheme runs: the bootstrap
-        // below is held to it like any program.
-        state.set_stack_cap(config.stack_cap());
+        // The stack's cap (#907) is the machine's from its construction,
+        // which reserves the register stack for it (#908's 7c): the
+        // bootstrap below is held to it like any program.
+        let mut state = VmState::with_gc_mode_and_stack_cap(
+            heap.clone(),
+            Rc::clone(&global_env),
+            mode,
+            config.stack_cap(),
+        );
         // Deliberately *not* `install_primitives()` — that bound every
         // registered primitive into globals regardless of the import set
         // (`cadddr` was callable with only `(scheme base)` imported).

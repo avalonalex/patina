@@ -1,5 +1,6 @@
-//! The VM's register stack (#908, GC stage 4d.7b): frames and their
-//! registers interleaved in one buffer of tagged words.
+//! The VM's register stack (#908, GC stage 4d.7b and 4d.7c): frames and
+//! their registers interleaved in one buffer of tagged words, which for the
+//! machine's own stack is a reservation of address space that never moves.
 //!
 //! Until 4d.7b the machine kept a vector of `CallFrame`s beside a vector of
 //! registers, and a continuation cloned both. Here a frame is a header of
@@ -69,12 +70,25 @@
 //! [`FrameStack::frames`] or [`FrameStack::top`], which answer the field
 //! for the top frame, and the type has no other reader, so no caller can
 //! see the stale word. A copy is a clone and carries the field with it.
+//!
+//! **Two buffers.** [`FrameStack`] is written once, over what holds its
+//! words ([`Buffer`]). A captured copy holds them in a vector of its own
+//! size, and is what the plain name means. The machine's stack
+//! ([`LiveStack`]) holds them in a reservation the size of its cap
+//! ([`Reserved`], 7c): a frame's address holds from its push to its pop,
+//! the stack's top is an address the frame-entry check compares with the
+//! poll word, and every write that would extend the stack is refused at
+//! the reservation's end ([`NoRoom`]) before a word is written. A capture
+//! copies out of the reservation, and an arrival or a delimited re-entry
+//! copies back into it, at its base or at its top.
 
 use super::code_object::CodeObject;
 use super::{CallFrame, FrameCode, Reg};
 use patina_core::Trace;
+use patina_core::heap::reservation::Reservation;
 use patina_core::tagged_value::TaggedValue;
 use std::cell::Cell;
+use std::ops::Deref;
 use std::rc::Rc;
 
 /// The words in a frame's header.
@@ -202,27 +216,219 @@ fn word_address(word: TaggedValue) -> usize {
     word.raw() as usize
 }
 
-/// Put a copy of `words` on the end of `buffer`, as one run of stores.
-/// `<[T]>::to_vec` and `extend_from_slice` clone a slice of cells an
-/// element at a time under a guard, which costs a capture several
-/// instructions a word.
+/// A write the stack's buffer has no room for: the live stack is at its
+/// reservation's end. Nothing was written. The machine answers it as it
+/// does a stack at its cap (`VmState::stack_exhausted`, #907).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NoRoom;
+
+/// What holds a stack's words: the words themselves, as a slice, and the
+/// few ways [`FrameStack`] changes how many there are. A captured copy's
+/// is a vector of its own size. The live stack's is a reservation of
+/// address space ([`Reserved`]), which never moves and does not grow.
+pub trait Buffer: Deref<Target = [Cell<TaggedValue>]> {
+    /// Whether `more` words fit past the ones held. A buffer that grows
+    /// makes the room and answers `true`. A reservation answers `false` at
+    /// its end, and then nothing may be written.
+    fn make_room(&mut self, more: usize) -> bool;
+
+    /// The buffer's first word. Good for writing the words
+    /// [`Self::make_room`] last allowed, which start at its length.
+    fn as_mut_ptr(&mut self) -> *mut Cell<TaggedValue>;
+
+    /// Take the words below `len` as the buffer's.
+    ///
+    /// # Safety
+    ///
+    /// Each of them is written, and `len` is within the room
+    /// [`Self::make_room`] last allowed.
+    unsafe fn set_len(&mut self, len: usize);
+
+    /// Drop the words from `len` up, if there are any.
+    fn truncate(&mut self, len: usize);
+
+    /// How many words the buffer holds without growing: all a reservation
+    /// ever holds.
+    fn capacity(&self) -> usize;
+}
+
+impl Buffer for Vec<Cell<TaggedValue>> {
+    #[inline(always)]
+    fn make_room(&mut self, more: usize) -> bool {
+        self.reserve(more);
+        true
+    }
+
+    #[inline(always)]
+    fn as_mut_ptr(&mut self) -> *mut Cell<TaggedValue> {
+        Vec::as_mut_ptr(self)
+    }
+
+    #[inline(always)]
+    unsafe fn set_len(&mut self, len: usize) {
+        // SAFETY: the caller's.
+        unsafe { Vec::set_len(self, len) }
+    }
+
+    #[inline(always)]
+    fn truncate(&mut self, len: usize) {
+        Vec::truncate(self, len);
+    }
+
+    #[inline(always)]
+    fn capacity(&self) -> usize {
+        Vec::capacity(self)
+    }
+}
+
+/// The live stack's buffer: a reservation of address space the size of the
+/// stack's cap (#908's 7c, `PRD/GC_PRD.md` §11.1), with the words written
+/// so far at its start.
+///
+/// **It never moves.** A frame's address holds from its push to its pop,
+/// which is what JIT code, and a frame pointer in a register, need of it.
+/// The reservation takes physical pages as they are first written, so a
+/// stack costs what it has reached and not its cap, and a page once
+/// written stays until 4d.8 returns it (#909).
+///
+/// **It does not grow.** Every write past the words held asks
+/// [`Buffer::make_room`] first, and is refused at the reservation's end:
+/// there is no guard page, and no write lands outside the mapping. The
+/// reservation is the cap rounded up to a page, so the machine's own
+/// checks against the cap (`VmState::check_stack_bytes`, and the poll at a
+/// frame's entry) refuse first wherever they are asked, at the byte the cap
+/// names. This check is what holds where they are not asked, or are wrong.
+pub(crate) struct Reserved {
+    reservation: Reservation,
+    /// How many words are written: every word below it is initialized.
+    len: usize,
+}
+
+impl Reserved {
+    /// A reservation for a stack of at most `cap` bytes, or of as much of
+    /// that as the system gives, down to `floor` bytes
+    /// (`Reservation::new`). [`Self::capacity`](Buffer::capacity) says
+    /// what there is.
+    ///
+    /// # Panics
+    ///
+    /// Where the system refuses even the floor: there is then no address
+    /// space for a stack at all.
+    fn new(cap: usize, floor: usize) -> Self {
+        let reservation = Reservation::new(cap, floor).unwrap_or_else(|error| {
+            panic!("patina: no address space for a register stack of {floor} bytes: {error}")
+        });
+        Reserved {
+            reservation,
+            len: 0,
+        }
+    }
+
+    /// The first word's address, which is the reservation's and never
+    /// changes.
+    #[inline(always)]
+    fn first(&self) -> *mut Cell<TaggedValue> {
+        // A reservation is page-aligned, so the cast keeps a word's
+        // alignment.
+        self.reservation.base().as_ptr().cast()
+    }
+
+    /// The address past the last word written: the stack's top, which the
+    /// frame-entry check compares with the poll word (§12).
+    #[inline(always)]
+    fn top_address(&self) -> usize {
+        self.first() as usize + self.len * WORD_BYTES
+    }
+}
+
+impl Deref for Reserved {
+    type Target = [Cell<TaggedValue>];
+
+    #[inline(always)]
+    fn deref(&self) -> &[Cell<TaggedValue>] {
+        // SAFETY: the reservation is this buffer's own, readable and
+        // writable for its life and aligned to a page. The first `len`
+        // words were written through `as_mut_ptr` before `set_len` took
+        // them in, and `len` words are inside it (`make_room`). A word is
+        // a `Cell`, so a shared slice allows the writes the stack makes
+        // through it.
+        unsafe { std::slice::from_raw_parts(self.first(), self.len) }
+    }
+}
+
+impl Buffer for Reserved {
+    #[inline(always)]
+    fn make_room(&mut self, more: usize) -> bool {
+        // `len` is at most the capacity, so the difference does not wrap.
+        self.capacity() - self.len >= more
+    }
+
+    #[inline(always)]
+    fn as_mut_ptr(&mut self) -> *mut Cell<TaggedValue> {
+        self.first()
+    }
+
+    #[inline(always)]
+    unsafe fn set_len(&mut self, len: usize) {
+        debug_assert!(len <= self.capacity());
+        self.len = len;
+    }
+
+    #[inline(always)]
+    fn truncate(&mut self, len: usize) {
+        // A word has no destructor: dropping the words is forgetting them.
+        self.len = self.len.min(len);
+    }
+
+    #[inline(always)]
+    fn capacity(&self) -> usize {
+        self.reservation.size() / WORD_BYTES
+    }
+}
+
+impl std::fmt::Debug for Reserved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reserved")
+            .field("len", &self.len)
+            .field("capacity", &self.capacity())
+            .finish()
+    }
+}
+
+/// Put a copy of `words` on the end of `buffer`, as one run of stores, or
+/// refuse where they do not fit. `<[T]>::to_vec` and `extend_from_slice`
+/// clone a slice of cells an element at a time under a guard, which costs a
+/// capture several instructions a word.
 #[inline(always)]
-fn extend_words(buffer: &mut Vec<Cell<TaggedValue>>, words: &[Cell<TaggedValue>]) {
-    buffer.extend(words.iter().map(|word| Cell::new(word.get())));
+fn extend_words<B: Buffer>(buffer: &mut B, words: &[Cell<TaggedValue>]) -> Result<(), NoRoom> {
+    if !buffer.make_room(words.len()) {
+        return Err(NoRoom);
+    }
+    let len = buffer.len();
+    // SAFETY: `make_room` allowed `words.len()` words past `len`, and each
+    // is written before `set_len` takes it in. `words` is not the buffer's
+    // spare room, which no slice reaches.
+    unsafe {
+        let at = buffer.as_mut_ptr().add(len);
+        for (i, word) in words.iter().enumerate() {
+            at.add(i).write(Cell::new(word.get()));
+        }
+        buffer.set_len(len + words.len());
+    }
+    Ok(())
 }
 
 /// A copy of `words`, in a buffer of its size.
 fn copy_words(words: &[Cell<TaggedValue>]) -> Vec<Cell<TaggedValue>> {
     let mut copy = Vec::with_capacity(words.len());
-    extend_words(&mut copy, words);
+    copy.extend(words.iter().map(|word| Cell::new(word.get())));
     copy
 }
 
-/// The least buffer, in words, that an arrival keeps whatever it needs:
-/// below it a buffer is too small for its size to matter.
-const KEPT_WORDS: usize = 1 << 12;
-
-/// A stack of frames, live or captured: see the module's comment.
+/// A stack of frames, live or captured: see the module's comment. A
+/// captured copy's words are in a vector of its own, which is what the
+/// plain name means. The live stack's are in a reservation
+/// ([`LiveStack`]).
 ///
 /// Its trace (derived, #686) is a captured copy's: every word a slot, which
 /// reports the closures and the registers and passes over the fixnums, and
@@ -230,9 +436,9 @@ const KEPT_WORDS: usize = 1 << 12;
 /// its frames under their maps (`gc_roots::trace_frames`, #906), and
 /// `ExecutionState` skips the field.
 #[derive(Debug, Default, Trace)]
-pub struct FrameStack {
+pub struct FrameStack<B = Vec<Cell<TaggedValue>>> {
     /// The headers and the registers, bottom first.
-    words: Vec<Cell<TaggedValue>>,
+    words: B,
     /// The frames' code, bottom first, once for each run of frames that
     /// share it, in `codes[..runs]`: what keeps a frame's unit loaded until
     /// 4e makes the `code` word a reference. The last of those is the top
@@ -260,20 +466,58 @@ pub struct FrameStack {
     top_code: usize,
 }
 
-/// A capture's copy: the words as one run of stores, and a reference for
-/// each run of code. An arrival copies back into the buffer the live stack
-/// already has (`clone_from`), so that it neither frees and takes a buffer
-/// nor leaves one with no room for the next push.
-///
-/// **Unless that buffer is far larger than the arrival needs:** more than
-/// four times its words. Then the buffer goes, and the arrival takes one of
-/// its own size, as every arrival did while it replaced the vectors. An
-/// escape from the bottom of a deep recursion is such an arrival, and a
-/// `guard` that catches `&stack-exhausted` is one: without this the stack
-/// the recursion grew would stay with the process, gigabytes of it at the
-/// default cap, until 4d.8 returns a stack's pages (#909).
+/// The machine's own stack: its words in a reservation the size of its
+/// cap, which never moves (#908's 7c).
+pub(crate) type LiveStack = FrameStack<Reserved>;
+
+impl LiveStack {
+    /// An empty stack of at most `cap` bytes, in a reservation of that
+    /// size, or of as much of it as the system gives, down to `floor`
+    /// bytes. [`Self::capacity_bytes`] says what there is.
+    pub(crate) fn reserved(cap: usize, floor: usize) -> Self {
+        FrameStack {
+            words: Reserved::new(cap, floor),
+            codes: Vec::new(),
+            runs: 0,
+            base: 0,
+            pc: 0,
+            top_code: 0,
+        }
+    }
+
+    /// The bytes the reservation holds: the most the stack can.
+    pub(crate) fn capacity_bytes(&self) -> usize {
+        self.words.capacity() * WORD_BYTES
+    }
+
+    /// The address of the stack's first word, which never changes: what a
+    /// limit in bytes is counted from to make the poll word's address.
+    #[inline(always)]
+    pub(crate) fn base_address(&self) -> usize {
+        self.words.first() as usize
+    }
+
+    /// The address of the stack's top: what the frame-entry check compares
+    /// with the poll word (`PRD/GC_PRD.md` §12).
+    #[inline(always)]
+    pub(crate) fn top_address(&self) -> usize {
+        self.words.top_address()
+    }
+}
+
+/// A copy of a captured copy.
 impl Clone for FrameStack {
     fn clone(&self) -> Self {
+        self.copy()
+    }
+}
+
+impl<B: Buffer> FrameStack<B> {
+    // ── Copying whole ───────────────────────────────────────────────────
+
+    /// A capture's copy: the words as one run of stores, in a buffer of
+    /// their size, and a reference for each run of code.
+    pub(crate) fn copy(&self) -> FrameStack {
         FrameStack {
             words: copy_words(&self.words),
             codes: self.live_runs().to_vec(),
@@ -284,13 +528,18 @@ impl Clone for FrameStack {
         }
     }
 
-    fn clone_from(&mut self, source: &Self) {
-        if self.words.capacity() / 4 > source.words.len().max(KEPT_WORDS) {
-            self.words = copy_words(&source.words);
-        } else {
-            self.words.clear();
-            extend_words(&mut self.words, &source.words);
+    /// Make this stack a copy of `source`, in the buffer it has: a
+    /// continuation's arrival. Refused, with the stack as it was, where
+    /// the buffer cannot hold `source`'s words.
+    pub(crate) fn copy_from(&mut self, source: &FrameStack) -> Result<(), NoRoom> {
+        // Room for what the source holds beyond what is here, asked before
+        // anything goes, so that a refusal leaves the stack whole.
+        let more = source.words.len().saturating_sub(self.words.len());
+        if !self.words.make_room(more) {
+            return Err(NoRoom);
         }
+        self.words.truncate(0);
+        extend_words(&mut self.words, &source.words)?;
         // The spent runs go with the frames the arrival replaces.
         self.codes.truncate(source.runs);
         let kept = self.codes.len();
@@ -301,10 +550,9 @@ impl Clone for FrameStack {
         self.base = source.base;
         self.pc = source.pc;
         self.top_code = source.top_code;
+        Ok(())
     }
-}
 
-impl FrameStack {
     // ── Reading ─────────────────────────────────────────────────────────
 
     /// Every word, headers and registers, bottom first.
@@ -458,7 +706,10 @@ impl FrameStack {
     /// The frames, top first, each as a view of its header.
     pub(crate) fn frames(&self) -> Frames<'_> {
         Frames {
-            stack: self,
+            words: &self.words,
+            codes: &self.codes,
+            top: self.base,
+            pc: self.pc,
             base: self.base,
             run: self.runs,
         }
@@ -589,18 +840,21 @@ impl FrameStack {
         return_reg: Reg,
         num_regs: u16,
         fill: TaggedValue,
-    ) -> usize {
-        self.spill_pc();
-        let base = self.words.len() + HEADER_WORDS;
+    ) -> Result<usize, NoRoom> {
         // The header's five words, then the window, written straight into
         // the buffer's spare room: the buffer is asked for room once, and
         // no word is written twice. `Vec`'s own `extend` and `resize` each
         // ask again, and cost a call a dozen instructions more (measured
-        // 2026-11-24, on `fib`).
+        // 2026-11-24, on `fib`). The live stack's buffer refuses at its
+        // reservation's end, before anything is written.
         let num_regs = num_regs as usize;
         let len = self.words.len();
         let total = HEADER_WORDS + num_regs;
-        self.words.reserve(total);
+        if !self.words.make_room(total) {
+            return Err(NoRoom);
+        }
+        self.spill_pc();
+        let base = len + HEADER_WORDS;
         // The frame joins the run below it if it runs the same code, as
         // every frame of a recursion does, and starts one otherwise.
         let address = code_address(code);
@@ -612,8 +866,8 @@ impl FrameStack {
             meta_word(0, return_reg),
             closure,
         ];
-        // SAFETY: `reserve` left room for `total` words past `len`, so every
-        // write below is inside the allocation and past the initialized
+        // SAFETY: `make_room` allowed `total` words past `len`, so every
+        // write below is inside the buffer and past the initialized
         // words. All `total` are written before `set_len` takes them in,
         // and a `Cell<TaggedValue>` has no destructor to run on what the
         // spare room held.
@@ -632,7 +886,7 @@ impl FrameStack {
         }
         self.base = base;
         self.pc = 0;
-        base
+        Ok(base)
     }
 
     /// Pop the top frame with its window, and answer its `return_reg`. If
@@ -661,14 +915,15 @@ impl FrameStack {
     /// call's replacement, in the window as it stands, grown to the code's
     /// registers if it has fewer, the new ones holding `fill`. A window
     /// never shrinks. The code is not the frame's own: a tail call to that
-    /// is [`Self::restart_top`].
+    /// is [`Self::restart_top`]. Refused, with the frame as it was, where
+    /// the buffer has no room for a window that must grow.
     #[inline(always)]
     pub(crate) fn replace_top(
         &mut self,
         code: &Rc<CodeObject>,
         closure: TaggedValue,
         fill: TaggedValue,
-    ) {
+    ) -> Result<(), NoRoom> {
         let base = self.base;
         let address = code_address(code);
         debug_assert_ne!(
@@ -680,16 +935,64 @@ impl FrameStack {
         let header = &self.words[base.wrapping_sub(HEADER_WORDS)..base];
         let link = header[HEADER_WORDS - LINK].get();
         let (had, starts_run) = (link_num_regs(link), link_starts_run(link));
-        let num_regs = code.num_regs.max(had);
+        if code.num_regs > had {
+            // Rare: a window never shrinks, so a frame that tail calls
+            // among the same few procedures grows at most once for each.
+            return self.replace_top_grown(code, closure, fill);
+        }
         // The frame starts a run from here, whichever it was in.
-        header[HEADER_WORDS - LINK].set(link_word(link_distance(link), num_regs, true));
+        header[HEADER_WORDS - LINK].set(link_word(link_distance(link), had, true));
         header[HEADER_WORDS - CODE].set(code_word(code));
         header[HEADER_WORDS - CLOSURE].set(closure);
-        if num_regs > had {
-            self.words.resize(base + num_regs as usize, Cell::new(fill));
-        }
         self.set_top_code(code, address, starts_run);
         self.pc = 0;
+        Ok(())
+    }
+
+    /// [`Self::replace_top`] for code with more registers than the window
+    /// has: the window grows first, so that a refusal leaves the frame as
+    /// it was, and the header is found again, since a buffer that grows
+    /// may have moved it.
+    #[cold]
+    #[inline(never)]
+    fn replace_top_grown(
+        &mut self,
+        code: &Rc<CodeObject>,
+        closure: TaggedValue,
+        fill: TaggedValue,
+    ) -> Result<(), NoRoom> {
+        let base = self.base;
+        if !self.grow_top_window(base + code.num_regs as usize, fill) {
+            return Err(NoRoom);
+        }
+        let header = &self.words[base - HEADER_WORDS..base];
+        let link = header[HEADER_WORDS - LINK].get();
+        header[HEADER_WORDS - LINK].set(link_word(link_distance(link), code.num_regs, true));
+        header[HEADER_WORDS - CODE].set(code_word(code));
+        header[HEADER_WORDS - CLOSURE].set(closure);
+        self.set_top_code(code, code_address(code), link_starts_run(link));
+        self.pc = 0;
+        Ok(())
+    }
+
+    /// Grow the top frame's window, which ends the buffer, to end at word
+    /// `end`, the new registers holding `fill`. Answers `false`, with
+    /// nothing written, where the buffer has no room.
+    fn grow_top_window(&mut self, end: usize, fill: TaggedValue) -> bool {
+        let len = self.words.len();
+        if !self.words.make_room(end - len) {
+            return false;
+        }
+        // SAFETY: `make_room` allowed the words from `len` to `end`, and
+        // each is written before `set_len` takes it in.
+        unsafe {
+            let at = self.words.as_mut_ptr();
+            for i in len..end {
+                at.add(i).write(Cell::new(fill));
+            }
+            self.words.set_len(end);
+        }
+        true
     }
 
     /// Start the top frame again at pc 0 in its own code, running `closure`.
@@ -825,14 +1128,18 @@ impl FrameStack {
     /// Put `captured`'s frames on top of this stack: a delimited
     /// continuation's re-entry. One word is written in the copy, the
     /// outermost frame's distance to the frame it now sits above. Does
-    /// nothing for an empty capture.
-    pub(crate) fn append(&mut self, captured: &FrameStack) {
+    /// nothing for an empty capture. Refused, with the stack as it was,
+    /// where the buffer has no room for the capture's words.
+    pub(crate) fn append(&mut self, captured: &FrameStack) -> Result<(), NoRoom> {
         if captured.is_empty() {
-            return;
+            return Ok(());
         }
-        self.spill_pc();
         let at = self.words.len();
-        extend_words(&mut self.words, &captured.words);
+        extend_words(&mut self.words, &captured.words)?;
+        // The frame the capture lands above keeps its pc in its header
+        // from here: written after the copy, which a refusal leaves
+        // undone, and before `base` moves.
+        self.spill_pc();
         self.drop_spent();
         self.codes.extend_from_slice(captured.live_runs());
         self.runs = self.codes.len();
@@ -848,6 +1155,7 @@ impl FrameStack {
         self.base = at + captured.base;
         self.pc = captured.pc;
         self.top_code = captured.top_code;
+        Ok(())
     }
 
     /// Set the register of its caller that the outermost of the frames
@@ -863,7 +1171,7 @@ impl FrameStack {
 
     /// Drop every frame.
     pub(crate) fn clear(&mut self) {
-        self.words.clear();
+        self.words.truncate(0);
         self.codes.clear();
         self.runs = 0;
         self.base = 0;
@@ -913,12 +1221,6 @@ impl FrameStack {
             "the top frame's code is not the last run's"
         );
     }
-
-    /// How many words the buffer has room for.
-    #[cfg(test)]
-    pub(crate) fn capacity(&self) -> usize {
-        self.words.capacity()
-    }
 }
 
 #[cfg(test)]
@@ -931,8 +1233,10 @@ impl FrameStack {
         closure: TaggedValue,
         registers: &[TaggedValue],
     ) -> FrameStack {
-        let mut stack = FrameStack::default();
-        let base = stack.push(code, closure, 0, registers.len() as u16, TaggedValue::NULL);
+        let mut stack = <FrameStack>::default();
+        let base = stack
+            .push(code, closure, 0, registers.len() as u16, TaggedValue::NULL)
+            .expect("a vector grows");
         for (slot, &value) in stack.words[base..].iter().zip(registers) {
             slot.set(value);
         }
@@ -942,7 +1246,14 @@ impl FrameStack {
 
 /// The frames of a [`FrameStack`], top first.
 pub(crate) struct Frames<'a> {
-    stack: &'a FrameStack,
+    /// The stack's words, and the code of its runs with any spent entries
+    /// after them.
+    words: &'a [Cell<TaggedValue>],
+    codes: &'a [FrameCode],
+    /// The top frame's first register, and its pc, which the stack keeps
+    /// beside its words.
+    top: usize,
+    pc: usize,
     /// The first register of the frame to answer next, or 0 after the
     /// bottom one.
     base: usize,
@@ -960,10 +1271,9 @@ impl<'a> Iterator for Frames<'a> {
         if base == 0 {
             return None;
         }
-        let stack = self.stack;
-        let top = base == stack.base;
+        let top = base == self.top;
         // One range check for the header's five words.
-        let header = &stack.words[base - HEADER_WORDS..base];
+        let header = &self.words[base - HEADER_WORDS..base];
         let link = header[HEADER_WORDS - LINK].get();
         let meta = header[HEADER_WORDS - META].get();
         // The frame's run, which the frame below shares unless this frame
@@ -974,12 +1284,12 @@ impl<'a> Iterator for Frames<'a> {
         self.base = base - link_distance(link);
         Some(CallFrame {
             // The top frame's pc is the stack's own (the module's comment).
-            pc: if top { stack.pc } else { meta_pc(meta) },
+            pc: if top { self.pc } else { meta_pc(meta) },
             register_base: base,
             num_regs: link_num_regs(link),
             closure: header[HEADER_WORDS - CLOSURE].get(),
             return_reg: meta_return_reg(meta),
-            code: &stack.codes[run].0,
+            code: &self.codes[run].0,
         })
     }
 }
@@ -1009,16 +1319,22 @@ mod tests {
     /// A stack of three frames of 2, 0 and 3 registers, the middle one at
     /// pc 7 and the bottom one at pc 4.
     fn three() -> FrameStack {
-        let mut stack = FrameStack::default();
-        stack.push(&code(1, 2), TaggedValue::FALSE, 0, 2, FILL);
+        let mut stack = <FrameStack>::default();
+        stack
+            .push(&code(1, 2), TaggedValue::FALSE, 0, 2, FILL)
+            .unwrap();
         stack.set_pc(4);
-        stack.push(&code(2, 0), TaggedValue::TRUE, 1, 0, FILL);
+        stack
+            .push(&code(2, 0), TaggedValue::TRUE, 1, 0, FILL)
+            .unwrap();
         stack.set_pc(7);
-        stack.push(&code(3, 3), TaggedValue::FALSE, 9, 3, FILL);
+        stack
+            .push(&code(3, 3), TaggedValue::FALSE, 9, 3, FILL)
+            .unwrap();
         stack
     }
 
-    fn shape(stack: &FrameStack) -> Vec<(u64, usize, usize, u16, Reg)> {
+    fn shape<B: Buffer>(stack: &FrameStack<B>) -> Vec<(u64, usize, usize, u16, Reg)> {
         stack
             .frames()
             .map(|f| (f.code.id.0, f.pc, f.register_base, f.num_regs, f.return_reg))
@@ -1109,10 +1425,10 @@ mod tests {
     #[test]
     fn a_pop_inside_a_run_takes_up_the_callers_pc() {
         let f = code(1, 1);
-        let mut stack = FrameStack::default();
-        stack.push(&f, TaggedValue::FALSE, 0, 1, FILL);
+        let mut stack = <FrameStack>::default();
+        stack.push(&f, TaggedValue::FALSE, 0, 1, FILL).unwrap();
         stack.set_pc(6);
-        stack.push(&f, TaggedValue::FALSE, 3, 1, FILL);
+        stack.push(&f, TaggedValue::FALSE, 3, 1, FILL).unwrap();
         stack.set_pc(4);
         let mut cur = Rc::clone(&f);
         assert_eq!((stack.pop(), stack.pc()), (3, 6));
@@ -1175,11 +1491,12 @@ mod tests {
         let stack = three();
         let captured = stack.above(7 * 8);
         // Onto a stack whose top frame is another size.
-        let mut live = FrameStack::default();
-        live.push(&code(7, 6), TaggedValue::FALSE, 0, 6, FILL);
+        let mut live = <FrameStack>::default();
+        live.push(&code(7, 6), TaggedValue::FALSE, 0, 6, FILL)
+            .unwrap();
         live.set_pc(3);
         let at = live.bytes();
-        live.append(&captured);
+        live.append(&captured).unwrap();
         live.set_return_reg_at(at, 5);
         assert_eq!(
             shape(&live),
@@ -1187,8 +1504,8 @@ mod tests {
         );
         live.assert_frames_tile();
         // And onto an empty one, where the outermost frame is the bottom.
-        let mut bare = FrameStack::default();
-        bare.append(&captured);
+        let mut bare = <FrameStack>::default();
+        bare.append(&captured).unwrap();
         assert_eq!(shape(&bare), [(3, 0, 10, 3, 9), (2, 7, 5, 0, 1)]);
         bare.assert_frames_tile();
         assert_eq!(bare.pop(), 9);
@@ -1196,7 +1513,7 @@ mod tests {
         assert!(bare.is_empty());
     }
 
-    fn ids(stack: &FrameStack) -> Vec<u64> {
+    fn ids<B: Buffer>(stack: &FrameStack<B>) -> Vec<u64> {
         stack.frames().map(|f| f.code.id.0).collect()
     }
 
@@ -1208,12 +1525,12 @@ mod tests {
     fn frames_that_share_code_share_one_reference() {
         let (f, g) = (code(1, 1), code(2, 1));
         let counts = || (Rc::strong_count(&f), Rc::strong_count(&g));
-        let mut stack = FrameStack::default();
+        let mut stack = <FrameStack>::default();
         for _ in 0..3 {
-            stack.push(&f, TaggedValue::FALSE, 0, 1, FILL);
+            stack.push(&f, TaggedValue::FALSE, 0, 1, FILL).unwrap();
         }
-        stack.push(&g, TaggedValue::FALSE, 0, 1, FILL);
-        stack.push(&f, TaggedValue::FALSE, 0, 1, FILL);
+        stack.push(&g, TaggedValue::FALSE, 0, 1, FILL).unwrap();
+        stack.push(&f, TaggedValue::FALSE, 0, 1, FILL).unwrap();
         // Three references: the two runs of `f`, and this test's.
         assert_eq!(counts(), (3, 2));
         assert_eq!(stack.frame_count(), 5);
@@ -1238,7 +1555,7 @@ mod tests {
         stack.drop_spent();
         assert_eq!(counts(), (2, 1));
         // A tail call out of a run of two takes one frame with it.
-        stack.replace_top(&g, TaggedValue::TRUE, FILL);
+        stack.replace_top(&g, TaggedValue::TRUE, FILL).unwrap();
         assert_eq!(ids(&stack), [2, 1]);
         assert_eq!(counts(), (2, 2));
         stack.assert_frames_tile();
@@ -1249,10 +1566,10 @@ mod tests {
         stack.drop_spent();
         assert_eq!(counts(), (1, 1));
 
-        // A clone into a stack that held other frames leaves none of them.
-        stack.push(&g, TaggedValue::FALSE, 0, 4, FILL);
+        // An arrival into a stack that held other frames leaves none of them.
+        stack.push(&g, TaggedValue::FALSE, 0, 4, FILL).unwrap();
         let mut other = three();
-        other.clone_from(&stack);
+        other.copy_from(&stack).unwrap();
         assert_eq!(shape(&other), shape(&stack));
         other.assert_frames_tile();
     }
@@ -1272,9 +1589,9 @@ mod tests {
                 Rc::strong_count(&h),
             )
         };
-        let mut stack = FrameStack::default();
-        stack.push(&f, TaggedValue::FALSE, 0, 1, FILL);
-        stack.push(&g, TaggedValue::FALSE, 0, 1, FILL);
+        let mut stack = <FrameStack>::default();
+        stack.push(&f, TaggedValue::FALSE, 0, 1, FILL).unwrap();
+        stack.push(&g, TaggedValue::FALSE, 0, 1, FILL).unwrap();
         assert_eq!(counts(), (2, 2, 1));
         // `g` returns: its run is spent, and holds it still.
         stack.pop();
@@ -1286,13 +1603,13 @@ mod tests {
         assert_eq!((below.frame_count(), counts()), (1, (4, 2, 1)));
         drop((copy, below));
         // `g` again: the same run, and no reference counted.
-        stack.push(&g, TaggedValue::FALSE, 0, 1, FILL);
+        stack.push(&g, TaggedValue::FALSE, 0, 1, FILL).unwrap();
         assert_eq!(ids(&stack), [2, 1]);
         assert_eq!(counts(), (2, 2, 1));
         stack.assert_frames_tile();
         // `h` in its place: `g`'s reference goes for `h`'s.
         stack.pop();
-        stack.push(&h, TaggedValue::FALSE, 0, 1, FILL);
+        stack.push(&h, TaggedValue::FALSE, 0, 1, FILL).unwrap();
         assert_eq!(ids(&stack), [3, 1]);
         assert_eq!(counts(), (2, 1, 2));
         stack.assert_frames_tile();
@@ -1302,16 +1619,16 @@ mod tests {
         stack.drop_spent();
         assert_eq!(counts(), (2, 1, 1));
         // An arrival's copy replaces the spent runs with the frames'.
-        stack.push(&h, TaggedValue::FALSE, 0, 1, FILL);
+        stack.push(&h, TaggedValue::FALSE, 0, 1, FILL).unwrap();
         stack.pop();
-        let mut arrival = FrameStack::default();
-        arrival.push(&g, TaggedValue::FALSE, 0, 1, FILL);
-        stack.clone_from(&arrival);
+        let mut arrival = <FrameStack>::default();
+        arrival.push(&g, TaggedValue::FALSE, 0, 1, FILL).unwrap();
+        stack.copy_from(&arrival).unwrap();
         assert_eq!(ids(&stack), [2]);
         assert_eq!(counts(), (1, 3, 1));
         stack.assert_frames_tile();
         // A cut leaves the runs above it spent, and a clear drops them.
-        stack.push(&f, TaggedValue::FALSE, 0, 1, FILL);
+        stack.push(&f, TaggedValue::FALSE, 0, 1, FILL).unwrap();
         stack.truncate(48);
         assert_eq!((ids(&stack), counts()), (vec![2], (2, 3, 1)));
         stack.assert_frames_tile();
@@ -1332,23 +1649,23 @@ mod tests {
                 Rc::strong_count(&k),
             )
         };
-        let mut stack = FrameStack::default();
-        stack.push(&f, TaggedValue::FALSE, 0, 1, FILL);
-        stack.push(&g, TaggedValue::FALSE, 7, 1, FILL);
+        let mut stack = <FrameStack>::default();
+        stack.push(&f, TaggedValue::FALSE, 0, 1, FILL).unwrap();
+        stack.push(&g, TaggedValue::FALSE, 7, 1, FILL).unwrap();
         // `g` to `h`: `h` takes a reference, and `g` is spent above it.
-        stack.replace_top(&h, TaggedValue::TRUE, FILL);
+        stack.replace_top(&h, TaggedValue::TRUE, FILL).unwrap();
         assert_eq!((ids(&stack), counts()), (vec![3, 1], (2, 2, 1)));
         stack.assert_frames_tile();
         // And back, and forth: the two change places.
         for _ in 0..3 {
-            stack.replace_top(&g, TaggedValue::TRUE, FILL);
+            stack.replace_top(&g, TaggedValue::TRUE, FILL).unwrap();
             assert_eq!((ids(&stack), counts()), (vec![2, 1], (2, 2, 1)));
             stack.assert_frames_tile();
-            stack.replace_top(&h, TaggedValue::TRUE, FILL);
+            stack.replace_top(&h, TaggedValue::TRUE, FILL).unwrap();
             assert_eq!((ids(&stack), counts()), (vec![3, 1], (2, 2, 1)));
         }
         // A third procedure: the spent `g` goes for it.
-        stack.replace_top(&k, TaggedValue::TRUE, FILL);
+        stack.replace_top(&k, TaggedValue::TRUE, FILL).unwrap();
         assert_eq!((ids(&stack), counts()), (vec![4, 1], (1, 2, 2)));
         stack.assert_frames_tile();
         // The frame returns to its caller's register all the same.
@@ -1359,12 +1676,12 @@ mod tests {
         assert_eq!(counts(), (1, 1, 1));
         // A tail call to the caller's own code is a run of its own beside
         // the caller's, and pops as one.
-        stack.push(&g, TaggedValue::FALSE, 7, 1, FILL);
-        stack.replace_top(&f, TaggedValue::TRUE, FILL);
+        stack.push(&g, TaggedValue::FALSE, 7, 1, FILL).unwrap();
+        stack.replace_top(&f, TaggedValue::TRUE, FILL).unwrap();
         assert_eq!(ids(&stack), [1, 1]);
         assert_eq!(Rc::strong_count(&f), 3);
         stack.assert_frames_tile();
-        stack.push(&f, TaggedValue::FALSE, 0, 1, FILL);
+        stack.push(&f, TaggedValue::FALSE, 0, 1, FILL).unwrap();
         assert_eq!(Rc::strong_count(&f), 3);
         stack.pop();
         stack.pop();
@@ -1378,11 +1695,11 @@ mod tests {
     #[test]
     fn a_copy_cut_inside_a_run_starts_the_run_again() {
         let (f, g) = (code(1, 1), code(2, 1));
-        let mut stack = FrameStack::default();
+        let mut stack = <FrameStack>::default();
         for _ in 0..3 {
-            stack.push(&f, TaggedValue::FALSE, 0, 1, FILL);
+            stack.push(&f, TaggedValue::FALSE, 0, 1, FILL).unwrap();
         }
-        stack.push(&g, TaggedValue::FALSE, 0, 1, FILL);
+        stack.push(&g, TaggedValue::FALSE, 0, 1, FILL).unwrap();
         // The top two frames: one of `f`, cut out of its run, and `g`.
         let captured = stack.above(12 * 8);
         assert_eq!(ids(&captured), [2, 1]);
@@ -1392,7 +1709,7 @@ mod tests {
         stack.truncate(12 * 8);
         assert_eq!(ids(&stack), [1, 1]);
         stack.assert_frames_tile();
-        stack.append(&captured);
+        stack.append(&captured).unwrap();
         assert_eq!(ids(&stack), [2, 1, 1, 1]);
         stack.assert_frames_tile();
         assert_eq!((Rc::strong_count(&f), Rc::strong_count(&g)), (4, 3));
@@ -1405,43 +1722,143 @@ mod tests {
         assert_eq!((Rc::strong_count(&f), Rc::strong_count(&g)), (2, 2));
     }
 
-    /// An arrival keeps the live stack's buffer, so that the next push has
-    /// room, unless the buffer is more than four times what it needs: then
-    /// it takes one of its own size, and a stack a deep recursion grew goes
-    /// back to the allocator at the escape out of it.
+    /// A live stack in the smallest reservation there is, one page.
+    fn one_page() -> LiveStack {
+        LiveStack::reserved(1, 1)
+    }
+
+    /// The live stack's words are in a reservation (#908's 7c): they are
+    /// where it starts however many there are, and a frame that would end
+    /// past it is refused with nothing written. A frame that ends at it
+    /// is not.
     #[test]
-    fn an_arrival_keeps_a_buffer_near_its_size_and_lets_a_far_larger_one_go() {
-        let f = code(1, 59);
-        let frame_words = HEADER_WORDS + 59;
-        let stack_of = |frames: usize| {
-            let mut stack = FrameStack::default();
-            for _ in 0..frames {
-                stack.push(&f, TaggedValue::FALSE, 0, 59, FILL);
-            }
+    fn a_live_stack_never_moves_and_refuses_a_frame_past_its_end() {
+        // 65 words a frame, which divides no page: some words are left.
+        let f = code(1, 60);
+        let frame = HEADER_WORDS + 60;
+        let mut stack = one_page();
+        let room = stack.capacity_bytes() / WORD_BYTES;
+        let first = stack.base_address();
+        assert_eq!(stack.top_address(), first);
+        for i in 0..room / frame {
+            let base = stack.push(&f, TaggedValue::FALSE, 0, 60, FILL);
+            assert_eq!(base, Ok(i * frame + HEADER_WORDS));
+        }
+        let held = room / frame * frame;
+        assert_eq!(stack.words().as_ptr() as usize, first);
+        assert_eq!(stack.base_address(), first);
+        assert_eq!(stack.top_address(), first + held * WORD_BYTES);
+
+        // The page has room for less than another frame.
+        stack.set_pc(7);
+        let before = (shape(&stack), stack.bytes(), Rc::strong_count(&f));
+        assert_eq!(stack.push(&f, TaggedValue::FALSE, 0, 60, FILL), Err(NoRoom));
+        let g = code(2, 60);
+        assert_eq!(stack.push(&g, TaggedValue::FALSE, 0, 60, FILL), Err(NoRoom));
+        assert_eq!(Rc::strong_count(&g), 1, "no run was started for it");
+        assert_eq!((shape(&stack), stack.bytes(), Rc::strong_count(&f)), before);
+        stack.assert_frames_tile();
+
+        // A frame of exactly the words left ends at the reservation's end,
+        // and after it not even a header fits.
+        let left = room - held;
+        assert!(
+            left >= HEADER_WORDS,
+            "the test's frame leaves room for a header"
+        );
+        let last = code(3, (left - HEADER_WORDS) as u16);
+        let base = stack.push(&last, TaggedValue::FALSE, 0, last.num_regs, FILL);
+        assert_eq!(base, Ok(held + HEADER_WORDS));
+        assert_eq!(stack.bytes(), stack.capacity_bytes());
+        assert_eq!(
+            stack.push(&code(4, 0), TaggedValue::FALSE, 0, 0, FILL),
+            Err(NoRoom)
+        );
+        stack.assert_frames_tile();
+        // A pop gives the room back.
+        stack.pop();
+        assert_eq!(stack.pc(), 7);
+        assert!(
             stack
+                .push(&code(4, 0), TaggedValue::FALSE, 0, 0, FILL)
+                .is_ok()
+        );
+    }
+
+    /// A tail call whose window must grow past the reservation is refused
+    /// with the frame as it was: its code, its closure, its window, and no
+    /// reference taken for the code it was to run.
+    #[test]
+    fn a_tail_call_that_cannot_grow_its_window_is_refused_with_the_frame_as_it_was() {
+        let mut stack = one_page();
+        let room = stack.capacity_bytes() / WORD_BYTES;
+        let small = code(1, 1);
+        stack.push(&small, TaggedValue::TRUE, 3, 1, FILL).unwrap();
+        stack.set_pc(5);
+        let before = (shape(&stack), stack.bytes(), stack.top_closure());
+
+        let wide = code(2, (room - HEADER_WORDS + 1) as u16);
+        assert_eq!(
+            stack.replace_top(&wide, TaggedValue::FALSE, FILL),
+            Err(NoRoom)
+        );
+        assert_eq!((shape(&stack), stack.bytes(), stack.top_closure()), before);
+        assert_eq!(Rc::strong_count(&wide), 1);
+        assert_eq!(stack.top_code().map(|code| code.id.0), Some(1));
+        stack.assert_frames_tile();
+
+        // One whose window ends at the reservation's end grows into it.
+        let fits = code(3, (room - HEADER_WORDS) as u16);
+        stack.replace_top(&fits, TaggedValue::FALSE, FILL).unwrap();
+        assert_eq!(stack.bytes(), stack.capacity_bytes());
+        assert_eq!(ids(&stack), [3]);
+        stack.assert_frames_tile();
+    }
+
+    /// A delimited re-entry and a full arrival that the reservation cannot
+    /// hold are refused with the stack as it was, and one it can hold
+    /// lands at the reservation's base.
+    #[test]
+    fn an_append_or_an_arrival_past_the_reservation_is_refused_with_the_stack_as_it_was() {
+        let (f, g) = (code(1, 1), code(2, 59));
+        let mut stack = one_page();
+        let room = stack.capacity_bytes() / WORD_BYTES;
+        let first = stack.base_address();
+        stack.push(&f, TaggedValue::FALSE, 0, 1, FILL).unwrap();
+        stack.set_pc(3);
+        let frames_of_g = |frames: usize| {
+            let mut copy = <FrameStack>::default();
+            for _ in 0..frames {
+                copy.push(&g, TaggedValue::FALSE, 0, 59, FILL).unwrap();
+            }
+            copy
         };
-        // A snapshot of 100 frames, 6,400 words.
-        let snapshot = stack_of(100);
-        // A live stack of 200 frames, whose buffer has room for 16,384
-        // words: under four times the snapshot's, so it stays.
-        let mut near = stack_of(200);
-        let kept = near.capacity();
-        near.clone_from(&snapshot);
-        assert_eq!(near.capacity(), kept);
-        assert_eq!(shape(&near), shape(&snapshot));
-        // One of 1,000 frames, 64,000 words: over four times it, so the
-        // buffer goes.
-        let mut deep = stack_of(1000);
-        assert!(deep.capacity() >= 1000 * frame_words);
-        deep.clone_from(&snapshot);
-        assert_eq!(deep.capacity(), 100 * frame_words);
-        assert_eq!(shape(&deep), shape(&snapshot));
-        deep.assert_frames_tile();
-        // A small buffer stays whatever the arrival needs.
-        let mut small = stack_of(40);
-        let kept = small.capacity();
-        small.clone_from(&stack_of(1));
-        assert_eq!(small.capacity(), kept);
+        // More frames than the page holds, and as many as it holds with
+        // the frame that is there.
+        let big = frames_of_g(room / (HEADER_WORDS + 59) + 1);
+        let full = frames_of_g(room / (HEADER_WORDS + 59));
+        let before = (shape(&stack), stack.bytes(), Rc::strong_count(&g));
+
+        assert_eq!(stack.append(&big), Err(NoRoom));
+        assert_eq!(stack.append(&full), Err(NoRoom));
+        assert_eq!(stack.copy_from(&big), Err(NoRoom));
+        assert_eq!((shape(&stack), stack.bytes(), Rc::strong_count(&g)), before);
+        assert_eq!(stack.pc(), 3);
+        stack.assert_frames_tile();
+
+        // What fits arrives where the stack starts, in place of the frame
+        // that was there, and can be appended to.
+        stack.copy_from(&full).unwrap();
+        assert_eq!(shape(&stack), shape(&full));
+        assert_eq!(
+            (stack.base_address(), stack.words().as_ptr() as usize),
+            (first, first)
+        );
+        stack.assert_frames_tile();
+        stack.copy_from(&frames_of_g(1)).unwrap();
+        stack.append(&frames_of_g(2)).unwrap();
+        assert_eq!(ids(&stack), [2, 2, 2]);
+        stack.assert_frames_tile();
     }
 
     #[test]
@@ -1449,11 +1866,15 @@ mod tests {
         let mut stack = three();
         stack.set_pc(5);
         // Code of fewer registers: the window stays as it is.
-        stack.replace_top(&code(4, 2), TaggedValue::TRUE, FILL);
+        stack
+            .replace_top(&code(4, 2), TaggedValue::TRUE, FILL)
+            .unwrap();
         assert_eq!(stack.bytes(), 20 * 8, "a window never shrinks");
         assert_eq!(shape(&stack)[0], (4, 0, 17, 3, 9));
         // Code of more: it grows, and the new registers hold the fill.
-        stack.replace_top(&code(5, 6), TaggedValue::TRUE, TaggedValue::fixnum(7));
+        stack
+            .replace_top(&code(5, 6), TaggedValue::TRUE, TaggedValue::fixnum(7))
+            .unwrap();
         assert_eq!(shape(&stack)[0], (5, 0, 17, 6, 9));
         assert_eq!(
             stack.words()[20..]

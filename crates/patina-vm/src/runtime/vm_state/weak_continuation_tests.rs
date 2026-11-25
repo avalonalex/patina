@@ -29,7 +29,8 @@ fn pin_in_register(state: &mut VmState, value: TaggedValue) {
         let id = super::tests::load_in_globals(state, super::tests::code(), Vec::new()).id();
         state
             .execution
-            .push_frame(state.code_object(id).unwrap(), CallFrame::NO_CLOSURE, 0);
+            .push_frame(state.code_object(id).unwrap(), CallFrame::NO_CLOSURE, 0)
+            .unwrap();
     }
     let base = state.execution.top_frame().unwrap().register_base;
     state.execution.set_top(base, 0, value);
