@@ -3771,8 +3771,10 @@ fn mark_if_import_rebound(
 /// occupant wrote 99 into, and answer what the read found. The reuse is
 /// the push the fill covers: a tail call (`tail_replace`), a self tail call
 /// (`restart_closure`), or a stub's next round (`restart_stub`). A check
-/// build panics at the read, in `reg_at`; a plain release build finds the
-/// fill, `NULL`; with the fill gone, either finds 99.
+/// build panics at the read, in `reg_at`. A plain release build finds the
+/// fill, `NULL`, after a stub's round, and 99 after either tail call,
+/// whose windows it does not fill (#714's Q-4d3-1). With a fill gone, its
+/// build finds 99.
 #[cfg(feature = "test-support")]
 pub(crate) fn read_an_unwritten_register(after: crate::test_support::Reuse) -> TaggedValue {
     use crate::test_support::Reuse;
