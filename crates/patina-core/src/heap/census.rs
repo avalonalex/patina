@@ -13,6 +13,67 @@ use std::collections::HashSet;
 use std::rc::Rc;
 use std::time::Instant;
 
+/// Whether an object's payload has `Drop` glue (#931): `needs_drop` of each
+/// field's type, as the compiler sees it, so that a payload made plain
+/// flips its variant's flag with no table to edit. Every field is named, no
+/// `..`, so that a field added to a variant joins the answer or fails to
+/// compile here. A sweep that frees an object whose payload needs `Drop`
+/// runs Rust code; GC_PRD §6's "no heap object owns a Rust value" is the
+/// share of objects for which this answers `false`.
+pub(crate) fn payload_needs_drop(data: &HeapObjectData) -> bool {
+    use HeapObjectData as H;
+    fn nd<T>(_: &T) -> bool {
+        std::mem::needs_drop::<T>()
+    }
+    match data {
+        H::BigInt(b) => nd(b),
+        H::Rational(r) => nd(r),
+        H::Real(f) => nd(f),
+        H::Complex { real, imag } => nd(real) || nd(imag),
+        H::Symbol(s) => nd(s),
+        H::Bytevector(v) => nd(v),
+        H::Exception {
+            kind,
+            message,
+            irritants,
+        } => nd(kind) || nd(message) || nd(irritants),
+        H::Procedure(p) => nd(p),
+        H::Port(p) => nd(p),
+        H::Macro {
+            body,
+            literals,
+            scopes,
+            relinks,
+        } => nd(body) || nd(literals) || nd(scopes) || nd(relinks),
+        H::RecordType(t) => nd(t),
+        H::Record {
+            record_type,
+            fields,
+        } => nd(record_type) || nd(fields),
+        H::Identifier {
+            name,
+            scopes,
+            written,
+            relinked,
+        } => nd(name) || nd(scopes) || nd(written) || nd(relinked),
+        H::Continuation { k, bytes } => nd(k) || nd(bytes),
+        H::Parameter { values, converter } => nd(values) || nd(converter),
+        H::Promise(p) => nd(p),
+        H::Library(l) => nd(l),
+        H::Values(v) => nd(v),
+        H::EnvironmentSpecifier { env, mutable } => nd(env) || nd(mutable),
+        H::PromptTag(t) => nd(t),
+        H::LabelPlaceholder(n) => nd(n),
+        H::MutableCell(c) => nd(c),
+        H::Ephemeron(e) => nd(e),
+        H::VmClosure { code_id, free_vars } => nd(code_id) || nd(free_vars),
+        H::VmContinuationRef { id, bytes } => nd(id) || nd(bytes),
+        H::VmDelimitedContinuationRef { id, bytes } => nd(id) || nd(bytes),
+        H::CoreSyntax(form) => nd(form),
+        H::Free => false,
+    }
+}
+
 /// An object's variant, its length (free variables, fields, values), and
 /// its size in the headered layout of `PRD/GC_PRD.md` §6.
 pub(super) fn object_info(data: &HeapObjectData) -> (Variant, usize, u64) {
@@ -125,6 +186,10 @@ impl Heap {
     ) {
         if let Some((variant, len, headered)) = info {
             let today = (OBJECT_SLOT_BYTES + payload) as u64;
+            imp::variant_drops(
+                variant,
+                payload_needs_drop(&self.objects[value.heap_index() as usize]),
+            );
             imp::alloc(
                 Arena::Object,
                 value.heap_index(),
@@ -235,6 +300,60 @@ mod tests {
     /// 2. A program makes a relink only in a generated macro that keeps a
     /// relinked identifier, which the census's own lane, which runs
     /// programs, need not reach.
+    /// A variant's `Drop` flag is its payload's types' (#931): owning a
+    /// buffer or an `Rc` needs `Drop`, words, ids and flags do not. Each
+    /// kind here is built by a literal; the rest follow from the same
+    /// function, which names every field of every variant. A payload made
+    /// plain flips its row here, which is the point of reading it.
+    #[test]
+    fn a_variants_drop_flag_is_its_payloads_types() {
+        let rows: Vec<(&str, HeapObjectData, bool)> = vec![
+            ("Real", HeapObjectData::Real(1.5), false),
+            (
+                "Complex",
+                HeapObjectData::Complex {
+                    real: TaggedValue::fixnum(1),
+                    imag: TaggedValue::fixnum(2),
+                },
+                false,
+            ),
+            ("Symbol", HeapObjectData::Symbol(Rc::from("s")), true),
+            ("Bytevector", HeapObjectData::Bytevector(vec![1]), true),
+            (
+                "Values",
+                HeapObjectData::Values(vec![TaggedValue::NULL]),
+                true,
+            ),
+            (
+                "VmClosure",
+                HeapObjectData::VmClosure {
+                    code_id: 7,
+                    free_vars: vec![],
+                },
+                true,
+            ),
+            (
+                "VmContinuationRef",
+                HeapObjectData::VmContinuationRef { id: 1, bytes: 8 },
+                false,
+            ),
+            (
+                "LabelPlaceholder",
+                HeapObjectData::LabelPlaceholder(3),
+                false,
+            ),
+            (
+                "MutableCell",
+                HeapObjectData::MutableCell(super::super::Interior::new(TaggedValue::NULL)),
+                false,
+            ),
+            ("Free", HeapObjectData::Free, false),
+        ];
+        for (name, data, drops) in &rows {
+            assert_eq!(payload_needs_drop(data), *drops, "{name}");
+        }
+    }
+
     #[test]
     fn a_macros_relinks_are_words_of_the_object() {
         let body = || {

@@ -48,6 +48,20 @@ HEAP_SITES = ['set_car', 'set_cdr', 'vector_set', 'vm_vector_set', 'write_mutabl
               'set_vm_closure_free_var', 'promise_update', 'break_ephemeron', 'record_set',
               'parameter_install', 'parameter_install_converted', 'promise_force_prim', 'promise_force_vm']
 V_REAL, V_PROCEDURE, V_CELL, V_CLOSURE = 2, 7, 21, 23
+# Where `SHARED_PAYLOADS` lives: the heap payloads that hold an `Rc`, a
+# `RefCell`, a `Cell` or an `Interior` (C9, #711), as `Variant.field`. The
+# census reads the variants from it, so that the list has one home (#931).
+SHARED_LIST = ROOT / 'crates/patina-interpreter/src/reentry_lint_control.rs'
+
+
+def shared_variants(text=None):
+    """The variants `SHARED_PAYLOADS` names: each entry's part before the
+    dot, from the Rust source, comments skipped."""
+    text = SHARED_LIST.read_text() if text is None else text
+    start = text.index('const SHARED_PAYLOADS: &[&str] = &[')
+    body = text[start:text.index('];', start)]
+    lines = (line.split('//', 1)[0] for line in body.splitlines()[1:])
+    return sorted({entry.split('.')[0] for line in lines for entry in re.findall(r'"([^"]+)"', line)})
 # A tree-walker run's name: the workload's, with this after it.
 TW_SUFFIX = '-tw'
 # A representative length per length bucket, for the study's estimator.
@@ -174,6 +188,35 @@ def rows_by_backend(results):
             if backend in split and any(r.get('default') for r in split[backend].values())}
 
 
+def payload_shares(default):
+    """The shares of allocations whose payload needs `Drop` and whose payload
+    is shared state (#931), over `default`, {workload: summary}: by objects,
+    and by arena slots, where every vector and string slot owns a buffer.
+    K9 reads the second. A variant's flag is the census's, from its
+    payload's types, and counts if any workload saw it set; a run that read
+    no flags (a binary before #931) gives none."""
+    allocations = sum(d['alloc_total'] for d in default.values())
+    names = next(iter(default.values()), {}).get('variant_names', [])
+    flags = [d['variant_drop'] for d in default.values() if 'variant_drop' in d]
+    if not flags or not names or not allocations:
+        return dict.fromkeys(('drop_share_objects', 'drop_share_slots', 'shared_share_objects',
+                              'drop_variants'))
+    shared = set(shared_variants())
+    drops = [any(f[i] for f in flags) for i in range(len(names))]
+
+    def objects(pick):
+        return sum(sum(c for i, c in enumerate(d['obj_variant']) if pick(i)) for d in default.values())
+
+    slots = sum(d['alloc_by_arena'][1] + d['alloc_by_arena'][2] for d in default.values())
+    drop_objects = objects(lambda i: drops[i])
+    return {
+        'drop_share_objects': drop_objects / allocations,
+        'drop_share_slots': (drop_objects + slots) / allocations,
+        'shared_share_objects': objects(lambda i: names[i] in shared) / allocations,
+        'drop_variants': [n for i, n in enumerate(names) if drops[i]],
+    }
+
+
 def rows(results, backend='vm'):
     """#647's census rows from one backend's {workload: {config:
     {'summary', 'log', 'gclog'}}}."""
@@ -204,6 +247,7 @@ def rows(results, backend='vm'):
     out['mix_flonums'] = sum(d['obj_variant'][V_REAL] for d in default.values()) / allocations
     out['mix_vectors'] = sum(d['alloc_by_arena'][1] for d in default.values()) / allocations
     out['mix_cells'] = sum(d['obj_variant'][V_CELL] for d in default.values()) / allocations
+    out.update(payload_shares(default))
     # Survival per nursery size, by count.
     out['survival'] = {}
     for n in names:
@@ -282,6 +326,9 @@ def report_lines(r):
         f'allocation mix ({r["allocations"] / 1e6:.0f} M objects): closures {pct(r["mix_closures"])}, '
         f'pairs {pct(r["mix_pairs"])}, flonums {pct(r["mix_flonums"])}, vectors {pct(r["mix_vectors"])}, '
         f'cells {pct(r["mix_cells"])}',
+        f'payloads: {pct(r.get("drop_share_objects"))} of allocations need Drop in object variants, '
+        f'{pct(r.get("drop_share_slots"))} with vector and string slots; '
+        f'{pct(r.get("shared_share_objects"))} hold shared state (SHARED_PAYLOADS)',
         f'survival at 64 K: <= 1.5% on {r["survival_64k_at_most_1_5"]} of {r["survival_64k_measured"]}; {pick}',
         f'store mix: the immediate filter removes {pct(r["store_immediate"], 0)} of heap stores; the median '
         f'workload sends {pct(r["store_young_holder_median_64k"])} to young holders; old-to-young '

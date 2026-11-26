@@ -563,6 +563,11 @@ pub(crate) mod imp {
         string_len_bytes: [u64; NLEN],
         by_variant: [u64; 28],
         variant_bytes: [u64; 28],
+        /// Each variant's payload has `Drop` glue (#931): set from the
+        /// first object of it allocated, by its payload's types
+        /// (`heap::census::payload_needs_drop`); a variant never allocated
+        /// reads `false`, and its count is 0.
+        variant_drop: [bool; 28],
         closure_free_vars: [u64; NLEN],
         record_fields: [u64; NLEN],
         values_len: [u64; NLEN],
@@ -668,6 +673,12 @@ pub(crate) mod imp {
 
     /// One allocation into `index` of `arena`: `today` the bytes the byte
     /// account charged, `headered` the bytes in §6's layout.
+    /// Whether `variant`'s payload has `Drop` glue, from an object of it
+    /// just allocated (#931).
+    pub(crate) fn variant_drops(variant: Variant, drops: bool) {
+        with_state(|s| s.variant_drop[variant.0] = drops);
+    }
+
     pub(crate) fn alloc(
         arena: Arena,
         index: u32,
@@ -1042,6 +1053,11 @@ pub(crate) mod imp {
         let _ = writeln!(w, "variant_names {}", VARIANT_NAMES.join(","));
         let _ = writeln!(w, "obj_variant {:?}", s.by_variant);
         let _ = writeln!(w, "obj_variant_bytes {:?}", s.variant_bytes);
+        let _ = writeln!(
+            w,
+            "variant_drop {:?}",
+            s.variant_drop.map(|drops| drops as u8)
+        );
         let _ = writeln!(w, "closure_fv {:?}", s.closure_free_vars);
         let _ = writeln!(w, "record_fields {:?}", s.record_fields);
         let _ = writeln!(w, "values_len {:?}", s.values_len);
