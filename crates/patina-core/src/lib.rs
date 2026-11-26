@@ -133,6 +133,7 @@ pub use heap::gc::{
 pub use heap::{
     CheckCell, GC_CHECK, Heap, SharedHeap, SpineEnd,
     attrs::{AllocAttrs, BarrierKind, GcAttrs, PollKind, Publication, WatermarkKind},
+    config::HeapConfig,
     handles::{Owned, OwnedEnvironment},
     interrupt::InterruptHandle,
     mutator::{Carrier, Mutator, event},

@@ -214,6 +214,7 @@ impl EvalError {
                 ExceptionKind::FileError => ErrorKind::FileIO,
                 ExceptionKind::ReadError => ErrorKind::Read,
                 ExceptionKind::Interrupt => ErrorKind::Interrupt,
+                ExceptionKind::StackExhausted => ErrorKind::StackExhausted,
                 _ => ErrorKind::User,
             },
             EvalError::WithLocation { error, .. } | EvalError::WithDiagnostic { error, .. } => {
@@ -385,6 +386,16 @@ impl From<ErrorDetail> for EvalError {
             ErrorKind::Internal => EvalError::InternalError(detail.message),
             ErrorKind::ControlFlow => EvalError::ContinuationEscape,
             ErrorKind::Interrupt => EvalError::Interrupt,
+            // The VM's alone (#907): the tree-walker keeps no stack cap, and
+            // carries the condition only as a host or a test hands it one.
+            ErrorKind::StackExhausted => {
+                let irritants_display = detail.format_irritants();
+                EvalError::SchemeException {
+                    kind: ExceptionKind::StackExhausted,
+                    message: detail.message,
+                    irritants_display,
+                }
+            }
         }
     }
 }

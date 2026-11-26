@@ -119,6 +119,11 @@ fn fill_value() -> TaggedValue {
     std::hint::black_box(FILL)
 }
 
+/// A frame's header in 4d.7's interleaved layout: five words, `ret`, `link`,
+/// `code`, `meta` and `closure` (`PRD/GC_PRD.md` §11.1). The stack's cap
+/// counts frames at this size from 4d.6 on (#907), ahead of the layout.
+pub(super) const FRAME_HEADER_BYTES: usize = 40;
+
 /// Write [`FILL`] into every register of `window`: one store each, with no
 /// test per register.
 #[inline(always)]
@@ -247,6 +252,17 @@ impl ExecutionState {
     #[inline(always)]
     pub(super) fn depth(&self) -> Depth {
         Depth::of_frames(self.frames.len())
+    }
+
+    /// What the stack holds in bytes, as 4d.7's interleaved layout will hold
+    /// it (#907, `PRD/GC_PRD.md` §11.1): [`FRAME_HEADER_BYTES`] a frame and
+    /// 8 a register. The frame-entry check compares it with the poll word,
+    /// so the depth at which the stack's cap is met does not move when that
+    /// layout lands.
+    #[inline(always)]
+    pub(super) fn top_bytes(&self) -> usize {
+        self.frames.len() * FRAME_HEADER_BYTES
+            + self.registers.len() * std::mem::size_of::<TaggedValue>()
     }
 
     /// The depth the top frame was pushed at: [`Self::depth`] less that
@@ -702,8 +718,14 @@ impl ExecutionState {
 
     /// Capture every dynamic component together; handle allocation clears
     /// the copy's dead temporaries and its hole, `deliver_reg`, and installs
-    /// the weak-store payload before a safe point.
-    pub(super) fn capture_full(&self, deliver_reg: u16, reentry: Rc<[u64]>) -> VmContinuation {
+    /// the weak-store payload before a safe point. `stack_reserve_open` is
+    /// the machine's, which the snapshot carries (#907).
+    pub(super) fn capture_full(
+        &self,
+        deliver_reg: u16,
+        reentry: Rc<[u64]>,
+        stack_reserve_open: bool,
+    ) -> VmContinuation {
         patina_core::census::capture_full(self.depth().frame_count(), self.registers.len());
         VmContinuation {
             frames: self.frames.clone(),
@@ -715,6 +737,7 @@ impl ExecutionState {
             exit_status: None,
             abort_landing: false,
             reentry,
+            stack_reserve_open,
         }
     }
 

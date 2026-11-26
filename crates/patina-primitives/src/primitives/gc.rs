@@ -86,6 +86,11 @@
 //! - `open-file-ports` and `descriptor-limit`: the file ports open now,
 //!   whenever they opened, and the soft `RLIMIT_NOFILE` they count against,
 //!   or `#f` where it is unlimited or cannot be read.
+//! - `stack-limit`: the VM's stack cap in bytes (#907), which
+//!   `--stack-max`, `PATINA_STACK_MAX` or a host's `HeapConfig` sets and
+//!   which otherwise is fitted to the machine's memory. A call that takes
+//!   the stack to within 1 MiB of it raises `&stack-exhausted`. 0 on the
+//!   tree-walker, which keeps no cap.
 //! - `minors` and `majors`: collections by kind. Every collection is a major
 //!   until a nursery comes (GC_PRD stage 7), so `minors` is 0 and `majors` is
 //!   `collections`.
@@ -267,6 +272,7 @@ fn gc_stats<'gc>(cx: &mut Cx<'gc>, _args: &[Value<'gc>]) -> Result<Value<'gc>, E
             "descriptor-limit",
             patina_core::heap::descriptor_limit().map_or(Value::FALSE, n),
         ),
+        ("stack-limit", n(cx.stack_cap())),
         ("namespaces", n(cx.namespaces())),
         ("cells", n(cx.cells())),
         ("binding-records", n(cx.binding_records())),

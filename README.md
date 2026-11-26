@@ -129,9 +129,10 @@ The architecture is designed to support future exploration:
   (#835), and on the VM the placeholders a loaded unit links for names not
   yet bound, until no code links one (#836), `code-units`, the code
   units the VM has loaded and not
-  released (0 on the tree-walker, #836), and `scope-sets`, the scope sets
-  the heap's scope-set table holds for its identifiers (#788), beside its
-  arena counts
+  released (0 on the tree-walker, #836), `scope-sets`, the scope sets
+  the heap's scope-set table holds for its identifiers (#788), and
+  `stack-limit`, the VM's stack cap in bytes (0 on the tree-walker, #907),
+  beside its arena counts
   (`docs/GC_DESIGN.md` §6), and the pauses, the MMU at 10 ms, how much was
   allocated where collection was deferred, and the process's resident size
   and CPU time (§6.2). `PATINA_GC_LOG=<path>` writes a CSV line per
@@ -205,6 +206,22 @@ A program blocked reading its input, or inside one long primitive operation,
 sees the interrupt only once that returns. If you press Ctrl-C a second time
 before then, the process ends right away, as it did before Patina caught
 Ctrl-C.
+
+A recursion that runs away is stopped before it takes the machine's memory.
+The VM's stack has a cap: by default a quarter of the machine's memory, or of
+its container's limit, and at most 8 GiB. A call that takes the stack to
+within 1 MiB of the cap raises an error that a program can catch. Its message
+is `stack exhausted`, its one irritant is the cap in bytes, and
+`stack-exhausted?` from `(patina limits)` tells it from other errors.
+Uncaught, it ends a script as any error does, with status 1.
+`--stack-max 512M` sets the cap (bytes, or a number with `K`, `M` or `G`), as
+does the variable `PATINA_STACK_MAX`, and `(gc-stats)`'s `stack-limit` reads
+it. Two costs are worth knowing. A `guard` that catches the error copies the
+stack, as it does for any error raised that deep, so catching at the cap
+takes about as much memory again. And the last MiB is all the room a handler
+has: one that itself recurses through it loses the top-level form it was
+running in, and the next form starts afresh. The tree-walker
+(`--tree-walker`) keeps no cap.
 
 ```scheme
 patina> (define factorial
@@ -448,6 +465,16 @@ with an explicit constructor above. Both interpreters provide `lookup()`,
 `set_command_line()`. Tree-walker-specific `evaluator()`
 access remains on `TreeWalkInterpreter`; portable code uses `backend()`.
 `new_vm_with_fs` and `new_tree_walker_with_fs` accept a host filesystem.
+
+`new_vm_with_config` takes a `HeapConfig`, which sets what the interpreter's
+memory may take. Today that is the VM's stack cap:
+`Interpreter::new_vm_with_config(HeapConfig::new().max_stack(64 << 20))`
+builds an interpreter whose stack may take 64 MiB, whatever
+`PATINA_STACK_MAX` says. `new_vm()` reads that variable instead
+(`HeapConfig::from_env()`), and with neither the cap is fitted to the
+machine. A configuration is read when the interpreter is built and not kept.
+The tree-walker takes one too (`new_tree_walker_with_config`) and keeps no
+cap.
 
 The old types and `patina_pipeline::{error,pipeline,standard}` paths remain
 available as deprecated tree-walker adapters; they do not silently switch

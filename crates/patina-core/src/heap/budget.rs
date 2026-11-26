@@ -22,10 +22,10 @@
 //! too, since the stack is one of several reservations the limit has to
 //! hold (the heap's is fitted at stage 5e).
 //!
-//! **Nothing reads these yet.** The stack's cap, `&stack-exhausted` and the
-//! knobs that override the default are #907's second half, which waits on
-//! the owner's rulings; this is the detection alone, with its fitting
-//! logic tested under injected values, and no lane's output changes.
+//! **What reads them.** The VM's stack cap, where a configuration sets
+//! none ([`HeapConfig::stack_cap`](super::config::HeapConfig::stack_cap),
+//! #907's second half): detected once for each machine built that way. The
+//! fitting logic is tested under injected values.
 //!
 //! macOS has no cgroups and refuses to set `RLIMIT_AS` (`ulimit -v`
 //! answers "Invalid argument" on macOS 27.2), so the test that reads a real

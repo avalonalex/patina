@@ -346,6 +346,14 @@ impl<'gc> Cx<'gc> {
         self.heap.borrow().code_units()
     }
 
+    /// The stack's cap in bytes on this context's heap's machine
+    /// ([`Carrier::stack_cap`](crate::Carrier::stack_cap), #907): 0 on the
+    /// tree-walker, which keeps none. `(gc-stats)`'s `stack-limit`.
+    #[inline]
+    pub fn stack_cap(&self) -> usize {
+        self.heap.borrow().mutator().stack_cap()
+    }
+
     /// [`Heap::core_syntax`](crate::Heap::core_syntax) on this context's heap.
     #[inline]
     pub fn core_syntax(&mut self, form: crate::core_syntax::CoreForm) -> Value<'gc> {

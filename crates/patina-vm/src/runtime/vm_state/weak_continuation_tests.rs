@@ -53,6 +53,7 @@ fn continuation_pinning(payload: TaggedValue) -> VmContinuation {
         exit_status: None,
         abort_landing: false,
         reentry: std::rc::Rc::from(Vec::new()),
+        stack_reserve_open: false,
     }
 }
 

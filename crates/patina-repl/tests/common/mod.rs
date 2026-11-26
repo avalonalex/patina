@@ -49,6 +49,9 @@ pub fn patina_command(cwd: &Path, args: &[&str], envs: &[(&str, &str)]) -> Comma
         .env_remove("PATINA_LIBRARY_PATH")
         .env_remove("PATINA_HOME")
         .env_remove("PATINA_ISOLATED_LIBRARIES")
+        // A cap exported in the developer's shell would decide how deep a
+        // test's recursion may go (#907); a test of the cap passes its own.
+        .env_remove("PATINA_STACK_MAX")
         // A session saves its history under HOME, and a test's input has no
         // business in the developer's own `~/.patina_history`.
         .env("HOME", cwd)

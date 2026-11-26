@@ -333,7 +333,30 @@ pub struct VmState {
     /// build, which keeps no count.
     #[trace(skip, reason = "a count of open windows: no value")]
     assert_no_gc: AssertNoGcCount,
+    /// The stack's cap in bytes (#907, `PRD/GC_PRD.md` §11.1): the most
+    /// [`ExecutionState::top_bytes`](super::execution_state::ExecutionState::top_bytes)
+    /// may reach. `usize::MAX` until [`VmState::set_stack_cap`] gives the
+    /// machine one, which its backend does when it is built.
+    #[trace(skip, reason = "a number of bytes")]
+    stack_cap: usize,
+    /// The soft limit: the cap less [`STACK_RESERVE`]. The frame entry that
+    /// crosses it raises `&stack-exhausted`, and the reserve above it is the
+    /// handler's room. What the poll word holds while the limit is armed.
+    #[trace(skip, reason = "a number of bytes")]
+    stack_soft: usize,
+    /// Whether `&stack-exhausted` has been raised and the stack has not yet
+    /// come back to the soft limit: the reserve is open, the poll word holds
+    /// the cap, and a frame entry past it is the hard cap. Closed, and the
+    /// soft limit armed again, by [`VmState::rearm_stack_limit`] once the
+    /// stack top is at or below the soft limit, with no margin (the owner's
+    /// ruling on Q6, 2026-11-24, on #782).
+    #[trace(skip, reason = "a flag")]
+    stack_reserve_open: bool,
 }
+
+/// The room a handler for `&stack-exhausted` runs in: the last MiB under
+/// the cap (`PRD/GC_PRD.md` §11.1).
+pub(super) const STACK_RESERVE: usize = 1 << 20;
 
 /// A unit [`VmState::load_unit`] loaded and linked, and the window over it
 /// (#836): from the load until its frame is pushed or a closure names it,
@@ -499,7 +522,153 @@ impl VmState {
             instance,
             driver: None,
             assert_no_gc,
+            stack_cap: usize::MAX,
+            stack_soft: patina_core::Mutator::NO_LIMIT,
+            stack_reserve_open: false,
         }
+    }
+
+    /// Give the machine its stack cap, in bytes (#907): the soft limit is
+    /// armed [`STACK_RESERVE`] under it. The backend calls it once, when it
+    /// builds the machine, with its configuration's cap
+    /// (`HeapConfig::stack_cap`), which is never under 2 MiB. A cap past
+    /// what an address space holds is taken as that.
+    pub(crate) fn set_stack_cap(&mut self, cap: u64) {
+        // 2^47 bytes: no stack reaches it, and it fits a fixnum.
+        let cap = usize::try_from(cap).unwrap_or(usize::MAX).min(1 << 47);
+        self.stack_cap = cap;
+        self.stack_soft = cap.saturating_sub(STACK_RESERVE);
+        self.stack_reserve_open = false;
+        self.mutator.set_stack_limit(self.stack_soft);
+        // For `(gc-stats)`'s `stack-limit`.
+        self.mutator.set_stack_cap(cap);
+    }
+
+    /// The stack met the limit the poll word held (#907). With the soft
+    /// limit armed, this is the first exhaustion: the reserve opens, so that
+    /// the handler has the last MiB, and the catchable condition is raised.
+    /// With the reserve open already, a handler has run through it: the
+    /// hard cap, which nothing catches.
+    ///
+    /// The reserve opens only where the stack has reached it. A re-entry
+    /// refused under the soft limit ([`Self::check_stack_bytes`]) raises
+    /// the condition with the limit still armed: its handler runs below
+    /// the limit, and meets it like any other code if it goes that deep.
+    #[cold]
+    #[inline(never)]
+    fn stack_exhausted(&mut self) -> VmError {
+        let cap = self.stack_cap as u64;
+        if self.stack_reserve_open {
+            return VmError::StackOverflow { cap };
+        }
+        if self.execution.top_bytes() >= self.stack_soft {
+            self.stack_reserve_open = true;
+            self.mutator.set_stack_limit(self.stack_cap);
+        }
+        VmError::StackExhausted { cap }
+    }
+
+    /// Whether the reserve is open: a handler for `&stack-exhausted` has the
+    /// last MiB under the cap (#907). What a full continuation captured now
+    /// carries (`VmContinuation::stack_reserve_open`).
+    #[inline]
+    pub(super) fn stack_reserve_open(&self) -> bool {
+        self.stack_reserve_open
+    }
+
+    /// Whether the reserve would still be open with the stack cut back to
+    /// `bytes`: it is open now and `bytes` is above the soft limit. What
+    /// [`Self::rearm_stack_limit`] decides for the live stack, for a landing
+    /// an abort describes before it travels there.
+    #[inline]
+    pub(super) fn stack_reserve_open_over(&self, bytes: usize) -> bool {
+        self.stack_reserve_open && bytes > self.stack_soft
+    }
+
+    /// A continuation has arrived and replaced the stack
+    /// (`ExecutionState::restore`): put the limit back to what the
+    /// continuation was captured under (#907), `reserve_was_open`. The
+    /// reserve's state is part of what a continuation restores, as the
+    /// handler stack is. Captured in the extent of a handler for
+    /// `&stack-exhausted`, it finds the reserve open again: a `guard` whose
+    /// clauses all decline re-enters its handler to raise the condition
+    /// again from the raise site (R7RS 7.3), and with the limit armed the
+    /// re-entry's own poll would raise a second, different
+    /// `&stack-exhausted` in place of the first. Captured anywhere else, it
+    /// finds the soft limit armed, whatever the handler it was invoked from
+    /// had.
+    ///
+    /// The state is carried and not read off the stack's height. Taking
+    /// every stack above the soft limit for a handler's rests on an
+    /// argument about where the polls are: that no closure runs above the
+    /// limit, armed, long enough to capture. Where that failed, an arrival
+    /// would open the reserve with no condition raised, and the next
+    /// exhaustion in the form would be the hard cap. The snapshot's own
+    /// word rests on nothing.
+    ///
+    /// The compare is for a snapshot that says "open" over a stack at or
+    /// below the limit, which no capture makes: it keeps the reserve
+    /// closed there, as [`Self::rearm_stack_limit`] would.
+    pub(super) fn stack_limit_after_arrival(&mut self, reserve_was_open: bool) {
+        let open = reserve_was_open && self.execution.top_bytes() > self.stack_soft;
+        if open != self.stack_reserve_open {
+            self.stack_reserve_open = open;
+            self.mutator.set_stack_limit(if open {
+                self.stack_cap
+            } else {
+                self.stack_soft
+            });
+        }
+    }
+
+    /// Arm the soft limit again if the reserve is open and the stack top is
+    /// at or below the soft limit (#907; the owner's ruling on Q6): called
+    /// where a transfer has cut the stack (a continuation's arrival, an
+    /// abort's landing), after a collection, and where a form ends or is
+    /// abandoned. No margin: a `guard` just under the limit that catches
+    /// the condition and recurses again gets a second catchable one, where
+    /// a margin would leave the limit disarmed and lose the form at the
+    /// hard cap (the design CPython withdrew after 3.9.9). The escape's
+    /// after thunks run before it lands, so they still have the reserve.
+    #[inline]
+    pub(super) fn rearm_stack_limit(&mut self) {
+        if self.stack_reserve_open {
+            self.rearm_stack_limit_slow();
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn rearm_stack_limit_slow(&mut self) {
+        if self.execution.top_bytes() <= self.stack_soft {
+            self.stack_reserve_open = false;
+            self.mutator.set_stack_limit(self.stack_soft);
+        }
+    }
+
+    /// Refuse a push that takes no poll (a stub's frame) where it would pass
+    /// the cap, so that nothing grows the stack beyond it: `num_regs` is the
+    /// frame's registers. A closure's entry polls instead, after its push.
+    #[inline]
+    pub(super) fn check_stack_room(&mut self, num_regs: u16) -> Result<(), VmError> {
+        self.check_stack_bytes(
+            super::execution_state::FRAME_HEADER_BYTES
+                + num_regs as usize * std::mem::size_of::<TaggedValue>(),
+        )
+    }
+
+    /// [`Self::check_stack_room`] for `bytes` more of stack, whatever they
+    /// hold: a delimited continuation's re-entry appends its whole region.
+    /// What would not fit is an exhaustion at this call: the catchable
+    /// condition where the soft limit is armed, as when a region larger
+    /// than the reserve is re-entered just under the limit, and the hard
+    /// cap where a handler already has the reserve.
+    #[inline]
+    pub(super) fn check_stack_bytes(&mut self, bytes: usize) -> Result<(), VmError> {
+        if self.execution.top_bytes().saturating_add(bytes) > self.stack_cap {
+            return Err(self.stack_exhausted());
+        }
+        Ok(())
     }
 
     /// The current global environment. The environment/heap retain their own
@@ -861,6 +1030,9 @@ impl VmState {
         let started = std::time::Instant::now();
         self.release_dead_code();
         GcController::finish_collection(&self.gc, &self.heap, started.elapsed());
+        // A collection: one of the three places the soft limit is armed
+        // again (#907).
+        self.rearm_stack_limit();
     }
 
     /// [`Self::after_collection`]'s work: count down the freed closures'
@@ -1675,6 +1847,9 @@ fn run_top_frame(state: &mut VmState) -> Result<TaggedValue, VmError> {
         state.execution.clear();
         state.pending_escape = None;
     }
+    // The form has ended, returned or abandoned: with the stack empty, the
+    // soft limit is armed again whatever the form left open (#907).
+    state.rearm_stack_limit();
     result
 }
 
@@ -1911,10 +2086,11 @@ fn route_error(state: &mut VmState, e: VmError) -> Result<(), VmError> {
     // Route catchable errors through exception handlers
     if is_catchable(&e) && !state.execution.handlers().is_empty() {
         let (kind, message) = classify_error(&e);
+        let irritants = super::control::exception_irritants(&e);
         let exception = state
             .heap
             .borrow_mut()
-            .alloc_exception(kind, message, vec![]);
+            .alloc_exception(kind, message, irritants);
         // The raise pushes `raise_step_stub` and the loop drives
         // it. Register 0 as the destination is a placeholder: this
         // error has no result slot, and a non-continuable raise
@@ -1981,7 +2157,10 @@ fn maybe_collect(state: &mut VmState, driver: &mut GcDriver) -> bool {
 #[inline]
 pub(super) fn poll(state: &mut VmState) -> Result<(), VmError> {
     state.assert_no_gc.assert_none_open();
-    if state.mutator.poll_due() {
+    // The frame-entry check and the poll, in one compare (§12, #907): the
+    // poll word is zero while something is posted, and the stack's limit
+    // otherwise, so the stack's top is at or past it in either case.
+    if state.execution.top_bytes() >= state.mutator.limit() {
         return poll_slow(state);
     }
     Ok(())
@@ -1997,13 +2176,18 @@ fn poll_slow(state: &mut VmState) -> Result<(), VmError> {
     if state.mutator.take_signal() {
         return Err(VmError::Interrupt);
     }
-    let Some(mut driver) = state.driver.take() else {
-        return Ok(());
-    };
-    let collected = maybe_collect(state, &mut driver);
-    state.driver = Some(driver);
-    if collected {
-        state.after_collection();
+    if let Some(mut driver) = state.driver.take() {
+        let collected = maybe_collect(state, &mut driver);
+        state.driver = Some(driver);
+        if collected {
+            state.after_collection();
+        }
+    }
+    // The stack (#907). Asked of the carrier's limit, not of the poll word,
+    // which still reads zero where a post could not be serviced here (a
+    // collection posted beneath a nested loop).
+    if state.execution.top_bytes() >= state.mutator.stack_limit() {
+        return Err(state.stack_exhausted());
     }
     Ok(())
 }
@@ -4144,6 +4328,95 @@ mod tests {
         assert!(!state.is_primitive_shadowed(car));
         define_global(&mut state, &global, Rc::from("car"), TaggedValue::fixnum(1));
         assert!(state.is_primitive_shadowed(car));
+    }
+
+    /// A machine under a 2 MiB cap, with `frames` frames of 60,000 registers
+    /// on its stack: 480,040 bytes each as the cap counts them, so two are
+    /// under the soft limit of 1 MiB and three are in the reserve.
+    fn capped_with_frames(frames: usize) -> VmState {
+        let mut state = VmState::on_a_fresh_heap();
+        state.set_stack_cap(2 << 20);
+        let mut wide = code();
+        wide.num_regs = 60_000;
+        let id = load_in_globals(&mut state, wide, Vec::new()).id();
+        let wide = state.code_object(id).unwrap();
+        for _ in 0..frames {
+            state
+                .execution
+                .push_frame(Rc::clone(&wide), CallFrame::NO_CLOSURE, 0);
+        }
+        state
+    }
+
+    /// The limit a full continuation's arrival sets is the one it was
+    /// captured under, not one read off the stack's height (#907): a
+    /// snapshot that says the limit was armed arrives with it armed, above
+    /// the soft limit too, where taking every stack above the limit for a
+    /// handler's would open the reserve with no condition raised. No
+    /// program in the suites captures one there, since every closure's
+    /// entry is polled; this holds the rule itself.
+    #[test]
+    fn an_arrival_sets_the_limit_its_continuation_was_captured_under() {
+        const CAP: usize = 2 << 20;
+        const SOFT: usize = CAP - STACK_RESERVE;
+        let limits = |state: &VmState| (state.stack_reserve_open(), state.mutator.limit());
+
+        // Above the soft limit.
+        let mut state = capped_with_frames(3);
+        assert!(state.execution.top_bytes() > SOFT);
+        assert_eq!(limits(&state), (false, SOFT), "armed when built");
+        state.stack_limit_after_arrival(false);
+        assert_eq!(limits(&state), (false, SOFT), "captured armed: armed");
+        assert!(
+            matches!(poll(&mut state), Err(VmError::StackExhausted { .. })),
+            "and the arrival's poll raises the condition"
+        );
+        assert_eq!(limits(&state), (true, CAP), "which opens the reserve");
+        state.stack_limit_after_arrival(false);
+        assert_eq!(
+            limits(&state),
+            (false, SOFT),
+            "captured armed, from a handler"
+        );
+        state.stack_limit_after_arrival(true);
+        assert_eq!(limits(&state), (true, CAP), "captured in a handler: open");
+        assert!(poll(&mut state).is_ok(), "the handler has the reserve");
+
+        // At or below it, the reserve is closed whatever the snapshot says.
+        let mut state = capped_with_frames(2);
+        assert!(state.execution.top_bytes() <= SOFT);
+        state.stack_limit_after_arrival(true);
+        assert_eq!(limits(&state), (false, SOFT));
+        assert!(poll(&mut state).is_ok());
+    }
+
+    /// The landing an abort describes before it travels there keeps the
+    /// reserve open only where cutting the live machine would
+    /// (`rearm_stack_limit`): it is open now, and the stack under the
+    /// prompt is above the soft limit.
+    #[test]
+    fn an_aborts_landing_keeps_the_reserve_only_above_the_soft_limit() {
+        const SOFT: usize = (2 << 20) - STACK_RESERVE;
+        let mut state = capped_with_frames(3);
+        assert!(
+            !state.stack_reserve_open_over(SOFT + 8),
+            "armed: no landing opens the reserve"
+        );
+        assert!(matches!(
+            poll(&mut state),
+            Err(VmError::StackExhausted { .. })
+        ));
+        assert!(state.stack_reserve_open());
+        assert!(state.stack_reserve_open_over(SOFT + 8));
+        assert!(!state.stack_reserve_open_over(SOFT), "at the limit: armed");
+        assert!(!state.stack_reserve_open_over(0));
+        // What the path that cuts the machine in place answers for the same
+        // two landings.
+        state.rearm_stack_limit();
+        assert!(state.stack_reserve_open(), "three frames: above the limit");
+        state.execution.pop_frame();
+        state.rearm_stack_limit();
+        assert!(!state.stack_reserve_open(), "two frames: at or below it");
     }
 }
 

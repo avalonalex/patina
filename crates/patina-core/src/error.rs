@@ -37,6 +37,13 @@ pub enum ExceptionKind {
     /// Racket's `exn:break` is no `exn:fail`; `(patina interrupt)`'s
     /// `interrupt?` answers `#t`.
     Interrupt,
+    /// The VM's stack reached its soft limit (#907, `PRD/GC_PRD.md` §11.1):
+    /// raised non-continuably by the frame entry that crossed it. An error
+    /// object, so `error-object?` answers `#t` and ordinary error handling
+    /// sees it, as it sees Python's `RecursionError`;
+    /// `(patina limits)`'s `stack-exhausted?` tells it apart (the owner's
+    /// ruling on Q5, 2026-11-24, on #782).
+    StackExhausted,
     /// User-defined exception kind
     Custom(String),
 }
@@ -177,6 +184,10 @@ pub enum ErrorKind {
     /// A posted interrupt (#701): catchable, but not an error object
     Interrupt,
 
+    /// The VM's stack reached its soft limit (#907): catchable, and an
+    /// error object
+    StackExhausted,
+
     // === Non-catchable errors (stay in Rust) ===
     /// Internal interpreter bug - should never happen
     Internal,
@@ -197,6 +208,7 @@ impl ErrorKind {
             ErrorKind::FileIO => ExceptionKind::FileError,
             ErrorKind::Read => ExceptionKind::ReadError,
             ErrorKind::Interrupt => ExceptionKind::Interrupt,
+            ErrorKind::StackExhausted => ExceptionKind::StackExhausted,
             _ => ExceptionKind::Error,
         }
     }
@@ -215,6 +227,7 @@ impl ErrorKind {
             ErrorKind::Syntax => "syntax error",
             ErrorKind::User => "error",
             ErrorKind::Interrupt => "interrupt",
+            ErrorKind::StackExhausted => "stack exhausted",
             ErrorKind::Internal => "internal error",
             ErrorKind::ControlFlow => "control flow",
         }

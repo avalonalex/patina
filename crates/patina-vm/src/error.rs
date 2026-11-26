@@ -55,8 +55,27 @@ pub enum VmError {
     #[error("divide by zero")]
     DivideByZero,
 
-    #[error("stack overflow")]
-    StackOverflow,
+    /// The stack reached its soft limit, 1 MiB under its cap (#907,
+    /// `PRD/GC_PRD.md` §11.1): raised at the frame entry that crossed it, or
+    /// at a continuation's re-entry that would not fit under the cap, as a
+    /// non-continuable `&stack-exhausted`, an error object, with the last
+    /// MiB left for its handler. Uncaught, it is an uncaught error like any
+    /// other. `cap` is the cap in bytes.
+    #[error(
+        "stack exhausted: the stack reached its limit, 1 MiB under its cap of {cap} bytes \
+         (--stack-max or PATINA_STACK_MAX raises the cap)"
+    )]
+    StackExhausted { cap: u64 },
+
+    /// A handler for `&stack-exhausted` ran past the cap itself: the hard
+    /// cap. Not catchable: the form is abandoned by the path an uncaught
+    /// error takes, with no handler and no after thunk run (the owner's
+    /// ruling on Q6, 2026-11-24, on #782).
+    #[error(
+        "stack exhausted: a handler for the first exhaustion ran out of room in the last MiB \
+         under the cap of {cap} bytes, and the form was abandoned"
+    )]
+    StackOverflow { cap: u64 },
 
     #[error("compile error: {0}")]
     Compile(#[from] CompileError),

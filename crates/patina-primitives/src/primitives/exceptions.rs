@@ -101,6 +101,43 @@ pub(super) fn interrupt_p<'gc>(
     Ok(Value::boolean(is_interrupt))
 }
 
+/// (stack-exhausted? obj) - Returns #t if obj is the condition the VM raises
+/// when its stack reaches the soft limit under its cap (#907): an error
+/// object, so `error-object?` answers #t for it too. `(patina limits)`
+/// exports it. The tree-walker keeps no cap and never raises the condition.
+pub(super) fn stack_exhausted_p<'gc>(
+    cx: &mut Cx<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    let is_stack_exhausted = cx
+        .exception_kind(args[0])
+        .is_some_and(|kind| kind == ExceptionKind::StackExhausted);
+    Ok(Value::boolean(is_stack_exhausted))
+}
+
+/// Register `stack-exhausted?`, after every primitive registered before it
+/// (`register_all`), so that no other primitive's index moves (#608).
+pub(super) fn register_last(registry: &mut super::PrimitiveRegistry) {
+    use crate::registry::PrimitiveFn;
+    use patina_runtime::Arity;
+
+    // stack-exhausted? - predicate, for (patina limits)
+    registry.register(PrimitiveFn::new_cx(
+        "patina.internal.errors",
+        "stack-exhausted?",
+        Arity::Exact(1),
+        "Returns #t if obj is the condition a stack at its limit raises.",
+        stack_exhausted_p,
+    ));
+}
+
 /// (error-object-message error-object) - Get the error message string
 pub(super) fn error_object_message<'gc>(
     cx: &mut Cx<'gc>,

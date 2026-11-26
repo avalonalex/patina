@@ -185,6 +185,9 @@ fn every_vm_state_root_is_traced() {
         instance,
         driver: None,
         assert_no_gc,
+        stack_cap: usize::MAX,
+        stack_soft: patina_core::Mutator::NO_LIMIT,
+        stack_reserve_open: false,
     };
     // A value a frame returned into nothing, which only the cell holds
     // (`CallFrame::NO_RETURN`, #714).
@@ -259,6 +262,7 @@ fn every_continuation_snapshot_field_is_traced() {
         exit_status: None,
         abort_landing: false,
         reentry: Rc::from(Vec::new()),
+        stack_reserve_open: false,
     });
     let [
         register,
@@ -369,6 +373,7 @@ fn every_slot_the_vm_reports_is_where_its_value_lives() {
         exit_status: None,
         abort_landing: false,
         reentry: Rc::from(Vec::new()),
+        stack_reserve_open: false,
     });
     state.alloc_vm_delimited_continuation(VmDelimitedContinuation {
         frames: vec![frame(&code, fixnum(7))],
@@ -752,6 +757,7 @@ fn full_capture_of(code: &Rc<CodeObject>) -> VmContinuation {
         exit_status: None,
         abort_landing: false,
         reentry: Rc::from(Vec::new()),
+        stack_reserve_open: false,
     }
 }
 

@@ -11,7 +11,11 @@
 //! (`heap/interrupt.rs`, #701).
 //!
 //! **Live words.** Today only the event words are live:
-//! - `reg_limit`, the poll word, which a post zeroes;
+//! - `reg_limit`, the poll word, which a post zeroes. While nothing is
+//!   posted it holds the VM's stack limit in bytes (#907), so a frame entry
+//!   makes one compare for both: the stack's top against this word. The
+//!   limit to put back after a post is serviced is the [`Carrier`]'s, since
+//!   every word here is spoken for;
 //! - `pending`, the events the owner posts;
 //! - `event`, the events posted from anywhere else: signal handlers, timers,
 //!   profilers, and later other carriers.
@@ -28,7 +32,9 @@
 //! **Reserved words.** The rest stay zero until the stage that needs each:
 //! - the allocation buffer, `ap` and `alloc_limit`, at 5a;
 //! - the barrier's words, `meta_bias`, `remset_cur` and `remset_soft`, at 7;
-//! - the register stack's `reg_top` at 4d;
+//! - the register stack's `reg_top`, still reserved after 4d.6 (#907 counts
+//!   the stack's bytes from its vectors' lengths) and after 4d.7 (decision
+//!   A4 on #782);
 //! - `ticks` with SRFI 18's deterministic scheduler;
 //! - the words C1 and C10 reserve, so that adding them later breaks no ABI:
 //!   `fenced_ap`, `quiesce_epoch` and `handshake`.
@@ -45,6 +51,7 @@
 //! **Under `threaded`** (#711, `PRD/GC_PRD.md` §18.1), the owner's words are
 //! atomics too, read and written relaxed, at the same offsets: [`words`].
 
+use std::cell::Cell;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -185,10 +192,11 @@ pub struct Mutator {
     /// 0x28. The running green thread's register-stack top (4d).
     reg_top: words::Ptr<u64>,
     /// 0x30. The poll word: zero while an event is posted. A frame entry
-    /// will compare the register-stack top against it (§12), so it is the
-    /// stack's limit otherwise. Until stage 4d gives the VM a reserved stack
-    /// it is [`Mutator::NO_LIMIT`]. Non-zero values are written only by the
-    /// owner, through [`Mutator::set_limit`].
+    /// compares the stack's top in bytes against it (§12, #907), so it is
+    /// the stack's limit otherwise: the VM's soft limit, its cap while a
+    /// handler has the reserve, and [`Mutator::NO_LIMIT`] where a machine
+    /// has no cap, as the tree-walker has none. Non-zero values are written
+    /// only by the owner, through [`Mutator::set_limit`].
     reg_limit: AtomicUsize,
     /// 0x38. Events posted from outside the owner, by `fetch_or`.
     event: AtomicU32,
@@ -258,8 +266,9 @@ impl Mutator {
     /// The offset of `reg_limit`, which a poll reads (`GcAttrs::poll`).
     pub const REG_LIMIT_OFFSET: u16 = std::mem::offset_of!(Mutator, reg_limit) as u16;
 
-    /// `reg_limit` while nothing is posted and the VM has no stack limit:
-    /// the largest value, so that a frame entry's `top > reg_limit` never
+    /// `reg_limit` while nothing is posted and the machine has no stack
+    /// limit: the largest value, so that a frame entry's `top >= reg_limit`
+    /// never
     /// fires on it.
     pub const NO_LIMIT: usize = usize::MAX;
 
@@ -344,23 +353,32 @@ impl Mutator {
         }
     }
 
+    /// The poll word as a frame entry reads it: zero while something is
+    /// posted, and otherwise the stack's limit in bytes, which is
+    /// [`Mutator::NO_LIMIT`] where the machine has none (#907).
+    #[inline]
+    pub fn limit(&self) -> usize {
+        self.reg_limit.load(Ordering::Relaxed)
+    }
+
     /// Take what was posted from elsewhere, at a poll whose word read 0:
     /// whether a [`SIGNAL`](event::SIGNAL) was among it, for the machine to
     /// raise `&interrupt` (#701). A collection posted from elsewhere joins
     /// the owner's posts, for the poll that may run it; an event no stage
-    /// services yet is dropped. The poll word is restored unless something
-    /// is still posted.
+    /// services yet is dropped. The poll word is restored to `limit` unless
+    /// something is still posted ([`Carrier::take_signal`] passes the
+    /// carrier's stack limit).
     ///
     /// Any poll may take a signal, under a `NoGcScope` too, where a
     /// collection stays posted.
     #[cold]
-    pub fn take_signal(&self) -> bool {
+    fn take_signal_restoring(&self, limit: usize) -> bool {
         if self.event.load(Ordering::Relaxed) == 0 {
             return false;
         }
         let remote = self.event.swap(0, Ordering::SeqCst);
         self.pending.set(self.pending.get() | (remote & event::GC));
-        self.set_limit(Self::NO_LIMIT);
+        self.set_limit(limit);
         remote & event::SIGNAL != 0
     }
 
@@ -370,11 +388,12 @@ impl Mutator {
         self.pending.get() & event::GC != 0
     }
 
-    /// A collection ran: take its posts, and restore the poll word unless
-    /// something else is still posted.
-    pub(crate) fn collected(&self) {
+    /// A collection ran: take its posts, and restore the poll word to
+    /// `limit` unless something else is still posted ([`Carrier::collected`]
+    /// passes the carrier's stack limit).
+    fn collected_restoring(&self, limit: usize) {
         self.pending.set(self.pending.get() & !event::GC);
-        self.set_limit(Self::NO_LIMIT);
+        self.set_limit(limit);
     }
 
     /// The open [`NoGcScope`](crate::NoGcScope)s: zero where a collection
@@ -457,11 +476,29 @@ impl Default for Mutator {
 /// the `Mutator` and waits out any post in flight, and only then is the
 /// memory freed. Whichever holder drops the last `Rc`, an
 /// [`InterruptHandle`] that outlives the heap posts nothing.
+///
+/// **The stack limit** (#907). The poll word doubles as the VM's stack
+/// limit (§12): a frame entry compares the stack's top with it, so it reads
+/// zero while something is posted and the limit otherwise. Servicing a post
+/// has to put the limit back, and the `Mutator`'s words are all spoken for,
+/// so the limit to put back is kept here, beside them: the machine sets it
+/// ([`Carrier::set_stack_limit`]), and [`Carrier::take_signal`] and
+/// [`Carrier::collected`] restore the poll word to it. It is
+/// [`Mutator::NO_LIMIT`] until a machine sets one, and for good on the
+/// tree-walker, which has no cap.
 #[repr(C)]
 #[derive(Debug)]
 pub struct Carrier {
     mutator: Mutator,
     interrupt: Arc<InterruptCell>,
+    /// What the poll word holds while nothing is posted: the stack's limit
+    /// in bytes. The owner's alone.
+    stack_limit: Cell<usize>,
+    /// The stack's cap in bytes, for `(gc-stats)`'s `stack-limit`: what the
+    /// machine was built with, and 0 where it has none, as the tree-walker
+    /// has none. The limit above moves under it: the soft limit while it is
+    /// armed, the cap while a handler has the reserve.
+    stack_cap: Cell<usize>,
 }
 
 impl Carrier {
@@ -470,6 +507,8 @@ impl Carrier {
         let carrier = Rc::new(Self {
             mutator: Mutator::new(),
             interrupt: Arc::new(InterruptCell::new()),
+            stack_limit: Cell::new(Mutator::NO_LIMIT),
+            stack_cap: Cell::new(0),
         });
         carrier.interrupt.attach(&carrier.mutator);
         carrier
@@ -479,6 +518,54 @@ impl Carrier {
     /// signal handler, until the carrier is dropped.
     pub fn interrupt_handle(&self) -> InterruptHandle {
         InterruptHandle::new(&self.interrupt)
+    }
+
+    /// Set the stack's limit, in bytes: what the poll word holds from now
+    /// on while nothing is posted. The machine's alone to call: at its
+    /// construction, when it raises `&stack-exhausted` (the limit becomes
+    /// the cap, so that the handler has the reserve), and when it arms the
+    /// soft limit again.
+    pub fn set_stack_limit(&self, limit: usize) {
+        self.stack_limit.set(limit);
+        self.mutator.set_limit(limit);
+    }
+
+    /// The stack's limit as last set, whatever is posted:
+    /// [`Mutator::limit`] reads zero while something is.
+    #[inline]
+    pub fn stack_limit(&self) -> usize {
+        self.stack_limit.get()
+    }
+
+    /// Record the stack's cap, in bytes, for [`Carrier::stack_cap`]. The
+    /// machine calls it once, when it is given its cap.
+    pub fn set_stack_cap(&self, cap: usize) {
+        self.stack_cap.set(cap);
+    }
+
+    /// The stack's cap in bytes, or 0 where the machine keeps none.
+    pub fn stack_cap(&self) -> usize {
+        self.stack_cap.get()
+    }
+
+    /// Take what was posted from elsewhere, at a poll whose word read 0:
+    /// whether a [`SIGNAL`](event::SIGNAL) was among it, for the machine to
+    /// raise `&interrupt` (#701). A collection posted from elsewhere joins
+    /// the owner's posts, for the poll that may run it; an event no stage
+    /// services yet is dropped. The poll word goes back to the stack limit
+    /// unless something is still posted.
+    ///
+    /// Any poll may take a signal, under a `NoGcScope` too, where a
+    /// collection stays posted.
+    #[cold]
+    pub fn take_signal(&self) -> bool {
+        self.mutator.take_signal_restoring(self.stack_limit.get())
+    }
+
+    /// A collection ran: take its posts, and put the poll word back to the
+    /// stack limit unless something else is still posted.
+    pub(crate) fn collected(&self) {
+        self.mutator.collected_restoring(self.stack_limit.get());
     }
 }
 
@@ -507,7 +594,7 @@ mod tests {
         assert!(!m.poll_due() && !m.gc_posted());
         m.post(event::GC_MAJOR);
         assert!(m.poll_due() && m.gc_posted());
-        m.collected();
+        m.collected_restoring(Mutator::NO_LIMIT);
         assert!(!m.poll_due() && !m.gc_posted());
     }
 
@@ -515,7 +602,7 @@ mod tests {
     fn servicing_one_event_leaves_the_poll_due_for_another() {
         let m = Mutator::new();
         m.post(event::GC_MAJOR | event::FINALIZERS_PENDING);
-        m.collected();
+        m.collected_restoring(Mutator::NO_LIMIT);
         assert!(!m.gc_posted());
         assert!(m.poll_due(), "the finalizers are still posted");
     }
@@ -523,19 +610,51 @@ mod tests {
     #[test]
     fn a_signal_is_taken_once_and_a_remote_collection_joins_the_owners() {
         let m = Mutator::new();
-        assert!(!m.take_signal());
+        assert!(!m.take_signal_restoring(Mutator::NO_LIMIT));
         m.post_remote(event::SIGNAL | event::GC_MAJOR);
-        assert!(m.take_signal());
-        assert!(!m.take_signal(), "taken once");
+        assert!(m.take_signal_restoring(Mutator::NO_LIMIT));
+        assert!(!m.take_signal_restoring(Mutator::NO_LIMIT), "taken once");
         assert!(
             m.gc_posted() && m.poll_due(),
             "the collection is still posted"
         );
-        m.collected();
+        m.collected_restoring(Mutator::NO_LIMIT);
         assert!(!m.poll_due());
         m.post_remote(event::DEBUGGER);
-        assert!(!m.take_signal());
+        assert!(!m.take_signal_restoring(Mutator::NO_LIMIT));
         assert!(!m.poll_due(), "an event nothing services is dropped");
+    }
+
+    /// The stack limit (#907): the poll word reads it while nothing is
+    /// posted and zero while something is, and servicing a post puts it
+    /// back, a signal's and a collection's alike.
+    #[test]
+    fn servicing_a_post_puts_the_stack_limit_back() {
+        use super::Carrier;
+        let carrier = Carrier::new();
+        assert_eq!(carrier.limit(), Mutator::NO_LIMIT);
+        assert_eq!(carrier.stack_limit(), Mutator::NO_LIMIT);
+
+        carrier.set_stack_limit(1 << 20);
+        assert_eq!((carrier.limit(), carrier.stack_limit()), (1 << 20, 1 << 20));
+        assert!(!carrier.poll_due());
+
+        carrier.post(event::GC_MAJOR);
+        assert_eq!((carrier.limit(), carrier.stack_limit()), (0, 1 << 20));
+        carrier.collected();
+        assert_eq!(carrier.limit(), 1 << 20);
+
+        carrier.post_remote(event::SIGNAL);
+        assert_eq!(carrier.limit(), 0);
+        assert!(carrier.take_signal());
+        assert_eq!(carrier.limit(), 1 << 20);
+
+        // A limit set while something is posted waits for it.
+        carrier.post(event::GC_MAJOR);
+        carrier.set_stack_limit(2 << 20);
+        assert_eq!((carrier.limit(), carrier.stack_limit()), (0, 2 << 20));
+        carrier.collected();
+        assert_eq!(carrier.limit(), 2 << 20);
     }
 
     #[test]

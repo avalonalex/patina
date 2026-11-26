@@ -87,7 +87,8 @@ pub use legacy::{Pipeline, PipelineError, StandardPipeline};
 pub use patina_core::error::SourceLocation;
 pub use patina_core::heap::ExternalAccounter;
 pub use patina_core::{
-    InterruptHandle, Owned, OwnedEnvironment, SharedHeap, TaggedValue, event, new_shared_heap,
+    HeapConfig, InterruptHandle, Owned, OwnedEnvironment, SharedHeap, TaggedValue, event,
+    new_shared_heap,
 };
 pub use patina_frontend::{
     DesugarError, Desugarer, LexError, Lexer, ParseError, Parser, SourceMap,
@@ -2027,6 +2028,13 @@ impl Interpreter<TreeWalker> {
         Self::new(TreeWalker::with_fs(fs))
     }
 
+    /// A tree-walker interpreter under `config` (#907). The tree-walker
+    /// keeps no stack cap and ignores [`HeapConfig::max_stack`]; see
+    /// [`Interpreter::new_vm_with_config`] for the configuration's use.
+    pub fn new_tree_walker_with_config(config: &HeapConfig) -> Self {
+        Self::new(TreeWalker::with_config(config))
+    }
+
     /// Create an interpreter from an existing evaluator (TreeWalker-specific)
     ///
     /// This is useful for tests that need to configure the evaluator
@@ -2068,7 +2076,16 @@ pub type VmInterpreter = Interpreter<VmBackend>;
 
 #[cfg(feature = "vm")]
 impl Interpreter<VmBackend> {
-    /// Construct the recommended VM interpreter.
+    /// Construct the recommended VM interpreter. Its memory settings are
+    /// the environment's ([`HeapConfig::from_env`]: `PATINA_STACK_MAX`, the
+    /// stack's cap); [`Interpreter::new_vm_with_config`] takes the host's
+    /// own instead.
+    ///
+    /// # Panics
+    ///
+    /// Where `PATINA_STACK_MAX` is set to something that is not a size, as
+    /// [`HeapConfig::from_env`] does: a host that would rather report it
+    /// calls [`HeapConfig::try_from_env`] and passes the configuration.
     pub fn new_vm() -> Self {
         Self::new(VmBackend::new())
     }
@@ -2076,6 +2093,33 @@ impl Interpreter<VmBackend> {
     /// Construct a VM interpreter with a host-supplied filesystem.
     pub fn new_vm_with_fs(fs: std::sync::Arc<dyn patina_core::FileSystem>) -> Self {
         Self::new(VmBackend::with_fs(fs))
+    }
+
+    /// Construct a VM interpreter under `config` (#907): what the host set
+    /// in it holds, whatever the process's environment says, and the rest
+    /// takes its default. [`Interpreter::new_vm`] reads the environment
+    /// instead ([`HeapConfig::from_env`]: `PATINA_STACK_MAX`).
+    ///
+    /// ```
+    /// use patina_interpreter::{HeapConfig, Interpreter};
+    /// // A sandboxed interpreter whose stack may take 64 MiB: a call that
+    /// // takes it to within 1 MiB of that raises `&stack-exhausted`.
+    /// let interp = Interpreter::new_vm_with_config(HeapConfig::new().max_stack(64 << 20));
+    /// # drop(interp);
+    /// ```
+    ///
+    /// The configuration is read here and not kept: build it, pass it, and
+    /// reuse or drop it.
+    pub fn new_vm_with_config(config: &HeapConfig) -> Self {
+        Self::new(VmBackend::with_config(config))
+    }
+
+    /// [`Interpreter::new_vm_with_config`] with a host-supplied filesystem.
+    pub fn new_vm_with_fs_and_config(
+        fs: std::sync::Arc<dyn patina_core::FileSystem>,
+        config: &HeapConfig,
+    ) -> Self {
+        Self::new(VmBackend::with_fs_and_config(fs, config))
     }
 }
 
