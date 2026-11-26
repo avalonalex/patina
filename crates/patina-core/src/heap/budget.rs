@@ -402,7 +402,12 @@ mod tests {
     #[test]
     fn a_set_cap_is_held_to_the_budget() {
         let rows: &[(&str, MemoryLimits, u64, u64)] = &[
-            ("nothing known", limits(None, None, None), u64::MAX, u64::MAX),
+            (
+                "nothing known",
+                limits(None, None, None),
+                u64::MAX,
+                u64::MAX,
+            ),
             (
                 "nothing known, under the floor",
                 limits(None, None, None),
