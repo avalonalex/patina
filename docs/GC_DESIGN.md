@@ -196,8 +196,9 @@ Raw indices escape `TaggedValue` into places a relocator cannot see or would
 have to be taught about:
 
 1. `Heap::symbol_table` maps names to bare `HeapIndex` (`heap/mod.rs:255`).
-2. Syntax provenance in `Heap` and diagnostic snapshots in `SourceMap` key
-   locations by `tv.raw_bits()` (`heap/source.rs`, `source_map.rs`).
+2. Syntax provenance in `Heap` keys the locations of lists, vectors and
+   strings by `tv.raw_bits()` (`heap/source.rs`), until #792 and #793. An
+   identifier holds its location's id since #791 (`heap/documents.rs`).
 3. `eq?`/`eqv?`/hashing compare raw bits (`heap/mod.rs:1474,1507,1593,1719`).
 4. `CodeObject.constants: Vec<TaggedValue>` in every compiled code object.
 5. Environment binding maps reachable only through `Rc` graphs.
@@ -2727,18 +2728,44 @@ identifier. Its `written` flag preserves ordinary symbol semantics in macro
 scope edits, template compilation and ellipsis recognition; an expansion's
 identifiers remain distinct from these annotated source names. Ordinary datum
 parsers and Scheme `read` still intern symbols and allocate no source metadata.
-The heap's `syntax_sources` table records the span of each list, vector,
-string and identifier a program parser reads, and the location and expansion
-chain of each node an expansion stamps. Desugaring uses this table, never an
-interned symbol as an occurrence key. Scope edits preserve
+An identifier holds its location (#791, GC stage 4c.5): the id of an
+entry in the heap's document tables (`heap/documents.rs`), a plain `Heap`
+field read under the heap's borrow beside the scope-set table (decision 18
+on #782). An entry holds the identifier's own span, its expansion chain, and
+for an identifier at the head of a list the list's span, its form span
+(decision 16: both spans are kept), each span in a slot that holds its
+document and source name. Entries are interned by their spans and their
+chain's newest link (decision 14: chains are not interned), so the
+identifiers one expansion gives one location share an entry. A copy takes
+its original's id with no write. The reader gives a head its form span when
+the list closes, in the same entry as its own span; an identifier that heads
+two lists through a datum label has none. An expansion's stamp writes the
+identifiers the expansion made in place, and gives a name the reader wrote,
+which may come from another context, a located copy instead, so that an
+entry made since the last collection is carried only by identifiers made
+since then, as a minor collection that prunes young entries alone requires
+from stage 7; inside a nested macro definition that copy keeps the outer
+chain (`wrap → bad`). A template's literal is held as a re-sourced copy
+whose chain is the template's. The heap's `syntax_sources` table records the
+span of each list, vector and string a program parser reads, and the
+location and expansion chain of each such node an expansion stamps, until
+#792 locates a list by its head and #793 deletes the table. Desugaring uses
+these, never an interned symbol as an occurrence key. Scope edits preserve
 provenance; stripping syntax identifiers into quoted data preserves graph
 sharing and cycles, using the same iterative graph copier. A memo shared by all
 quotes in one form preserves sharing across separate insertions of a macro
 argument; it lives in the form's context (`FormCx`) and is dropped with it, so
 it outlives no form and sees no collection (#704).
 
-This table is **not a root**. Before reclaiming slots, sweep retains only entries
-whose values are marked, then shrinks excess table capacity. This visits annotated
+Neither table is **a root**. Marking an identifier sets its entry's bit in the
+collection's mark bits; the sweep frees every entry whose bit is clear,
+drops a slot left with no entry, and reuses ids lowest first; check builds
+panic on a read of a free entry. The document tables charge their buffers as
+external bytes, and `(gc-stats)`'s `documents` reads their slots. Compaction
+of a streaming document frees no entry (decision 17): only the marks do, so
+an old location keeps its line and column and loses its excerpt. Before
+reclaiming slots, sweep retains only the `syntax_sources` entries whose
+values are marked, then shrinks excess table capacity. This visits annotated
 syntax rather than doing a lookup for every freed datum, and removes entries
 before slots can be reused. There is no drain shared between nested loaders,
 and a later parse cannot see stale provenance. Spans retain an `Arc` to a source

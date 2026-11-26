@@ -2510,7 +2510,8 @@ count of `(gc-stats)` at 4N within max(16, 5%) of N, one clause per key:
 and `SS5:binding-records` since #834, `SS5:code-units`, the VM's loaded
 code units, which the tree-walker reads as 0, since #836's second PR, ahead
 of 4b.9's link tables so that the PRs that build them hold it, and
-`SS5:scope-sets`, the sets the heap's scope-set table holds, since #788.
+`SS5:scope-sets`, the sets the heap's scope-set table holds, since #788,
+and `SS5:documents`, the slots of the heap's document tables, since #791.
 The runner's `PER_OWNER_KEYS` and
 `driver.scm`'s `steady-per-owner-keys` are that list, a test keeps them equal,
 and a key joins both in the PR that adds it to `(gc-stats)`. A row that

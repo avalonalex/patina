@@ -223,17 +223,20 @@ pub struct ScopeId(pub usize);  // fresh from a process-wide counter, never reus
 ### The identifier (hygienic identifier)
 
 A syntax identifier is a heap object. Since #790 it holds its spelling's
-interned symbol, and since #788 its scope set's id in the heap's scope-set
+interned symbol, since #788 its scope set's id in the heap's scope-set
 table, which keeps each distinct set once and frees a set at the first
-collection after no live identifier carries it:
+collection after no live identifier carries it, and since #791 its
+location's id in the heap's document tables. Its payload is `Copy` and
+owns nothing:
 
 ```rust
-HeapObjectData::Identifier {
+HeapObjectData::Identifier(IdentifierData {
     name: TaggedValue,    // its spelling's symbol: interned, but for a relinked identifier's
     scopes: ScopeSetId,   // its set's entry in the heap's ScopeSetTable; 0 is the empty set
+    source: SourceId,     // its location's entry in the heap's DocumentTable; 0 is none
     written: bool,        // a name the reader wrote, with a symbol's binding behavior
     relinked: bool,       // `name` is a relinked spelling's symbol, which no table holds
-}
+})
 ```
 
 No code outside `patina-core` names a `ScopeSetId`: `Heap::get_identifier_data`
@@ -246,7 +249,21 @@ quote stripping take or answer the symbol itself, with no lookup
 and interned nowhere: its name is a symbol object only the identifiers that
 carry it hold, made once per spelling a relinking gives (`Cx::relinked_name`),
 and it stands in quoted data for its spelling interned, as it always did.
-#791 gives the identifier its source id.
+
+**Provenance** (#791). An identifier's location is its own span, its
+expansion chain, and, for a list's head, the list's span, its form span,
+which the reader records when the list closes. Every copy a scope edit, a
+substitution mark or the relinker makes takes its original's source id, so
+it is located where its original is, with no write. A template's
+`Template::Symbol` keeps its location off the heap, and each instantiation
+interns it. An expansion's stamp locates the identifiers the expansion made,
+and gives a name the reader wrote a located copy, with the same name,
+scopes and `written` flag, rather than rewriting an identifier another
+context may have made: so `nope`, written inside `(wrap (define-syntax bad
+…))`, reports `wrap → bad`. A template's literal is held as a copy whose
+chain is the template's, which every use extends. `Heap::source` and
+`Cx::source` build the `SourceLocation` from the entry, and
+`Heap::form_span` reads the form span, which #792 makes a list's location.
 
 A macro object holds a set's id too (#789): `HeapObjectData::Macro.scopes`,
 the union of every scope its `CompiledMacro` holds off the heap

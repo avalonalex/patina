@@ -454,8 +454,9 @@ Two further facts every location-driven client must design around:
 - **Node addresses are unstable.** There is no CpsExpr cache — every top-level form is
   re-transformed (`cps_eval/mod.rs:367`) — so clients key by `(source, line, column)`
   and match against `expr.source`, never by node identity.
-- **Syntax provenance is keyed by raw value bits** (`Heap::source`), and sweep prunes it
-  because the GC reuses slots. Clients store `SourceLocation` values, which are
+- **Syntax provenance is held by identifiers** (an id into the heap's document tables,
+  #791), and for lists, vectors and strings keyed by raw value bits until #793
+  (`Heap::source` reads both), and sweep prunes both because the GC reuses slots. Clients store `SourceLocation` values, which are
   self-contained, never those keys. (`SourceMap` kept a second such table, pruned at
   top-level-form boundaries by `prune_freed_locations`; nothing read it, and it went in
   #643.)
