@@ -26,6 +26,7 @@ use crate::types::code_object::{Arity, CodeObject, RegisterMapCensus, RegisterMa
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, VmContinuation, VmDelimitedContinuation,
 };
+use crate::types::frame_stack::NoRoom;
 use crate::types::instruction::{ControlForm, Instruction, TestOp};
 use crate::types::{CallFrame, CodeObjectId, Depth};
 use patina_core::environment::Environment;
@@ -336,8 +337,9 @@ pub struct VmState {
     assert_no_gc: AssertNoGcCount,
     /// The stack's cap in bytes (#907, `PRD/GC_PRD.md` §11.1): the most
     /// [`ExecutionState::top_bytes`](super::execution_state::ExecutionState::top_bytes)
-    /// may reach. `usize::MAX` until [`VmState::set_stack_cap`] gives the
-    /// machine one, which its backend does when it is built.
+    /// may reach. The machine is built with it, and its register stack's
+    /// reservation is made for it (#908's 7c): the cap is what was asked
+    /// for, or the reservation's size where the system gave less.
     #[trace(skip, reason = "a number of bytes")]
     stack_cap: usize,
     /// The soft limit: the cap less [`STACK_RESERVE`]. The frame entry that
@@ -358,6 +360,17 @@ pub struct VmState {
 /// The room a handler for `&stack-exhausted` runs in: the last MiB under
 /// the cap (`PRD/GC_PRD.md` §11.1).
 pub(super) const STACK_RESERVE: usize = 1 << 20;
+
+/// The least a stack's reservation may be, where the system refuses the
+/// cap: the least cap a configuration gives (`STACK_CAP_FLOOR`).
+const STACK_FLOOR: usize = patina_core::heap::budget::STACK_CAP_FLOOR as usize;
+
+/// A cap in bytes as the machine keeps it. One past what an address space
+/// holds is taken as that: 2^47 bytes, which no stack reaches and which
+/// fits a fixnum.
+fn clamp_stack_cap(cap: u64) -> usize {
+    usize::try_from(cap).unwrap_or(usize::MAX).min(1 << 47)
+}
 
 /// A unit [`VmState::load_unit`] loaded and linked, and the window over it
 /// (#836): from the load until its frame is pushed or a closure names it,
@@ -456,8 +469,26 @@ impl VmState {
     }
 
     /// A machine collecting in `mode`, whatever the environment says: for a
-    /// test that compares collecting with not collecting (#626).
+    /// test that compares collecting with not collecting (#626). Its stack
+    /// has the default cap (`HeapConfig::stack_cap`), whatever the
+    /// environment says of that too.
     pub(crate) fn with_gc_mode(heap: SharedHeap, globals: Rc<Environment>, mode: GcMode) -> Self {
+        let cap = patina_core::HeapConfig::new().stack_cap();
+        Self::with_gc_mode_and_stack_cap(heap, globals, mode, cap)
+    }
+
+    /// [`Self::with_gc_mode`] with a stack cap of `stack_cap` bytes (#907),
+    /// which the machine has from here on: the register stack's
+    /// reservation is made for it (#908's 7c), and the soft limit armed
+    /// [`STACK_RESERVE`] under it. The backend builds its machine with its
+    /// configuration's cap, which is never under 2 MiB.
+    pub(crate) fn with_gc_mode_and_stack_cap(
+        heap: SharedHeap,
+        globals: Rc<Environment>,
+        mode: GcMode,
+        stack_cap: u64,
+    ) -> Self {
+        let stack_cap = clamp_stack_cap(stack_cap);
         let mut registry = PrimitiveRegistry::new();
         patina_primitives::register_all(&mut registry);
         // `globals` lives on `heap`: an environment keeps no handle to its
@@ -474,8 +505,11 @@ impl VmState {
         let assert_no_gc = AssertNoGcCount::of(&heap);
         heap.borrow_mut().enable_gc_freed_closure_tracking();
         let parameter_set = registry.resolve_index("scheme.base/%parameter-set!");
-        Self {
-            execution: super::execution_state::ExecutionState::default(),
+        let mut state = Self {
+            execution: super::execution_state::ExecutionState::with_stack_cap(
+                stack_cap,
+                STACK_FLOOR,
+            ),
             pending_escape: None,
             pending_transfer: false,
             reentry: Vec::new(),
@@ -523,26 +557,68 @@ impl VmState {
             instance,
             driver: None,
             assert_no_gc,
-            stack_cap: usize::MAX,
-            stack_soft: patina_core::Mutator::NO_LIMIT,
+            stack_cap: 0,
+            stack_soft: 0,
             stack_reserve_open: false,
-        }
+        };
+        state.arm_stack_cap(stack_cap);
+        state
     }
 
-    /// Give the machine its stack cap, in bytes (#907): the soft limit is
-    /// armed [`STACK_RESERVE`] under it. The backend calls it once, when it
-    /// builds the machine, with its configuration's cap
-    /// (`HeapConfig::stack_cap`), which is never under 2 MiB. A cap past
-    /// what an address space holds is taken as that.
+    /// Give the machine another stack cap, in bytes, and a reservation for
+    /// it: for a test that wants a small one. The stack holds no frame.
+    #[cfg(test)]
     pub(crate) fn set_stack_cap(&mut self, cap: u64) {
-        // 2^47 bytes: no stack reaches it, and it fits a fixnum.
-        let cap = usize::try_from(cap).unwrap_or(usize::MAX).min(1 << 47);
+        let cap = clamp_stack_cap(cap);
+        self.execution.reserve_stack(cap, STACK_FLOOR);
+        self.arm_stack_cap(cap);
+    }
+
+    /// Hold the stack to `cap` bytes, for which its reservation was made,
+    /// and arm the soft limit [`STACK_RESERVE`] under it (#907). The
+    /// reservation is the cap rounded up to a page, or less where the
+    /// system refused that much address space (`Reservation::new`): the
+    /// cap that holds is the smaller of the two, and `(gc-stats)`'s
+    /// `stack-limit` reads it.
+    fn arm_stack_cap(&mut self, cap: usize) {
+        let cap = cap.min(self.execution.stack_capacity());
         self.stack_cap = cap;
         self.stack_soft = cap.saturating_sub(STACK_RESERVE);
         self.stack_reserve_open = false;
-        self.mutator.set_stack_limit(self.stack_soft);
-        // For `(gc-stats)`'s `stack-limit`.
+        self.set_stack_limit(self.stack_soft);
         self.mutator.set_stack_cap(cap);
+    }
+
+    /// Put `bytes` in the poll word as the stack's limit: as the address a
+    /// stack that deep has its top at (#908's 7c, `PRD/GC_PRD.md` §12),
+    /// which the frame-entry check compares the top's address with.
+    fn set_stack_limit(&self, bytes: usize) {
+        self.mutator
+            .set_stack_limit(self.execution.stack_address(bytes));
+    }
+
+    /// A push the stack's reservation refused (#908's 7c): no frame was
+    /// written. The reservation ends at the cap or within a page past it,
+    /// so this is the stack at its cap, answered as
+    /// [`Self::stack_exhausted`] answers that.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn no_stack_room(&mut self, _refused: NoRoom) -> VmError {
+        self.stack_exhausted()
+    }
+
+    /// Push a stub's frame (`ExecutionState::push_frame`), or answer the
+    /// stack's exhaustion where its reservation has no room for it.
+    pub(super) fn push_frame(
+        &mut self,
+        code: Rc<CodeObject>,
+        closure: TaggedValue,
+        return_reg: u16,
+    ) -> Result<usize, VmError> {
+        match self.execution.push_frame(code, closure, return_reg) {
+            Ok(base) => Ok(base),
+            Err(refused) => Err(self.no_stack_room(refused)),
+        }
     }
 
     /// The stack met the limit the poll word held (#907). With the soft
@@ -564,7 +640,7 @@ impl VmState {
         }
         if self.execution.top_bytes() >= self.stack_soft {
             self.stack_reserve_open = true;
-            self.mutator.set_stack_limit(self.stack_cap);
+            self.set_stack_limit(self.stack_cap);
         }
         VmError::StackExhausted { cap }
     }
@@ -614,7 +690,7 @@ impl VmState {
         let open = reserve_was_open && self.execution.top_bytes() > self.stack_soft;
         if open != self.stack_reserve_open {
             self.stack_reserve_open = open;
-            self.mutator.set_stack_limit(if open {
+            self.set_stack_limit(if open {
                 self.stack_cap
             } else {
                 self.stack_soft
@@ -643,7 +719,7 @@ impl VmState {
     fn rearm_stack_limit_slow(&mut self) {
         if self.execution.top_bytes() <= self.stack_soft {
             self.stack_reserve_open = false;
-            self.mutator.set_stack_limit(self.stack_soft);
+            self.set_stack_limit(self.stack_soft);
         }
     }
 
@@ -667,6 +743,18 @@ impl VmState {
     #[inline]
     pub(super) fn check_stack_bytes(&mut self, bytes: usize) -> Result<(), VmError> {
         if self.execution.top_bytes().saturating_add(bytes) > self.stack_cap {
+            return Err(self.stack_exhausted());
+        }
+        Ok(())
+    }
+
+    /// Refuse a transfer that would leave the stack holding `bytes`, where
+    /// that is past the cap: an abort's landing, which is the stack under
+    /// its prompt with the handler's stub on it (`abort_to_prompt`). The
+    /// exhaustion is this call's, as [`Self::check_stack_bytes`]'s is.
+    #[inline]
+    pub(super) fn check_stack_landing(&mut self, bytes: usize) -> Result<(), VmError> {
+        if bytes > self.stack_cap {
             return Err(self.stack_exhausted());
         }
         Ok(())
@@ -1810,7 +1898,7 @@ fn push_top_frame(state: &mut VmState, unit: LoadedUnit) -> Result<(), VmError> 
     let (code_id, window) = unit.into_parts();
     let code = state.code_object(code_id)?;
     poll_in_window(state, switches::poll_before_frame_push());
-    state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0);
+    state.push_frame(code, CallFrame::NO_CLOSURE, 0)?;
     drop(window);
     Ok(())
 }
@@ -2190,9 +2278,10 @@ fn maybe_collect(state: &mut VmState, driver: &mut GcDriver) -> bool {
 pub(super) fn poll(state: &mut VmState) -> Result<(), VmError> {
     state.assert_no_gc.assert_none_open();
     // The frame-entry check and the poll, in one compare (§12, #907): the
-    // poll word is zero while something is posted, and the stack's limit
-    // otherwise, so the stack's top is at or past it in either case.
-    if state.execution.top_bytes() >= state.mutator.limit() {
+    // poll word is zero while something is posted, and the address of the
+    // stack's limit otherwise, so the stack's top is at or past it in
+    // either case.
+    if state.execution.top_address() >= state.mutator.limit() {
         return poll_slow(state);
     }
     Ok(())
@@ -2218,7 +2307,7 @@ fn poll_slow(state: &mut VmState) -> Result<(), VmError> {
     // The stack (#907). Asked of the carrier's limit, not of the poll word,
     // which still reads zero where a post could not be serviced here (a
     // collection posted beneath a nested loop).
-    if state.execution.top_bytes() >= state.mutator.stack_limit() {
+    if state.execution.top_address() >= state.mutator.stack_limit() {
         return Err(state.stack_exhausted());
     }
     Ok(())
@@ -3722,7 +3811,10 @@ pub(crate) fn read_an_unwritten_register(after: crate::test_support::Reuse) -> T
                 vec![closure],
             ));
             let a = state.code_object(a).expect("the control's code is loaded");
-            state.execution.push_frame(a, CallFrame::NO_CLOSURE, 0);
+            state
+                .execution
+                .push_frame(a, CallFrame::NO_CLOSURE, 0)
+                .unwrap();
         }
         Reuse::SelfTailCall => {
             // C(self, first): the first activation writes r2 and calls
@@ -3750,7 +3842,7 @@ pub(crate) fn read_an_unwritten_register(after: crate::test_support::Reuse) -> T
             let closure = state.heap.borrow_mut().alloc_vm_closure(c.0, Vec::new());
             state.note_closure_made(c);
             let c = state.code_object(c).expect("the control's code is loaded");
-            let base = state.execution.push_frame(c, closure, 0);
+            let base = state.execution.push_frame(c, closure, 0).unwrap();
             state.execution.init_arg(base, 0, closure);
             state.execution.init_arg(base, 1, TaggedValue::TRUE);
         }
@@ -3778,7 +3870,10 @@ pub(crate) fn read_an_unwritten_register(after: crate::test_support::Reuse) -> T
             let next = state
                 .code_object(next)
                 .expect("the control's code is loaded");
-            let base = state.execution.push_frame(first, CallFrame::NO_CLOSURE, 0);
+            let base = state
+                .execution
+                .push_frame(first, CallFrame::NO_CLOSURE, 0)
+                .unwrap();
             state.execution.set_top(base, 0, TaggedValue::fixnum(1));
             state.execution.set_top(base, 1, stale);
             state.execution.restart_stub(next, 1);
@@ -3811,10 +3906,10 @@ mod tests {
         let mut code = code();
         code.num_regs = 4;
         let id = load_in_globals(&mut state, code, Vec::new()).id();
-        let base =
-            state
-                .execution
-                .push_frame(state.code_object(id).unwrap(), CallFrame::NO_CLOSURE, 0);
+        let base = state
+            .execution
+            .push_frame(state.code_object(id).unwrap(), CallFrame::NO_CLOSURE, 0)
+            .unwrap();
         // A header of five words, then the window (#908).
         assert_eq!(base, 5);
         assert_eq!(state.execution.registers().len(), 9);
@@ -4375,7 +4470,8 @@ mod tests {
         for _ in 0..frames {
             state
                 .execution
-                .push_frame(Rc::clone(&wide), CallFrame::NO_CLOSURE, 0);
+                .push_frame(Rc::clone(&wide), CallFrame::NO_CLOSURE, 0)
+                .unwrap();
         }
         state
     }
@@ -4391,7 +4487,12 @@ mod tests {
     fn an_arrival_sets_the_limit_its_continuation_was_captured_under() {
         const CAP: usize = 2 << 20;
         const SOFT: usize = CAP - STACK_RESERVE;
-        let limits = |state: &VmState| (state.stack_reserve_open(), state.mutator.limit());
+        // The poll word holds a limit as an address (#908's 7c): read here
+        // as the bytes from the stack's base.
+        let limits = |state: &VmState| {
+            let bytes = state.mutator.limit() - state.execution.stack_address(0);
+            (state.stack_reserve_open(), bytes)
+        };
 
         // Above the soft limit.
         let mut state = capped_with_frames(3);
@@ -4449,6 +4550,112 @@ mod tests {
         state.execution.pop_frame();
         state.rearm_stack_limit();
         assert!(!state.stack_reserve_open(), "two frames: at or below it");
+    }
+
+    /// The cap a machine holds its stack to is the smaller of the one asked
+    /// for and what its reservation holds (#908's 7c): where the system
+    /// reserved less address space than the cap, the reservation's end is
+    /// the cap, the soft limit is a reserve under that, and `(gc-stats)`'s
+    /// `stack-limit` reads it. A cap the reservation holds is the cap.
+    #[test]
+    fn a_cap_past_the_reservation_is_held_to_the_reservation() {
+        let mut state = VmState::on_a_fresh_heap();
+        state.set_stack_cap(2 << 20);
+        let held = state.execution.stack_capacity();
+        assert!(((2 << 20)..(4 << 20)).contains(&held), "2 MiB, to a page");
+        let limit = |state: &VmState| state.mutator.limit() - state.execution.stack_address(0);
+
+        state.arm_stack_cap(8 << 20);
+        assert_eq!(state.stack_cap, held, "the reservation holds less");
+        assert_eq!(
+            state.mutator.stack_cap(),
+            held,
+            "and the statistic reads it"
+        );
+        assert_eq!(limit(&state), held - STACK_RESERVE);
+
+        state.arm_stack_cap(held - 4096);
+        assert_eq!(state.stack_cap, held - 4096, "a cap it holds is the cap");
+        assert_eq!(state.mutator.stack_cap(), held - 4096);
+        assert_eq!(limit(&state), held - 4096 - STACK_RESERVE);
+    }
+
+    /// A machine under a 2 MiB cap whose stack ends `under` bytes below
+    /// it, a prompt recorded there, and one frame of `above` registers
+    /// over the prompt.
+    fn capped_with_a_prompt(under: usize, above: u16) -> (VmState, usize) {
+        const CAP: usize = 2 << 20;
+        let mut state = capped_with_frames(4);
+        let push = |state: &mut VmState, num_regs: u16| {
+            let mut frame = code();
+            frame.num_regs = num_regs;
+            let id = load_in_globals(state, frame, Vec::new()).id();
+            let frame = state.code_object(id).unwrap();
+            state
+                .execution
+                .push_frame(frame, CallFrame::NO_CLOSURE, 0)
+                .unwrap();
+        };
+        // A frame that takes the stack to `under` bytes below the cap.
+        let filler = CAP - under - state.execution.top_bytes() - 40;
+        assert_eq!(filler % 8, 0);
+        push(&mut state, (filler / 8) as u16);
+        assert_eq!(state.execution.top_bytes(), CAP - under);
+        let prompt = state
+            .execution
+            .push_prompt(TaggedValue::TRUE, TaggedValue::FALSE, 0);
+        push(&mut state, above);
+        (state, prompt)
+    }
+
+    /// An abort lands on the stack under its prompt with the handler's
+    /// stub on it, 72 bytes, which can be more than the frames it drops.
+    /// A landing that would end past the cap is refused where the abort is
+    /// made, as the stack's exhaustion, with nothing cut (#908's 7c): the
+    /// catchable condition while the soft limit is armed, and the hard cap
+    /// once a handler has the reserve. One that ends at the cap is made.
+    #[test]
+    fn an_abort_whose_landing_would_pass_the_cap_is_refused_before_anything_is_cut() {
+        use super::super::control::abort_to_prompt;
+        const CAP: usize = 2 << 20;
+
+        // 48 bytes under the cap, and a frame of 48 over the prompt: the
+        // stack is at the cap, and the stub is 24 bytes more than it drops.
+        let (mut state, prompt) = capped_with_a_prompt(48, 1);
+        assert_eq!(state.execution.top_bytes(), CAP);
+        let held = |state: &VmState| (state.execution.top_bytes(), state.execution.prompts().len());
+        let before = held(&state);
+        let refused = abort_to_prompt(&mut state, prompt, TaggedValue::NULL, 0);
+        assert!(
+            matches!(refused, VmError::StackExhausted { .. }),
+            "{refused:?}"
+        );
+        assert_eq!(held(&state), before, "nothing was cut");
+        assert!(state.stack_reserve_open(), "the first exhaustion");
+        let refused = abort_to_prompt(&mut state, prompt, TaggedValue::NULL, 0);
+        assert!(
+            matches!(refused, VmError::StackOverflow { .. }),
+            "{refused:?}"
+        );
+        assert_eq!(held(&state), before);
+
+        // 72 bytes under the cap: the landing ends at the cap, and the
+        // abort is made.
+        let (mut state, prompt) = capped_with_a_prompt(72, 4);
+        assert_eq!(state.execution.top_bytes(), CAP);
+        let parked = abort_to_prompt(&mut state, prompt, TaggedValue::NULL, 0);
+        assert!(
+            !matches!(
+                parked,
+                VmError::StackExhausted { .. } | VmError::StackOverflow { .. }
+            ),
+            "{parked:?}"
+        );
+        assert_eq!(
+            held(&state),
+            (CAP, 0),
+            "cut to the prompt, with the stub on it"
+        );
     }
 }
 

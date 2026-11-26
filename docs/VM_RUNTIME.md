@@ -24,19 +24,23 @@ No value conversion is needed.
 ### 2.1 Frames and the register stack
 
 ```rust
-pub struct FrameStack {
-    words:    Vec<Cell<TaggedValue>>,  // headers and registers, bottom first
+pub struct FrameStack<B = Vec<Cell<TaggedValue>>> {
+    words:    B,                       // headers and registers, bottom first
     codes:    Vec<FrameCode>,          // the frames' code: an Rc<CodeObject> a run
     runs:     usize,                   // how many of `codes` are the frames' runs
     base:     usize,                   // the top frame's first register, in words
     pc:       usize,                   // the top frame's next instruction
     top_code: usize,                   // the address of the top frame's code
 }
+type LiveStack = FrameStack<Reserved>; // the machine's own: a reservation
 ```
 
 The frames and their registers are one buffer of tagged words
-(`types/frame_stack.rs`; GC stage 4d.7b, #908). A frame is a header of five
-words followed by its window, in `PRD/GC_PRD.md` §11.1's layout:
+(`types/frame_stack.rs`; GC stage 4d.7b, #908). A captured copy keeps its
+words in a vector of its own size. The machine's stack keeps them in a
+reservation of address space (4d.7c; "The live stack is a reservation"
+below). A frame is a header of five words followed by its window, in
+`PRD/GC_PRD.md` §11.1's layout:
 
 ```text
 fp+0   ret      0 in an interpreter's frame
@@ -89,6 +93,31 @@ fp+40  r0 … rₙ₋₁
   and its return about 20 instructions within one procedure and 30
   between two, and left a row of the benchmark set in fifteen over 1% in
   instructions against `main`.
+- **The live stack is a reservation** (4d.7c, #908). The machine's own
+  stack, `LiveStack`, keeps its words in a range of address space the size
+  of its cap, rounded up to a page (`Reserved`, over `patina-core`'s
+  `heap/reservation.rs`; `docs/GC_DESIGN.md` §6.4), mapped when the machine
+  is built.
+  - **It never moves.** A frame's address holds from its push to its pop,
+    which JIT code and a frame pointer held in a register need, and the
+    stack's top is an address the frame-entry check compares with the poll
+    word (§3.2).
+  - **It takes pages as they are written.** A stack costs what it has
+    reached, not its cap. A page once written stays the process's until
+    #909 returns it.
+  - **It does not grow, and has no guard page.** Every write that extends
+    the stack asks the buffer for room first and is refused at the
+    reservation's end with nothing written: a push, a tail call whose
+    window must grow, a delimited re-entry's append and a continuation's
+    arrival (`NoRoom`). The machine answers a refusal as it answers a stack
+    at its cap (`VmState::no_stack_room`): the hard cap where a handler has
+    the reserve. The machine's own checks against the cap refuse first
+    wherever they are asked (§3.2), so a refusal by the buffer is a closure
+    entry or a tail call in the last frame's worth of the reserve, or a
+    top-level form's frame, which `eval` and `load` push under a stack of
+    any depth.
+  - **A capture copies out of it and an arrival back into it.** The copies
+    are vectors, as they were, until 4e makes a continuation a heap object.
 - **The top frame's pc is a field, not a header word.** The dispatch loop
   reads and advances a pc once an instruction, so the top frame's lives in
   `pc`, beside `base` and `top_code`: three loads from fixed offsets. A
@@ -310,13 +339,15 @@ pub struct VmDelimitedContinuation {
 }
 ```
 
-**A capture copies words** (#908). A full capture clones the register stack:
-its words, as one run of stores, and the side vector's runs of code. An
-arrival copies them back into the buffer the live stack already has, unless
-that buffer is more than four times what the arrival needs: then the buffer
-goes and the arrival takes one of its own size, so the stack a deep
-recursion grew is freed at the escape out of it, as it was while an arrival
-replaced the vectors. A delimited one copies
+**A capture copies words** (#908). A full capture copies the register stack
+out of its reservation: its words, as one run of stores, into a vector of
+their size, and the side vector's runs of code. An arrival copies them back
+into the reservation, at its base. The pages the stack had written above
+the arrival stay the process's until #909 returns them, as they do after a
+return. While an arrival replaced vectors, and then one buffer, an escape
+out of a deep recursion gave what the recursion grew back to the allocator,
+which did not reliably take it out of the process's footprint (measured
+2026-11-25, on #924). A delimited one copies
 the words from the prompt's depth to the top, as a stack of its own, whose
 outermost frame is written as a bottom frame. Invoking it appends those
 words to the live stack and writes one of them, that frame's distance to the
@@ -409,15 +440,23 @@ outermost loop returns, and the form, not the next one, answers it (#700).
 
 **The stack's cap** (#907; `PRD/GC_PRD.md` §11.1; the owner's rulings of
 2026-11-24 on #782). The poll is the frame-entry check as well. The poll
-word holds the stack's limit in bytes while nothing is posted, and `poll`
-compares the stack's top with it (`ExecutionState::top_bytes`: 40 bytes a
-frame and 8 a register, what 4d.7's interleaved stack will hold, so the depth
-at which the cap is met does not move when that lands).
+word holds the stack's limit while nothing is posted, and `poll` compares
+the stack's top with it. Both are addresses since 4d.7c (#908), where the
+stack is a reservation that never moves: the top is
+`ExecutionState::top_address`, and the limit the address a stack that deep
+has its top at (`ExecutionState::stack_address`). The cap and the soft limit
+are byte counts in the machine, 40 bytes a frame and 8 a register
+(`ExecutionState::top_bytes`), as they were before the stack was one
+buffer, so the depth at which the cap is met has not moved.
 
 - **The cap** is the backend's configuration's (`HeapConfig::max_stack`,
   `--stack-max`, `PATINA_STACK_MAX`) or the machine's default, min(8 GiB, a
-  quarter of B, a quarter of `RLIMIT_AS`), never under 2 MiB
-  (`VmState::set_stack_cap`). `(gc-stats)`'s `stack-limit` reads it.
+  quarter of B, a quarter of `RLIMIT_AS`), never under 2 MiB. The machine
+  is built with it (`VmState::with_gc_mode_and_stack_cap`), and its stack's
+  reservation is made for it there. Where the system gives less address
+  space than the cap asks (`Reservation::new` tries half, and half again,
+  down to 2 MiB), the cap is what it gave. `(gc-stats)`'s `stack-limit`
+  reads the cap that holds.
 - **The soft limit** is the cap less 1 MiB (`STACK_RESERVE`). The frame entry
   that takes the stack to it gets `VmError::StackExhausted` from its poll,
   which the loop routes as it routes an interrupt: raised non-continuably in
@@ -464,12 +503,20 @@ at which the cap is met does not move when that lands).
   exhaustion at that call: the catchable condition where the soft limit is
   armed, raised with the limit still armed if the stack is under it, and
   the hard cap where the reserve is open.
+- **An abort's landing is held to the cap where the abort is made**
+  (`check_stack_landing`, 4d.7c). It lands on the stack under its prompt
+  with the handler's stub on it, 72 bytes, which can be more than the
+  frames it drops. A landing that would end past the cap is refused before
+  anything is captured, cut or left, as an exhaustion at the abort's call,
+  so its two paths agree and each has room for what it builds.
 - **Inside a primitive's callback** (a nested loop) nothing differs: the
   handler stack is the machine's, so the condition raised there reaches a
   handler installed outside the primitive's call, and the hard cap met
   there is no more catchable than anywhere else. A closure's entry polls
-  after its push instead, so until 4d.7 puts the stack in a reservation a
-  frame can sit one frame past the cap when the hard cap is raised.
+  after its push instead. The push is refused where the frame would end
+  past the stack's reservation, which is the cap rounded up to a page, so a
+  frame ends past the cap only inside that last page, and its poll raises
+  the hard cap there.
 - **The tree-walker** keeps no cap (decision A9 on #782).
 
 `crates/patina-tests/tests/stack_cap_matrix.rs` holds each of these to a

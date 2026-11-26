@@ -12,7 +12,7 @@ use crate::types::code_object::{Arity, CodeObject};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use crate::types::frame_stack::Frames;
+use crate::types::frame_stack::{Buffer, Frames, LiveStack, NoRoom};
 use crate::types::{CallFrame, Depth, FrameStack};
 use patina_core::heap::Heap;
 use patina_core::{CheckCell, GC_CHECK, SlotVisitor, TaggedValue, Trace};
@@ -28,9 +28,11 @@ use std::rc::Rc;
 /// `a_frame_s_live_registers_are_kept_and_its_dead_ones_cleared` the walk
 /// under a map, and `the_running_code_keeps_its_units_link_table` the
 /// running code.
-#[derive(Default, Trace)]
+#[derive(Trace)]
 pub(super) struct ExecutionState {
-    /// The frames and their registers, interleaved (#908). Its words are
+    /// The frames and their registers, interleaved (#908), in a
+    /// reservation of address space the size of the stack's cap, which
+    /// never moves (7c). Its words are
     /// slots, so that the root provider reports each register where it
     /// lives, and clears one, through `&self` (#682). Not the derived
     /// trace's: a collection walks the frames, reports each frame's code
@@ -42,7 +44,7 @@ pub(super) struct ExecutionState {
         skip,
         reason = "reported by the walk of the frames, which `VmState`'s `trace_roots` runs after the derived trace: each frame's code, closure and live registers, the rest cleared (`gc_roots::trace_frames`, #906)"
     )]
-    stack: FrameStack,
+    stack: LiveStack,
     prompt_stack: Vec<PromptFrame>,
     dynamic_winds: Vec<DynamicWindRecord>,
     exception_handlers: Vec<ExceptionHandler>,
@@ -175,9 +177,54 @@ impl Trace for RunningCode {
 }
 
 impl ExecutionState {
+    /// A state with nothing on it, whose register stack may reach `cap`
+    /// bytes: its reservation is made here, of that size or of as much of
+    /// it as the system gives, down to `floor` bytes
+    /// ([`Self::stack_capacity`] says which).
+    pub(super) fn with_stack_cap(cap: usize, floor: usize) -> Self {
+        ExecutionState {
+            stack: LiveStack::reserved(cap, floor),
+            prompt_stack: Vec::new(),
+            dynamic_winds: Vec::new(),
+            exception_handlers: Vec::new(),
+            running: RunningCode::default(),
+            awaiting: Awaiting::default(),
+            answer: Cell::new(None),
+        }
+    }
+
+    /// Give the register stack a reservation for a cap of `cap` bytes in
+    /// place of the one it has, for a test that wants a small cap. The
+    /// stack holds no frame.
+    #[cfg(test)]
+    pub(super) fn reserve_stack(&mut self, cap: usize, floor: usize) {
+        assert!(
+            self.stack.is_empty(),
+            "a stack with frames keeps its reservation"
+        );
+        self.stack = LiveStack::reserved(cap, floor);
+    }
+
+    /// The bytes the register stack's reservation holds: the cap it was
+    /// asked for rounded up to a page, or less where the system refused
+    /// that.
+    pub(super) fn stack_capacity(&self) -> usize {
+        self.stack.capacity_bytes()
+    }
+
+    /// The address a stack `bytes` deep has its top at: what the poll word
+    /// holds for a limit of `bytes` (`PRD/GC_PRD.md` §12). The stack's base
+    /// never moves, so the address holds for the machine's life. A limit
+    /// past every address is the largest one.
+    #[inline]
+    pub(super) fn stack_address(&self, bytes: usize) -> usize {
+        self.stack.base_address().saturating_add(bytes)
+    }
+
     /// Build a state from its components, for tests that fill each with a
     /// value nothing else holds, with no running code. A struct literal, so
-    /// a new component fails to compile here too.
+    /// a new component fails to compile here too. The stack is copied into
+    /// a reservation of its own.
     #[cfg(test)]
     pub(super) fn from_parts(
         stack: FrameStack,
@@ -185,8 +232,10 @@ impl ExecutionState {
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
     ) -> Self {
+        let mut live = LiveStack::reserved(64 << 20, 2 << 20);
+        live.copy_from(&stack).expect("a test's stack fits");
         ExecutionState {
-            stack,
+            stack: live,
             prompt_stack,
             dynamic_winds,
             exception_handlers,
@@ -219,7 +268,7 @@ impl ExecutionState {
     /// The register stack itself, for the tests that read a window or a
     /// header's word where it lives.
     #[cfg(test)]
-    pub(super) fn stack(&self) -> &FrameStack {
+    pub(super) fn stack(&self) -> &LiveStack {
         &self.stack
     }
     /// The frames, top first, each as a view of its header.
@@ -286,11 +335,18 @@ impl ExecutionState {
     }
 
     /// What the stack holds in bytes (#907, `PRD/GC_PRD.md` §11.1): 40 a
-    /// frame and 8 a register, which is its buffer's length. The
-    /// frame-entry check compares it with the poll word.
+    /// frame and 8 a register, which is its buffer's length. The cap and
+    /// the soft limit are counted in it.
     #[inline(always)]
     pub(super) fn top_bytes(&self) -> usize {
         self.stack.bytes()
+    }
+
+    /// The address of the stack's top, which the frame-entry check
+    /// compares with the poll word (`PRD/GC_PRD.md` §12; #908's 7c).
+    #[inline(always)]
+    pub(super) fn top_address(&self) -> usize {
+        self.stack.top_address()
     }
 
     /// The depth the top frame was pushed at: where its header starts, or
@@ -513,13 +569,15 @@ impl ExecutionState {
 
     /// Enter one loaded code object with its matching window, every register
     /// of it [`FILL`]ed (#714). Caller fills operands before the next safe
-    /// point. Dynamic extents are unchanged.
+    /// point. Dynamic extents are unchanged. Refused, with nothing written,
+    /// where the frame would end past the stack's reservation
+    /// (`VmState::push_frame` answers that as the cap).
     pub(super) fn push_frame(
         &mut self,
         code: Rc<CodeObject>,
         closure: TaggedValue,
         return_reg: u16,
-    ) -> usize {
+    ) -> Result<usize, NoRoom> {
         self.push_closure_frame(&code, closure, return_reg)
     }
 
@@ -535,7 +593,7 @@ impl ExecutionState {
         code: &Rc<CodeObject>,
         closure: TaggedValue,
         return_reg: u16,
-    ) -> usize {
+    ) -> Result<usize, NoRoom> {
         self.debug_assert_file_ends_at_top();
         self.stack
             .push(code, closure, return_reg, code.num_regs, fill_value())
@@ -567,15 +625,22 @@ impl ExecutionState {
     /// writes the arguments (`store_args_in_window`), into the registers the
     /// fill leaves alone. A window larger than the new code needs keeps its
     /// spare registers, which the new code cannot name and the walk of the
-    /// frames clears at every collection and capture.
-    pub(super) fn tail_replace(&mut self, code: &Rc<CodeObject>, closure: TaggedValue) -> usize {
+    /// frames clears at every collection and capture. Refused, with the
+    /// frame as it was, where a window that must grow would end past the
+    /// stack's reservation.
+    #[inline(always)]
+    pub(super) fn tail_replace(
+        &mut self,
+        code: &Rc<CodeObject>,
+        closure: TaggedValue,
+    ) -> Result<usize, NoRoom> {
         if GC_CHECK && self.top_awaits() {
             wrote_an_awaiting_frame("tail_replace", 0);
         }
         let base = self.top_base();
-        self.stack.replace_top(code, closure, fill_value());
+        self.stack.replace_top(code, closure, fill_value())?;
         fill(&self.stack.words()[base + argument_slots(code.arity)..base + code.num_regs as usize]);
-        base
+        Ok(base)
     }
 
     /// Give the top window to another activation of its own code, a self
@@ -723,7 +788,7 @@ impl ExecutionState {
         let (frames, registers) = self.stack.census_shape();
         patina_core::census::capture_full(frames, registers);
         VmContinuation {
-            stack: self.stack.clone(),
+            stack: self.stack.copy(),
             dynamic_winds: self.dynamic_winds.clone(),
             prompt_stack: self.prompt_stack.clone(),
             exception_handlers: self.exception_handlers.clone(),
@@ -737,16 +802,21 @@ impl ExecutionState {
 
     /// Full arrival replaces every component. The control layer decides
     /// which Rust re-entry boundaries it leaves and when to deliver the value.
-    pub(super) fn restore(&mut self, cc: &VmContinuation) {
+    /// Refused, with every component as it was, where the snapshot's stack
+    /// does not fit the reservation: none is, since a snapshot is a copy of
+    /// this stack or of part of it with one stub's frame more, which the
+    /// machine's cap admitted.
+    pub(super) fn restore(&mut self, cc: &VmContinuation) -> Result<(), NoRoom> {
         let (frames, registers) = cc.stack.census_shape();
         patina_core::census::restore_full(frames, registers);
-        // Into the buffers the live stack has: an arrival frees none and
-        // takes none, and leaves room for the next push.
-        self.stack.clone_from(&cc.stack);
+        // Into the reservation, at its base: an arrival moves no frame
+        // that stays, and the stack's address does not change.
+        self.stack.copy_from(&cc.stack)?;
         self.dynamic_winds = cc.dynamic_winds.clone();
         self.prompt_stack = cc.prompt_stack.clone();
         self.exception_handlers = cc.exception_handlers.clone();
         self.mark_awaiting();
+        Ok(())
     }
 
     /// Abort fast path, only when there is no wind thunk left to run. The
@@ -775,9 +845,9 @@ impl ExecutionState {
         handler: TaggedValue,
         val: TaggedValue,
         cont: TaggedValue,
-    ) {
+    ) -> Result<(), NoRoom> {
         self.debug_assert_file_ends_at_top();
-        push_abort_stub(&mut self.stack, code, return_reg, handler, val, cont);
+        push_abort_stub(&mut self.stack, code, return_reg, handler, val, cont)
     }
 
     /// Abandon an uncaught form: drop every component without running winds.
@@ -801,12 +871,15 @@ impl ExecutionState {
 
     /// Re-entry thunks have already pushed the captured winds. Relocate and
     /// append the other four components together, then deliver into the hole.
+    /// The inner refusal is the stack's, with no component changed: the
+    /// captured frames would end past its reservation, which the caller's
+    /// check of the cap rules out (`finish_delimited_invoke`).
     pub(super) fn append_delimited(
         &mut self,
         dc: &VmDelimitedContinuation,
         value: TaggedValue,
         dst: u16,
-    ) -> Result<(), VmError> {
+    ) -> Result<Result<(), NoRoom>, VmError> {
         // Checked, because arbitrary user code has run between the invoke and
         // here — that is what the stub frames are for — and this assumes every
         // captured record is still on top. Unchecked it would wrap in release and
@@ -824,7 +897,9 @@ impl ExecutionState {
         // are: each records a distance to its caller, so only the outermost
         // one's is written, for the frame it now sits above (#908).
         let outermost = self.depth();
-        self.stack.append(&dc.stack);
+        if let Err(refused) = self.stack.append(&dc.stack) {
+            return Ok(Err(refused));
+        }
 
         // The dynamic environment the captured frames ran in comes back with them:
         // the prompts they established and the handlers they installed. Every
@@ -885,7 +960,7 @@ impl ExecutionState {
         // `deliver_reg` is Some only for a non-empty capture.
         self.mark_awaiting();
         self.return_into(ReturnFrame::Top, deliver_reg, value);
-        Ok(())
+        Ok(Ok(()))
     }
 }
 
@@ -994,23 +1069,24 @@ fn returned_into_a_running_frame(reg: u16) -> ! {
 ///
 /// Requires loaded abort-handler code. Appends one initialized frame to
 /// `stack`, live or detached; no other dynamic components are touched.
-pub(super) fn push_abort_stub(
-    stack: &mut FrameStack,
+pub(super) fn push_abort_stub<B: Buffer>(
+    stack: &mut FrameStack<B>,
     code: Rc<CodeObject>,
     return_reg: u16,
     handler: TaggedValue,
     val: TaggedValue,
     cont: TaggedValue,
-) {
+) -> Result<(), NoRoom> {
     let base = stack.push(
         &code,
         CallFrame::NO_CLOSURE,
         return_reg,
         abort_step::NUM_REGS,
         fill_value(),
-    );
+    )?;
     let words = stack.words();
     words[base + abort_step::HANDLER as usize].set(handler);
     words[base + abort_step::VAL as usize].set(val);
     words[base + abort_step::CONT as usize].set(cont);
+    Ok(())
 }

@@ -12,10 +12,12 @@
 //!
 //! **Live words.** Today only the event words are live:
 //! - `reg_limit`, the poll word, which a post zeroes. While nothing is
-//!   posted it holds the VM's stack limit in bytes (#907), so a frame entry
-//!   makes one compare for both: the stack's top against this word. The
-//!   limit to put back after a post is serviced is the [`Carrier`]'s, since
-//!   every word here is spoken for;
+//!   posted it holds the VM's stack limit (#907), so a frame entry makes
+//!   one compare for both: the stack's top against this word. The limit is
+//!   an address since #908's 7c, where the stack is a reservation that
+//!   never moves: the address its top has at the limit. The limit to put
+//!   back after a post is serviced is the [`Carrier`]'s, since every word
+//!   here is spoken for;
 //! - `pending`, the events the owner posts;
 //! - `event`, the events posted from anywhere else: signal handlers, timers,
 //!   profilers, and later other carriers.
@@ -32,9 +34,9 @@
 //! **Reserved words.** The rest stay zero until the stage that needs each:
 //! - the allocation buffer, `ap` and `alloc_limit`, at 5a;
 //! - the barrier's words, `meta_bias`, `remset_cur` and `remset_soft`, at 7;
-//! - the register stack's `reg_top`, still reserved after 4d.6 (#907 counts
-//!   the stack's bytes from its vectors' lengths) and after 4d.7 (decision
-//!   A4 on #782);
+//! - the register stack's `reg_top`, still reserved after 4d.6 and after
+//!   4d.7 (decision A4 on #782): the interpreter keeps the stack's top
+//!   beside its words;
 //! - `ticks` with SRFI 18's deterministic scheduler;
 //! - the words C1 and C10 reserve, so that adding them later breaks no ABI:
 //!   `fenced_ap`, `quiesce_epoch` and `handshake`.
@@ -192,11 +194,12 @@ pub struct Mutator {
     /// 0x28. The running green thread's register-stack top (4d).
     reg_top: words::Ptr<u64>,
     /// 0x30. The poll word: zero while an event is posted. A frame entry
-    /// compares the stack's top in bytes against it (§12, #907), so it is
-    /// the stack's limit otherwise: the VM's soft limit, its cap while a
-    /// handler has the reserve, and [`Mutator::NO_LIMIT`] where a machine
-    /// has no cap, as the tree-walker has none. Non-zero values are written
-    /// only by the owner, through [`Mutator::set_limit`].
+    /// compares the address of the stack's top against it (§12, #907; an
+    /// address since #908's 7c), so it is the stack's limit otherwise: the
+    /// address of the VM's soft limit, of its cap while a handler has the
+    /// reserve, and [`Mutator::NO_LIMIT`] where a machine has no cap, as
+    /// the tree-walker has none. Non-zero values are written only by the
+    /// owner, through [`Mutator::set_limit`].
     reg_limit: AtomicUsize,
     /// 0x38. Events posted from outside the owner, by `fetch_or`.
     event: AtomicU32,
@@ -354,7 +357,7 @@ impl Mutator {
     }
 
     /// The poll word as a frame entry reads it: zero while something is
-    /// posted, and otherwise the stack's limit in bytes, which is
+    /// posted, and otherwise the stack's limit, an address, which is
     /// [`Mutator::NO_LIMIT`] where the machine has none (#907).
     #[inline]
     pub fn limit(&self) -> usize {
@@ -491,11 +494,12 @@ impl Default for Mutator {
 pub struct Carrier {
     mutator: Mutator,
     interrupt: Arc<InterruptCell>,
-    /// What the poll word holds while nothing is posted: the stack's limit
-    /// in bytes. The owner's alone.
+    /// What the poll word holds while nothing is posted: the stack's limit,
+    /// as the address the stack's top has there. The owner's alone.
     stack_limit: Cell<usize>,
     /// The stack's cap in bytes, for `(gc-stats)`'s `stack-limit`: what the
-    /// machine was built with, and 0 where it has none, as the tree-walker
+    /// machine was built with, or the size of its stack's reservation where
+    /// the system gave less, and 0 where it has none, as the tree-walker
     /// has none. The limit above moves under it: the soft limit while it is
     /// armed, the cap while a handler has the reserve.
     stack_cap: Cell<usize>,
@@ -520,11 +524,12 @@ impl Carrier {
         InterruptHandle::new(&self.interrupt)
     }
 
-    /// Set the stack's limit, in bytes: what the poll word holds from now
-    /// on while nothing is posted. The machine's alone to call: at its
-    /// construction, when it raises `&stack-exhausted` (the limit becomes
-    /// the cap, so that the handler has the reserve), and when it arms the
-    /// soft limit again.
+    /// Set the stack's limit, as the address its top has there: what the
+    /// poll word holds from now on while nothing is posted, and what a
+    /// frame entry compares the top's address with. The machine's alone to
+    /// call: at its construction, when it raises `&stack-exhausted` (the
+    /// limit becomes the cap, so that the handler has the reserve), and
+    /// when it arms the soft limit again.
     pub fn set_stack_limit(&self, limit: usize) {
         self.stack_limit.set(limit);
         self.mutator.set_limit(limit);

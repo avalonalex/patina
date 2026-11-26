@@ -38,6 +38,7 @@ use crate::types::code_object::{Arity, CodeObject, RegisterMaps};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
+use crate::types::frame_stack::Buffer;
 use crate::types::{CallFrame, CodeObjectId, Depth, FrameStack, Instruction};
 
 /// Code with these constants and nothing else.
@@ -79,16 +80,18 @@ fn frame(code: &Rc<CodeObject>, closure: TaggedValue) -> Frame {
 /// A register stack of `frames`, bottom first, whose windows hold
 /// `registers` in order: each frame takes as many as its window has.
 fn stack_of(registers: Vec<TaggedValue>, frames: Vec<Frame>) -> FrameStack {
-    let mut stack = FrameStack::default();
+    let mut stack = <FrameStack>::default();
     let mut registers = registers.into_iter();
     for frame in frames {
-        let base = stack.push(
-            &frame.code,
-            frame.closure,
-            0,
-            frame.num_regs,
-            TaggedValue::NULL,
-        );
+        let base = stack
+            .push(
+                &frame.code,
+                frame.closure,
+                0,
+                frame.num_regs,
+                TaggedValue::NULL,
+            )
+            .expect("a vector grows");
         stack.set_pc(frame.pc);
         for slot in &stack.words()[base..base + frame.num_regs as usize] {
             slot.set(registers.next().expect("a register for each of a window's"));
@@ -103,7 +106,7 @@ fn stack_of(registers: Vec<TaggedValue>, frames: Vec<Frame>) -> FrameStack {
 
 /// Every register of `stack`, bottom frame first: its words less its
 /// frames' headers.
-fn registers_of(stack: &FrameStack) -> Vec<TaggedValue> {
+fn registers_of<B: Buffer>(stack: &FrameStack<B>) -> Vec<TaggedValue> {
     let mut windows: Vec<Vec<TaggedValue>> = stack
         .frames()
         .map(|f| {
@@ -119,7 +122,7 @@ fn registers_of(stack: &FrameStack) -> Vec<TaggedValue> {
 
 /// The words of `stack` that hold values, where they live: each frame's
 /// registers and then its closure, bottom frame first.
-fn value_slots(stack: &FrameStack) -> Vec<&Cell<TaggedValue>> {
+fn value_slots<B: Buffer>(stack: &FrameStack<B>) -> Vec<&Cell<TaggedValue>> {
     let mut frames: Vec<Vec<&Cell<TaggedValue>>> = stack
         .frames()
         .map(|f| {
@@ -1153,7 +1156,7 @@ fn a_tail_call_from_a_top_level_form_keeps_the_forms_link_table() {
     let b = load_linked(&mut state, tail_calling(closure), &["x"], x, y);
     let (retired, doomed) = doomed_frame_closure(&state);
     let b = state.code_object(b).expect("loaded");
-    state.execution.push_frame(b, retired, 0);
+    state.execution.push_frame(b, retired, 0).unwrap();
     let collections = state.heap.borrow().gc_collections();
 
     let result = super::run_top_frame(&mut state);
@@ -1190,7 +1193,7 @@ fn a_tail_call_after_a_return_keeps_the_callers_link_table() {
     let m = load_linked(&mut state, tail_calling(closure), &["x"], x, y);
     let (retired, doomed) = doomed_frame_closure(&state);
     let m = state.code_object(m).expect("loaded");
-    state.execution.push_frame(m, retired, 0);
+    state.execution.push_frame(m, retired, 0).unwrap();
     let b = super::tests::load_in_globals(
         &mut state,
         assembled(
@@ -1244,7 +1247,10 @@ fn a_nested_loop_puts_back_the_running_code_when_it_returns() {
     // keep its window open to the end of the test, through the nested loop.
     let c = super::tests::load_in_globals(&mut state, super::tests::code(), Vec::new()).id();
     let c = state.code_object(c).expect("loaded");
-    state.execution.push_frame(c, CallFrame::NO_CLOSURE, 0);
+    state
+        .execution
+        .push_frame(c, CallFrame::NO_CLOSURE, 0)
+        .unwrap();
 
     #[expect(
         clippy::disallowed_methods,
@@ -1272,7 +1278,10 @@ fn a_nested_loop_puts_back_the_running_code_when_it_fails() {
     let c =
         super::tests::load_in_globals(&mut state, tail_calling(TaggedValue::NULL), Vec::new()).id();
     let c = state.code_object(c).expect("loaded");
-    state.execution.push_frame(c, CallFrame::NO_CLOSURE, 0);
+    state
+        .execution
+        .push_frame(c, CallFrame::NO_CLOSURE, 0)
+        .unwrap();
 
     #[expect(
         clippy::disallowed_methods,
@@ -1323,7 +1332,10 @@ fn a_tail_call_where_an_escape_lands_keeps_the_landing_units_link_table() {
     )
     .id();
     let w = state.code_object(w).expect("loaded");
-    let base = state.execution.push_frame(w, CallFrame::NO_CLOSURE, 0);
+    let base = state
+        .execution
+        .push_frame(w, CallFrame::NO_CLOSURE, 0)
+        .unwrap();
     state.execution.set_top(base, 0, k);
     let collections = state.heap.borrow().gc_collections();
 

@@ -920,7 +920,8 @@ Its `RootProvider` implementation lives in the child module
 `runtime/vm_state/gc_roots.rs`, the only production code outside the storage
 implementation allowed to prune its private weak stores. The dynamic
 collections are owned by `ExecutionState`: the register stack, which holds
-the frames and their registers in one buffer of words since #908
+the frames and their registers in one buffer of words since #908, a
+reservation of address space that never moves since its 7c
 (`VM_RUNTIME.md` §2.1), and the prompt, wind and handler stacks. The
 inventory below names a frame's parts as its view does (`CallFrame`).
 
@@ -1228,9 +1229,10 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
     and re-read make a Dekker pair with a remote post (OCaml's protocol), so
     no post is lost.
   - **The poll word is the stack's limit too** (#907, §12). While nothing
-    is posted it holds the VM's stack limit in bytes, so a frame entry makes
-    one compare for both: the stack's top, counted at 40 bytes a frame and 8
-    a register as 4d.7's layout will hold it, against the word. The limit is
+    is posted it holds the VM's stack limit, so a frame entry makes one
+    compare for both: the address of the stack's top against the word,
+    which holds the limit as the address the top has there (#908's 7c; a
+    count of bytes before the stack was a reservation). The limit is
     the soft limit, 1 MiB under the cap; the cap while a handler for
     `&stack-exhausted` has that MiB; and the largest value where a machine
     has no cap, as the tree-walker has none. The `Mutator`'s words are all
@@ -1813,8 +1815,11 @@ at stage 5.
   it does the process aborts, as it does where memory cannot be allocated.
 - **No guard page**: whoever writes into a reservation checks its end first.
 
-**Nothing uses it yet.** The register stack moves into one with #908's 7c,
-and its pages are returned by #909. The sizes are unit-tested under an
+**The VM's register stack is in one** since #908's 7c (`VM_RUNTIME.md`
+§2.1): the machine reserves its stack's cap when it is built, every write
+that extends the stack is refused at the reservation's end, and the poll
+word holds the stack's limit as an address in it. Its pages are returned by
+#909. The sizes are unit-tested under an
 injected limit; reserving, writing and decommitting on both CI legs, with
 `mincore` reading that the pages have gone, and on the allocated backing
 too; on the Linux leg a child process run under `ulimit -v` of 4 GiB asks

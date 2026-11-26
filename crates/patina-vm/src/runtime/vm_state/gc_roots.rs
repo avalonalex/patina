@@ -61,6 +61,7 @@
 use patina_core::{GC_CHECK, GcVisitor, RootProvider, SlotVisitor, Trace};
 use rustc_hash::FxHashMap;
 
+use crate::types::frame_stack::Buffer;
 use crate::types::{CallFrame, CodeObjectId, FrameStack, Reg};
 use patina_core::TaggedValue;
 use std::cell::Cell;
@@ -113,7 +114,10 @@ const RETIRED: TaggedValue = if GC_CHECK {
 /// (`FrameStack::assert_frames_tile`).
 ///
 /// The census reads the stack's shape here, as the collection starts.
-pub(in crate::runtime) fn trace_frames(stack: &FrameStack, visitor: &mut dyn SlotVisitor) {
+pub(in crate::runtime) fn trace_frames<B: Buffer>(
+    stack: &FrameStack<B>,
+    visitor: &mut dyn SlotVisitor,
+) {
     let (frames, registers) = stack.census_shape();
     patina_core::census::stack_shape(frames, registers);
     if cfg!(debug_assertions) {
@@ -192,7 +196,7 @@ enum Scanned<'a> {
 ///
 /// A frame is taken apart by name, so that a new field has to be placed.
 #[inline(always)]
-fn scan_frames(stack: &FrameStack, mut each: impl FnMut(Scanned<'_>)) {
+fn scan_frames<B: Buffer>(stack: &FrameStack<B>, mut each: impl FnMut(Scanned<'_>)) {
     let words = stack.words();
     for frame in stack.frames() {
         each(Scanned::Frame(&frame));
@@ -448,7 +452,9 @@ pub(crate) fn collect_with_a_frame_at_an_unmapped_pc() -> bool {
         register_roots: Some(RegisterMaps::from_parts(index, Rc::from([0]), 1)),
     });
     let code = state.code_object(id).expect("the control's code is loaded");
-    let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0);
+    let base = state
+        .push_frame(code, CallFrame::NO_CLOSURE, 0)
+        .expect("room for the control's frame");
     let held = [TaggedValue::fixnum(1), TaggedValue::fixnum(2)];
     for (reg, value) in (0..).zip(held) {
         state.execution.set_top(base, reg, value);
@@ -610,11 +616,13 @@ mod tests {
         // holds a fixnum of its own: 100 and 200 for the closures, and the
         // registers 0 to 6 from the bottom.
         let (lower, upper) = (code(4), code(3));
-        let mut stack = FrameStack::default();
+        let mut stack = <FrameStack>::default();
         let mut next = 0;
         for (code, closure) in [(&lower, 100), (&upper, 200)] {
             let n = code.num_regs;
-            let base = stack.push(code, TaggedValue::fixnum(closure), 0, n, TaggedValue::NULL);
+            let base = stack
+                .push(code, TaggedValue::fixnum(closure), 0, n, TaggedValue::NULL)
+                .expect("a vector grows");
             for slot in &stack.words()[base..base + n as usize] {
                 slot.set(TaggedValue::fixnum(next));
                 next += 1;
@@ -636,6 +644,6 @@ mod tests {
             1,
             "only the hole is cleared"
         );
-        retire_snapshot(&FrameStack::default(), Some(1));
+        retire_snapshot(&<FrameStack>::default(), Some(1));
     }
 }

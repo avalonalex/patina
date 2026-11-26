@@ -2,10 +2,10 @@
 //! K13): one range of memory that never moves, takes physical pages as they
 //! are written, and gives them back a range at a time.
 //!
-//! The register stack is to live in one, so that a frame's address holds
-//! for the frame's life (#908's 7c), and the heap's own reservation follows
-//! at stage 5, when this moves to `patina-gc`. **Nothing uses it yet**:
-//! this is the mapping alone, with its tests, and no lane's output changes.
+//! The VM's register stack lives in one, so that a frame's address holds
+//! for the frame's life (#908's 7c: `patina-vm`'s `types/frame_stack.rs`),
+//! and the heap's own reservation follows at stage 5, when this moves to
+//! `patina-gc`.
 //!
 //! - **Reserving** makes one private anonymous mapping, read-write, with
 //!   `MAP_NORESERVE` on Linux, where the kernel's heuristic would refuse a

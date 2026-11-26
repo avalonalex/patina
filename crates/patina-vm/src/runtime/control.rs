@@ -152,7 +152,10 @@ fn call_closure_resolved(
     check_arity(code.arity, args.len())?;
 
     let arity = code.arity;
-    let base = execution.push_closure_frame(code, closure_val, return_reg);
+    let base = match execution.push_closure_frame(code, closure_val, return_reg) {
+        Ok(base) => base,
+        Err(refused) => return Err(state.no_stack_room(refused)),
+    };
     store_args_in_window(state, base, arity, args);
 
     Ok(())
@@ -182,7 +185,10 @@ pub(super) fn call_closure_from_regs(
     check_arity(code.arity, arg_regs.len())?;
 
     let arity = code.arity;
-    let base = execution.push_closure_frame(code, closure_val, return_reg);
+    let base = match execution.push_closure_frame(code, closure_val, return_reg) {
+        Ok(base) => base,
+        Err(refused) => return Err(state.no_stack_room(refused)),
+    };
     if let Arity::Variadic(fixed) = &arity {
         let fixed = *fixed as usize;
         for (i, &r) in arg_regs.iter().take(fixed).enumerate() {
@@ -577,7 +583,7 @@ fn handle_control_primitive(
             // (issue #157, and PR #156's move for a jump's wind thunks).
             let code = value_wind_stub(state)?;
             state.check_stack_room(code.num_regs)?;
-            let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, dst);
+            let base = state.push_frame(code, CallFrame::NO_CLOSURE, dst)?;
 
             // Through `set_top`: the frame is already pushed, so `base` *is*
             // the top frame's, and the debug assert keeps that
@@ -779,7 +785,7 @@ fn handle_control_primitive(
                 Some(PromiseState::Delayed(thunk)) => {
                     let code = force_stub(state)?;
                     state.check_stack_room(code.num_regs)?;
-                    let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, dst);
+                    let base = state.push_frame(code, CallFrame::NO_CLOSURE, dst)?;
 
                     state.execution.set_top(base, force_step::PROMISE, obj);
                     state.execution.set_top(base, force_step::THUNK, thunk);
@@ -804,7 +810,7 @@ fn handle_control_primitive(
             // `(k 1 2)` answered `#<procedure>`.
             let code = value_cwv_stub(state)?;
             state.check_stack_room(code.num_regs)?;
-            let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, dst);
+            let base = state.push_frame(code, CallFrame::NO_CLOSURE, dst)?;
 
             state.execution.set_top(base, value_cwv::PRODUCER, args[0]);
             state.execution.set_top(base, value_cwv::CONSUMER, args[1]);
@@ -1399,8 +1405,15 @@ pub(super) fn step_wind_jump(
         .zip(&state.reentry)
         .take_while(|(captured, active)| captured == active)
         .count();
+    // The snapshot's stack goes into the reservation the live one has
+    // (#908's 7c). A snapshot fits: it is a copy of this stack, or of the
+    // part of it under a prompt with the abort's stub on top, which
+    // `abort_to_prompt` held to the cap. Were one not to, nothing has been
+    // replaced.
+    if let Err(refused) = state.execution.restore(&cc) {
+        return Err(state.no_stack_room(refused));
+    }
     state.reentry_kept = (kept == cc.reentry.len() && kept < state.reentry.len()).then_some(kept);
-    state.execution.restore(&cc);
     // A continuation's arrival has replaced the stack, and the stack's
     // limit goes with it (#907): the reserve is open again where the
     // continuation was captured in it, and the soft limit is armed anywhere
@@ -1689,7 +1702,7 @@ fn push_stub_frame(
 ) -> Result<usize, VmError> {
     debug_assert_eq!(num_regs, code.num_regs);
     state.check_stack_room(num_regs)?;
-    Ok(state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0))
+    state.push_frame(code, CallFrame::NO_CLOSURE, 0)
 }
 
 /// The one-instruction code object every wind step's frame runs.
@@ -2319,9 +2332,7 @@ fn push_resume_frame(
 ) -> Result<(), VmError> {
     let code = stub_for(state, &suspension.work)?;
     state.check_stack_room(code.num_regs)?;
-    let base = state
-        .execution
-        .push_frame(code, CallFrame::NO_CLOSURE, return_reg);
+    let base = state.push_frame(code, CallFrame::NO_CLOSURE, return_reg)?;
 
     state
         .execution
@@ -3032,6 +3043,19 @@ pub(super) fn abort_to_prompt(
     dst: u16,
 ) -> VmError {
     let prompt = state.execution.prompts()[prompt_idx].clone();
+    // Where the abort lands is the stack under the prompt with the
+    // handler's stub on it, and a stub can be larger than the frames the
+    // abort drops: a prompt whose frames end within a stub's bytes of the
+    // cap has a landing past it. Refused here, as the stack's exhaustion at
+    // this call, before anything is captured, cut or left, so that the two
+    // paths below agree and each has room for what it builds (#907, #908's
+    // 7c).
+    let under_prompt = prompt.stack_depth.min(state.execution.depth());
+    let stub_bytes = crate::types::frame_stack::FRAME_HEADER_BYTES
+        + abort_step::NUM_REGS as usize * crate::types::frame_stack::WORD_BYTES;
+    if let Err(exhausted) = state.check_stack_landing(under_prompt.bytes() + stub_bytes) {
+        return exhausted;
+    }
     // From the capture until the stub or the landing's snapshot holds the
     // handle, `cont_tv` (and then `target_tv`) is in Rust locals alone: no
     // safe point in between, asserted (#624). The window ends at the stub
@@ -3080,9 +3104,17 @@ pub(super) fn abort_to_prompt(
         // An abort's landing has cut the stack: where the soft limit is
         // armed again if the reserve was open (#907).
         state.rearm_stack_limit();
-        state
-            .execution
-            .push_abort_stub(stub, prompt.dst, prompt.handler, val, cont_tv);
+        // The landing is within the cap (checked above), so the stack's
+        // reservation has room for the stub; were it refused, the stack is
+        // at its cap (#908's 7c).
+        if let Err(refused) =
+            state
+                .execution
+                .push_abort_stub(stub, prompt.dst, prompt.handler, val, cont_tv)
+        {
+            drop(window);
+            return state.no_stack_room(refused);
+        }
         drop(window);
         return park_transfer(state, val);
     }
@@ -3097,7 +3129,9 @@ pub(super) fn abort_to_prompt(
     // delimits, before the handler's stub goes on it, is still above the
     // soft limit (#907). The two paths must not differ in where they end up.
     let stack_reserve_open = state.stack_reserve_open_over(stack.bytes());
-    push_abort_stub(&mut stack, stub, prompt.dst, prompt.handler, val, cont_tv);
+    // Onto a copy, whose buffer grows: the push is not refused. The
+    // landing is within the cap (checked above), so its arrival has room.
+    let _ = push_abort_stub(&mut stack, stub, prompt.dst, prompt.handler, val, cont_tv);
     let target = VmContinuation {
         stack,
         dynamic_winds: state.execution.winds()[..wind_depth].to_vec(),
@@ -3526,7 +3560,12 @@ pub(super) fn finish_delimited_invoke(
     // poll on the generic call's return raises `&stack-exhausted` once the
     // region has taken the stack to the soft limit.
     state.check_stack_bytes(dc.stack.bytes())?;
-    state.execution.append_delimited(dc, value, dst)
+    // The cap is within the stack's reservation, so the append has room;
+    // were it refused, nothing has been appended (#908's 7c).
+    match state.execution.append_delimited(dc, value, dst)? {
+        Ok(()) => Ok(()),
+        Err(refused) => Err(state.no_stack_room(refused)),
+    }
 }
 
 /// [`invoke_delimited`] for an invoke in tail position: the invoking frame is
@@ -3964,7 +4003,10 @@ pub(super) fn tail_call_other_closure(
     check_arity(new_code.arity, arg_vals.len())?;
 
     let arity = new_code.arity;
-    let base = execution.tail_replace(new_code, func_val);
+    let base = match execution.tail_replace(new_code, func_val) {
+        Ok(base) => base,
+        Err(refused) => return Err(state.no_stack_room(refused)),
+    };
     store_args_in_window(state, base, arity, arg_vals);
     // The callee's entry, in the reused window (§12, #700).
     super::vm_state::poll(state)?;

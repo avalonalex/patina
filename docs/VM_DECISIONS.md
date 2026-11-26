@@ -84,6 +84,10 @@ the binding site. Only the cell pointer is captured.
 - A frame is a header of five words on the register stack, below its
   registers, and a snapshot is a copy of the stack's words (GC stage 4d.7b,
   #908).
+- The machine's stack is a reservation of address space the size of its
+  cap, which never moves and takes pages as they are written (4d.7c): a
+  frame has one address for its life. A snapshot is a vector copied out of
+  it until 4e.
 - Continuation operations are **VM control primitives** intercepted at call
   dispatch, not ISA instructions.
 
