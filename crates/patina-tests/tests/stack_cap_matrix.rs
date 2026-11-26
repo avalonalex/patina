@@ -581,8 +581,8 @@ const COMMITTED: &str = "(cdr (assq 'committed-stack-bytes (gc-stats)))";
 /// A recursion's pages go back at the second collection after it returns
 /// (#909): 300,000 frames are 40.8 MB of stack, held after the return and
 /// after one `(gc)`, and all but the first MiB given back by the second.
-/// The stack is granted room in steps of 256 KiB, so that is what a
-/// machine that has run little holds.
+/// The stack is granted room in steps of 256 KiB, so a machine that has
+/// run little holds a whole number of them, inside the first MiB.
 #[test]
 fn a_recursions_pages_go_back_at_the_second_collection() {
     let program = format!(
@@ -592,11 +592,12 @@ fn a_recursions_pages_go_back_at_the_second_collection() {
        (one (begin (gc) {COMMITTED}))
        (two (begin (gc) {COMMITTED}))
        (three (begin (gc) {COMMITTED})))
-  (list start depth (>= grown 40800000) (< grown 41200000) (= one grown) two three))"
+  (list (and (< 0 start 1048577) (modulo start 262144)) depth
+        (>= grown 40800000) (< grown 41200000) (= one grown) two three))"
     );
     assert_eq!(
         answer(&vm(ROOMY), &program),
-        "(262144 300000 #t #t #t 1048576 1048576)"
+        "(0 300000 #t #t #t 1048576 1048576)"
     );
 }
 

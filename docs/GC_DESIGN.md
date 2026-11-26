@@ -1847,9 +1847,18 @@ which no deterministic reading saw.
   two majors. A program that recurses as deep between every two
   collections keeps its pages, with nothing given back and written again.
   One that goes deep less often than it collects pays for the pages each
-  time: 47 µs a MiB to write them again on the Mac the reservation's table
-  above was measured on, against some 300 µs a MiB to push and pop the
-  frames that fill them.
+  time. Measured 2026-11-25 on the Mac of the reservation's table above,
+  on a program that does nothing else: twenty cycles of a 1 M-frame
+  recursion and two `(gc)`s took 0.74 s where they took 0.62 s with the
+  pages kept (+19%; +21% in cycles and +8% in instructions), which is
+  46 µs for each MiB given back and written again. With one `(gc)` a cycle
+  the two read the same, and so does a list of 1 M built by recursion
+  twenty times over, whose collections come one to a cycle.
+- **Giving pages back is outside the pause's record, and not free:** the
+  1.3 GiB of a 10 M-frame recursion cost 112 M instructions and about
+  10 ms, once. On a target with no mapping calls the reservation is one
+  allocation (`Reservation`'s fallback), a decommit zeroes it, and the key
+  falls though nothing went back.
 - **`(gc-stats)`'s `committed-stack-bytes`** is the committed end: what was
   granted and not given back, so within 256 KiB above what was written.
   The buffer publishes it on the heap's carrier where it moves

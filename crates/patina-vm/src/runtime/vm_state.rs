@@ -1128,9 +1128,9 @@ impl VmState {
         // A collection: one of the three places the soft limit is armed
         // again (#907).
         self.rearm_stack_limit();
-        // And an observation of the register stack (#909): the pages it
-        // has not reached since the collection before go back to the
-        // system. After the pause's accounting, as a decommit is.
+        // And an observation of the register stack, as a major is (#909):
+        // the pages it has not reached since the one before go back to
+        // the system. After the pause's accounting, as a decommit is.
         self.execution.observe_stack();
     }
 

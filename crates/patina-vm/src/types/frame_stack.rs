@@ -471,7 +471,7 @@ impl Buffer for Reserved {
 
     #[inline(always)]
     unsafe fn set_len(&mut self, len: usize) {
-        debug_assert!(len <= self.capacity());
+        debug_assert!(len <= self.granted, "a length past what was granted");
         self.len = len;
     }
 
