@@ -179,7 +179,7 @@
 //!
 //! Run 2026-11-22 in the debug build, each mutation of `retire_registers`
 //! (`crates/patina-vm/src/runtime/vm_state/gc_roots.rs`; since #906 the
-//! collection's walk of the frames, `scan_windows` there) applied alone and
+//! collection's walk of the frames, `scan_frames` there) applied alone and
 //! then removed, as a 4d defect in the maps would look. The rows named are
 //! the 26 there were then: the handler rows in their `tail` position, the
 //! `callee` rows in their `non-tail` one, before the position axis (#714).
