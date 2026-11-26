@@ -289,7 +289,7 @@ impl Heap {
 mod tests {
     use super::*;
     use crate::heap::gc::{Collector, MarkSweepCollector};
-    use crate::{RootProvider, ScopeSet, SlotVisitor, SourceMap};
+    use crate::{RootProvider, SlotVisitor, SourceMap};
 
     #[test]
     fn syntax_copies_keep_independent_locations() {
@@ -302,15 +302,19 @@ mod tests {
         let second = map.location("test.scm", 1, 5, 1, 8);
         heap.record_source(original, first.clone());
         heap.inherit_source(original, copy);
-        assert_eq!(heap.source(copy), Some(&first));
+        assert_eq!(heap.source(copy), Some(first.clone()));
 
         heap.record_source(copy, second.clone());
-        assert_eq!(heap.source(original), Some(&first));
-        assert_eq!(heap.source(copy), Some(&second));
+        assert_eq!(heap.source(original), Some(first));
+        assert_eq!(heap.source(copy), Some(second.clone()));
         heap.record_source(original, map.location("test.scm", 1, 2, 1, 3));
-        assert_eq!(heap.source(copy), Some(&second));
+        assert_eq!(heap.source(copy), Some(second));
     }
 
+    /// A container's entry of `syntax_sources` goes with its container,
+    /// before the slot is reused. An identifier's location is in the
+    /// document tables since #791, whose sentinels hold the same of it
+    /// (`heap/trace_sentinels.rs`).
     #[test]
     fn sweep_removes_non_owning_provenance_before_slot_reuse() {
         struct Keep(TaggedValue);
@@ -321,19 +325,15 @@ mod tests {
         }
         let mut heap = Heap::new();
         let mut map = SourceMap::new();
-        map.set_source_text("live dead".into());
-        let live = heap.alloc_identifier("live".into(), ScopeSet::new());
-        let dead = heap.alloc_identifier("dead".into(), ScopeSet::new());
-        heap.record_source(live, map.location("test.scm", 1, 1, 1, 5));
-        heap.record_source(dead, map.location("test.scm", 1, 6, 1, 10));
-        let retained = heap.source(dead).unwrap().clone();
-        // The new identifier's spelling is interned first, so that its
-        // symbol, which the intern table keeps, takes no freed slot (#790).
-        heap.intern_symbol("new");
+        map.set_source_text("(live) (dead)".into());
+        let live = heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
+        let dead = heap.alloc_pair(TaggedValue::fixnum(2), TaggedValue::NULL);
+        heap.record_source(live, map.location("test.scm", 1, 1, 1, 7));
+        heap.record_source(dead, map.location("test.scm", 1, 8, 1, 14));
+        let retained = heap.source(dead).unwrap();
         MarkSweepCollector::new().collect(&mut heap, &[&Keep(live)]);
         assert!(heap.source(live).is_some());
-        assert!(heap.source(dead).is_none());
-        let reused = heap.alloc_identifier("new".into(), ScopeSet::new());
+        let reused = heap.alloc_pair(TaggedValue::fixnum(3), TaggedValue::NULL);
         // The same slot. In a check build the new tenant's reference carries
         // a newer generation stamp, so it is deliberately not `dead` (#621).
         assert_eq!(reused.heap_index(), dead.heap_index());

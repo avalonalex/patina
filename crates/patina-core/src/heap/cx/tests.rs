@@ -391,6 +391,50 @@ fn a_scope_addition_interns_each_set_once_across_calls() {
     });
 }
 
+/// Copies write no location (#791): a scope edit's copy, a substitution
+/// mark's copy, a relinked alias's and a map's each carry their original's
+/// source id and location, and the document tables hold as many entries
+/// after the copies as before them.
+#[test]
+fn copies_of_an_identifier_keep_its_location_and_write_no_entry() {
+    with_cx(|cx| {
+        let mut map = crate::SourceMap::new();
+        map.set_source_text("(f x)".into());
+        let at = map.location("copies.scm", 1, 4, 1, 5);
+        let original = cx.alloc_identifier("x".into(), ScopeSet::singleton(ScopeId(81)));
+        cx.record_source(original, at.clone());
+        let id = cx
+            .heap
+            .borrow()
+            .identifier(original.tagged())
+            .unwrap()
+            .source;
+        let entries = cx.heap.borrow().source_entries();
+        let list = cx.list_from_iter([original]);
+        let flipped = cx.rescope_identifiers(list, |_, _| true, |s| s.flip_scope(ScopeId(82)));
+        let flipped = cx.car(flipped);
+        let mut addition = cx.scope_addition(ScopeId(83));
+        let marked = cx.add_scope_copying(&mut addition, original).unwrap();
+        let name = cx.relinked_name("x.8-1".into());
+        let alias = cx.alloc_relinked_identifier(&name, ScopeSet::new());
+        cx.inherit_source(original, alias);
+        for copy in [flipped, marked, alias] {
+            assert_ne!(copy, original);
+            assert_eq!(
+                cx.heap.borrow().identifier(copy.tagged()).unwrap().source,
+                id
+            );
+            assert_eq!(cx.source(copy), Some(at.clone()));
+        }
+        assert_eq!(
+            cx.heap.borrow().source_entries(),
+            entries,
+            "a copy wrote an entry"
+        );
+    });
+}
+
+/// The word the identifier `v` holds as its name (#790).
 /// The word the identifier `v` holds as its name (#790).
 fn name_of(cx: &Cx<'_>, v: Value<'_>) -> TaggedValue {
     match cx.heap.borrow().get_object(v.tagged()) {
