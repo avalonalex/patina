@@ -987,7 +987,8 @@ and `raw_environment` sit on each, beside a twin calling `lookup` or
 | core | `heap::cx` module | a value leaving the call that made it | a lifetime error, no code |
 | core | `heap::cx` module | a value used after a call that may collect: a safe point while a context lives | E0499 |
 | core | `heap::cx` module | a slice held across an allocation | E0502 |
-| core | `heap::Interior` | a record's, a parameter's or a promise's payload borrowed outside core (#708) | E0624 |
+| core | `heap::Interior` | a record's or a promise's payload borrowed outside core (#708) | E0624 |
+| core | `heap::Interior` | a plain payload, a parameter's value, assigned outside core (#930) | E0594 |
 | core | `Trace` | a field whose type has no `Trace` (#686) | not pinned |
 | core | `Trace` | a `skip` without its reason (#686) | a derive error, no code |
 | primitives | `ApplyContext::apply_in` | a slice held across the call | E0502 |

@@ -933,27 +933,22 @@ impl<'gc> Cx<'gc> {
     /// Whether `v` is a parameter object.
     #[inline]
     pub fn is_parameter(&self, v: Value<'gc>) -> bool {
-        self.heap.borrow().get_parameter(v.tagged()).is_some()
+        self.heap.borrow().is_parameter(v.tagged())
     }
 
     /// The current value of the parameter object `v`, or `None` if `v` is
     /// none. It is written through the funnel ([`ParamValue`]).
     #[inline]
     pub fn parameter_value(&self, v: Value<'gc>) -> Option<Value<'gc>> {
-        let (values, _) = self.heap.borrow().get_parameter(v.tagged())?;
-        let word = values
-            .borrow()
-            .last()
-            .copied()
-            .unwrap_or(TaggedValue::UNSPECIFIED);
-        Some(self.brand(word))
+        let (value, _) = self.heap.borrow().parameter_parts(v.tagged())?;
+        Some(self.brand(value.unwrap_or(TaggedValue::UNSPECIFIED)))
     }
 
     /// The converter of the parameter object `v`: `None` if `v` is none,
     /// `Some(None)` if it has none.
     #[inline]
     pub fn parameter_converter(&self, v: Value<'gc>) -> Option<Option<Value<'gc>>> {
-        let (_, converter) = self.heap.borrow().get_parameter(v.tagged())?;
+        let (_, converter) = self.heap.borrow().parameter_parts(v.tagged())?;
         Some(converter.map(|w| self.brand(w)))
     }
 

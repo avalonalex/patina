@@ -91,13 +91,6 @@ use std::rc::Rc;
 /// are the raw layer. Stage 5e deletes the `RefCell` (`PRD/GC_PRD.md` §19).
 pub type SharedHeap = Rc<RefCell<Heap>>;
 
-/// Type alias for the complex parameter value type returned by `Heap::get_parameter`.
-///
-/// Contains (values_stack, converter) where:
-/// - `values_stack`: The stack of parameter values (most recent on top)
-/// - `converter`: Optional converter procedure for the parameter
-pub(crate) type ParameterData = (Rc<Interior<Vec<TaggedValue>>>, Option<TaggedValue>);
-
 /// Whether the stale-reference checks are compiled in (#621): every debug
 /// build, and a release build with `patina-core`'s `gc-check` feature, which
 /// the release GC lane enables. A plain release build — the shipped binary —
@@ -221,6 +214,9 @@ pub enum HeapObjectType {
     PromptTag = 11,
     Promise = 12,
     Parameter = 13,
+    /// Reserved: no object has this type. A library was a heap object in
+    /// name only, a variant nothing allocated, deleted by #930; the number
+    /// stays so that the others keep theirs.
     Library = 14,
     Environment = 15,
     Exception = 16,
@@ -255,11 +251,15 @@ pub enum PromiseState {
 }
 
 /// A payload of a heap object that changes after the object is made: a
-/// record's fields, a parameter's value stack, a promise's state, a cell's
-/// value and an ephemeron's pair. Only core reaches inside. A store goes
-/// through the funnel ([`Cx::store`](crate::Cx::store), [`Heap::store`]),
-/// and a read through an accessor that answers by value
-/// ([`Heap::promise_state`], [`Heap::parameter_parts`]).
+/// record's fields, a promise's state and an ephemeron's pair. Only core
+/// reaches inside. A store goes through the funnel
+/// ([`Cx::store`](crate::Cx::store), [`Heap::store`]), and a read through
+/// an accessor that answers by value ([`Heap::promise_state`]).
+///
+/// A cell's value and a parameter's are plain fields instead (#930), and
+/// the three above follow at GC stage 4g: a payload only the funnel writes
+/// is written through `&mut Heap`, and what keeps code outside core from
+/// writing it is that nothing answers a `&mut HeapObjectData`.
 ///
 /// Code outside core can match a [`HeapObjectData`] on its kind, as the
 /// datum writer does, but cannot borrow its payload (#708):
@@ -288,15 +288,16 @@ pub enum PromiseState {
 /// }
 /// ```
 ///
-/// Nor a parameter's values:
+/// Nor assign a plain payload, a parameter's value or a cell's (#930),
+/// even with the heap borrowed mutably:
 ///
-/// ```compile_fail,E0624
+/// ```compile_fail,E0594
 /// use patina_core::TaggedValue;
 /// use patina_core::heap::{Heap, HeapObjectData};
 ///
-/// fn install_by_hand(heap: &Heap, parameter: TaggedValue, value: TaggedValue) {
-///     if let HeapObjectData::Parameter { values, .. } = heap.get_object(parameter) {
-///         values.borrow_mut().push(value);
+/// fn install_by_hand(heap: &mut Heap, parameter: TaggedValue, value: TaggedValue) {
+///     if let HeapObjectData::Parameter { value: held, .. } = heap.get_object(parameter) {
+///         *held = value;
 ///     }
 /// }
 /// ```
@@ -403,11 +404,15 @@ pub enum HeapObjectData {
         bytes: usize,
     },
     Parameter {
-        values: Rc<Interior<Vec<TaggedValue>>>,
+        /// Its value: a plain field, which only the funnel writes
+        /// ([`ParamValue`](crate::ParamValue)), through `&mut Heap` (#930).
+        /// A `parameterize` saves and restores it through
+        /// `%parameterize-swap!`, so a parameter holds one value, never a
+        /// stack of them.
+        value: TaggedValue,
         converter: Option<TaggedValue>,
     },
     Promise(Rc<Interior<PromiseState>>),
-    Library(Rc<crate::library::Library>),
     Values(Vec<TaggedValue>),
     EnvironmentSpecifier {
         env: Rc<crate::environment::Environment>,
@@ -417,8 +422,10 @@ pub enum HeapObjectData {
     LabelPlaceholder(usize),
     /// A mutable cell used to box variables that are `set!` after being captured
     /// by a VM closure. The cell holds the current value and is shared by
-    /// reference among all closures that captured the same binding.
-    MutableCell(Interior<TaggedValue>),
+    /// reference among all closures that captured the same binding. A plain
+    /// field, which only the funnel writes
+    /// ([`CellValue`](crate::CellValue)), through `&mut Heap` (#930).
+    MutableCell(TaggedValue),
     /// SRFI 124 ephemeron: a key/datum pair whose key the collector holds
     /// *weakly*, and whose datum it keeps alive only while the key is.
     ///
@@ -492,7 +499,6 @@ impl HeapObjectData {
             HeapObjectData::Continuation { .. } => HeapObjectType::Continuation,
             HeapObjectData::Parameter { .. } => HeapObjectType::Parameter,
             HeapObjectData::Promise(_) => HeapObjectType::Promise,
-            HeapObjectData::Library(_) => HeapObjectType::Library,
             HeapObjectData::Values(_) => HeapObjectType::Values,
             HeapObjectData::EnvironmentSpecifier { .. } => HeapObjectType::Environment,
             HeapObjectData::PromptTag(_) => HeapObjectType::PromptTag,
@@ -1893,15 +1899,15 @@ impl Heap {
     }
 
     /// Allocate a native Parameter object whose value is `init`, with
-    /// `converter` if it has one. Only core writes its value afterwards
-    /// ([`Interior`], #708).
+    /// `converter` if it has one. Only core writes its value afterwards,
+    /// through the funnel (#708).
     pub fn alloc_parameter(
         &mut self,
         init: TaggedValue,
         converter: Option<TaggedValue>,
     ) -> TaggedValue {
         self.alloc_object(HeapObjectData::Parameter {
-            values: Rc::new(Interior::new(vec![init])),
+            value: init,
             converter,
         })
     }
@@ -2023,31 +2029,6 @@ impl Heap {
             // written, and nothing since has freed or reused a slot.
             self.objects[inner.heap_index() as usize] = HeapObjectData::Promise(outer_cell);
         }
-    }
-
-    /// Allocate a native Library object
-    pub fn alloc_library(&mut self, lib: Rc<crate::library::Library>) -> TaggedValue {
-        self.alloc_object(HeapObjectData::Library(lib))
-    }
-
-    /// Get a Library from a TaggedValue, if it is one
-    pub fn get_library(&self, tv: TaggedValue) -> Option<&Rc<crate::library::Library>> {
-        if !tv.is_object() {
-            return None;
-        }
-        match self.get_object(tv) {
-            HeapObjectData::Library(lib) => Some(lib),
-            _ => None,
-        }
-    }
-
-    /// Check if value is a library
-    #[inline]
-    pub fn is_library(&self, tv: TaggedValue) -> bool {
-        if !tv.is_object() {
-            return false;
-        }
-        matches!(self.get_object(tv), HeapObjectData::Library(_))
     }
 
     /// Allocate a native Values object (multiple return values)
@@ -2222,7 +2203,7 @@ impl Heap {
     /// Allocate a `MutableCell` containing `val`.
     pub fn alloc_mutable_cell(&mut self, val: TaggedValue) -> TaggedValue {
         check_storable(val, "cell");
-        self.alloc_object(HeapObjectData::MutableCell(Interior::new(val)))
+        self.alloc_object(HeapObjectData::MutableCell(val))
     }
 
     /// Read the value inside a `MutableCell`.
@@ -2233,7 +2214,7 @@ impl Heap {
             return None;
         }
         match self.get_object(ptr) {
-            HeapObjectData::MutableCell(cell) => Some(*cell.borrow()),
+            HeapObjectData::MutableCell(value) => Some(*value),
             _ => None,
         }
     }
@@ -2242,15 +2223,16 @@ impl Heap {
     ///
     /// Returns `false` if `ptr` does not point to a `MutableCell`.
     #[inline]
-    pub(crate) fn write_mutable_cell(&self, ptr: TaggedValue, val: TaggedValue) -> bool {
+    pub(crate) fn write_mutable_cell(&mut self, ptr: TaggedValue, val: TaggedValue) -> bool {
         if !ptr.is_object() {
             return false;
         }
-        match self.get_object(ptr) {
-            HeapObjectData::MutableCell(cell) => {
+        self.object_checks.check("object", ptr);
+        match &mut self.objects[ptr.heap_index() as usize] {
+            HeapObjectData::MutableCell(value) => {
                 check_storable(val, "cell");
                 crate::census::store(crate::census::Site::MutableCell, Some(ptr), val);
-                *cell.borrow_mut() = val;
+                *value = val;
                 true
             }
             _ => false,
@@ -2889,20 +2871,22 @@ impl Heap {
         }
     }
 
-    /// Get the Parameter fields from a TaggedValue, if it is one
-    ///
-    /// Returns (values_stack, converter) tuple. Crate-private, as the
-    /// funnel's: outside core a parameter is read by value
-    /// ([`Self::parameter_parts`]) and written through
-    /// [`ParamValue`](crate::ParamValue) (#708).
+    /// Write `val` as the parameter object `tv`'s value. Returns `false`
+    /// if `tv` is no parameter. Crate-private, as the funnel's: outside
+    /// core a parameter is read by value ([`Self::parameter_parts`]) and
+    /// written through [`ParamValue`](crate::ParamValue) (#708).
     #[inline]
-    pub(crate) fn get_parameter(&self, tv: TaggedValue) -> Option<ParameterData> {
+    pub(crate) fn write_parameter(&mut self, tv: TaggedValue, val: TaggedValue) -> bool {
         if !tv.is_object() {
-            return None;
+            return false;
         }
-        match self.get_object(tv) {
-            HeapObjectData::Parameter { values, converter } => Some((values.clone(), *converter)),
-            _ => None,
+        self.object_checks.check("object", tv);
+        match &mut self.objects[tv.heap_index() as usize] {
+            HeapObjectData::Parameter { value, .. } => {
+                *value = val;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -2934,9 +2918,11 @@ impl Heap {
         }
     }
 
-    /// The parameter object `tv`'s current value and its converter, read
-    /// rather than borrowed, or `None` if `tv` is none. The value is `None`
-    /// for an empty stack, which no parameter object has.
+    /// The parameter object `tv`'s current value and its converter, or
+    /// `None` if `tv` is none. The value is always `Some`: the `Option` is
+    /// from when a parameter held a stack of values, which could be empty
+    /// in principle, and stays so that this accessor's callers need not
+    /// change (#930).
     #[inline]
     pub fn parameter_parts(
         &self,
@@ -2946,9 +2932,7 @@ impl Heap {
             return None;
         }
         match self.get_object(tv) {
-            HeapObjectData::Parameter { values, converter } => {
-                Some((values.borrow().last().copied(), *converter))
-            }
+            HeapObjectData::Parameter { value, converter } => Some((Some(*value), *converter)),
             _ => None,
         }
     }
@@ -3065,7 +3049,6 @@ impl Heap {
                 HeapObjectData::Continuation { .. } => "continuation",
                 HeapObjectData::Parameter { .. } => "parameter",
                 HeapObjectData::Promise(_) => "promise",
-                HeapObjectData::Library(_) => "library",
                 HeapObjectData::Values(_) => "values",
                 HeapObjectData::EnvironmentSpecifier { .. } => "environment",
                 HeapObjectData::PromptTag(_) => "continuation-prompt-tag",
