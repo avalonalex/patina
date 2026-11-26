@@ -130,7 +130,9 @@ The architecture is designed to support future exploration:
   yet bound, until no code links one (#836), `code-units`, the code
   units the VM has loaded and not
   released (0 on the tree-walker, #836), `scope-sets`, the scope sets
-  the heap's scope-set table holds for its identifiers (#788), and
+  the heap's scope-set table holds for its identifiers (#788),
+  `documents`, the documents the live identifiers' locations are in
+  (#791), and
   `stack-limit`, the VM's stack cap in bytes (0 on the tree-walker, #907),
   and `committed-stack-bytes`, the bytes of its stack the VM holds
   committed, which `committed-bytes` does not count (0 on the tree-walker,
