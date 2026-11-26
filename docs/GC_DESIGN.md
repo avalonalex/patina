@@ -321,7 +321,9 @@ Notes:
   points at its environment, and every VM unit's link table at its
   namespace, and without dedup marking would be quadratic.
 - A provider reports a value as a slot where it lives in a `Cell`: the VM's
-  registers and its frames' closures, live and in captured continuations.
+  registers and its frames' closures, live and in captured continuations,
+  all words of a register stack (#908). A captured copy reports its every
+  word, the frame headers' fixnums among them, which a visitor passes over.
   Everything else is pinned until the stage that makes it heap data — the
   extents' records and code constants at 4e, environments and library exports
   at 4b — and the tree-walker's values always, its heaps never moving
@@ -916,16 +918,18 @@ the `current_step: StepResult` local** in `eval_in_env`'s trampoline loop
 Everything hangs off `VmState` (`crates/patina-vm/src/runtime/vm_state.rs`).
 Its `RootProvider` implementation lives in the child module
 `runtime/vm_state/gc_roots.rs`, the only production code outside the storage
-implementation allowed to prune its private weak stores. The five dynamic
-collections are owned by `ExecutionState` and traced through read-only slices;
-the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
+implementation allowed to prune its private weak stores. The dynamic
+collections are owned by `ExecutionState`: the register stack, which holds
+the frames and their registers in one buffer of words since #908
+(`VM_RUNTIME.md` §2.1), and the prompt, wind and handler stacks. The
+inventory below names a frame's parts as its view does (`CallFrame`).
 
 | Field | Root? | Notes |
 |-------|-------|-------|
-| `registers` | **yes** | Slots (`Cell`s, #682), reported by the walk of the frames (`gc_roots::trace_frames`, #906), which `trace_roots` runs after the derived trace, whose `ExecutionState` skips the field for it: for each frame, the registers the per-PC compiler map at its pc keeps, a run at a time, and every other register of its window, a completed expression temporary (#423), overwritten as the walk passes it ("Temporary retirement" below); local bindings remain conservative. Every register lies in a frame's window (`PRD/GC_PRD.md` §11.1, invariant 1; #714, asserted in debug builds): a push fills each register no argument or operand writes, a reused window's too, and nothing keeps a word past the top window. The walk still reports a register it finds outside every window, between two or past the top one, with the rest, at one compare a frame, and a debug build refuses it there. Until #714 two words lay outside, rooted by the whole-vector trace of the time and left alone by retirement, which read only windows: the window a finished wind step left behind (`finish_wind_step`) and `run_apply_proc`'s scratch slot past the caller's window |
+| the stack's registers | **yes** | Slots (`Cell`s, #682), reported by the walk of the frames (`gc_roots::trace_frames`, #906), which `trace_roots` runs after the derived trace, whose `ExecutionState` skips the register stack for it: for each frame, top first, the registers the per-PC compiler map at its pc keeps, a run at a time, and every other register of its window, a completed expression temporary (#423), overwritten as the walk passes it ("Temporary retirement" below); local bindings remain conservative. Every word lies in a frame (`PRD/GC_PRD.md` §11.1, invariant 1; #714): a frame is its header and its window, the walk goes from one frame to the next by the distance its header records, and a debug build first checks that the frames tile the buffer (`FrameStack::assert_frames_tile`). A push fills each register no argument or operand writes, a reused window's too. Until #908 the registers were a vector of their own, and the walk reported a register it found outside every window with the rest. Until #714 two words lay outside, rooted by the whole-vector trace of the time and left alone by retirement, which read only windows: the window a finished wind step left behind (`finish_wind_step`) and `run_apply_proc`'s scratch slot past the caller's window |
 | `answer` | **yes** | Pinned (#714). The value `return_into` was handed for a destination of `CallFrame::NO_RETURN`, a higher-order primitive's callback, which writes no register: `call_any` takes back an immediate callee's at once, with no safe point between; one a frame returned into nothing (a continuation that re-entered the callback after its primitive returned) stays until the next replaces it, or `clear` |
-| `frames[*].closure` | **yes** | A slot, reported as the registers are: the frame's `VmClosure`, or the immediate `CallFrame::NO_CLOSURE` (`types/mod.rs`). A bare `Option<ObjectIndex>` with a visitor method of its own until #683 |
-| `frames[*].code`, `running` | by id | Each frame's code (`FrameCode`, `types/mod.rs`) and the code the dispatch loop's `cur_code` holds (`RunningCode`, `execution_state.rs`, written where `cur_code` changes and put back when a nested loop ends) report their code id through `SlotVisitor::code`; the code-id round of the fixpoint (§9.5) hands each id once to `trace_code_ids`, which traces that unit's link table once a collection (`LinkTable::trace_once`, by `trace_epoch`), generation-checked. The constants stay traced from `code_store`, which never traces a table (#836). `load_unit` links each unit's table in the namespace the unit was compiled in, before any read goes through it, so a table traced marks the records its unit links, and with them the placeholders and weak read-through records nothing else marks, the heap's by-name record, and the namespace it was linked in (`LinkTable.namespace`, §8). A table's entries are dereferenced only by the code of a unit something holds: a frame, a marked closure or the running code, each of which reports the unit's id |
+| a frame's `closure` | **yes** | A slot, the word of the frame's header below its first register, reported by the walk as the registers are (#908; by the frame's own derived trace while frames were a vector): the frame's `VmClosure`, or the immediate `CallFrame::NO_CLOSURE` (`types/mod.rs`). A bare `Option<ObjectIndex>` with a visitor method of its own until #683 |
+| a frame's `code`, `running` | by id | Each frame's code, which the walk reports from the register stack's side vector, once for a run of frames in the same code (`FrameCode`, `types/mod.rs`; the header's `code` word is an address the walk reads as a fixnum, #908), and the code the dispatch loop's `cur_code` holds (`RunningCode`, `execution_state.rs`, written where `cur_code` changes and put back when a nested loop ends) report their code id through `SlotVisitor::code`; the code-id round of the fixpoint (§9.5) hands each id once to `trace_code_ids`, which traces that unit's link table once a collection (`LinkTable::trace_once`, by `trace_epoch`), generation-checked. The constants stay traced from `code_store`, which never traces a table (#836). `load_unit` links each unit's table in the namespace the unit was compiled in, before any read goes through it, so a table traced marks the records its unit links, and with them the placeholders and weak read-through records nothing else marks, the heap's by-name record, and the namespace it was linked in (`LinkTable.namespace`, §8). A table's entries are dereferenced only by the code of a unit something holds: a frame, a marked closure or the running code, each of which reports the unit's id |
 | `pending_escape` | **yes** | Pinned. Value parked while crossing a Rust re-entry boundary; multiple values otherwise travel in ordinary registers as heap values |
 | `scratch_args` | yes | Pinned. Empty at every safe point: `mem::take`n while a primitive call holds it, and emptied when the call is done (since #639: the last call's arguments had stayed in it, and a dead key passed to `make-ephemeron` survived a `(gc)`). Rooting it is free and future-proof |
 | `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | Pinned until stage 4e makes them heap data. `tag`/`handler`/`before`/`after` values, and a wind record's `handlers` — the stack of its own `dynamic-wind` call, which its thunks run under and which nothing else holds once the live stack has moved on (`types/continuation.rs`). An `ExceptionHandler` is one procedure now — it used to also carry the wind depth `raise` unwound to, which no raise path needs since Track L families 22/28 |
@@ -977,34 +981,40 @@ register count: so a register a map calls live was written by its
 activation, and the excess capacity past the code's count, which no fill
 reaches, is what retirement alone clears.
 
-Retirement is the collection's own trace of the register file, in one pass
+Retirement is the collection's own trace of the register stack, in one pass
 (#906, GC_PRD §11.1 invariant 3; `gc_roots::trace_frames`): the root
-provider walks the frames, and for each reports the slots its map keeps, a
-run at a time, and overwrites the rest. Until #906 a pass of its own
+provider walks the frames, top first, and for each reports its code and
+closure and the slots its map keeps, a run at a time, and overwrites the
+rest. The walk reads a frame's pc and window from its header, and the top
+frame's pc from the stack's own field (`VM_RUNTIME.md` §2.1, #908). Until #906 a pass of its own
 (`retire_registers`) cleared them before each collection, at the three
 places the VM collects (`maybe_collect`, `collect_for_loader`,
 `collect_at_call`), and the derived trace then reported the whole vector;
-now `ExecutionState`'s derived trace skips the registers for the walk, and
-those places only lend the state. Clearing, not skipping: a slot the walk
+now `ExecutionState`'s derived trace skips the register stack for the walk,
+and those places only lend the state. Clearing, not skipping: a slot the walk
 does not report holds no reference once the walk returns, so a wrong map
 retains garbage or panics at a read, and never leaves a pointer to a swept
 object for a capture's copy, a tracer's register view or the frame's own
 next instruction to find. The walk runs only inside a collection, which
 only the driver runs, at depth 0 (§7): a nested loop clears nothing, since
 the frames beneath it are suspended in the middle of an instruction, which
-may read its operands again. A frame's closure and its code id stay the
-frame's own derived trace's.
+may read its operands again.
 
 Full and delimited continuation snapshots are cleared by the same walk at
 capture, in the copy (`gc_roots::retire_snapshot`, where the handle is
-allocated), with the delimited base offset accounted for, and with their
-hole: the register of the snapshot's top frame its `deliver_reg` names,
+allocated), and with their hole: the register of the snapshot's top frame its `deliver_reg` names,
 which the capturing call never returns into and an arrival writes before
 the frame runs, and which the map keeps as a call's destination. (`call/cc`
 clears it in the live frame too, as it did before the capture cleared its
 own copy: the frame waits on the call while its procedure runs.) A
-snapshot's trace still visits its complete vector, so snapshots and tracer
+snapshot's trace still visits its every word, so snapshots and tracer
 register views never carry deliberately untraced pointers to swept objects.
+
+**A capture's bytes** (#908). A snapshot is a copy of the register stack:
+40 bytes of header and 8 a register for each frame, which is what the
+frames and registers took as two vectors, and 16 bytes for each run of
+frames that share code. Its handle is charged all of it (`payload_bytes`,
+#606).
 
 Runtime stubs are no longer conservative by omission: each carries a map
 that keeps every register at every pc, so a stub's frame is kept by its map
@@ -2153,7 +2163,7 @@ these checks except the defer balance, which every build checks.
     and on arrival the value from the restore to its delivery. The target
     and value themselves stay in the stub's window, which stays for the
     whole travel (#714); until then `finish_wind_step` popped the stub and
-    kept its window on the register file as their only root, outside every
+    kept its window on the register stack as their only root, outside every
     frame's window (#156);
   - a unit from its load to its frame's push (S1, #836): until a frame holds
     the unit's code, only the code store does, and a collection would let

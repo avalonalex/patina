@@ -862,15 +862,20 @@ fp+0   ret      raw     cached resume address in the caller (JIT); 0 in interpre
 fp+8   link     fixnum  caller distance in bytes (fp − caller_fp) [3–34] | nregs [35–50] | flags [51–62]
                         (stub kind; WM = "the return out of this frame crosses the watermark")
 fp+16  code     value   reference to the code descriptor
-fp+24  meta     fixnum  pc of the last suspension point [3–34] | return_reg (result register in the caller) [35–50]
+fp+24  meta     fixnum  pc of the last suspension point [3–31] | return_reg (result register in the caller) [35–50]
 fp+32  closure  value
 fp+40  r0 … rₙ₋₁ tagged values only, in every tier, at every suspension point (§11.2)
 ```
 
-The header is 40 B, today's `CallFrame` size; `closure` becomes a traced value. `code` is a descriptor reference from
+The header is 40 B, the size `CallFrame` had as a stored record; `closure` becomes a traced value. A pc is 29 bits, so a
+body has fewer than 2²⁹ instructions, checked at load (decision A3 on #782). The interpreter writes a frame's pc into its
+header when it pushes a frame above it, and keeps the top frame's in a field beside the stack, which every reader of a pc
+goes through (4d.7b, #908). `code` is a descriptor reference from
 4e; from 4d to 4e it holds the code object's address, an 8-aligned pointer that the scan reads as a fixnum and skips,
-and a per-thread side vector of `Rc<CodeObject>`, pushed and popped with frames and cloned by capture, keeps each
-frame's unit loaded (DESIGN E.5). The interpreter keeps its calling protocol (`return_reg` in the callee's frame);
+and a per-thread side vector of `Rc<CodeObject>`, cloned by capture, keeps each frame's unit loaded (DESIGN E.5). The
+vector holds a reference for each run of consecutive frames in the same code, the first frame of a run is marked in
+the last of `link`'s flags (bit 62) until 4e, and the entry of a run that has returned is kept, to be taken back by
+the next call of the same code, until the code store next asks whether a frame holds a code object (4d.7b, #908). The interpreter keeps its calling protocol (`return_reg` in the callee's frame);
 prompts, handlers and winds record byte offsets from the stack base. The JIT delivers a result as the first
 `CallConv::Tail` argument of the caller's resume entry (`x2` on aarch64, `rdi` on x64 [S]).
 

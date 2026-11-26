@@ -65,13 +65,13 @@ TRACE_FUNCTIONS = {
     ],
     # The VM's weak continuation tables, until stage 4e deletes them, its
     # units' link tables, traced by code id (#836), and the walk of its
-    # frames, the register file's trace (#906).
+    # frames, the register stack's trace (#906, #908).
     "crates/patina-vm/src/runtime/vm_state/gc_roots.rs": [
         "trace_roots",
         "trace_weak_ids",
         "trace_code_ids",
         "trace_frames",
-        "scan_windows",
+        "scan_frames",
         "scan_window",
     ],
     # A frame's code and the running code, reported by id (`FrameCode`,

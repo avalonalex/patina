@@ -12,9 +12,9 @@ It is the single source of truth. All other VM docs should be consistent with it
 
 **Decision:** Register-based VM (not stack-based).
 
-Each `CallFrame` owns a register window: a contiguous slice of a shared
-`Vec<TaggedValue>`. Local variables and temporaries are accessed by index (O(1),
-no hash lookup). Global variables are linked once per distinct name when a
+Each frame owns a register window: a contiguous run of words on the one
+register stack, after the frame's five-word header (§4). Local variables and
+temporaries are accessed by index (O(1), no hash lookup). Global variables are linked once per distinct name when a
 code unit loads (an operand the desugarer linked has an entry of its own,
 preset by pass 5 with its record and left alone at load, #837, whether
 early binding linked it or relinking; the compiler keeps the two apart and
@@ -79,25 +79,36 @@ the binding site. Only the cell pointer is captured.
 ## 4. Continuations: Stack-Snapshot + Control Primitives
 
 **Decision:**
-- Continuations are captured by snapshotting call frames, registers, and
+- Continuations are captured by snapshotting the register stack and the
   dynamic state.
-- `CallFrame` must `#[derive(Clone)]` — enforced from day 1.
+- A frame is a header of five words on the register stack, below its
+  registers, and a snapshot is a copy of the stack's words (GC stage 4d.7b,
+  #908).
 - Continuation operations are **VM control primitives** intercepted at call
   dispatch, not ISA instructions.
 
-### `CallFrame` (non-negotiable invariant)
+### The frame header
 
-```rust
-#[derive(Clone)]
-pub struct CallFrame {
-    pub code_id:       CodeObjectId,
-    pub pc:            usize,
-    pub register_base: usize,
-    pub num_regs:      u16,
-    pub closure:       TaggedValue,     // the VmClosure, or CallFrame::NO_CLOSURE
-    pub return_reg:    Reg,
-}
+```text
+fp+0   ret      0 in an interpreter's frame
+fp+8   link     distance to the caller in bytes | nregs | flags
+fp+16  code     the code object's address
+fp+24  meta     pc | return_reg
+fp+32  closure  the VmClosure, or CallFrame::NO_CLOSURE
+fp+40  r0 … rₙ₋₁
 ```
+
+The layout is `PRD/GC_PRD.md` §11.1's, which the interpreter, JIT code and
+captured continuations share (decision 8, ruled 2026-11-24). Every word is a
+value or a fixnum, so a copy can be traced word by word, and `link` is a
+distance, so a run of frames can be copied to another place and still be
+walked. `types/frame_stack.rs` has the encoding and the operations;
+`docs/VM_RUNTIME.md` §2.1 has what the machine keeps beside the stack.
+
+Until 4d.7b the frames were a vector of `CallFrame` records beside the
+registers, and this section's invariant was that `CallFrame` derive `Clone`,
+since a continuation cloned the vector. `CallFrame` is now a read-only view
+of a header, which nothing stores.
 
 ### Control Primitives
 
@@ -223,7 +234,7 @@ pub type CxHandler =
 
 **Decision:** Explicit `TailCall` instruction in ISA. Compiler detects tail
 positions and emits `TailCall` instead of `Call`. `TailCall` reuses the current
-`CallFrame`.
+frame.
 
 **TailCall arg handling:** Arguments are read into temporaries, then the VM
 collects all values first before writing to callee base. This avoids clobbering

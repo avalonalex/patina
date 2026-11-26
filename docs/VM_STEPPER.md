@@ -42,24 +42,29 @@ Each line has the format:
 ```
 $ echo '(+ 1 2)' > /tmp/t.scm && patina --trace /tmp/t.scm
 
-[0001] D=1 #102 pc=0   LoadGlobal   r1 <- globals[+]  (base=0 regs=4)
-       r1[1] = #<prim>  (was ())
-[0002] D=1 #102 pc=1   LoadImm      r2 <- fixnum(1)  (base=0 regs=4)
-       r2[2] = 1  (was ())
-[0003] D=1 #102 pc=2   LoadImm      r3 <- fixnum(2)  (base=0 regs=4)
-       r3[3] = 2  (was ())
-[0004] D=1 #102 pc=3   Call         r0 <- r1(r2, r3)  (base=0 regs=4)
-       r0[0] = 3  (was ())
-[0005] D=1 #102 pc=4   Return       r0  (base=0 regs=4)
+[0001] D=1 #102 pc=0   LoadGlobal   r1 <- globals[+]  (base=5 regs=4)
+       r1[6] = #<prim>  (was ())
+[0002] D=1 #102 pc=1   LoadImm      r2 <- fixnum(1)  (base=5 regs=4)
+       r2[7] = 1  (was ())
+[0003] D=1 #102 pc=2   LoadImm      r3 <- fixnum(2)  (base=5 regs=4)
+       r3[8] = 2  (was ())
+[0004] D=1 #102 pc=3   Call         r0 <- r1(r2, r3)  (base=5 regs=4)
+       r0[5] = 3  (was ())
+[0005] D=1 #102 pc=4   Return       r0  (base=5 regs=4)
 ```
 
 Key:
 - `[0001]` — step number (monotonically increasing)
-- `D=1` — frame stack depth (number of active CallFrames)
+- `D=1` — frame stack depth (number of active frames)
 - `#102` — CodeObject ID
 - `pc=0` — program counter before execution
-- `r1[1]` — frame-relative register r1 at absolute index 1
-- `(base=0 regs=4)` — this frame's register window: registers[0..4]
+- `r1[6]` — frame-relative register r1 at absolute index 6: a word of the
+  register stack, which holds the frames' headers as well as their
+  registers (#908)
+- `(base=5 regs=4)` — this frame's register window: words 5 to 8 of the
+  stack. A frame's header is the five words below its base, so the first
+  frame's window starts at 5, and each frame's base is 5 past the end of
+  the window below it
 - `globals[+]` — a global operand, by the spelling its unit's link table
   holds; `globals[car@linked]`, an operand the desugarer linked to a binding
   record (#837), pinned in the table and read through that record, never by
@@ -222,8 +227,8 @@ Note its register base and which register holds the cell (usually r0).
 ```rust
 let filter = TraceFilter {
     // Watch the absolute index of the MutableCell register
-    // (register_base + register_number)
-    watchpoints: [3].into(),  // e.g., base=3, cell in r0 -> abs=3
+    // (register_base + register_number), as a trace prints it
+    watchpoints: [5].into(),  // e.g., base=5, cell in r0 -> abs=5
     ..Default::default()
 };
 ```

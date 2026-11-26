@@ -34,16 +34,18 @@
 //! whatever keeps a unit can run its code, and so reports its id.
 //!
 //! The registers and the frames' closures, live and in captured
-//! continuations, are reported as slots, where they live (#682). Everything
+//! continuations, are reported as slots, where they live (#682): words of
+//! the register stack (#908). Everything
 //! else is pinned until a stage makes it heap data: the extents' records and
 //! the code's constants at 4e, the environments at 4b; and the scratch
 //! arguments and the pending escape, empty or unset at every safe point.
 //!
-//! The live registers are the one part of the state its derived trace
-//! leaves out: [`trace_frames`] walks the frames instead, reports the
-//! registers each frame's map keeps and clears the rest, in one pass
-//! (#906). A capture clears its copy by the same walk ([`retire_snapshot`]),
-//! and a snapshot's trace then reports its whole register file.
+//! The live register stack is the one part of the state its derived trace
+//! leaves out: [`trace_frames`] walks the frames instead, reports each
+//! frame's code and closure and the registers its map keeps, and clears the
+//! rest, in one pass (#906). A capture clears its copy by the same walk
+//! ([`retire_snapshot`]), and a snapshot's trace then reports its every
+//! word: the headers' other words are fixnums, which a visitor passes over.
 //!
 //! The weak protocol is sound because every store touch (capture, invoke)
 //! is confined to one instruction dispatch and nested loops defer
@@ -59,7 +61,7 @@
 use patina_core::{GC_CHECK, GcVisitor, RootProvider, SlotVisitor, Trace};
 use rustc_hash::FxHashMap;
 
-use crate::types::{CallFrame, CodeObjectId, Reg};
+use crate::types::{CallFrame, CodeObjectId, FrameStack, Reg};
 use patina_core::TaggedValue;
 use std::cell::Cell;
 
@@ -79,16 +81,18 @@ const RETIRED: TaggedValue = if GC_CHECK {
 };
 
 /// A collection's walk of the live frames (#906, GC_PRD §11.1 invariant 3):
-/// in one pass, each frame's registers that the map at its pc keeps are
-/// reported to `visitor` where they live, a run at a time, and every other
-/// register of its window is overwritten with [`RETIRED`]. This is the
-/// register file's whole trace: `ExecutionState`'s derived trace skips the
-/// field for it, and `VmState`'s `trace_roots` calls it. Until #906 a pass
-/// of its own retired the registers before each collection, and the derived
-/// trace then reported the file whole.
+/// in one pass, each frame's code is reported by id (once for a run of
+/// frames in the same code) and its closure where it lives, each of its registers that the map at its pc keeps is reported
+/// where it lives, a run at a time, and every other register of its window
+/// is overwritten with [`RETIRED`]. This is the register stack's whole
+/// trace: `ExecutionState`'s derived trace skips the field for it, and
+/// `VmState`'s `trace_roots` calls it. Until #906 a pass of its own retired
+/// the registers before each collection, and the derived trace then
+/// reported the file whole; until #908 the frames were a vector of their
+/// own, whose derived trace reported their closures and code.
 ///
 /// **Clearing, not skipping.** A register the walk does not report holds no
-/// reference once it returns, so nothing that reads the register file
+/// reference once it returns, so nothing that reads the register stack
 /// afterwards, a capture's copy or the step tracer or the reader a wrong map
 /// leaves, finds a pointer to an object this collection freed: a wrong map
 /// retains garbage or panics at the read of a `DEAD_SLOT` (#625), and never
@@ -100,29 +104,37 @@ const RETIRED: TaggedValue = if GC_CHECK {
 /// nothing: the frames beneath it are suspended in the middle of an
 /// instruction, which may read its operands again when it resumes.
 ///
-/// What [`scan_windows`] does at each frame holds here: hand-built code
-/// keeps every register, a frame at an unmapped pc panics in a check build
-/// and keeps every register in a plain release one, and a register outside
-/// every frame's window, which #714 left none of, is reported with the
-/// rest, never passed over, and refused by a debug build.
-///
-/// The frames' closures and code ids are not this walk's: each frame's own
-/// derived trace reports them (`ExecutionState.frames`).
+/// What [`scan_frames`] does at each frame holds here: hand-built code
+/// keeps every register, and a frame at an unmapped pc panics in a check
+/// build and keeps every register in a plain release one. No word lies
+/// outside every frame (#714): a frame is its header and its window, and
+/// the walk goes from one to the next by the distance the header records,
+/// which a debug build checks against the buffer first
+/// (`FrameStack::assert_frames_tile`).
 ///
 /// The census reads the stack's shape here, as the collection starts.
-pub(in crate::runtime) fn trace_frames(
-    registers: &[Cell<TaggedValue>],
-    frames: &[CallFrame],
-    visitor: &mut dyn SlotVisitor,
-) {
-    patina_core::census::stack_shape(frames.len(), registers.len());
-    let outside = scan_windows(registers, frames, 0, |run| visitor.slots(run));
-    debug_assert!(
-        outside.is_none(),
-        "register {outside:?} of {} lies outside every frame's window (#714, \
-         PRD/GC_PRD.md §11.1, invariant 1); the walk reported it with the rest",
-        registers.len()
-    );
+pub(in crate::runtime) fn trace_frames(stack: &FrameStack, visitor: &mut dyn SlotVisitor) {
+    let (frames, registers) = stack.census_shape();
+    patina_core::census::stack_shape(frames, registers);
+    if cfg!(debug_assertions) {
+        stack.assert_frames_tile();
+    }
+    let words = stack.words();
+    // The code id last reported: frames that follow one another in the same
+    // code, as a recursion's do, report it once.
+    let mut reported = None;
+    scan_frames(stack, |scanned| match scanned {
+        Scanned::Frame(frame) => {
+            let id = frame.code.id.0;
+            if reported != Some(id) {
+                reported = Some(id);
+                visitor.code(id);
+            }
+            // The closure, the word below the frame's first register.
+            visitor.slots(&words[frame.register_base - 1..frame.register_base]);
+        }
+        Scanned::Live(run) => visitor.slots(run),
+    });
 }
 
 /// A capture's pass over its copy (#906, GC_PRD §13): the walk a collection
@@ -130,10 +142,8 @@ pub(in crate::runtime) fn trace_frames(
 /// and with nothing to report, so that each register its frame's map calls
 /// dead is overwritten with [`RETIRED`] in the copy; and with it `hole`,
 /// the register of the snapshot's top frame that invoking the continuation
-/// delivers into. The snapshot's own trace then reports its whole register
-/// file, so no snapshot or tracer view carries a pointer nothing traces.
-/// A delimited snapshot's frames keep their absolute bases and its file is
-/// only its slice, which starts at `base_at_capture`.
+/// delivers into. The snapshot's own trace then reports its every word, so
+/// no snapshot or tracer view carries a pointer nothing traces.
 ///
 /// **The hole.** The capturing call never returns a value into it, and an
 /// arrival writes it before the frame runs again (`step_wind_jump`,
@@ -152,29 +162,26 @@ pub(in crate::runtime) fn trace_frames(
 /// paths keep their shape.
 #[cold]
 #[inline(never)]
-pub(in crate::runtime) fn retire_snapshot(
-    registers: &[Cell<TaggedValue>],
-    frames: &[CallFrame],
-    base_at_capture: usize,
-    hole: Option<Reg>,
-) {
-    // A register outside every window is left as it is: the snapshot's
-    // trace reports the whole file, and the live stack's checks are what
-    // refuse one (`trace_frames`, `debug_assert_windows_tile`).
-    scan_windows(registers, frames, base_at_capture, |_run| {});
-    if let (Some(top), Some(hole)) = (frames.last(), hole)
+pub(in crate::runtime) fn retire_snapshot(stack: &FrameStack, hole: Option<Reg>) {
+    scan_frames(stack, |_scanned| {});
+    if let (Some(top), Some(hole)) = (stack.top(), hole)
         && hole != CallFrame::NO_RETURN
     {
-        registers[top.register_base - base_at_capture + hole as usize].set(RETIRED);
+        stack.words()[top.register_base + hole as usize].set(RETIRED);
     }
 }
 
-/// The walk [`trace_frames`] and [`retire_snapshot`] share: for each of
-/// `frames`, bottom first, hand `live` the registers of its window that the
-/// map at its pc keeps, a run at a time, and overwrite the rest with
-/// [`RETIRED`] ([`scan_window`]). `registers` is the file the windows lie
-/// in, from `base_at_capture`: 0 for the live stack and a full snapshot,
-/// and the base of a delimited snapshot's first frame.
+/// What [`scan_frames`] hands its caller: a frame, as the walk comes to
+/// it, and then each run of that frame's registers its map keeps.
+enum Scanned<'a> {
+    Frame(&'a CallFrame<'a>),
+    Live(&'a [Cell<TaggedValue>]),
+}
+
+/// The walk [`trace_frames`] and [`retire_snapshot`] share: for each frame
+/// of `stack`, top first, hand `each` the frame, then the registers of its
+/// window that the map at its pc keeps, a run at a time, and overwrite the
+/// rest with [`RETIRED`] ([`scan_window`]).
 ///
 /// - **Hand-built code** has no maps, and keeps every register.
 /// - **A frame at a pc its code has no map for,** one no frame can be
@@ -182,71 +189,44 @@ pub(in crate::runtime) fn retire_snapshot(
 ///   compiler missed a suspension point: a check build panics there
 ///   ([`unmapped_pc`]), and a plain release build keeps every register of
 ///   the frame.
-/// - **A register outside every frame's window,** between two windows or
-///   past the top one, is handed to `live` with the rest, whole: one
-///   compare a frame, and no word passed over. #714 left none, and this
-///   answers the first one it met, for the collection's walk to refuse in a
-///   debug build.
 ///
 /// A frame is taken apart by name, so that a new field has to be placed.
 #[inline(always)]
-fn scan_windows(
-    registers: &[Cell<TaggedValue>],
-    frames: &[CallFrame],
-    base_at_capture: usize,
-    mut live: impl FnMut(&[Cell<TaggedValue>]),
-) -> Option<usize> {
-    let mut outside = None;
-    // Where the window below ends, which is where this one starts.
-    let mut end = 0;
-    for frame in frames {
+fn scan_frames(stack: &FrameStack, mut each: impl FnMut(Scanned<'_>)) {
+    let words = stack.words();
+    for frame in stack.frames() {
+        each(Scanned::Frame(&frame));
         let CallFrame {
             pc,
             register_base,
             num_regs,
-            // The frame's closure, a slot, which the frame's own trace
-            // reports (`ExecutionState.frames`, a snapshot's `frames`).
+            // The frame's closure, a word of the stack: the caller's to
+            // report for the live stack, and a snapshot's own trace's.
             closure: _,
             // A register number, in the caller's window.
             return_reg: _,
             code,
         } = frame;
-        let base = *register_base - base_at_capture;
-        if base != end {
-            // A window that starts below the one under it ends leaves no
-            // gap to report, and the slice is empty.
-            let gap = registers.get(end..base).unwrap_or_default();
-            live(gap);
-            outside = outside.or(Some(end.min(base)));
-        }
-        end = base + *num_regs as usize;
-        let window = &registers[base..end];
+        let window = &words[register_base..register_base + num_regs as usize];
         // Hand-built code has no maps, and keeps every register.
         let Some(maps) = &code.register_roots else {
-            live(window);
+            each(Scanned::Live(window));
             continue;
         };
-        let Some(roots) = maps.at(*pc) else {
+        let Some(roots) = maps.at(pc) else {
             if GC_CHECK {
-                unmapped_pc(frame);
+                unmapped_pc(&frame);
             }
-            live(window);
+            each(Scanned::Live(window));
             continue;
         };
         scan_window(
             window,
             roots,
-            switches::dropped(roots, *num_regs),
-            &mut live,
+            switches::dropped(roots, num_regs),
+            &mut |run| each(Scanned::Live(run)),
         );
     }
-    if let Some(past) = registers.get(end..)
-        && !past.is_empty()
-    {
-        live(past);
-        outside = outside.or(Some(end));
-    }
-    outside
 }
 
 /// One window against `roots`, the map of its frame's pc: hand `live` each
@@ -287,7 +267,7 @@ fn scan_window(
 /// A check build's refusal of a frame found at a pc with no map (#905).
 #[cold]
 #[inline(never)]
-fn unmapped_pc(frame: &CallFrame) -> ! {
+fn unmapped_pc(frame: &CallFrame<'_>) -> ! {
     let after = (frame.pc.checked_sub(1)).and_then(|pc| frame.code.instructions.get(pc));
     panic!(
         "a frame of code {} ({:?}) is at pc {}, after {after:?}, which has no \
@@ -350,9 +330,9 @@ pub(in crate::runtime) use crate::test_support as switches;
 impl RootProvider for VmState {
     /// `VmState`'s derived trace (#686), whose fields say what each holds,
     /// in a new epoch: `trace_roots` runs once, first, in each collection.
-    /// Then the register file, which the derived trace leaves to the walk
-    /// of the frames (#906, [`trace_frames`]): each frame's live registers
-    /// reported, and its dead ones cleared.
+    /// Then the register stack, which the derived trace leaves to the walk
+    /// of the frames (#906, #908, [`trace_frames`]): each frame's code,
+    /// closure and live registers reported, and its dead registers cleared.
     fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
         self.trace_epoch.set(self.trace_epoch.get() + 1);
         Trace::trace(self, visitor);
@@ -485,7 +465,6 @@ pub(crate) fn collect_with_a_frame_at_an_unmapped_pc() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::FrameCode;
     use crate::types::code_object::{Arity, CodeObject};
     use std::rc::Rc;
 
@@ -587,82 +566,76 @@ mod tests {
         }
     }
 
-    /// A frame of hand-built code, which has no maps and keeps every
-    /// register, whose window is `num_regs` registers from `register_base`.
-    fn frame(register_base: usize, num_regs: u16) -> CallFrame {
-        CallFrame {
-            pc: 0,
-            register_base,
+    /// Hand-built code, which has no maps and keeps every register.
+    fn code(num_regs: u16) -> Rc<CodeObject> {
+        Rc::new(CodeObject {
+            id: CodeObjectId::label(),
+            name: None,
+            links: patina_core::LinkTable::empty(),
+            live_closures: Cell::new(0),
+            instructions: Vec::new(),
+            constants: Vec::new(),
             num_regs,
-            closure: Cell::new(CallFrame::NO_CLOSURE),
-            return_reg: 0,
-            code: FrameCode(Rc::new(CodeObject {
-                id: CodeObjectId::label(),
-                name: None,
-                links: patina_core::LinkTable::empty(),
-                live_closures: Cell::new(0),
-                instructions: Vec::new(),
-                constants: Vec::new(),
-                num_regs,
-                arity: Arity::Fixed(0),
-                source_map: Vec::new(),
-                register_roots: None,
-            })),
+            arity: Arity::Fixed(0),
+            source_map: Vec::new(),
+            register_roots: None,
+        })
+    }
+
+    /// A collection's walk reports, for every frame, its code by id, its
+    /// closure and its registers, each where it lives, and nothing else:
+    /// the header's other words are not values, and no word lies outside a
+    /// frame (#714, #908).
+    #[test]
+    fn the_walk_reports_each_frames_code_closure_and_registers() {
+        #[derive(Default)]
+        struct Seen {
+            slots: Vec<i64>,
+            codes: Vec<u64>,
         }
-    }
-
-    /// The registers `scan_windows` hands to `live`, by number, and the
-    /// first register it found outside every window.
-    fn walk(registers: &[Cell<TaggedValue>], frames: &[CallFrame]) -> (Vec<i64>, Option<usize>) {
-        let mut reported = Vec::new();
-        let outside = scan_windows(registers, frames, 0, |run| {
-            reported.extend(run.iter().map(|slot| slot.get().as_fixnum().unwrap()));
-        });
-        (reported, outside)
-    }
-
-    /// A register outside every frame's window, which #714 left none of, is
-    /// handed on with the rest and never passed over: below the first
-    /// window, between two, and past the top one, in a build of any kind.
-    /// The walk answers the first, which a collection's refuses in a debug
-    /// build ([`a_debug_build_refuses_a_register_outside_every_window`]).
-    #[test]
-    fn a_register_outside_every_window_is_reported_with_the_rest() {
-        let registers = window(9);
-        let tiled = [frame(0, 4), frame(4, 5)];
-        assert_eq!(walk(&registers, &tiled), ((0..9).collect(), None));
-
-        // r0 lies below the first window, r4 and r5 between the two, and r8
-        // past the top one.
-        let gapped = [frame(1, 3), frame(6, 2)];
-        assert_eq!(walk(&registers, &gapped), ((0..9).collect(), Some(0)));
-        let between = [frame(0, 4), frame(6, 3)];
-        assert_eq!(walk(&registers, &between), ((0..9).collect(), Some(4)));
-        let past = [frame(0, 4), frame(4, 4)];
-        assert_eq!(walk(&registers, &past), ((0..9).collect(), Some(8)));
-        // No frame at all: the whole file.
-        assert_eq!(walk(&registers, &[]), ((0..9).collect(), Some(0)));
-        assert_eq!(walk(&[], &[]), (Vec::new(), None));
-    }
-
-    /// A collection's walk refuses that register in a debug build, where
-    /// `ExecutionState`'s own assertions hold the windows to tiling the file
-    /// (#714). Only a debug build: a release build reports the register and
-    /// goes on.
-    #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "lies outside every frame's window")]
-    fn a_debug_build_refuses_a_register_outside_every_window() {
-        struct Ignore;
-        impl SlotVisitor for Ignore {
-            fn slot(&mut self, _slot: &Cell<TaggedValue>) {}
+        impl SlotVisitor for Seen {
+            fn slot(&mut self, slot: &Cell<TaggedValue>) {
+                self.slots.push(slot.get().as_fixnum().unwrap());
+            }
             fn pinned(&mut self, _value: TaggedValue) {}
             fn env(&mut self, _env: &Rc<patina_core::environment::Environment>) {}
             fn continuation(&mut self, _k: &Rc<patina_core::CpsContinuation>) {}
             fn cont_env(&mut self, _cont_env: &patina_core::cont_value::ContEnv) {}
             fn expr_literals(&mut self, _expr: &patina_core::CpsExpr) {}
-            fn code(&mut self, _id: u64) {}
+            fn code(&mut self, id: u64) {
+                self.codes.push(id);
+            }
         }
-        trace_frames(&window(5), &[frame(0, 4)], &mut Ignore);
+        // Two frames, of 4 and 3 registers. Each closure word and register
+        // holds a fixnum of its own: 100 and 200 for the closures, and the
+        // registers 0 to 6 from the bottom.
+        let (lower, upper) = (code(4), code(3));
+        let mut stack = FrameStack::default();
+        let mut next = 0;
+        for (code, closure) in [(&lower, 100), (&upper, 200)] {
+            let n = code.num_regs;
+            let base = stack.push(code, TaggedValue::fixnum(closure), 0, n, TaggedValue::NULL);
+            for slot in &stack.words()[base..base + n as usize] {
+                slot.set(TaggedValue::fixnum(next));
+                next += 1;
+            }
+        }
+        let mut seen = Seen::default();
+        trace_frames(&stack, &mut seen);
+        // The top frame first: its closure, then its registers.
+        assert_eq!(seen.slots, [200, 4, 5, 6, 100, 0, 1, 2, 3]);
+        assert_eq!(seen.codes, [upper.id.0, lower.id.0]);
+
+        // A capture's pass reports nothing and, for hand-built code, clears
+        // only the hole, in the top frame.
+        retire_snapshot(&stack, Some(1));
+        let words: Vec<_> = stack.words().iter().map(|slot| slot.get()).collect();
+        assert_eq!(words[stack.base() + 1], RETIRED);
+        assert_eq!(
+            words.iter().filter(|&&word| word == RETIRED).count(),
+            1,
+            "only the hole is cleared"
+        );
+        retire_snapshot(&FrameStack::default(), Some(1));
     }
 }

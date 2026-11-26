@@ -7,6 +7,7 @@
 pub mod code_object;
 pub mod continuation;
 mod depth;
+pub(crate) mod frame_stack;
 pub mod instruction;
 
 pub use code_object::{Arity, CodeObject, CodeObjectId, ConstIdx};
@@ -14,11 +15,11 @@ pub use continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
 pub(crate) use depth::Depth;
+pub use frame_stack::FrameStack;
 pub use instruction::Instruction;
 
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{SlotVisitor, Trace};
-use std::cell::Cell;
 use std::rc::Rc;
 
 /// Register index (frame-relative, u16 allows up to 65535 registers per frame)
@@ -31,66 +32,56 @@ pub type LabelId = usize; // instruction index (absolute within a CodeObject)
 // CallFrame
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A single activation record on the call stack.
+/// A view of one activation record on the register stack: what its header
+/// holds, read out.
 ///
-/// `CallFrame` MUST always implement `Clone`. This is a non-negotiable invariant:
-/// stack-snapshot continuations (`CaptureComposable`, `AbortToPrompt`) need to
-/// clone the entire call stack. See VM_DECISIONS.md §4 and VM_ISA.md §2.2.
+/// Until GC stage 4d.7b (#908) this was the record itself, a vector of
+/// them beside the registers, and its `Clone` was what a continuation
+/// copied. A frame is now five words of the register stack below its
+/// registers ([`FrameStack`]), and this is only how the step tracer, the
+/// collector's walk and the machine's rarer paths read one: nothing stores
+/// it, and a write goes through the stack.
 ///
-/// `return_reg` is stored in the *callee's* frame and names the register in the
-/// *caller's* window where the return value should be written. The `Return`
-/// instruction reads this field without needing to inspect the caller's frame.
-///
-/// Its trace (derived, #686) reports its closure, a slot like a register,
-/// and its code by id ([`FrameCode`], #836).
-#[derive(Debug, Clone, Trace)]
-pub struct CallFrame {
-    /// Program counter — index of the next instruction to execute.
-    #[trace(skip, reason = "an instruction index")]
+/// `return_reg` is kept in the *callee's* frame and names the register in
+/// the *caller's* window where the return value should be written, so
+/// `Return` does not inspect the caller's frame.
+#[derive(Debug, Clone, Copy)]
+pub struct CallFrame<'a> {
+    /// Program counter: the index of the next instruction to execute.
     pub pc: usize,
-    /// Offset into `ExecutionState::registers` where this frame's r0 lives.
-    #[trace(
-        skip,
-        reason = "a register index; the window is traced with the register file"
-    )]
+    /// The index in the register stack's words of this frame's r0. Its
+    /// header is the five words below.
     pub register_base: usize,
-    /// Number of registers owned by this frame.
-    #[trace(skip, reason = "a count")]
+    /// Number of registers this frame's window holds: its code's, or more
+    /// where a tail call reused a larger window.
     pub num_regs: u16,
     /// The closure this activation runs, a `VmClosure`, or
     /// [`CallFrame::NO_CLOSURE`] for code that runs none: top-level code,
     /// wherever it was compiled (the program, a library's body form, a host
     /// namespace's form), which reads through its unit's link table, and the
     /// stubs (#779, #836). Read only for a closure's free variables
-    /// (`LoadClosure`), never for an environment. A slot like a register,
-    /// and traced as one (#682).
-    pub closure: Cell<TaggedValue>,
+    /// (`LoadClosure`), never for an environment. A word of the stack like
+    /// a register, and traced as one (#682).
+    pub closure: TaggedValue,
     /// Register in the *caller's* frame where `Return` should write its result.
     /// When there is no caller (top-level), this field is unused.
-    #[trace(skip, reason = "a register number")]
     pub return_reg: Reg,
-    /// The code object this frame executes, resolved once at push time.
-    /// Code objects are immutable after loading, so caching the `Rc` here is
-    /// safe and lets the dispatch loop fetch instructions without a
-    /// `code_store` lookup per instruction. Its id is `code.id` — the
-    /// frame stores no separate copy that could drift out of sync. Traced by
-    /// that id ([`FrameCode`]): the unit's link table through
-    /// `trace_code_ids`, the constants through `code_store`, which keeps
-    /// every code object a frame or a captured continuation can run (#338).
-    pub code: FrameCode,
+    /// The code object this frame executes. The frame's `code` word holds
+    /// its address, and the stack's side vector the `Rc` this borrows,
+    /// which keeps the code's unit loaded while the frame or a captured
+    /// copy of it lives (#338).
+    pub code: &'a Rc<CodeObject>,
 }
 
-/// A frame's code (#836): what the dispatch loop runs, and the frame's edge
-/// to its unit's link table. Its trace reports the code's id, which the
+/// A frame's code, as the register stack's side vector holds it (#836,
+/// #908): what keeps the frame's unit loaded, and the frame's edge to its
+/// unit's link table. Its trace reports the code's id, which the
 /// collector resolves to the unit's table (`VmState::trace_code_ids`); the
 /// constants stay traced from `code_store` until 4e. A newtype, because the
 /// derive cannot report an id, an `Rc<CodeObject>` unskipped would trace
 /// the constants through it, and a field of `CodeObject` that reported its
 /// id would be reported from `code_store` too, which would keep every
 /// loaded unit's table.
-///
-/// It is the `Rc` alone, so `CallFrame` keeps its size, and the
-/// continuation snapshots that copy frames their charge (#606).
 #[derive(Debug, Clone)]
 pub struct FrameCode(pub Rc<CodeObject>);
 
@@ -111,7 +102,7 @@ impl Trace for FrameCode {
     }
 }
 
-impl CallFrame {
+impl CallFrame<'_> {
     /// What a frame that runs no closure holds as its `closure`.
     pub const NO_CLOSURE: TaggedValue = TaggedValue::FALSE;
 
@@ -119,7 +110,7 @@ impl CallFrame {
     /// caller (#714): a higher-order primitive's callback, whose value the
     /// dispatch loop hands the primitive (`run_apply_proc`). No window
     /// reaches it, since a window's registers number at most `u16::MAX`,
-    /// so it is past the end of the register file, and `return_into` writes
+    /// so it is past the end of the register stack, and `return_into` writes
     /// no register for it. A continuation that re-enters the callback after
     /// the primitive has returned then returns into nothing.
     pub(crate) const NO_RETURN: Reg = Reg::MAX;
@@ -127,8 +118,7 @@ impl CallFrame {
     /// The closure this frame runs, if it runs one.
     #[inline(always)]
     pub fn closure(&self) -> Option<TaggedValue> {
-        let closure = self.closure.get();
-        closure.is_object().then_some(closure)
+        self.closure.is_object().then_some(self.closure)
     }
 }
 

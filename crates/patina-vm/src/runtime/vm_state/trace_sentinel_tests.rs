@@ -38,7 +38,7 @@ use crate::types::code_object::{Arity, CodeObject, RegisterMaps};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use crate::types::{CallFrame, CodeObjectId, Depth, FrameCode, Instruction};
+use crate::types::{CallFrame, CodeObjectId, Depth, FrameStack, Instruction};
 
 /// Code with these constants and nothing else.
 fn code_holding(constants: Vec<TaggedValue>) -> Rc<CodeObject> {
@@ -56,17 +56,81 @@ fn code_holding(constants: Vec<TaggedValue>) -> Rc<CodeObject> {
     })
 }
 
+/// A frame for [`stack_of`] to push: its code, the closure it runs, the pc
+/// it is suspended at, and how many registers its window takes.
+struct Frame {
+    code: Rc<CodeObject>,
+    closure: TaggedValue,
+    pc: usize,
+    num_regs: u16,
+}
+
 /// A frame running `code` for the closure `closure`, which the frame holds
-/// in a slot.
-fn frame(code: &Rc<CodeObject>, closure: TaggedValue) -> CallFrame {
-    CallFrame {
+/// in a word of the stack, with one register.
+fn frame(code: &Rc<CodeObject>, closure: TaggedValue) -> Frame {
+    Frame {
+        code: Rc::clone(code),
+        closure,
         pc: 0,
-        register_base: 0,
         num_regs: 1,
-        closure: Cell::new(closure),
-        return_reg: 0,
-        code: FrameCode(Rc::clone(code)),
     }
+}
+
+/// A register stack of `frames`, bottom first, whose windows hold
+/// `registers` in order: each frame takes as many as its window has.
+fn stack_of(registers: Vec<TaggedValue>, frames: Vec<Frame>) -> FrameStack {
+    let mut stack = FrameStack::default();
+    let mut registers = registers.into_iter();
+    for frame in frames {
+        let base = stack.push(
+            &frame.code,
+            frame.closure,
+            0,
+            frame.num_regs,
+            TaggedValue::NULL,
+        );
+        stack.set_pc(frame.pc);
+        for slot in &stack.words()[base..base + frame.num_regs as usize] {
+            slot.set(registers.next().expect("a register for each of a window's"));
+        }
+    }
+    assert!(
+        registers.next().is_none(),
+        "a register outside every window"
+    );
+    stack
+}
+
+/// Every register of `stack`, bottom frame first: its words less its
+/// frames' headers.
+fn registers_of(stack: &FrameStack) -> Vec<TaggedValue> {
+    let mut windows: Vec<Vec<TaggedValue>> = stack
+        .frames()
+        .map(|f| {
+            stack.words()[f.register_base..f.register_base + f.num_regs as usize]
+                .iter()
+                .map(Cell::get)
+                .collect()
+        })
+        .collect();
+    windows.reverse();
+    windows.concat()
+}
+
+/// The words of `stack` that hold values, where they live: each frame's
+/// registers and then its closure, bottom frame first.
+fn value_slots(stack: &FrameStack) -> Vec<&Cell<TaggedValue>> {
+    let mut frames: Vec<Vec<&Cell<TaggedValue>>> = stack
+        .frames()
+        .map(|f| {
+            stack.words()[f.register_base..f.register_base + f.num_regs as usize]
+                .iter()
+                .chain(&stack.words()[f.register_base - 1..f.register_base])
+                .collect()
+        })
+        .collect();
+    frames.reverse();
+    frames.concat()
 }
 
 /// A wind record whose thunks and handler are these values.
@@ -140,8 +204,7 @@ fn every_vm_state_root_is_traced() {
     let code = code_holding(vec![constant]);
     let mut state = VmState {
         execution: ExecutionState::from_parts(
-            vec![Cell::new(register)],
-            vec![frame(&code, closure)],
+            stack_of(vec![register], vec![frame(&code, closure)]),
             vec![prompt(tag, prompt_handler)],
             vec![wind(before, after, wind_handler)],
             vec![handler(installed)],
@@ -251,11 +314,10 @@ fn every_continuation_snapshot_field_is_traced() {
         installed,
     ] = full;
     let full_ref = state.alloc_vm_continuation(VmContinuation {
-        frames: vec![frame(&code, closure)],
+        stack: stack_of(vec![register], vec![frame(&code, closure)]),
         dynamic_winds: vec![wind(before, after, wind_handler)],
         prompt_stack: vec![prompt(tag, prompt_handler)],
         exception_handlers: vec![handler(installed)],
-        registers: vec![Cell::new(register)],
         // No hole in the window: the capture clears the register its
         // `deliver_reg` names (#906), and this one holds the sentinel.
         deliver_reg: CallFrame::NO_RETURN,
@@ -275,10 +337,8 @@ fn every_continuation_snapshot_field_is_traced() {
         installed,
     ] = delimited;
     let delimited_ref = state.alloc_vm_delimited_continuation(VmDelimitedContinuation {
-        frames: vec![frame(&code, closure)],
+        stack: stack_of(vec![register], vec![frame(&code, closure)]),
         dynamic_winds: vec![wind(before, after, wind_handler)],
-        registers: vec![Cell::new(register)],
-        base_at_capture: 0,
         deliver_reg: Some(CallFrame::NO_RETURN),
         depth_at_capture: Depth::BASE,
         wind_depth_at_capture: 0,
@@ -343,6 +403,11 @@ impl Rewriter {
 /// visitor that writes into each slot it is shown changes the VM's own
 /// state, and puts it back. The other providers, the tree-walker's, the
 /// library registry and the step tracer, report every value pinned.
+///
+/// The live stack reports each frame's closure and registers, and no other
+/// word of a header: the walk reads those to find the next frame. A
+/// captured copy reports its every word (#908), the headers' fixnums among
+/// them, which a collector passes over.
 #[test]
 fn every_slot_the_vm_reports_is_where_its_value_lives() {
     use patina_core::RootProvider;
@@ -350,24 +415,24 @@ fn every_slot_the_vm_reports_is_where_its_value_lives() {
     let mut state = VmState::on_a_fresh_heap();
     let code = code_holding(Vec::new());
     state.execution = ExecutionState::from_parts(
-        vec![Cell::new(fixnum(1)), Cell::new(fixnum(2))],
         // Both registers are its window: the walk of the frames reports a
-        // window's registers, and a debug build refuses one outside every
-        // window (#906).
-        vec![CallFrame {
-            num_regs: 2,
-            ..frame(&code, fixnum(3))
-        }],
+        // window's registers (#906).
+        stack_of(
+            vec![fixnum(1), fixnum(2)],
+            vec![Frame {
+                num_regs: 2,
+                ..frame(&code, fixnum(3))
+            }],
+        ),
         Vec::new(),
         Vec::new(),
         Vec::new(),
     );
     state.alloc_vm_continuation(VmContinuation {
-        frames: vec![frame(&code, fixnum(5))],
+        stack: stack_of(vec![fixnum(4)], vec![frame(&code, fixnum(5))]),
         dynamic_winds: Vec::new(),
         prompt_stack: Vec::new(),
         exception_handlers: Vec::new(),
-        registers: vec![Cell::new(fixnum(4))],
         // No hole in the window, which the capture would clear (#906).
         deliver_reg: CallFrame::NO_RETURN,
         exit_status: None,
@@ -376,10 +441,8 @@ fn every_slot_the_vm_reports_is_where_its_value_lives() {
         stack_reserve_open: false,
     });
     state.alloc_vm_delimited_continuation(VmDelimitedContinuation {
-        frames: vec![frame(&code, fixnum(7))],
+        stack: stack_of(vec![fixnum(6)], vec![frame(&code, fixnum(7))]),
         dynamic_winds: Vec::new(),
-        registers: vec![Cell::new(fixnum(6))],
-        base_at_capture: 0,
         deliver_reg: None,
         depth_at_capture: Depth::BASE,
         wind_depth_at_capture: 0,
@@ -397,12 +460,28 @@ fn every_slot_the_vm_reports_is_where_its_value_lives() {
         values
     };
     let held = values(&state);
-    assert_eq!(held, (1..=7).map(fixnum).collect::<Vec<_>>());
+    // The registers and closures, among the copies' other words.
+    let of_values: Vec<_> = {
+        let full = state.continuation_store.borrow();
+        let delimited = state.delimited_continuation_store.borrow();
+        (value_slots(state.execution.stack()).into_iter())
+            .chain(value_slots(&full.values().next().unwrap().stack))
+            .chain(value_slots(&delimited.values().next().unwrap().stack))
+            .map(Cell::get)
+            .collect()
+    };
+    assert_eq!(of_values, (1..=7).map(fixnum).collect::<Vec<_>>());
+    // Three live slots, and the six words of each one-frame copy.
+    assert_eq!(held.len(), 3 + 6 + 6);
 
     let mut rewriter = Rewriter::default();
     state.trace_roots(&mut rewriter);
     state.trace_weak_ids(&ids, &mut rewriter);
-    assert_eq!(rewriter.slots.len(), 7, "every slot, and each once");
+    assert_eq!(
+        rewriter.slots.len(),
+        held.len(),
+        "every slot, and each once"
+    );
     for_each_slot(&state, |slot| assert_eq!(slot.get(), rewriter.marker(slot)));
 
     rewriter.restoring = true;
@@ -411,21 +490,19 @@ fn every_slot_the_vm_reports_is_where_its_value_lives() {
     assert_eq!(values(&state), held);
 }
 
-/// Every slot the VM holds a value in, read through the state that owns
-/// it: the live registers and frames' closures, and the one full and one
-/// delimited capture's.
+/// Every slot the VM reports, read through the state that owns it: the
+/// live registers and frames' closures, and every word of the one full and
+/// the one delimited capture. The copies' words are read as they lie, with
+/// no walk of their frames, whose headers a rewriting visitor has written
+/// over between its two passes.
 fn for_each_slot(state: &VmState, mut each: impl FnMut(&Cell<TaggedValue>)) {
-    let execution = &state.execution;
     let full = state.continuation_store.borrow();
     let delimited = state.delimited_continuation_store.borrow();
     let full = full.values().next().expect("one full capture");
     let delimited = delimited.values().next().expect("one delimited capture");
-    for slot in (execution.register_cells().iter())
-        .chain(execution.frames().iter().map(|f| &f.closure))
-        .chain(&full.registers)
-        .chain(full.frames.iter().map(|f| &f.closure))
-        .chain(&delimited.registers)
-        .chain(delimited.frames.iter().map(|f| &f.closure))
+    for slot in (value_slots(state.execution.stack()).into_iter())
+        .chain(full.stack.words())
+        .chain(delimited.stack.words())
     {
         each(slot);
     }
@@ -468,11 +545,10 @@ fn mapped_code(num_regs: u16, maps: &[&[u64]]) -> Rc<CodeObject> {
 }
 
 /// A frame of `code` suspended at `pc`, whose window is `num_regs`
-/// registers from `register_base`.
-fn suspended(code: &Rc<CodeObject>, pc: usize, register_base: usize, num_regs: u16) -> CallFrame {
-    CallFrame {
+/// registers.
+fn suspended(code: &Rc<CodeObject>, pc: usize, num_regs: u16) -> Frame {
+    Frame {
         pc,
-        register_base,
         num_regs,
         ..frame(code, CallFrame::NO_CLOSURE)
     }
@@ -486,9 +562,7 @@ fn garbage(heap: &mut Heap) -> TaggedValue {
 
 /// Every register of the machine, in order.
 fn register_values(state: &VmState) -> Vec<TaggedValue> {
-    (state.execution.register_cells().iter())
-        .map(Cell::get)
-        .collect()
+    registers_of(state.execution.stack())
 }
 
 /// The walk of the frames under a map (#906, `PRD/GC_PRD.md` §11.1,
@@ -520,13 +594,13 @@ fn a_frame_s_live_registers_are_kept_and_its_dead_ones_cleared() {
     drop(heap);
     state.execution = running(
         lower.iter().chain(&upper).copied().collect(),
-        vec![suspended(&code, 1, 0, 3), suspended(&code, 2, 3, 3)],
+        vec![suspended(&code, 1, 3), suspended(&code, 2, 3)],
     );
 
     collect(&state);
     let heap = state.heap.borrow();
     s.assert_survived(&heap);
-    assert_eq!(state.execution.frames().len(), 2, "both frames live");
+    assert_eq!(state.execution.frame_count(), 2, "both frames live");
     for (dead, what) in [
         (lower[1], "the lower frame's r1, which its map calls dead"),
         (upper[0], "the upper frame's r0, which its map calls dead"),
@@ -577,7 +651,7 @@ fn a_window_wider_than_its_map_is_cleared_past_the_map() {
     }
     drop(heap);
     let held = registers.clone();
-    state.execution = running(registers, vec![suspended(&code, 0, 0, 130)]);
+    state.execution = running(registers, vec![suspended(&code, 0, 130)]);
 
     collect(&state);
     let heap = state.heap.borrow();
@@ -621,10 +695,12 @@ fn a_full_capture_clears_its_copy_s_dead_registers_and_its_hole() {
     ];
     let (dead, hole) = (garbage(h), garbage(h));
     drop(heap);
-    let registers = [kept[0], dead, kept[1], kept[2], hole, kept[3]];
+    let registers = vec![kept[0], dead, kept[1], kept[2], hole, kept[3]];
     let continuation = state.alloc_vm_continuation(VmContinuation {
-        frames: vec![suspended(&code, 1, 0, 3), suspended(&code, 2, 3, 3)],
-        registers: registers.into_iter().map(Cell::new).collect(),
+        stack: stack_of(
+            registers,
+            vec![suspended(&code, 1, 3), suspended(&code, 2, 3)],
+        ),
         // The top frame's r1, which its map keeps.
         deliver_reg: 1,
         ..full_capture_of(&code)
@@ -632,7 +708,7 @@ fn a_full_capture_clears_its_copy_s_dead_registers_and_its_hole() {
     let copy: Vec<_> = {
         let store = state.continuation_store.borrow();
         let snapshot = store.values().next().expect("the capture");
-        snapshot.registers.iter().map(Cell::get).collect()
+        registers_of(&snapshot.stack)
     };
     assert_eq!(
         copy,
@@ -653,10 +729,9 @@ fn a_full_capture_clears_its_copy_s_dead_registers_and_its_hole() {
     assert_freed(&heap, hole, "the hole, the top frame's r1");
 }
 
-/// As the full capture's, for a delimited one, whose frames keep their
-/// absolute bases over a register file that is only its slice: the walk
-/// reads each window from `base_at_capture`. Its top frame runs hand-built
-/// code, which has no map and keeps every register but the hole.
+/// As the full capture's, for a delimited one, whose frames are a stack of
+/// their own. Its top frame runs hand-built code, which has no map and
+/// keeps every register but the hole.
 #[test]
 fn a_delimited_capture_clears_its_copy_from_its_base() {
     let mut state = VmState::on_a_fresh_heap();
@@ -673,19 +748,19 @@ fn a_delimited_capture_clears_its_copy_from_its_base() {
     ];
     let (dead, hole) = (garbage(h), garbage(h));
     drop(heap);
-    let registers = [dead, kept[0], kept[1], kept[2], hole];
+    let registers = vec![dead, kept[0], kept[1], kept[2], hole];
     let continuation = state.alloc_vm_delimited_continuation(VmDelimitedContinuation {
-        // The slice starts at register 40 of the stack it was cut from.
-        frames: vec![suspended(&code, 1, 40, 3), suspended(&unmapped, 0, 43, 2)],
-        registers: registers.into_iter().map(Cell::new).collect(),
-        base_at_capture: 40,
+        stack: stack_of(
+            registers,
+            vec![suspended(&code, 1, 3), suspended(&unmapped, 0, 2)],
+        ),
         deliver_reg: Some(1),
         ..delimited_capture_of(&code)
     });
     let copy: Vec<_> = {
         let store = state.delimited_continuation_store.borrow();
         let snapshot = store.values().next().expect("the capture");
-        snapshot.registers.iter().map(Cell::get).collect()
+        registers_of(&snapshot.stack)
     };
     assert_eq!(
         copy,
@@ -748,11 +823,13 @@ fn load_linked(
 /// A full continuation whose one frame runs `code`.
 fn full_capture_of(code: &Rc<CodeObject>) -> VmContinuation {
     VmContinuation {
-        frames: vec![frame(code, CallFrame::NO_CLOSURE)],
+        stack: stack_of(
+            vec![TaggedValue::NULL],
+            vec![frame(code, CallFrame::NO_CLOSURE)],
+        ),
         dynamic_winds: Vec::new(),
         prompt_stack: Vec::new(),
         exception_handlers: Vec::new(),
-        registers: vec![Cell::new(TaggedValue::NULL)],
         deliver_reg: 0,
         exit_status: None,
         abort_landing: false,
@@ -764,10 +841,11 @@ fn full_capture_of(code: &Rc<CodeObject>) -> VmContinuation {
 /// A delimited continuation whose one frame runs `code`.
 fn delimited_capture_of(code: &Rc<CodeObject>) -> VmDelimitedContinuation {
     VmDelimitedContinuation {
-        frames: vec![frame(code, CallFrame::NO_CLOSURE)],
+        stack: stack_of(
+            vec![TaggedValue::NULL],
+            vec![frame(code, CallFrame::NO_CLOSURE)],
+        ),
         dynamic_winds: Vec::new(),
-        registers: vec![Cell::new(TaggedValue::NULL)],
-        base_at_capture: 0,
         deliver_reg: None,
         depth_at_capture: Depth::BASE,
         wind_depth_at_capture: 0,
@@ -782,16 +860,15 @@ fn delimited_capture_of(code: &Rc<CodeObject>) -> VmDelimitedContinuation {
 /// window of one frame of [`holder_code`]: every register lies in a frame's
 /// window (#714), and the walk of the frames reports them through it
 /// (#906).
-fn running(registers: Vec<TaggedValue>, mut frames: Vec<CallFrame>) -> ExecutionState {
+fn running(registers: Vec<TaggedValue>, mut frames: Vec<Frame>) -> ExecutionState {
     if frames.is_empty() {
-        frames.push(CallFrame {
+        frames.push(Frame {
             num_regs: registers.len() as u16,
             ..frame(&holder_code(), CallFrame::NO_CLOSURE)
         });
     }
     ExecutionState::from_parts(
-        registers.into_iter().map(Cell::new).collect(),
-        frames,
+        stack_of(registers, frames),
         Vec::new(),
         Vec::new(),
         Vec::new(),

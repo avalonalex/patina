@@ -288,7 +288,7 @@ Test crates, the REPL and test and example targets are exempt (`clippy.toml`'s h
    field whose type has no `Trace` does not compile, and a field that holds
    no value is `#[trace(skip, reason = "…")]`. Its sentinel test is the
    same, run once with the field marked `skip`. One field that holds values
-   is skipped too, the VM's register file (#906): a walk of the frames
+   is skipped too, the VM's register stack (#906, #908): a walk of the frames
    traces it, under each frame's map, and its `reason` names the walk,
    which is on the script's list. A field like it needs the same three: a
    hand-written trace on the list, the reason naming it, and a sentinel

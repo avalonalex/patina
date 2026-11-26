@@ -1,17 +1,29 @@
-//! How deep the VM's frame stack is (#903).
+//! How deep the VM's register stack is (#903, #908).
 
-/// A depth of the frame stack: where a prompt or a handler was established,
-/// where a delimited capture starts, and where a dispatch loop stops.
-/// `ExecutionState::depth` reads the live stack's, and each continuation
-/// snapshot answers its own.
+/// A depth of the register stack: where a prompt or a handler was
+/// established, where a delimited capture starts, and where a dispatch loop
+/// stops. `ExecutionState::depth` reads the live stack's, and each
+/// continuation snapshot answers its own.
 ///
-/// Today it counts frames. GC stage 4d.7 (#908) makes it a byte offset from
-/// the register stack's base (`PRD/GC_PRD.md` §11.1) and changes only what
-/// it holds: the machine compares depths, takes the smaller of two, moves one
-/// from one stack to another ([`Depth::relocate`]) and measures how far one
-/// sits above another ([`Depth::distance_above`]), and none of that reads
-/// the count. What does read it, [`Depth::frame_count`], is the census hooks,
-/// the step tracer and the frame vector's own cuts in `ExecutionState`.
+/// It is the stack's top as a byte offset from its base
+/// (`PRD/GC_PRD.md` §11.1), since GC stage 4d.7b (#908); until then it
+/// counted frames. The machine compares depths, takes the smaller of two,
+/// moves one from one stack to another ([`Depth::relocate`]) and measures
+/// how far one sits above another ([`Depth::distance_above`]), and none of
+/// that reads the offset. What does is the stack's own cuts and copies
+/// ([`Depth::bytes`]).
+///
+/// **A depth read off a stack names a place between two frames,** and so
+/// does one moved with the frames it was recorded among: a carried prompt's
+/// ([`Depth::relocate`]), and the handler's a `raise-continuable` puts back
+/// a distance below its stub ([`Depth::lowered_by`]), whose distance is
+/// measured from a floor that every region able to replay the stub
+/// contains (`vm_raise_value`). One case moves a depth past the frames it
+/// was recorded among: a handler's carried below the prompt its
+/// continuation was delimited by, [`Depth::relocate`]'s saturating case.
+/// It can fall inside a frame of the stack it lands on. Such a depth is
+/// only ever compared, never cut at: the handler is dropped once the
+/// stack's top is at or below it.
 ///
 /// Every method is the integer operation it wraps, inlined, so a depth read
 /// or compare on the dispatch loop's paths costs what the `usize` did.
@@ -23,17 +35,18 @@ impl Depth {
     /// The empty stack's depth.
     pub(crate) const BASE: Depth = Depth(0);
 
-    /// The depth of a stack of `frames` frames. Only the depth accessors
-    /// call it: `ExecutionState::depth` and each continuation snapshot's.
+    /// The depth of a stack whose top is `bytes` above its base. Only the
+    /// depth accessors call it: `ExecutionState`'s and each continuation
+    /// snapshot's.
     #[inline(always)]
-    pub(crate) const fn of_frames(frames: usize) -> Depth {
-        Depth(frames)
+    pub(crate) const fn of_bytes(bytes: usize) -> Depth {
+        Depth(bytes)
     }
 
-    /// The number of frames below this depth, which the census hooks and
-    /// the step tracer report and `ExecutionState` cuts its frame vector at.
+    /// The byte offset this depth is, which the register stack cuts and
+    /// copies at.
     #[inline(always)]
-    pub(crate) const fn frame_count(self) -> usize {
+    pub(crate) const fn bytes(self) -> usize {
         self.0
     }
 
@@ -54,16 +67,16 @@ impl Depth {
     }
 
     /// How far this depth sits above `floor`, or 0 if it does not: a
-    /// distance in the type's own unit, which survives a capture replayed at
-    /// another depth, as an absolute depth does not. The raise stub keeps
-    /// one as a fixnum (`raise_step::DEPTH_BELOW`).
+    /// distance in bytes, which survives a capture replayed at another
+    /// depth, as an absolute depth does not. The raise stub keeps one as a
+    /// fixnum (`raise_step::DEPTH_BELOW`).
     #[inline(always)]
     pub(crate) fn distance_above(self, floor: Depth) -> usize {
         self.0.saturating_sub(floor.0)
     }
 
-    /// The depth `distance` below this one, or [`Depth::BASE`] if that is
-    /// further down than the stack goes: the inverse of
+    /// The depth `distance` bytes below this one, or [`Depth::BASE`] if
+    /// that is further down than the stack goes: the inverse of
     /// [`Depth::distance_above`].
     #[inline(always)]
     pub(crate) fn lowered_by(self, distance: usize) -> Depth {
