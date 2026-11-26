@@ -1578,6 +1578,20 @@ per-file check that a run collected cannot stand in for this: a control file
 can collect under the default GC too (`cps-features.scm` does, once; before
 the byte trigger, #606, every one did, while it loaded SRFI 64).
 
+**One lane runs two test files in the plain release build (#714).** A plain
+release build is the one build that does not fill the window a tail call
+reuses (the owner's ruling of 2026-11-26 on #714's Q-4d3-1): there a
+register the new activation has not written keeps the replaced one's word
+until a collection or a capture clears it. Every lane above runs its tests in
+a check build, which fills the window, so `ci.yml`'s R7RS Compliance job,
+which builds the shipped binary, ends with
+`cargo test --release -p patina-tests --test retired_registers --test ephemerons`.
+`retired_registers.rs` pins what a plain build reads in a register its
+activation never wrote: the earlier occupant's word after a tail call or a
+self tail call, and the fill after a stub's next round.
+`ephemerons.rs`'s tail-call tests hold that what a tail call leaves in its
+window does not outlive a collection.
+
 **Every GC lane pins descriptor pressure's threshold (#607).** Descriptor
 pressure posts a collection once `min(128, soft RLIMIT_NOFILE / 4)` file
 ports opened since the last one are still open, so the soft descriptor limit
