@@ -13,8 +13,9 @@
 //! where it says nothing, the default fitted to the machine
 //! ([`MemoryLimits::default_stack_cap`]). The environment is read only by
 //! [`HeapConfig::from_env`], which the constructors that take no
-//! configuration use: a host that passes its own configuration gets exactly
-//! what it wrote, whatever the process's environment holds.
+//! configuration use: a host that passes its own configuration gets what it
+//! wrote, held to the memory budget, whatever the process's environment
+//! holds.
 
 use super::budget::MemoryLimits;
 
@@ -68,12 +69,12 @@ impl HeapConfig {
     /// Set the main stack's cap, in bytes: the most the VM's frames and
     /// registers may take before a call raises `&stack-exhausted`. A value
     /// under [`STACK_CAP_FLOOR`](super::budget::STACK_CAP_FLOOR) (2 MiB) is
-    /// raised to it, since the last
-    /// MiB of the cap is the room a handler for the condition runs in. A
-    /// value above the memory budget, physical memory or the cgroup's
-    /// limit, is held to it (#929): [`HeapConfig::stack_cap`] answers what
-    /// a machine built from this configuration holds. The tree-walker keeps
-    /// no cap and ignores the setting.
+    /// raised to it, since the last MiB of the cap is the room a handler
+    /// for the condition runs in. A value above the memory budget, physical
+    /// memory or the cgroup's limit, is held to it (#929):
+    /// [`HeapConfig::stack_cap`] answers what a machine built from this
+    /// configuration holds. The tree-walker keeps no cap and ignores the
+    /// setting.
     pub fn max_stack(&mut self, bytes: u64) -> &mut Self {
         self.max_stack = Some(bytes);
         self

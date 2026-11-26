@@ -125,10 +125,17 @@ fn a_size_takes_a_binary_suffix_and_has_a_floor() {
 /// reserve half of the process's address space.
 #[test]
 fn a_size_above_the_memory_budget_is_held_to_it() {
-    let Some(budget) = patina_core::heap::budget::MemoryLimits::detect().budget() else {
+    let limits = patina_core::heap::budget::MemoryLimits::detect();
+    let Some(budget) = limits.budget() else {
         eprintln!("no memory budget can be read here, so a cap is held as asked");
         return;
     };
+    // Under an address-space limit a reservation of B may be refused and
+    // halved, so `stack-limit` reads less than B there, rightly.
+    if limits.address_space.is_some() {
+        eprintln!("an address-space limit is set here, which may refuse a reservation of B");
+        return;
+    }
     let program = "(import (scheme base) (scheme write) (patina debug))
 (write (cdr (assq 'stack-limit (gc-stats))))
 ";
