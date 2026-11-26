@@ -577,6 +577,54 @@ pub enum RelinkTarget<'a> {
 /// frame comes to have them when it binds more than [`FRAME_INDEX_ABOVE`]
 /// scoped bindings of one spelling (`scoped_index`). `Environment::rare`
 /// has the measurement.
+/// [`Environment::rare`]'s cell, whose drop hands the tables, where there
+/// are any, to a function out of line (#936). Every tree-walker frame is
+/// dropped, and none has tables, so a frame's drop should be a load and a
+/// test. As a plain `OnceCell<Box<RareTables>>` its drop glue inlines the
+/// tables' own, which LLVM placed out of line or in it as the crate's code
+/// was partitioned: a module added elsewhere in core (#919) grew it from 88
+/// to 668 bytes, and the tree-walker's calls 0.35% in instructions.
+#[derive(Debug, Default)]
+struct RareCell(std::mem::ManuallyDrop<OnceCell<Box<RareTables>>>);
+
+impl RareCell {
+    fn new(cell: OnceCell<Box<RareTables>>) -> Self {
+        RareCell(std::mem::ManuallyDrop::new(cell))
+    }
+}
+
+impl std::ops::Deref for RareCell {
+    type Target = OnceCell<Box<RareTables>>;
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for RareCell {
+    #[inline(always)]
+    fn drop(&mut self) {
+        // SAFETY: the cell is taken once, here, and never read after.
+        let cell = unsafe { std::mem::ManuallyDrop::take(&mut self.0) };
+        if let Some(tables) = cell.into_inner() {
+            drop_rare_tables(tables);
+        }
+    }
+}
+
+/// The tables' drop, out of line, for [`RareCell`]'s.
+#[cold]
+#[inline(never)]
+fn drop_rare_tables(tables: Box<RareTables>) {
+    drop(tables);
+}
+
+impl Trace for RareCell {
+    fn trace<V: crate::heap::gc::SlotVisitor + ?Sized>(&self, visitor: &mut V) {
+        self.0.trace(visitor);
+    }
+}
+
 #[derive(Debug, Default, Trace)]
 struct RareTables {
     /// The identities of the macro-introduced top-level definitions compiled
@@ -1153,7 +1201,7 @@ pub struct Environment {
     /// It is 184 since #837's second PR took out the macro-expansion
     /// alias table and its latch. `environment_size_is_watched` holds the
     /// line.
-    rare: OnceCell<Box<RareTables>>,
+    rare: RareCell,
     #[trace(
         skip,
         reason = "the parent, which `SlotVisitor::env` walks with the chain it heads: the collector follows it by reference (`GcVisitor::visit_env`)"
@@ -1297,10 +1345,10 @@ impl Environment {
             kind,
             frame: kind.frame_flag(),
             captured: Cell::new(false),
-            rare: OnceCell::from(Box::new(RareTables {
+            rare: RareCell::new(OnceCell::from(Box::new(RareTables {
                 namespace: charge,
                 ..RareTables::default()
-            })),
+            }))),
             parent,
         };
         env.recharge();
@@ -1354,7 +1402,7 @@ impl Environment {
             kind,
             frame: kind.frame_flag(),
             captured: Cell::new(false),
-            rare: OnceCell::new(),
+            rare: RareCell::default(),
             parent: Some(parent),
         }
     }
@@ -8376,7 +8424,7 @@ mod gc_edge_tests {
             kind: Kind::Frame,
             frame: Kind::Frame.frame_flag(),
             captured: Cell::new(false),
-            rare: OnceCell::from(Box::new(RareTables {
+            rare: RareCell::new(OnceCell::from(Box::new(RareTables {
                 introduced_global_names: RefCell::default(),
                 scoped_index: RefCell::default(),
                 frame_imports: RefCell::new(vec![None, Some(exported)]),
@@ -8386,7 +8434,7 @@ mod gc_edge_tests {
                 read_through: OnceCell::new(),
                 // Weak, never traced (#836): a namespace's alone.
                 placeholders: OnceCell::new(),
-            })),
+            }))),
             parent: Some(parent),
         };
         assert_eq!(env.get(&heap, "plain"), Some(plain));
@@ -8447,13 +8495,13 @@ mod gc_edge_tests {
             kind: Kind::HostNamespace,
             frame: Kind::HostNamespace.frame_flag(),
             captured: Cell::new(false),
-            rare: OnceCell::from(Box::new(RareTables {
+            rare: RareCell::new(OnceCell::from(Box::new(RareTables {
                 read_through: OnceCell::from(Box::new(RefCell::new(ReadThrough {
                     unbound,
                     records,
                 }))),
                 ..RareTables::default()
-            })),
+            }))),
             parent: Some(empty),
         });
         assert_eq!(env.recount(&heap.borrow()), (1, 0), "one record, no cell");
