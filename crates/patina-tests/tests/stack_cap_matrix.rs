@@ -554,10 +554,17 @@ fn stack_limit_reads_the_cap() {
 #[test]
 fn a_cap_above_the_memory_budget_is_held_to_it() {
     const KEY: &str = "(cdr (assq 'stack-limit (gc-stats)))";
-    let Some(budget) = patina_core::heap::budget::MemoryLimits::detect().budget() else {
+    let limits = patina_core::heap::budget::MemoryLimits::detect();
+    let Some(budget) = limits.budget() else {
         eprintln!("no memory budget can be read here, so a cap is held as asked");
         return;
     };
+    // Under an address-space limit a reservation of B may be refused and
+    // halved, so `stack-limit` reads less than B there, rightly.
+    if limits.address_space.is_some() {
+        eprintln!("an address-space limit is set here, which may refuse a reservation of B");
+        return;
+    }
     assert!(budget > ROOMY, "a machine with {budget} bytes of memory");
     for asked in [u64::MAX, 1 << 62, budget + 1, budget] {
         assert_eq!(

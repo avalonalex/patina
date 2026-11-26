@@ -2664,8 +2664,9 @@ stage is judged by (`PRD/GC_PRD.md` §16). The sets:
   `libload-point-c`, on both backends: libload's libraries imported inside a
   top-level `begin`, a load met inside a form, which defers its collection
   to the form's end (point C, #658). It is the load decision 9 on #782
-  recommends GC stage 4c's memory gate measure, at about 524 MiB of
-  footprint on the VM and 916 MiB on the tree-walker today, in one deferral
+  holds GC stage 4c's memory gate to (the owner's ruling of 2026-11-26: at
+  most 300 MiB on the VM at #793), at about 524 MiB of
+  footprint on the VM and 916 MiB on the tree-walker before 4c, in one deferral
   window of 275.5 MiB and 617.7 MiB (#787). It checks its own premise under
   the default trigger, one collection and a window of at least 250 MiB, and
   fails once the load stops deferring, so a change to loading shows as a
@@ -2757,6 +2758,16 @@ read a workload up to 0.7% apart. The harness's readings recorded before
 that date for #837's stack (#875, #878, #881), its baseline at 791b7c5a
 among them, were taken under the variable, and none is comparable with a
 reading taken since.
+
+**A PR that changes marking, the collector or what lives in the heap runs
+the `probes` set in its A/B** (the owner's ruling of 2026-11-26 on #782's
+Q-4b-2). A cost paid once per collection shows only where a program collects
+often for little work, and those programs are in `probes`: #850 made every
+collection mark each live binding's record and cell, 116,000 instructions
+for the standard libraries, and `vectors-500`, `io-string` and `ctakdeep`
+rose 1.3–3.7% (#895), which the A/Bs of 4b's PRs did not see, since they
+ran `gbs`, `twins`, `load` and `tw`. With no `--set` the harness runs every
+set but `large-live`, `probes` among them.
 
 ```bash
 ./scripts/run_gc_benchmarks.sh --rounds 3                    # this build, every set
