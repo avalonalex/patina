@@ -851,7 +851,9 @@ assert in `Fresh::init` that the holder is young or pre-logged. `Heap::vector_sl
 thread's defaults to min(8 GiB, 25%·B) (8 GiB holds about 60 M frames; on the 7 GB macOS runner 25%·B is 1.75 GB, about
 1.63 GiB, which still holds today's 10 M-frame recursion, 1.37 GB [P]), other green threads 256 MiB, set by
 `PATINA_STACK_MAX`, `--stack-max` and `HeapConfig::max_stack` (decision 15, SD5); green-thread stacks follow §18.1's
-stack rule. Within 1 MiB of the cap, the **soft limit**, the frame-entry check raises a catchable `&stack-exhausted`,
+stack rule. A cap that is set is held to B where it asks for more, and is what was asked where B cannot be read: a cap
+is a bound on memory, and a reservation above the machine's memory only takes address space from the process's other
+reservations (the owner's ruling of 2026-11-26 on [#782]'s Q9, [#929]). Within 1 MiB of the cap, the **soft limit**, the frame-entry check raises a catchable `&stack-exhausted`,
 the last MiB being the handler's room. The condition is an error object, which `stack-exhausted?` from
 `(patina limits)` recognises, and it is raised non-continuably. The soft limit is armed again when the stack top is at
 or below it, with no margin, checked where a transfer lands, at each collection and at the end of each top-level form:
@@ -1690,7 +1692,7 @@ has its own budget, as now. It is not a singleton (§14): an embedder that wants
 | Native (Rust) stack | Rust recursion in the reader, expander, compiler and printer | the OS thread's stack (the main thread's `ulimit -s`; carriers spawned at the same size) | — | a catchable error from a depth guard; today a process abort ([#617]) | now |
 | Descriptors | open file ports | `RLIMIT_NOFILE` | OS; lanes pin it | post a major when opens − closes since the last major reach min(128, limit/4); on `EMFILE`, collect and retry once, then a file error ([#607]) | 1, 4a |
 | JIT code | installed bodies | set by the JIT track's first merged stage | `PATINA_JIT_CODE_MAX` | stop tiering up; no error | first merged JIT stage |
-| Address space | heap reservation (from the ceiling); main stack; 256 MiB store buffer per mutator; JIT reservation; green-thread stacks | fitted under `RLIMIT_AS` | — | smaller reservations, then [K13](#k13)'s fallback; the store buffer's soft limit collects first | 4d, 5a, 5e, 7, 9 |
+| Address space | heap reservation (from the ceiling); main stack; 256 MiB store buffer per mutator; JIT reservation; green-thread stacks | fitted under `RLIMIT_AS`; a stack cap or a heap ceiling that is set above B is held to B before it is reserved ([#929]; 5a builds the heap's) | — | smaller reservations, then [K13](#k13)'s fallback; the store buffer's soft limit collects first | 4d, 5a, 5e, 7, 9 |
 
 **At the heap limit:**
 
@@ -2516,3 +2518,4 @@ from them on these known points before filing it:
 [#883]: https://github.com/avalonalex/patina/issues/883
 [#892]: https://github.com/avalonalex/patina/issues/892
 [#909]: https://github.com/avalonalex/patina/issues/909
+[#929]: https://github.com/avalonalex/patina/issues/929

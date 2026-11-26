@@ -826,7 +826,11 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   4d's gate per PR (#910, 4d.9): 1 M frames under the default cap, 136 MB
   of stack, held after one `(gc)` and the first MiB after two, with
   `stack-limit` reading that cap; the nightly's `stack-returned` row holds
-  the same at 10 M frames (the steady-state lane, below). The
+  the same at 10 M frames (the steady-state lane, below). And one holds a
+  cap above the memory budget to the budget (#929): `stack-limit` reads B
+  for a cap of `u64::MAX`, a cap under B is held as asked, and 100
+  machines each asking for `u64::MAX` are alive at once, where the 42nd
+  found no address space. The
   limit a continuation's arrival sets, and the one an abort's landing
   keeps, are unit tests beside the machine
   (`patina-vm/src/runtime/vm_state.rs`): they hold the rule for a snapshot
@@ -876,7 +880,8 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   nothing else of its header.
   `crates/patina-repl/tests/stack_max_cli.rs` holds the runner's side:
   `--stack-max` and `PATINA_STACK_MAX`, their precedence, the size grammar
-  and its floor, a malformed size refused before anything runs, the exit
+  and its floor, a size above the memory budget held to it (#929), a
+  malformed size refused before anything runs, the exit
   status of an uncaught exhaustion, `-k` after the hard cap, and, on Linux,
   the default cap under `ulimit -v`
 

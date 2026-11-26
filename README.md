@@ -217,10 +217,12 @@ is `stack exhausted`, its one irritant is the cap in bytes, and
 `stack-exhausted?` from `(patina limits)` tells it from other errors.
 Uncaught, it ends a script as any error does, with status 1.
 `--stack-max 512M` sets the cap (bytes, or a number with `K`, `M` or `G`), as
-does the variable `PATINA_STACK_MAX`, and `(gc-stats)`'s `stack-limit` reads
-it. The VM reserves that much address space for its stack when it starts,
-and uses memory only for what the stack reaches; where the system will not
-give that much address space, the cap is what it gives. What a deep
+does the variable `PATINA_STACK_MAX`. A cap above the machine's memory, or
+its container's limit, is held to that: no stack could fill more without
+swap. `(gc-stats)`'s `stack-limit` reads the cap that holds, which is then
+less than was asked. The VM reserves that much address space for its stack
+when it starts, and uses memory only for what the stack reaches; where the
+system will not give that much address space, the cap is what it gives. What a deep
 recursion used goes back to the system at the second collection after it
 returns, all but the first MiB. Two costs are worth
 knowing. A `guard` that catches the error copies the stack, as it does for
@@ -476,7 +478,7 @@ access remains on `TreeWalkInterpreter`; portable code uses `backend()`.
 memory may take. Today that is the VM's stack cap:
 `Interpreter::new_vm_with_config(HeapConfig::new().max_stack(64 << 20))`
 builds an interpreter whose stack may take 64 MiB, whatever
-`PATINA_STACK_MAX` says. `new_vm()` reads that variable instead
+`PATINA_STACK_MAX` says (a cap above the machine's memory is held to it). `new_vm()` reads that variable instead
 (`HeapConfig::from_env()`), and with neither the cap is fitted to the
 machine. A configuration is read when the interpreter is built and not kept.
 The tree-walker takes one too (`new_tree_walker_with_config`) and keeps no

@@ -457,7 +457,13 @@ buffer, so the depth at which the cap is met has not moved.
 
 - **The cap** is the backend's configuration's (`HeapConfig::max_stack`,
   `--stack-max`, `PATINA_STACK_MAX`) or the machine's default, min(8 GiB, a
-  quarter of B, a quarter of `RLIMIT_AS`), never under 2 MiB. The machine
+  quarter of B, a quarter of `RLIMIT_AS`), never under 2 MiB. A
+  configuration's cap is held to B, physical memory or the cgroup's limit,
+  where it asks for more (`MemoryLimits::stack_cap_for`, #929; the owner's
+  ruling of 2026-11-26 on #782's Q9): a cap is a reservation, and one
+  written to mean "no limit" took half of the process's address space, so
+  that a 42nd machine built with one found none. Where B cannot be read
+  the cap is what was asked. The machine
   is built with it (`VmState::with_gc_mode_and_stack_cap`), and its stack's
   reservation is made for it there. Where the system gives less address
   space than the cap asks (`Reservation::new` tries half, and half again,

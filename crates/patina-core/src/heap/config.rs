@@ -8,14 +8,15 @@
 //! and it is built by methods, so a later stage adds a setting without
 //! breaking a host that builds one today.
 //!
-//! Precedence, for the stack's cap: what the configuration says; where it
-//! says nothing, the default fitted to the machine
+//! Precedence, for the stack's cap: what the configuration says, held to
+//! the machine's memory budget ([`MemoryLimits::stack_cap_for`], #929);
+//! where it says nothing, the default fitted to the machine
 //! ([`MemoryLimits::default_stack_cap`]). The environment is read only by
 //! [`HeapConfig::from_env`], which the constructors that take no
 //! configuration use: a host that passes its own configuration gets exactly
 //! what it wrote, whatever the process's environment holds.
 
-use super::budget::{MemoryLimits, STACK_CAP_FLOOR};
+use super::budget::MemoryLimits;
 
 /// The variable [`HeapConfig::from_env`] reads the main stack's cap from,
 /// in the grammar of [`parse_size`]. `--stack-max` is the same setting on
@@ -66,22 +67,29 @@ impl HeapConfig {
 
     /// Set the main stack's cap, in bytes: the most the VM's frames and
     /// registers may take before a call raises `&stack-exhausted`. A value
-    /// under [`STACK_CAP_FLOOR`] (2 MiB) is raised to it, since the last
-    /// MiB of the cap is the room a handler for the condition runs in. The
-    /// tree-walker keeps no cap and ignores the setting.
+    /// under [`STACK_CAP_FLOOR`](super::budget::STACK_CAP_FLOOR) (2 MiB) is
+    /// raised to it, since the last
+    /// MiB of the cap is the room a handler for the condition runs in. A
+    /// value above the memory budget, physical memory or the cgroup's
+    /// limit, is held to it (#929): [`HeapConfig::stack_cap`] answers what
+    /// a machine built from this configuration holds. The tree-walker keeps
+    /// no cap and ignores the setting.
     pub fn max_stack(&mut self, bytes: u64) -> &mut Self {
         self.max_stack = Some(bytes);
         self
     }
 
     /// The main stack's cap under this configuration, in bytes: what
-    /// [`HeapConfig::max_stack`] set, raised to the floor, or the default
-    /// fitted to the machine's memory, its cgroup's limit and `RLIMIT_AS`
-    /// ([`MemoryLimits::default_stack_cap`]), which is read at this call.
+    /// [`HeapConfig::max_stack`] set, raised to the floor and held to the
+    /// memory budget ([`MemoryLimits::stack_cap_for`], #929), or the
+    /// default fitted to the machine's memory, its cgroup's limit and
+    /// `RLIMIT_AS` ([`MemoryLimits::default_stack_cap`]). The limits are
+    /// read at this call.
     pub fn stack_cap(&self) -> u64 {
+        let limits = MemoryLimits::detect();
         match self.max_stack {
-            Some(bytes) => bytes.max(STACK_CAP_FLOOR),
-            None => MemoryLimits::detect().default_stack_cap(),
+            Some(bytes) => limits.stack_cap_for(bytes),
+            None => limits.default_stack_cap(),
         }
     }
 }
@@ -179,15 +187,24 @@ mod tests {
     /// between the floor and the ceiling whatever the machine.
     #[test]
     fn the_cap_is_what_was_set_or_the_default() {
-        use crate::heap::budget::STACK_CAP_CEILING;
+        use crate::heap::budget::{STACK_CAP_CEILING, STACK_CAP_FLOOR};
         assert_eq!(HeapConfig::new().max_stack(64 << 20).stack_cap(), 64 << 20);
         assert_eq!(HeapConfig::new().max_stack(1).stack_cap(), STACK_CAP_FLOOR);
         assert_eq!(HeapConfig::new().max_stack(0).stack_cap(), STACK_CAP_FLOOR);
+        // More than the default's ceiling may be asked for, and is held to
+        // the machine's memory budget where that is known (#929).
+        let budget = MemoryLimits::detect().budget();
         assert_eq!(
             HeapConfig::new().max_stack(u64::MAX).stack_cap(),
-            u64::MAX,
-            "a host may ask for more than the default's ceiling"
+            budget.unwrap_or(u64::MAX).max(STACK_CAP_FLOOR),
         );
+        if let Some(budget) = budget.filter(|&budget| budget > STACK_CAP_CEILING) {
+            assert_eq!(
+                HeapConfig::new().max_stack(budget - 4096).stack_cap(),
+                budget - 4096,
+                "a cap above the default's ceiling and under the budget is held as asked"
+            );
+        }
         let default = HeapConfig::new().stack_cap();
         assert_eq!(default, MemoryLimits::detect().default_stack_cap());
         assert!((STACK_CAP_FLOOR..=STACK_CAP_CEILING).contains(&default));
