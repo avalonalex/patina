@@ -52,7 +52,7 @@ pub(super) fn object_info(data: &HeapObjectData) -> (Variant, usize, u64) {
             (11, n, 8 + 8 * n as u64)
         }
         H::Identifier { .. } => (12, 0, 24),
-        H::Continuation(_) => (13, 0, 16),
+        H::Continuation { .. } => (13, 0, 16),
         H::Parameter { .. } => (14, 0, 24),
         H::Promise(_) => (15, 0, 24),
         H::Library(_) => (16, 0, 16),

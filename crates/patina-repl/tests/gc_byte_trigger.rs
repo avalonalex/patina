@@ -8,9 +8,11 @@
 //! and L, the bytes the last collection found live, counts the snapshots it
 //! kept. A tree-walker closure is charged its own allocation and an estimate
 //! of the frame it captures (#637), so that a loop of closures collects as
-//! often as the memory they keep alive calls for. These run the shapes of
-//! #606 and #637 through the CLI with no GC variable set, on the backends
-//! they concern, and read what the heap reports in `gc-stats`.
+//! often as the memory they keep alive calls for, and a tree-walker capture
+//! an estimate of the continuation levels it is the first to hold (#656).
+//! These run the shapes of #606, #637 and #656 through the CLI with no GC
+//! variable set, on the backends they concern, and read what the heap
+//! reports in `gc-stats`.
 
 mod common;
 
@@ -169,6 +171,80 @@ fn garbage_tree_walker_closures_collect_by_what_they_capture() {
     assert!(r.collections >= CLOSURES * 500 / FLOOR, "{r:?}");
     assert!(r.reclaimed > r.allocated * 9 / 10, "{r:?}");
     assert!(r.committed < 4 * FLOOR, "{r:?}");
+}
+
+/// #656: a tree-walker capture holds the chain of continuation levels below
+/// it, Rust memory the heap did not count, and is charged an estimate of
+/// each level it is the first to capture: 980 bytes on a 64-bit target,
+/// `CAPTURED_LEVEL_BYTES` in `patina-core`. So captures made and dropped at
+/// the bottom of a 1,000-deep recursion collect about every 8 MiB of what
+/// they hold. Charged its slot alone, each cost the trigger under 1,000
+/// bytes for about a megabyte, and 200 of them never collected. The bound
+/// below is 900 bytes a level, under the estimate.
+/// The tree-walker only: a VM capture is charged what it copies (#606).
+#[test]
+fn garbage_tree_walker_captures_collect_by_the_levels_they_hold() {
+    const CAPTURES: u64 = 200;
+    const DEPTH: u64 = 1000;
+    let workload = "(define (deep n)
+  (if (= n 0) (call/cc (lambda (k) 1)) (+ 1 (deep (- n 1)))))
+(let loop ((i 0))
+  (when (< i 200) (deep 1000) (loop (+ i 1))))";
+    let r = run(&["--tree-walker"], workload);
+    assert!(r.allocated > CAPTURES * DEPTH * 900, "{r:?}");
+    assert!(r.collections >= r.allocated / FLOOR / 2, "{r:?}");
+    assert!(r.reclaimed > r.allocated * 9 / 10, "{r:?}");
+    assert!(r.committed < 4 * FLOOR, "{r:?}");
+}
+
+/// Captures a program keeps are live bytes on the tree-walker too (#656),
+/// as `kept_vm_captures_raise_the_interval` holds for the VM: 100 kept
+/// captures, each at the bottom of its own 1,000-deep recursion and so
+/// about 98 MB in all, collect three times, where a trigger that left them
+/// out of L would collect at every 8 MiB of them, eleven times.
+#[test]
+fn kept_tree_walker_captures_raise_the_interval() {
+    const CAPTURES: u64 = 100;
+    const DEPTH: u64 = 1000;
+    let workload = "(define kept '())
+(define (deep n)
+  (if (= n 0)
+      (call/cc (lambda (k) (set! kept (cons k kept)) 1))
+      (+ 1 (deep (- n 1)))))
+(let loop ((i 0))
+  (when (< i 100) (deep 1000) (loop (+ i 1))))";
+    let r = run(&["--tree-walker"], workload);
+    assert!(r.allocated > CAPTURES * DEPTH * 900, "{r:?}");
+    assert!(r.collections >= 1, "{r:?}");
+    // L counted what the last collection kept: most of what was captured
+    // before it.
+    assert!(r.live > r.allocated / 2, "{r:?}");
+    assert!(r.collections * 2 < r.allocated / FLOOR, "{r:?}");
+}
+
+/// Captures that share a tail are charged for it once (#656): 20,000 made
+/// in a loop at the bottom of one 1,000-deep recursion, `samedepth1000`'s
+/// shape. The first is charged the thousand levels and each later one its
+/// own allocation and the level its iteration made, so the loop allocates
+/// about 2,160 bytes a capture and collects a handful of times. Charged
+/// the whole chain each, it would allocate about a megabyte a capture,
+/// 20 GB, and collect about 2,400 times; charged nothing for its levels, as
+/// before #656, about 910 bytes a capture, which the lower bound is above.
+#[test]
+fn tree_walker_captures_over_one_tail_are_charged_for_it_once() {
+    const CAPTURES: u64 = 20_000;
+    let workload = "(define (at-depth d thunk) (if (= d 0) (thunk) (+ 1 (at-depth (- d 1) thunk))))
+(at-depth 1000
+  (lambda ()
+    (let loop ((i 0))
+      (when (< i 20000) (call/cc (lambda (k) k)) (loop (+ i 1))))
+    0))";
+    let r = run(&["--tree-walker"], workload);
+    // Each capture is charged its own allocation and a level, and the first
+    // the tail as well; none is charged the tail again.
+    assert!(r.allocated > CAPTURES * 1_500, "{r:?}");
+    assert!(r.allocated < CAPTURES * 8_000, "{r:?}");
+    assert!(r.collections < 10, "{r:?}");
 }
 
 /// Each trigger beside its count (#663), right after a collection, in each

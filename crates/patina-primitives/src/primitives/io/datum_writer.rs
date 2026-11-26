@@ -412,7 +412,7 @@ fn format_leaf_object<'gc>(cx: &Cx<'gc>, tv: Value<'gc>, display_mode: bool, out
         // One spelling for all three: the tree-walker captures into
         // `Continuation`, the VM into a store it reaches by handle, and a
         // program cannot tell which backend it is running on.
-        HeapObjectData::Continuation(_)
+        HeapObjectData::Continuation { .. }
         | HeapObjectData::VmContinuationRef { .. }
         | HeapObjectData::VmDelimitedContinuationRef { .. } => out.push_str("#<continuation>"),
         HeapObjectData::PromptTag(tag) => write!(out, "{}", tag).unwrap(),

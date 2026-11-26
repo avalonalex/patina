@@ -649,7 +649,10 @@ fn cps_continuation_fields() {
     };
 
     let mut heap = shared.borrow_mut();
-    let root = heap.alloc_object(HeapObjectData::Continuation(Rc::new(k)));
+    let root = heap.alloc_object(HeapObjectData::Continuation {
+        k: Rc::new(k),
+        bytes: 0,
+    });
     collect_from(&mut heap, &[root]);
     sentinels.assert_survived(&heap);
 }

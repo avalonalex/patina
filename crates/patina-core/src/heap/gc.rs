@@ -1930,7 +1930,11 @@ impl<'h> GcVisitor<'h> {
                 }
                 self.note_code_id(*code_id);
             }
-            HeapObjectData::Continuation(k) => {
+            HeapObjectData::Continuation {
+                k,
+                // What the account holds for the capture (#656): a number.
+                bytes: _,
+            } => {
                 self.visit_continuation(k);
             }
         }

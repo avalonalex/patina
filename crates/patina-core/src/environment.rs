@@ -1132,6 +1132,13 @@ pub struct Environment {
     /// tree-walker cycles against main on the aligned GBS (#835).
     #[trace(skip, reason = "a flag set from the kind at construction")]
     frame: u8,
+    /// Whether a tree-walker capture has been charged for the continuation
+    /// level this frame belongs to (#656, [`Environment::mark_captured`]).
+    /// Never set in a namespace, and it latches: nothing clears it while the
+    /// frame lives. It sits in the padding after the flags above, so the
+    /// struct is no larger for it (`environment_size_is_watched`).
+    #[trace(skip, reason = "a flag")]
+    captured: Cell<bool>,
     /// The tables only a global or a library environment ever fills
     /// ([`RareTables`]), absent until one of them is first written and one
     /// pointer wide either way.
@@ -1289,6 +1296,7 @@ impl Environment {
             has_visible_scoped: Cell::new(false),
             kind,
             frame: kind.frame_flag(),
+            captured: Cell::new(false),
             rare: OnceCell::from(Box::new(RareTables {
                 namespace: charge,
                 ..RareTables::default()
@@ -1345,6 +1353,7 @@ impl Environment {
             has_visible_scoped: Cell::new(false),
             kind,
             frame: kind.frame_flag(),
+            captured: Cell::new(false),
             rare: OnceCell::new(),
             parent: Some(parent),
         }
@@ -1355,6 +1364,18 @@ impl Environment {
     #[inline]
     pub fn heap_id(&self) -> u64 {
         self.heap_id
+    }
+
+    /// Marks this frame as one a tree-walker capture has been charged for
+    /// (#656), and says whether it was unmarked: the caller charges the
+    /// level it belongs to, and walks on to what that level returns into.
+    /// A marked frame ends the walk, since whatever lies below it was walked
+    /// by the capture that marked it. Only a frame is marked; ask
+    /// [`Environment::is_namespace`] first.
+    #[inline]
+    pub(crate) fn mark_captured(&self) -> bool {
+        debug_assert!(!self.is_namespace());
+        !self.captured.replace(true)
     }
 
     /// Whether this is a frame of the tree-walker's CPS temporaries
@@ -1720,6 +1741,7 @@ impl Environment {
             has_visible_scoped: _,
             kind: _,
             frame: _,
+            captured: _,
             rare,
             // An environment of its own, which charges for itself if it is a
             // namespace.
@@ -7364,6 +7386,30 @@ mod namespace_charge_tests {
         );
     }
 
+    /// The frames in `CAPTURED_LEVEL_BYTES` (#656) are the two a non-tail
+    /// call leaves pending: the call's, which is `CAPTURED_FRAME_BYTES`
+    /// above, and a frame of temporaries, which binds by name in its inline
+    /// slots and so is the struct alone. A level's size is pinned, so that a
+    /// change in a frame or in a continuation environment's entry fails here
+    /// until the number its comment gives is updated.
+    #[test]
+    fn captured_level_bytes_is_a_non_tail_calls_level() {
+        let heap = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(&heap));
+        let frame = Environment::for_temporaries(global);
+        frame.bind("t", n(1));
+
+        assert!(!frame.bindings.borrow().slots.spilled());
+        assert_eq!(frame.scoped_bindings.borrow().capacity(), 0);
+        assert!(frame.rare.get().is_none());
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            crate::cont_value::CAPTURED_LEVEL_BYTES,
+            980,
+            "a level changed size: update the number CAPTURED_LEVEL_BYTES's comment gives"
+        );
+    }
+
     /// However many specifiers name a namespace, it is charged once; and its
     /// mutable specifier is one object.
     #[test]
@@ -8329,6 +8375,7 @@ mod gc_edge_tests {
             has_visible_scoped: Cell::new(true),
             kind: Kind::Frame,
             frame: Kind::Frame.frame_flag(),
+            captured: Cell::new(false),
             rare: OnceCell::from(Box::new(RareTables {
                 introduced_global_names: RefCell::default(),
                 scoped_index: RefCell::default(),
@@ -8399,6 +8446,7 @@ mod gc_edge_tests {
             has_visible_scoped: Cell::new(false),
             kind: Kind::HostNamespace,
             frame: Kind::HostNamespace.frame_flag(),
+            captured: Cell::new(false),
             rare: OnceCell::from(Box::new(RareTables {
                 read_through: OnceCell::from(Box::new(RefCell::new(ReadThrough {
                     unbound,
