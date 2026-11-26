@@ -218,12 +218,12 @@ Uncaught, it ends a script as any error does, with status 1.
 does the variable `PATINA_STACK_MAX`, and `(gc-stats)`'s `stack-limit` reads
 it. The VM reserves that much address space for its stack when it starts,
 and uses memory only for what the stack reaches; where the system will not
-give that much address space, the cap is what it gives. Two costs are worth knowing. A `guard` that catches the error copies the
-stack, as it does for any error raised that deep, so catching at the cap
-takes about as much memory again. And the last MiB is all the room a handler
-has: one that itself recurses through it loses the top-level form it was
-running in, and the next form starts afresh. The tree-walker
-(`--tree-walker`) keeps no cap.
+give that much address space, the cap is what it gives. Two costs are worth
+knowing. A `guard` that catches the error copies the stack, as it does for
+any error raised that deep, so catching at the cap takes about as much
+memory again. And the last MiB is all the room a handler has: one that
+itself recurses through it loses the top-level form it was running in, and
+the next form starts afresh. The tree-walker (`--tree-walker`) keeps no cap.
 
 ```scheme
 patina> (define factorial

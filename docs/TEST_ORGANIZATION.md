@@ -825,7 +825,10 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   the limit armed. A third holds an abort's landing to the cap (#908's
   7c): one whose stub would end past it is refused with nothing cut, as
   the catchable condition and then as the hard cap, and one that ends at
-  the cap is made.
+  the cap is made. A fourth holds the cap to the stack's reservation: a
+  cap past what the reservation holds is armed as the reservation's size,
+  in the machine, in `(gc-stats)`'s `stack-limit` and in the poll word,
+  and a cap the reservation holds is armed as asked.
   The register stack itself (#908, frames and registers in one buffer of
   words) has unit tests beside it, in
   `patina-vm/src/types/frame_stack.rs`: a header word keeps its fields,
