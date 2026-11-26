@@ -84,9 +84,9 @@
 
 use super::code_object::CodeObject;
 use super::{CallFrame, FrameCode, Reg};
-use patina_core::Trace;
 use patina_core::heap::reservation::Reservation;
 use patina_core::tagged_value::TaggedValue;
+use patina_core::{Carrier, Trace};
 use std::cell::Cell;
 use std::ops::Deref;
 use std::rc::Rc;
@@ -288,8 +288,7 @@ impl Buffer for Vec<Cell<TaggedValue>> {
 /// **It never moves.** A frame's address holds from its push to its pop,
 /// which is what JIT code, and a frame pointer in a register, need of it.
 /// The reservation takes physical pages as they are first written, so a
-/// stack costs what it has reached and not its cap, and a page once
-/// written stays until 4d.8 returns it (#909).
+/// stack costs what it has reached and not its cap.
 ///
 /// **It does not grow.** Every write past the words held asks
 /// [`Buffer::make_room`] first, and is refused at the reservation's end:
@@ -298,11 +297,49 @@ impl Buffer for Vec<Cell<TaggedValue>> {
 /// checks against the cap (`VmState::check_stack_bytes`, and the poll at a
 /// frame's entry) refuse first wherever they are asked, at the byte the cap
 /// names. This check is what holds where they are not asked, or are wrong.
+///
+/// **It gives pages back** (#909, GC stage 4d.8). The stack may write up
+/// to its *granted* end without asking, and a write past that takes a
+/// path out of line, which grants more in steps of [`GRANT_WORDS`] up to
+/// the reservation's end. So the granted end is a bound on how deep the
+/// stack has been since it was last reset, kept at no cost to a push: the
+/// compare a push makes is against it where it was against the
+/// reservation's end. A collection is an observation
+/// ([`Reserved::observe`]): the pages above what was granted since the
+/// observation before go back to the system, and the grant is reset to
+/// the stack's top. A recursion's pages therefore go at the second
+/// collection after it returns, and a program that recurses as deep
+/// between every two collections keeps them. The first [`KEPT_WORDS`]
+/// never go.
 pub(crate) struct Reserved {
     reservation: Reservation,
     /// How many words are written: every word below it is initialized.
     len: usize,
+    /// The granted end, in words: what [`Buffer::make_room`] allows
+    /// without asking further. At least `len`, at most the capacity, and
+    /// a multiple of [`GRANT_WORDS`] or the capacity itself.
+    granted: usize,
+    /// The committed end, in words: the most `granted` has been since
+    /// pages were last given back, and where they were given back from.
+    /// No word at or above it has been written since. `(gc-stats)`'s
+    /// `committed-stack-bytes` is this in bytes.
+    committed: usize,
+    /// Where the committed end is published for `(gc-stats)`: the heap's
+    /// carrier, or nothing for a stack no machine owns, as a test's.
+    account: Option<Rc<Carrier>>,
 }
+
+/// The step the granted end moves in: 256 KiB of words. Small against a
+/// recursion deep enough to matter, so the committed bytes read close to
+/// what was written, and large against a frame, so the path out of line
+/// is taken once in thousands of calls into new depth: a 10 M-frame
+/// recursion, 1.36 GB, takes it some 5,200 times.
+const GRANT_WORDS: usize = (256 << 10) / WORD_BYTES;
+
+/// What an observation never gives back: the first MiB of words. A stack
+/// that moves within it costs no call to the system at any collection,
+/// and no page written again.
+const KEPT_WORDS: usize = (1 << 20) / WORD_BYTES;
 
 impl Reserved {
     /// A reservation for a stack of at most `cap` bytes, or of as much of
@@ -321,6 +358,68 @@ impl Reserved {
         Reserved {
             reservation,
             len: 0,
+            granted: 0,
+            committed: 0,
+            account: None,
+        }
+    }
+
+    /// Grant the stack room for `more` words past the ones held, where the
+    /// reservation has it: the granted end moves up to the next step past
+    /// them, or to the reservation's end. Answers `false`, with nothing
+    /// changed, where the reservation has no such room.
+    #[cold]
+    #[inline(never)]
+    fn grant(&mut self, more: usize) -> bool {
+        let capacity = self.capacity();
+        // `len` is at most the capacity, so the difference does not wrap.
+        if capacity - self.len < more {
+            return false;
+        }
+        // At most the capacity, which is a count of words in an address
+        // space, so the rounding does not overflow.
+        self.granted = (self.len + more)
+            .next_multiple_of(GRANT_WORDS)
+            .min(capacity);
+        if self.granted > self.committed {
+            self.committed = self.granted;
+            self.publish();
+        }
+        true
+    }
+
+    /// An observation (#909): give back the pages above what the stack
+    /// was granted since the observation before, and above the first
+    /// [`KEPT_WORDS`], and start the next period at the stack's top.
+    ///
+    /// What was granted bounds how deep the stack has been, so the pages
+    /// given back are ones it did not reach in a whole period between two
+    /// observations: the hysteresis that keeps a program which recurses
+    /// as deep in every period from paying for its pages each time. They
+    /// are above the top, so they hold nothing: a pushed frame writes its
+    /// every word.
+    fn observe(&mut self) {
+        let capacity = self.capacity();
+        let keep = self.granted.max(KEPT_WORDS).min(capacity);
+        if self.committed > keep {
+            // The reservation is whole pages and `keep` a multiple of the
+            // step or the capacity, so the range is whole pages wherever a
+            // page divides 256 KiB. An error is the system's refusal, with
+            // each page as it was or zero: the end stays where it was, and
+            // the next observation asks again.
+            let range = keep * WORD_BYTES..self.committed * WORD_BYTES;
+            if self.reservation.decommit(range).is_ok() {
+                self.committed = keep;
+                self.publish();
+            }
+        }
+        self.granted = self.len.next_multiple_of(GRANT_WORDS).min(capacity);
+    }
+
+    /// Publish the committed end where `(gc-stats)` reads it.
+    fn publish(&self) {
+        if let Some(account) = &self.account {
+            account.set_stack_committed(self.committed * WORD_BYTES);
         }
     }
 
@@ -359,8 +458,10 @@ impl Deref for Reserved {
 impl Buffer for Reserved {
     #[inline(always)]
     fn make_room(&mut self, more: usize) -> bool {
-        // `len` is at most the capacity, so the difference does not wrap.
-        self.capacity() - self.len >= more
+        // Against the granted end, which is at least `len`, so the
+        // difference does not wrap: the one compare a push makes, and the
+        // grant past it is out of line (`Reserved::grant`).
+        self.granted - self.len >= more || self.grant(more)
     }
 
     #[inline(always)]
@@ -370,7 +471,7 @@ impl Buffer for Reserved {
 
     #[inline(always)]
     unsafe fn set_len(&mut self, len: usize) {
-        debug_assert!(len <= self.capacity());
+        debug_assert!(len <= self.granted, "a length past what was granted");
         self.len = len;
     }
 
@@ -390,6 +491,8 @@ impl std::fmt::Debug for Reserved {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Reserved")
             .field("len", &self.len)
+            .field("granted", &self.granted)
+            .field("committed", &self.committed)
             .field("capacity", &self.capacity())
             .finish()
     }
@@ -483,6 +586,30 @@ impl LiveStack {
             pc: 0,
             top_code: 0,
         }
+    }
+
+    /// [`Self::reserved`], with the committed bytes published on
+    /// `account` for `(gc-stats)`'s `committed-stack-bytes` (#909): the
+    /// machine's own stack, which hands over its heap's carrier.
+    pub(crate) fn reserved_on(cap: usize, floor: usize, account: Rc<Carrier>) -> Self {
+        let mut stack = Self::reserved(cap, floor);
+        stack.words.account = Some(account);
+        stack.words.publish();
+        stack
+    }
+
+    /// An observation, which a collection is (#909): the stack's pages
+    /// above what it has reached since the observation before go back to
+    /// the system, the first MiB excepted ([`Reserved::observe`]).
+    pub(crate) fn observe(&mut self) {
+        self.words.observe();
+    }
+
+    /// The bytes of the reservation that are committed: what the stack
+    /// has been granted room to write and has not given back.
+    #[cfg(test)]
+    pub(crate) fn committed_bytes(&self) -> usize {
+        self.words.committed * WORD_BYTES
     }
 
     /// The bytes the reservation holds: the most the stack can.
@@ -1902,5 +2029,191 @@ mod tests {
         assert_eq!(shape(&stack)[0], (6, 0, 17, 6, 2));
         assert_eq!(Rc::strong_count(&next), 2);
         stack.assert_frames_tile();
+    }
+
+    // ── The reservation's pages (4d.8, #909) ────────────────────────────
+
+    /// A frame of the pages' tests: 1,000 registers, 8,040 bytes.
+    const WIDE: u16 = 1000;
+
+    /// Push frames of [`WIDE`] registers, each holding `#t`, until the
+    /// stack holds at least `bytes`.
+    fn fill_to(stack: &mut LiveStack, f: &Rc<CodeObject>, bytes: usize) {
+        while stack.bytes() < bytes {
+            stack
+                .push(f, TaggedValue::FALSE, 0, WIDE, TaggedValue::TRUE)
+                .unwrap();
+        }
+    }
+
+    /// Pop frames until the stack holds at most `bytes`.
+    fn drain_to(stack: &mut LiveStack, bytes: usize) {
+        while stack.bytes() > bytes {
+            stack.pop();
+        }
+    }
+
+    /// The raw word of a register near `bytes` into the reservation, in
+    /// whichever frame of [`WIDE`] registers [`fill_to`] put there, read
+    /// where it lies whether or not the stack still holds it: `#t`'s word
+    /// once a frame was pushed over it, and zero on a page that was never
+    /// written or has been given back.
+    fn word_near(stack: &LiveStack, bytes: usize) -> u64 {
+        let frame = HEADER_WORDS + WIDE as usize;
+        let index = bytes / WORD_BYTES / frame * frame + HEADER_WORDS + 7;
+        assert!(index < stack.capacity_bytes() / WORD_BYTES);
+        // SAFETY: the index is inside the reservation, which is readable
+        // from end to end and zero where it is unwritten; a word is plain
+        // data.
+        unsafe { (*stack.words.first().add(index)).get().raw() }
+    }
+
+    const MIB: usize = 1 << 20;
+    const STEP: usize = GRANT_WORDS * WORD_BYTES;
+
+    /// The stack is granted room in steps, and what it was granted is what
+    /// it holds committed: the figure `(gc-stats)` reads, published on the
+    /// carrier where it moves.
+    #[test]
+    fn the_stack_is_granted_room_in_steps_and_publishes_what_it_holds() {
+        let carrier = Carrier::new();
+        let mut stack = LiveStack::reserved_on(8 * MIB, MIB, Rc::clone(&carrier));
+        assert_eq!((stack.committed_bytes(), carrier.stack_committed()), (0, 0));
+        let f = code(1, WIDE);
+        fill_to(&mut stack, &f, 1);
+        assert_eq!(stack.committed_bytes(), STEP, "the first frame: one step");
+        fill_to(&mut stack, &f, STEP - 8040);
+        assert_eq!(stack.committed_bytes(), STEP, "within it: no more");
+        fill_to(&mut stack, &f, STEP + 1);
+        assert_eq!(stack.committed_bytes(), 2 * STEP, "past it: the next");
+        assert_eq!(carrier.stack_committed(), 2 * STEP);
+        // An append and an arrival are granted room as a push is.
+        let captured = stack.copy();
+        stack.append(&captured).unwrap();
+        let held = stack.bytes().next_multiple_of(STEP);
+        assert_eq!(
+            (stack.committed_bytes(), carrier.stack_committed()),
+            (held, held)
+        );
+        stack.assert_frames_tile();
+        // The last step ends at the reservation's end, and nothing is
+        // granted past it.
+        let nearly = stack.capacity_bytes() - 8040;
+        fill_to(&mut stack, &f, nearly);
+        assert_eq!(stack.committed_bytes(), stack.capacity_bytes());
+        assert_eq!(
+            stack.push(&f, TaggedValue::FALSE, 0, WIDE, TaggedValue::TRUE),
+            Err(NoRoom)
+        );
+        assert_eq!(carrier.stack_committed(), stack.capacity_bytes());
+    }
+
+    /// An observation gives back the pages above what the stack reached
+    /// since the observation before, so a recursion's pages go at the
+    /// second observation after it returns, and what is under the mark
+    /// stays, the frames still on the stack among it.
+    #[test]
+    fn an_observation_gives_back_what_the_stack_did_not_reach_since_the_one_before() {
+        assert_ne!(TaggedValue::TRUE.raw(), 0);
+        let carrier = Carrier::new();
+        let mut stack = LiveStack::reserved_on(8 * MIB, MIB, Rc::clone(&carrier));
+        let f = code(1, WIDE);
+        fill_to(&mut stack, &f, 4 * MIB);
+        let deep = stack.bytes().next_multiple_of(STEP);
+        assert_eq!(stack.committed_bytes(), deep);
+        // Back to a little over 1.5 MiB, which the stack keeps holding.
+        drain_to(&mut stack, 3 * MIB / 2 + 100_000);
+        let kept = stack.bytes().next_multiple_of(STEP);
+        let frames = shape(&stack);
+        assert_ne!(word_near(&stack, 3 * MIB), 0, "written by the descent");
+
+        // The first observation after the return: the period it ends went
+        // to 4 MiB, so nothing goes.
+        stack.observe();
+        assert_eq!(stack.committed_bytes(), deep);
+        assert_ne!(word_near(&stack, 3 * MIB), 0);
+
+        // The second: the stack has not been above its top since.
+        stack.observe();
+        assert_eq!(
+            (stack.committed_bytes(), carrier.stack_committed()),
+            (kept, kept)
+        );
+        assert_eq!(word_near(&stack, 3 * MIB), 0, "the page went back");
+        assert_eq!(word_near(&stack, kept + STEP), 0, "from the mark up");
+        assert_ne!(word_near(&stack, MIB), 0, "and not from under the top");
+        assert_eq!(shape(&stack), frames);
+        stack.assert_frames_tile();
+        for frame in stack.frames() {
+            let base = frame.register_base;
+            assert!(
+                stack.words()[base..base + WIDE as usize]
+                    .iter()
+                    .all(|word| word.get() == TaggedValue::TRUE)
+            );
+        }
+
+        // A third changes nothing, and the stack grows over the pages
+        // that went as over any it never wrote.
+        stack.observe();
+        assert_eq!(stack.committed_bytes(), kept);
+        fill_to(&mut stack, &f, 4 * MIB);
+        assert_eq!(stack.committed_bytes(), deep);
+        assert_ne!(word_near(&stack, 3 * MIB), 0);
+        stack.assert_frames_tile();
+    }
+
+    /// The hysteresis: a stack that goes as deep between every two
+    /// observations keeps its pages, with nothing given back and written
+    /// again; and one that goes less deep each time gives back only what
+    /// lies above the deepest it went in the period.
+    #[test]
+    fn a_stack_that_goes_as_deep_in_every_period_keeps_its_pages() {
+        let mut stack = LiveStack::reserved(8 * MIB, MIB);
+        let f = code(1, WIDE);
+        fill_to(&mut stack, &f, 4 * MIB);
+        let deep = stack.committed_bytes();
+        for _ in 0..10 {
+            drain_to(&mut stack, 0);
+            stack.observe();
+            assert_eq!(stack.committed_bytes(), deep);
+            assert_ne!(word_near(&stack, 3 * MIB), 0, "no page went back");
+            fill_to(&mut stack, &f, 4 * MIB);
+        }
+        // A period that reaches only 3 MiB gives back what is above that.
+        drain_to(&mut stack, 0);
+        stack.observe();
+        fill_to(&mut stack, &f, 3 * MIB);
+        let reached = stack.bytes().next_multiple_of(STEP);
+        drain_to(&mut stack, 0);
+        stack.observe();
+        assert_eq!(stack.committed_bytes(), reached);
+        assert_ne!(word_near(&stack, 3 * MIB - STEP), 0);
+        assert_eq!(word_near(&stack, 4 * MIB - STEP), 0);
+    }
+
+    /// The first MiB is never given back: a stack that moves within it
+    /// makes no call to the system at any observation.
+    #[test]
+    fn the_first_mebibyte_is_never_given_back() {
+        let mut stack = LiveStack::reserved(8 * MIB, MIB);
+        let f = code(1, WIDE);
+        fill_to(&mut stack, &f, 3 * STEP);
+        let held = stack.committed_bytes();
+        assert!(held <= MIB);
+        drain_to(&mut stack, 0);
+        for _ in 0..3 {
+            stack.observe();
+            assert_eq!(stack.committed_bytes(), held);
+            assert_ne!(word_near(&stack, 2 * STEP), 0);
+        }
+        // Past it, what goes back is what lies above the first MiB.
+        fill_to(&mut stack, &f, 2 * MIB);
+        drain_to(&mut stack, 0);
+        stack.observe();
+        stack.observe();
+        assert_eq!(stack.committed_bytes(), MIB);
+        assert_ne!(word_near(&stack, MIB - STEP), 0);
+        assert_eq!(word_near(&stack, MIB + STEP), 0);
     }
 }

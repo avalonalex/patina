@@ -15,7 +15,7 @@ use crate::types::continuation::{
 use crate::types::frame_stack::{Buffer, Frames, LiveStack, NoRoom};
 use crate::types::{CallFrame, Depth, FrameStack};
 use patina_core::heap::Heap;
-use patina_core::{CheckCell, GC_CHECK, SlotVisitor, TaggedValue, Trace};
+use patina_core::{Carrier, CheckCell, GC_CHECK, SlotVisitor, TaggedValue, Trace};
 use std::cell::Cell;
 use std::ops::Range;
 use std::rc::Rc;
@@ -181,9 +181,9 @@ impl ExecutionState {
     /// bytes: its reservation is made here, of that size or of as much of
     /// it as the system gives, down to `floor` bytes
     /// ([`Self::stack_capacity`] says which).
-    pub(super) fn with_stack_cap(cap: usize, floor: usize) -> Self {
+    pub(super) fn with_stack_cap(cap: usize, floor: usize, account: Rc<Carrier>) -> Self {
         ExecutionState {
-            stack: LiveStack::reserved(cap, floor),
+            stack: LiveStack::reserved_on(cap, floor, account),
             prompt_stack: Vec::new(),
             dynamic_winds: Vec::new(),
             exception_handlers: Vec::new(),
@@ -197,12 +197,27 @@ impl ExecutionState {
     /// place of the one it has, for a test that wants a small cap. The
     /// stack holds no frame.
     #[cfg(test)]
-    pub(super) fn reserve_stack(&mut self, cap: usize, floor: usize) {
+    pub(super) fn reserve_stack(&mut self, cap: usize, floor: usize, account: Rc<Carrier>) {
         assert!(
             self.stack.is_empty(),
             "a stack with frames keeps its reservation"
         );
-        self.stack = LiveStack::reserved(cap, floor);
+        self.stack = LiveStack::reserved_on(cap, floor, account);
+    }
+
+    /// An observation of the register stack, which a collection is (#909,
+    /// `PRD/GC_PRD.md` §17.1): its pages above what it has reached since
+    /// the observation before go back to the system
+    /// (`LiveStack::observe`). The machine calls it after every
+    /// collection, outside the pause.
+    pub(super) fn observe_stack(&mut self) {
+        self.stack.observe();
+    }
+
+    /// The bytes of the register stack's reservation that are committed.
+    #[cfg(test)]
+    pub(super) fn stack_committed(&self) -> usize {
+        self.stack.committed_bytes()
     }
 
     /// The bytes the register stack's reservation holds: the cap it was

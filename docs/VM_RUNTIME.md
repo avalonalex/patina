@@ -102,9 +102,15 @@ fp+40  r0 … rₙ₋₁
     which JIT code and a frame pointer held in a register need, and the
     stack's top is an address the frame-entry check compares with the poll
     word (§3.2).
-  - **It takes pages as they are written.** A stack costs what it has
-    reached, not its cap. A page once written stays the process's until
-    #909 returns it.
+  - **It takes pages as they are written, and gives them back** (4d.8,
+    #909). A stack costs what it has reached, not its cap. The buffer
+    grants room in steps of 256 KiB, so what it has granted bounds how
+    deep the stack has been, and each collection gives back the pages
+    above what was granted since the collection before, the first MiB
+    excepted (`LiveStack::observe`, from `after_collection`;
+    `docs/GC_DESIGN.md` §6.4). A recursion's pages go at the second
+    collection after it returns, and `(gc-stats)`'s
+    `committed-stack-bytes` reads what is held.
   - **It does not grow, and has no guard page.** Every write that extends
     the stack asks the buffer for room first and is refused at the
     reservation's end with nothing written: a push, a tail call whose
@@ -343,8 +349,8 @@ pub struct VmDelimitedContinuation {
 out of its reservation: its words, as one run of stores, into a vector of
 their size, and the side vector's runs of code. An arrival copies them back
 into the reservation, at its base. The pages the stack had written above
-the arrival stay the process's until #909 returns them, as they do after a
-return. While an arrival replaced vectors, and then one buffer, an escape
+the arrival go back at the second collection after it, as they do after a
+return (#909). While an arrival replaced vectors, and then one buffer, an escape
 out of a deep recursion gave what the recursion grew back to the allocator,
 which did not reliably take it out of the process's footprint (measured
 2026-11-25, on #924). A delimited one copies

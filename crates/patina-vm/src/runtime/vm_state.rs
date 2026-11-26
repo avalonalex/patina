@@ -509,6 +509,7 @@ impl VmState {
             execution: super::execution_state::ExecutionState::with_stack_cap(
                 stack_cap,
                 STACK_FLOOR,
+                Rc::clone(&mutator),
             ),
             pending_escape: None,
             pending_transfer: false,
@@ -570,7 +571,8 @@ impl VmState {
     #[cfg(test)]
     pub(crate) fn set_stack_cap(&mut self, cap: u64) {
         let cap = clamp_stack_cap(cap);
-        self.execution.reserve_stack(cap, STACK_FLOOR);
+        self.execution
+            .reserve_stack(cap, STACK_FLOOR, Rc::clone(&self.mutator));
         self.arm_stack_cap(cap);
     }
 
@@ -1126,6 +1128,10 @@ impl VmState {
         // A collection: one of the three places the soft limit is armed
         // again (#907).
         self.rearm_stack_limit();
+        // And an observation of the register stack, as a major is (#909):
+        // the pages it has not reached since the one before go back to
+        // the system. After the pause's accounting, as a decommit is.
+        self.execution.observe_stack();
     }
 
     /// [`Self::after_collection`]'s work: count down the freed closures'
@@ -4578,6 +4584,39 @@ mod tests {
         assert_eq!(state.stack_cap, held - 4096, "a cap it holds is the cap");
         assert_eq!(state.mutator.stack_cap(), held - 4096);
         assert_eq!(limit(&state), held - 4096 - STACK_RESERVE);
+    }
+
+    /// A collection is an observation of the register stack (#909): what
+    /// the machine does after one gives back the pages the stack has not
+    /// reached since the collection before, the first MiB excepted, and
+    /// `(gc-stats)`'s `committed-stack-bytes` reads what is left. So the
+    /// pages of a recursion that has returned are held through the first
+    /// collection and go at the second.
+    #[test]
+    fn a_collection_gives_back_the_pages_the_stack_has_not_reached_since_the_one_before() {
+        let mut state = VmState::on_a_fresh_heap();
+        state.set_stack_cap(8 << 20);
+        let mut wide = code();
+        wide.num_regs = 60_000;
+        let id = load_in_globals(&mut state, wide, Vec::new()).id();
+        let wide = state.code_object(id).unwrap();
+        for _ in 0..6 {
+            state
+                .execution
+                .push_frame(Rc::clone(&wide), CallFrame::NO_CLOSURE, 0)
+                .unwrap();
+        }
+        let deep = state.execution.stack_committed();
+        assert!(deep >= 6 * 480_040, "six frames of 480,040 bytes");
+        assert_eq!(state.mutator.stack_committed(), deep);
+        for _ in 0..6 {
+            state.execution.pop_frame();
+        }
+        state.after_collection();
+        assert_eq!(state.execution.stack_committed(), deep, "the first: held");
+        state.after_collection();
+        assert_eq!(state.execution.stack_committed(), 1 << 20, "the second");
+        assert_eq!(state.mutator.stack_committed(), 1 << 20);
     }
 
     /// A machine under a 2 MiB cap whose stack ends `under` bytes below
