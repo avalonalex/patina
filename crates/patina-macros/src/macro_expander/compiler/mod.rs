@@ -192,6 +192,12 @@ pub struct Compiler<'gc> {
     /// Each literal's index in `literals`.
     pub(super) literal_ids: HashMap<Value<'gc>, LiteralId>,
 
+    /// For each identifier a template keeps as a literal whose expansion
+    /// chain the template holds, the copy the macro object holds in its
+    /// place (`held_for_template`, #791): one copy, however often the rules
+    /// name the identifier.
+    pub(super) held_literals: HashMap<Value<'gc>, Value<'gc>>,
+
     /// The pairs and vectors of the pattern or template being compiled that
     /// the compiler is inside — so that one met again inside itself, which a
     /// datum label can write, is refused rather than compiled until the stack
@@ -232,6 +238,7 @@ impl<'gc> Compiler<'gc> {
             inherited_identifiers: HashMap::new(),
             literals: Vec::new(),
             literal_ids: HashMap::new(),
+            held_literals: HashMap::new(),
             open: OpenNodes::default(),
         }
     }
@@ -262,6 +269,7 @@ impl<'gc> Compiler<'gc> {
             inherited_identifiers: HashMap::new(),
             literals: Vec::new(),
             literal_ids: HashMap::new(),
+            held_literals: HashMap::new(),
             open: OpenNodes::default(),
         }
     }
@@ -296,6 +304,7 @@ impl<'gc> Compiler<'gc> {
             inherited_identifiers: HashMap::new(),
             literals: Vec::new(),
             literal_ids: HashMap::new(),
+            held_literals: HashMap::new(),
             open: OpenNodes::default(),
         }
     }
@@ -342,6 +351,7 @@ impl<'gc> Compiler<'gc> {
         self.inherited_identifiers.clear();
         self.literals.clear();
         self.literal_ids.clear();
+        self.held_literals.clear();
 
         for (pat_form, tmpl_form) in rules {
             // Reset per-rule context
@@ -385,6 +395,7 @@ impl<'gc> Compiler<'gc> {
 
         let template_symbols = CompiledMacro::collect_template_symbols(&compiled_rules);
         self.literal_ids.clear();
+        self.held_literals.clear();
         let compiled = CompiledMacro {
             name,
             template_symbols,

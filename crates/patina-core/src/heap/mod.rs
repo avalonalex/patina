@@ -65,6 +65,7 @@ pub use account::{
 };
 pub use check::CheckCell;
 use check::SlotChecks;
+use documents::{DocumentTable, SourceId};
 pub use finalize::teardown;
 use handles::{HandleTable, Owned, OwnedEnvironment};
 use num_bigint::BigInt;
@@ -73,7 +74,6 @@ pub use port_table::PortId;
 #[cfg(any(test, feature = "test-support"))]
 pub use port_table::registered_port_tables;
 pub(crate) use port_table::{PortTable, open_output_files};
-use documents::{DocumentTable, SourceId};
 use scope_sets::{ScopeSetId, ScopeSetTable};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -1949,10 +1949,12 @@ impl Heap {
     ) -> Option<TaggedValue> {
         let data = self.identifier(original)?;
         let source = self.documents.relocated(data.source, location);
-        Some(self.alloc_object(HeapObjectData::Identifier(IdentifierData {
-            source,
-            ..data
-        })))
+        Some(
+            self.alloc_object(HeapObjectData::Identifier(IdentifierData {
+                source,
+                ..data
+            })),
+        )
     }
 
     /// The span of the list the identifier `value` heads, as a location
@@ -2818,7 +2820,9 @@ impl Heap {
         }
         match self.get_object(tv) {
             HeapObjectData::Symbol(s) => Some(s.as_ref()),
-            HeapObjectData::Identifier(IdentifierData { name, .. }) => Some(self.symbol_spelling(*name)),
+            HeapObjectData::Identifier(IdentifierData { name, .. }) => {
+                Some(self.symbol_spelling(*name))
+            }
             _ => None,
         }
     }
