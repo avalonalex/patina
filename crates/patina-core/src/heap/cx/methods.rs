@@ -354,6 +354,15 @@ impl<'gc> Cx<'gc> {
         self.heap.borrow().mutator().stack_cap()
     }
 
+    /// The bytes of its register stack this context's heap's machine holds
+    /// committed ([`Carrier::stack_committed`](crate::Carrier::stack_committed),
+    /// #909): 0 on the tree-walker, which keeps no such stack.
+    /// `(gc-stats)`'s `committed-stack-bytes`.
+    #[inline]
+    pub fn stack_committed(&self) -> usize {
+        self.heap.borrow().mutator().stack_committed()
+    }
+
     /// [`Heap::core_syntax`](crate::Heap::core_syntax) on this context's heap.
     #[inline]
     pub fn core_syntax(&mut self, form: crate::core_syntax::CoreForm) -> Value<'gc> {

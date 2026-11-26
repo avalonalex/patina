@@ -573,3 +573,69 @@ fn the_default_cap_holds_a_ten_million_frame_recursion() {
         }
     }
 }
+
+/// `(gc-stats)`'s `committed-stack-bytes` (#909, GC stage 4d.8), read with
+/// primitives alone, so that the read enters no closure.
+const COMMITTED: &str = "(cdr (assq 'committed-stack-bytes (gc-stats)))";
+
+/// A recursion's pages go back at the second collection after it returns
+/// (#909): 300,000 frames are 40.8 MB of stack, held after the return and
+/// after one `(gc)`, and all but the first MiB given back by the second.
+/// The stack is granted room in steps of 256 KiB, so that is what a
+/// machine that has run little holds.
+#[test]
+fn a_recursions_pages_go_back_at_the_second_collection() {
+    let program = format!(
+        "(let* ((start {COMMITTED})
+       (depth (deep 300000))
+       (grown {COMMITTED})
+       (one (begin (gc) {COMMITTED}))
+       (two (begin (gc) {COMMITTED}))
+       (three (begin (gc) {COMMITTED})))
+  (list start depth (>= grown 40800000) (< grown 41200000) (= one grown) two three))"
+    );
+    assert_eq!(
+        answer(&vm(ROOMY), &program),
+        "(262144 300000 #t #t #t 1048576 1048576)"
+    );
+}
+
+/// The hysteresis (#909): a program that recurses to the same depth
+/// between every two collections keeps its pages. Ten cycles of a
+/// recursion and a `(gc)` read the same committed bytes after each
+/// collection, where giving back at every collection would read the first
+/// MiB.
+#[test]
+fn a_recursion_in_every_cycle_keeps_its_pages() {
+    let program = format!(
+        "(let loop ((i 0) (seen '()))
+  (if (= i 10)
+      (list (length seen) (apply = seen) (>= (car seen) 40800000))
+      (begin (deep 300000) (gc) (loop (+ i 1) (cons {COMMITTED} seen)))))"
+    );
+    assert_eq!(answer(&vm(ROOMY), &program), "(10 #t #t)");
+}
+
+/// A stack that a `guard` catching `&stack-exhausted` leaves behind goes
+/// back the same way: the cap's 2 MiB are held when the condition is
+/// caught, and the first MiB after two collections. And the tree-walker,
+/// which keeps no such stack, reads 0.
+#[test]
+fn committed_stack_bytes_after_the_cap_and_on_the_tree_walker() {
+    let program = format!(
+        "(let* ((caught (guard (e ((stack-exhausted? e) 'exhausted)) (deep 20000)))
+       (held {COMMITTED})
+       (after (begin (gc) (gc) {COMMITTED})))
+  (list caught (> held 1048576) (<= held 2097152) after))"
+    );
+    assert_eq!(answer(&vm(CAP), &program), "(exhausted #t #t 1048576)");
+    let walker = common::tree_walker_interpreter();
+    assert_eq!(answer(&walker, COMMITTED), "0");
+    assert_eq!(
+        answer(
+            &walker,
+            &format!("(begin (deep 20000) (gc) (gc) {COMMITTED})")
+        ),
+        "0"
+    );
+}

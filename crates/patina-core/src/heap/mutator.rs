@@ -503,6 +503,12 @@ pub struct Carrier {
     /// has none. The limit above moves under it: the soft limit while it is
     /// armed, the cap while a handler has the reserve.
     stack_cap: Cell<usize>,
+    /// The bytes of its register stack the machine holds committed, for
+    /// `(gc-stats)`'s `committed-stack-bytes` (#909): what the stack has
+    /// been given room to write and has not given back, 0 where the
+    /// machine keeps no such stack, as the tree-walker keeps none. The
+    /// stack's buffer writes it where the figure moves.
+    stack_committed: Cell<usize>,
 }
 
 impl Carrier {
@@ -513,6 +519,7 @@ impl Carrier {
             interrupt: Arc::new(InterruptCell::new()),
             stack_limit: Cell::new(Mutator::NO_LIMIT),
             stack_cap: Cell::new(0),
+            stack_committed: Cell::new(0),
         });
         carrier.interrupt.attach(&carrier.mutator);
         carrier
@@ -551,6 +558,20 @@ impl Carrier {
     /// The stack's cap in bytes, or 0 where the machine keeps none.
     pub fn stack_cap(&self) -> usize {
         self.stack_cap.get()
+    }
+
+    /// Record the bytes of the register stack that are committed, for
+    /// [`Carrier::stack_committed`] (#909). The stack's buffer calls it
+    /// where it takes room past what it had, and where it gives pages
+    /// back after a collection.
+    pub fn set_stack_committed(&self, bytes: usize) {
+        self.stack_committed.set(bytes);
+    }
+
+    /// The bytes of the register stack that are committed, or 0 where the
+    /// machine keeps no such stack.
+    pub fn stack_committed(&self) -> usize {
+        self.stack_committed.get()
     }
 
     /// Take what was posted from elsewhere, at a poll whose word read 0:

@@ -91,6 +91,13 @@
 //!   which otherwise is fitted to the machine's memory. A call that takes
 //!   the stack to within 1 MiB of it raises `&stack-exhausted`. 0 on the
 //!   tree-walker, which keeps no cap.
+//! - `committed-stack-bytes`: the bytes of its stack the VM holds
+//!   committed (#909): what the stack has been given room to write, in
+//!   steps of 256 KiB, and has not given back. A collection gives back
+//!   what lies above the deepest the stack has been since the collection
+//!   before it, and never the first MiB, so a deep recursion's pages go at
+//!   the second collection after it returns. `committed-bytes` does not
+//!   count them. 0 on the tree-walker, which keeps no such stack.
 //! - `minors` and `majors`: collections by kind. Every collection is a major
 //!   until a nursery comes (GC_PRD stage 7), so `minors` is 0 and `majors` is
 //!   `collections`.
@@ -273,6 +280,7 @@ fn gc_stats<'gc>(cx: &mut Cx<'gc>, _args: &[Value<'gc>]) -> Result<Value<'gc>, E
             patina_core::heap::descriptor_limit().map_or(Value::FALSE, n),
         ),
         ("stack-limit", n(cx.stack_cap())),
+        ("committed-stack-bytes", n(cx.stack_committed())),
         ("namespaces", n(cx.namespaces())),
         ("cells", n(cx.cells())),
         ("binding-records", n(cx.binding_records())),
