@@ -57,9 +57,8 @@ pub(crate) fn payload_needs_drop(data: &HeapObjectData) -> bool {
             relinked,
         } => nd(name) || nd(scopes) || nd(written) || nd(relinked),
         H::Continuation { k, bytes } => nd(k) || nd(bytes),
-        H::Parameter { values, converter } => nd(values) || nd(converter),
+        H::Parameter { value, converter } => nd(value) || nd(converter),
         H::Promise(p) => nd(p),
-        H::Library(l) => nd(l),
         H::Values(v) => nd(v),
         H::EnvironmentSpecifier { env, mutable } => nd(env) || nd(mutable),
         H::PromptTag(t) => nd(t),
@@ -345,7 +344,15 @@ mod tests {
             ),
             (
                 "MutableCell",
-                HeapObjectData::MutableCell(super::super::Interior::new(TaggedValue::NULL)),
+                HeapObjectData::MutableCell(TaggedValue::NULL),
+                false,
+            ),
+            (
+                "Parameter",
+                HeapObjectData::Parameter {
+                    value: TaggedValue::NULL,
+                    converter: None,
+                },
                 false,
             ),
             ("Free", HeapObjectData::Free, false),
