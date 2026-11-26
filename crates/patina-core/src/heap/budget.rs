@@ -22,10 +22,16 @@
 //! too, since the stack is one of several reservations the limit has to
 //! hold (the heap's is fitted at stage 5e).
 //!
-//! **What reads them.** The VM's stack cap, where a configuration sets
-//! none ([`HeapConfig::stack_cap`](super::config::HeapConfig::stack_cap),
-//! #907's second half): detected once for each machine built that way. The
-//! fitting logic is tested under injected values.
+//! A cap a configuration sets is held to B too
+//! ([`MemoryLimits::stack_cap_for`], #929): a cap is a bound on memory, and
+//! no bound above the machine's memory is one a program can reach by using
+//! it, while its reservation would take address space from everything else
+//! the process maps.
+//!
+//! **What reads them.** The VM's stack cap
+//! ([`HeapConfig::stack_cap`](super::config::HeapConfig::stack_cap), #907's
+//! second half): detected once for each machine built. The fitting logic is
+//! tested under injected values.
 //!
 //! macOS has no cgroups and refuses to set `RLIMIT_AS` (`ulimit -v`
 //! answers "Invalid argument" on macOS 27.2), so the test that reads a real
@@ -105,6 +111,27 @@ impl MemoryLimits {
         if let Some(address_space) = self.address_space {
             cap = cap.min(address_space / STACK_SHARE);
         }
+        cap.max(STACK_CAP_FLOOR)
+    }
+
+    /// The main stack's cap where a configuration asked for `asked` bytes
+    /// (#929; the owner's ruling of 2026-11-26 on #782's Q9): the smaller
+    /// of what was asked and B, never below [`STACK_CAP_FLOOR`]. Where B is
+    /// unknown the cap is what was asked.
+    ///
+    /// Since #908 a cap is a reservation of address space, made when the
+    /// machine is built. A cap written to mean "no limit" took half of the
+    /// process's address space, and a 42nd machine built with one found
+    /// none left. Held to B, a cap is one a stack could fill without
+    /// swap, the same on every run on one machine, and thousands of
+    /// machines fit a process whatever each asked for. `RLIMIT_AS` is not
+    /// read here: a reservation it refuses is halved until it is granted,
+    /// as before (`Reservation`).
+    pub fn stack_cap_for(&self, asked: u64) -> u64 {
+        let cap = match self.budget() {
+            Some(budget) => asked.min(budget),
+            None => asked,
+        };
         cap.max(STACK_CAP_FLOOR)
     }
 }
@@ -366,6 +393,98 @@ mod tests {
             limits(Some(4 * GIB), None, Some(GIB)).budget(),
             Some(4 * GIB)
         );
+    }
+
+    /// A cap a configuration set is held to B, and to nothing else (#929):
+    /// the smaller of what was asked and B, the floor at least, and what
+    /// was asked where no memory is known. `RLIMIT_AS` is not read: a
+    /// reservation it refuses is halved where it is made.
+    #[test]
+    fn a_set_cap_is_held_to_the_budget() {
+        let rows: &[(&str, MemoryLimits, u64, u64)] = &[
+            ("nothing known", limits(None, None, None), u64::MAX, u64::MAX),
+            (
+                "nothing known, under the floor",
+                limits(None, None, None),
+                1,
+                STACK_CAP_FLOOR,
+            ),
+            (
+                "written to mean no limit, on 24 GiB",
+                limits(Some(24 * GIB), None, None),
+                u64::MAX,
+                24 * GIB,
+            ),
+            (
+                "one byte past B",
+                limits(Some(24 * GIB), None, None),
+                24 * GIB + 1,
+                24 * GIB,
+            ),
+            (
+                "B exactly",
+                limits(Some(24 * GIB), None, None),
+                24 * GIB,
+                24 * GIB,
+            ),
+            (
+                "above the default's ceiling and under B",
+                limits(Some(24 * GIB), None, None),
+                16 * GIB,
+                16 * GIB,
+            ),
+            (
+                "under B",
+                limits(Some(24 * GIB), None, None),
+                64 * MIB,
+                64 * MIB,
+            ),
+            (
+                "a 512 MiB container on a 64 GiB host",
+                limits(Some(64 * GIB), Some(512 * MIB), None),
+                8 * GIB,
+                512 * MIB,
+            ),
+            (
+                "a cgroup limit above the machine's memory",
+                limits(Some(4 * GIB), Some(64 * GIB), None),
+                32 * GIB,
+                4 * GIB,
+            ),
+            (
+                "only a cgroup limit",
+                limits(None, Some(2 * GIB), None),
+                u64::MAX,
+                2 * GIB,
+            ),
+            (
+                "an address-space limit is not read",
+                limits(Some(24 * GIB), None, Some(GIB)),
+                8 * GIB,
+                8 * GIB,
+            ),
+            (
+                "an address-space limit alone holds nothing",
+                limits(None, None, Some(GIB)),
+                u64::MAX,
+                u64::MAX,
+            ),
+            (
+                "under the floor",
+                limits(Some(24 * GIB), None, None),
+                0,
+                STACK_CAP_FLOOR,
+            ),
+            (
+                "a budget under the floor",
+                limits(Some(MIB), None, None),
+                8 * GIB,
+                STACK_CAP_FLOOR,
+            ),
+        ];
+        for (name, limits, asked, held) in rows {
+            assert_eq!(limits.stack_cap_for(*asked), *held, "{name}");
+        }
     }
 
     /// The default cap, row by row: min(8 GiB, 25%·B), a quarter of
