@@ -354,12 +354,14 @@ Notes:
   single `borrow_mut()` for the whole collection — which is exactly why safe
   points must be borrow-free (§7). But `visit_env` and object-variant tracing
   read interiors: environments' binding maps, which are `RefCell`s, and
-  `Record.fields`, `Parameter.values` and `Promise` state, each an
-  `Rc<Interior<…>>` (#708). Those are *separate* cells from the heap's, so
-  tracing them under the heap borrow is fine. `MutableCell` and `Ephemeron`
-  hold their `Interior` *inside* the object arena: the mark phase borrows it
-  under the `&Heap` that `run_mark_phase` takes, a borrow of the cell, not a
-  second borrow of the heap.
+  `Record.fields` and `Promise` state, each an `Rc<Interior<…>>` (#708).
+  Those are *separate* cells from the heap's, so tracing them under the heap
+  borrow is fine. `Ephemeron` holds its `Interior` *inside* the object
+  arena: the mark phase borrows it under the `&Heap` that `run_mark_phase`
+  takes, a borrow of the cell, not a second borrow of the heap. A cell's
+  value and a parameter's are plain fields (#930): the mark phase reads
+  them as it reads any field, and the funnel writes them through
+  `&mut Heap`. The rest leave `Interior` at 4g.
 
 ### 4.2 Mark state
 
@@ -977,10 +979,14 @@ collection replaces excluded slots with `UNSPECIFIED`, including
 excess capacity in reused tail-call windows; a check build writes `DEAD_SLOT`
 instead and panics where one is read (#625, §11 item 6). A push fills the
 registers of its window that no argument or operand writes the same way
-(#714), reused windows included, past the arguments up to the new code's
-register count: so a register a map calls live was written by its
-activation, and the excess capacity past the code's count, which no fill
-reaches, is what retirement alone clears.
+(#714): a fresh window whole, the registers a reused window grows by, and
+a stub's next round. A check build fills a tail call's reused window too,
+past the arguments up to the new code's register count; a plain release
+build does not (the owner's ruling of 2026-11-26 on #714's Q-4d3-1), and
+there a register the new activation has not written keeps the replaced
+one's word until retirement clears it. Either way a register a map calls
+live was written by its activation. The excess capacity past the code's
+count, which no fill reaches, is what retirement alone clears.
 
 Retirement is the collection's own trace of the register stack, in one pass
 (#906, GC_PRD §11.1 invariant 3; `gc_roots::trace_frames`): the root
@@ -3155,8 +3161,10 @@ visitor exists, and the stress lane is the real safety net.
    passes the register (#906), and at a continuation capture, in the copy,
    with the copy's hole; and a push writes it into each register of its window that no
    argument or operand writes, a tail call's, a self tail call's and a
-   stub restart's reused window included, where a plain release build
-   writes `NULL` (#714). Every read of a register checks for it: `VmState::reg_at`, which
+   stub restart's reused window included (#714). A plain release build
+   writes `NULL` there, but for a tail call's and a self tail call's
+   window, which it does not fill (#714's Q-4d3-1, ruled 2026-11-26).
+   Every read of a register checks for it: `VmState::reg_at`, which
    every instruction's operands go through (`read of a retired register as
    an instruction's operand`); the closure-call fast path's argument copy and
    its rest list, which read the caller's registers directly

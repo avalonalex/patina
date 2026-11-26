@@ -255,14 +255,11 @@ const SHARED_PAYLOADS: &[&str] = &[
     "Continuation.k",
     "Ephemeron.0",
     "EnvironmentSpecifier.env",
-    "Library.0",
     "Macro.body",
     // Shared, immutable state (#837): each `CarriedRelink` holds two
     // `Rc<str>` spellings inside a struct of its own, which the scan reads
     // as a wrapper (`SHARED_WRAPPERS`).
     "Macro.relinks",
-    "MutableCell.0",
-    "Parameter.values",
     "Procedure.0",
     "Promise.0",
     "PromptTag.0",

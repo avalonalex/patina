@@ -854,12 +854,10 @@ fn record_fields() {
 }
 
 #[test]
-fn parameter_values_and_converter() {
+fn parameter_value_and_converter() {
     objects_keep_their_sentinels(|_, heap, s| {
         vec![HeapObjectData::Parameter {
-            values: Rc::new(Interior::new(vec![
-                s.pair(heap, "HeapObjectData::Parameter.values"),
-            ])),
+            value: s.pair(heap, "HeapObjectData::Parameter.value"),
             converter: Some(s.vector(heap, "HeapObjectData::Parameter.converter")),
         }]
     });
@@ -902,9 +900,9 @@ fn environment_specifier_environment() {
 #[test]
 fn mutable_cell_contents() {
     objects_keep_their_sentinels(|_, heap, s| {
-        vec![HeapObjectData::MutableCell(Interior::new(
+        vec![HeapObjectData::MutableCell(
             s.object(heap, "HeapObjectData::MutableCell"),
-        ))]
+        )]
     });
 }
 

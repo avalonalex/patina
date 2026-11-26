@@ -416,7 +416,6 @@ fn format_leaf_object<'gc>(cx: &Cx<'gc>, tv: Value<'gc>, display_mode: bool, out
         | HeapObjectData::VmContinuationRef { .. }
         | HeapObjectData::VmDelimitedContinuationRef { .. } => out.push_str("#<continuation>"),
         HeapObjectData::PromptTag(tag) => write!(out, "{}", tag).unwrap(),
-        HeapObjectData::Library(lib) => write!(out, "{}", lib).unwrap(),
         // The rest are internal and should reach no program's output — a
         // freed slot is a use-after-free that `get_object` refuses in a check
         // build, so that arm only renders in a plain release one. They are

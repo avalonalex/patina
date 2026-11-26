@@ -405,6 +405,7 @@ pub(crate) mod imp {
         "Continuation",
         "Parameter",
         "Promise",
+        // Reserved: `Library`, a variant nothing allocated, deleted by #930.
         "Library",
         "Values",
         "EnvironmentSpecifier",

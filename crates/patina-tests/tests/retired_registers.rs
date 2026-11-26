@@ -38,6 +38,11 @@
 //! Correct code reads no such register, so patina-vm runs hand-assembled
 //! code that does, on a machine of its own
 //! (`test_support::read_an_unwritten_register`), and no switch is involved.
+//! A plain release build fills a stub's next round and not a tail call's
+//! window (the owner's ruling of 2026-11-26 on #714's Q-4d3-1), which
+//! [`a_plain_release_build_fills_a_stub_s_window_and_not_a_tail_call_s`]
+//! pins; CI runs this file in that build too, beside `ephemerons.rs`,
+//! whose tail-call tests hold what such a window keeps across a collection.
 //!
 //! One more control, of another check: a frame at a pc its code has no map
 //! for panics where a collection's walk of the frames meets it (#905,
@@ -170,20 +175,30 @@ unwritten_control!(
     "read of a retired register as an instruction's operand: r1"
 );
 
-/// A plain release build reads the fill, `NULL`, in each of those
-/// registers, and never the 99 the window's earlier occupant wrote there.
+/// What a plain release build reads in each of those registers (#714's
+/// Q-4d3-1, the owner's ruling of 2026-11-26, option (b)). A stub's next
+/// round is filled in every build, so it reads the fill, `NULL`. A tail
+/// call's window and a self tail call's are filled in a check build only,
+/// so they read the 99 the window's earlier occupant wrote: correct code
+/// reads no register it has not written, which the three controls above
+/// hold every check build to, and the next collection or capture clears
+/// the register (`ephemerons.rs`'s `a_tail_call_retires_the_previous_
+/// register_window` and `a_self_tail_call_retires_its_argument_copies`).
+/// A change to either answer is a change to that ruling.
+///
 /// Compiled out of a check build, where the reads panic, rather than
 /// ignored, so that `--include-ignored` in CI's controls step runs only
 /// controls.
 #[test]
 #[cfg(not(any(debug_assertions, feature = "gc-check")))]
-fn a_plain_release_build_reads_the_fill_in_a_reused_window() {
-    for reuse in [Reuse::TailCall, Reuse::SelfTailCall, Reuse::StubRestart] {
-        assert_eq!(
-            read_an_unwritten_register(reuse),
-            TaggedValue::NULL,
-            "{reuse:?}"
-        );
+fn a_plain_release_build_fills_a_stub_s_window_and_not_a_tail_call_s() {
+    let stale = TaggedValue::fixnum(99);
+    for (reuse, expected) in [
+        (Reuse::TailCall, stale),
+        (Reuse::SelfTailCall, stale),
+        (Reuse::StubRestart, TaggedValue::NULL),
+    ] {
+        assert_eq!(read_an_unwritten_register(reuse), expected, "{reuse:?}");
     }
 }
 
