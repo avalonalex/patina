@@ -640,3 +640,33 @@ fn committed_stack_bytes_after_the_cap_and_on_the_tree_walker() {
         "0"
     );
 }
+
+/// Row 4d's gate, per PR (#910; the nightly's `stack-returned` row holds it
+/// at 10 M frames on the release build): a recursion 1 M deep under the
+/// default cap, 136 MB of stack, whose pages go back at the second
+/// collection after it returns. The key then reads the first MiB, which
+/// is never given back, and `stack-limit` the cap the machine was built
+/// with. Where the default cap is under 256 MiB, which is a machine with
+/// under 1 GiB of memory for it, the recursion may not fit, and the test
+/// says so and stops.
+#[test]
+fn a_million_frames_under_the_default_cap_go_back_after_two_collections() {
+    let cap = HeapConfig::new().stack_cap();
+    if cap < 256 << 20 {
+        eprintln!("the default cap here is {cap} bytes: 1 M frames may not fit");
+        return;
+    }
+    let interp = Interpreter::new(VmBackend::with_config(&HeapConfig::new()));
+    let program = format!(
+        "(let* ((depth (deep 1000000))
+       (grown {COMMITTED})
+       (one (begin (gc) {COMMITTED}))
+       (two (begin (gc) {COMMITTED})))
+  (list depth (>= grown 136000000) (= one grown) two
+        (cdr (assq 'stack-limit (gc-stats)))))"
+    );
+    assert_eq!(
+        answer(&interp, &program),
+        format!("(1000000 #t #t 1048576 {cap})")
+    );
+}

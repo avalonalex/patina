@@ -343,8 +343,133 @@ class Readings(unittest.TestCase):
                          ('FAIL', []))
 
 
+class Bounds(unittest.TestCase):
+    """A row that holds a key of (gc-stats) to a bound (#910): the reading
+    its program makes with `steady-bound-reading`, in every run."""
+    row = steady.Row('b', 'server', 'x.scm', {'vm': 10, 'tree-walker': 10},
+                     bounds={'committed-stack-bytes': {'vm': (1, MIB), 'tree-walker': (0, 0)}})
+
+    @staticmethod
+    def bounded(n, value, key='committed-stack-bytes'):
+        return run(n) | {'bound': {0: {key: value}}}
+
+    def test_a_bound_reading_is_parsed_beside_the_others(self):
+        out = ('STEADY-BOUND at=0 committed-stack-bytes=1048576 stack-limit=none\n'
+               'STEADY at=10 cpu-us=5 pause-total-us=1 collections=2\n')
+        readings = steady.parse(out)
+        self.assertEqual(readings['bound'], {0: {'committed-stack-bytes': 1048576, 'stack-limit': None}})
+        self.assertEqual(readings['pre'][10]['cpu-us'], 5)
+        self.assertEqual(readings['after'], {})
+
+    def test_a_bound_holds_each_end_and_every_run(self):
+        n = 10
+        name = 'bound:committed-stack-bytes'
+        self.assertIn(name, self.row.checks())
+        held = lambda backend, *values: steady.evaluate(
+            self.row, backend, [self.bounded(n, v) for v in values], n)[name]
+        self.assertEqual(held('vm', MIB), (f'{MIB} in [1, {MIB}]', MIB, True))
+        self.assertTrue(held('vm', 1)[2])
+        # One byte past either end fails, and so does one run of three.
+        self.assertEqual(held('vm', MIB + 1), (f'{MIB + 1} in [1, {MIB}]', MIB, False))
+        self.assertFalse(held('vm', 0)[2])
+        self.assertEqual(held('vm', MIB, 2 * MIB, 4096), (f'{2 * MIB} in [1, {MIB}]', MIB, False))
+        self.assertEqual(held('vm', MIB, 0, 4096)[0], f'0 in [1, {MIB}]')
+        # Where every run is inside, the largest is shown.
+        self.assertEqual(held('vm', 4096, MIB, 8192)[0], f'{MIB} in [1, {MIB}]')
+        # Each backend has its own range.
+        self.assertTrue(held('tree-walker', 0)[2])
+        self.assertFalse(held('tree-walker', 1)[2])
+        # A row with no bound has no such result.
+        plain = steady.Row('p', 'server', 'x.scm', {})
+        self.assertEqual([c for c in plain.checks() if c.startswith('bound:')], [])
+        self.assertNotIn(name, steady.evaluate(plain, 'vm', [run(n)], n))
+
+    def test_a_bound_without_its_reading_fails_the_row(self):
+        n = 10
+        self.assertIsNone(steady.reading_failure(self.row, self.bounded(n, 4096), n))
+        # The program never called `steady-bound-reading`.
+        problem = steady.reading_failure(self.row, run(n), n)
+        self.assertEqual(problem, 'no bound reading')
+        self.assertEqual(steady.problem_verdict(self.row, 'vm', problem, n), ('FAIL', []))
+        # (gc-stats) lacks the key, or the reading names another.
+        self.assertEqual(steady.reading_failure(self.row, self.bounded(n, None), n),
+                         'no reading of `committed-stack-bytes` for its bound')
+        self.assertEqual(steady.reading_failure(self.row, self.bounded(n, 1, key='stack-limit'), n),
+                         'no reading of `committed-stack-bytes` for its bound')
+        # A row with no bound needs no such reading.
+        self.assertIsNone(steady.reading_failure(steady.Row('p', 'server', 'x.scm', {}), run(n), n))
+
+    def test_no_mark_names_a_bound_and_a_bound_names_both_backends(self):
+        marked = dataclasses.replace(self.row, red={'bound:committed-stack-bytes': '#1'})
+        self.assertEqual(steady.mark_errors(marked),
+                         ["b: 'bound:committed-stack-bytes' marks a bound, which is a gate"])
+        on_one = dataclasses.replace(self.row, red={'bound:committed-stack-bytes/vm': '#1'})
+        self.assertEqual(len(steady.mark_errors(on_one)), 1)
+        self.assertEqual(steady.mark_errors(self.row), [])
+        # A cap hit on a row whose only marks are elsewhere is as before,
+        # and a bound gives it no reason of its own.
+        cap = 'resident size passed the 4096 MiB cap'
+        self.assertEqual(steady.problem_verdict(self.row, 'vm', cap, 10), ('FAIL', []))
+        one = dataclasses.replace(self.row, bounds={'k': {'vm': (0, 1)}})
+        self.assertEqual(len(steady.mark_errors(one)), 1)
+        inverted = dataclasses.replace(self.row, bounds={'k': {'vm': (2, 1), 'tree-walker': (0, 0)}})
+        self.assertEqual(len(steady.mark_errors(inverted)), 1)
+
+    def test_arguments_may_differ_by_backend(self):
+        same = steady.Row('s', 'server', 'x.scm', {}, ('7',))
+        self.assertEqual((same.args_for('vm'), same.args_for('tree-walker')), (('7',), ('7',)))
+        each = steady.Row('e', 'server', 'x.scm', {}, {'vm': ('10',), 'tree-walker': ('1',)})
+        self.assertEqual((each.args_for('vm'), each.args_for('tree-walker')), (('10',), ('1',)))
+        self.assertEqual(steady.mark_errors(each), [])
+        self.assertEqual(len(steady.mark_errors(steady.Row('o', 'server', 'x.scm', {}, {'vm': ('10',)}))), 1)
+        # What a run is given: N, then the backend's own arguments.
+        with tempfile.TemporaryDirectory() as scratch:
+            binary = Path(scratch) / 'patina'
+            binary.write_text('#!/usr/bin/env python3\nimport json, sys\n'
+                              'open(sys.argv[-1], "a").write(json.dumps(sys.argv[1:-1]) + "\\n")\n')
+            binary.chmod(0o755)
+            row = steady.Row('r', 'server', 'x.scm', {},
+                             {'vm': ('10', '{scratch}/argv.txt'), 'tree-walker': ('1', '{scratch}/argv.txt')})
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', ResourceWarning)
+                for backend in steady.BACKENDS:
+                    steady.run_once(binary, row, backend, 5, 60, 4096, scratch)
+            seen = [json.loads(line) for line in (Path(scratch) / 'argv.txt').read_text().splitlines()]
+        program = str(steady.STEADY / 'x.scm')
+        self.assertEqual(seen, [[program, '5', '10'], ['--tree-walker', program, '5', '1']])
+
+    def test_the_stack_returned_row_holds_4d_s_gate(self):
+        # Row 4d's gate (PRD/GC_PRD.md §19): a 10 M-deep recursion on the VM,
+        # its pages given back after two observations, read through the key;
+        # 1 M frames on the tree-walker (§17.4), which keeps no such stack.
+        row = next(row for row in steady.ROWS if row.name == 'stack-returned')
+        self.assertEqual(row.args, {'vm': ('10000000',), 'tree-walker': ('1000000',)})
+        self.assertFalse(row.pr)
+        low, high = row.bounds['committed-stack-bytes']['vm']
+        self.assertEqual(high, MIB)
+        self.assertGreater(low, 0, 'a key that reads 0 is not a stack given back')
+        self.assertEqual(row.bounds['committed-stack-bytes']['tree-walker'], (0, 0))
+        low, high = row.bounds['stack-limit']['vm']
+        self.assertGreater(low, 10_000_000 * 136)
+        self.assertEqual(high, 8 << 30)
+        self.assertEqual(row.bounds['stack-limit']['tree-walker'], (0, 0))
+        self.assertEqual(row.red, {'SS2/vm': '#616'})
+        self.assertEqual(steady.mark_errors(row), [])
+        # Its program recurses, checks the answer and reads both keys after
+        # two collections, before the steady loop.
+        program = (steady.STEADY / row.program).read_text()
+        reading = program.index("(steady-bound-reading '(committed-stack-bytes stack-limit))")
+        self.assertLess(program.index('(deep depth)'), reading)
+        self.assertLess(reading, program.index('(steady-run'))
+
+
 class Driver(unittest.TestCase):
     driver = (steady.STEADY / 'driver.scm').read_text()
+
+    def test_a_bound_is_read_after_two_collections(self):
+        reading = self.driver[self.driver.index('(define (steady-bound-reading keys)'):]
+        self.assertRegex(reading, r'^\(define \(steady-bound-reading keys\)\s*\(gc\)\s*\(gc\)\s*'
+                                  r'\(steady-print "STEADY-BOUND" 0 keys \(gc-stats\)\)\)')
 
     def test_the_driver_prints_every_per_owner_key(self):
         keys = re.search(r"\(define steady-per-owner-keys '\(([^)]*)\)\)", self.driver)
