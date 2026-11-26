@@ -817,7 +817,12 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   refused under the soft limit, which leaves it armed; the condition
   reaching a handler outside a nested loop, and the hard cap met inside
   one; the predicate's `#f` for everything else, on both backends;
-  `stack-limit`; and a 10 M-frame recursion under the default cap. The
+  `stack-limit`; and a 10 M-frame recursion under the default cap. Three
+  more read `(gc-stats)`'s `committed-stack-bytes` (#909, 4d.8): a
+  300,000-frame recursion's 40.8 MB held after it returns and after one
+  `(gc)`, and the first MiB after two; the same bytes after each of ten
+  cycles of a recursion and a `(gc)`; and the stack a caught
+  `&stack-exhausted` leaves, with 0 on the tree-walker. The
   limit a continuation's arrival sets, and the one an abort's landing
   keeps, are unit tests beside the machine
   (`patina-vm/src/runtime/vm_state.rs`): they hold the rule for a snapshot
@@ -828,7 +833,10 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   the cap is made. A fourth holds the cap to the stack's reservation: a
   cap past what the reservation holds is armed as the reservation's size,
   in the machine, in `(gc-stats)`'s `stack-limit` and in the poll word,
-  and a cap the reservation holds is armed as asked.
+  and a cap the reservation holds is armed as asked. A fifth holds that a
+  collection is an observation of the stack (#909): what the machine does
+  after one gives back the pages of frames that have returned, at the
+  second and not at the first.
   The register stack itself (#908, frames and registers in one buffer of
   words) has unit tests beside it, in
   `patina-vm/src/types/frame_stack.rs`: a header word keeps its fields,
@@ -852,7 +860,13 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   refused with nothing written, while one that ends at it is pushed; a
   tail call whose window cannot grow is refused with the frame as it was;
   and an append or an arrival the reservation cannot hold is refused with
-  the stack as it was.
+  the stack as it was. Four hold the pages it gives back (4d.8, #909), each
+  reading a word of the reservation where it lies, which is zero on a page
+  that has gone: the stack is granted room in steps of 256 KiB and
+  publishes what it holds; an observation gives back what the stack did
+  not reach since the one before, so a recursion's pages go at the second,
+  with the frames still on the stack untouched; a stack that goes as deep
+  in every period keeps its pages; and the first MiB never goes.
   `gc_roots.rs`'s `the_walk_reports_each_frames_code_closure_and_registers`
   holds a collection's walk to a frame's code, closure and registers and
   nothing else of its header.

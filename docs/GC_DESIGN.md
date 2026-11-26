@@ -1818,12 +1818,48 @@ at stage 5.
 **The VM's register stack is in one** since #908's 7c (`VM_RUNTIME.md`
 §2.1): the machine reserves its stack's cap when it is built, every write
 that extends the stack is refused at the reservation's end, and the poll
-word holds the stack's limit as an address in it. Its pages are returned by
-#909. The sizes are unit-tested under an
+word holds the stack's limit as an address in it. The sizes are unit-tested
+under an
 injected limit; reserving, writing and decommitting on both CI legs, with
 `mincore` reading that the pages have gone, and on the allocated backing
 too; on the Linux leg a child process run under `ulimit -v` of 4 GiB asks
 for 8 GiB and gets 2 GiB.
+
+**The stack's pages go back after two observations** (#909, GC stage 4d.8;
+`PRD/GC_PRD.md` §17.1 and M5). A deep recursion that returned used to leave
+its pages with the process for good: 1,304 MiB resident after 10 M frames,
+which no deterministic reading saw.
+
+- **What the stack has reached is tracked at no cost to a push.** The
+  reservation grants room in steps of 256 KiB (`Reserved::grant`). A push
+  compares against the granted end, where it compared against the
+  reservation's, and a write past the granted end takes a path out of line
+  that grants the next step. So the granted end bounds how deep the stack
+  has been since it was last reset. A 10 M-frame recursion takes the path
+  out of line some 5,200 times.
+- **A collection is an observation** (`VmState::after_collection`, after
+  the pause's accounting). The pages above what was granted since the
+  observation before go back through `Reservation::decommit`, and the grant
+  is reset to the stack's top. The first MiB never goes, so a stack that
+  moves within it makes no call to the system at any collection.
+- **So a recursion's pages are held through the first collection after it
+  returns and go at the second,** as an empty block is decommitted after
+  two majors. A program that recurses as deep between every two
+  collections keeps its pages, with nothing given back and written again.
+  One that goes deep less often than it collects pays for the pages each
+  time: 47 µs a MiB to write them again on the Mac the reservation's table
+  above was measured on, against some 300 µs a MiB to push and pop the
+  frames that fill them.
+- **`(gc-stats)`'s `committed-stack-bytes`** is the committed end: what was
+  granted and not given back, so within 256 KiB above what was written.
+  The buffer publishes it on the heap's carrier where it moves
+  (`Carrier::set_stack_committed`), and it is 0 on the tree-walker.
+  `committed-bytes` does not count it, and the steady-state clauses, which
+  read committed plus external bytes, do not see it: 4d.9's lane reads the
+  key (#910).
+
+After 10 M frames and two `(gc)`s the key reads 1,048,576 and the process
+holds 8 MiB resident, where a program that never recursed holds 7 MiB.
 
 ## 7. Safe Points and Re-entrancy
 

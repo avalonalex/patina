@@ -1773,7 +1773,7 @@ repro and fix direction; the rest have no issue because the design fixes them at
 | Continuation churn plateaus, because the trigger does not see capture bytes | [#606] | 1 |
 | Dropping an interpreter leaks its heap | [#604] | 2 |
 | Unreferenced symbols are never reclaimed: 192 B per symbol [P] (chibi 166, Chez 0) | no issue: fixed by design | 5c |
-| The VM's register stack keeps a deep recursion's pages: 139 MiB resident after 1 M frames return and two `(gc)`s [P, `86baed1b`] | no issue: fixed by design | 4d |
+| The VM's register stack keeps a deep recursion's pages: 139 MiB resident after 1 M frames return and two `(gc)`s [P, `86baed1b`] | fixed at 4d.8 ([#909]): the pages above what the stack reached since the collection before go back at each collection, so 8 MiB resident after the same, and `committed-stack-bytes` reads what is held | 4d |
 | On the tree-walker, the system allocator keeps the Rust memory that a deep recursion's frames and continuation links used once they are freed: 483 MiB resident of a 979 MiB peak after 1 M frames and two `(gc)`s, with `committed-bytes` at 1.4 MiB, given back by a second deep recursion [P, `86baed1b`] | [#780] | tree-walker lag (decision 1), re-measured at 4f's exit |
 | Tree-walker environments are freed only when sweep drops their procedure, and the trigger sees them as an estimate, a one-parameter frame (572 B since [#837]'s second PR, 612 B before) for each closure: frame chains and frames only a continuation holds are missed, a wide frame is charged far under what it holds (a closure over a 64-parameter frame holds about 13,660 B, where the closure and its estimate are charged 820 B, about 17× under [P, `86baed1b`]), and a frame that several closures share is charged once for each | [#637] (the estimate, closed by [#638]); the rest no issue: fixed by design | 4f |
 | Tree-walker continuation captures are invisible to the trigger: 6,000 captures at depth 1,000 make no collection and peak at 5.71 GiB footprint (RSS reads lower under memory compression), where the VM makes 107 collections and peaks at 16.3 MiB [P, `86baed1b`] | [#656] | 4f |
@@ -2508,3 +2508,4 @@ from them on these known points before filing it:
 [#878]: https://github.com/avalonalex/patina/pull/878
 [#883]: https://github.com/avalonalex/patina/issues/883
 [#892]: https://github.com/avalonalex/patina/issues/892
+[#909]: https://github.com/avalonalex/patina/issues/909

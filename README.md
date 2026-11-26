@@ -132,7 +132,9 @@ The architecture is designed to support future exploration:
   released (0 on the tree-walker, #836), `scope-sets`, the scope sets
   the heap's scope-set table holds for its identifiers (#788), and
   `stack-limit`, the VM's stack cap in bytes (0 on the tree-walker, #907),
-  beside its arena counts
+  and `committed-stack-bytes`, the bytes of its stack the VM holds
+  committed, which `committed-bytes` does not count (0 on the tree-walker,
+  #909), beside its arena counts
   (`docs/GC_DESIGN.md` §6), and the pauses, the MMU at 10 ms, how much was
   allocated where collection was deferred, and the process's resident size
   and CPU time (§6.2). `PATINA_GC_LOG=<path>` writes a CSV line per
@@ -218,7 +220,9 @@ Uncaught, it ends a script as any error does, with status 1.
 does the variable `PATINA_STACK_MAX`, and `(gc-stats)`'s `stack-limit` reads
 it. The VM reserves that much address space for its stack when it starts,
 and uses memory only for what the stack reaches; where the system will not
-give that much address space, the cap is what it gives. Two costs are worth
+give that much address space, the cap is what it gives. What a deep
+recursion used goes back to the system at the second collection after it
+returns, all but the first MiB. Two costs are worth
 knowing. A `guard` that catches the error copies the stack, as it does for
 any error raised that deep, so catching at the cap takes about as much
 memory again. And the last MiB is all the room a handler has: one that
