@@ -214,9 +214,11 @@ pub enum Reuse {
 /// code in which an activation given a window by `after`'s push first reads
 /// a register it never wrote, one the window's earlier occupant wrote 99
 /// into, and answer what the read found. A check build panics at the read,
-/// which finds the fill, `DEAD_SLOT`; a plain release build answers the
-/// fill, `NULL`; with the fill gone, either answers 99. A machine of its
-/// own, so no switch, and nothing another test's thread sees.
+/// which finds the fill, `DEAD_SLOT`. A plain release build fills a stub's
+/// next round and answers the fill, `NULL`, after one; it does not fill a
+/// tail call's window or a self tail call's (#714's Q-4d3-1), and answers
+/// 99 after either. With a fill gone, its build answers 99. A machine of
+/// its own, so no switch, and nothing another test's thread sees.
 pub fn read_an_unwritten_register(after: Reuse) -> patina_core::TaggedValue {
     crate::runtime::vm_state::read_an_unwritten_register(after)
 }

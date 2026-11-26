@@ -119,6 +119,40 @@ fn a_size_takes_a_binary_suffix_and_has_a_floor() {
     }
 }
 
+/// A size above the machine's memory budget is held to the budget (#929):
+/// the flag and the variable alike read B in `stack-limit`, where the
+/// largest size the grammar takes, written to mean "no limit", used to
+/// reserve half of the process's address space.
+#[test]
+fn a_size_above_the_memory_budget_is_held_to_it() {
+    let limits = patina_core::heap::budget::MemoryLimits::detect();
+    let Some(budget) = limits.budget() else {
+        eprintln!("no memory budget can be read here, so a cap is held as asked");
+        return;
+    };
+    // Under an address-space limit a reservation of B may be refused and
+    // halved, so `stack-limit` reads less than B there, rightly.
+    if limits.address_space.is_some() {
+        eprintln!("an address-space limit is set here, which may refuse a reservation of B");
+        return;
+    }
+    let program = "(import (scheme base) (scheme write) (patina debug))
+(write (cdr (assq 'stack-limit (gc-stats))))
+";
+    let huge = "17179869183G";
+    for (args, envs) in [
+        (&["--stack-max", huge][..], &[][..]),
+        (&[][..], &[("PATINA_STACK_MAX", huge)][..]),
+    ] {
+        let (stdout, stderr, status) = run(args, envs, program);
+        assert_eq!(
+            (stdout.as_str(), status),
+            (budget.to_string().as_str(), Some(0)),
+            "{args:?} {envs:?}: {stderr}"
+        );
+    }
+}
+
 /// What is not a size is refused before anything runs, by the flag and by
 /// the variable, with the text, the reason and the grammar; and the flag
 /// needs its value.

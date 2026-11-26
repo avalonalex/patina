@@ -457,7 +457,13 @@ buffer, so the depth at which the cap is met has not moved.
 
 - **The cap** is the backend's configuration's (`HeapConfig::max_stack`,
   `--stack-max`, `PATINA_STACK_MAX`) or the machine's default, min(8 GiB, a
-  quarter of B, a quarter of `RLIMIT_AS`), never under 2 MiB. The machine
+  quarter of B, a quarter of `RLIMIT_AS`), never under 2 MiB. A
+  configuration's cap is held to B, physical memory or the cgroup's limit,
+  where it asks for more (`MemoryLimits::stack_cap_for`, #929; the owner's
+  ruling of 2026-11-26 on #782's Q9): a cap is a reservation, and one
+  written to mean "no limit" took half of the process's address space, so
+  that a 42nd machine built with one found none. Where B cannot be read
+  the cap is what was asked. The machine
   is built with it (`VmState::with_gc_mode_and_stack_cap`), and its stack's
   reservation is made for it there. Where the system gives less address
   space than the cap asks (`Reservation::new` tries half, and half again,
@@ -590,16 +596,25 @@ and a push (#904):
   `PRD/GC_PRD.md` §11.1, invariant 1): `NULL` in a plain release build,
   `DEAD_SLOT` in a check build, which `reg_at` refuses, so a read of a
   register the activation never wrote panics there. A fresh window is
-  filled whole. A reused one is filled past what it keeps: `tail_replace`
-  (a tail call) and `restart_closure` (a self tail call) fill the new
-  code's registers past its arguments' (`[0, n)` for `Fixed(n)`, `[0, k+1)`
-  for `Variadic(k)`, which `store_args_in_window` writes), one store each,
-  and `restart_stub` a stub's next round from the registers it keeps (a
-  resume stub keeps the primitive's index, a wind step its target and
-  value). Registers a larger earlier occupant left past the new code's
-  count are not filled: the new code cannot name them, and retirement
-  clears them at every collection and capture, as it walks the frames
-  (`docs/GC_DESIGN.md` §5.2, #906).
+  filled whole, and so are the registers a reused window grows by. A
+  stub's next round is filled from the registers it keeps (`restart_stub`:
+  a resume stub keeps the primitive's index, a wind step its target and
+  value).
+- A tail call's window is filled in a check build only (the owner's ruling
+  of 2026-11-26 on #714's Q-4d3-1). There `tail_replace` (a tail call) and
+  `restart_closure` (a self tail call) fill the new code's registers past
+  its arguments' (`[0, n)` for `Fixed(n)`, `[0, k+1)` for `Variadic(k)`,
+  which `store_args_in_window` writes), one store each. A plain release
+  build writes none of them: the stores cost loop- and tail-call-heavy
+  code 2.5–4% of its instructions (`queue3` +3.97%, `poll-even-odd`
+  +3.66%, `destruc` +2.85%; 2026-11-25). There such a register keeps the
+  replaced activation's word until the new one writes it, or until the
+  next collection or capture clears it, as retirement walks the frames
+  (`docs/GC_DESIGN.md` §5.2, #906). The word never names a freed object,
+  since nothing is freed between the reuse and that collection. Registers
+  a larger earlier occupant left past the new code's count are filled in
+  no build: the new code cannot name them, and retirement clears them the
+  same way.
 
 A check build asserts the choice: `return_into` writes a frame below the top
 or a top frame that awaits a value, and `set_top` and a push's writes never
@@ -644,9 +659,10 @@ For `TailCall` to a closure, the current frame is reused:
 - Read all arg values into temporaries first
 - Give the frame the callee's code (`tail_replace`), or, for the frame's own
   code, its closure (`restart_closure`): pc 0, the window grown if the code
-  needs more registers, and every register past the arguments' filled
-  (§3.4). The header's `link`, `code` and `closure` words are written under
-  one range check, and the frame starts a run of its own from there (§2.1)
+  needs more registers, and, in a check build, every register past the
+  arguments' filled (§3.4). The header's `link`, `code` and `closure` words
+  are written under one range check, and the frame starts a run of its own
+  from there (§2.1)
 - Write args to param slots
 - Poll at the callee's entry
 
