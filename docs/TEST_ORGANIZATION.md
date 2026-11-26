@@ -826,7 +826,11 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   4d's gate per PR (#910, 4d.9): 1 M frames under the default cap, 136 MB
   of stack, held after one `(gc)` and the first MiB after two, with
   `stack-limit` reading that cap; the nightly's `stack-returned` row holds
-  the same at 10 M frames (the steady-state lane, below). The
+  the same at 10 M frames (the steady-state lane, below). And one holds a
+  cap above the memory budget to the budget (#929): `stack-limit` reads B
+  for a cap of `u64::MAX`, a cap under B is held as asked, and 100
+  machines each asking for `u64::MAX` are alive at once, where the 42nd
+  found no address space. The
   limit a continuation's arrival sets, and the one an abort's landing
   keeps, are unit tests beside the machine
   (`patina-vm/src/runtime/vm_state.rs`): they hold the rule for a snapshot
@@ -876,7 +880,8 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   nothing else of its header.
   `crates/patina-repl/tests/stack_max_cli.rs` holds the runner's side:
   `--stack-max` and `PATINA_STACK_MAX`, their precedence, the size grammar
-  and its floor, a malformed size refused before anything runs, the exit
+  and its floor, a size above the memory budget held to it (#929), a
+  malformed size refused before anything runs, the exit
   status of an uncaught exhaustion, `-k` after the hard cap, and, on Linux,
   the default cap under `ulimit -v`
 
@@ -1577,6 +1582,20 @@ under zeal and fewer than 100 with no GC variable set, or it fails there. Its
 per-file check that a run collected cannot stand in for this: a control file
 can collect under the default GC too (`cps-features.scm` does, once; before
 the byte trigger, #606, every one did, while it loaded SRFI 64).
+
+**One lane runs two test files in the plain release build (#714).** A plain
+release build is the one build that does not fill the window a tail call
+reuses (the owner's ruling of 2026-11-26 on #714's Q-4d3-1): there a
+register the new activation has not written keeps the replaced one's word
+until a collection or a capture clears it. Every lane above runs its tests in
+a check build, which fills the window, so `ci.yml`'s R7RS Compliance job,
+which builds the shipped binary, ends with
+`cargo test --release -p patina-tests --test retired_registers --test ephemerons`.
+`retired_registers.rs` pins what a plain build reads in a register its
+activation never wrote: the earlier occupant's word after a tail call or a
+self tail call, and the fill after a stub's next round.
+`ephemerons.rs`'s tail-call tests hold that what a tail call leaves in its
+window does not outlive a collection.
 
 **Every GC lane pins descriptor pressure's threshold (#607).** Descriptor
 pressure posts a collection once `min(128, soft RLIMIT_NOFILE / 4)` file
@@ -2646,8 +2665,9 @@ stage is judged by (`PRD/GC_PRD.md` §16). The sets:
   `libload-point-c`, on both backends: libload's libraries imported inside a
   top-level `begin`, a load met inside a form, which defers its collection
   to the form's end (point C, #658). It is the load decision 9 on #782
-  recommends GC stage 4c's memory gate measure, at about 524 MiB of
-  footprint on the VM and 916 MiB on the tree-walker today, in one deferral
+  holds GC stage 4c's memory gate to (the owner's ruling of 2026-11-26: at
+  most 300 MiB on the VM at #793), at about 524 MiB of
+  footprint on the VM and 916 MiB on the tree-walker before 4c, in one deferral
   window of 275.5 MiB and 617.7 MiB (#787). It checks its own premise under
   the default trigger, one collection and a window of at least 250 MiB, and
   fails once the load stops deferring, so a change to loading shows as a
@@ -2739,6 +2759,16 @@ read a workload up to 0.7% apart. The harness's readings recorded before
 that date for #837's stack (#875, #878, #881), its baseline at 791b7c5a
 among them, were taken under the variable, and none is comparable with a
 reading taken since.
+
+**A PR that changes marking, the collector or what lives in the heap runs
+the `probes` set in its A/B** (the owner's ruling of 2026-11-26 on #782's
+Q-4b-2). A cost paid once per collection shows only where a program collects
+often for little work, and those programs are in `probes`: #850 made every
+collection mark each live binding's record and cell, 116,000 instructions
+for the standard libraries, and `vectors-500`, `io-string` and `ctakdeep`
+rose 1.3–3.7% (#895), which the A/Bs of 4b's PRs did not see, since they
+ran `gbs`, `twins`, `load` and `tw`. With no `--set` the harness runs every
+set but `large-live`, `probes` among them.
 
 ```bash
 ./scripts/run_gc_benchmarks.sh --rounds 3                    # this build, every set

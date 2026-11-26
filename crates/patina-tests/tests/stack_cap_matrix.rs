@@ -544,6 +544,51 @@ fn stack_limit_reads_the_cap() {
     assert_eq!(answer(&walker, "(deep 20000)"), "20000");
 }
 
+/// A cap above the machine's memory budget is held to the budget (#929,
+/// the owner's ruling of 2026-11-26 on #782's Q9): `stack-limit` reads B,
+/// physical memory or the cgroup's limit, whatever was asked above it, and
+/// a cap under B is held as asked. Until then a cap was reserved as asked,
+/// halved until the system granted it, so one written to mean "no limit"
+/// took half of the process's address space, and the 42nd machine built
+/// with one found none left. Here 100 are alive at once, each holding B.
+#[test]
+fn a_cap_above_the_memory_budget_is_held_to_it() {
+    const KEY: &str = "(cdr (assq 'stack-limit (gc-stats)))";
+    let limits = patina_core::heap::budget::MemoryLimits::detect();
+    let Some(budget) = limits.budget() else {
+        eprintln!("no memory budget can be read here, so a cap is held as asked");
+        return;
+    };
+    // Under an address-space limit a reservation of B may be refused and
+    // halved, so `stack-limit` reads less than B there, rightly.
+    if limits.address_space.is_some() {
+        eprintln!("an address-space limit is set here, which may refuse a reservation of B");
+        return;
+    }
+    assert!(budget > ROOMY, "a machine with {budget} bytes of memory");
+    for asked in [u64::MAX, 1 << 62, budget + 1, budget] {
+        assert_eq!(
+            answer(&vm(asked), KEY),
+            budget.to_string(),
+            "asked for {asked}"
+        );
+    }
+    for asked in [budget - 4096, ROOMY] {
+        assert_eq!(
+            answer(&vm(asked), KEY),
+            asked.to_string(),
+            "asked for {asked}"
+        );
+    }
+    let machines: Vec<_> = (0..100).map(|_| vm(u64::MAX)).collect();
+    for (index, machine) in machines.iter().enumerate() {
+        assert_eq!(answer(machine, KEY), budget.to_string(), "machine {index}");
+    }
+    // A cap held to B is a cap like any other: the recursion that fits
+    // under 64 MiB fits under it.
+    assert_eq!(answer(&machines[99], "(deep 20000)"), "20000");
+}
+
 /// The default cap holds what runs today (#907's acceptance): a recursion
 /// 10 M deep, 1.36 GB of stack as the cap counts it (136 bytes a frame),
 /// where the machine's default is at least 1.5 GiB, as it is on both CI

@@ -101,13 +101,15 @@ const _: () = assert!(GC_CHECK || std::mem::size_of::<Awaiting>() == 0);
 /// What a push writes into every register of the window it initializes that
 /// no argument or operand of its own fills (#714, `PRD/GC_PRD.md` §11.1,
 /// frame invariant 1): a fresh window whole (`push_frame`, `push_abort_stub`),
-/// and a reused one past the registers it keeps (`tail_replace`,
-/// `restart_closure`, `restart_stub`), so that no window holds a word of an
-/// activation that has gone. A plain release build writes `NULL`, which
-/// `push_frame` always wrote. A check build writes `DEAD_SLOT`, which the
-/// machine refuses to read (`VmState::reg_at`, #625), so a read of a register
-/// the activation never wrote panics there, rather than answering what an
-/// earlier occupant of the window left.
+/// the registers a reused window grows by, and a stub's next round past the
+/// registers it keeps (`restart_stub`). A plain release build writes `NULL`,
+/// which `push_frame` always wrote. A check build writes `DEAD_SLOT`, which
+/// the machine refuses to read (`VmState::reg_at`, #625), so a read of a
+/// register the activation never wrote panics there, rather than answering
+/// what an earlier occupant of the window left.
+///
+/// A tail call's reused window (`tail_replace`, `restart_closure`) is filled
+/// past its arguments in a check build only ([`fill_reused`]).
 const FILL: TaggedValue = if GC_CHECK {
     TaggedValue::DEAD_SLOT
 } else {
@@ -134,10 +136,36 @@ fn fill(window: &[Cell<TaggedValue>]) {
     }
 }
 
+/// [`fill`], in a check build only: for the registers past the arguments in
+/// the window a tail call reuses (`tail_replace`, `restart_closure`). The
+/// owner's ruling of 2026-11-26 on #714's Q-4d3-1, option (b): the stores
+/// cost loop- and tail-call-heavy code 2.5–4% of its instructions (measured
+/// 2026-11-25), and a plain release build is sound without them.
+///
+/// In a plain release build such a register keeps the earlier occupant's
+/// word until the new activation writes it, or until the next collection
+/// or capture, whose walk of the frames clears every register the frame's
+/// map calls dead (`PRD/GC_PRD.md` §11.1, invariant 3). The word is never a
+/// freed object's: nothing is freed between the reuse and that collection,
+/// and the collection clears the register, or traces it where the frame's
+/// pc has no map. Correct code reads no register it has not written, which
+/// the check builds hold every test to, since there the fill is `DEAD_SLOT`.
+/// What it gives up is the answer a compiler's unwritten read gets in a
+/// plain release build: the earlier occupant's word, where it was `NULL`.
+///
+/// The caller passes the window's bounds and not a slice, so that a plain
+/// release build does not check them either.
+#[inline(always)]
+fn fill_reused(words: &[Cell<TaggedValue>], from: usize, to: usize) {
+    if GC_CHECK {
+        fill(&words[from..to]);
+    }
+}
+
 /// The registers a call's arguments occupy in a window of code of `arity`:
 /// the fixed parameters, and for a variadic one the register of its rest
 /// list after them, which `store_args_in_window` writes. A reused window is
-/// filled from here up.
+/// filled from here up, in a check build.
 #[inline(always)]
 fn argument_slots(arity: Arity) -> usize {
     match arity {
@@ -377,9 +405,9 @@ impl ExecutionState {
     // (`set_top`), a write into a frame something has returned into or one
     // below the top (`return_into`), and a push's initializing writes
     // (`push_frame`, `push_abort_stub`, the fill of a reused window in
-    // `tail_replace`, `restart_closure` and `restart_stub`, #714, and the
-    // arguments the call paths copy into a callee's window, `init_arg` and
-    // `init_args`).
+    // `restart_stub` and, in a check build, in `tail_replace` and
+    // `restart_closure`, #714, and the arguments the call paths copy into a
+    // callee's window, `init_arg` and `init_args`).
     // `inline(always)`, as the register helpers they replace were:
     // `dispatch_one_instruction` is too large for LLVM to inline them
     // otherwise (PRD §1.6 finding 1).
@@ -634,15 +662,19 @@ impl ExecutionState {
     }
 
     /// Reuse the top window for another closure, a tail call's push: the
-    /// window grows to the new code's registers if it needs more, and every
-    /// register of the new code past its arguments' is [`FILL`]ed (#714), so
-    /// the new activation reads nothing the replaced one wrote. The caller
-    /// writes the arguments (`store_args_in_window`), into the registers the
-    /// fill leaves alone. A window larger than the new code needs keeps its
-    /// spare registers, which the new code cannot name and the walk of the
-    /// frames clears at every collection and capture. Refused, with the
-    /// frame as it was, where a window that must grow would end past the
-    /// stack's reservation.
+    /// window grows to the new code's registers if it needs more, the
+    /// registers it grows by [`FILL`]ed. In a check build every register of
+    /// the new code past its arguments' is filled too (#714,
+    /// [`fill_reused`]), so a read of one the new activation never wrote
+    /// panics; in a plain release build those keep what the replaced
+    /// activation left, until the new one writes them or a collection or
+    /// capture clears them. The caller writes the arguments
+    /// (`store_args_in_window`), into the registers the fill leaves alone.
+    /// A window larger than the new code needs keeps its spare registers,
+    /// which the new code cannot name and the walk of the frames clears at
+    /// every collection and capture. Refused, with the frame as it was,
+    /// where a window that must grow would end past the stack's
+    /// reservation.
     #[inline(always)]
     pub(super) fn tail_replace(
         &mut self,
@@ -654,21 +686,32 @@ impl ExecutionState {
         }
         let base = self.top_base();
         self.stack.replace_top(code, closure, fill_value())?;
-        fill(&self.stack.words()[base + argument_slots(code.arity)..base + code.num_regs as usize]);
+        fill_reused(
+            self.stack.words(),
+            base + argument_slots(code.arity),
+            base + code.num_regs as usize,
+        );
         Ok(base)
     }
 
     /// Give the top window to another activation of its own code, a self
-    /// tail call's push: every register of the code past its arguments' is
-    /// [`FILL`]ed (#714). The caller has written the arguments, which the
-    /// fill leaves alone.
+    /// tail call's push. In a check build every register of the code past
+    /// its arguments' is [`FILL`]ed (#714, [`fill_reused`]); a plain
+    /// release build writes none of them. The caller has written the
+    /// arguments, which the fill leaves alone.
     pub(super) fn restart_closure(&mut self, closure: TaggedValue) {
-        if GC_CHECK && self.top_awaits() {
-            wrote_an_awaiting_frame("restart_closure", 0);
+        if GC_CHECK {
+            if self.top_awaits() {
+                wrote_an_awaiting_frame("restart_closure", 0);
+            }
+            let base = self.top_base();
+            let code = self.stack.top_code().expect("the top frame's code");
+            fill_reused(
+                self.stack.words(),
+                base + argument_slots(code.arity),
+                base + code.num_regs as usize,
+            );
         }
-        let base = self.top_base();
-        let code = self.stack.top_code().expect("the top frame's code");
-        fill(&self.stack.words()[base + argument_slots(code.arity)..base + code.num_regs as usize]);
         self.stack.restart_top(closure);
     }
 
