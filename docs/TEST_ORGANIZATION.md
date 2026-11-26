@@ -2813,6 +2813,17 @@ and it records:
   the identifier keys and their entries.
 - **Other counts:** identity- and `equal-hash`, continuation copies, and
   the VM's stack at each safe point.
+- **Each variant's `Drop` flag** (#931): whether the variant's payload has
+  `Drop` glue, from `needs_drop` of its fields' types
+  (`heap::census::payload_needs_drop`, which names every field of every
+  variant, so that a payload made plain flips its flag with no table to
+  edit), as `variant_drop`. The runner reads it with `SHARED_PAYLOADS`
+  (`reentry_lint_control.rs`, whose variants it parses, so that the list
+  has one home) and reports two shares of allocations: whose payload needs
+  `Drop`, by object variants and counting every vector and string slot,
+  which owns a buffer; and whose payload is shared state. K9 reads the
+  share by slots (decision 25 on #782), and GC stage 4g's gate is read
+  with them.
 
 The output goes to three places:
 
@@ -2845,9 +2856,15 @@ answer, as the `gc` mode's sides must, unless its output holds timings
 - object sizes and the allocation mix;
 - survival at 64 K allocations;
 - the store mix;
+- the payload shares (#931);
 - live peaks, and the VM's deepest stack (the tree-walker gives the census
   no stack shape);
 - the collector's rates.
+
+`libload-postload`, in the `load` set, is libload's imports and nothing
+after them, so its `forced_pause_us` in the `gc` mode is the post-load major,
+a `(gc)` right after the load, which the stage-4 exit baseline reports
+beside libload's, which follows its churn (decision 25 on #782, #931).
 
 The census takes a lock per allocation and per store, about doubling run
 time, so it answers counts and shapes, and the `gc` mode answers times. The

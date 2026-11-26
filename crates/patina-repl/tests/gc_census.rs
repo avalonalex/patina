@@ -186,6 +186,16 @@ fn the_census_counts_allocations_by_kind_and_stores_by_site() {
             c.list("obj_variant_bytes")[2],
             16 * c.list("obj_variant")[2]
         );
+        // Each variant's `Drop` flag, from its payload's types (#931): a
+        // flonum's payload is a word, a symbol's an `Rc<str>`, which the
+        // bootstrap allocates; a variant nothing allocated reads 0.
+        let drops = c.list("variant_drop");
+        assert_eq!(drops.len(), c.list("obj_variant").len(), "{backend:?}");
+        assert_eq!(drops[2], 0, "{backend:?}: Real");
+        assert_eq!(drops[4], 1, "{backend:?}: Symbol");
+        for (i, (&flag, &count)) in drops.iter().zip(c.list("obj_variant")).enumerate() {
+            assert!(flag <= 1 && (count > 0 || flag == 0), "{backend:?}: variant {i}");
+        }
         // set-car! stores a fixnum: an immediate, which a barrier's filter
         // drops. vector-set! stores the pair: the VM writes it inline.
         assert!(c.site("set_car", "total") >= 100_000, "{backend:?}");
