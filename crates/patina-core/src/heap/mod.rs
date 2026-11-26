@@ -30,6 +30,7 @@ mod census;
 mod check;
 pub mod config;
 pub mod cx;
+mod documents;
 mod finalize;
 pub mod gc;
 pub mod handles;
@@ -72,6 +73,7 @@ pub use port_table::PortId;
 #[cfg(any(test, feature = "test-support"))]
 pub use port_table::registered_port_tables;
 pub(crate) use port_table::{PortTable, open_output_files};
+use documents::{DocumentTable, SourceId};
 use scope_sets::{ScopeSetId, ScopeSetTable};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -320,6 +322,35 @@ impl<T> Interior<T> {
     }
 }
 
+/// An identifier's payload (#791): a symbol, two ids and two flags, so it
+/// is `Copy`, owns nothing, and has no `Drop`. The ids are core's alone: no
+/// code outside `patina-core` can name a [`ScopeSetId`] or a [`SourceId`].
+#[derive(Debug, Clone, Copy)]
+pub struct IdentifierData {
+    /// Its spelling's symbol (#790): the interned symbol of the spelling,
+    /// which the identifier's trace visits, except a relinked identifier's
+    /// (`relinked`).
+    pub(crate) name: TaggedValue,
+    /// The id of its scope set's entry in the heap's scope-set table
+    /// (#788), which holds each set once.
+    pub(crate) scopes: ScopeSetId,
+    /// The id of its location's entry in the heap's document tables
+    /// (#791), or none: where it was read or expanded, its expansion chain,
+    /// and the span of the list it heads if it heads one. A copy takes its
+    /// original's id. It is set when the identifier is made, or by the
+    /// reader or an expansion's stamp within the context that made it
+    /// (`heap/documents.rs`).
+    pub(crate) source: SourceId,
+    /// A written program name, which has the binding behavior of a symbol.
+    pub(crate) written: bool,
+    /// Whether `name` is a relinked spelling's symbol (#837): a symbol
+    /// object the intern table does not hold, so that a spelling bound
+    /// nowhere is no name to any reader and a redefined library's
+    /// spellings are not kept for good (#790). Only the identifiers that
+    /// carry it hold it, and its trace keeps it alive.
+    pub(crate) relinked: bool,
+}
+
 /// Generic heap object data
 ///
 /// This enum holds the actual data for objects that use TAG_OBJECT. A
@@ -376,23 +407,7 @@ pub enum HeapObjectData {
         record_type: Rc<crate::record_type::RecordTypeDescriptor>,
         fields: Rc<Interior<Vec<TaggedValue>>>,
     },
-    Identifier {
-        /// Its spelling's symbol (#790): the interned symbol of the
-        /// spelling, which the identifier's trace visits, except a relinked
-        /// identifier's (`relinked`).
-        name: TaggedValue,
-        /// The id of its scope set's entry in the heap's scope-set table
-        /// (#788), which holds each set once.
-        scopes: ScopeSetId,
-        /// A written program name, which has the binding behavior of a symbol.
-        written: bool,
-        /// Whether `name` is a relinked spelling's symbol (#837): a symbol
-        /// object the intern table does not hold, so that a spelling bound
-        /// nowhere is no name to any reader and a redefined library's
-        /// spellings are not kept for good (#790). Only the identifiers that
-        /// carry it hold it, and its trace keeps it alive.
-        relinked: bool,
-    },
+    Identifier(IdentifierData),
     /// A tree-walker capture: a first-class continuation.
     Continuation {
         k: Rc<crate::continuation::CpsContinuation>,
@@ -488,7 +503,7 @@ impl HeapObjectData {
             HeapObjectData::Macro { .. } => HeapObjectType::Macro,
             HeapObjectData::RecordType(_) => HeapObjectType::RecordType,
             HeapObjectData::Record { .. } => HeapObjectType::Record,
-            HeapObjectData::Identifier { .. } => HeapObjectType::Identifier,
+            HeapObjectData::Identifier(_) => HeapObjectType::Identifier,
             HeapObjectData::Continuation { .. } => HeapObjectType::Continuation,
             HeapObjectData::Parameter { .. } => HeapObjectType::Parameter,
             HeapObjectData::Promise(_) => HeapObjectType::Promise,
@@ -576,6 +591,12 @@ pub struct Heap {
     /// borrow, as `symbol_table` is: no id leaves core (decision 18 on #782,
     /// pending the owner's ruling).
     scope_sets: ScopeSetTable,
+
+    /// Where each identifier was read or expanded, once, by the id the
+    /// identifier holds (`heap/documents.rs`, #791). A plain field under
+    /// the heap's borrow, as the scope-set table is (decision 18 on #782,
+    /// ruled 2026-11-26).
+    documents: DocumentTable,
 
     /// Syntactic-keyword intern table, the exact shape of `symbol_table`:
     /// keyed by the thing being interned. Allocated lazily on first use and
@@ -820,6 +841,7 @@ impl Heap {
         port_table::register(handles.ports());
         let account = ByteAccount::new(Rc::clone(&mutator));
         let scope_sets = ScopeSetTable::new(account.external_bytes_handle());
+        let documents = DocumentTable::new(account.external_bytes_handle());
         Self {
             syntax_sources: std::collections::HashMap::new(),
             instance: Rc::new(crate::instance::Instance::default()),
@@ -829,6 +851,7 @@ impl Heap {
             objects: Vec::new(),
             symbol_table: std::collections::HashMap::new(),
             scope_sets,
+            documents,
             core_syntax_table: std::collections::HashMap::new(),
             free_pairs: Vec::new(),
             free_vectors: Vec::new(),
@@ -1734,12 +1757,13 @@ impl Heap {
             self.is_interned_symbol(symbol),
             "an identifier's name is an interned symbol of its heap"
         );
-        self.alloc_object(HeapObjectData::Identifier {
+        self.alloc_object(HeapObjectData::Identifier(IdentifierData {
             name: symbol,
             scopes: ScopeSetId::EMPTY,
+            source: SourceId::NONE,
             written: true,
             relinked: false,
-        })
+        }))
     }
 
     /// Whether `value` is a symbol the heap's intern table holds: the
@@ -1773,12 +1797,13 @@ impl Heap {
             "a relinked identifier's name is a symbol the intern table does not hold"
         );
         let scopes = self.scope_sets.intern(scopes);
-        self.alloc_object(HeapObjectData::Identifier {
+        self.alloc_object(HeapObjectData::Identifier(IdentifierData {
             name,
             scopes,
+            source: SourceId::NONE,
             written: false,
             relinked: true,
-        })
+        }))
     }
 
     /// The scope set at `id` in the heap's table (#788).
@@ -1844,17 +1869,19 @@ impl Heap {
         name: TaggedValue,
         scopes: ScopeSetId,
     ) -> TaggedValue {
-        self.alloc_identifier_copy(name, scopes, false)
+        self.alloc_identifier_copy(name, scopes, false, SourceId::NONE)
     }
 
     /// A walk's copy of an identifier (#788): its name's word, `relinked`
-    /// as the original's was (#790), and the set `scopes`, interned
-    /// already. The copy is no written name.
+    /// as the original's was (#790), the set `scopes`, interned already,
+    /// and its original's location, `source`, with no write to the document
+    /// tables (#791). The copy is no written name.
     pub(crate) fn alloc_identifier_copy(
         &mut self,
         name: TaggedValue,
         scopes: ScopeSetId,
         relinked: bool,
+        source: SourceId,
     ) -> TaggedValue {
         debug_assert!(
             if relinked {
@@ -1864,20 +1891,120 @@ impl Heap {
             },
             "an identifier's name is an interned symbol of its heap, or a relinked one's symbol"
         );
-        self.alloc_object(HeapObjectData::Identifier {
+        self.alloc_object(HeapObjectData::Identifier(IdentifierData {
             name,
             scopes,
+            source,
             written: false,
             relinked,
-        })
+        }))
     }
 
     pub fn is_source_identifier(&self, value: TaggedValue) -> bool {
         value.is_object()
             && matches!(
                 self.get_object(value),
-                HeapObjectData::Identifier { written: true, .. }
+                HeapObjectData::Identifier(IdentifierData { written: true, .. })
             )
+    }
+
+    /// The identifier `value`'s payload, copied out, or `None` if `value`
+    /// is no identifier (#791).
+    #[inline]
+    pub(crate) fn identifier(&self, value: TaggedValue) -> Option<IdentifierData> {
+        if !value.is_object() {
+            return None;
+        }
+        match self.get_object(value) {
+            HeapObjectData::Identifier(data) => Some(*data),
+            _ => None,
+        }
+    }
+
+    /// Give the identifier `value` the location `source`: its payload's one
+    /// write after it is made. Only for an identifier made in the context
+    /// that calls this, beneath which nothing collects: the reader's, a
+    /// template's instantiation, and an expansion's stamp of the copies the
+    /// expansion made (`heap/documents.rs`, "Ids are set before a
+    /// collection sees them").
+    pub(crate) fn set_identifier_source(&mut self, value: TaggedValue, source: SourceId) {
+        self.object_checks.check("object", value);
+        match &mut self.objects[value.heap_index() as usize] {
+            HeapObjectData::Identifier(data) => data.source = source,
+            _ => unreachable!("set_identifier_source on a non-identifier"),
+        }
+    }
+
+    /// A copy of the identifier `original` located at `location`: the same
+    /// name, scopes and flags, `written` among them, and its original's
+    /// form span. For an identifier some other context made, which an
+    /// expansion's stamp may not write in place (`heap/documents.rs`): a
+    /// name the reader wrote that the expansion carries into a quote, a
+    /// vector or a nested macro definition, and a template's literal.
+    /// `None` if `original` is no identifier.
+    pub fn alloc_identifier_relocated(
+        &mut self,
+        original: TaggedValue,
+        location: &crate::SourceLocation,
+    ) -> Option<TaggedValue> {
+        let data = self.identifier(original)?;
+        let source = self.documents.relocated(data.source, location);
+        Some(self.alloc_object(HeapObjectData::Identifier(IdentifierData {
+            source,
+            ..data
+        })))
+    }
+
+    /// The span of the list the identifier `value` heads, as a location
+    /// with the identifier's chain (#791): what the reader recorded when
+    /// the list closed. `None` for a value that is no identifier, for an
+    /// identifier that heads no list, and for one that heads more than
+    /// one, through a datum label. Raw: until #792 no diagnostic reads it.
+    pub fn form_span(&self, value: TaggedValue) -> Option<crate::SourceLocation> {
+        self.documents.form_location(self.identifier(value)?.source)
+    }
+
+    /// Record that the identifier `value`, which the reader has just made
+    /// and located, heads the list at `form` (#791). A no-op for a value
+    /// that is no identifier, or has no location of its own.
+    pub fn record_form_span(&mut self, value: TaggedValue, form: &crate::SourceLocation) {
+        let Some(data) = self.identifier(value) else {
+            return;
+        };
+        let source = self.documents.heading(data.source, form);
+        if source != data.source {
+            self.set_identifier_source(value, source);
+        }
+    }
+
+    /// Locate the identifier `value`, which the reader has just made, at
+    /// `own`, as the head of the list at `form` (#791): one entry of the
+    /// document tables with both spans. A no-op for a value that is no
+    /// identifier.
+    pub fn record_head_source(
+        &mut self,
+        value: TaggedValue,
+        own: &crate::SourceLocation,
+        form: &crate::SourceLocation,
+    ) {
+        if self.identifier(value).is_none() {
+            return;
+        }
+        let source = self.documents.intern_head(own, form);
+        self.set_identifier_source(value, source);
+    }
+
+    /// The entries the heap's document tables hold (#791): for a test
+    /// that a copy of an identifier writes none.
+    #[doc(hidden)]
+    pub fn source_entries(&self) -> usize {
+        self.documents.len()
+    }
+
+    /// The slots the heap's document tables hold: `(gc-stats)`'s
+    /// `documents` (#791).
+    pub fn documents(&self) -> usize {
+        self.documents.documents()
     }
 
     /// Allocate a native Continuation object (first-class continuation),
@@ -2507,7 +2634,7 @@ impl Heap {
             return None;
         }
         match self.get_object(tv) {
-            HeapObjectData::Identifier { name, scopes, .. } => {
+            HeapObjectData::Identifier(IdentifierData { name, scopes, .. }) => {
                 Some((self.symbol_spelling(*name), self.scope_sets.get(*scopes)))
             }
             _ => None,
@@ -2532,11 +2659,8 @@ impl Heap {
         if !tv.is_object() {
             return None;
         }
-        let HeapObjectData::Identifier { name, relinked, .. } = self.get_object(tv) else {
-            return None;
-        };
-        let name = *name;
-        if !*relinked {
+        let IdentifierData { name, relinked, .. } = self.identifier(tv)?;
+        if !relinked {
             return Some(name);
         }
         let spelling = Rc::clone(self.symbol_spelling(name));
@@ -2679,7 +2803,7 @@ impl Heap {
     /// Check if value is an identifier
     #[inline]
     pub fn is_identifier(&self, tv: TaggedValue) -> bool {
-        tv.is_object() && matches!(self.get_object(tv), HeapObjectData::Identifier { .. })
+        tv.is_object() && matches!(self.get_object(tv), HeapObjectData::Identifier(_))
     }
 
     /// Get the name from a symbol or identifier
@@ -2694,7 +2818,7 @@ impl Heap {
         }
         match self.get_object(tv) {
             HeapObjectData::Symbol(s) => Some(s.as_ref()),
-            HeapObjectData::Identifier { name, .. } => Some(self.symbol_spelling(*name)),
+            HeapObjectData::Identifier(IdentifierData { name, .. }) => Some(self.symbol_spelling(*name)),
             _ => None,
         }
     }
@@ -3061,7 +3185,7 @@ impl Heap {
                 HeapObjectData::CoreSyntax(_) => "syntax",
                 HeapObjectData::RecordType(_) => "record-type",
                 HeapObjectData::Record { .. } => "record",
-                HeapObjectData::Identifier { .. } => "identifier",
+                HeapObjectData::Identifier(_) => "identifier",
                 HeapObjectData::Continuation { .. } => "continuation",
                 HeapObjectData::Parameter { .. } => "parameter",
                 HeapObjectData::Promise(_) => "promise",
@@ -3319,25 +3443,31 @@ impl Heap {
             // stripping interns, so its spelling is compared, as every
             // identifier's was before.
             (
-                HeapObjectData::Identifier {
+                HeapObjectData::Identifier(IdentifierData {
                     name: a,
                     relinked: a_relinked,
                     ..
-                },
-                HeapObjectData::Identifier {
+                }),
+                HeapObjectData::Identifier(IdentifierData {
                     name: b,
                     relinked: b_relinked,
                     ..
-                },
+                }),
             ) => {
                 a == b
                     || ((*a_relinked || *b_relinked)
                         && self.symbol_spelling(*a) == self.symbol_spelling(*b))
             }
-            (HeapObjectData::Symbol(_), HeapObjectData::Identifier { name, relinked, .. }) => {
+            (
+                HeapObjectData::Symbol(_),
+                HeapObjectData::Identifier(IdentifierData { name, relinked, .. }),
+            ) => {
                 *name == a || (*relinked && self.symbol_spelling(a) == self.symbol_spelling(*name))
             }
-            (HeapObjectData::Identifier { name, relinked, .. }, HeapObjectData::Symbol(_)) => {
+            (
+                HeapObjectData::Identifier(IdentifierData { name, relinked, .. }),
+                HeapObjectData::Symbol(_),
+            ) => {
                 *name == b || (*relinked && self.symbol_spelling(*name) == self.symbol_spelling(b))
             }
             // Procedure - pointer equality for eqv?

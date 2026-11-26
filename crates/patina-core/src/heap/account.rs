@@ -376,7 +376,7 @@ impl HeapObjectData {
             // (#790).
             HeapObjectData::Real(_)
             | HeapObjectData::Port(_)
-            | HeapObjectData::Identifier { .. }
+            | HeapObjectData::Identifier(_)
             | HeapObjectData::Complex { .. }
             | HeapObjectData::LabelPlaceholder(_)
             | HeapObjectData::MutableCell(_)

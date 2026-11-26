@@ -863,7 +863,9 @@ mod tests {
         let mut table = table();
         let map = map("a b c d");
         let at = |column| map.location("a.scm", 1, column, 1, column + 1);
-        let ids: Vec<_> = [1, 3, 5, 7].map(|column| table.intern(&at(column))).to_vec();
+        let ids: Vec<_> = [1, 3, 5, 7]
+            .map(|column| table.intern(&at(column)))
+            .to_vec();
         let marked = marks(&table, &[ids[1], ids[2]]);
         table.sweep(&marked);
         assert_eq!(table.len(), 2);
@@ -969,7 +971,11 @@ mod tests {
         assert_eq!(heap.external_bytes(), charged);
         let marked = marks(&table, &ids[..10]);
         table.sweep(&marked);
-        assert!(table.charged() < charged, "{} of {charged}", table.charged());
+        assert!(
+            table.charged() < charged,
+            "{} of {charged}",
+            table.charged()
+        );
         assert_eq!(heap.external_bytes(), table.charged());
         let marked = marks(&table, &[]);
         table.sweep(&marked);

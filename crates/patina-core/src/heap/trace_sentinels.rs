@@ -1199,7 +1199,7 @@ fn scope_set_of(ids: &[usize]) -> ScopeSet {
 /// The id of `identifier`'s set in its heap's table.
 fn scope_set_id(heap: &Heap, identifier: TaggedValue) -> super::scope_sets::ScopeSetId {
     match heap.get_object(identifier) {
-        HeapObjectData::Identifier { scopes, .. } => *scopes,
+        HeapObjectData::Identifier(identifier) => identifier.scopes,
         other => panic!("not an identifier: {other:?}"),
     }
 }
@@ -1241,12 +1241,13 @@ fn identifier_fields() {
     let mut heap = Heap::new();
     let mut s = Sentinels::new(&mut heap);
     let name = s.object(&mut heap, "HeapObjectData::Identifier.name");
-    let identifier = heap.alloc_object(HeapObjectData::Identifier {
+    let identifier = heap.alloc_object(HeapObjectData::Identifier(super::IdentifierData {
         name,
         scopes: super::scope_sets::ScopeSetId::EMPTY,
+        source: super::documents::SourceId::NONE,
         written: false,
         relinked: true,
-    });
+    }));
     collect_from(&mut heap, &[identifier]);
     s.assert_survived(&heap);
 }

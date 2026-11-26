@@ -1,22 +1,46 @@
 //! Non-owning syntax provenance: where each occurrence of program syntax was
-//! read or expanded. Entries are removed by sweep, before slots can be
-//! reused. Documents contain no Scheme values and are not GC roots.
+//! read or expanded. Documents contain no Scheme values and are not GC
+//! roots.
 //!
-//! Only containers and identifiers have an entry. The reader used to record
-//! the location of each element of a list or vector too, immediate datums
-//! included, but nothing outside tests read those spans (#643).
+//! An identifier holds the id of its location's entry in the heap's
+//! document tables (`heap/documents.rs`, #791): a copy takes its
+//! original's id, and the sweep frees the entries no marked identifier
+//! carries. A list, a vector, a string or another non-symbol object has an
+//! entry of `syntax_sources`, keyed by its raw bits, which the sweep prunes
+//! before a slot can be reused, until #792 and #793. The reader used to
+//! record the location of each element of a list or vector too, immediate
+//! datums included, but nothing outside tests read those spans (#643).
 
 use super::scope_sets::{ScopeSetId, ScopeSetMemo};
-use super::{Heap, HeapObjectData};
+use super::{Heap, IdentifierData};
 use crate::{ScopeId, ScopeSet, SourceLocation, TaggedValue};
 use std::rc::Rc;
 
 impl Heap {
-    pub fn source(&self, value: TaggedValue) -> Option<&SourceLocation> {
-        self.syntax_sources.get(&value.raw_bits()).map(Rc::as_ref)
+    /// Where `value` was read or expanded: an identifier's location, built
+    /// from its entry in the document tables (#791), or a container's, from
+    /// `syntax_sources`. Owned, since an identifier's is built and cannot
+    /// be lent.
+    pub fn source(&self, value: TaggedValue) -> Option<SourceLocation> {
+        if let Some(identifier) = self.identifier(value) {
+            return self.documents.location(identifier.source);
+        }
+        self.syntax_sources
+            .get(&value.raw_bits())
+            .map(|location| (**location).clone())
     }
 
+    /// Locate `value` at `location`. An identifier takes a new entry of the
+    /// document tables with that span and chain, its form span kept, and
+    /// its payload is written: so only an identifier made in the calling
+    /// context is recorded so (`heap/documents.rs`; one another context
+    /// made is copied, [`Heap::alloc_identifier_relocated`]).
     pub fn record_source(&mut self, value: TaggedValue, location: SourceLocation) {
+        if let Some(identifier) = self.identifier(value) {
+            let source = self.documents.relocated(identifier.source, &location);
+            self.set_identifier_source(value, source);
+            return;
+        }
         if value.is_pair() || value.is_vector() || value.is_string() || value.is_object() {
             // Interned symbols denote a name, never one occurrence.
             if self.get_symbol_name(value).is_none() {
@@ -26,7 +50,23 @@ impl Heap {
         }
     }
 
+    /// Locate `copy` where `original` is, if `original` has a location. An
+    /// identifier's copy takes its original's source id, with no write to
+    /// the document tables (#791); the copy was made in the calling
+    /// context, as [`Heap::record_source`] requires.
     pub fn inherit_source(&mut self, original: TaggedValue, copy: TaggedValue) {
+        if original == copy {
+            return;
+        }
+        if let Some(copied) = self.identifier(copy) {
+            if let Some(identifier) = self.identifier(original)
+                && !identifier.source.is_none()
+                && identifier.source != copied.source
+            {
+                self.set_identifier_source(copy, identifier.source);
+            }
+            return;
+        }
         // Scope edits often copy the same syntax repeatedly while a library
         // load defers GC. Share its immutable provenance; record_source
         // replaces a copy's entry only when that occurrence is updated.
@@ -94,21 +134,21 @@ impl Heap {
             root,
             &mut std::collections::HashMap::new(),
             |heap, value| {
-                let HeapObjectData::Identifier {
+                let Some(IdentifierData {
                     name,
-                    scopes,
+                    scopes: from,
+                    source,
                     written,
                     relinked,
-                } = heap.get_object(value)
+                }) = heap.identifier(value)
                 else {
                     unreachable!("the walk hands over identifiers only");
                 };
-                if *written || !picks(heap.symbol_spelling(*name), heap.scope_sets.get(*scopes)) {
+                if written || !picks(heap.symbol_spelling(name), heap.scope_sets.get(from)) {
                     return None;
                 }
-                let (name, from, relinked) = (*name, *scopes, *relinked);
                 let to = heap.scope_sets.edited(&mut made, from, &rescope);
-                Some(heap.alloc_identifier_copy(name, to, relinked))
+                Some(heap.alloc_identifier_copy(name, to, relinked, source))
             },
         )
     }
@@ -116,30 +156,25 @@ impl Heap {
     /// A copy of the identifier `value` with `scope` added to its set, the
     /// set made through `made` (#788), or `None` if `value` is no
     /// identifier: `Cx::add_scope_copying`'s. The copy is no written name,
-    /// whatever the original was, and holds the original's name (#790).
+    /// whatever the original was, and holds the original's name (#790) and
+    /// its location (#791).
     pub(crate) fn identifier_adding_scope(
         &mut self,
         made: &mut ScopeSetMemo,
         scope: ScopeId,
         value: TaggedValue,
     ) -> Option<TaggedValue> {
-        if !value.is_object() {
-            return None;
-        }
-        let HeapObjectData::Identifier {
+        let IdentifierData {
             name,
-            scopes,
+            scopes: from,
+            source,
             relinked,
             ..
-        } = self.get_object(value)
-        else {
-            return None;
-        };
-        let (name, from, relinked) = (*name, *scopes, *relinked);
+        } = self.identifier(value)?;
         let to = self
             .scope_sets
             .edited(made, from, |set| set.with_scope(scope));
-        Some(self.alloc_identifier_copy(name, to, relinked))
+        Some(self.alloc_identifier_copy(name, to, relinked, source))
     }
 
     /// An identifier for the interned symbol `symbol` whose set is `scope`

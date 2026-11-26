@@ -51,7 +51,7 @@ pub(super) fn object_info(data: &HeapObjectData) -> (Variant, usize, u64) {
             let n = fields.borrow().len();
             (11, n, 8 + 8 * n as u64)
         }
-        H::Identifier { .. } => (12, 0, 24),
+        H::Identifier(_) => (12, 0, 24),
         H::Continuation { .. } => (13, 0, 16),
         H::Parameter { .. } => (14, 0, 24),
         H::Promise(_) => (15, 0, 24),
@@ -199,7 +199,7 @@ impl Heap {
             } else if value.is_object()
                 && matches!(
                     self.objects.get(value.heap_index() as usize),
-                    Some(HeapObjectData::Identifier { .. })
+                    Some(HeapObjectData::Identifier(_))
                 )
             {
                 3

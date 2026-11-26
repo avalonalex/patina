@@ -72,7 +72,7 @@ use super::mutator::Carrier;
 pub use super::root_set::{RootSet, RootToken};
 use super::telemetry::{CollectReason, CollectionRecord, PhaseTimes};
 use super::trace::Trace;
-use super::{GC_CHECK, Heap, HeapObjectData, PromiseState, SharedHeap};
+use super::{GC_CHECK, Heap, HeapObjectData, IdentifierData, PromiseState, SharedHeap};
 use crate::cont_value::ContEnv;
 use crate::continuation::CpsContinuation;
 use crate::cps_expr::CpsExpr;
@@ -92,7 +92,7 @@ pub(crate) struct BitSet {
 }
 
 impl BitSet {
-    fn new(len: usize) -> Self {
+    pub(crate) fn new(len: usize) -> Self {
         Self {
             words: vec![0; len.div_ceil(64)],
             len,
@@ -101,7 +101,7 @@ impl BitSet {
 
     /// Set bit `i`. Returns `true` if the bit was previously clear.
     #[inline]
-    fn set(&mut self, i: usize) -> bool {
+    pub(crate) fn set(&mut self, i: usize) -> bool {
         debug_assert!(i < self.len, "bit index {i} out of range {}", self.len);
         let word = &mut self.words[i / 64];
         let mask = 1u64 << (i % 64);
@@ -140,6 +140,11 @@ pub struct MarkBits {
     /// set of each identifier marking traces. The sweep frees the entries
     /// whose bit is clear (`heap/scope_sets.rs`).
     pub(crate) scope_sets: BitSet,
+    /// One bit per entry of the heap's document tables (#791): set for the
+    /// entry of each identifier marking traces, and for entry 0, which is
+    /// no entry, by an identifier with no location. The sweep frees the
+    /// entries whose bit is clear (`heap/documents.rs`).
+    pub(crate) sources: BitSet,
     /// The payloads of the marked objects (`heap/account.rs`), counted as
     /// marking reaches each one: a vector's elements when it is traced, a
     /// string's characters when it is marked, an object's payload when it
@@ -183,6 +188,7 @@ impl MarkBits {
             strings: BitSet::new(heap.strings.len()),
             objects: BitSet::new(heap.objects.len()),
             scope_sets,
+            sources: BitSet::new(heap.documents.entries()),
             live_payload: 0,
             live_closures: 0,
         }
@@ -1800,16 +1806,23 @@ impl<'h> GcVisitor<'h> {
             // Its set's id, recorded so that the sweep keeps the set (#788):
             // the table holds sets of scope ids, which hold no value, and is
             // no root.
-            HeapObjectData::Identifier {
+            HeapObjectData::Identifier(IdentifierData {
                 name,
                 scopes,
+                source,
                 // A flag.
                 written: _,
                 // A flag: whether `name` is a relinked spelling's symbol.
                 relinked: _,
-            } => {
+            }) => {
                 self.visit(*name);
                 self.marks.scope_sets.set(scopes.index());
+                // No value: the id of its location's entry, recorded so
+                // that the sweep keeps the entry (#791). The document
+                // tables hold spans and chains, and are no root. An
+                // identifier with no location sets bit 0, which is no
+                // entry's and is never read.
+                self.marks.sources.set(source.index());
             }
 
             HeapObjectData::Complex { real, imag } => {
@@ -2086,6 +2099,9 @@ impl Heap {
         // Nor are the scope sets (#788): every set no marked identifier
         // carries is freed, and its id reused.
         self.scope_sets.sweep(&marks.scope_sets);
+        // Nor are the document tables (#791): every entry no marked
+        // identifier carries is freed, and a slot left with none dropped.
+        self.documents.sweep(&marks.sources);
         // Moved out so the object arena's recording closure can hold it while
         // the arenas themselves are mutably borrowed.
         let mut freed_closures = self.gc_freed_closure_code_ids.take();

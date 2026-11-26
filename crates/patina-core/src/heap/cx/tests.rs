@@ -305,7 +305,7 @@ fn a_frame_write_through_a_shared_context_refuses_a_namespace() {
 /// The id of the identifier `v`'s set in its heap's table (#788).
 fn set_id_of(cx: &Cx<'_>, v: Value<'_>) -> crate::heap::scope_sets::ScopeSetId {
     match cx.heap.borrow().get_object(v.tagged()) {
-        HeapObjectData::Identifier { scopes, .. } => *scopes,
+        HeapObjectData::Identifier(identifier) => identifier.scopes,
         other => panic!("not an identifier: {other:?}"),
     }
 }
@@ -394,7 +394,7 @@ fn a_scope_addition_interns_each_set_once_across_calls() {
 /// The word the identifier `v` holds as its name (#790).
 fn name_of(cx: &Cx<'_>, v: Value<'_>) -> TaggedValue {
     match cx.heap.borrow().get_object(v.tagged()) {
-        HeapObjectData::Identifier { name, .. } => *name,
+        HeapObjectData::Identifier(identifier) => identifier.name,
         other => panic!("not an identifier: {other:?}"),
     }
 }
@@ -453,7 +453,7 @@ fn a_relinked_identifiers_spelling_stays_uninterned() {
         assert!(
             matches!(
                 cx.heap.borrow().get_object(copy.tagged()),
-                HeapObjectData::Identifier { relinked: true, .. }
+                HeapObjectData::Identifier(crate::heap::IdentifierData { relinked: true, .. })
             ),
             "a copy of a relinked identifier is relinked"
         );
