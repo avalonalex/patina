@@ -174,20 +174,23 @@ let tracer = StepTracer::handle_with_filter(filter);
 
 ### Watchpoints
 
-Watchpoints monitor absolute positions in the flat register array and trigger
-`Watchpoint` events when the value changes. This catches cross-frame clobbering.
+Watchpoints monitor absolute positions in the register stack, whose words
+are the frames' headers and their registers (#908), and trigger `Watchpoint`
+events when the value changes. This catches cross-frame clobbering. A
+register's position is its frame's base plus its number, as a trace prints
+it: the first frame's r0 is word 5, above its five-word header.
 
 ```rust
 let filter = TraceFilter {
-    // Monitor absolute register indices 3 and 9
-    watchpoints: [3, 9].into(),
+    // Monitor absolute register indices 5 and 12
+    watchpoints: [5, 12].into(),
     ..Default::default()
 };
 ```
 
 Watchpoint output:
 ```
-[0042]   !! WATCH regs[3] changed: MutableCell(0) -> 99 (in #106 pc=2)
+[0042]   !! WATCH regs[5] changed: MutableCell(0) -> 99 (in #106 pc=2)
 ```
 
 ## JSONL Output Format

@@ -21,6 +21,12 @@
 ;; (gc-stats). Every key is read through `steady-value`, which prints `none`
 ;; for a key (gc-stats) lacks or one that answers #f, and the runner fails a
 ;; row that reads `none` in a key one of its clauses reads.
+;;
+;; A row that holds a key to a bound (the runner's `Row.bounds`, #910) calls
+;; `(steady-bound-reading keys)` where the bound is to hold, before
+;; `steady-run`: two (gc)s, then one line,
+;;
+;;   STEADY-BOUND at=0 <key>=<..> ...
 
 (define (steady-arg k)
   (list-ref (command-line) k))
@@ -65,6 +71,14 @@
             (steady-print "STEADY" at steady-before-keys before)
             (steady-print "STEADY-AFTER" at steady-after-keys after)))
         (steady-print "STEADY" at steady-before-keys before))))
+
+;; The reading a row's bounds are held to: `keys` of (gc-stats) after two
+;; collections, which is when a returned stack's pages have gone back
+;; (docs/GC_DESIGN.md §6.4).
+(define (steady-bound-reading keys)
+  (gc)
+  (gc)
+  (steady-print "STEADY-BOUND" 0 keys (gc-stats)))
 
 (define (steady-run cycle)
   (let ((n (steady-number 1)))

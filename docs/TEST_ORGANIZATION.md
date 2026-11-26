@@ -822,7 +822,11 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   300,000-frame recursion's 40.8 MB held after it returns and after one
   `(gc)`, and the first MiB after two; the same bytes after each of ten
   cycles of a recursion and a `(gc)`; and the stack a caught
-  `&stack-exhausted` leaves, with 0 on the tree-walker. The
+  `&stack-exhausted` leaves, with 0 on the tree-walker. One more is row
+  4d's gate per PR (#910, 4d.9): 1 M frames under the default cap, 136 MB
+  of stack, held after one `(gc)` and the first MiB after two, with
+  `stack-limit` reading that cap; the nightly's `stack-returned` row holds
+  the same at 10 M frames (the steady-state lane, below). The
   limit a continuation's arrival sets, and the one an abort's landing
   keeps, are unit tests beside the machine
   (`patina-vm/src/runtime/vm_state.rs`): they hold the rule for a snapshot
@@ -2520,6 +2524,22 @@ pin, so a cost past it fails the lane until the owner raises it, and a
 pinned row that reaches the resident-size cap fails too. A pin holds at the
 row's own N only, and is not held under `--scale`: a namespace charges its
 buffers at capacity, which steps with N.
+A row may also hold a key of `(gc-stats)` to a **bound** (`bound:<key>`,
+#910): its program reads the key with the driver's `steady-bound-reading`,
+after two `(gc)`s at the point the bound is to hold, and every run's reading
+must lie between the two values the row gives for the backend. No mark may
+name a bound, which is a gate, and a row whose program did not make the
+reading fails. `stack-returned` is the row with bounds, and row 4d's gate
+(`PRD/GC_PRD.md` §19, and §17.4's limits row): a 10 M-frame recursion on
+the VM under the default cap, 1.36 GB of register stack, and 1 M frames on
+the tree-walker, which a row's arguments may now give per backend. After
+it returns and two `(gc)`s, `committed-stack-bytes` reads at most 1 MiB,
+and above 0 on the VM, so that a key no longer published does not pass for
+a stack given back (#909); and `stack-limit` reads the default cap, between
+what the recursion needs and its 8 GiB ceiling. Both read 0 on the
+tree-walker. Its SS2 is red on the VM for #616, as `deep-then-steady`'s is,
+at the same reading. Three runs take 1.8 s on the VM and 6.2 s on the
+tree-walker here (2026-11-25), at 1,308 and 924 MiB of peak resident size.
 The REPL rows declare SS1, SS4 and SS5,
 since their growth shows in L and the counts and their footprints are the
 deferred library loads' high-water (#616); the server and churn rows declare

@@ -582,11 +582,14 @@ const COMMITTED: &str = "(cdr (assq 'committed-stack-bytes (gc-stats)))";
 /// (#909): 300,000 frames are 40.8 MB of stack, held after the return and
 /// after one `(gc)`, and all but the first MiB given back by the second.
 /// The stack is granted room in steps of 256 KiB, so a machine that has
-/// run little holds a whole number of them, inside the first MiB.
+/// run little holds a whole number of them, inside the first MiB. The
+/// program collects before it recurses, so that no paced collection falls
+/// between the return and the first `(gc)`, where it would be the first of
+/// the two observations.
 #[test]
 fn a_recursions_pages_go_back_at_the_second_collection() {
     let program = format!(
-        "(let* ((start {COMMITTED})
+        "(let* ((start (begin (gc) {COMMITTED}))
        (depth (deep 300000))
        (grown {COMMITTED})
        (one (begin (gc) {COMMITTED}))
@@ -609,10 +612,11 @@ fn a_recursions_pages_go_back_at_the_second_collection() {
 #[test]
 fn a_recursion_in_every_cycle_keeps_its_pages() {
     let program = format!(
-        "(let loop ((i 0) (seen '()))
-  (if (= i 10)
-      (list (length seen) (apply = seen) (>= (car seen) 40800000))
-      (begin (deep 300000) (gc) (loop (+ i 1) (cons {COMMITTED} seen)))))"
+        "(begin (gc)
+  (let loop ((i 0) (seen '()))
+    (if (= i 10)
+        (list (length seen) (apply = seen) (>= (car seen) 40800000))
+        (begin (deep 300000) (gc) (loop (+ i 1) (cons {COMMITTED} seen))))))"
     );
     assert_eq!(answer(&vm(ROOMY), &program), "(10 #t #t)");
 }
@@ -638,5 +642,36 @@ fn committed_stack_bytes_after_the_cap_and_on_the_tree_walker() {
             &format!("(begin (deep 20000) (gc) (gc) {COMMITTED})")
         ),
         "0"
+    );
+}
+
+/// Row 4d's gate, per PR (#910; the nightly's `stack-returned` row holds it
+/// at 10 M frames on the release build): a recursion 1 M deep under the
+/// default cap, 136 MB of stack, whose pages go back at the second
+/// collection after it returns. The key then reads the first MiB, which
+/// is never given back, and `stack-limit` the cap the machine was built
+/// with. It collects before it recurses, as the test of the second
+/// collection above does and for its reason. Where the default cap is under
+/// 256 MiB, which is a machine with under 1 GiB of memory for it, the
+/// recursion may not fit, and the test says so and stops.
+#[test]
+fn a_million_frames_under_the_default_cap_go_back_after_two_collections() {
+    let cap = HeapConfig::new().stack_cap();
+    if cap < 256 << 20 {
+        eprintln!("the default cap here is {cap} bytes: 1 M frames may not fit");
+        return;
+    }
+    let interp = Interpreter::new(VmBackend::with_config(&HeapConfig::new()));
+    let program = format!(
+        "(let* ((depth (begin (gc) (deep 1000000)))
+       (grown {COMMITTED})
+       (one (begin (gc) {COMMITTED}))
+       (two (begin (gc) {COMMITTED})))
+  (list depth (>= grown 136000000) (= one grown) two
+        (cdr (assq 'stack-limit (gc-stats)))))"
+    );
+    assert_eq!(
+        answer(&interp, &program),
+        format!("(1000000 #t #t 1048576 {cap})")
     );
 }

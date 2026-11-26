@@ -1156,7 +1156,7 @@ a traced struct, or a root provider meets two rules:
    (`FrameCode`, `types/mod.rs`) and of the running code (`RunningCode`,
    `execution_state.rs`), each its one field by name, which report an id the
    derive cannot; the VM's walk of its frames (#906), `trace_frames` with
-   the `scan_windows` and `scan_window` a capture shares, which takes each
+   the `scan_frames` and `scan_window` a capture shares, which takes each
    frame apart by name; and each root provider's `trace_roots`, a call to its
    derived trace — `VmState`'s, the tree-walker's `Evaluator`'s and
    `StepRoots`', the library registry's and a compilation's literal pool's

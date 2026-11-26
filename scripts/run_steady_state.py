@@ -19,15 +19,20 @@ the clauses it declares:
        cost per cycle, (L(4N) - L(N))/3N, at most PIN_TOLERANCE (1.05) times
        the bytes pinned for it (K17; R9 on #782); held at the row's own N
        only, since a capacity charge steps with N
+  bound:<key>  on a row that declares one (`Row.bounds`, #910), a key of
+       (gc-stats) between two values, in every run, where the row's program
+       reads it: after two (gc)s at the point it calls the driver's
+       `steady-bound-reading`
 
 A clause a row fails today is marked red with the issue or stage that fixes
 it, by its name (`SS5:<key>` for one per-owner key, never a bare SS5) or its
 name on one backend (`SS1/vm`); it is reported, and a red clause that passes
 is called out for promotion, but neither fails the lane. No mark may name a
-pin: a cost past it fails the lane until the owner re-pins it. Every other
-failure does, whatever the row's marks: a clause, a run that exits non-zero, a
-missing reading (a reading the driver did not print, or `none` in a key a
-declared clause reads, a per-owner key among them) or a timeout. The
+pin: a cost past it fails the lane until the owner re-pins it. Nor a bound,
+which is a gate. Every other failure does, whatever the row's marks: a clause,
+a run that exits non-zero, a missing reading (a reading the driver did not
+print, or `none` in a key a declared clause or bound reads, a per-owner key
+among them) or a timeout. The
 watchdog's resident-size cap fails a row with no red mark and is reported
 red on one with a red mark, except on a pinned row run at its own N, which
 it fails: a cost past the cap is past the pin.
@@ -72,14 +77,16 @@ PIN_TOLERANCE = 1.05
 class Row:
     """One row: `program` is a file under STEADY, or `stream:<form>` for a
     stream of top-level forms the runner writes, fed as a file, on standard
-    input or to the REPL (`mode`). `n` is N per backend; `red` maps a
-    check, or `check/backend`, to the issue or stage that fixes it: a clause
-    other than SS5, or SS5's clause of one per-owner key, `SS5:<key>`."""
+    input or to the REPL (`mode`). `n` is N per backend; `args` follow it on
+    the command line, the same on both backends or, as a dict, per backend;
+    `red` maps a check, or `check/backend`, to the issue or stage that fixes
+    it: a clause other than SS5, or SS5's clause of one per-owner key,
+    `SS5:<key>`."""
     name: str
     group: str
     program: str
     n: dict
-    args: tuple = ()
+    args: object = ()
     clauses: tuple = CLAUSES
     red: dict = dataclasses.field(default_factory=dict)
     pr: bool = False
@@ -97,14 +104,25 @@ class Row:
     # A row that drops a peak before its window: L at N and at 4N must be
     # below this, or the peak is still live ('peak').
     live_max: int = None
+    # Keys of (gc-stats) the row holds to bounds (#910): {key: {backend:
+    # (low, high)}}, both ends allowed. The row's program reads them with
+    # the driver's `steady-bound-reading`, after two (gc)s at the point the
+    # bound is to hold, and the lane holds every run's reading as the
+    # result `bound:<key>`. No mark may name one: a bound is a gate.
+    bounds: dict = None
 
     def red_reason(self, clause, backend):
         return self.red.get(f'{clause}/{backend}') or self.red.get(clause)
 
+    def args_for(self, backend):
+        """The row's arguments after N on `backend`."""
+        return self.args[backend] if isinstance(self.args, dict) else self.args
+
     def checks(self):
         """The results the row is held to, in `evaluate`'s order and by the
         names marks use: each declared clause, SS1's pin beside it, SS5 one
-        per per-owner key, and `D` and `peak`. No mark may name the pin."""
+        per per-owner key, `D` and `peak`, and one `bound:<key>` per bound.
+        No mark may name the pin or a bound."""
         names = []
         for clause in (c for c in CLAUSES if c in self.clauses):
             if clause != 'SS5':
@@ -113,7 +131,8 @@ class Row:
                 names.append('pin')
         if 'SS5' in self.clauses:
             names += [f'SS5:{key}' for key in PER_OWNER_KEYS]
-        return names + ['D'] * bool(self.per_cycle) + ['peak'] * bool(self.live_max)
+        names += ['D'] * bool(self.per_cycle) + ['peak'] * bool(self.live_max)
+        return names + [f'bound:{key}' for key in self.bounds or {}]
 
 
 STREAM_FORMS = {
@@ -232,6 +251,22 @@ ROWS = [
         red={'SS2': '#616'}),
     Row('deep-then-steady', 'server', 'deep-then-steady.scm', {'vm': 200000, 'tree-walker': 100000},
         ('200000',), red={'SS2/vm': '#616'}),
+    # The 10 M-deep recursion of row 4d's gate (§19) and of §17.4's limits
+    # row, under the default cap: 10 M frames on the VM, 1.36 GB of register
+    # stack, and 1 M on the tree-walker (10 M there would take about
+    # 9.6 GiB of Rust memory, #780). After it returns and two (gc)s the row
+    # holds two keys (#910): `committed-stack-bytes` at most 1 MiB, 4d.8's
+    # bound (#909), and above 0 on the VM, so that a key that stopped being
+    # published does not pass for a stack given back; and `stack-limit`, the
+    # default cap, between what the recursion needs and its ceiling of
+    # 8 GiB. The tree-walker keeps neither, and reads 0 for both. SS2 is red
+    # on the VM as it is on deep-then-steady, at the same 1.18: the arenas'
+    # high-water (#616), which the stack is no part of.
+    Row('stack-returned', 'server', 'stack-returned.scm', {'vm': 200000, 'tree-walker': 100000},
+        {'vm': ('10000000',), 'tree-walker': ('1000000',)},
+        red={'SS2/vm': '#616'},
+        bounds={'committed-stack-bytes': {'vm': (1, MIB), 'tree-walker': (0, 0)},
+                'stack-limit': {'vm': (1400 * 1000 * 1000, 8 << 30), 'tree-walker': (0, 0)}}),
     Row('port-churn', 'server', 'port-churn.scm', {'vm': 60000, 'tree-walker': 10000}, pr=True),
     Row('file-port-churn', 'server', 'file-port-churn.scm', {'vm': 5000, 'tree-walker': 5000},
         ('{scratch}/file-port-churn.txt',)),
@@ -275,19 +310,22 @@ ROWS = [
         red={'SS2/tree-walker': '#656'}),
 ]
 
-READING = re.compile(r'(STEADY(?:-AFTER)?) at=(\d+)((?: [a-z-]+=\S+)*)')
+READING = re.compile(r'(STEADY(?:-AFTER|-BOUND)?) at=(\d+)((?: [a-z-]+=\S+)*)')
+KINDS = {'STEADY': 'pre', 'STEADY-AFTER': 'after', 'STEADY-BOUND': 'bound'}
 
 
 def parse(stdout):
-    """{'pre': {at: {key: value}}, 'after': {at: {key: value}}} from a run's
-    output. A REPL may print a prompt before a reading, so a reading is
-    found anywhere in its line."""
-    readings = {'pre': {}, 'after': {}}
+    """{'pre': {at: {key: value}}, 'after': {at: {key: value}}, 'bound':
+    {at: {key: value}}} from a run's output: the readings before and after
+    the forced collections, and the one a row with bounds makes (at 0). A
+    REPL may print a prompt before a reading, so a reading is found
+    anywhere in its line."""
+    readings = {'pre': {}, 'after': {}, 'bound': {}}
     for line in stdout.splitlines():
         m = READING.search(line)
         if not m:
             continue
-        kind = 'after' if m.group(1) == 'STEADY-AFTER' else 'pre'
+        kind = KINDS[m.group(1)]
         values = {}
         for pair in m.group(3).split():
             key, _, value = pair.partition('=')
@@ -359,25 +397,41 @@ def evaluate(row, backend, runs, n):
     if row.live_max:
         peak = max(live1, live4)
         results['peak'] = (peak, row.live_max, peak <= row.live_max)
+    for key, by_backend in (row.bounds or {}).items():
+        low, high = by_backend[backend]
+        values = [r['bound'][0][key] for r in runs]
+        # The reading farthest outside, or the largest where all are inside.
+        worst = max(values, key=lambda v: (max(low - v, v - high, 0), v))
+        results[f'bound:{key}'] = (f'{worst} in [{low}, {high}]', high,
+                                   all(low <= v <= high for v in values))
     return results
 
 
 def mark_errors(row):
-    """What is wrong with the row's red marks, and its pin: each mark names
-    one of its checks (`Row.checks`), optionally on one backend, so a mark
-    silences nothing it does not name; a bare SS5, which would silence every
-    per-owner key, is refused, and so is a mark on the pin, which only the
-    owner raises. A pin is held beside SS1, so a row with one declares SS1,
-    and pins both backends."""
+    """What is wrong with the row's red marks, its pin, its bounds and its
+    arguments: each mark names one of its checks (`Row.checks`), optionally
+    on one backend, so a mark silences nothing it does not name; a bare SS5,
+    which would silence every per-owner key, is refused, and so is a mark on
+    the pin, which only the owner raises, or on a bound, which is a gate. A
+    pin is held beside SS1, so a row with one declares SS1, and pins both
+    backends. A bound gives both backends a range, and arguments given per
+    backend give both."""
     errors = []
     if row.pin and ('SS1' not in row.clauses or set(row.pin) != set(BACKENDS)):
         errors.append(f'{row.name}: a pin needs SS1 and a cost for each of {BACKENDS}')
+    for key, by_backend in (row.bounds or {}).items():
+        if set(by_backend) != set(BACKENDS) or any(low > high for low, high in by_backend.values()):
+            errors.append(f'{row.name}: the bound on {key!r} needs (low, high) for each of {BACKENDS}')
+    if isinstance(row.args, dict) and set(row.args) != set(BACKENDS):
+        errors.append(f'{row.name}: arguments per backend need each of {BACKENDS}')
     for mark in row.red:
         check, _, backend = mark.partition('/')
         if check == 'SS5':
             errors.append(f'{row.name}: {mark!r} names no per-owner key (SS5:<key>)')
         elif check == 'pin':
             errors.append(f'{row.name}: {mark!r} marks a pin, which only the owner raises')
+        elif check.startswith('bound:'):
+            errors.append(f'{row.name}: {mark!r} marks a bound, which is a gate')
         elif check not in row.checks():
             errors.append(f'{row.name}: {mark!r} names no check of the row')
         if backend not in ('', *BACKENDS):
@@ -410,12 +464,20 @@ def read_keys(row, n):
 def reading_failure(row, readings, n):
     """Why a run's readings cannot be held to the row's clauses, or None: a
     reading the driver did not print, or `none` in a key a clause reads where
-    it reads it (`read_keys`). Either fails the row whatever its marks
-    (`problem_verdict`), as a run that stopped would."""
+    it reads it (`read_keys`), or a bound's key the row's program did not
+    read. Each fails the row whatever its marks (`problem_verdict`), as a
+    run that stopped would."""
     missing = [at for at in (n, 4 * n) if at not in readings['after']]
     missing += [at for at in (2 * n, 3 * n, 4 * n) if at not in readings['pre']]
     if missing:
         return f'no reading at {missing}'
+    if row.bounds:
+        bound = readings.get('bound', {}).get(0)
+        if bound is None:
+            return 'no bound reading'
+        for key in sorted(row.bounds):
+            if bound.get(key) is None:
+                return f'no reading of `{key}` for its bound'
     keys = read_keys(row, n)
     for kind in ('after', 'pre'):
         points = sorted(at for k, at in keys if k == kind)
@@ -437,7 +499,7 @@ def problem_verdict(row, backend, problem, n):
     which no mark silences."""
     if row.pin and n == row.n[backend]:
         return 'FAIL', []
-    clauses = [c for c in row.checks() if c not in ('D', 'peak')]
+    clauses = [c for c in row.checks() if c not in ('D', 'peak') and not c.startswith('bound:')]
     reasons = sorted({row.red_reason(c, backend) for c in clauses} - {None})
     if reasons and 'resident size' in problem:
         return 'RED', reasons
@@ -484,7 +546,7 @@ def run_once(binary, row, backend, n, timeout, cap_mib, scratch):
                 cmd.append('-i')
             stdin = path.open()
     else:
-        args = [a.replace('{scratch}', scratch) for a in row.args]
+        args = [a.replace('{scratch}', scratch) for a in row.args_for(backend)]
         cmd += [str(STEADY / row.program), str(n)] + args
     # Neither the caller's interpreter settings nor its allocator's
     # (macOS's `Malloc...` variables, which move SS4's times and the

@@ -565,7 +565,7 @@ fn written_register(instruction: &Instruction) -> Option<u16> {
 /// #905): its pc 0, where a frame's entry polls, and the pc after each
 /// instruction [`suspends_after`] names. A frame is never found anywhere
 /// else, so only these pcs have a map, and a check build refuses a frame
-/// found at any other (`gc_roots::scan_windows`).
+/// found at any other (`gc_roots::scan_frames`).
 fn is_suspension_point(instructions: &[Instruction], pc: usize) -> bool {
     pc == 0 || suspends_after(&instructions[pc - 1])
 }

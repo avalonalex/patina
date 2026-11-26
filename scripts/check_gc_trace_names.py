@@ -16,7 +16,7 @@ tracing by code id (#836) — its provider's `trace_code_ids`, the frame's
 code, `FrameCode`, and the running code, `RunningCode`, whose traces report
 an id the derive cannot — the VM's walk of its frames, which reports the
 registers each frame's map keeps and clears the rest (#906: `trace_frames`
-and the `scan_windows` and `scan_window` it shares with a capture) — and
+and the `scan_frames` and `scan_window` it shares with a capture) — and
 each root provider's `trace_roots`, a call to its derived trace.
 
 For each function in TRACE_FUNCTIONS this fails on:
