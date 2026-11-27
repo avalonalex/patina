@@ -342,7 +342,7 @@ mod tests {
             SourceMap::new()
                 .format_context(&retained)
                 .unwrap()
-                .contains("live dead")
+                .contains("(live) (dead)")
         );
     }
 }
