@@ -564,10 +564,11 @@ pub(crate) mod imp {
         string_len_bytes: [u64; NLEN],
         by_variant: [u64; 28],
         variant_bytes: [u64; 28],
-        /// Each variant's payload has `Drop` glue (#931): set from the
-        /// first object of it allocated, by its payload's types
-        /// (`heap::census::payload_needs_drop`); a variant never allocated
-        /// reads `false`, and its count is 0.
+        /// Each variant's payload has `Drop` glue (#931), by its payload's
+        /// types (`heap::census::payload_needs_drop`): written at each
+        /// object allocated, with the same answer for every object of a
+        /// variant. A variant never allocated reads `false`, and its count
+        /// is 0.
         variant_drop: [bool; 28],
         closure_free_vars: [u64; NLEN],
         record_fields: [u64; NLEN],
@@ -673,13 +674,10 @@ pub(crate) mod imp {
     // -----------------------------------------------------------------
 
     /// One allocation into `index` of `arena`: `today` the bytes the byte
-    /// account charged, `headered` the bytes in §6's layout.
-    /// Whether `variant`'s payload has `Drop` glue, from an object of it
-    /// just allocated (#931).
-    pub(crate) fn variant_drops(variant: Variant, drops: bool) {
-        with_state(|s| s.variant_drop[variant.0] = drops);
-    }
-
+    /// account charged, `headered` the bytes in §6's layout, and for an
+    /// object whether its payload has `Drop` glue (#931; `false` for the
+    /// other arenas, which do not read it).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn alloc(
         arena: Arena,
         index: u32,
@@ -687,6 +685,7 @@ pub(crate) mod imp {
         len: usize,
         today: u64,
         headered: u64,
+        drops: bool,
     ) {
         with_state(|s| {
             let a = arena as usize;
@@ -715,6 +714,7 @@ pub(crate) mod imp {
                 }
                 Arena::Object => {
                     s.by_variant[variant.0] += 1;
+                    s.variant_drop[variant.0] = drops;
                     s.variant_bytes[variant.0] += headered;
                     match variant.0 {
                         V_CLOSURE => s.closure_free_vars[len_bucket(len)] += 1,

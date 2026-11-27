@@ -147,6 +147,7 @@ impl Heap {
                 0,
                 PAIR_SLOT_BYTES as u64,
                 16,
+                false,
             );
         } else if value.is_vector() {
             let elements = &self.vectors[index as usize];
@@ -159,6 +160,7 @@ impl Heap {
                 len,
                 today as u64,
                 vector_bytes(len),
+                false,
             );
         } else if value.is_string() {
             let chars = &self.strings[index as usize];
@@ -171,6 +173,7 @@ impl Heap {
                 len,
                 today as u64,
                 string_bytes(len),
+                false,
             );
         }
     }
@@ -186,10 +189,7 @@ impl Heap {
     ) {
         if let Some((variant, len, headered)) = info {
             let today = (OBJECT_SLOT_BYTES + payload) as u64;
-            imp::variant_drops(
-                variant,
-                payload_needs_drop(&self.objects[value.heap_index() as usize]),
-            );
+            let drops = payload_needs_drop(&self.objects[value.heap_index() as usize]);
             imp::alloc(
                 Arena::Object,
                 value.heap_index(),
@@ -197,6 +197,7 @@ impl Heap {
                 len,
                 today,
                 headered,
+                drops,
             );
         }
     }
