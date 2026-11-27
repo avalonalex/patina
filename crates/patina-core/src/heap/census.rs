@@ -5,7 +5,7 @@
 
 use super::account::{OBJECT_SLOT_BYTES, PAIR_SLOT_BYTES, STRING_SLOT_BYTES, VECTOR_SLOT_BYTES};
 use super::gc::MarkBits;
-use super::{Heap, HeapObjectData};
+use super::{Heap, HeapObjectData, IdentifierData};
 use crate::census::imp::{self, Arena, Scan, Variant, round8, string_bytes, vector_bytes};
 use crate::tagged_value::TaggedValue;
 use num_bigint::BigInt;
@@ -50,12 +50,13 @@ pub(crate) fn payload_needs_drop(data: &HeapObjectData) -> bool {
             record_type,
             fields,
         } => nd(record_type) || nd(fields),
-        H::Identifier {
+        H::Identifier(IdentifierData {
             name,
             scopes,
+            source,
             written,
             relinked,
-        } => nd(name) || nd(scopes) || nd(written) || nd(relinked),
+        }) => nd(name) || nd(scopes) || nd(source) || nd(written) || nd(relinked),
         H::Continuation { k, bytes } => nd(k) || nd(bytes),
         H::Parameter { value, converter } => nd(value) || nd(converter),
         H::Promise(p) => nd(p),
@@ -249,7 +250,9 @@ impl Heap {
     /// `syntax_sources`'s keys by kind, the distinct locations they share,
     /// and how many the prune that follows keeps: what GC stage 4c's
     /// per-document tables replace (#787, #791). Run before the sweep's
-    /// prune, so every key is a value of an occupied slot.
+    /// prune, so every key is a value of an occupied slot. An identifier's
+    /// location has been an id in the document tables since #791, so the
+    /// identifier counts read 0.
     fn census_sources(&self, scan: &mut Scan, marks: &MarkBits) {
         let mut entries = HashSet::new();
         let mut identifier_entries = HashSet::new();
@@ -319,6 +322,20 @@ mod tests {
                 false,
             ),
             ("Symbol", HeapObjectData::Symbol(Rc::from("s")), true),
+            // Plain since its location became an id in the document
+            // tables (#791), and its scope set one in the scope-set table
+            // (#788).
+            (
+                "Identifier",
+                HeapObjectData::Identifier(IdentifierData {
+                    name: TaggedValue::NULL,
+                    scopes: crate::heap::scope_sets::ScopeSetId::EMPTY,
+                    source: crate::heap::documents::SourceId::NONE,
+                    written: true,
+                    relinked: false,
+                }),
+                false,
+            ),
             ("Bytevector", HeapObjectData::Bytevector(vec![1]), true),
             (
                 "Values",
