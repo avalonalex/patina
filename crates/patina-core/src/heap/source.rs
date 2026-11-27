@@ -18,9 +18,95 @@
 //! immediate datums included, but nothing outside tests read those spans
 //! (#643).
 
+use super::documents::SourceId;
 use super::scope_sets::{ScopeSetId, ScopeSetMemo};
-use super::{Heap, IdentifierData};
-use crate::{ScopeId, ScopeSet, SourceLocation, TaggedValue};
+use super::{Heap, HeapObjectData, IdentifierData};
+use crate::source_document::ExpansionChain;
+use crate::{ScopeId, ScopeSet, SourceLocation, SourceMap, TaggedValue};
+use rustc_hash::FxHashMap;
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::Arc;
+
+/// Where a macro use is, and in which top-level form: what the expander's
+/// output flip stamps on each identifier it copies (#794). The desugarer
+/// makes one for a use whose call site has a location; an expansion made
+/// without one, as the body pre-pass makes, stamps nothing.
+pub struct ExpansionStamp<'a> {
+    /// The use's location, which an identifier with none of its own takes.
+    pub call_site: &'a SourceLocation,
+    /// The top-level form being expanded, the number a new link records
+    /// ([`ExpansionChain::form`]).
+    pub form: u64,
+    /// The program's source map, where a location with no document records
+    /// the expansion by line and column. `None` in a library body, whose
+    /// desugarer has no map.
+    pub source_map: Option<&'a Rc<RefCell<SourceMap>>>,
+}
+
+/// One walk's stamping: the stamp, and what it has made so far. The links
+/// it has made, one for each distinct prefix, are shared by every
+/// identifier extending that prefix, so a wide expansion makes one link,
+/// not one for each identifier.
+pub(crate) struct Stamping<'a> {
+    call_site: &'a SourceLocation,
+    /// The call site's own chain, the prefix of an identifier whose chain
+    /// the expansion may not extend.
+    call_site_chain: Option<ExpansionChain>,
+    form: u64,
+    macro_name: &'a str,
+    /// Made with the first link: many expansions reach no syntax with a
+    /// document and make no link (made eagerly, the old stamp's name cost
+    /// loading `(scheme base)` 2% more instructions).
+    name: Option<Arc<str>>,
+    /// Each link made, by its prefix's identity (0 for none).
+    links: FxHashMap<usize, ExpansionChain>,
+    /// The entry of the use's location with this expansion's chain, once an
+    /// identifier with no location has taken it.
+    pub(crate) at_use: Option<SourceId>,
+    /// The locations with no document met, each one an expansion to record
+    /// in the program's source map after the walk.
+    pub(crate) undocumented: Vec<SourceLocation>,
+}
+
+impl<'a> Stamping<'a> {
+    pub(crate) fn new(stamp: &ExpansionStamp<'a>, macro_name: &'a str) -> Self {
+        Stamping {
+            call_site: stamp.call_site,
+            call_site_chain: stamp
+                .call_site
+                .span
+                .as_ref()
+                .and_then(|span| span.expansion_chain.clone()),
+            form: stamp.form,
+            macro_name,
+            name: None,
+            links: FxHashMap::default(),
+            at_use: None,
+            undocumented: Vec::new(),
+        }
+    }
+
+    /// The chain of syntax whose chain is `own` after this expansion: `own`
+    /// extended, if the expansion may extend it, or else the call site's
+    /// chain if it may, or else a new chain of this expansion alone.
+    pub(crate) fn chain_from(&mut self, own: Option<&ExpansionChain>) -> ExpansionChain {
+        let prefix = ExpansionChain::extendable(own, self.form)
+            .or_else(|| ExpansionChain::extendable(self.call_site_chain.as_ref(), self.form))
+            .cloned();
+        let key = prefix.as_ref().map_or(0, ExpansionChain::id);
+        if let Some(link) = self.links.get(&key) {
+            return link.clone();
+        }
+        let name = self
+            .name
+            .get_or_insert_with(|| Arc::from(self.macro_name))
+            .clone();
+        let link = ExpansionChain::extend(prefix.as_ref(), name, self.form);
+        self.links.insert(key, link.clone());
+        link
+    }
+}
 
 impl Heap {
     /// Where `value` was read or expanded, built from the document tables
@@ -114,7 +200,9 @@ impl Heap {
     ) -> TaggedValue {
         self.walk_syntax_identifiers(root, replacements, |heap, value| {
             let (name, scopes) = heap.get_identifier_data_any(value)?;
-            transform(heap, value, name, scopes)
+            let copy = transform(heap, value, name, scopes)?;
+            heap.locate_copy(value, copy);
+            Some(copy)
         })
     }
 
@@ -124,11 +212,17 @@ impl Heap {
     /// walk meets, by its id. `picks` reads each set where the table holds
     /// it, with no copy. The memo lives for this call, beneath the context
     /// that called it, where nothing collects.
+    ///
+    /// With a stamp, the expander's output flip (#794), every identifier is
+    /// copied, a written one with its set and flag as they are, and each
+    /// copy is allocated with the source id the stamp gives it
+    /// ([`Heap::stamp_source`]), so that nothing writes its id afterwards.
     pub(crate) fn rescope_identifiers(
         &mut self,
         root: TaggedValue,
         picks: impl Fn(&str, &ScopeSet) -> bool,
         rescope: impl Fn(&ScopeSet) -> ScopeSet,
+        mut stamp: Option<&mut Stamping<'_>>,
     ) -> TaggedValue {
         let mut made = ScopeSetMemo::default();
         self.walk_syntax_identifiers(
@@ -145,13 +239,74 @@ impl Heap {
                 else {
                     unreachable!("the walk hands over identifiers only");
                 };
-                if written || !picks(heap.symbol_spelling(name), heap.scope_sets.get(from)) {
-                    return None;
-                }
-                let to = heap.scope_sets.edited(&mut made, from, &rescope);
-                Some(heap.alloc_identifier_copy(name, to, relinked, source))
+                let picked =
+                    !written && picks(heap.symbol_spelling(name), heap.scope_sets.get(from));
+                let Some(stamp) = stamp.as_deref_mut() else {
+                    if !picked {
+                        return None;
+                    }
+                    let to = heap.scope_sets.edited(&mut made, from, &rescope);
+                    return Some(heap.alloc_identifier_copy(name, to, relinked, source));
+                };
+                let scopes = if picked {
+                    heap.scope_sets.edited(&mut made, from, &rescope)
+                } else {
+                    from
+                };
+                let source = heap.stamp_source(source, stamp);
+                Some(
+                    heap.alloc_object(HeapObjectData::Identifier(IdentifierData {
+                        name,
+                        scopes,
+                        source,
+                        written,
+                        relinked,
+                    })),
+                )
             },
         )
+    }
+
+    /// The source id an expansion's stamp gives an identifier whose id is
+    /// `id` (#794): its own location, or the use's where it has none, with
+    /// the chain extended by this expansion under #612's rule
+    /// ([`ExpansionChain::extendable`]), one new link for each distinct
+    /// prefix. A location with no document holds no chain; it, and a form
+    /// span with no document, go on the stamp's list for the program's
+    /// source map, which records the expansion by line and column.
+    pub(crate) fn stamp_source(&mut self, id: SourceId, stamp: &mut Stamping<'_>) -> SourceId {
+        if let Some(form) = self.documents.form_location(id)
+            && form.span.is_none()
+        {
+            stamp.undocumented.push(form);
+        }
+        match self.documents.stamp_reading(id) {
+            None => {
+                if stamp.call_site.span.is_none() {
+                    stamp.undocumented.push(stamp.call_site.clone());
+                }
+                if let Some(id) = stamp.at_use {
+                    return id;
+                }
+                let mut location = stamp.call_site.clone();
+                if let Some(span) = &mut location.span {
+                    span.expansion_chain = Some(stamp.chain_from(span.expansion_chain.as_ref()));
+                }
+                let at_use = self.documents.intern(&location);
+                stamp.at_use = Some(at_use);
+                at_use
+            }
+            Some((_, false)) => {
+                if let Some(location) = self.documents.location(id) {
+                    stamp.undocumented.push(location);
+                }
+                id
+            }
+            Some((chain, true)) => {
+                let chain = stamp.chain_from(chain.as_ref());
+                self.documents.rechained(id, chain)
+            }
+        }
     }
 
     /// A copy of the identifier `value` with `scope` added to its set, the
@@ -222,7 +377,6 @@ impl Heap {
             }
             if self.is_identifier(value) {
                 if let Some(copy) = copy_of(self, value) {
-                    self.locate_copy(value, copy);
                     replacements.insert(value.raw_bits(), copy);
                     changed.push(value);
                 }

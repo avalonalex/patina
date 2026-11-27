@@ -47,6 +47,8 @@ mod scope_sets;
 #[doc(hidden)]
 pub mod sentinels;
 mod source;
+pub use source::ExpansionStamp;
+pub(crate) use source::Stamping;
 pub mod table;
 pub mod telemetry;
 pub mod trace;

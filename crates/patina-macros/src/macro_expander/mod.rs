@@ -330,7 +330,7 @@ pub fn expand_macro_with_scope<'gc>(
         scopes: &compiled_macro.definition_scopes,
         relinked: None,
     });
-    expand_macro_at_sites(mac, args, cx, definition, use_site, 0)
+    expand_macro_at_sites(mac, args, cx, definition, use_site, 0, None)
 }
 
 /// The compiled body of the macro object `mac`.
@@ -347,6 +347,12 @@ fn macro_body<'gc>(mac: Value<'gc>, cx: &Cx<'gc>) -> std::rc::Rc<CompiledMacro> 
 /// limits how deep a value it substitutes may nest ([`Expander::at_depth`],
 /// #617).
 ///
+/// With a `stamp`, the output flip also stamps each identifier of the
+/// expansion with where the use is and the macro's name in its chain
+/// ([`Cx::rescope_identifiers_stamped`], #794), in the same walk. The
+/// desugarer passes one for a use whose call site has a location; its body
+/// pre-pass, which only reads the names an expansion defines, passes none.
+///
 /// # Panics
 ///
 /// If `mac` is no macro object.
@@ -357,6 +363,7 @@ pub fn expand_macro_at_sites<'gc>(
     definition: Option<Site<'_>>,
     use_site: Option<Site<'_>>,
     depth: usize,
+    stamp: Option<&patina_core::ExpansionStamp<'_>>,
 ) -> Result<MacroExpansion<'gc>, crate::error::MacroError> {
     use crate::tracer::MacroTracer;
 
@@ -390,8 +397,18 @@ pub fn expand_macro_at_sites<'gc>(
     MacroTracer::exit_expansion();
     let expanded = expanded?;
 
-    // Step 4: Flip output scopes on expanded result
-    let result = flip_scope_on_tagged(expanded, macro_scope, cx);
+    // Step 4: Flip output scopes on expanded result, and stamp it with the
+    // use's location where the caller passed one (#794).
+    let result = match stamp {
+        Some(stamp) => cx.rescope_identifiers_stamped(
+            expanded,
+            |_, _| true,
+            |scopes| scopes.flip_scope(macro_scope),
+            stamp,
+            &compiled_macro.name,
+        ),
+        None => flip_scope_on_tagged(expanded, macro_scope, cx),
+    };
 
     Ok(MacroExpansion {
         form: result,

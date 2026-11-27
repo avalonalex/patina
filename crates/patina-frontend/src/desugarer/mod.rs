@@ -162,15 +162,9 @@ fn body_binds_definitions(exprs: &[CoreExpr]) -> bool {
 /// chains each makes (`Desugarer::form`). Zero is no form.
 static NEXT_FORM: AtomicU64 = AtomicU64::new(1);
 
-/// `chain`, if an expansion of `form` may extend it: the expansion of
-/// `form` made it, or a macro's template holds it.
-fn extendable(chain: Option<&ExpansionChain>, form: u64) -> Option<&ExpansionChain> {
-    chain.filter(|chain| chain.form() == form || chain.form() == ExpansionChain::TEMPLATE)
-}
-
 /// The use's location `loc` with an expansion of `macro_name` added to its
-/// chain, as [`stamp_expansion_source`] gives a node with no location of its
-/// own: for an expansion whose form has none (#792).
+/// chain, as the output flip's stamp gives an identifier with no location
+/// of its own (#794): for an expansion whose form has none (#792).
 fn expanded_at_use(
     mut loc: SourceLocation,
     source_map: Option<&Rc<RefCell<SourceMap>>>,
@@ -178,7 +172,7 @@ fn expanded_at_use(
     form: u64,
 ) -> SourceLocation {
     if let Some(span) = &mut loc.span {
-        let prefix = extendable(span.expansion_chain.as_ref(), form);
+        let prefix = ExpansionChain::extendable(span.expansion_chain.as_ref(), form);
         span.expansion_chain = Some(ExpansionChain::extend(
             prefix,
             std::sync::Arc::from(macro_name),
@@ -189,150 +183,6 @@ fn expanded_at_use(
             .record_expansion(&loc, macro_name.to_owned());
     }
     loc
-}
-
-/// Stamp an expansion with where it was made: each identifier of `tv` takes
-/// the invocation's location if it has none of its own, and its expansion
-/// chain extended by `macro_name`. A list is located by its head (#792), so
-/// the walk enters pairs and vectors and records nothing on them: a list the
-/// template built has the use for its head's form span already, and one
-/// substituted whole keeps its head's. Answers the expansion, which is `tv`
-/// unless `tv` is itself a name the reader wrote.
-///
-/// An identifier holds its location (#791), and one this expansion made,
-/// which is every identifier the flips and the relinker copied, is written
-/// in place. A name the reader wrote reaches here as the reader made it,
-/// perhaps in another context: the flips never pick one, and the
-/// substitution marks do not enter a quote, a vector or a nested macro
-/// definition. Its location is not written in place (`patina-core`'s
-/// `heap/documents.rs`: an entry made since the last collection is carried
-/// only by identifiers made since then). The pair or vector that holds it
-/// is given a copy instead, with the same name, scopes and flags, located
-/// with the extended chain. Inside a quote or a vector that is data, and
-/// nothing reads the chain; inside a nested macro definition the template
-/// compiler reads it, and the uses of the macro so defined report the
-/// expansion that defined it (`wrap → bad`).
-fn stamp_expansion_source<'gc>(
-    tv: Value<'gc>,
-    source: &SourceLocation,
-    source_map: Option<&Rc<RefCell<SourceMap>>>,
-    cx: &mut Cx<'gc>,
-    macro_name: &str,
-    form: u64,
-) -> Value<'gc> {
-    // Syntax without an origin uses the invocation. Written templates and
-    // substituted syntax keep their original occurrence, across files. Each
-    // expanded occurrence owns its chain: separate uses of one template must
-    // not accumulate history at the template's shared text position, and an
-    // expansion extends only a chain its own top-level form made, or one a
-    // macro's template holds for its uses. Syntax a later form expands
-    // again — a quoted datum `eval` sees each time — still carries the chains
-    // the earlier expansion left, and extending those grew them with every
-    // `eval` (#612).
-    let mut pending = vec![tv];
-    let mut seen = HashSet::new();
-    // A wide expansion gives many nodes the same history. Extend each
-    // distinct prefix once, and share the new link among them. A link holds
-    // its prefix, so no address in this map can be reused during the walk.
-    // The name is made with the first link: many expansions reach no syntax
-    // with a document of its own, and extend no chain (made eagerly, it cost
-    // loading `(scheme base)` 2% more instructions).
-    let mut name: Option<std::sync::Arc<str>> = None;
-    let mut histories = HashMap::new();
-    // The location `value` takes from this expansion: its own, or the
-    // invocation's, with its chain extended.
-    let mut stamped = |cx: &mut Cx<'gc>, value: Value<'gc>| {
-        let mut loc = cx.source(value).unwrap_or_else(|| source.clone());
-        if let Some(span) = &mut loc.span {
-            let prefix = extendable(span.expansion_chain.as_ref(), form)
-                .or_else(|| extendable(source.span.as_ref()?.expansion_chain.as_ref(), form));
-            let key = prefix.map_or(0, ExpansionChain::id);
-            let chain = histories.entry(key).or_insert_with(|| {
-                let name = name.get_or_insert_with(|| std::sync::Arc::from(macro_name));
-                ExpansionChain::extend(prefix, name.clone(), form)
-            });
-            span.expansion_chain = Some(chain.clone());
-        }
-        // A location with no document of its own records the expansion
-        // in the program's, by line and column. A library body's
-        // desugarer has no map, and such a location no document to
-        // record it in.
-        if loc.span.is_none()
-            && let Some(map) = source_map
-        {
-            map.borrow_mut()
-                .record_expansion(&loc, macro_name.to_owned());
-        }
-        // So does the list it heads, which is located by it (#792).
-        if let Some(map) = source_map
-            && let Some(form) = cx.form_span(value)
-            && form.span.is_none()
-        {
-            map.borrow_mut()
-                .record_expansion(&form, macro_name.to_owned());
-        }
-        loc
-    };
-    // Each name the reader wrote that the walk has met, with the stamped
-    // copy its holders are given (#791): one copy for an identifier two
-    // holders share.
-    let mut copies: HashMap<u64, Value<'gc>> = HashMap::new();
-    let mut copy_of = |cx: &mut Cx<'gc>,
-                       stamped: &mut dyn FnMut(&mut Cx<'gc>, Value<'gc>) -> SourceLocation,
-                       written: Value<'gc>| {
-        if let Some(&copy) = copies.get(&written.raw_bits()) {
-            return copy;
-        }
-        let loc = stamped(cx, written);
-        let copy = cx
-            .alloc_identifier_relocated(written, &loc)
-            .expect("a written identifier");
-        copies.insert(written.raw_bits(), copy);
-        copy
-    };
-    if cx.is_source_identifier(tv) {
-        return copy_of(cx, &mut stamped, tv);
-    }
-    while let Some(value) = pending.pop() {
-        if !seen.insert(value.raw_bits()) {
-            continue;
-        }
-        // Only identifiers are located (#792): a list is by its head, whose
-        // form span keeps its place and takes the head's extended chain.
-        if cx.is_identifier(value) {
-            let loc = stamped(cx, value);
-            cx.record_source(value, loc);
-            continue;
-        }
-        // The children are walked in the order they always were: a pair's
-        // car before its cdr, a vector's elements from the first.
-        if value.is_pair() {
-            let (car, cdr) = cx.get_pair(value);
-            if cx.is_source_identifier(cdr) {
-                let copy = copy_of(cx, &mut stamped, cdr);
-                cx.set_cdr(value, copy);
-            } else {
-                pending.push(cdr);
-            }
-            if cx.is_source_identifier(car) {
-                let copy = copy_of(cx, &mut stamped, car);
-                cx.set_car(value, copy);
-            } else {
-                pending.push(car);
-            }
-        } else if value.is_vector() {
-            for index in (0..cx.vector_len(value)).rev() {
-                let element = cx.vector_ref(value, index);
-                if cx.is_source_identifier(element) {
-                    let copy = copy_of(cx, &mut stamped, element);
-                    cx.vector_set(value, index, copy);
-                } else {
-                    pending.push(element);
-                }
-            }
-        }
-    }
-    tv
 }
 
 /// The spellings one expansion's relinking gave, keyed by the spelling the
@@ -1214,7 +1064,7 @@ impl<'a> Desugarer<'a> {
             }
             Some(SyntaxRef::Macro(mac, compiled_macro)) => {
                 self.put_back_carried(mac, &compiled_macro, cx);
-                let Ok(expansion) = self.expand_macro(mac, &compiled_macro, tv, cx) else {
+                let Ok(expansion) = self.expand_macro(mac, &compiled_macro, tv, cx, None) else {
                     return;
                 };
                 let expanded = self.link_definition_env_refs(
@@ -3015,11 +2865,20 @@ impl<'a> Desugarer<'a> {
 
             self.put_back_carried(mac, &compiled_macro, cx);
 
+            // The expansion is stamped with where the use is as the output
+            // flip copies it, in the same walk (#794).
+            let stamp = call_site_source
+                .as_ref()
+                .map(|call_site| patina_core::ExpansionStamp {
+                    call_site,
+                    form: self.form.get(),
+                    source_map: self.source_map.as_ref(),
+                });
             let patina_macros::MacroExpansion {
                 form: expanded_tagged,
                 scope: expansion_scope,
             } = self
-                .expand_macro(mac, &compiled_macro, list, cx)
+                .expand_macro(mac, &compiled_macro, list, cx, stamp.as_ref())
                 .map_err(|e| match e {
                     // Refused as every resolution the rule does not determine is,
                     // not reported as a failed expansion.
@@ -3055,19 +2914,6 @@ impl<'a> Desugarer<'a> {
                 &compiled_macro,
                 cx,
             );
-
-            // Phase 4: stamp expanded pairs + record macro expansion chain
-            let expanded_tagged = match &call_site_source {
-                Some(src) => stamp_expansion_source(
-                    expanded_tagged,
-                    src,
-                    self.source_map.as_ref(),
-                    cx,
-                    &compiled_macro.name,
-                    self.form.get(),
-                ),
-                None => expanded_tagged,
-            };
 
             // Continue desugaring the expansion
             let mut expr = self.desugar_form(expanded_tagged, cx)?;

@@ -1168,7 +1168,42 @@ impl<'gc> Cx<'gc> {
         let word = self
             .heap
             .borrow_mut()
-            .rescope_identifiers(root.tagged(), picks, rescope);
+            .rescope_identifiers(root.tagged(), picks, rescope, None);
+        self.brand(word)
+    }
+
+    /// [`Cx::rescope_identifiers`] that also stamps the expansion of the
+    /// macro `macro_name` with where its use is (#794): the expander's
+    /// output flip. Every identifier is copied, a written one with its set
+    /// and flag kept, and each copy is made with its location already
+    /// stamped: its own, or the use's where it has none, with the chain
+    /// extended under #612's rule. So the walk is the expansion's only one,
+    /// and a source id is final when its identifier is made. The
+    /// locations with no document it met record the expansion in the
+    /// stamp's source map afterwards, by line and column.
+    pub fn rescope_identifiers_stamped(
+        &mut self,
+        root: Value<'gc>,
+        picks: impl Fn(&str, &ScopeSet) -> bool,
+        rescope: impl Fn(&ScopeSet) -> ScopeSet,
+        stamp: &crate::ExpansionStamp<'_>,
+        macro_name: &str,
+    ) -> Value<'gc> {
+        let mut stamping = crate::heap::Stamping::new(stamp, macro_name);
+        let word = self.heap.borrow_mut().rescope_identifiers(
+            root.tagged(),
+            picks,
+            rescope,
+            Some(&mut stamping),
+        );
+        if let Some(map) = stamp.source_map
+            && !stamping.undocumented.is_empty()
+        {
+            let mut map = map.borrow_mut();
+            for location in &stamping.undocumented {
+                map.record_expansion(location, macro_name.to_owned());
+            }
+        }
         self.brand(word)
     }
 

@@ -154,13 +154,16 @@ impl Desugarer<'_> {
     /// names (#837): a literal of a generated macro and an input of this
     /// use may each be an identifier relinking renamed, whose meaning is
     /// the form's table's and no environment's. `put_back_carried` has
-    /// put the macro's own back before this is called.
+    /// put the macro's own back before this is called. With a `stamp`, the
+    /// expansion's identifiers are stamped with the use's location as the
+    /// output flip copies them (#794).
     pub(super) fn expand_macro<'gc>(
         &self,
         mac: Value<'gc>,
         compiled: &patina_core::CompiledMacro,
         form: Value<'gc>,
         cx: &mut FormCx<'_, 'gc>,
+        stamp: Option<&patina_core::ExpansionStamp<'_>>,
     ) -> std::result::Result<patina_macros::MacroExpansion<'gc>, patina_macros::MacroError> {
         let use_env = self.expansion_env(&self.env, cx);
         let definition_env = compiled
@@ -189,6 +192,7 @@ impl Desugarer<'_> {
                 relinked,
             }),
             depth,
+            stamp,
         )
     }
 }

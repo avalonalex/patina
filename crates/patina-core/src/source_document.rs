@@ -219,6 +219,15 @@ impl ExpansionChain {
         Arc::as_ptr(&self.0) as usize
     }
 
+    /// `chain`, if an expansion of the top-level form numbered `form` may
+    /// extend it: that form's expansion made it, or a macro's template
+    /// holds it (#612's rule). Otherwise an expansion starts its own chain,
+    /// so that syntax an earlier form's expansion stamped — a quoted datum
+    /// `eval` expands again and again — gains no history from it.
+    pub fn extendable(chain: Option<&ExpansionChain>, form: u64) -> Option<&ExpansionChain> {
+        chain.filter(|chain| chain.form() == form || chain.form() == Self::TEMPLATE)
+    }
+
     /// This chain as a macro's template holds it, for the syntax each use of
     /// the macro introduces from it: every use extends it, whichever form
     /// the use is in. The template's copy is never stamped, so nothing

@@ -447,6 +447,34 @@ impl DocumentTable {
         self.intern_entry(Entry { form, ..old })
     }
 
+    /// What an expansion's stamp reads of the entry at `id` (#794): its
+    /// chain, and whether its own span is in a document, where a chain can
+    /// be held. `None` for no entry.
+    pub(crate) fn stamp_reading(&self, id: SourceId) -> Option<(Option<ExpansionChain>, bool)> {
+        if id.is_none() {
+            return None;
+        }
+        let entry = self.get(id);
+        let documented = self.slots[entry.own.slot as usize].document.is_some();
+        Some((entry.chain.clone(), documented))
+    }
+
+    /// The id of the entry that is `id`'s with `chain` as its chain, both
+    /// spans kept: an expansion's stamp of an identifier whose own span is
+    /// in a document (#794). What [`Self::relocated`] makes of `id`'s own
+    /// location with `chain` on it, without building the location.
+    pub(crate) fn rechained(&mut self, id: SourceId, chain: ExpansionChain) -> SourceId {
+        let old = self.get(id);
+        if old.chain_id() == chain.id() {
+            return id;
+        }
+        let entry = Entry {
+            chain: Some(chain),
+            ..old.clone()
+        };
+        self.intern_entry(entry)
+    }
+
     /// The location at `id`: its own span and chain, as the
     /// `SourceLocation` it was interned from. `None` for no entry.
     pub(crate) fn location(&self, id: SourceId) -> Option<SourceLocation> {
