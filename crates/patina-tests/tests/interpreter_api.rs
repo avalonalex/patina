@@ -794,8 +794,21 @@ fn nothing_writes_syntax_sources() {
             "{backend}: identifiers are located"
         );
     }
-    check(&TreeWalkInterpreter::new_tree_walker(), "tree-walker");
-    check(&Interpreter::new(VmBackend::new()), "vm");
+    // Collecting where the adaptive trigger says, as a program run with no
+    // GC variable set does, whatever `PATINA_GC_STRESS` says: the test is of
+    // what the loads record, not of collection, and under the stress lane's
+    // 16 its 25-library load took this target from under a second to 814 s
+    // in a debug build, past CI's 15-minute step.
+    check(
+        &Interpreter::new(patina_interpreter::TreeWalker::with_gc_mode(
+            patina_core::GcMode::On,
+        )),
+        "tree-walker",
+    );
+    check(
+        &Interpreter::new(VmBackend::with_gc_mode(patina_core::GcMode::On)),
+        "vm",
+    );
 }
 
 /// The location of each pair of `value`, in a fixed order: none for a pair
