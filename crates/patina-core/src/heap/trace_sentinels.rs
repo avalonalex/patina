@@ -1255,8 +1255,8 @@ fn an_identifiers_location_lives_with_it() {
 }
 
 /// An entry no live identifier carries is freed at a collection, and a slot
-/// left with no entry is dropped (#791). The new entry that takes the freed
-/// id leaves every live identifier's location as it was.
+/// left with no entry is dropped (#791). A new entry leaves every live
+/// identifier's location as it was.
 #[test]
 fn a_dead_identifiers_location_is_freed_and_its_slot_dropped() {
     let mut heap = Heap::new();
@@ -1281,6 +1281,37 @@ fn a_dead_identifiers_location_is_freed_and_its_slot_dropped() {
     let _ = dead_id;
     assert_eq!((heap.source_entries(), heap.documents()), (2, 1));
     assert_eq!(heap.source(kept), Some(kept_at));
+}
+
+/// A collection that frees entries below a live identifier's compacts the
+/// table (#791): the live identifiers' ids move down to 1, 2 and 3, each
+/// still reads its own location, and the table holds their entries and no
+/// more. Fails with the renumbering pass in `Heap::sweep` deleted: the
+/// moved identifiers read past the table's end.
+#[test]
+fn a_compacting_collection_renumbers_the_live_identifiers() {
+    let mut heap = Heap::new();
+    let mut map = crate::SourceMap::new();
+    map.set_source_text("a b c d e f g h".into());
+    let at = |column| map.location("c.scm", 1, column, 1, column + 1);
+    let identifiers: Vec<_> = (0..8)
+        .map(|i| {
+            let identifier = heap.alloc_source_identifier(Rc::from(format!("x{i}")));
+            heap.record_source(identifier, at(1 + 2 * i));
+            identifier
+        })
+        .collect();
+    // One from the middle and the last two.
+    let kept = [identifiers[3], identifiers[6], identifiers[7]];
+    let ids =
+        |heap: &Heap| kept.map(|identifier| heap.identifier(identifier).unwrap().source.index());
+    assert_eq!(ids(&heap), [4, 7, 8]);
+    collect_from(&mut heap, &kept);
+    assert_eq!(ids(&heap), [1, 2, 3]);
+    assert_eq!((heap.source_entries(), heap.documents.entries()), (3, 4));
+    for (identifier, column) in kept.into_iter().zip([7, 13, 15]) {
+        assert_eq!(heap.source(identifier), Some(at(column)));
+    }
 }
 
 /// An identifier, its name (#790): built by a literal, with a fresh object

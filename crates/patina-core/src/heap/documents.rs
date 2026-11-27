@@ -34,9 +34,12 @@
 //! identifier sets its entry's bit in the collection's [`MarkBits`], a
 //! bitmap sized to the table when the collection starts. The sweep, beside
 //! the scope-set table's, frees every entry whose bit is clear
-//! ([`DocumentTable::sweep`]): it leaves the index, drops its chain, counts
-//! out of its slots, and its id is reused, the lowest first. A slot left
-//! with no entry is dropped then.
+//! ([`DocumentTable::sweep`]): it leaves the index, drops its chain and
+//! counts out of its slots. A slot left with no entry is dropped then. The
+//! entries kept are numbered again from 1, in their order, and the heap
+//! gives every live identifier its entry's new id in the same sweep, so the
+//! table holds what lives and no more: a few entries made late no longer
+//! keep it at its high-water mark.
 //!
 //! **Ids are set before a collection sees them.** A source id is given when
 //! its identifier is made, or by the reader or an expansion's stamp within
@@ -45,13 +48,15 @@
 //! made since then, which a minor collection that prunes young entries
 //! alone relies on from stage 7 (`PRD/GC_PRD.md` §9.9).
 //!
-//! In debug and `gc-check` builds a read of a free entry panics, as #621's
-//! checks do for a freed slot: an id read through an identifier the sweep
-//! freed, or an id kept past a collection.
+//! In debug and `gc-check` builds a read of an entry the sweep freed
+//! panics, as #621's checks do for a freed slot, where the table no longer
+//! reaches that far: an id read through an identifier the sweep freed, or an
+//! id kept past a collection. Within the table such an id reads another
+//! entry, which is why no id is kept outside an identifier.
 //!
 //! **Charge** (M3). The table's buffers are charged as external bytes
 //! (`heap/account.rs`): the entries, the index, the slots and their maps,
-//! and the free lists. It charges as it grows, through its own handle, and
+//! and the free slots. It charges as it grows, through its own handle, and
 //! gives back as the sweep frees entries and it shrinks, before the sweep
 //! reads the external bytes to set L. A table with no entry charges
 //! nothing. A chain's links and a document's text are not the table's: a
@@ -100,6 +105,25 @@ impl SourceId {
 
     fn at(index: usize) -> Self {
         SourceId(u32::try_from(index).expect("more than 2^32 source entries"))
+    }
+}
+
+/// How a sweep that compacted the table numbered the entries it kept
+/// ([`DocumentTable::sweep`]): each old id's new one, and 0 for an entry it
+/// freed.
+pub(crate) struct Renumbering(Box<[u32]>);
+
+impl Renumbering {
+    /// `id`'s new id. A live identifier's entry is never freed, since
+    /// marking it marked the entry; in a check build an id the sweep freed
+    /// panics.
+    #[inline]
+    pub(crate) fn apply(&self, id: SourceId) -> SourceId {
+        let new = SourceId(self.0[id.index()]);
+        if GC_CHECK && new.is_none() && !id.is_none() {
+            free_entry_read(id);
+        }
+        new
     }
 }
 
@@ -305,12 +329,10 @@ impl Index {
 /// One heap's document tables. See the [module docs](self).
 #[derive(Debug)]
 pub(crate) struct DocumentTable {
-    /// Each id's entry. Entry 0 is no entry, and free; so is a freed one.
+    /// Each id's entry. Entry 0 is no entry, and free; outside a sweep no
+    /// other is, since the sweep compacts the table.
     entries: Vec<Entry>,
     index: Index,
-    /// The free entries but 0, the lowest last, which a new entry takes
-    /// first.
-    free: Vec<u32>,
     /// Each slot. Slot 0 is no slot, and free; so is a dropped one.
     slots: Vec<Slot>,
     /// The slots of each document, by its address: one, but for a document
@@ -337,7 +359,6 @@ impl DocumentTable {
         Self {
             entries: vec![Entry::FREE],
             index: Index::default(),
-            free: Vec::new(),
             slots: vec![Slot::free()],
             by_document: FxHashMap::default(),
             by_name: FxHashMap::default(),
@@ -450,13 +471,22 @@ impl DocumentTable {
         self.held_slots
     }
 
-    /// The sweep's pass (#791): free every entry `marked` lacks, and drop
-    /// every slot that leaves with no entry. A freed entry drops its chain
-    /// and counts out of its slots; the free entries at the end go, the
-    /// free list is made again from the rest, and so is the index. Bit 0 is
-    /// never read: entry 0 is no entry. A free entry's bit is never set,
-    /// since no identifier holds a free id.
-    pub(crate) fn sweep(&mut self, marked: &BitSet) {
+    /// The sweep's pass (#791): free every entry `marked` lacks, drop every
+    /// slot that leaves with no entry, and number the entries kept again
+    /// from 1, in their order. A freed entry drops its chain and counts out
+    /// of its slots; the table is cut to the entries kept and its buffers to
+    /// fit, and the index is made again. Bit 0 is never read: entry 0 is no
+    /// entry.
+    ///
+    /// Answers the renumbering when an entry moved, which the heap applies
+    /// to every live identifier before anything reads an id again, and
+    /// `None` when none did. Without it a few live entries made late held
+    /// the table at its high-water mark: in #791's gate, 17 live entries at
+    /// ids up to 1,838 kept 1,839 entries and up to 440 KB charged, and the
+    /// charge followed how many identifiers had died since the last
+    /// collection, not what lived.
+    #[must_use = "a renumbering is applied to every live identifier"]
+    pub(crate) fn sweep(&mut self, marked: &BitSet) -> Option<Renumbering> {
         debug_assert_eq!(
             self.entries.len(),
             marked.len(),
@@ -464,7 +494,7 @@ impl DocumentTable {
         );
         let mut freed = false;
         for index in 1..self.entries.len() {
-            if marked.get(index) || self.entries[index].is_free() {
+            if marked.get(index) {
                 continue;
             }
             let entry = std::mem::replace(&mut self.entries[index], Entry::FREE);
@@ -475,42 +505,52 @@ impl DocumentTable {
             freed = true;
         }
         if !freed {
-            return;
+            return None;
         }
         for slot in 1..self.slots.len() {
             if self.slots[slot].held && self.slots[slot].entries == 0 {
                 self.drop_slot(slot as u32);
             }
         }
-        let kept = (1..self.entries.len())
-            .rposition(|index| !self.entries[index].is_free())
-            .map_or(1, |last| last + 2);
+        let mut renumbered = vec![0u32; self.entries.len()].into_boxed_slice();
+        let mut kept = 1;
+        let mut moved = false;
+        for index in 1..self.entries.len() {
+            if self.entries[index].is_free() {
+                continue;
+            }
+            if kept != index {
+                // Every entry between `kept` and `index` is free.
+                self.entries.swap(kept, index);
+                moved = true;
+            }
+            renumbered[index] = kept as u32;
+            kept += 1;
+        }
         self.entries.truncate(kept);
-        self.free.clear();
-        self.free.extend(
-            (1..kept)
-                .rev()
-                .filter(|&index| self.entries[index].is_free())
-                .map(|index| index as u32),
-        );
         self.shrink();
         self.index.resize(&self.entries, 0);
         self.settle_charge();
+        moved.then_some(Renumbering(renumbered))
     }
 
     /// The entry at `id`, which is not [`SourceId::NONE`]. In a check
-    /// build, a free entry's read panics.
+    /// build, the read of an id past the table, which a sweep freed and
+    /// compacted away, panics.
     #[inline]
     fn get(&self, id: SourceId) -> &Entry {
-        let entry = &self.entries[id.index()];
-        if GC_CHECK && entry.is_free() {
-            free_entry_read(id);
+        if GC_CHECK {
+            match self.entries.get(id.index()) {
+                Some(entry) if !entry.is_free() => entry,
+                _ => free_entry_read(id),
+            }
+        } else {
+            &self.entries[id.index()]
         }
-        entry
     }
 
-    /// `entry`'s id: the one the index has, or a new one, in a free entry
-    /// if there is one. A new entry counts into its slots.
+    /// `entry`'s id: the one the index has, or a new one at the end. A new
+    /// entry counts into its slots.
     fn intern_entry(&mut self, entry: Entry) -> SourceId {
         let hash = entry.hash();
         if let Some(id) = self.index.find(&self.entries, &entry, hash) {
@@ -520,17 +560,8 @@ impl DocumentTable {
         if entry.form.in_slot() {
             self.slots[entry.form.slot as usize].entries += 1;
         }
-        let id = match self.free.pop() {
-            Some(id) => {
-                self.entries[id as usize] = entry;
-                id
-            }
-            None => {
-                let id = SourceId::at(self.entries.len()).0;
-                self.entries.push(entry);
-                id
-            }
-        };
+        let id = SourceId::at(self.entries.len()).0;
+        self.entries.push(entry);
         self.index.insert(&self.entries, id);
         self.settle_charge();
         SourceId(id)
@@ -651,13 +682,13 @@ impl DocumentTable {
     }
 
     /// Give back the room the sweep left: all of it once no entry is held,
-    /// so that the table charges nothing again; otherwise each buffer that
-    /// holds four times what it uses.
+    /// so that the table charges nothing again; otherwise the entries' to
+    /// fit, so that what they charge after a collection follows what lives,
+    /// and each map that holds four times what it uses.
     fn shrink(&mut self) {
+        self.entries.shrink_to_fit();
         if self.entries.len() == 1 {
             debug_assert_eq!(self.held_slots, 0, "a slot with no entry");
-            self.entries.shrink_to_fit();
-            self.free = Vec::new();
             self.slots.truncate(1);
             self.slots.shrink_to_fit();
             self.by_document = FxHashMap::default();
@@ -667,12 +698,6 @@ impl DocumentTable {
             return;
         }
         let roomy = |capacity: usize, len: usize| capacity > (len * 4).max(64);
-        if roomy(self.entries.capacity(), self.entries.len()) {
-            self.entries.shrink_to(self.entries.len() * 2);
-        }
-        if roomy(self.free.capacity(), self.free.len()) {
-            self.free.shrink_to(self.free.len() * 2);
-        }
         if roomy(self.by_document.capacity(), self.by_document.len()) {
             self.by_document.shrink_to(self.by_document.len() * 2);
         }
@@ -686,7 +711,6 @@ impl DocumentTable {
     fn bytes(&self) -> usize {
         self.entries.capacity().saturating_sub(1) * size_of::<Entry>()
             + self.index.bytes()
-            + self.free.capacity() * size_of::<u32>()
             + self.slots.capacity().saturating_sub(1) * size_of::<Slot>()
             + hash_table_bytes::<usize, Vec<u32>>(self.by_document.capacity())
             // Each document's list of slots: one slot, in a buffer of four.
@@ -719,13 +743,14 @@ fn chain_of(location: &SourceLocation) -> Option<ExpansionChain> {
     location.span.as_ref()?.expansion_chain.clone()
 }
 
-/// The panic of a check build's read of a free entry, out of line so the
+/// The panic of a check build's read of a freed entry, out of line so the
 /// read stays a load and a branch.
 #[cold]
 #[inline(never)]
 fn free_entry_read(id: SourceId) -> ! {
     panic!(
-        "source entry {} is free: an identifier the sweep freed, or an id kept past a collection",
+        "source entry {} is free, or past the compacted table: an identifier the sweep freed, \
+         or an id kept past a collection",
         id.0
     )
 }
@@ -854,12 +879,15 @@ mod tests {
         assert_eq!(table.documents(), 2);
         // Freed, both slots go.
         let marked = marks(&table, &[]);
-        table.sweep(&marked);
+        assert!(
+            table.sweep(&marked).is_none(),
+            "nothing kept, nothing moved"
+        );
         assert_eq!((table.len(), table.documents()), (0, 0));
     }
 
     #[test]
-    fn the_sweep_frees_unmarked_entries_and_reuses_the_lowest_first() {
+    fn the_sweep_compacts_the_entries_it_keeps_and_renumbers_them() {
         let mut table = table();
         let map = map("a b c d");
         let at = |column| map.location("a.scm", 1, column, 1, column + 1);
@@ -867,22 +895,35 @@ mod tests {
             .map(|column| table.intern(&at(column)))
             .to_vec();
         let marked = marks(&table, &[ids[1], ids[2]]);
-        table.sweep(&marked);
+        let renumbering = table.sweep(&marked).expect("two entries moved");
         assert_eq!(table.len(), 2);
-        // The live entries read as before; the trailing free one is gone.
-        assert_eq!(table.location(ids[1]), Some(at(3)));
-        assert_eq!(table.location(ids[2]), Some(at(5)));
-        assert_eq!(table.entries(), 4);
-        // A new entry takes the lowest free id, and the live ones still
-        // read as before.
-        let fresh = table.intern(&at(9));
-        assert_eq!(fresh, ids[0]);
-        assert_eq!(table.location(fresh), Some(at(9)));
-        assert_eq!(table.location(ids[1]), Some(at(3)));
-        // The freed location is a new entry, not the old id's.
-        let again = table.intern(&at(7));
-        assert_eq!(again.index(), 4);
+        assert_eq!(table.entries(), 3, "id 0 and the two kept");
+        // The kept entries are 1 and 2, in their order, and read as before.
+        let kept = [renumbering.apply(ids[1]), renumbering.apply(ids[2])];
+        assert_eq!(kept.map(SourceId::index), [1, 2]);
+        assert_eq!(table.location(kept[0]), Some(at(3)));
+        assert_eq!(table.location(kept[1]), Some(at(5)));
+        assert_eq!(renumbering.apply(SourceId::NONE), SourceId::NONE);
+        // The index was made again: the kept locations are their entries,
+        // and a new one, or the freed one again, goes at the end.
+        assert_eq!(table.intern(&at(3)), kept[0]);
+        assert_eq!(table.intern(&at(9)).index(), 3);
+        assert_eq!(table.intern(&at(7)).index(), 4);
         assert_eq!(table.documents(), 1);
+    }
+
+    #[test]
+    fn a_sweep_that_moves_no_entry_answers_no_renumbering() {
+        let mut table = table();
+        let map = map("a b c");
+        let at = |column| map.location("a.scm", 1, column, 1, column + 1);
+        let ids: Vec<_> = [1, 3, 5].map(|column| table.intern(&at(column))).to_vec();
+        // Nothing freed.
+        assert!(table.sweep(&marks(&table, &ids)).is_none());
+        // Only the last freed: the others stay where they are.
+        assert!(table.sweep(&marks(&table, &ids[..2])).is_none());
+        assert_eq!(table.entries(), 3);
+        assert_eq!(table.location(ids[1]), Some(at(3)));
     }
 
     #[test]
@@ -899,7 +940,7 @@ mod tests {
         assert_eq!(table.documents(), 2);
         assert!(Arc::strong_count(&document) >= 2, "the slot holds it");
         let marked = marks(&table, &[live]);
-        table.sweep(&marked);
+        assert!(table.sweep(&marked).is_none(), "the live entry is first");
         assert_eq!(table.documents(), 1);
         assert_eq!(Arc::strong_count(&document), 1, "the slot let go of it");
         let _ = dead;
@@ -941,18 +982,32 @@ mod tests {
         not(any(debug_assertions, feature = "gc-check")),
         ignore = "needs a check build"
     )]
-    #[should_panic(expected = "is free: an identifier the sweep freed")]
+    #[should_panic(expected = "is free, or past the compacted table")]
     fn a_check_build_refuses_a_free_source_entry() {
         let mut table = table();
         let map = map("a b");
         let live = table.intern(&map.location("a.scm", 1, 1, 1, 2));
         let dead = table.intern(&map.location("a.scm", 1, 3, 1, 4));
-        // A third, so that the dead entry is not the trailing one, which
-        // the sweep drops outright.
-        let last = table.intern(&map.location("a.scm", 1, 1, 1, 4));
-        let marked = marks(&table, &[live, last]);
-        table.sweep(&marked);
+        let marked = marks(&table, &[live]);
+        assert!(table.sweep(&marked).is_none());
+        // Compacted away: past the table's end.
         table.location(dead);
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "is free, or past the compacted table")]
+    fn a_check_build_refuses_to_renumber_a_freed_entry() {
+        let mut table = table();
+        let map = map("a b");
+        let dead = table.intern(&map.location("a.scm", 1, 1, 1, 2));
+        let live = table.intern(&map.location("a.scm", 1, 3, 1, 4));
+        let marked = marks(&table, &[live]);
+        let renumbering = table.sweep(&marked).expect("the live entry moved");
+        renumbering.apply(dead);
     }
 
     /// The table charges its buffers as external bytes and gives all of
@@ -969,16 +1024,32 @@ mod tests {
         let charged = table.charged();
         assert!(charged >= 300 * size_of::<Entry>(), "{charged}");
         assert_eq!(heap.external_bytes(), charged);
+        // The ten kept are the first ten, so nothing moves, and the
+        // entries are cut to fit them.
         let marked = marks(&table, &ids[..10]);
-        table.sweep(&marked);
+        assert!(table.sweep(&marked).is_none());
         assert!(
             table.charged() < charged,
             "{} of {charged}",
             table.charged()
         );
+        assert_eq!(table.entries.capacity(), 11);
+        // Ten kept from the end move to the front, and the charge is the
+        // same as for the first ten: it follows what lives.
+        let after_ten = table.charged();
+        let more: Vec<_> = (300..600)
+            .map(|line| table.intern(&map.location("a.scm", line + 1, 1, line + 1, 2)))
+            .collect();
+        let mut kept = ids[..10].to_vec();
+        kept.extend_from_slice(&more[290..]);
+        let renumbering = table.sweep(&marks(&table, &kept)).expect("ten moved");
+        assert_eq!(renumbering.apply(more[299]).index(), 20);
+        let marked = marks(&table, &(1..=10).map(SourceId).collect::<Vec<_>>());
+        assert!(table.sweep(&marked).is_none());
+        assert_eq!(table.charged(), after_ten);
         assert_eq!(heap.external_bytes(), table.charged());
         let marked = marks(&table, &[]);
-        table.sweep(&marked);
+        assert!(table.sweep(&marked).is_none());
         assert_eq!((table.len(), table.documents()), (0, 0));
         assert_eq!(table.charged(), 0);
         assert_eq!(heap.external_bytes(), 0);

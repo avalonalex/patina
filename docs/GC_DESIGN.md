@@ -1413,6 +1413,17 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   `cells` keys below. The `environment`
   loop's figures measured 2026-10-03, release, macOS arm64.
 
+  **So do the syntax tables (#788, #791).** The scope-set table and the
+  document tables, plain `Heap` fields (§9.1), charge their buffers at
+  capacity through a handle of their own as they grow, and give back as the
+  sweep frees their entries, before it reads the total. The document tables
+  compact as they sweep, so what they charge after a collection follows the
+  identifiers that live: before they did, 17 live entries at ids up to
+  1,838 held 1,839 entries and up to 440 KB, and the external bytes of a
+  loop that read and evaluated the same forms drifted with how many
+  identifiers had died since the last collection. `(gc-stats)`'s
+  `scope-sets` and `documents` count their sets and their documents.
+
   **Open file ports charge too, and count toward descriptor pressure
   (#607).** A file port's descriptor and buffer were invisible to the
   trigger, so a loop that opened files and dropped the ports ran out of
@@ -2763,10 +2774,14 @@ it outlives no form and sees no collection (#704).
 
 Neither table is **a root**. Marking an identifier sets its entry's bit in the
 collection's mark bits; the sweep frees every entry whose bit is clear,
-drops a slot left with no entry, and reuses ids lowest first; check builds
-panic on a read of a free entry. The document tables charge their buffers as
-external bytes, and `(gc-stats)`'s `documents` reads their slots. Compaction
-of a streaming document frees no entry (decision 17): only the marks do, so
+drops a slot left with no entry, and numbers the entries kept again from 1,
+in their order; the heap gives each live identifier its entry's new id in the
+same sweep, in a pass over the object arena that only a sweep which moved an
+entry makes. No id is kept outside an identifier, and check builds panic on
+the read of an id past the compacted table. The document tables charge their
+buffers as external bytes (§6), and `(gc-stats)`'s `documents` reads their
+slots. Compaction of a streaming document is another matter, and frees no
+entry (decision 17): only the marks do, so
 an old location keeps its line and column and loses its excerpt. Before
 reclaiming slots, sweep retains only the `syntax_sources` entries whose
 values are marked, then shrinks excess table capacity. This visits annotated

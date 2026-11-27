@@ -2100,8 +2100,11 @@ impl Heap {
         // carries is freed, and its id reused.
         self.scope_sets.sweep(&marks.scope_sets);
         // Nor are the document tables (#791): every entry no marked
-        // identifier carries is freed, and a slot left with none dropped.
-        self.documents.sweep(&marks.sources);
+        // identifier carries is freed, a slot left with none dropped, and
+        // the entries kept numbered again, which the live identifiers learn
+        // below, once the object arena's sweep has made the dead ones
+        // tombstones.
+        let renumbering = self.documents.sweep(&marks.sources);
         // Moved out so the object arena's recording closure can hold it while
         // the arenas themselves are mutably borrowed.
         let mut freed_closures = self.gc_freed_closure_code_ids.take();
@@ -2175,6 +2178,17 @@ impl Heap {
             ),
         };
         self.gc_freed_closure_code_ids = freed_closures;
+        // The document table compacted (#791): each live identifier takes
+        // its entry's new id. A pass over the object arena, only in a sweep
+        // that freed an entry below a live one, which a collection that
+        // read, expanded or evaluated nothing since the last does not.
+        if let Some(renumbering) = renumbering {
+            for object in &mut self.objects {
+                if let HeapObjectData::Identifier(identifier) = object {
+                    identifier.source = renumbering.apply(identifier.source);
+                }
+            }
+        }
         // A check build's part: every dead plain port's entry is gone, and
         // every dead file port was queued; and every placeholder and weak
         // read-through record left in a store names live pairs, which the

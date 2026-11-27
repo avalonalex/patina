@@ -19,7 +19,9 @@
 //!   `src_identifiers`, `src_objects`), the keys the prune keeps
 //!   (`src_kept`), and the distinct entries, the `Rc<SourceLocation>`s
 //!   `inherit_source` shares, of all keys and of the identifier keys
-//!   (`src_entries`, `src_identifier_entries`);
+//!   (`src_entries`, `src_identifier_entries`). Since #791 an identifier
+//!   holds its location in the heap's document tables, so the identifier
+//!   columns read 0 until #793 deletes the table and its columns;
 //! - `PATINA_GC_CENSUS_HEAPS`: appends `exe total=… max_live=…
 //!   live_at_exit=…` at exit, the heaps this process made, whether or not
 //!   `PATINA_GC_CENSUS` is set.

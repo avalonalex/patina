@@ -271,6 +271,8 @@ fn source_keys(row: &HashMap<&str, u64>) -> u64 {
 /// kind, the keys the prune keeps, and the entries they share. The loop
 /// reads and expands nothing and collects every 25,000 iterations, so after
 /// the first collection the table holds only what the previous prune kept.
+/// Since #791 an identifier holds its location in the document tables, not
+/// here: its columns read 0.
 #[test]
 fn the_census_counts_the_source_table_s_keys() {
     if !GC_CENSUS {
@@ -291,17 +293,21 @@ fn the_census_counts_the_source_table_s_keys() {
         let rows = log_rows(&c);
         assert!(rows.len() >= 4, "{backend:?}: {} collections", rows.len());
         // The program and the libraries it loaded, read and expanded; and
-        // `inherit_source` gives a copy its original's entry.
+        // `inherit_source` gives a copy its original's entry. No identifier
+        // is a key (#791).
         let first = &rows[0];
+        assert!(first["src_pairs"] > 1000, "{backend:?}: {first:?}");
         assert!(
-            first["src_pairs"] > 1000 && first["src_identifiers"] > 1000,
+            first["src_entries"] < source_keys(first),
             "{backend:?}: {first:?}"
         );
-        assert!(
-            first["src_entries"] < source_keys(first)
-                && first["src_identifier_entries"] < first["src_identifiers"],
-            "{backend:?}: {first:?}"
-        );
+        for row in &rows {
+            assert_eq!(
+                (row["src_identifiers"], row["src_identifier_entries"]),
+                (0, 0),
+                "{backend:?}: {row:?}"
+            );
+        }
         for row in &rows {
             assert!(row["src_kept"] <= source_keys(row), "{backend:?}: {row:?}");
         }
