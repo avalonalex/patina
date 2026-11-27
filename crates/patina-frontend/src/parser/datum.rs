@@ -3,7 +3,7 @@
 
 use super::{Labels, ParseError, Parser};
 use crate::lexer::{Lexer, Token};
-use patina_core::{Cx, Value};
+use patina_core::{Cx, SourceLocation, Value};
 
 enum Tail<'gc> {
     Elements,
@@ -13,7 +13,9 @@ enum Tail<'gc> {
 
 // Specialize the same grammar for syntax and ordinary Scheme data. The latter
 // does no provenance work. Syntax records where each container, identifier
-// and string begins; it no longer records each element's span (#643).
+// and string begins; it no longer records each element's span (#643). An
+// identifier at the head of a list is also given the list's span, its form
+// span (#791), when the list closes.
 trait SourceMode {
     const TRACK: bool;
 }
@@ -35,6 +37,12 @@ enum Frame<'gc> {
         elements: Vec<Value<'gc>>,
         tail: Tail<'gc>,
         at: (u32, u32),
+        /// Where the list's head is, when the head is an identifier this
+        /// read made as the list's first element (#791): kept here and
+        /// recorded with the list's own span when the list closes, so that
+        /// a head takes one entry of the heap's document tables, not one
+        /// for its own span and a second with its form span.
+        head_at: Option<SourceLocation>,
     },
     Vector {
         elements: Vec<Value<'gc>>,
@@ -186,6 +194,7 @@ impl Parser {
                                 elements: Vec::new(),
                                 tail: Tail::Elements,
                                 at,
+                                head_at: None,
                             },
                             Token::VectorOpen => Frame::Vector {
                                 elements: Vec::new(),
@@ -214,7 +223,12 @@ impl Parser {
                         return Err(ParseError::UnexpectedToken(Token::RightParen));
                     }
                     let value = match frames.pop() {
-                        Some(Frame::List { elements, tail, at }) => {
+                        Some(Frame::List {
+                            elements,
+                            tail,
+                            at,
+                            head_at,
+                        }) => {
                             let tail = match tail {
                                 Tail::Elements => Value::NULL,
                                 Tail::Complete(tail) => tail,
@@ -224,6 +238,20 @@ impl Parser {
                             };
                             if M::TRACK {
                                 location = self.source_location(at.0, at.1);
+                                // The head's form span is the list's span
+                                // (#791). A head this read made as the
+                                // list's first element is located here,
+                                // with both spans at once. One located
+                                // before, which only a datum label makes
+                                // a head, takes the form span beside its
+                                // own, or loses it if it heads a second
+                                // list.
+                                if let (Some(form), Some(&head)) = (&location, elements.first()) {
+                                    match head_at {
+                                        Some(own) => cx.record_head_source(head, &own, form),
+                                        None => cx.record_form_span(head, form),
+                                    }
+                                }
                             }
                             cx.list_from_iter_with_tail(elements, tail)
                         }
@@ -324,7 +352,22 @@ impl Parser {
             {
                 // A label reference is another edge to existing syntax. Keep
                 // the identifier/container's original spelling location.
-                if !matches!(self.current_token, Token::DatumRef(_)) || cx.source(value).is_none() {
+                if !matches!(self.current_token, Token::DatumRef(_)) {
+                    // An identifier about to become its list's head is
+                    // located when the list closes, with the list's span
+                    // (`Frame::List::head_at`).
+                    match frames.last_mut() {
+                        Some(Frame::List {
+                            elements,
+                            tail: Tail::Elements,
+                            head_at,
+                            ..
+                        }) if elements.is_empty() && cx.is_source_identifier(value) => {
+                            *head_at = Some(loc.clone());
+                        }
+                        _ => cx.record_source(value, loc.clone()),
+                    }
+                } else if cx.source(value).is_none() {
                     cx.record_source(value, loc.clone());
                 }
             }

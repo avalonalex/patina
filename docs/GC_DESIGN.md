@@ -196,8 +196,9 @@ Raw indices escape `TaggedValue` into places a relocator cannot see or would
 have to be taught about:
 
 1. `Heap::symbol_table` maps names to bare `HeapIndex` (`heap/mod.rs:255`).
-2. Syntax provenance in `Heap` and diagnostic snapshots in `SourceMap` key
-   locations by `tv.raw_bits()` (`heap/source.rs`, `source_map.rs`).
+2. Syntax provenance in `Heap` keys the locations of lists, vectors and
+   strings by `tv.raw_bits()` (`heap/source.rs`), until #792 and #793. An
+   identifier holds its location's id since #791 (`heap/documents.rs`).
 3. `eq?`/`eqv?`/hashing compare raw bits (`heap/mod.rs:1474,1507,1593,1719`).
 4. `CodeObject.constants: Vec<TaggedValue>` in every compiled code object.
 5. Environment binding maps reachable only through `Rc` graphs.
@@ -366,7 +367,9 @@ Notes:
 ### 4.2 Mark state
 
 Side bit-vectors, one per arena (`MarkBits`), sized to arena length at
-collection start. Owned by the `GcVisitor` and created fresh per collection —
+collection start, and one each for the scope-set table (#788) and the
+document tables (#791), sized to the table, whose bits an identifier sets
+for the set and the location entry it carries. Owned by the `GcVisitor` and created fresh per collection —
 no persistent mark state on `Heap`, so there is no clearing step and no idle
 memory between collections. No `TaggedValue` or `HeapObjectData` change.
 The visitor also roots the intern table at construction (a dangling
@@ -389,7 +392,8 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs`):
 
 | Variant | Children |
 |---------|----------|
-| `BigInt`, `Rational`, `Real`, `Symbol`, `Bytevector`, `Port` (its `PortTable` entry's number, #785), `RecordType`, `Identifier`, `Library`*, `PromptTag`, `LabelPlaceholder` | leaf |
+| `BigInt`, `Rational`, `Real`, `Symbol`, `Bytevector`, `Port` (its `PortTable` entry's number, #785), `RecordType`, `Library`*, `PromptTag`, `LabelPlaceholder` | leaf |
+| `Identifier` | `name`, a symbol (#790); and no value besides: `scopes` sets its set's bit (#788) and `source` its location entry's bit (#791), which the sweep reads; `written` and `relinked` are flags |
 | `Complex` | `real`, `imag` |
 | `Exception` | each of `irritants` |
 | `Record` | each of `fields` (through the `Rc<Interior<Vec<_>>>`); `record_type`, an `Rc`'d descriptor rather than a value, is not traced |
@@ -469,6 +473,16 @@ the drain. A check build still collects the port objects the object arena's
 sweep frees, and asserts that the pass took out each plain one's entry and
 that the collection queued each file one's (`PortTable::check_swept`, with
 its positive control `a_check_build_refuses_a_dead_port_the_pass_left`).
+
+The syntax tables are swept beside the arenas, before any slot is reused:
+the scope-set table frees every set no marked identifier carries (#788), and
+the document tables every location entry, dropping a document slot left with
+no entry (#791). The document tables then compact: the entries kept are
+numbered again from 1, and after the object arena's sweep has made the dead
+identifiers tombstones, one pass over the object arena gives each live
+identifier its entry's new id. Only a sweep that moved an entry makes the
+pass, so a collection after which nothing was read, expanded or evaluated
+makes none (§9.1).
 
 The namespaces' weak entries leave the same way, in a second pass right after
 the ports' (#836): a parentless namespace's placeholders, and a host
@@ -1413,6 +1427,21 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   same borrow-free handle (#834): the `namespaces`, `binding-records` and
   `cells` keys below. The `environment`
   loop's figures measured 2026-10-03, release, macOS arm64.
+
+  **So do the syntax tables (#788, #791).** The scope-set table and the
+  document tables, plain `Heap` fields (§9.1), charge their buffers at
+  capacity through a handle of their own as they grow, and give back as the
+  sweep frees their entries, before it reads the total. The document tables
+  compact as they sweep, and what they charge after a collection is a
+  function of the identifiers that live: their entries, with room for twice
+  as many rounded up to a power of two, and at least 64. Before they
+  compacted, 17 live entries at ids up to 1,838 held 1,839 entries and up
+  to 440 KB. They keep that room rather than cut to fit, since the next
+  forms' entries would grow the buffer again after every collection, and
+  each growth counts as bytes allocated that no collection reclaims. `(gc-stats)`'s `scope-sets` and `documents` count their sets
+  and their documents, and `document-bytes` is the document tables' part of
+  `external-bytes`, which a reading that holds the namespaces' charge to
+  the byte takes out.
 
   **Open file ports charge too, and count toward descriptor pressure
   (#607).** A file port's descriptor and buffer were invisible to the
@@ -2733,18 +2762,48 @@ identifier. Its `written` flag preserves ordinary symbol semantics in macro
 scope edits, template compilation and ellipsis recognition; an expansion's
 identifiers remain distinct from these annotated source names. Ordinary datum
 parsers and Scheme `read` still intern symbols and allocate no source metadata.
-The heap's `syntax_sources` table records the span of each list, vector,
-string and identifier a program parser reads, and the location and expansion
-chain of each node an expansion stamps. Desugaring uses this table, never an
-interned symbol as an occurrence key. Scope edits preserve
+An identifier holds its location (#791, GC stage 4c.5): the id of an
+entry in the heap's document tables (`heap/documents.rs`), a plain `Heap`
+field read under the heap's borrow beside the scope-set table (decision 18
+on #782). An entry holds the identifier's own span, its expansion chain, and
+for an identifier at the head of a list the list's span, its form span
+(decision 16: both spans are kept), each span in a slot that holds its
+document and source name. Entries are interned by their spans and their
+chain's newest link (decision 14: chains are not interned), so the
+identifiers one expansion gives one location share an entry. A copy takes
+its original's id with no write. The reader gives a head its form span when
+the list closes, in the same entry as its own span; an identifier that heads
+two lists through a datum label has none. An expansion's stamp writes the
+identifiers the expansion made in place, and gives a name the reader wrote,
+which may come from another context, a located copy instead, so that an
+entry made since the last collection is carried only by identifiers made
+since then, as a minor collection that prunes young entries alone requires
+from stage 7; inside a nested macro definition that copy keeps the outer
+chain (`wrap → bad`). A template's literal is held as a re-sourced copy
+whose chain is the template's. The heap's `syntax_sources` table records the
+span of each list, vector and string a program parser reads, and the
+location and expansion chain of each such node an expansion stamps, until
+#792 locates a list by its head and #793 deletes the table. Desugaring uses
+these, never an interned symbol as an occurrence key. Scope edits preserve
 provenance; stripping syntax identifiers into quoted data preserves graph
 sharing and cycles, using the same iterative graph copier. A memo shared by all
 quotes in one form preserves sharing across separate insertions of a macro
 argument; it lives in the form's context (`FormCx`) and is dropped with it, so
 it outlives no form and sees no collection (#704).
 
-This table is **not a root**. Before reclaiming slots, sweep retains only entries
-whose values are marked, then shrinks excess table capacity. This visits annotated
+Neither table is **a root**. Marking an identifier sets its entry's bit in the
+collection's mark bits; the sweep frees every entry whose bit is clear,
+drops a slot left with no entry, and numbers the entries kept again from 1,
+in their order; the heap gives each live identifier its entry's new id in the
+same sweep, in a pass over the object arena that only a sweep which moved an
+entry makes. No id is kept outside an identifier, and check builds panic on
+the read of an id past the compacted table. The document tables charge their
+buffers as external bytes (§6), and `(gc-stats)`'s `documents` reads their
+slots. Compaction of a streaming document is another matter, and frees no
+entry (decision 17): only the marks do, so
+an old location keeps its line and column and loses its excerpt. Before
+reclaiming slots, sweep retains only the `syntax_sources` entries whose
+values are marked, then shrinks excess table capacity. This visits annotated
 syntax rather than doing a lookup for every freed datum, and removes entries
 before slots can be reused. There is no drain shared between nested loaders,
 and a later parse cannot see stale provenance. Spans retain an `Arc` to a source

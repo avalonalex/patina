@@ -2072,4 +2072,38 @@ mod occurrence_span_tests {
             assert!(cx.source(datum).is_none());
         });
     }
+
+    /// A head identifier carries its list's span, its form span (#791):
+    /// equal to the list's own location, nested lists each to their own
+    /// head, and no form span for an identifier that heads no list. The head
+    /// of two lists, through a datum label, has none ("lost, never
+    /// misattributed").
+    #[test]
+    fn a_head_identifier_carries_its_lists_span() {
+        with_cx(|cx| {
+            let mut parser =
+                Parser::new_program("(f (g 1) x)\n(begin (#0=h 1) (#0# 2))", "test.scm", false)
+                    .unwrap();
+            let form = parser.parse(cx).unwrap();
+            let f = cx.car(form);
+            let inner = cx.car(cx.cdr(form));
+            let g = cx.car(inner);
+            let x = cx.car(cx.cdr(cx.cdr(form)));
+            assert_eq!(cx.form_span(f), cx.source(form));
+            assert!(cx.form_span(f).is_some());
+            assert_eq!(cx.form_span(g), cx.source(inner));
+            assert_eq!(cx.form_span(g).unwrap().column, 4);
+            assert_eq!(cx.form_span(x), None, "an identifier that heads no list");
+            // Its own location is untouched by the form span.
+            assert_eq!(cx.source(f).unwrap().column, 2);
+            assert_eq!(cx.source(f).unwrap().length, Some(1));
+            let labelled = parser.parse(cx).unwrap();
+            let first = cx.car(cx.cdr(labelled));
+            let second = cx.car(cx.cdr(cx.cdr(labelled)));
+            let h = cx.car(first);
+            assert_eq!(cx.car(second), h, "one identifier heads both lists");
+            assert_eq!(cx.form_span(h), None, "the head of two lists has none");
+            assert_eq!(cx.source(h).unwrap().column, 12);
+        });
+    }
 }

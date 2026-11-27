@@ -842,10 +842,65 @@ impl<'gc> Cx<'gc> {
         crate::BindingCell::free(&mut self.heap.borrow_mut(), TaggedValue::UNSPECIFIED)
     }
 
-    /// [`Heap::source`], cloned.
+    /// [`Heap::source`].
     #[inline]
     pub fn source(&self, v: Value<'gc>) -> Option<SourceLocation> {
-        self.heap.borrow().source(v.tagged()).cloned()
+        self.heap.borrow().source(v.tagged())
+    }
+
+    /// [`Heap::alloc_identifier_relocated`]: a copy of the identifier `v`
+    /// located at `location`, for an identifier another context made.
+    /// Raw: the expansion stamp's and the template compiler's plumbing
+    /// (#791).
+    pub fn alloc_identifier_relocated(
+        &mut self,
+        v: Value<'gc>,
+        location: &SourceLocation,
+    ) -> Option<Value<'gc>> {
+        let copy = self
+            .heap
+            .borrow_mut()
+            .alloc_identifier_relocated(v.tagged(), location)?;
+        Some(self.brand(copy))
+    }
+
+    /// [`Heap::form_span`]: the span of the list the identifier `v` heads.
+    /// Raw: until #792 no diagnostic reads it.
+    #[inline]
+    pub fn form_span(&self, v: Value<'gc>) -> Option<SourceLocation> {
+        self.heap.borrow().form_span(v.tagged())
+    }
+
+    /// [`Heap::record_form_span`]: the reader's, when a list closes.
+    #[inline]
+    pub fn record_form_span(&mut self, v: Value<'gc>, form: &SourceLocation) {
+        self.heap.borrow_mut().record_form_span(v.tagged(), form)
+    }
+
+    /// [`Heap::record_head_source`]: the reader's, for a list's head it has
+    /// just made, when the list closes.
+    #[inline]
+    pub fn record_head_source(
+        &mut self,
+        v: Value<'gc>,
+        own: &SourceLocation,
+        form: &SourceLocation,
+    ) {
+        self.heap
+            .borrow_mut()
+            .record_head_source(v.tagged(), own, form)
+    }
+
+    /// [`Heap::documents`]: `(gc-stats)`'s `documents` (#791).
+    #[inline]
+    pub fn documents(&self) -> usize {
+        self.heap.borrow().documents()
+    }
+
+    /// [`Heap::document_bytes`]: `(gc-stats)`'s `document-bytes` (#791).
+    #[inline]
+    pub fn document_bytes(&self) -> usize {
+        self.heap.borrow().document_bytes()
     }
 
     /// [`Heap::get_object`], borrowed: for the datum writer, which matches on
@@ -1106,11 +1161,11 @@ impl<'gc> Cx<'gc> {
     }
 
     /// A copy of the identifier `v` whose set is its own with `addition`'s
-    /// scope added, located where `v` is ([`Cx::inherit_source`]), or `None`
-    /// if `v` is no identifier: the macro expander's mark of a substituted
-    /// identifier. The copy is no written name, whatever `v` was. Each
-    /// distinct set is added to, and the result interned, once in the
-    /// memo's life (#788). Raw: it names the raw [`ScopeAddition`].
+    /// scope added, located where `v` is (it takes `v`'s source id, #791),
+    /// or `None` if `v` is no identifier: the macro expander's mark of a
+    /// substituted identifier. The copy is no written name, whatever `v`
+    /// was. Each distinct set is added to, and the result interned, once in
+    /// the memo's life (#788). Raw: it names the raw [`ScopeAddition`].
     pub fn add_scope_copying(
         &mut self,
         addition: &mut ScopeAddition<'gc>,
@@ -1118,7 +1173,6 @@ impl<'gc> Cx<'gc> {
     ) -> Option<Value<'gc>> {
         let mut heap = self.heap.borrow_mut();
         let copy = heap.identifier_adding_scope(&mut addition.made, addition.scope, v.tagged())?;
-        heap.inherit_source(v.tagged(), copy);
         drop(heap);
         Some(self.brand(copy))
     }

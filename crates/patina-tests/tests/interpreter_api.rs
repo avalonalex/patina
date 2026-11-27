@@ -781,7 +781,7 @@ fn chain_lengths(heap: &patina_core::SharedHeap, value: TaggedValue) -> Vec<Opti
         }
         lengths.push(
             heap.source(value)
-                .and_then(|loc| loc.span.as_ref()?.expansion_chain.as_ref())
+                .and_then(|loc| loc.span?.expansion_chain)
                 .map(|chain| chain.len()),
         );
         pending.extend([heap.cdr(value), heap.car(value)]);

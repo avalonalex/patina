@@ -925,12 +925,13 @@ macro_rules! gc_shared_tests {
             // `steady-per-owner-keys`, the runner's `PER_OWNER_KEYS`), where
             // a key joins last in the PR that adds it to `(gc-stats)`:
             // `code-units` after `binding-records` (#836), `scope-sets` after
-            // `code-units` (#788). Every one answers a count on both
-            // backends, `code-units` 0 on the tree-walker.
+            // `code-units` (#788), `documents` after `scope-sets` (#791).
+            // Every one answers a count on both backends, `code-units` 0 on
+            // the tree-walker.
             assert_gc_eval_to(
                 r#"
                 (import (scheme base) (patina debug))
-                (define per-owner '(symbols ports namespaces cells binding-records code-units scope-sets))
+                (define per-owner '(symbols ports namespaces cells binding-records code-units scope-sets documents))
                 (define stats (gc-stats))
                 (define (owned entries)
                   (cond ((null? entries) '())
@@ -943,7 +944,7 @@ macro_rules! gc_shared_tests {
                         (and (exact-integer? n) (>= n 0) (counts? (cdr keys))))))
                 (list (owned stats) (counts? per-owner))
                 "#,
-                "((symbols ports namespaces cells binding-records code-units scope-sets) #t)",
+                "((symbols ports namespaces cells binding-records code-units scope-sets documents) #t)",
             );
         }
 

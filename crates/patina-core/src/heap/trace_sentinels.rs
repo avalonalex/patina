@@ -1197,7 +1197,7 @@ fn scope_set_of(ids: &[usize]) -> ScopeSet {
 /// The id of `identifier`'s set in its heap's table.
 fn scope_set_id(heap: &Heap, identifier: TaggedValue) -> super::scope_sets::ScopeSetId {
     match heap.get_object(identifier) {
-        HeapObjectData::Identifier { scopes, .. } => *scopes,
+        HeapObjectData::Identifier(identifier) => identifier.scopes,
         other => panic!("not an identifier: {other:?}"),
     }
 }
@@ -1226,6 +1226,92 @@ fn an_identifiers_scope_set_lives_with_it() {
     assert_eq!(heap.scope_sets.intern(set), id);
 }
 
+/// A located identifier (#791), reachable only through a pair, keeps its
+/// entry in the document tables across a collection: its id, its location,
+/// and a new entry interned after the collection takes another id, which it
+/// would not if the sweep had freed this one. Fails with the identifier's
+/// arm in `trace_object_children` recording no source id (#164's rule).
+#[test]
+fn an_identifiers_location_lives_with_it() {
+    let mut heap = Heap::new();
+    let mut map = crate::SourceMap::new();
+    map.set_source_text("(alpha beta)".into());
+    let at = map.location("live.scm", 1, 2, 1, 7);
+    let identifier = heap.alloc_source_identifier(Rc::from("alpha"));
+    heap.record_source(identifier, at.clone());
+    let id = heap.identifier(identifier).unwrap().source;
+    let root = heap.alloc_pair(identifier, TaggedValue::NULL);
+    collect_from(&mut heap, &[root]);
+    assert_eq!(heap.identifier(identifier).unwrap().source, id);
+    assert_eq!(heap.source(identifier), Some(at.clone()));
+    let newcomer = heap
+        .documents
+        .intern(&map.location("live.scm", 1, 8, 1, 12));
+    assert_ne!(newcomer, id, "the live identifier's entry was reused");
+    assert_eq!(heap.source(identifier), Some(at));
+    assert_eq!(heap.documents(), 1);
+}
+
+/// An entry no live identifier carries is freed at a collection, and a slot
+/// left with no entry is dropped (#791). A new entry leaves every live
+/// identifier's location as it was.
+#[test]
+fn a_dead_identifiers_location_is_freed_and_its_slot_dropped() {
+    let mut heap = Heap::new();
+    let mut kept_map = crate::SourceMap::new();
+    kept_map.set_source_text("kept".into());
+    let mut dead_map = crate::SourceMap::new();
+    dead_map.set_source_text("dead".into());
+    let kept_at = kept_map.location("kept.scm", 1, 1, 1, 5);
+    let kept = heap.alloc_source_identifier(Rc::from("kept"));
+    heap.record_source(kept, kept_at.clone());
+    let dead = heap.alloc_source_identifier(Rc::from("dead"));
+    heap.record_source(dead, dead_map.location("dead.scm", 1, 1, 1, 5));
+    let dead_id = heap.identifier(dead).unwrap().source;
+    assert_eq!((heap.source_entries(), heap.documents()), (2, 2));
+    collect_from(&mut heap, &[kept]);
+    super::sentinels::assert_freed(&heap, dead, "the unrooted identifier");
+    assert_eq!((heap.source_entries(), heap.documents()), (1, 1));
+    // A new location in the kept document: one more entry, no new slot, and
+    // the kept identifier reads as it did.
+    let newcomer = heap.alloc_source_identifier(Rc::from("new"));
+    heap.record_source(newcomer, kept_map.location("kept.scm", 1, 2, 1, 3));
+    let _ = dead_id;
+    assert_eq!((heap.source_entries(), heap.documents()), (2, 1));
+    assert_eq!(heap.source(kept), Some(kept_at));
+}
+
+/// A collection that frees entries below a live identifier's compacts the
+/// table (#791): the live identifiers' ids move down to 1, 2 and 3, each
+/// still reads its own location, and the table holds their entries and no
+/// more. Fails with the renumbering pass in `Heap::sweep` deleted: the
+/// moved identifiers read past the table's end.
+#[test]
+fn a_compacting_collection_renumbers_the_live_identifiers() {
+    let mut heap = Heap::new();
+    let mut map = crate::SourceMap::new();
+    map.set_source_text("a b c d e f g h".into());
+    let at = |column| map.location("c.scm", 1, column, 1, column + 1);
+    let identifiers: Vec<_> = (0..8)
+        .map(|i| {
+            let identifier = heap.alloc_source_identifier(Rc::from(format!("x{i}")));
+            heap.record_source(identifier, at(1 + 2 * i));
+            identifier
+        })
+        .collect();
+    // One from the middle and the last two.
+    let kept = [identifiers[3], identifiers[6], identifiers[7]];
+    let ids =
+        |heap: &Heap| kept.map(|identifier| heap.identifier(identifier).unwrap().source.index());
+    assert_eq!(ids(&heap), [4, 7, 8]);
+    collect_from(&mut heap, &kept);
+    assert_eq!(ids(&heap), [1, 2, 3]);
+    assert_eq!((heap.source_entries(), heap.documents.entries()), (3, 4));
+    for (identifier, column) in kept.into_iter().zip([7, 13, 15]) {
+        assert_eq!(heap.source(identifier), Some(at(column)));
+    }
+}
+
 /// An identifier, its name (#790): built by a literal, with a fresh object
 /// in `name` that the intern table does not hold, so that only the trace
 /// keeps it. An interned symbol would survive through the table whether or
@@ -1239,12 +1325,13 @@ fn identifier_fields() {
     let mut heap = Heap::new();
     let mut s = Sentinels::new(&mut heap);
     let name = s.object(&mut heap, "HeapObjectData::Identifier.name");
-    let identifier = heap.alloc_object(HeapObjectData::Identifier {
+    let identifier = heap.alloc_object(HeapObjectData::Identifier(super::IdentifierData {
         name,
         scopes: super::scope_sets::ScopeSetId::EMPTY,
+        source: super::documents::SourceId::NONE,
         written: false,
         relinked: true,
-    });
+    }));
     collect_from(&mut heap, &[identifier]);
     s.assert_survived(&heap);
 }

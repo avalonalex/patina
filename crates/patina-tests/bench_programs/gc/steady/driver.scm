@@ -34,7 +34,7 @@
 (define (steady-number k)
   (string->number (steady-arg k)))
 
-(define steady-per-owner-keys '(symbols ports namespaces cells binding-records code-units scope-sets))
+(define steady-per-owner-keys '(symbols ports namespaces cells binding-records code-units scope-sets documents))
 
 (define steady-before-keys '(cpu-us pause-total-us collections))
 

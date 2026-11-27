@@ -65,21 +65,27 @@ impl<'gc> Compiler<'gc> {
         compiled
     }
 
-    /// Mark the expansion chain on `form`'s location as this template's
-    /// (`ExpansionChain::for_template`), so that every use, in whichever
-    /// form, extends it.
-    fn hold_chain_for_template(&self, cx: &mut Cx<'gc>, form: Value<'gc>) {
-        let Some(mut loc) = cx.source(form) else {
-            return;
-        };
-        let Some(span) = &mut loc.span else {
-            return;
-        };
-        let Some(chain) = &span.expansion_chain else {
-            return;
-        };
-        span.expansion_chain = Some(chain.for_template());
-        cx.record_source(form, loc);
+    /// The identifier the macro object holds for `form`, an identifier a
+    /// template keeps as a literal: a copy whose expansion chain is marked
+    /// this template's (`ExpansionChain::for_template`), so that every use,
+    /// in whichever form, extends it; or `form` itself where it has no
+    /// chain to hold. A copy, since `form` may be an identifier another
+    /// context made and another holder shares, whose location is not
+    /// rewritten in place (#791).
+    fn held_for_template(&mut self, cx: &mut Cx<'gc>, form: Value<'gc>) -> Value<'gc> {
+        if let Some(&held) = self.held_literals.get(&form) {
+            return held;
+        }
+        let held = (|| {
+            let mut loc = cx.source(form)?;
+            let span = loc.span.as_mut()?;
+            let chain = span.expansion_chain.as_ref()?;
+            span.expansion_chain = Some(chain.for_template());
+            cx.alloc_identifier_relocated(form, &loc)
+        })()
+        .unwrap_or(form);
+        self.held_literals.insert(form, held);
+        held
     }
 
     /// [`Self::compile_template`] for one node, inside the ones `open` holds.
@@ -167,8 +173,8 @@ impl<'gc> Compiler<'gc> {
                 // Each use introduces a copy of it, which inherits its
                 // location and so its expansion chain: the chain is this
                 // template's from now on, for every use to extend (#612).
-                self.hold_chain_for_template(cx, form);
-                return Ok(self.make_literal_template(form));
+                let held = self.held_for_template(cx, form);
+                return Ok(self.make_literal_template(held));
             }
 
             // Not a pattern variable - apply hygiene handling

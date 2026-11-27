@@ -168,6 +168,24 @@ fn extendable(chain: Option<&ExpansionChain>, form: u64) -> Option<&ExpansionCha
     chain.filter(|chain| chain.form() == form || chain.form() == ExpansionChain::TEMPLATE)
 }
 
+/// Stamp an expansion with where it was made: each pair, vector and
+/// identifier of `tv` takes the invocation's location if it has none of its
+/// own, and its expansion chain extended by `macro_name`. Answers the
+/// expansion, which is `tv` unless `tv` is itself a name the reader wrote.
+///
+/// An identifier holds its location (#791), and one this expansion made,
+/// which is every identifier the flips and the relinker copied, is written
+/// in place. A name the reader wrote reaches here as the reader made it,
+/// perhaps in another context: the flips never pick one, and the
+/// substitution marks do not enter a quote, a vector or a nested macro
+/// definition. Its location is not written in place (`patina-core`'s
+/// `heap/documents.rs`: an entry made since the last collection is carried
+/// only by identifiers made since then). The pair or vector that holds it
+/// is given a copy instead, with the same name, scopes and flags, located
+/// with the extended chain. Inside a quote or a vector that is data, and
+/// nothing reads the chain; inside a nested macro definition the template
+/// compiler reads it, and the uses of the macro so defined report the
+/// expansion that defined it (`wrap → bad`).
 fn stamp_expansion_source<'gc>(
     tv: Value<'gc>,
     source: &SourceLocation,
@@ -175,7 +193,7 @@ fn stamp_expansion_source<'gc>(
     cx: &mut Cx<'gc>,
     macro_name: &str,
     form: u64,
-) {
+) -> Value<'gc> {
     // Syntax without an origin uses the invocation. Written templates and
     // substituted syntax keep their original occurrence, across files. Each
     // expanded occurrence owns its chain: separate uses of one template must
@@ -195,41 +213,89 @@ fn stamp_expansion_source<'gc>(
     // loading `(scheme base)` 2% more instructions).
     let mut name: Option<std::sync::Arc<str>> = None;
     let mut histories = HashMap::new();
+    // The location `value` takes from this expansion: its own, or the
+    // invocation's, with its chain extended.
+    let mut stamped = |cx: &mut Cx<'gc>, value: Value<'gc>| {
+        let mut loc = cx.source(value).unwrap_or_else(|| source.clone());
+        if let Some(span) = &mut loc.span {
+            let prefix = extendable(span.expansion_chain.as_ref(), form)
+                .or_else(|| extendable(source.span.as_ref()?.expansion_chain.as_ref(), form));
+            let key = prefix.map_or(0, ExpansionChain::id);
+            let chain = histories.entry(key).or_insert_with(|| {
+                let name = name.get_or_insert_with(|| std::sync::Arc::from(macro_name));
+                ExpansionChain::extend(prefix, name.clone(), form)
+            });
+            span.expansion_chain = Some(chain.clone());
+        }
+        // A location with no document of its own records the expansion
+        // in the program's, by line and column. A library body's
+        // desugarer has no map, and such a location no document to
+        // record it in.
+        if loc.span.is_none()
+            && let Some(map) = source_map
+        {
+            map.borrow_mut()
+                .record_expansion(&loc, macro_name.to_owned());
+        }
+        loc
+    };
+    // Each name the reader wrote that the walk has met, with the stamped
+    // copy its holders are given (#791): one copy for an identifier two
+    // holders share.
+    let mut copies: HashMap<u64, Value<'gc>> = HashMap::new();
+    let mut copy_of = |cx: &mut Cx<'gc>,
+                       stamped: &mut dyn FnMut(&mut Cx<'gc>, Value<'gc>) -> SourceLocation,
+                       written: Value<'gc>| {
+        if let Some(&copy) = copies.get(&written.raw_bits()) {
+            return copy;
+        }
+        let loc = stamped(cx, written);
+        let copy = cx
+            .alloc_identifier_relocated(written, &loc)
+            .expect("a written identifier");
+        copies.insert(written.raw_bits(), copy);
+        copy
+    };
+    if cx.is_source_identifier(tv) {
+        return copy_of(cx, &mut stamped, tv);
+    }
     while let Some(value) = pending.pop() {
         if !seen.insert(value.raw_bits()) {
             continue;
         }
-        let mut loc = cx.source(value).unwrap_or_else(|| source.clone());
         if value.is_pair() || value.is_vector() || cx.is_identifier(value) {
-            if let Some(span) = &mut loc.span {
-                let prefix = extendable(span.expansion_chain.as_ref(), form)
-                    .or_else(|| extendable(source.span.as_ref()?.expansion_chain.as_ref(), form));
-                let key = prefix.map_or(0, ExpansionChain::id);
-                let chain = histories.entry(key).or_insert_with(|| {
-                    let name = name.get_or_insert_with(|| std::sync::Arc::from(macro_name));
-                    ExpansionChain::extend(prefix, name.clone(), form)
-                });
-                span.expansion_chain = Some(chain.clone());
-            }
-            // A location with no document of its own records the expansion
-            // in the program's, by line and column. A library body's
-            // desugarer has no map, and such a location no document to
-            // record it in.
-            if loc.span.is_none()
-                && let Some(map) = source_map
-            {
-                map.borrow_mut()
-                    .record_expansion(&loc, macro_name.to_owned());
-            }
+            let loc = stamped(cx, value);
             cx.record_source(value, loc);
         }
+        // The children are walked in the order they always were: a pair's
+        // car before its cdr, a vector's elements from the first.
         if value.is_pair() {
             let (car, cdr) = cx.get_pair(value);
-            pending.extend([cdr, car]);
+            if cx.is_source_identifier(cdr) {
+                let copy = copy_of(cx, &mut stamped, cdr);
+                cx.set_cdr(value, copy);
+            } else {
+                pending.push(cdr);
+            }
+            if cx.is_source_identifier(car) {
+                let copy = copy_of(cx, &mut stamped, car);
+                cx.set_car(value, copy);
+            } else {
+                pending.push(car);
+            }
         } else if value.is_vector() {
-            pending.extend(cx.vector_slice(value).iter().rev().copied());
+            for index in (0..cx.vector_len(value)).rev() {
+                let element = cx.vector_ref(value, index);
+                if cx.is_source_identifier(element) {
+                    let copy = copy_of(cx, &mut stamped, element);
+                    cx.vector_set(value, index, copy);
+                } else {
+                    pending.push(element);
+                }
+            }
         }
     }
+    tv
 }
 
 /// The spellings one expansion's relinking gave, keyed by the spelling the
@@ -2523,11 +2589,11 @@ impl<'a> Desugarer<'a> {
             .get_identifier_data(tv)
             .map(|(_, scopes)| scopes)
             .unwrap_or_default();
-        let source = cx.source(tv);
+        // The renamed copy is located where its original is: it takes the
+        // original's source id, form span and all, with no write to the
+        // document tables (#791).
         let copy = cx.alloc_relinked_identifier(&alias, scopes);
-        if let Some(source) = source {
-            cx.record_source(copy, source);
-        }
+        cx.inherit_source(tv, copy);
         copy
     }
 
@@ -2957,16 +3023,17 @@ impl<'a> Desugarer<'a> {
             );
 
             // Phase 4: stamp expanded pairs + record macro expansion chain
-            if let Some(src) = &call_site_source {
-                stamp_expansion_source(
+            let expanded_tagged = match &call_site_source {
+                Some(src) => stamp_expansion_source(
                     expanded_tagged,
                     src,
                     self.source_map.as_ref(),
                     cx,
                     &compiled_macro.name,
                     self.form.get(),
-                );
-            }
+                ),
+                None => expanded_tagged,
+            };
 
             // Continue desugaring the expansion
             let mut expr = self.desugar_form(expanded_tagged, cx)?;

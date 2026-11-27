@@ -151,6 +151,18 @@
 //!   between collections those and the ones made since. The table charges
 //!   its sets to `external-bytes`. The steady-state driver reads it after
 //!   `(gc) (gc)` with the other per-owner counts.
+//! - `documents` (#791): the slots the heap's document tables hold, one for
+//!   each document, and source name, the live identifiers' locations are
+//!   in. Each identifier holds the id of its location's entry; a collection
+//!   frees every entry no marked identifier carries, and drops a slot left
+//!   with none. So read after a collection each slot has a live entry. The
+//!   tables charge their buffers to `external-bytes`. The steady-state
+//!   driver reads it with the other per-owner counts.
+//! - `document-bytes` (#791): what the document tables charge, the part of
+//!   `external-bytes` that is theirs. It follows the live identifiers'
+//!   locations, which the forms a program reads between two readings can
+//!   change, so a reading that holds another charge to the byte takes it
+//!   out of `external-bytes`.
 //!
 //! `binding-records` and `cells` are running sums: raised as a namespace
 //! makes a record or a cell, `cells` lowered as a record is re-pointed away
@@ -286,6 +298,8 @@ fn gc_stats<'gc>(cx: &mut Cx<'gc>, _args: &[Value<'gc>]) -> Result<Value<'gc>, E
         ("binding-records", n(cx.binding_records())),
         ("code-units", n(cx.code_units())),
         ("scope-sets", n(cx.scope_sets())),
+        ("documents", n(cx.documents())),
+        ("document-bytes", n(cx.document_bytes())),
     ];
 
     let mut alist: Vec<Value<'gc>> = entries

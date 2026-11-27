@@ -1033,3 +1033,76 @@ fn a_dropped_line_keeps_its_location_and_built_data_has_none() {
         );
     }
 }
+
+/// A name the reader wrote inside a macro definition that another macro's
+/// expansion carries reports the chain of both (#791): `nope` in `bad`'s
+/// template, written inside `(wrap …)`, reports `wrap → bad`, on both
+/// backends, as it did when the expansion's stamp rewrote the reader's
+/// location in place. Since #791 an identifier holds its location, and the
+/// stamp gives such a name a copy with the extended chain rather than
+/// writing an identifier another context made.
+#[test]
+fn a_name_written_in_a_nested_macro_definition_keeps_both_chains() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = program_of(&[
+        "(define-syntax wrap (syntax-rules () ((_ form) form)))",
+        "(wrap (define-syntax bad (syntax-rules () ((_) (nope)))))",
+        "(bad)",
+    ]);
+    fs::write(dir.path().join("program.scm"), &program).unwrap();
+    for backend in BOTH_BACKENDS {
+        let (_, _, stderr, ok) = run(dir.path(), backend, &["program.scm"], None);
+        assert!(!ok, "{backend:?}");
+        assert_located(
+            &stderr,
+            "program.scm",
+            &program,
+            (3, 49, 4),
+            Some("  macro expansion chain: wrap → bad"),
+        );
+    }
+}
+
+/// Compaction keeps an entry a live identifier carries (decision 17 on
+/// #782, #791): a program on standard input defines `g` through
+/// `def-getter` on its first lines, then 1,100 lines of a thousand
+/// characters each, which drop those lines' text, with a collection every
+/// hundred lines, then calls `(g)`. The error reports `<stdin>:1:94` with
+/// `def-getter → g`, with no excerpt, or reports no location; never another
+/// one, which a reused entry would give.
+#[test]
+fn a_compacted_stream_never_misattributes_an_old_location() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut program = String::from(
+        "(define-syntax def-getter (syntax-rules () ((_ get) (define-syntax get (syntax-rules () ((_) nope))))))\n\
+         (def-getter g)\n\
+         (import (scheme base) (patina debug))\n",
+    );
+    for i in 0..1100 {
+        program.push_str(&format!(
+            "(define v{i} (list 'a 'b)) ;{}\n",
+            "x".repeat(1000)
+        ));
+        if i % 100 == 99 {
+            program.push_str("(gc)\n");
+        }
+    }
+    program.push_str("(g)\n");
+    for backend in BOTH_BACKENDS {
+        let (_, _, stderr, ok) = run(dir.path(), backend, &[], Some(&program));
+        assert!(!ok, "{backend:?}");
+        assert!(stderr.contains("nope"), "{backend:?}: {stderr}");
+        let lines: Vec<&str> = stderr.lines().collect();
+        match lines.iter().position(|l| l.starts_with("  at ")) {
+            None => {}
+            Some(at) => {
+                assert_eq!(lines[at], "  at <stdin>:1:94", "{backend:?}: {stderr}");
+                assert_eq!(
+                    &lines[at + 1..],
+                    ["  macro expansion chain: def-getter → g"],
+                    "{backend:?}: {stderr}"
+                );
+            }
+        }
+    }
+}

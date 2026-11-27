@@ -66,9 +66,10 @@ CLAUSES = ('SS1', 'SS2', 'SS4', 'SS5')
 # (R1 and R11 on #782); `code-units`, the VM's loaded code units (0 on the
 # tree-walker), with 4b.9's second PR, ahead of its link tables, so that the
 # PRs that build them hold it (#836, R8); `scope-sets`, the sets the heap's
-# scope-set table holds, with 4c.2 (#788).
+# scope-set table holds, with 4c.2 (#788); `documents`, the slots of the
+# heap's document tables, with 4c.5 (#791).
 PER_OWNER_KEYS = ('symbols', 'ports', 'namespaces', 'cells', 'binding-records', 'code-units',
-                  'scope-sets')
+                  'scope-sets', 'documents')
 # What a pin allows above the cost it pins: the owner's ruling R9 on #782.
 PIN_TOLERANCE = 1.05
 
