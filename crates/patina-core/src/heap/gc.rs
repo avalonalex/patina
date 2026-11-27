@@ -2083,6 +2083,15 @@ impl Heap {
         // arena's sweep drops it.
         #[cfg(any(debug_assertions, feature = "gc-check"))]
         let mut measured_dead_closures = 0usize;
+        // Nothing writes the table since a list is located by its head
+        // (#792): the check that #793 deletes a table nothing fills. It goes
+        // with the table.
+        #[cfg(any(debug_assertions, feature = "gc-check"))]
+        assert!(
+            self.syntax_sources.is_empty(),
+            "syntax_sources holds {} entries at a sweep (#793)",
+            self.syntax_sources.len()
+        );
         // Provenance is not a root. Prune it before slots can be reused,
         // inspecting only annotated syntax rather than every freed datum.
         self.syntax_sources
