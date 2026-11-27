@@ -23,9 +23,8 @@
 //! them in place; the other payloads charged — a bignum's limbs, an
 //! exception's message and irritants, a `values` object, a symbol's name, a
 //! continuation's snapshot — are never written after allocation. A
-//! parameter's value stack, which `parameterize` grows and shrinks, is not
-//! charged: it is as deep as the `parameterize` forms active, which their
-//! frames already pay for.
+//! parameter's value is a field of its slot (#930): a `parameterize`
+//! saves and restores it through `%parameterize-swap!`, in its own frames.
 //!
 //! **Shared `Rc` payloads are not charged** — a procedure's body and
 //! environment (a tree-walker closure is charged an estimate of its frame
@@ -391,7 +390,6 @@ impl HeapObjectData {
             | HeapObjectData::RecordType(_)
             | HeapObjectData::Parameter { .. }
             | HeapObjectData::Promise(_)
-            | HeapObjectData::Library(_)
             | HeapObjectData::EnvironmentSpecifier { .. }
             | HeapObjectData::PromptTag(_) => 0,
         }

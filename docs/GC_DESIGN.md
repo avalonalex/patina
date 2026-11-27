@@ -354,12 +354,14 @@ Notes:
   single `borrow_mut()` for the whole collection — which is exactly why safe
   points must be borrow-free (§7). But `visit_env` and object-variant tracing
   read interiors: environments' binding maps, which are `RefCell`s, and
-  `Record.fields`, `Parameter.values` and `Promise` state, each an
-  `Rc<Interior<…>>` (#708). Those are *separate* cells from the heap's, so
-  tracing them under the heap borrow is fine. `MutableCell` and `Ephemeron`
-  hold their `Interior` *inside* the object arena: the mark phase borrows it
-  under the `&Heap` that `run_mark_phase` takes, a borrow of the cell, not a
-  second borrow of the heap.
+  `Record.fields` and `Promise` state, each an `Rc<Interior<…>>` (#708).
+  Those are *separate* cells from the heap's, so tracing them under the heap
+  borrow is fine. `Ephemeron` holds its `Interior` *inside* the object
+  arena: the mark phase borrows it under the `&Heap` that `run_mark_phase`
+  takes, a borrow of the cell, not a second borrow of the heap. A cell's
+  value and a parameter's are plain fields (#930): the mark phase reads
+  them as it reads any field, and the funnel writes them through
+  `&mut Heap`. The rest leave `Interior` at 4g.
 
 ### 4.2 Mark state
 

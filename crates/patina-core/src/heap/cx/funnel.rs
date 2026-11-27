@@ -297,17 +297,12 @@ fn write_parameter(
     v: TaggedValue,
     site: Site,
 ) -> sealed::Written {
-    let Some((values, _)) = heap.get_parameter(param.tagged()) else {
+    if !heap.is_parameter(param.tagged()) {
         return Err("a parameter's value of a non-parameter");
-    };
+    }
     check_storable(v, "parameter");
     census::store(site, Some(param.tagged()), v);
-    let mut values = values.borrow_mut();
-    match values.last_mut() {
-        Some(top) => *top = v,
-        None => values.push(v),
-    }
-    drop(values);
+    heap.write_parameter(param.tagged(), v);
     if let Some(which) = heap.standard_port_parameter(param.tagged()) {
         refresh_current_port(heap, which, v);
     }

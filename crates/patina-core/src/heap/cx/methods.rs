@@ -621,10 +621,14 @@ impl<'gc> Cx<'gc> {
         self.heap.borrow().is_integer_r7rs(tv.tagged())
     }
 
-    /// [`Heap::is_library`](crate::Heap::is_library) on this context's heap.
+    /// Whether `tv` is a library object: never. A library is no heap
+    /// value: the variant that would have held one was never allocated, and
+    /// #930 deleted it. Kept, answering `false`, so that code written
+    /// against it keeps compiling; `library?` answers `#f` as it always did.
     #[inline]
     pub fn is_library(&self, tv: Value<'gc>) -> bool {
-        self.heap.borrow().is_library(tv.tagged())
+        let _ = tv;
+        false
     }
 
     /// [`Heap::is_list`](crate::Heap::is_list) on this context's heap.

@@ -274,7 +274,7 @@ mod gc_edge_tests {
     use super::*;
     use crate::heap::new_shared_heap;
     use crate::heap::sentinels::Sentinels;
-    use crate::heap::trace_sentinels::{collect_from, env_holding};
+    use crate::heap::trace_sentinels::{collect_only, env_holding};
 
     #[test]
     fn library_exports_and_environment() {
@@ -294,9 +294,10 @@ mod gc_edge_tests {
             env: env_holding(&heap, private),
             source: None,
         };
+        // The library itself is the root, as a registry's entry is: no
+        // heap object holds one (#930).
         let mut h = heap.borrow_mut();
-        let root = h.alloc_library(Rc::new(library));
-        collect_from(&mut h, &[root]);
+        collect_only(&mut h, |visitor| library.trace(visitor));
         s.assert_survived(&h);
     }
 }

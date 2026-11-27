@@ -1887,16 +1887,13 @@ impl<'h> GcVisitor<'h> {
                     self.visit(field);
                 }
             }
-            HeapObjectData::Parameter { values, converter } => {
-                for &value in values.borrow().iter() {
-                    self.visit(value);
-                }
+            HeapObjectData::Parameter { value, converter } => {
+                self.visit(*value);
                 if let Some(converter) = converter {
                     self.visit(*converter);
                 }
             }
             HeapObjectData::Promise(state) => self.visit_promise(state),
-            HeapObjectData::Library(lib) => lib.as_ref().trace(self),
             HeapObjectData::Values(values) => {
                 for &value in values {
                     self.visit(value);
@@ -1909,9 +1906,8 @@ impl<'h> GcVisitor<'h> {
             } => {
                 self.visit_env(env);
             }
-            HeapObjectData::MutableCell(cell) => {
-                let inner = *cell.borrow();
-                self.visit(inner);
+            HeapObjectData::MutableCell(value) => {
+                self.visit(*value);
             }
             HeapObjectData::VmClosure {
                 // The VM's code id, queued for `RootProvider::trace_code_ids`,

@@ -267,8 +267,8 @@ impl CycleSearch {
                             }
                         }
                     }
-                    HeapObjectData::MutableCell(cell) => {
-                        let content = *cell.borrow();
+                    HeapObjectData::MutableCell(content) => {
+                        let content = *content;
                         if !Self::finishes_within(content, heap, budget) {
                             return false;
                         }
@@ -355,8 +355,8 @@ impl CycleSearch {
                         self.visit(*val, heap);
                     }
                 }
-                HeapObjectData::MutableCell(cell) => {
-                    let content = *cell.borrow();
+                HeapObjectData::MutableCell(content) => {
+                    let content = *content;
                     self.visit(content, heap);
                 }
                 _ => {}
@@ -519,7 +519,6 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, printer: &
         HeapObjectData::Continuation { .. } => buf.push_str("#<continuation>"),
         HeapObjectData::Parameter { .. } => buf.push_str("#<parameter>"),
         HeapObjectData::Promise(_) => buf.push_str("#<promise>"),
-        HeapObjectData::Library(lib) => write!(buf, "{}", lib).unwrap(),
         HeapObjectData::Values(vals) => {
             for (i, val) in vals.iter().enumerate() {
                 if i > 0 {
@@ -540,9 +539,9 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, printer: &
                 _ => write!(buf, "#<procedure:{slot}.{generation}>").unwrap(),
             }
         }
-        HeapObjectData::MutableCell(cell) => {
+        HeapObjectData::MutableCell(content) => {
             buf.push_str("#<cell:");
-            let content = *cell.borrow();
+            let content = *content;
             format_tagged_impl(content, heap, buf, printer);
             buf.push('>');
         }

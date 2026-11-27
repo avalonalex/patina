@@ -55,7 +55,8 @@ pub(super) fn object_info(data: &HeapObjectData) -> (Variant, usize, u64) {
         H::Continuation { .. } => (13, 0, 16),
         H::Parameter { .. } => (14, 0, 24),
         H::Promise(_) => (15, 0, 24),
-        H::Library(_) => (16, 0, 16),
+        // 16 was `Library`, a variant nothing allocated (#930): reserved,
+        // so that the others keep the numbers the study gave them.
         H::Values(v) => (17, v.len(), 8 + 8 * v.len() as u64),
         H::EnvironmentSpecifier { .. } => (18, 0, 16),
         H::PromptTag(_) => (19, 0, 16),
