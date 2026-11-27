@@ -475,8 +475,8 @@ impl DocumentTable {
     /// slot that leaves with no entry, and number the entries kept again
     /// from 1, in their order. A freed entry drops its chain and counts out
     /// of its slots; the table is cut to the entries kept, their room set by
-    /// their number ([`Self::shrink`]), and the index is made again. Bit 0 is never read: entry 0 is no
-    /// entry.
+    /// their number ([`Self::shrink`]), and the index is made again. Bit 0
+    /// is never read: entry 0 is no entry.
     ///
     /// Answers the renumbering when an entry moved, which the heap applies
     /// to every live identifier before anything reads an id again, and

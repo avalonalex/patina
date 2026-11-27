@@ -1168,10 +1168,9 @@ impl<'gc> Cx<'gc> {
     /// A copy of the identifier `v` whose set is its own with `addition`'s
     /// scope added, located where `v` is (it takes `v`'s source id, #791),
     /// or `None` if `v` is no identifier: the macro expander's mark of a
-    /// substituted
-    /// identifier. The copy is no written name, whatever `v` was. Each
-    /// distinct set is added to, and the result interned, once in the
-    /// memo's life (#788). Raw: it names the raw [`ScopeAddition`].
+    /// substituted identifier. The copy is no written name, whatever `v`
+    /// was. Each distinct set is added to, and the result interned, once in
+    /// the memo's life (#788). Raw: it names the raw [`ScopeAddition`].
     pub fn add_scope_copying(
         &mut self,
         addition: &mut ScopeAddition<'gc>,

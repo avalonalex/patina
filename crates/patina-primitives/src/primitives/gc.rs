@@ -158,6 +158,11 @@
 //!   with none. So read after a collection each slot has a live entry. The
 //!   tables charge their buffers to `external-bytes`. The steady-state
 //!   driver reads it with the other per-owner counts.
+//! - `document-bytes` (#791): what the document tables charge, the part of
+//!   `external-bytes` that is theirs. It follows the live identifiers'
+//!   locations, which the forms a program reads between two readings can
+//!   change, so a reading that holds another charge to the byte takes it
+//!   out of `external-bytes`.
 //!
 //! `binding-records` and `cells` are running sums: raised as a namespace
 //! makes a record or a cell, `cells` lowered as a record is re-pointed away
