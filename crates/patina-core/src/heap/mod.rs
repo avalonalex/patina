@@ -1912,6 +1912,19 @@ impl Heap {
         relinked: bool,
         source: SourceId,
     ) -> TaggedValue {
+        self.alloc_identifier_copy_written(name, scopes, relinked, source, false)
+    }
+
+    /// [`Heap::alloc_identifier_copy`] with `written` as the original's: the
+    /// stamped output flip's copy, which copies a written name too (#794).
+    pub(crate) fn alloc_identifier_copy_written(
+        &mut self,
+        name: TaggedValue,
+        scopes: ScopeSetId,
+        relinked: bool,
+        source: SourceId,
+        written: bool,
+    ) -> TaggedValue {
         debug_assert!(
             if relinked {
                 self.get_symbol_name(name).is_some() && !self.is_interned_symbol(name)
@@ -1924,7 +1937,7 @@ impl Heap {
             name,
             scopes,
             source,
-            written: false,
+            written,
             relinked,
         }))
     }

@@ -2863,10 +2863,7 @@ impl<'a> Desugarer<'a> {
             // flip copies it, in the same walk (#794).
             let stamp = call_site_source
                 .as_ref()
-                .map(|call_site| patina_core::ExpansionStamp {
-                    call_site,
-                    form: self.form.get(),
-                });
+                .map(|call_site| patina_core::ExpansionStamp::new(call_site, self.form.get()));
             let patina_macros::MacroExpansion {
                 form: expanded_tagged,
                 scope: expansion_scope,

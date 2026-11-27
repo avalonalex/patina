@@ -257,8 +257,8 @@ substitution mark or the relinker makes takes its original's source id, so
 it is located where its original is, with no write. A template's
 `Template::Symbol` keeps its location off the heap, and each instantiation
 interns it. The expansion's stamp is made by the output flip (#794,
-`Cx::rescope_identifiers_stamped`): given the use's location, the form's
-number and the source map, which the desugarer hands
+`Cx::rescope_identifiers_stamped`): given the use's location and the
+form's number, which the desugarer hands
 `expand_macro_at_sites` as an `ExpansionStamp`, the flip copies every
 identifier of the expansion, a name the reader wrote too, with the same
 name, scopes and `written` flag, and makes each copy already located, its
