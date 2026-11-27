@@ -2780,11 +2780,23 @@ entry made since the last collection is carried only by identifiers made
 since then, as a minor collection that prunes young entries alone requires
 from stage 7; inside a nested macro definition that copy keeps the outer
 chain (`wrap → bad`). A template's literal is held as a re-sourced copy
-whose chain is the template's. The heap's `syntax_sources` table records the
-span of each list, vector and string a program parser reads, and the
-location and expansion chain of each such node an expansion stamps, until
-#792 locates a list by its head and #793 deletes the table. Desugaring uses
-these, never an interned symbol as an occurrence key. Scope edits preserve
+whose chain is the template's. A list is located by its head (#792, DESIGN
+E.1): its location is the form span of the identifier it starts with.
+The reader records identifiers only, and a quote abbreviation's head is a
+written identifier, located at the prefix with the abbreviation as its form
+span. The head of each list a template builds takes the macro's use as its
+form span (decision 16), or none where the use has none, so the list reports
+the use while a reference the template introduces reports the template's
+text; the stamp writes identifier entries only. A list whose head is no
+identifier, a vector, a string and every other datum has no location: lost,
+never misattributed. Quoted data given to `eval` has none either, since
+quote stripping turns its identifiers into symbols (decision 11). Nothing
+writes the heap's `syntax_sources` table, which #793 deletes. Desugaring
+reads locations through the identifiers, never an interned symbol as an
+occurrence key. On the VM a call whose expression has no location records
+the nearest enclosing expression's in its procedure, or an entry of no
+location where the procedure's code map has one already
+(`docs/VM_ISA.md`), so it takes no location from an expression before it. Scope edits preserve
 provenance; stripping syntax identifiers into quoted data preserves graph
 sharing and cycles, using the same iterative graph copier. A memo shared by all
 quotes in one form preserves sharing across separate insertions of a macro
@@ -2803,9 +2815,9 @@ slots. Compaction of a streaming document is another matter, and frees no
 entry (decision 17): only the marks do, so
 an old location keeps its line and column and loses its excerpt. Before
 reclaiming slots, sweep retains only the `syntax_sources` entries whose
-values are marked, then shrinks excess table capacity. This visits annotated
-syntax rather than doing a lookup for every freed datum, and removes entries
-before slots can be reused. There is no drain shared between nested loaders,
+values are marked, then shrinks excess table capacity; nothing has filled
+the table since #792, and #793 deletes it with this prune. There is no drain
+shared between nested loaders,
 and a later parse cannot see stale provenance. Spans retain an `Arc` to a source
 document containing text and a line-start index, but no Scheme values. Expansion
 chains travel with each expanded span, so separate uses of a template do not

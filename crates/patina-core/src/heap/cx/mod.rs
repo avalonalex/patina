@@ -864,8 +864,30 @@ impl<'gc> Cx<'gc> {
         Some(self.brand(copy))
     }
 
-    /// [`Heap::form_span`]: the span of the list the identifier `v` heads.
-    /// Raw: until #792 no diagnostic reads it.
+    /// [`Heap::alloc_identifier_formed`]: a copy of the identifier `v`
+    /// whose form span is `form`, for the head of a list a template builds
+    /// that another context made. Raw: the template expander's (#792).
+    pub fn alloc_identifier_formed(
+        &mut self,
+        v: Value<'gc>,
+        form: Option<&SourceLocation>,
+    ) -> Option<Value<'gc>> {
+        let copy = self
+            .heap
+            .borrow_mut()
+            .alloc_identifier_formed(v.tagged(), form)?;
+        Some(self.brand(copy))
+    }
+
+    /// [`Heap::record_form`]: the form span of the identifier `v`, made in
+    /// this context, written in place. Raw: the template expander's (#792).
+    #[inline]
+    pub fn record_form(&mut self, v: Value<'gc>, form: Option<&SourceLocation>) {
+        self.heap.borrow_mut().record_form(v.tagged(), form)
+    }
+
+    /// [`Heap::form_span`]: the span of the list the identifier `v` heads,
+    /// which is that list's location ([`Self::source`]).
     #[inline]
     pub fn form_span(&self, v: Value<'gc>) -> Option<SourceLocation> {
         self.heap.borrow().form_span(v.tagged())

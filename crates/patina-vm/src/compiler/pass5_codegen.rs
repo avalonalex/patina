@@ -42,15 +42,20 @@ use std::rc::Rc;
 // Codegen context (per CodeObject being built)
 // ─────────────────────────────────────────────────────────────────────────────
 
-struct Codegen {
+struct Codegen<'e> {
     name: Option<Symbol>,
     instructions: Vec<Instruction>,
     constants: Vec<TaggedValue>,
     /// All nested members emitted during this compilation unit, which
     /// become the `CodeObject`s returned alongside the top-level one.
     nested: Vec<Member>,
-    /// Source location map: (pc, source_location).
-    source_map: Vec<(usize, SourceLocation)>,
+    /// Source location map: (pc, source_location), where an entry of no
+    /// location stops a call from taking the location before it (#792).
+    source_map: Vec<(usize, Option<SourceLocation>)>,
+    /// The locations of the expressions being generated in this procedure
+    /// that have one, outermost first: what a call with none of its own is
+    /// located at (#792).
+    enclosing: Vec<&'e SourceLocation>,
     /// Global callee names that resolved to registry primitives at compile
     /// time; `App`s on these emit `CallPrimitive` instead of `LoadGlobal` +
     /// `Call`. Empty when compiling without an environment.
@@ -90,7 +95,7 @@ struct Member {
     constants: Vec<TaggedValue>,
     num_regs: u16,
     arity: Arity,
-    source_map: Vec<(usize, SourceLocation)>,
+    source_map: Vec<(usize, Option<SourceLocation>)>,
     /// The possible roots at each pc, `register_root_maps`' answer, which
     /// the unit's maps index (`UnitMaps`).
     pc_roots: Vec<Vec<u64>>,
@@ -210,7 +215,7 @@ impl UnitMaps {
     }
 }
 
-impl Codegen {
+impl<'e> Codegen<'e> {
     fn new(name: Option<Symbol>, prim_calls: Rc<PrimitiveCallMap>, links: UnitLinks) -> Self {
         Self {
             name,
@@ -218,6 +223,7 @@ impl Codegen {
             constants: Vec::new(),
             nested: Vec::new(),
             source_map: Vec::new(),
+            enclosing: Vec::new(),
             prim_calls,
             retirements: Vec::new(),
             links,
@@ -294,16 +300,38 @@ impl Codegen {
     /// Record a source location for the instruction about to be emitted.
     fn record_source(&mut self, source: &Option<SourceLocation>) {
         if let Some(loc) = source {
-            let pc = self.current_pc();
-            // Parent and child can start at the same instruction. The
-            // child is the expression that instruction actually evaluates.
-            if let Some((last_pc, last_source)) = self.source_map.last_mut()
-                && *last_pc == pc
-            {
-                *last_source = loc.clone();
-            } else {
-                self.source_map.push((pc, loc.clone()));
+            self.record_entry(Some(loc.clone()));
+        }
+    }
+
+    /// Record where the instruction about to be emitted, which can fail and
+    /// follows the code of its operands, is (#792): at the expression's own
+    /// location, or else at the nearest enclosing expression's in this
+    /// procedure. With neither, and an entry in the map already, at none:
+    /// an entry of no location, so that the instruction takes no location
+    /// from an expression before it ("lost, never misattributed"). A
+    /// procedure with no entry keeps its map empty, which the error's
+    /// report skips to the caller.
+    fn record_call_source(&mut self, source: &Option<SourceLocation>) {
+        match source.as_ref().or_else(|| self.enclosing.last().copied()) {
+            Some(loc) => self.record_entry(Some(loc.clone())),
+            None if self.source_map.last().is_some_and(|(_, loc)| loc.is_some()) => {
+                self.record_entry(None)
             }
+            None => {}
+        }
+    }
+
+    fn record_entry(&mut self, source: Option<SourceLocation>) {
+        let pc = self.current_pc();
+        // Parent and child can start at the same instruction. The child is
+        // the expression that instruction actually evaluates.
+        if let Some((last_pc, last_source)) = self.source_map.last_mut()
+            && *last_pc == pc
+        {
+            *last_source = source;
+        } else {
+            self.source_map.push((pc, source));
         }
     }
 }
@@ -422,7 +450,7 @@ fn thread_returns(instructions: &mut [Instruction]) {
 /// Union at joins preserves a value needed on either path. This deliberately
 /// keeps local bindings through the frame's lifetime, rather than predicting
 /// their last use. No instructions are added to the normal execution path.
-fn register_root_maps(cg: &Codegen, num_regs: u16, num_params: u16) -> Vec<Vec<u64>> {
+fn register_root_maps(cg: &Codegen<'_>, num_regs: u16, num_params: u16) -> Vec<Vec<u64>> {
     use std::collections::VecDeque;
     let len = cg.instructions.len();
     let mut retire = vec![Vec::new(); len + 1];
@@ -667,7 +695,7 @@ fn suspends_after(instruction: &Instruction) -> bool {
 ///
 /// The caller must still emit the plain `JumpUnless` immediately after:
 /// the fused instruction's slow and deopt paths fall through to it.
-fn fuse_test_into_branch(cond: u16, cg: &mut Codegen) -> Option<usize> {
+fn fuse_test_into_branch(cond: u16, cg: &mut Codegen<'_>) -> Option<usize> {
     // Which opcodes are fusable, and their operands. Or-patterns bind the
     // same names across each shape, so adding a predicate is one alternative
     // in the matching group; anything else (arithmetic, `car`, vector ops)
@@ -735,11 +763,11 @@ fn fuse_test_into_branch(cond: u16, cg: &mut Codegen) -> Option<usize> {
 /// heap-referencing `TaggedValue`s (the constant pool is what roots those —
 /// see the `is_immediate` split in the `Literal` arm); `is_immediate` would
 /// be the widest safe bound, and fixnums are the profitable subset.
-fn primitive_operands(
-    args: &[RegExpr],
+fn primitive_operands<'e>(
+    args: &'e [RegExpr],
     arg_tmps: &[u16],
     inline: Option<InlineOp>,
-    cg: &mut Codegen,
+    cg: &mut Codegen<'e>,
 ) -> Result<(Vec<u16>, Option<TaggedValue>), CompileError> {
     if !args.iter().all(|a| writes_only_dst(&a.kind)) {
         for arg in args {
@@ -960,7 +988,7 @@ fn writes_only_dst(kind: &RegExprKind) -> bool {
 }
 
 /// Generate instructions for `expr` into `cg`.
-fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
+fn gen_expr<'e>(expr: &'e RegExpr, cg: &mut Codegen<'e>) -> Result<(), CompileError> {
     gen_expr_value(expr, cg)?;
     // Tail transfers replace the frame. Its callee starts with only the
     // parameter slots live, so no caller retirement point is needed.
@@ -973,25 +1001,34 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
     Ok(())
 }
 
-fn retire_temporaries(start: u16, end: u16, cg: &mut Codegen) {
+fn retire_temporaries(start: u16, end: u16, cg: &mut Codegen<'_>) {
     if start < end {
         cg.retirements.push((cg.current_pc(), start..end));
     }
 }
 
 /// A sequence discards the expression's result as well as its temporaries.
-fn gen_discarded_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
+fn gen_discarded_expr<'e>(expr: &'e RegExpr, cg: &mut Codegen<'e>) -> Result<(), CompileError> {
     gen_expr_value(expr, cg)?;
     retire_temporaries(expr.dst, expr.temp_end, cg);
     Ok(())
 }
 
-fn gen_expr_value(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
+fn gen_expr_value<'e>(expr: &'e RegExpr, cg: &mut Codegen<'e>) -> Result<(), CompileError> {
     // Grown with the depth of the code (#617).
-    patina_core::walk::ensure_sufficient_stack(|| gen_expr_value_inner(expr, cg))
+    patina_core::walk::ensure_sufficient_stack(|| {
+        // A located expression encloses what it evaluates (#792).
+        let Some(location) = &expr.source else {
+            return gen_expr_value_inner(expr, cg);
+        };
+        cg.enclosing.push(location);
+        let generated = gen_expr_value_inner(expr, cg);
+        cg.enclosing.pop();
+        generated
+    })
 }
 
-fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
+fn gen_expr_value_inner<'e>(expr: &'e RegExpr, cg: &mut Codegen<'e>) -> Result<(), CompileError> {
     // Record source location before emitting instructions for this expression.
     cg.record_source(&expr.source);
 
@@ -1143,7 +1180,7 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
 
         RegExprKind::SetGlobal { name, value, link } => {
             gen_expr(value, cg)?;
-            cg.record_source(&expr.source);
+            cg.record_call_source(&expr.source);
             let link = cg.link(name, *link)?;
             cg.emit(Instruction::StoreGlobal {
                 link,
@@ -1209,7 +1246,7 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
                 && let Some(&func_id) = cg.prim_calls.by_value.get(&v.raw_bits())
             {
                 let (regs, _) = primitive_operands(args, arg_tmps, None, cg)?;
-                cg.record_source(&expr.source);
+                cg.record_call_source(&expr.source);
                 cg.emit(Instruction::CallPrimitiveDirect {
                     func_id,
                     args: regs,
@@ -1226,7 +1263,7 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
             {
                 let inline = resolved.inline.filter(|op| op.arity() == args.len());
                 let (regs, imm) = primitive_operands(args, arg_tmps, inline, cg)?;
-                cg.record_source(&expr.source);
+                cg.record_call_source(&expr.source);
                 let link = cg.link(name, *link)?;
                 cg.emit(primitive_call_instruction(
                     inline, resolved, link, &regs, imm, expr.dst,
@@ -1242,7 +1279,7 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
             for arg in args {
                 gen_expr(arg, cg)?;
             }
-            cg.record_source(&expr.source);
+            cg.record_call_source(&expr.source);
             let arg_regs: Vec<u16> = arg_tmps.clone();
             if *is_tail {
                 cg.emit(Instruction::TailCall {
@@ -1268,7 +1305,7 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
             for arg in args {
                 gen_expr(arg, cg)?;
             }
-            cg.record_source(&expr.source);
+            cg.record_call_source(&expr.source);
             let arg_regs: Vec<u16> = arg_tmps.clone();
             if *is_tail {
                 cg.emit(Instruction::TailApply {
@@ -1325,14 +1362,14 @@ fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileE
 /// Changing a sequence here means changing it there. See those functions for
 /// the deliberate differences (a dedicated discard slot, and the stub's
 /// always being in tail position).
-fn gen_inline_control(
+fn gen_inline_control<'e>(
     form: ControlForm,
-    func: &RegExpr,
-    args: &[RegExpr],
+    func: &'e RegExpr,
+    args: &'e [RegExpr],
     arg_tmps: &[u16],
     is_tail: bool,
     dst: u16,
-    cg: &mut Codegen,
+    cg: &mut Codegen<'e>,
 ) -> Result<(), CompileError> {
     for arg in args {
         gen_expr(arg, cg)?;
@@ -1429,7 +1466,7 @@ fn gen_inline_control(
 }
 
 /// Compile a nested lambda, emit `MakeClosure` into `cg`, result in `dst`.
-fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), CompileError> {
+fn gen_lambda<'e>(lam: &'e RegLambda, dst: u16, cg: &mut Codegen<'e>) -> Result<(), CompileError> {
     let child_id = CodeObjectId::label();
     // The unit's interner goes down into the child and comes back before the
     // captures below, which the parent emits.

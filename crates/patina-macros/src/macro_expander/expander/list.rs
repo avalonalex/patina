@@ -30,9 +30,44 @@ impl<'gc> Expander<'gc> {
             let in_quote_ctx = inside_quote || (is_quote_form && i >= 1);
             self.expand_element_into(cx, template, env, indices, in_quote_ctx, &mut result)?;
         }
+        self.locate_head(cx, templates, &mut result, inside_quote);
 
         // Convert vec back to Scheme list
         Ok(cx.list_from_iter(result))
+    }
+
+    /// Locate a list this template builds at the use, through its head
+    /// (decision 16 on #782, #792): the head's form span becomes the use's
+    /// location, or none where the use has none, never the template's own
+    /// list. Whatever the head's origin — written in the template or
+    /// substituted from the use — the head's own span is untouched, so that
+    /// a reference the template introduces still reports the template's
+    /// text. A head that is no identifier leaves the list with no location.
+    ///
+    /// The head a template symbol was just instantiated as is this
+    /// context's, and written in place; any other — substituted, or a
+    /// literal the macro object holds — another context may have made, and
+    /// the list is given a copy. Quoted data is skipped: its identifiers
+    /// become symbols, and nothing reads where it was.
+    fn locate_head(
+        &self,
+        cx: &mut Cx<'gc>,
+        templates: &[Template],
+        elements: &mut [Value<'gc>],
+        inside_quote: bool,
+    ) {
+        let Some(head) = elements.first_mut() else {
+            return;
+        };
+        if inside_quote || !cx.is_identifier(*head) {
+            return;
+        }
+        let form = self.use_location.as_ref();
+        if matches!(templates.first(), Some(Template::Symbol(_))) {
+            cx.record_form(*head, form);
+        } else if let Some(copy) = cx.alloc_identifier_formed(*head, form) {
+            *head = copy;
+        }
     }
 
     /// Expand one template into `out`.
@@ -140,6 +175,7 @@ impl<'gc> Expander<'gc> {
         for template in templates {
             self.expand_element_into(cx, template, env, indices, inside_quote, &mut items)?;
         }
+        self.locate_head(cx, templates, &mut items, inside_quote);
 
         // Expand the tail
         let tail_value = self.expand_impl(cx, tail, env, indices, inside_quote)?;

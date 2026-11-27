@@ -280,18 +280,19 @@ fn source_keys(row: &HashMap<&str, u64>) -> u64 {
     SOURCE_KINDS.iter().map(|kind| row[kind]).sum()
 }
 
-/// `syntax_sources` before each collection's prune (#787): its keys by
-/// kind, the keys the prune keeps, and the entries they share. The loop
-/// reads and expands nothing and collects every 25,000 iterations, so after
-/// the first collection the table holds only what the previous prune kept.
-/// Since #791 an identifier holds its location in the document tables, not
-/// here: its columns read 0.
+/// `syntax_sources` before each collection's prune (#787): nothing writes
+/// it since a list is located by its head (#792), and an identifier holds
+/// its location in the document tables (#791). Every column reads 0 at every
+/// collection, on both backends: after the libraries a program loads, through
+/// a churn that collects every 25,000 iterations, and after ten definitions
+/// of a quoted vector holding a string, a flonum and a bytevector, each of
+/// which the reader used to record. #793 deletes the table and this scan.
 #[test]
-fn the_census_counts_the_source_table_s_keys() {
+fn the_census_finds_the_source_table_empty() {
     if !GC_CENSUS {
         return;
     }
-    let program = "(import (scheme base) (scheme write) (patina debug))
+    let churn = "(import (scheme base) (scheme write) (patina debug))
 (define keep (make-vector 8 #f))
 (define (churn n)
   (when (> n 0)
@@ -301,67 +302,29 @@ fn the_census_counts_the_source_table_s_keys() {
 (churn 100000)
 (display \"done\")
 ";
-    for backend in BOTH_BACKENDS {
-        let c = census(backend, program, &[]);
-        let rows = log_rows(&c);
-        assert!(rows.len() >= 4, "{backend:?}: {} collections", rows.len());
-        // The program and the libraries it loaded, read and expanded; and
-        // `inherit_source` gives a copy its original's entry. No identifier
-        // is a key (#791).
-        let first = &rows[0];
-        assert!(first["src_pairs"] > 1000, "{backend:?}: {first:?}");
-        assert!(
-            first["src_entries"] < source_keys(first),
-            "{backend:?}: {first:?}"
-        );
-        for row in &rows {
-            assert_eq!(
-                (row["src_identifiers"], row["src_identifier_entries"]),
-                (0, 0),
-                "{backend:?}: {row:?}"
-            );
-        }
-        for row in &rows {
-            assert!(row["src_kept"] <= source_keys(row), "{backend:?}: {row:?}");
-        }
-        for pair in rows.windows(2) {
-            assert_eq!(
-                source_keys(&pair[1]),
-                pair[0]["src_kept"],
-                "{backend:?}: {pair:?}"
-            );
-        }
-    }
-}
-
-/// Ten definitions of a quoted vector holding a string, a flonum and a
-/// bytevector add exactly their keys of each kind, and the prune keeps the
-/// four constants each one's value holds (#787).
-#[test]
-fn the_census_counts_each_kind_of_source_key() {
-    if !GC_CENSUS {
-        return;
-    }
-    let base =
-        "(import (scheme base) (scheme write) (patina debug))\n(gc)\n(gc)\n(display \"done\")\n";
     let definitions: String = (0..10)
         .map(|i| format!("(define v{i} '#(1 2 \"s{i}\" 1.5 #u8(1)))\n"))
         .collect();
-    let more = base.replacen("\n(gc)", &format!("\n{definitions}(gc)"), 1);
+    let constants = format!(
+        "(import (scheme base) (scheme write) (patina debug))\n{definitions}(gc)\n(gc)\n(display \"done\")\n"
+    );
     for backend in BOTH_BACKENDS {
-        let (base_census, more_census) = (census(backend, base, &[]), census(backend, &more, &[]));
-        let (before, after) = (&log_rows(&base_census)[0], &log_rows(&more_census)[0]);
-        let added = |column: &str| after[column] - before[column];
-        assert_eq!(
-            [
-                added("src_vectors"),
-                added("src_strings"),
-                added("src_objects"),
-                added("src_kept"),
-            ],
-            [10, 10, 20, 40],
-            "{backend:?}: {before:?} {after:?}"
-        );
+        for (program, collections) in [(churn, 4), (constants.as_str(), 2)] {
+            let c = census(backend, program, &[]);
+            let rows = log_rows(&c);
+            assert!(
+                rows.len() >= collections,
+                "{backend:?}: {} collections",
+                rows.len()
+            );
+            for row in &rows {
+                assert_eq!(
+                    (source_keys(row), row["src_entries"], row["src_kept"]),
+                    (0, 0, 0),
+                    "{backend:?}: {row:?}"
+                );
+            }
+        }
     }
 }
 

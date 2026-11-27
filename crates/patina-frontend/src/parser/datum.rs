@@ -52,6 +52,10 @@ enum Frame<'gc> {
     Prefix {
         name: &'static str,
         at: (u32, u32),
+        /// The prefix's own span, where the read records locations: its
+        /// head identifier's own span, as the abbreviation's whole span is
+        /// its form span (#792).
+        own: Option<SourceLocation>,
     },
     Label(usize),
     Comment {
@@ -304,7 +308,12 @@ impl Parser {
                             Token::Unquote => "unquote",
                             _ => "unquote-splicing",
                         };
-                        Frame::Prefix { name, at }
+                        // `location` is the prefix token's span here.
+                        Frame::Prefix {
+                            name,
+                            at,
+                            own: location.take(),
+                        }
                     });
                     self.advance()?;
                     continue;
@@ -350,9 +359,12 @@ impl Parser {
                 && !discarding
                 && let Some(loc) = &location
             {
-                // A label reference is another edge to existing syntax. Keep
-                // the identifier/container's original spelling location.
-                if !matches!(self.current_token, Token::DatumRef(_)) {
+                // Only an identifier is located (#792): a list by its head,
+                // and nothing else at all. A label reference is another edge
+                // to existing syntax, which keeps its original location.
+                if !matches!(self.current_token, Token::DatumRef(_))
+                    && cx.is_source_identifier(value)
+                {
                     // An identifier about to become its list's head is
                     // located when the list closes, with the list's span
                     // (`Frame::List::head_at`).
@@ -362,13 +374,11 @@ impl Parser {
                             tail: Tail::Elements,
                             head_at,
                             ..
-                        }) if elements.is_empty() && cx.is_source_identifier(value) => {
+                        }) if elements.is_empty() => {
                             *head_at = Some(loc.clone());
                         }
                         _ => cx.record_source(value, loc.clone()),
                     }
-                } else if cx.source(value).is_none() {
-                    cx.record_source(value, loc.clone());
                 }
             }
             if discarding {
@@ -403,9 +413,13 @@ impl Parser {
                     _ => {}
                 }
                 match frames.pop().expect("a pending prefix") {
-                    Frame::Prefix { name, at } => {
-                        let symbol = cx.intern_symbol(name);
-                        value = cx.list_from_iter([symbol, value]);
+                    Frame::Prefix { name, at, own } => {
+                        // The head is a written identifier where the read
+                        // makes identifiers, as `(quote x)` written out
+                        // reads (#792), so that the abbreviation is located
+                        // by it; the datum reader's is the symbol.
+                        let head = self.identifier(cx, name);
+                        value = cx.list_from_iter([head, value]);
                         if M::TRACK
                             && let Some(loc) = &mut location
                         {
@@ -418,7 +432,9 @@ impl Parser {
                                     1
                                 }
                             });
-                            cx.record_source(value, loc.clone());
+                            if let Some(own) = &own {
+                                cx.record_head_source(head, own, loc);
+                            }
                         }
                     }
                     Frame::Label(label) => {

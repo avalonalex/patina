@@ -33,7 +33,7 @@ mod tests;
 pub use error::ExpandError;
 
 use crate::macro_expander::Template;
-use patina_core::{Cx, LiteralId, Value};
+use patina_core::{Cx, LiteralId, SourceLocation, Value};
 use patina_runtime::MatchEnv;
 
 /// Template expander for PVREF-based macro system
@@ -63,6 +63,11 @@ pub struct Expander<'gc> {
     ///
     /// [`MAX_FORM_DEPTH`]: patina_core::walk::MAX_FORM_DEPTH
     depth_limit: usize,
+
+    /// Where the use being expanded is, if it has a location: the form span
+    /// each list the template builds gives its head (decision 16 on #782,
+    /// #792), so that the list reports the use.
+    use_location: Option<SourceLocation>,
 }
 
 impl<'gc> Expander<'gc> {
@@ -75,7 +80,15 @@ impl<'gc> Expander<'gc> {
             macro_scope,
             mac: Value::UNSPECIFIED,
             depth_limit: patina_core::walk::MAX_FORM_DEPTH,
+            use_location: None,
         }
+    }
+
+    /// Expanding a use located at `location`, or at none (#792): each list
+    /// the template builds is located there, through its head.
+    pub fn at_use(mut self, location: Option<SourceLocation>) -> Self {
+        self.use_location = location;
+        self
     }
 
     /// Expanding the templates of the macro object `mac`, whose literals

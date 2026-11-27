@@ -5,48 +5,53 @@
 //! An identifier holds the id of its location's entry in the heap's
 //! document tables (`heap/documents.rs`, #791): a copy takes its
 //! original's id, and the sweep frees the entries no marked identifier
-//! carries. A list, a vector, a string or another non-symbol object has an
-//! entry of `syntax_sources`, keyed by its raw bits, which the sweep prunes
-//! before a slot can be reused, until #792 and #793. The reader used to
-//! record the location of each element of a list or vector too, immediate
-//! datums included, but nothing outside tests read those spans (#643).
+//! carries. A list is located by its head (#792, DESIGN E.1): the form span
+//! of the identifier it starts with, if that identifier has one. A list
+//! whose head is no identifier, a vector, a string and every other object
+//! has no location: lost, never misattributed. Nothing writes
+//! `syntax_sources` any more, which #793 deletes with its prune. The reader
+//! used to record the location of each element of a list or vector too,
+//! immediate datums included, but nothing outside tests read those spans
+//! (#643).
 
 use super::scope_sets::{ScopeSetId, ScopeSetMemo};
 use super::{Heap, IdentifierData};
 use crate::{ScopeId, ScopeSet, SourceLocation, TaggedValue};
-use std::rc::Rc;
 
 impl Heap {
-    /// Where `value` was read or expanded: an identifier's location, built
-    /// from its entry in the document tables (#791), or a container's, from
-    /// `syntax_sources`. Owned, since an identifier's is built and cannot
-    /// be lent.
+    /// Where `value` was read or expanded, built from the document tables
+    /// (#791): an identifier's own location, or a list's, which is the form
+    /// span of the identifier at its head (#792). `None` for a list whose
+    /// head is no identifier or has no form span, and for every other value.
+    /// Owned, since a location is built and cannot be lent.
     pub fn source(&self, value: TaggedValue) -> Option<SourceLocation> {
         if let Some(identifier) = self.identifier(value) {
             return self.documents.location(identifier.source);
         }
-        self.syntax_sources
-            .get(&value.raw_bits())
-            .map(|location| (**location).clone())
+        if value.is_pair() {
+            return self.form_span(self.car(value));
+        }
+        None
     }
 
-    /// Locate `value` at `location`. An identifier takes a new entry of the
-    /// document tables with that span and chain, its form span kept, and
-    /// its payload is written: so only an identifier made in the calling
-    /// context is recorded so (`heap/documents.rs`; one another context
-    /// made is copied, [`Heap::alloc_identifier_relocated`]).
+    /// The entries of `syntax_sources`, which nothing writes since #792:
+    /// what a test reads to see that #793 deletes a table nothing fills.
+    #[doc(hidden)]
+    pub fn syntax_source_entries(&self) -> usize {
+        self.syntax_sources.len()
+    }
+
+    /// Locate the identifier `value` at `location`: it takes a new entry of
+    /// the document tables with that span and chain, its form span kept,
+    /// and its payload is written. So only an identifier made in the calling
+    /// context is recorded so (`heap/documents.rs`; one another context made
+    /// is copied, [`Heap::alloc_identifier_relocated`]). Any other value is
+    /// left as it is: a list is located by its head, and nothing else is
+    /// located (#792).
     pub fn record_source(&mut self, value: TaggedValue, location: SourceLocation) {
         if let Some(identifier) = self.identifier(value) {
             let source = self.documents.relocated(identifier.source, &location);
             self.set_identifier_source(value, source);
-            return;
-        }
-        if value.is_pair() || value.is_vector() || value.is_string() || value.is_object() {
-            // Interned symbols denote a name, never one occurrence.
-            if self.get_symbol_name(value).is_none() {
-                self.syntax_sources
-                    .insert(value.raw_bits(), Rc::new(location));
-            }
         }
     }
 
@@ -288,61 +293,97 @@ impl Heap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::heap::gc::{Collector, MarkSweepCollector};
-    use crate::{RootProvider, SlotVisitor, SourceMap};
+    use crate::SourceMap;
 
+    /// A list is located by its head (#792): the form span of the
+    /// identifier it starts with, which a copy of the list with the same
+    /// head shares. A list whose head is no identifier, a vector and a
+    /// string have none, and recording one on them writes nothing.
     #[test]
-    fn syntax_copies_keep_independent_locations() {
+    fn a_list_is_located_by_its_head() {
         let mut heap = Heap::new();
         let mut map = SourceMap::new();
-        map.set_source_text("(1) (2)".into());
-        let original = heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
-        let copy = heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
-        let first = map.location("test.scm", 1, 1, 1, 4);
-        let second = map.location("test.scm", 1, 5, 1, 8);
-        heap.record_source(original, first.clone());
-        heap.inherit_source(original, copy);
-        assert_eq!(heap.source(copy), Some(first.clone()));
+        map.set_source_text("(car 5) (1 2) #(1) \"s\"".into());
+        let car = heap.intern_symbol("car");
+        let head = heap.alloc_source_identifier_for(car);
+        let own = map.location("test.scm", 1, 2, 1, 5);
+        let form = map.location("test.scm", 1, 1, 1, 8);
+        heap.record_head_source(head, &own, &form);
+        let tail = heap.alloc_pair(TaggedValue::fixnum(5), TaggedValue::NULL);
+        let list = heap.alloc_pair(head, tail);
+        let copy = heap.alloc_pair(head, tail);
+        assert_eq!(heap.source(head), Some(own));
+        assert_eq!(heap.source(list), Some(form.clone()));
+        assert_eq!(heap.source(copy), Some(form.clone()));
 
-        heap.record_source(copy, second.clone());
-        assert_eq!(heap.source(original), Some(first));
-        assert_eq!(heap.source(copy), Some(second.clone()));
-        heap.record_source(original, map.location("test.scm", 1, 2, 1, 3));
-        assert_eq!(heap.source(copy), Some(second));
+        heap.record_source(list, map.location("test.scm", 1, 9, 1, 14));
+        assert_eq!(
+            heap.source(list),
+            Some(form),
+            "a list's location is its head's"
+        );
+
+        let numbers = heap.alloc_pair(TaggedValue::fixnum(1), tail);
+        let vector = heap.alloc_vector(vec![TaggedValue::fixnum(1)]);
+        let string = heap.alloc_string("s".into());
+        for (value, at) in [(numbers, (9, 14)), (vector, (15, 19)), (string, (19, 22))] {
+            heap.record_source(value, map.location("test.scm", 1, at.0, 1, at.1));
+            assert_eq!(heap.source(value), None);
+        }
     }
 
-    /// A container's entry of `syntax_sources` goes with its container,
-    /// before the slot is reused. An identifier's location is in the
-    /// document tables since #791, whose sentinels hold the same of it
-    /// (`heap/trace_sentinels.rs`).
+    /// The head of a list a template builds takes the use as its form span
+    /// (decision 16 on #782, #792), its own span and chain kept: a copy for
+    /// a head another context made, and the head itself in place for one
+    /// made in this context. A use with no location leaves no form span,
+    /// never the one the head had; a head with no location of its own is
+    /// located at the use as well.
     #[test]
-    fn sweep_removes_non_owning_provenance_before_slot_reuse() {
-        struct Keep(TaggedValue);
-        impl RootProvider for Keep {
-            fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
-                visitor.pinned(self.0);
-            }
-        }
+    fn a_template_built_head_takes_the_use_as_its_form_span() {
         let mut heap = Heap::new();
         let mut map = SourceMap::new();
-        map.set_source_text("(live) (dead)".into());
-        let live = heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
-        let dead = heap.alloc_pair(TaggedValue::fixnum(2), TaggedValue::NULL);
-        heap.record_source(live, map.location("test.scm", 1, 1, 1, 7));
-        heap.record_source(dead, map.location("test.scm", 1, 8, 1, 14));
-        let retained = heap.source(dead).unwrap();
-        MarkSweepCollector::new().collect(&mut heap, &[&Keep(live)]);
-        assert!(heap.source(live).is_some());
-        let reused = heap.alloc_pair(TaggedValue::fixnum(3), TaggedValue::NULL);
-        // The same slot. In a check build the new tenant's reference carries
-        // a newer generation stamp, so it is deliberately not `dead` (#621).
-        assert_eq!(reused.heap_index(), dead.heap_index());
-        assert!(heap.source(reused).is_none());
-        assert!(
-            SourceMap::new()
-                .format_context(&retained)
-                .unwrap()
-                .contains("(live) (dead)")
+        map.set_source_text("(define-syntax m (car x))\n(m 5)".into());
+        let car = heap.intern_symbol("car");
+        let template = heap.alloc_source_identifier_for(car);
+        let own = map.location("test.scm", 1, 19, 1, 22);
+        let written = map.location("test.scm", 1, 18, 1, 25);
+        heap.record_head_source(template, &own, &written);
+        let at_use = map.location("test.scm", 2, 1, 2, 6);
+
+        let copy = heap
+            .alloc_identifier_formed(template, Some(&at_use))
+            .unwrap();
+        assert_ne!(copy, template);
+        assert_eq!(heap.source(copy), Some(own.clone()));
+        assert_eq!(heap.form_span(copy), Some(at_use.clone()));
+        assert_eq!(
+            heap.form_span(template),
+            Some(written),
+            "the original is untouched"
+        );
+        assert_eq!(
+            heap.identifier(copy).unwrap().written,
+            heap.identifier(template).unwrap().written
+        );
+
+        let unlocated = heap.alloc_identifier_formed(template, None).unwrap();
+        assert_eq!(heap.source(unlocated), Some(own.clone()));
+        assert_eq!(heap.form_span(unlocated), None);
+
+        heap.record_form(copy, None);
+        assert_eq!(heap.form_span(copy), None);
+        heap.record_form(copy, Some(&at_use));
+        assert_eq!(heap.form_span(copy), Some(at_use.clone()));
+
+        let bare = heap.alloc_identifier_for(car, ScopeSet::new());
+        assert_eq!(heap.source(bare), None);
+        let located = heap.alloc_identifier_formed(bare, Some(&at_use)).unwrap();
+        assert_eq!(heap.source(located), Some(at_use.clone()));
+        assert_eq!(heap.form_span(located), Some(at_use));
+        assert_eq!(
+            heap.alloc_identifier_formed(bare, None)
+                .map(|v| heap.source(v)),
+            Some(None)
         );
     }
 }

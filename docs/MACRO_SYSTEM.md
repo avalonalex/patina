@@ -262,8 +262,23 @@ scopes and `written` flag, rather than rewriting an identifier another
 context may have made: so `nope`, written inside `(wrap (define-syntax bad
 …))`, reports `wrap → bad`. A template's literal is held as a copy whose
 chain is the template's, which every use extends. `Heap::source` and
-`Cx::source` build the `SourceLocation` from the entry, and
-`Heap::form_span` reads the form span, which #792 makes a list's location.
+`Cx::source` build the `SourceLocation` from the entry.
+
+**Which form a location names** (#792). A list is located by its head:
+`Heap::source` of a pair is `Heap::form_span` of its car. The head of each
+list a template builds takes the use's location as its form span
+(`Expander::at_use`, decision 16), whatever its origin, written in the
+template or substituted from the use: in place for the identifier a
+`Template::Symbol` was just instantiated as, and as a copy for any other
+head. A list substituted whole keeps its head's, so `(wrap (car 5))`
+reports `(car 5)`, and `(bad 5)` whose template is `(car x)` reports
+`(bad 5)`. A use with no location leaves no form span, never the template's
+own list. An expansion whose form has none, `((f))`, is located at the use
+with the expansion in its chain. What has no location: a list whose head is
+no identifier (`((g) 1)`, `('car 5)`, `("ab" 0)`), a vector, a string, a
+list whose head heads a second list through a datum label, and quoted data
+given to `eval`; a report then names an enclosing form, the call that ran
+the code, or nothing, never a neighbour.
 
 A macro object holds a set's id too (#789): `HeapObjectData::Macro.scopes`,
 the union of every scope its `CompiledMacro` holds off the heap

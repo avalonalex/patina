@@ -92,7 +92,10 @@ fn expand_macro_core_tagged<'gc>(
     debug_ctx.log_input_flip(macro_scope, flipped_args, cx);
 
     // Create expander with macro scope for hygiene
-    let expander = Expander::new(macro_scope).for_macro(mac).at_depth(depth);
+    let expander = Expander::new(macro_scope)
+        .for_macro(mac)
+        .at_depth(depth)
+        .at_use(cx.source(original_args));
 
     // Try each rule until we find a match
     for (rule_idx, rule) in compiled_macro.rules.iter().enumerate() {
@@ -375,7 +378,7 @@ pub fn expand_macro_at_sites<'gc>(
         mac,
         flipped_args,
         macro_scope,
-        args, // original args for debug logging
+        args, // the use as written: its location, and debug logging
         definition,
         use_site,
         depth,
