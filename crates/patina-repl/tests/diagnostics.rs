@@ -911,6 +911,17 @@ fn run_time_errors_are_located_at_their_forms_on_the_vm() {
             Some((3, 13, 7)),
             Some("  macro expansion: bad"),
         ),
+        // Kept (decision 16): the same for a dotted template's form, inside
+        // a lambda the template builds, where no fallback reaches it (#792).
+        (
+            &[
+                "(define-syntax bad2 (syntax-rules () ((_ x . r) (lambda () (car x . r)))))",
+                "(define k (bad2 5))",
+                "(k)",
+            ][..],
+            Some((3, 11, 8)),
+            Some("  macro expansion: bad2"),
+        ),
         // Kept: an identifier-headed form inside a lambda-headed one.
         (
             &["((lambda (v) (vector-ref v 9)) (vector))"][..],
