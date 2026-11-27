@@ -574,11 +574,6 @@ pub enum SpineEnd<V = TaggedValue> {
 /// ```
 #[derive(Debug)]
 pub struct Heap {
-    /// Where each syntax occurrence was read or expanded, keyed by its raw
-    /// bits (`heap/source.rs`); not a root, so sweep prunes it. Nothing
-    /// writes it since a list is located by its head (#792), and #793
-    /// deletes it.
-    syntax_sources: std::collections::HashMap<u64, Rc<crate::SourceLocation>>,
     /// Pair storage: (car, cdr) tuples
     pairs: Vec<(TaggedValue, TaggedValue)>,
 
@@ -851,7 +846,6 @@ impl Heap {
         let scope_sets = ScopeSetTable::new(account.external_bytes_handle());
         let documents = DocumentTable::new(account.external_bytes_handle());
         Self {
-            syntax_sources: std::collections::HashMap::new(),
             instance: Rc::new(crate::instance::Instance::default()),
             pairs: Vec::with_capacity(pairs),
             vectors: Vec::with_capacity(vectors),
@@ -1800,6 +1794,31 @@ impl Heap {
         name: TaggedValue,
         scopes: crate::scope::ScopeSet,
     ) -> TaggedValue {
+        self.alloc_relinked_located(name, scopes, SourceId::NONE)
+    }
+
+    /// [`Heap::alloc_relinked_identifier`] located where the identifier
+    /// `original` is: the relinker's copy of a reference it renames, which
+    /// takes its original's source id, form span and all, with no write to
+    /// the document tables (#791, #793).
+    pub(crate) fn alloc_relinked_copy(
+        &mut self,
+        original: TaggedValue,
+        name: TaggedValue,
+        scopes: crate::scope::ScopeSet,
+    ) -> TaggedValue {
+        let source = self
+            .identifier(original)
+            .map_or(SourceId::NONE, |data| data.source);
+        self.alloc_relinked_located(name, scopes, source)
+    }
+
+    fn alloc_relinked_located(
+        &mut self,
+        name: TaggedValue,
+        scopes: crate::scope::ScopeSet,
+        source: SourceId,
+    ) -> TaggedValue {
         debug_assert!(
             self.get_symbol_name(name).is_some() && !self.is_interned_symbol(name),
             "a relinked identifier's name is a symbol the intern table does not hold"
@@ -1808,7 +1827,7 @@ impl Heap {
         self.alloc_object(HeapObjectData::Identifier(IdentifierData {
             name,
             scopes,
-            source: SourceId::NONE,
+            source,
             written: false,
             relinked: true,
         }))

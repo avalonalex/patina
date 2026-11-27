@@ -1,8 +1,8 @@
 //! The heap's document tables (#791, GC stage 4c.5): where each identifier
 //! was read or expanded, held once, under a [`SourceId`].
 //!
-//! An identifier's location used to be an entry of `Heap.syntax_sources`, a
-//! map keyed by the identifier's raw bits to an `Rc<SourceLocation>`: every
+//! An identifier's location used to be an entry of a map in `Heap` keyed by
+//! the identifier's raw bits to an `Rc<SourceLocation>` (deleted by #793): every
 //! copy a scope edit made wrote the map again, and the sweep pruned it key
 //! by key. Now an identifier holds the id of an entry here, a copy takes its
 //! original's id with no write, and the sweep frees the entries no marked

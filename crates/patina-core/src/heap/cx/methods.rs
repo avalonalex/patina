@@ -528,13 +528,15 @@ impl<'gc> Cx<'gc> {
         r.map(|w| self.brand(w))
     }
 
-    /// [`Heap::inherit_source`](crate::Heap::inherit_source) on this context's heap.
+    /// Formerly [`Heap::inherit_source`](crate::Heap::inherit_source) on
+    /// this context's heap. Does nothing (#793).
+    #[deprecated(
+        note = "a no-op since #793: every copy the heap makes of an identifier takes its \
+                location (Cx::alloc_identifier_relocated and Cx::alloc_relinked_copy make \
+                located copies), and a list is located by its head identifier"
+    )]
     #[inline]
-    pub fn inherit_source(&mut self, original: Value<'gc>, copy: Value<'gc>) {
-        self.heap
-            .borrow_mut()
-            .inherit_source(original.tagged(), copy.tagged())
-    }
+    pub fn inherit_source(&mut self, _original: Value<'gc>, _copy: Value<'gc>) {}
 
     /// [`Heap::intern_symbol`](crate::Heap::intern_symbol) on this context's heap.
     #[inline]

@@ -176,7 +176,10 @@ impl SourceMap {
 
     /// Formerly recorded a datum's location in the map's own table, which
     /// nothing outside tests read (#643). Records nothing.
-    #[deprecated(note = "a no-op; use Heap::record_source and Heap::source")]
+    #[deprecated(
+        note = "a no-op; an identifier holds its location (Heap::source), and a list is \
+                located by its head identifier"
+    )]
     pub fn record(&mut self, _tv: TaggedValue, _loc: SourceLocation) {}
 
     /// Formerly looked a datum's location up in the map's own table (#643).

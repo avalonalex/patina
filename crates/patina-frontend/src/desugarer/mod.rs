@@ -2602,7 +2602,6 @@ impl<'a> Desugarer<'a> {
             } else {
                 self.rewrite_vector(tv, renames, quote_depth, cx)
             };
-            cx.inherit_source(tv, rewritten);
             renames.open.borrow_mut().leave();
             return rewritten;
         }
@@ -2629,9 +2628,7 @@ impl<'a> Desugarer<'a> {
         // The renamed copy is located where its original is: it takes the
         // original's source id, form span and all, with no write to the
         // document tables (#791).
-        let copy = cx.alloc_relinked_identifier(&alias, scopes);
-        cx.inherit_source(tv, copy);
-        copy
+        cx.alloc_relinked_copy(tv, &alias, scopes)
     }
 
     /// [`Self::rewrite_refs`] for a vector.

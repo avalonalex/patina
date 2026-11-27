@@ -8,8 +8,12 @@
 //! carries. A list is located by its head (#792, DESIGN E.1): the form span
 //! of the identifier it starts with, if that identifier has one. A list
 //! whose head is no identifier, a vector, a string and every other object
-//! has no location: lost, never misattributed. Nothing writes
-//! `syntax_sources` any more, which #793 deletes with its prune. The reader
+//! has no location: lost, never misattributed.
+//!
+//! A list, a vector and a string used to have an entry of a map in `Heap`
+//! keyed by raw value bits, which the sweep pruned before a slot could be
+//! reused; nothing wrote it after #792, and #793 deleted it, its prune and
+//! `TaggedValue`'s `from_raw` with it. The reader
 //! used to record the location of each element of a list or vector too,
 //! immediate datums included, but nothing outside tests read those spans
 //! (#643).
@@ -34,13 +38,6 @@ impl Heap {
         None
     }
 
-    /// The entries of `syntax_sources`, which nothing writes since #792:
-    /// what a test reads to see that #793 deletes a table nothing fills.
-    #[doc(hidden)]
-    pub fn syntax_source_entries(&self) -> usize {
-        self.syntax_sources.len()
-    }
-
     /// Locate the identifier `value` at `location`: it takes a new entry of
     /// the document tables with that span and chain, its form span kept,
     /// and its payload is written. So only an identifier made in the calling
@@ -55,32 +52,31 @@ impl Heap {
         }
     }
 
-    /// Locate `copy` where `original` is, if `original` has a location. An
-    /// identifier's copy takes its original's source id, with no write to
-    /// the document tables (#791); the copy was made in the calling
-    /// context, as [`Heap::record_source`] requires.
-    pub fn inherit_source(&mut self, original: TaggedValue, copy: TaggedValue) {
+    /// Formerly located `copy` where `original` was: a container through
+    /// the raw-bits provenance table, which #793 deleted, and an identifier
+    /// through its source id. Does nothing.
+    #[deprecated(
+        note = "a no-op since #793: an identifier holds its location as a source id, which every \
+                copy the heap makes of it takes (Cx::rescope_identifiers, \
+                Heap::map_syntax_identifiers, Heap::alloc_identifier_relocated, \
+                Cx::alloc_relinked_copy), and a list is located by its head identifier"
+    )]
+    pub fn inherit_source(&mut self, _original: TaggedValue, _copy: TaggedValue) {}
+
+    /// Locate the identifier `copy`, made in the calling context, where the
+    /// identifier `original` is: it takes its original's source id, with no
+    /// write to the document tables (#791). A no-op for a pair of values
+    /// that are not both identifiers. The syntax walks' (#793), for a copy a
+    /// caller's transform made.
+    pub(crate) fn locate_copy(&mut self, original: TaggedValue, copy: TaggedValue) {
         if original == copy {
             return;
         }
-        if let Some(copied) = self.identifier(copy) {
-            if let Some(identifier) = self.identifier(original)
-                && !identifier.source.is_none()
-                && identifier.source != copied.source
-            {
-                self.set_identifier_source(copy, identifier.source);
-            }
-            return;
-        }
-        // Scope edits often copy the same syntax repeatedly while a library
-        // load defers GC. Share its immutable provenance; record_source
-        // replaces a copy's entry only when that occurrence is updated.
-        if original != copy
-            && (copy.is_pair() || copy.is_vector() || copy.is_string() || copy.is_object())
-            && self.get_symbol_name(copy).is_none()
-            && let Some(source) = self.syntax_sources.get(&original.raw_bits()).cloned()
+        if let (Some(identifier), Some(copied)) = (self.identifier(original), self.identifier(copy))
+            && !identifier.source.is_none()
+            && identifier.source != copied.source
         {
-            self.syntax_sources.insert(copy.raw_bits(), source);
+            self.set_identifier_source(copy, identifier.source);
         }
     }
 }
@@ -226,9 +222,7 @@ impl Heap {
             }
             if self.is_identifier(value) {
                 if let Some(copy) = copy_of(self, value) {
-                    if self.get_symbol_name(copy).is_none() {
-                        self.inherit_source(value, copy);
-                    }
+                    self.locate_copy(value, copy);
                     replacements.insert(value.raw_bits(), copy);
                     changed.push(value);
                 }
@@ -262,7 +256,6 @@ impl Heap {
                         let len = self.vector_len(parent);
                         self.alloc_vector(vec![TaggedValue::UNSPECIFIED; len])
                     };
-                    self.inherit_source(parent, copy);
                     replacements.insert(parent.raw_bits(), copy);
                     containers.push((parent, copy));
                     changed.push(parent);
@@ -294,6 +287,15 @@ impl Heap {
 mod tests {
     use super::*;
     use crate::SourceMap;
+
+    /// Syntax is `Drop`-free (`PRD/GC_PRD.md` §19, "Value on its own";
+    /// #793): an identifier's payload holds its name, its scope set and its
+    /// location as words and ids, and a list's location is its head's, so
+    /// no syntax object owns a Rust value that a sweep would drop.
+    #[test]
+    fn syntax_is_drop_free() {
+        assert!(!std::mem::needs_drop::<IdentifierData>());
+    }
 
     /// A list is located by its head (#792): the form span of the
     /// identifier it starts with, which a copy of the list with the same

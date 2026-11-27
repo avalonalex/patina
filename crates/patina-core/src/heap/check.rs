@@ -36,21 +36,17 @@
 //! - the four `alloc_*` returns, stamped by [`SlotChecks::reuse`] (a fresh
 //!   slot's generation is 0, the unstamped value);
 //! - the symbol and core-syntax lookups, stamped by [`SlotChecks::stamp`];
-//! - the four freed-bits reports in sweep, stamped by [`SlotChecks::free`]
-//!   with the generation the slot had *before* it was freed, so that a
-//!   `SourceMap` key (the raw bits of the value as it was made) still
-//!   matches the report that prunes it;
-//! - the `syntax_sources` prune, which reads only the tag and index, and,
-//!   in a `gc-census` build, the census's count of the same keys (#787),
-//!   which reads them the same way and keeps no value.
+//! - the reference sweep builds for each freed slot, which only
+//!   [`SlotChecks::free`] reads, and only for its index.
 //!
-//! `TaggedValue::from_raw` has no other caller, and it and the index
-//! constructors (`TaggedValue::pair` and the rest) are crate-private, so no
-//! other crate can mint a reference. Every copy of a value carries the same stamp, so the
-//! consumers of raw bits — `eq?`/`eqv?`/`equal?`'s fast paths, identity
-//! hashing (which hashes the index), the datum writer's labels, the
-//! desugarer's and parser's `seen` sets, the VM's primitive table and the
-//! `SourceMap` — see one key per object, as before.
+//! Nothing builds a reference from raw bits: the one way, `TaggedValue`'s
+//! `from_raw`, went with the raw-bits provenance table's prune (#793). The
+//! index constructors (`TaggedValue::pair` and the rest) are crate-private,
+//! so no other crate can mint a reference. Every copy of a value carries the
+//! same stamp, so the consumers of raw bits — `eq?`/`eqv?`/`equal?`'s fast
+//! paths, identity hashing (which hashes the index), the datum writer's
+//! labels, the desugarer's and parser's `seen` sets and the VM's primitive
+//! table — see one key per object, as before.
 
 #[cfg(any(debug_assertions, feature = "gc-check"))]
 pub(crate) use checked::SlotChecks;
