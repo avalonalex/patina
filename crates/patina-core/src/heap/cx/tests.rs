@@ -430,6 +430,12 @@ fn copies_of_an_identifier_keep_its_location_and_write_no_entry() {
             entries,
             "a copy wrote an entry"
         );
+
+        // A relinked copy of what is no identifier has no location (#793).
+        let symbol = cx.intern_symbol("x");
+        let unlocated = cx.alloc_relinked_copy(symbol, &name, ScopeSet::new());
+        assert_eq!(cx.source(unlocated), None);
+        assert_eq!(cx.heap.borrow().source_entries(), entries);
     });
 }
 

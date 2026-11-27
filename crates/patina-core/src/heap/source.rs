@@ -57,9 +57,9 @@ impl Heap {
     /// through its source id. Does nothing.
     #[deprecated(
         note = "a no-op since #793: an identifier holds its location as a source id, which every \
-                copy the heap makes of it takes (Heap::rescope_identifiers, \
-                Heap::map_syntax_identifiers, Heap::alloc_identifier_relocated), and a list is \
-                located by its head identifier"
+                copy the heap makes of it takes (Cx::rescope_identifiers, \
+                Heap::map_syntax_identifiers, Heap::alloc_identifier_relocated, \
+                Cx::alloc_relinked_copy), and a list is located by its head identifier"
     )]
     pub fn inherit_source(&mut self, _original: TaggedValue, _copy: TaggedValue) {}
 
