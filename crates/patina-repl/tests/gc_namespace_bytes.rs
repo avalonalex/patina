@@ -410,9 +410,8 @@ fn a_specifier_namespace_lives_while_code_compiled_in_it_does() {
 /// steady-state lane's `library-stream` shape, in file mode: after the
 /// redefinition and two collections the namespaces are counted and charged
 /// as they were before it. The document tables' charge (#791) is taken out
-/// of the reading: they keep room up to four times the locations that live,
-/// so the second load's reading can leave them a few entries' room above
-/// the first.
+/// of the reading: it follows the locations that live, which the second
+/// load's forms need not leave as the first's did.
 #[test]
 fn a_replaced_library_with_a_procedure_is_released() {
     let program = "(define ns0 0)

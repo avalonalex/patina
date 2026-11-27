@@ -1430,13 +1430,13 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   document tables, plain `Heap` fields (§9.1), charge their buffers at
   capacity through a handle of their own as they grow, and give back as the
   sweep frees their entries, before it reads the total. The document tables
-  compact as they sweep, so what they charge after a collection is bounded
-  by the identifiers that live, with room for at most four times their
-  entries: before they did, 17 live entries at ids up to 1,838 held 1,839
-  entries and up to 440 KB. They keep that room rather than cut to fit,
-  since the next forms' entries would grow the buffer again after every
-  collection, and each growth counts as bytes allocated that no collection
-  reclaims. `(gc-stats)`'s `scope-sets` and `documents` count their sets
+  compact as they sweep, and what they charge after a collection is a
+  function of the identifiers that live: their entries, with room for twice
+  as many rounded up to a power of two, and at least 64. Before they
+  compacted, 17 live entries at ids up to 1,838 held 1,839 entries and up
+  to 440 KB. They keep that room rather than cut to fit, since the next
+  forms' entries would grow the buffer again after every collection, and
+  each growth counts as bytes allocated that no collection reclaims. `(gc-stats)`'s `scope-sets` and `documents` count their sets
   and their documents, and `document-bytes` is the document tables' part of
   `external-bytes`, which a reading that holds the namespaces' charge to
   the byte takes out.

@@ -2010,9 +2010,10 @@ impl Heap {
     }
 
     /// The external bytes the heap's document tables charge: `(gc-stats)`'s
-    /// `document-bytes` (#791), part of `external-bytes`. The tables keep
-    /// room after a collection, up to four times what lives, so a reading
-    /// that holds the namespaces' charge to the byte takes this out of it.
+    /// `document-bytes` (#791), part of `external-bytes`. What they charge
+    /// follows the live identifiers' locations, which the forms a program
+    /// reads between two readings change, so a reading that holds the
+    /// namespaces' charge to the byte takes this out of it.
     pub fn document_bytes(&self) -> usize {
         self.documents.charged()
     }
