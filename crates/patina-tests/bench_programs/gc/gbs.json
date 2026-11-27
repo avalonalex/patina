@@ -686,6 +686,19 @@
    ]
   },
   {
+   "name": "libload-postload",
+   "group": "loading",
+   "kind": "patina",
+   "source": "probes/libload-postload.scm",
+   "sets": [
+    "load"
+   ],
+   "backends": [
+    "vm",
+    "tree-walker"
+   ]
+  },
+  {
    "name": "libload-point-c",
    "group": "loading",
    "kind": "patina",
