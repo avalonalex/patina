@@ -1178,9 +1178,7 @@ impl<'gc> Cx<'gc> {
     /// and flag kept, and each copy is made with its location already
     /// stamped: its own, or the use's where it has none, with the chain
     /// extended under #612's rule. So the walk is the expansion's only one,
-    /// and a source id is final when its identifier is made. The
-    /// locations with no document it met record the expansion in the
-    /// stamp's source map afterwards, by line and column.
+    /// and a source id is final when its identifier is made.
     pub fn rescope_identifiers_stamped(
         &mut self,
         root: Value<'gc>,
@@ -1196,14 +1194,6 @@ impl<'gc> Cx<'gc> {
             rescope,
             Some(&mut stamping),
         );
-        if let Some(map) = stamp.source_map
-            && !stamping.undocumented.is_empty()
-        {
-            let mut map = map.borrow_mut();
-            for location in &stamping.undocumented {
-                map.record_expansion(location, macro_name.to_owned());
-            }
-        }
         self.brand(word)
     }
 

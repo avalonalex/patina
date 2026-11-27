@@ -292,6 +292,10 @@ mod tests {
     use crate::SourceMap;
 
     #[test]
+    #[expect(
+        deprecated,
+        reason = "records an expansion by position, which a host may still do (#794)"
+    )]
     fn locations_retain_documents_and_expansion_chains_across_same_named_inputs() {
         fn send_sync<T: Send + Sync>() {}
         send_sync::<crate::SourceLocation>();
@@ -364,6 +368,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        deprecated,
+        reason = "records an expansion by position, which a host may still do (#794)"
+    )]
     fn retained_stream_positions_survive_compaction_without_quoting_wrong_text() {
         let mut map = SourceMap::new();
         map.set_primary_source("<stdin>");

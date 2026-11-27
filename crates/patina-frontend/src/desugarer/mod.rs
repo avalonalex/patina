@@ -164,13 +164,10 @@ static NEXT_FORM: AtomicU64 = AtomicU64::new(1);
 
 /// The use's location `loc` with an expansion of `macro_name` added to its
 /// chain, as the output flip's stamp gives an identifier with no location
-/// of its own (#794): for an expansion whose form has none (#792).
-fn expanded_at_use(
-    mut loc: SourceLocation,
-    source_map: Option<&Rc<RefCell<SourceMap>>>,
-    macro_name: &str,
-    form: u64,
-) -> SourceLocation {
+/// of its own (#794): for an expansion whose form has none (#792). A
+/// location with no document holds no chain, and the reader makes none
+/// (#794).
+fn expanded_at_use(mut loc: SourceLocation, macro_name: &str, form: u64) -> SourceLocation {
     if let Some(span) = &mut loc.span {
         let prefix = ExpansionChain::extendable(span.expansion_chain.as_ref(), form);
         span.expansion_chain = Some(ExpansionChain::extend(
@@ -178,9 +175,6 @@ fn expanded_at_use(
             std::sync::Arc::from(macro_name),
             form,
         ));
-    } else if let Some(map) = source_map {
-        map.borrow_mut()
-            .record_expansion(&loc, macro_name.to_owned());
     }
     loc
 }
@@ -2872,7 +2866,6 @@ impl<'a> Desugarer<'a> {
                 .map(|call_site| patina_core::ExpansionStamp {
                     call_site,
                     form: self.form.get(),
-                    source_map: self.source_map.as_ref(),
                 });
             let patina_macros::MacroExpansion {
                 form: expanded_tagged,
@@ -2922,14 +2915,8 @@ impl<'a> Desugarer<'a> {
             // expansion in its chain, as the stamp located such a form
             // before a list was located by its head (#792).
             if expr.source.is_none() {
-                expr.source = call_site_source.map(|loc| {
-                    expanded_at_use(
-                        loc,
-                        self.source_map.as_ref(),
-                        &compiled_macro.name,
-                        self.form.get(),
-                    )
-                });
+                expr.source = call_site_source
+                    .map(|loc| expanded_at_use(loc, &compiled_macro.name, self.form.get()));
             }
             return Ok(expr);
         }

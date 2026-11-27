@@ -22,10 +22,8 @@ use super::documents::SourceId;
 use super::scope_sets::{ScopeSetId, ScopeSetMemo};
 use super::{Heap, HeapObjectData, IdentifierData};
 use crate::source_document::ExpansionChain;
-use crate::{ScopeId, ScopeSet, SourceLocation, SourceMap, TaggedValue};
+use crate::{ScopeId, ScopeSet, SourceLocation, TaggedValue};
 use rustc_hash::FxHashMap;
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// Where a macro use is, and in which top-level form: what the expander's
@@ -38,10 +36,6 @@ pub struct ExpansionStamp<'a> {
     /// The top-level form being expanded, the number a new link records
     /// ([`ExpansionChain::form`]).
     pub form: u64,
-    /// The program's source map, where a location with no document records
-    /// the expansion by line and column. `None` in a library body, whose
-    /// desugarer has no map.
-    pub source_map: Option<&'a Rc<RefCell<SourceMap>>>,
 }
 
 /// One walk's stamping: the stamp, and what it has made so far. The links
@@ -63,10 +57,7 @@ pub(crate) struct Stamping<'a> {
     links: FxHashMap<usize, ExpansionChain>,
     /// The entry of the use's location with this expansion's chain, once an
     /// identifier with no location has taken it.
-    pub(crate) at_use: Option<SourceId>,
-    /// The locations with no document met, each one an expansion to record
-    /// in the program's source map after the walk.
-    pub(crate) undocumented: Vec<SourceLocation>,
+    at_use: Option<SourceId>,
 }
 
 impl<'a> Stamping<'a> {
@@ -83,7 +74,6 @@ impl<'a> Stamping<'a> {
             name: None,
             links: FxHashMap::default(),
             at_use: None,
-            undocumented: Vec::new(),
         }
     }
 
@@ -271,20 +261,14 @@ impl Heap {
     /// `id` (#794): its own location, or the use's where it has none, with
     /// the chain extended by this expansion under #612's rule
     /// ([`ExpansionChain::extendable`]), one new link for each distinct
-    /// prefix. A location with no document holds no chain; it, and a form
-    /// span with no document, go on the stamp's list for the program's
-    /// source map, which records the expansion by line and column.
+    /// prefix. A location with no document holds no chain and keeps its id.
+    /// The reader makes none since #791, so the expansion it once recorded
+    /// in the source map by line and column is recorded nowhere: #794 ran
+    /// the Rust tests, both chibi suites and Larceny's R7RS suites with a
+    /// trace of every such location the stamp met, and it met none.
     pub(crate) fn stamp_source(&mut self, id: SourceId, stamp: &mut Stamping<'_>) -> SourceId {
-        if let Some(form) = self.documents.form_location(id)
-            && form.span.is_none()
-        {
-            stamp.undocumented.push(form);
-        }
         match self.documents.stamp_reading(id) {
             None => {
-                if stamp.call_site.span.is_none() {
-                    stamp.undocumented.push(stamp.call_site.clone());
-                }
                 if let Some(id) = stamp.at_use {
                     return id;
                 }
@@ -296,12 +280,7 @@ impl Heap {
                 stamp.at_use = Some(at_use);
                 at_use
             }
-            Some((_, false)) => {
-                if let Some(location) = self.documents.location(id) {
-                    stamp.undocumented.push(location);
-                }
-                id
-            }
+            Some((_, false)) => id,
             Some((chain, true)) => {
                 let chain = stamp.chain_from(chain.as_ref());
                 self.documents.rechained(id, chain)
