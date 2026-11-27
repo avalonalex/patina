@@ -2774,13 +2774,21 @@ chain's newest link (decision 14: chains are not interned), so the
 identifiers one expansion gives one location share an entry. A copy takes
 its original's id with no write. The reader gives a head its form span when
 the list closes, in the same entry as its own span; an identifier that heads
-two lists through a datum label has none. An expansion's stamp writes the
-identifiers the expansion made in place, and gives a name the reader wrote,
-which may come from another context, a located copy instead, so that an
-entry made since the last collection is carried only by identifiers made
-since then, as a minor collection that prunes young entries alone requires
-from stage 7; inside a nested macro definition that copy keeps the outer
-chain (`wrap → bad`). A template's literal is held as a re-sourced copy
+two lists through a datum label has none. An expansion's stamp is made in
+the expander's output flip (#794, `Cx::rescope_identifiers_stamped`): the
+flip copies each identifier of the expansion, a name the reader wrote too,
+with its set and `written` flag kept, and allocates each copy with its
+stamped source id, its own location or the use's where it has none, with
+the chain extended under #612's rule (`ExpansionChain::extendable`), one
+new link for each distinct prefix. So an expansion is walked once, a source
+id is final when its identifier is made, and an entry made since the last
+collection is carried only by identifiers made since then, as a minor
+collection that prunes young entries alone requires from stage 7; inside a
+nested macro definition the copy keeps the outer chain (`wrap → bad`).
+Chains stay shared links with a form number, interned neither per document
+nor per heap (decision 14): at `86baed1b` a libload ended with about 13,000
+live links of 64 B, 0.8 MiB, which is all interning could save (#794's
+issue). A template's literal is held as a re-sourced copy
 whose chain is the template's. A list is located by its head (#792, DESIGN
 E.1): its location is the form span of the identifier it starts with.
 The reader records identifiers only, and a quote abbreviation's head is a

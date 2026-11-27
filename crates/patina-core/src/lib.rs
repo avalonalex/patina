@@ -131,7 +131,7 @@ pub use heap::gc::{
     GcMode, GcStats, GcVisitor, MarkBits, NoGcScope, RootProvider, RootSet, RootToken, SlotVisitor,
 };
 pub use heap::{
-    CheckCell, GC_CHECK, Heap, SharedHeap, SpineEnd,
+    CheckCell, ExpansionStamp, GC_CHECK, Heap, SharedHeap, SpineEnd,
     attrs::{AllocAttrs, BarrierKind, GcAttrs, PollKind, Publication, WatermarkKind},
     config::HeapConfig,
     handles::{Owned, OwnedEnvironment},

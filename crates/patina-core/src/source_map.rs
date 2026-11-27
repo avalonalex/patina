@@ -202,7 +202,16 @@ impl SourceMap {
         true
     }
 
-    /// Record that a macro with the given name was expanded at this location.
+    /// Record that a macro with the given name was expanded at this location,
+    /// by its line and column in its document: for a location whose span
+    /// holds no chain. Nothing in the workspace calls it since #794: an
+    /// expansion's chain is on its identifiers' locations, and the reader
+    /// makes no location without a document, where a chain could not be
+    /// held. [`Self::get_expansions`] still answers what it recorded.
+    #[deprecated(
+        note = "nothing records an expansion by position since #794: an expansion's chain is \
+                on its identifiers' locations (SourceSpan::expansion_chain)"
+    )]
     pub fn record_expansion(&mut self, loc: &SourceLocation, macro_name: String) {
         if let Some(document) = loc
             .span
@@ -305,6 +314,10 @@ mod tests {
     /// forgetting old lines bounds what is held without dropping the line an
     /// unfinished datum began on, or the expansion records of lines kept.
     #[test]
+    #[expect(
+        deprecated,
+        reason = "records an expansion by position, which a host may still do (#794)"
+    )]
     fn lines_read_one_at_a_time_are_quoted_and_the_oldest_forgotten() {
         let mut sm = SourceMap::new();
         let loc = |line| SourceLocation {

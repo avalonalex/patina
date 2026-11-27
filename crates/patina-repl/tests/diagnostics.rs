@@ -1271,26 +1271,53 @@ fn a_dropped_line_keeps_its_location_and_built_data_has_none() {
 /// backends, as it did when the expansion's stamp rewrote the reader's
 /// location in place. Since #791 an identifier holds its location, and the
 /// stamp gives such a name a copy with the extended chain rather than
-/// writing an identifier another context made.
+/// writing an identifier another context made. The substitution marks pass
+/// a macro definition through unmarked, so its names reach the expansion as
+/// the reader wrote them, and since #794 the output flip copies each of
+/// them with the extended chain, as it stamps: the two other rows, a
+/// `define-syntax` and a `let-syntax` whose template has an unbound name
+/// (#794's issue, which pins them).
 #[test]
 fn a_name_written_in_a_nested_macro_definition_keeps_both_chains() {
     let dir = tempfile::tempdir().unwrap();
-    let program = program_of(&[
-        "(define-syntax wrap (syntax-rules () ((_ form) form)))",
-        "(wrap (define-syntax bad (syntax-rules () ((_) (nope)))))",
-        "(bad)",
-    ]);
-    fs::write(dir.path().join("program.scm"), &program).unwrap();
-    for backend in BOTH_BACKENDS {
-        let (_, _, stderr, ok) = run(dir.path(), backend, &["program.scm"], None);
-        assert!(!ok, "{backend:?}");
-        assert_located(
-            &stderr,
-            "program.scm",
-            &program,
+    for (lines, at) in [
+        (
+            &[
+                "(define-syntax wrap (syntax-rules () ((_ form) form)))",
+                "(wrap (define-syntax bad (syntax-rules () ((_) (nope)))))",
+                "(bad)",
+            ][..],
             (3, 49, 4),
-            Some("  macro expansion chain: wrap → bad"),
-        );
+        ),
+        (
+            &[
+                "(define-syntax wrap (syntax-rules () ((_ form) form)))",
+                "(wrap (define-syntax bad (syntax-rules () ((_ x) (if #t unknown x)))))",
+                "(bad 42)",
+            ][..],
+            (3, 57, 7),
+        ),
+        (
+            &[
+                "(define-syntax wrap (syntax-rules () ((_ form) form)))",
+                "(wrap (let-syntax ((bad (syntax-rules () ((_ x) (if #t unknown x))))) (bad 42)))",
+            ][..],
+            (3, 56, 7),
+        ),
+    ] {
+        let program = program_of(lines);
+        fs::write(dir.path().join("program.scm"), &program).unwrap();
+        for backend in BOTH_BACKENDS {
+            let (_, _, stderr, ok) = run(dir.path(), backend, &["program.scm"], None);
+            assert!(!ok, "{backend:?}");
+            assert_located(
+                &stderr,
+                "program.scm",
+                &program,
+                at,
+                Some("  macro expansion chain: wrap → bad"),
+            );
+        }
     }
 }
 
