@@ -132,7 +132,8 @@ The architecture is designed to support future exploration:
   released (0 on the tree-walker, #836), `scope-sets`, the scope sets
   the heap's scope-set table holds for its identifiers (#788),
   `documents`, the documents the live identifiers' locations are in
-  (#791), and
+  (#791), `document-bytes`, the part of `external-bytes` their tables
+  charge (#791), and
   `stack-limit`, the VM's stack cap in bytes (0 on the tree-walker, #907),
   and `committed-stack-bytes`, the bytes of its stack the VM holds
   committed, which `committed-bytes` does not count (0 on the tree-walker,

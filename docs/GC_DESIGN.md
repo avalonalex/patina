@@ -365,7 +365,9 @@ Notes:
 ### 4.2 Mark state
 
 Side bit-vectors, one per arena (`MarkBits`), sized to arena length at
-collection start. Owned by the `GcVisitor` and created fresh per collection —
+collection start, and one each for the scope-set table (#788) and the
+document tables (#791), sized to the table, whose bits an identifier sets
+for the set and the location entry it carries. Owned by the `GcVisitor` and created fresh per collection —
 no persistent mark state on `Heap`, so there is no clearing step and no idle
 memory between collections. No `TaggedValue` or `HeapObjectData` change.
 The visitor also roots the intern table at construction (a dangling
@@ -388,7 +390,8 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs`):
 
 | Variant | Children |
 |---------|----------|
-| `BigInt`, `Rational`, `Real`, `Symbol`, `Bytevector`, `Port` (its `PortTable` entry's number, #785), `RecordType`, `Identifier`, `Library`*, `PromptTag`, `LabelPlaceholder` | leaf |
+| `BigInt`, `Rational`, `Real`, `Symbol`, `Bytevector`, `Port` (its `PortTable` entry's number, #785), `RecordType`, `Library`*, `PromptTag`, `LabelPlaceholder` | leaf |
+| `Identifier` | `name`, a symbol (#790); and no value besides: `scopes` sets its set's bit (#788) and `source` its location entry's bit (#791), which the sweep reads; `written` and `relinked` are flags |
 | `Complex` | `real`, `imag` |
 | `Exception` | each of `irritants` |
 | `Record` | each of `fields` (through the `Rc<Interior<Vec<_>>>`); `record_type`, an `Rc`'d descriptor rather than a value, is not traced |
@@ -468,6 +471,16 @@ the drain. A check build still collects the port objects the object arena's
 sweep frees, and asserts that the pass took out each plain one's entry and
 that the collection queued each file one's (`PortTable::check_swept`, with
 its positive control `a_check_build_refuses_a_dead_port_the_pass_left`).
+
+The syntax tables are swept beside the arenas, before any slot is reused:
+the scope-set table frees every set no marked identifier carries (#788), and
+the document tables every location entry, dropping a document slot left with
+no entry (#791). The document tables then compact: the entries kept are
+numbered again from 1, and after the object arena's sweep has made the dead
+identifiers tombstones, one pass over the object arena gives each live
+identifier its entry's new id. Only a sweep that moved an entry makes the
+pass, so a collection after which nothing was read, expanded or evaluated
+makes none (§9.1).
 
 The namespaces' weak entries leave the same way, in a second pass right after
 the ports' (#836): a parentless namespace's placeholders, and a host
@@ -1417,12 +1430,16 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   document tables, plain `Heap` fields (§9.1), charge their buffers at
   capacity through a handle of their own as they grow, and give back as the
   sweep frees their entries, before it reads the total. The document tables
-  compact as they sweep, so what they charge after a collection follows the
-  identifiers that live: before they did, 17 live entries at ids up to
-  1,838 held 1,839 entries and up to 440 KB, and the external bytes of a
-  loop that read and evaluated the same forms drifted with how many
-  identifiers had died since the last collection. `(gc-stats)`'s
-  `scope-sets` and `documents` count their sets and their documents.
+  compact as they sweep, so what they charge after a collection is bounded
+  by the identifiers that live, with room for at most four times their
+  entries: before they did, 17 live entries at ids up to 1,838 held 1,839
+  entries and up to 440 KB. They keep that room rather than cut to fit,
+  since the next forms' entries would grow the buffer again after every
+  collection, and each growth counts as bytes allocated that no collection
+  reclaims. `(gc-stats)`'s `scope-sets` and `documents` count their sets
+  and their documents, and `document-bytes` is the document tables' part of
+  `external-bytes`, which a reading that holds the namespaces' charge to
+  the byte takes out.
 
   **Open file ports charge too, and count toward descriptor pressure
   (#607).** A file port's descriptor and buffer were invisible to the

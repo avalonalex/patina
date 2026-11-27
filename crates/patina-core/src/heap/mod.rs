@@ -2009,6 +2009,14 @@ impl Heap {
         self.documents.documents()
     }
 
+    /// The external bytes the heap's document tables charge: `(gc-stats)`'s
+    /// `document-bytes` (#791), part of `external-bytes`. The tables keep
+    /// room after a collection, up to four times what lives, so a reading
+    /// that holds the namespaces' charge to the byte takes this out of it.
+    pub fn document_bytes(&self) -> usize {
+        self.documents.charged()
+    }
+
     /// Allocate a native Continuation object (first-class continuation),
     /// charged for its own allocation and for the continuation levels no
     /// earlier capture was charged for, which this marks (#656,

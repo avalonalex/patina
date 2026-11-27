@@ -294,6 +294,7 @@ fn gc_stats<'gc>(cx: &mut Cx<'gc>, _args: &[Value<'gc>]) -> Result<Value<'gc>, E
         ("code-units", n(cx.code_units())),
         ("scope-sets", n(cx.scope_sets())),
         ("documents", n(cx.documents())),
+        ("document-bytes", n(cx.document_bytes())),
     ];
 
     let mut alist: Vec<Value<'gc>> = entries

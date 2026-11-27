@@ -897,6 +897,12 @@ impl<'gc> Cx<'gc> {
         self.heap.borrow().documents()
     }
 
+    /// [`Heap::document_bytes`]: `(gc-stats)`'s `document-bytes` (#791).
+    #[inline]
+    pub fn document_bytes(&self) -> usize {
+        self.heap.borrow().document_bytes()
+    }
+
     /// [`Heap::get_object`], borrowed: for the datum writer, which matches on
     /// the object's kind. Its words are raw, and a payload that changes is
     /// in an [`Interior`](crate::heap::Interior), which a match can name but

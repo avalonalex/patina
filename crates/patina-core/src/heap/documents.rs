@@ -474,8 +474,9 @@ impl DocumentTable {
     /// The sweep's pass (#791): free every entry `marked` lacks, drop every
     /// slot that leaves with no entry, and number the entries kept again
     /// from 1, in their order. A freed entry drops its chain and counts out
-    /// of its slots; the table is cut to the entries kept and its buffers to
-    /// fit, and the index is made again. Bit 0 is never read: entry 0 is no
+    /// of its slots; the table is cut to the entries kept, a buffer with more
+    /// than four times the room it uses is cut to twice, and the index is
+    /// made again. Bit 0 is never read: entry 0 is no
     /// entry.
     ///
     /// Answers the renumbering when an entry moved, which the heap applies
@@ -682,13 +683,17 @@ impl DocumentTable {
     }
 
     /// Give back the room the sweep left: all of it once no entry is held,
-    /// so that the table charges nothing again; otherwise the entries' to
-    /// fit, so that what they charge after a collection follows what lives,
-    /// and each map that holds four times what it uses.
+    /// so that the table charges nothing again; otherwise each buffer that
+    /// holds four times what it uses, down to twice. Compacted, the entries
+    /// hold what lives, so their room after a collection is at most four
+    /// times that. Not to fit: the entries the next forms read would grow
+    /// the buffer again after every collection, and each growth is charged
+    /// as bytes allocated, which no collection reclaims, since giving back
+    /// external bytes is not a reclamation (`ExternalBytes::release`).
     fn shrink(&mut self) {
-        self.entries.shrink_to_fit();
         if self.entries.len() == 1 {
             debug_assert_eq!(self.held_slots, 0, "a slot with no entry");
+            self.entries.shrink_to_fit();
             self.slots.truncate(1);
             self.slots.shrink_to_fit();
             self.by_document = FxHashMap::default();
@@ -698,6 +703,9 @@ impl DocumentTable {
             return;
         }
         let roomy = |capacity: usize, len: usize| capacity > (len * 4).max(64);
+        if roomy(self.entries.capacity(), self.entries.len()) {
+            self.entries.shrink_to(self.entries.len() * 2);
+        }
         if roomy(self.by_document.capacity(), self.by_document.len()) {
             self.by_document.shrink_to(self.by_document.len() * 2);
         }
@@ -731,8 +739,8 @@ impl DocumentTable {
         self.charged = bytes;
     }
 
-    /// The external bytes the table has charged.
-    #[cfg(test)]
+    /// The external bytes the table has charged: `(gc-stats)`'s
+    /// `document-bytes`.
     pub(crate) fn charged(&self) -> usize {
         self.charged
     }
@@ -1025,7 +1033,7 @@ mod tests {
         assert!(charged >= 300 * size_of::<Entry>(), "{charged}");
         assert_eq!(heap.external_bytes(), charged);
         // The ten kept are the first ten, so nothing moves, and the
-        // entries are cut to fit them.
+        // entries' room is cut to twice what they hold.
         let marked = marks(&table, &ids[..10]);
         assert!(table.sweep(&marked).is_none());
         assert!(
@@ -1033,10 +1041,10 @@ mod tests {
             "{} of {charged}",
             table.charged()
         );
-        assert_eq!(table.entries.capacity(), 11);
-        // Ten kept from the end move to the front, and the charge is the
-        // same as for the first ten: it follows what lives.
-        let after_ten = table.charged();
+        assert_eq!(table.entries.capacity(), 22);
+        // Ten kept from the end of 300 more move to the front: the table
+        // holds twenty entries, in room bounded by them, not by the ids the
+        // ten had.
         let more: Vec<_> = (300..600)
             .map(|line| table.intern(&map.location("a.scm", line + 1, 1, line + 1, 2)))
             .collect();
@@ -1044,9 +1052,12 @@ mod tests {
         kept.extend_from_slice(&more[290..]);
         let renumbering = table.sweep(&marks(&table, &kept)).expect("ten moved");
         assert_eq!(renumbering.apply(more[299]).index(), 20);
-        let marked = marks(&table, &(1..=10).map(SourceId).collect::<Vec<_>>());
-        assert!(table.sweep(&marked).is_none());
-        assert_eq!(table.charged(), after_ten);
+        assert_eq!(table.entries(), 21);
+        assert!(
+            table.entries.capacity() <= 64,
+            "{}",
+            table.entries.capacity()
+        );
         assert_eq!(heap.external_bytes(), table.charged());
         let marked = marks(&table, &[]);
         assert!(table.sweep(&marked).is_none());

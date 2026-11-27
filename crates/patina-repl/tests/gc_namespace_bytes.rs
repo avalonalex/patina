@@ -409,7 +409,10 @@ fn a_specifier_namespace_lives_while_code_compiled_in_it_does() {
 /// code id of a frame, a marked closure or the running code (#836). The
 /// steady-state lane's `library-stream` shape, in file mode: after the
 /// redefinition and two collections the namespaces are counted and charged
-/// as they were before it.
+/// as they were before it. The document tables' charge (#791) is taken out
+/// of the reading: they keep room up to four times the locations that live,
+/// so the second load's reading can leave them a few entries' room above
+/// the first.
 #[test]
 fn a_replaced_library_with_a_procedure_is_released() {
     let program = "(define ns0 0)
@@ -421,13 +424,13 @@ fn a_replaced_library_with_a_procedure_is_released() {
 (gc)
 (gc)
 (set! ns0 (stat 'namespaces))
-(set! ext0 (stat 'external-bytes))
+(set! ext0 (- (stat 'external-bytes) (stat 'document-bytes)))
 (define-library (stream lib) (import (scheme base)) (export f) (begin (define (f) f)))
 (import (stream lib))
 (gc)
 (gc)
 (set! ns1 (stat 'namespaces))
-(set! ext1 (stat 'external-bytes))
+(set! ext1 (- (stat 'external-bytes) (stat 'document-bytes)))
 (write (list ns0 ns1 ext0 ext1 (if (eq? (f) f) 1 0)))
 (newline)";
     for backend in BOTH_BACKENDS {
