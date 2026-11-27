@@ -6,8 +6,8 @@
 //! copy a scope edit made wrote the map again, and the sweep pruned it key
 //! by key. Now an identifier holds the id of an entry here, a copy takes its
 //! original's id with no write, and the sweep frees the entries no marked
-//! identifier carries. Pairs, vectors and strings keep their
-//! `syntax_sources` entries until #792 and #793.
+//! identifier carries. A list is located by its head since #792, through
+//! the head's form span, and nothing else has a location.
 //!
 //! **Slots.** One for each document the heap's identifiers refer to,
 //! holding the `Arc<SourceDocument>` and the source name its locations
@@ -427,6 +427,23 @@ impl DocumentTable {
         } else {
             Span::SHARED
         };
+        self.intern_entry(Entry { form, ..old })
+    }
+
+    /// The id of the entry that is `id`'s with `form` as its form span, or
+    /// none: for the head of a list a template builds, which reports the
+    /// macro's use (decision 16 on #782, #792), whatever list it headed
+    /// before. An identifier with no entry is located at `form` as well:
+    /// the expansion's stamp would give it the use's location as its own.
+    pub(crate) fn formed(&mut self, id: SourceId, form: Option<&SourceLocation>) -> SourceId {
+        if id.is_none() {
+            return form.map_or(id, |form| self.intern_head(form, form));
+        }
+        let old = self.get(id).clone();
+        let form = form.map_or(Span::NONE, |form| self.span_of(form));
+        if form == old.form {
+            return id;
+        }
         self.intern_entry(Entry { form, ..old })
     }
 

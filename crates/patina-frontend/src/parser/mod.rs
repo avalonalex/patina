@@ -1978,6 +1978,11 @@ mod tests {
         });
     }
 
+    /// A quote abbreviation's head is a written identifier where the read
+    /// makes identifiers (#792), located at the prefix, with the whole
+    /// abbreviation as its form span, so that the abbreviation is located
+    /// by it as `(quote …)` written out is. `Parser::new`, which makes no
+    /// identifiers, still reads the symbol.
     #[test]
     fn test_source_map_quote_abbreviation() {
         with_cx(|cx| {
@@ -1985,15 +1990,30 @@ mod tests {
             let mut parser =
                 Parser::new_with_source_map("'(1 2 3)", Rc::from("test.scm"), sm.clone()).unwrap();
             let result = parser.parse(cx).unwrap();
-            // The quote abbreviation should record position of the `'`
             let loc = cx.source(result);
             assert!(loc.is_some(), "quote form should have source location");
             let loc = loc.unwrap();
-            assert_eq!(loc.line, 1);
-            assert_eq!(loc.column, 1);
+            assert_eq!((loc.line, loc.column, loc.length), (1, 1, Some(8)));
+            let head = cx.car(result);
+            assert!(
+                cx.is_source_identifier(head),
+                "the head is a written identifier"
+            );
+            assert_eq!(
+                cx.get_symbol_or_identifier_name(head).as_deref(),
+                Some("quote")
+            );
+            let own = cx.source(head).unwrap();
+            assert_eq!((own.line, own.column, own.length), (1, 1, Some(1)));
+
+            let mut parser = Parser::new("'(1 2 3)").unwrap();
+            let datum = parser.parse(cx).unwrap();
+            assert_eq!(cx.get_symbol_name(cx.car(datum)).as_deref(), Some("quote"));
         });
     }
 
+    /// A vector and a string have no location (#792): only identifiers are
+    /// located, and a list by its head.
     #[test]
     fn test_source_map_vector() {
         with_cx(|cx| {
@@ -2001,11 +2021,36 @@ mod tests {
             let mut parser =
                 Parser::new_with_source_map("#(1 2 3)", Rc::from("test.scm"), sm.clone()).unwrap();
             let result = parser.parse(cx).unwrap();
-            let loc = cx.source(result);
-            assert!(loc.is_some(), "vector should have source location");
-            let loc = loc.unwrap();
-            assert_eq!(loc.line, 1);
-            assert_eq!(loc.column, 1);
+            assert!(result.is_vector());
+            assert_eq!(cx.source(result), None, "a vector has no location");
+        });
+    }
+
+    /// [`test_source_map_vector`]'s twin, for a string.
+    #[test]
+    fn test_source_map_string() {
+        with_cx(|cx| {
+            let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
+            let mut parser =
+                Parser::new_with_source_map("\"abc\"", Rc::from("test.scm"), sm.clone()).unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert!(result.is_string());
+            assert_eq!(cx.source(result), None, "a string has no location");
+        });
+    }
+
+    /// A list whose head is no identifier has no location (#792), and
+    /// takes none from what it holds: `((g) 1)` is not `(g)`'s.
+    #[test]
+    fn test_source_map_list_without_an_identifier_head() {
+        with_cx(|cx| {
+            let sm = Rc::new(RefCell::new(crate::source_map::SourceMap::new()));
+            let mut parser =
+                Parser::new_with_source_map("((g) 1)", Rc::from("test.scm"), sm.clone()).unwrap();
+            let result = parser.parse(cx).unwrap();
+            assert_eq!(cx.source(result), None);
+            let inner = cx.source(cx.car(result)).unwrap();
+            assert_eq!((inner.line, inner.column), (1, 2));
         });
     }
 

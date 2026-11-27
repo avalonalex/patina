@@ -168,10 +168,36 @@ fn extendable(chain: Option<&ExpansionChain>, form: u64) -> Option<&ExpansionCha
     chain.filter(|chain| chain.form() == form || chain.form() == ExpansionChain::TEMPLATE)
 }
 
-/// Stamp an expansion with where it was made: each pair, vector and
-/// identifier of `tv` takes the invocation's location if it has none of its
-/// own, and its expansion chain extended by `macro_name`. Answers the
-/// expansion, which is `tv` unless `tv` is itself a name the reader wrote.
+/// The use's location `loc` with an expansion of `macro_name` added to its
+/// chain, as [`stamp_expansion_source`] gives a node with no location of its
+/// own: for an expansion whose form has none (#792).
+fn expanded_at_use(
+    mut loc: SourceLocation,
+    source_map: Option<&Rc<RefCell<SourceMap>>>,
+    macro_name: &str,
+    form: u64,
+) -> SourceLocation {
+    if let Some(span) = &mut loc.span {
+        let prefix = extendable(span.expansion_chain.as_ref(), form);
+        span.expansion_chain = Some(ExpansionChain::extend(
+            prefix,
+            std::sync::Arc::from(macro_name),
+            form,
+        ));
+    } else if let Some(map) = source_map {
+        map.borrow_mut()
+            .record_expansion(&loc, macro_name.to_owned());
+    }
+    loc
+}
+
+/// Stamp an expansion with where it was made: each identifier of `tv` takes
+/// the invocation's location if it has none of its own, and its expansion
+/// chain extended by `macro_name`. A list is located by its head (#792), so
+/// the walk enters pairs and vectors and records nothing on them: a list the
+/// template built has the use for its head's form span already, and one
+/// substituted whole keeps its head's. Answers the expansion, which is `tv`
+/// unless `tv` is itself a name the reader wrote.
 ///
 /// An identifier holds its location (#791), and one this expansion made,
 /// which is every identifier the flips and the relinker copied, is written
@@ -237,6 +263,14 @@ fn stamp_expansion_source<'gc>(
             map.borrow_mut()
                 .record_expansion(&loc, macro_name.to_owned());
         }
+        // So does the list it heads, which is located by it (#792).
+        if let Some(map) = source_map
+            && let Some(form) = cx.form_span(value)
+            && form.span.is_none()
+        {
+            map.borrow_mut()
+                .record_expansion(&form, macro_name.to_owned());
+        }
         loc
     };
     // Each name the reader wrote that the walk has met, with the stamped
@@ -263,9 +297,12 @@ fn stamp_expansion_source<'gc>(
         if !seen.insert(value.raw_bits()) {
             continue;
         }
-        if value.is_pair() || value.is_vector() || cx.is_identifier(value) {
+        // Only identifiers are located (#792): a list is by its head, whose
+        // form span keeps its place and takes the head's extended chain.
+        if cx.is_identifier(value) {
             let loc = stamped(cx, value);
             cx.record_source(value, loc);
+            continue;
         }
         // The children are walked in the order they always were: a pair's
         // car before its cdr, a vector's elements from the first.
@@ -3037,9 +3074,19 @@ impl<'a> Desugarer<'a> {
 
             // Continue desugaring the expansion
             let mut expr = self.desugar_form(expanded_tagged, cx)?;
-            // Use call-site source as fallback if the expanded form has no source
+            // An expansion whose form has no location, one whose head is no
+            // identifier (`((f))`), is located at the use, with this
+            // expansion in its chain, as the stamp located such a form
+            // before a list was located by its head (#792).
             if expr.source.is_none() {
-                expr.source = call_site_source;
+                expr.source = call_site_source.map(|loc| {
+                    expanded_at_use(
+                        loc,
+                        self.source_map.as_ref(),
+                        &compiled_macro.name,
+                        self.form.get(),
+                    )
+                });
             }
             return Ok(expr);
         }

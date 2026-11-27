@@ -765,17 +765,20 @@ fn macro_expansion_chains_belong_to_each_invocation() {
 }
 
 /// The 100th `eval` of one quoted datum reports an error inside a `case`
-/// clause as the first did: the same location and the same expansion
-/// chain, which belongs to that expansion, not to every one before it
-/// (#612).
+/// clause as the first did (#612): an expansion's chain once grew on the
+/// datum's pairs with every `eval`. Since a list is located by its head
+/// (#792), a quoted datum carries no location, decision 11's loss: neither
+/// report has an expansion chain, and each names the `eval` call that ran
+/// the code on the VM, one call in `run`, and nothing on the tree-walker.
 #[test]
 fn an_error_in_the_hundredth_eval_of_a_datum_reports_as_the_first() {
     let dir = tempfile::tempdir().unwrap();
     let mut program = String::from(
         "(import (scheme base) (scheme eval) (scheme repl))\n\
-         (define form '(case 3 ((1 2) 'a) ((3) (missing 5)) (else 'c)))\n",
+         (define form '(case 3 ((1 2) 'a) ((3) (missing 5)) (else 'c)))\n\
+         (define (run) (eval form (interaction-environment)))\n",
     );
-    program.push_str(&"(eval form (interaction-environment))\n".repeat(100));
+    program.push_str(&"(run)\n".repeat(100));
     fs::write(dir.path().join("program.scm"), program).unwrap();
     for backend in BOTH_BACKENDS {
         let (_, _, stderr, ok) = run(dir.path(), backend, &["-k", "program.scm"], None);
@@ -791,9 +794,13 @@ fn an_error_in_the_hundredth_eval_of_a_datum_reports_as_the_first() {
             }
         }
         assert_eq!(reports.len(), 100, "{backend:?}: {stderr}");
+        let located = if backend.is_empty() {
+            reports[0].contains("  at program.scm:3:15\n")
+        } else {
+            !reports[0].contains("  at ")
+        };
         assert!(
-            reports[0].contains("program.scm:2:")
-                && reports[0].contains("  macro expansion chain: case → let → case → let\n"),
+            located && reports[0].contains("missing") && !reports[0].contains("macro expansion"),
             "{backend:?}: {}",
             reports[0]
         );
@@ -855,6 +862,16 @@ fn assert_located(
     }
 }
 
+/// That `stderr` reports no location and no expansion chain.
+fn assert_unlocated(stderr: &str) {
+    assert!(
+        stderr.contains("Error:")
+            && !stderr.contains("  at ")
+            && !stderr.contains("macro expansion"),
+        "{stderr}"
+    );
+}
+
 /// Each case's program: `(import (scheme base))`, then one form per line.
 fn program_of(lines: &[&str]) -> String {
     format!("(import (scheme base))\n{}\n", lines.join("\n"))
@@ -862,16 +879,17 @@ fn program_of(lines: &[&str]) -> String {
 
 /// Where the VM reports a run-time error, and what the excerpt marks (#787).
 /// GC stage 4c moves provenance from `Heap.syntax_sources` onto identifiers,
-/// and from 4c.6 a list is located by its head identifier (#792). These
-/// cases pin what a user sees before that lands. Each says whether 4c keeps
-/// it or which decision on #782 loses it. The tree-walker reports no
-/// location for a run-time error today, so these are the VM's.
+/// and from 4c.6 a list is located by its head identifier (#792). Each case
+/// says whether 4c keeps it or which decision on #782 loses it, and what a
+/// lost one reports: nothing, or the call that ran its procedure. The
+/// tree-walker reports no location for a run-time error, so these are the
+/// VM's.
 #[test]
 fn run_time_errors_are_located_at_their_forms_on_the_vm() {
     let dir = tempfile::tempdir().unwrap();
     for (lines, at, chain) in [
         // Kept: an application form in a procedure body.
-        (&["(define (f) (car 5))", "(f)"][..], (2, 13, 7), None),
+        (&["(define (f) (car 5))", "(f)"][..], Some((2, 13, 7)), None),
         // Kept: a subform a macro substitutes, under the use's chain.
         (
             &[
@@ -879,7 +897,7 @@ fn run_time_errors_are_located_at_their_forms_on_the_vm() {
                 "(define (k) (wrap (car 5)))",
                 "(k)",
             ][..],
-            (3, 19, 7),
+            Some((3, 19, 7)),
             Some("  macro expansion chain: wrap → let"),
         ),
         // Kept (decision 16): a form a template introduces reports the
@@ -890,29 +908,225 @@ fn run_time_errors_are_located_at_their_forms_on_the_vm() {
                 "(define (h) (bad 5))",
                 "(h)",
             ][..],
-            (3, 13, 7),
+            Some((3, 13, 7)),
             Some("  macro expansion: bad"),
         ),
         // Kept: an identifier-headed form inside a lambda-headed one.
         (
             &["((lambda (v) (vector-ref v 9)) (vector))"][..],
-            (2, 14, 16),
+            Some((2, 14, 16)),
             None,
         ),
         // Kept: a vector literal as an argument; the application is located.
-        (&["(vector-ref #(1 2) 9)"][..], (2, 1, 21), None),
-        // Lost (decision 12): a head that is a call.
-        (&["(define (g) 5)", "((g) 1)"][..], (3, 1, 7), None),
-        // Lost (decision 12): a head that is a vector literal.
-        (&["(define (f) (#(1 2) 0))", "(f)"][..], (2, 13, 10), None),
-        // Lost (decision 12): a head that is a string literal.
-        (&["(define (f) (\"ab\" 0))", "(f)"][..], (2, 13, 8), None),
+        (&["(vector-ref #(1 2) 9)"][..], Some((2, 1, 21)), None),
+        // Lost (decision 12): a head that is a call. Not `(g)`'s `3:2`.
+        (&["(define (g) 5)", "((g) 1)"][..], None, None),
+        // Lost (decision 12): a head that is a vector literal. The
+        // procedure has no location left, and the call that ran it reports.
+        (
+            &["(define (f) (#(1 2) 0))", "(f)"][..],
+            Some((3, 1, 3)),
+            None,
+        ),
+        // Lost (decision 12): a head that is a string literal, the same.
+        (
+            &["(define (f) (\"ab\" 0))", "(f)"][..],
+            Some((3, 1, 3)),
+            None,
+        ),
     ] {
         let program = program_of(lines);
         fs::write(dir.path().join("program.scm"), &program).unwrap();
         let (_, _, stderr, ok) = run(dir.path(), &[], &["program.scm"], None);
         assert!(!ok, "{program}");
-        assert_located(&stderr, "program.scm", &program, at, chain);
+        match at {
+            Some(at) => assert_located(&stderr, "program.scm", &program, at, chain),
+            None => assert_unlocated(&stderr),
+        }
+    }
+}
+
+/// What each form 4c.6 leaves without a location reports (#792): lost, never
+/// misattributed. A report names the failing form, one that encloses it, or
+/// the call that ran it, or nothing; never a neighbour, as the VM's code map
+/// did before when a call with no location took the last one before it.
+/// Each row is a program, then its VM answer and its tree-walker answer: a
+/// location with its carets, or none. The tree-walker locates no run-time
+/// error, so most rows read none there; a desugar error and the `eval`
+/// cases are on both. The expansion chain is the last line where a row
+/// names one, and absent elsewhere.
+#[test]
+fn forms_left_without_a_location_report_no_other_form() {
+    type At = Option<(usize, usize, usize)>;
+    let base = "(import (scheme base))";
+    let eval = "(import (scheme base) (scheme eval) (scheme repl))";
+    let rows: &[(&[&str], At, At, Option<&str>)] = &[
+        // A head that is a call, at top level, in a body and in a call.
+        (&[base, "(define (g) 5)", "((g) 1)"], None, None, None),
+        (
+            &[base, "(define (g) 5)", "(define (k) ((g) 1))", "(k)"],
+            None,
+            None,
+            None,
+        ),
+        (
+            &[base, "(define (g) 5)", "(define (k) (list ((g) 1)))", "(k)"],
+            Some((3, 13, 14)),
+            None,
+            None,
+        ),
+        // A lambda head with the wrong arity, and a quoted head.
+        (
+            &[base, "(define (k) ((lambda (v) v)))", "(k)"],
+            None,
+            None,
+            None,
+        ),
+        (&[base, "(define (k) ('car 5))", "(k)"], None, None, None),
+        // A string, vector or number head as a procedure's body: the
+        // procedure has no location left, and its caller reports.
+        (
+            &[base, "(define (f) (\"ab\" 0))", "(f)"],
+            Some((3, 1, 3)),
+            None,
+            None,
+        ),
+        (
+            &[base, "(define (f) (#(1 2) 0))", "(f)"],
+            Some((3, 1, 3)),
+            None,
+            None,
+        ),
+        (
+            &[base, "(define (k) (1 2))", "(k)"],
+            Some((3, 1, 3)),
+            None,
+            None,
+        ),
+        // A template's form whose head is no identifier, inside a lambda the
+        // template builds, and inside a call it builds (kept).
+        (
+            &[
+                base,
+                "(define-syntax thunk0 (syntax-rules () ((_ f) (lambda () ((f))))))",
+                "(define (g) 5)",
+                "(define k (thunk0 g))",
+                "(k)",
+            ],
+            None,
+            None,
+            None,
+        ),
+        (
+            &[
+                base,
+                "(define-syntax call0 (syntax-rules () ((_ f) (list ((f))))))",
+                "(define (g) 5)",
+                "(define (k) (call0 g))",
+                "(k)",
+            ],
+            Some((4, 13, 9)),
+            None,
+            Some("  macro expansion: call0"),
+        ),
+        // One head for two lists, through a datum label: neither list has a
+        // location, nor takes the other's.
+        (
+            &[base, "(define (k) (#0=car '(1)) (#0# 6))", "(k)"],
+            None,
+            None,
+            None,
+        ),
+        // A desugar error in a form whose head is a call: the enclosing
+        // definition, on both backends.
+        (
+            &[base, "(define (g) 5)", "(define (k) ((g) . 1))"],
+            Some((3, 1, 22)),
+            Some((3, 1, 22)),
+            None,
+        ),
+        // Quoted data given to `eval` (decision 11), and data built at run
+        // time that holds a quoted list, a vector or a string: the `eval`
+        // call on the VM, nothing on the tree-walker, and no chain.
+        (
+            &[
+                eval,
+                "(define form '(case 3 ((1 2) 'a) ((3) (missing 5)) (else 'c)))",
+                "(eval form (interaction-environment))",
+            ],
+            Some((3, 1, 37)),
+            None,
+            None,
+        ),
+        (
+            &[
+                eval,
+                "(define form '(let ((x 5)) (car x)))",
+                "(eval form (interaction-environment))",
+            ],
+            Some((3, 1, 37)),
+            None,
+            None,
+        ),
+        (
+            &[
+                eval,
+                "(define form '(if))",
+                "(eval form (interaction-environment))",
+            ],
+            Some((3, 1, 37)),
+            None,
+            None,
+        ),
+        (
+            &[
+                eval,
+                "(define (g) 5)",
+                "(eval (list '(g) 1) (interaction-environment))",
+            ],
+            Some((3, 1, 46)),
+            None,
+            None,
+        ),
+        (
+            &[
+                eval,
+                "(eval (list 'vector-ref '#(1 2) 9) (interaction-environment))",
+            ],
+            Some((2, 1, 61)),
+            None,
+            None,
+        ),
+        (
+            &[
+                eval,
+                "(eval (list 'string-ref \"ab\" 9) (interaction-environment))",
+            ],
+            Some((2, 1, 58)),
+            None,
+            None,
+        ),
+        // A quasiquote's call with no location beside a call that has one:
+        // the enclosing `(list …)`, not `(car '(1))`.
+        (
+            &[base, "(define (f) (list (car '(1)) `(1 ,@5 2)))", "(f)"],
+            Some((2, 13, 28)),
+            None,
+            None,
+        ),
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    for (lines, vm, tree_walker, chain) in rows {
+        let program = format!("{}\n", lines.join("\n"));
+        fs::write(dir.path().join("program.scm"), &program).unwrap();
+        for (backend, at) in BOTH_BACKENDS.iter().zip([vm, tree_walker]) {
+            let (_, _, stderr, ok) = run(dir.path(), backend, &["program.scm"], None);
+            assert!(!ok, "{backend:?}: {program}");
+            match at {
+                Some(at) => assert_located(&stderr, "program.scm", &program, *at, *chain),
+                None => assert_unlocated(&stderr),
+            }
+        }
     }
 }
 
@@ -975,9 +1189,13 @@ fn expansion_errors_and_references_are_located_on_both_backends() {
 /// whole keeps it. Decision 17 on #782 recommends keeping this answer, and
 /// 4c.5's compaction test starts from it (#787).
 ///
-/// Kept: data built at run time and given to `eval` reports no location and
-/// no expansion chain, before 4c and after. It is the contrast for decision
-/// 11, which loses the quoted datum's location
+/// Data built at run time and given to `eval` reports no location of its own
+/// and no expansion chain: on the VM the `eval` call that ran it, and on the
+/// tree-walker nothing. Before #792 the VM reported nothing here, because
+/// the program's `''a` evaluated to the reader's own `(quote a)` pair, whose
+/// location reached the `eval`ed code's map; a quote abbreviation's head is
+/// a written identifier now, so quote stripping copies the pair. Decision
+/// 11's quoted datum reports the same
 /// (`an_error_in_the_hundredth_eval_of_a_datum_reports_as_the_first`).
 #[test]
 fn a_dropped_line_keeps_its_location_and_built_data_has_none() {
@@ -1027,10 +1245,12 @@ fn a_dropped_line_keeps_its_location_and_built_data_has_none() {
         );
         let (_, _, stderr, ok) = run(dir.path(), backend, &["built.scm"], None);
         assert!(!ok, "{backend:?}");
-        assert!(
-            stderr.contains("missing") && !stderr.contains("  at ") && !stderr.contains("macro"),
-            "{backend:?}: {stderr}"
-        );
+        assert!(stderr.contains("missing"), "{backend:?}: {stderr}");
+        if backend.is_empty() {
+            assert_located(&stderr, "built.scm", built, (2, 1, 1), None);
+        } else {
+            assert_unlocated(&stderr);
+        }
     }
 }
 

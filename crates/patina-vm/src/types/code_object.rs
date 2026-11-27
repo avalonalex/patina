@@ -163,9 +163,11 @@ pub struct CodeObject {
     pub arity: Arity,
 
     /// Maps instruction indices to source locations for error reporting.
-    /// Sorted by pc; binary-search to resolve.
+    /// Sorted by pc; binary-search to resolve. An entry of no location
+    /// (#792) marks code that has none, where an instruction would
+    /// otherwise take the location before it.
     #[trace(skip, reason = "source positions")]
-    pub source_map: Vec<(usize, SourceLocation)>,
+    pub source_map: Vec<(usize, Option<SourceLocation>)>,
 
     /// The possible register roots of a frame suspended at each pc, after
     /// completed expression temporaries have been retired (#423): a dense
@@ -327,7 +329,8 @@ pub struct RegisterMapCensus {
 }
 
 impl CodeObject {
-    /// Look up the source location for a given program counter.
+    /// Look up the source location for a given program counter: the last
+    /// entry's at or before it, which may be none (#792).
     pub fn source_location(&self, pc: usize) -> Option<&SourceLocation> {
         let idx = self
             .source_map
@@ -335,7 +338,7 @@ impl CodeObject {
         if idx == 0 {
             None
         } else {
-            Some(&self.source_map[idx - 1].1)
+            self.source_map[idx - 1].1.as_ref()
         }
     }
 }

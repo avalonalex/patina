@@ -769,37 +769,69 @@ fn compiled_functions_retain_their_document_across_same_named_inputs() {
 // Expansion chains belong to one expansion (#612)
 // =============================================================================
 
-/// The length of the expansion chain on each pair of `value`, in a fixed
-/// order: none for a pair without one.
-fn chain_lengths(heap: &patina_core::SharedHeap, value: TaggedValue) -> Vec<Option<usize>> {
+/// Nothing writes `syntax_sources` since a list is located by its head
+/// (#792): after libload's 25 libraries and a program that reads lists,
+/// vectors, strings, quote abbreviations and a macro use, on both backends,
+/// the table is empty, so #793 deletes a table nothing fills.
+#[test]
+fn nothing_writes_syntax_sources() {
+    fn check<B: Backend>(interp: &Interpreter<B>, backend: &str) {
+        let (result, _map) = interp.eval_program_with_source_name(
+            "(import (scheme base) (scheme write) (scheme time)\n\
+               (scheme list) (scheme hash-table) (scheme char) (scheme comparator) (scheme generator)\n\
+               (scheme set) (scheme sort) (scheme vector) (scheme text) (scheme ideque) (scheme ilist)\n\
+               (scheme rlist) (scheme mapping) (scheme stream) (scheme show) (scheme regex) (scheme charset)\n\
+               (scheme lseq) (scheme bytevector) (scheme flonum) (scheme fixnum) (scheme bitwise))\n\
+             (define-syntax swap (syntax-rules () ((_ a b) (list b a))))\n\
+             (define data (list '(a b) '#(1 2) \"text\" `(1 ,(+ 1 1)) (swap 1 2) #u8(1)))",
+            "tables.scm",
+        );
+        result.unwrap();
+        let heap = interp.backend().heap().clone();
+        assert_eq!(heap.borrow().syntax_source_entries(), 0, "{backend}");
+        assert!(
+            heap.borrow().document_bytes() > 0,
+            "{backend}: identifiers are located"
+        );
+    }
+    check(&TreeWalkInterpreter::new_tree_walker(), "tree-walker");
+    check(&Interpreter::new(VmBackend::new()), "vm");
+}
+
+/// The location of each pair of `value`, in a fixed order: none for a pair
+/// without one.
+fn pair_locations(heap: &patina_core::SharedHeap, value: TaggedValue) -> Vec<Option<String>> {
     let heap = heap.borrow();
-    let mut lengths = Vec::new();
+    let mut locations = Vec::new();
     let mut pending = vec![value];
     while let Some(value) = pending.pop() {
         if !value.is_pair() {
             continue;
         }
-        lengths.push(
+        locations.push(
             heap.source(value)
-                .and_then(|loc| loc.span?.expansion_chain)
-                .map(|chain| chain.len()),
+                .map(|loc| format!("{}:{}:{}", loc.source, loc.line, loc.column)),
         );
         pending.extend([heap.cdr(value), heap.car(value)]);
     }
-    lengths
+    locations
 }
 
-/// `eval` of one quoted datum, again and again: each expansion stamps the
-/// datum's own pairs where a macro splices them into its output, as `case`
-/// does its remaining clauses, and each chain is that expansion's. A chain
-/// an earlier `eval` left on a pair is not extended, which made memory and
-/// time grow with every `eval` (#612).
+/// `eval` of one quoted datum, again and again. Each expansion used to
+/// stamp the datum's own pairs where a macro spliced them into its output,
+/// as `case` does its remaining clauses, and a chain an earlier `eval` left
+/// on a pair was extended, which made memory and time grow with every
+/// `eval` (#612). Since a list is located by its head (#792), a quoted
+/// datum, whose identifiers quote stripping turns into symbols, carries no
+/// location at all, and the heap holds no more location entries after 100
+/// `eval`s than after one, each counted after a collection. #612's memory
+/// bound is #793's.
 #[test]
 fn eval_of_one_datum_does_not_extend_its_earlier_chains() {
     fn check<B: Backend>(interp: &Interpreter<B>, backend: &str) {
         let heap = interp.backend().heap().clone();
         let (result, _map) = interp.eval_program_with_source_name(
-            "(import (scheme base) (scheme eval) (scheme repl))\n\
+            "(import (scheme base) (scheme eval) (scheme repl) (patina debug))\n\
              (define form '(case 3 ((1 2) 'a) ((3) 'b) (else 'c)))\n\
              (define (run n)\n\
                (do ((i 0 (+ i 1))) ((= i n) (eval form (interaction-environment)))\n\
@@ -809,14 +841,21 @@ fn eval_of_one_datum_does_not_extend_its_earlier_chains() {
         result.unwrap();
         let answer = interp.eval_str("(run 0)").unwrap();
         assert_eq!(answer, interp.eval_str("'b").unwrap(), "{backend}");
-        let once = chain_lengths(&heap, interp.eval_str("form").unwrap());
+        let located = pair_locations(&heap, interp.eval_str("form").unwrap());
         assert!(
-            once.iter().any(Option::is_some),
-            "{backend}: no pair of the datum carries a chain, so this proves nothing: {once:?}"
+            !located.is_empty() && located.iter().all(Option::is_none),
+            "{backend}: the quoted datum carries no location: {located:?}"
         );
+        interp.eval_str("(gc)").unwrap();
+        let once = heap.borrow().document_bytes();
+        assert!(once > 0, "{backend}: the program's own names are located");
         interp.eval_str("(run 99)").unwrap();
-        let after = chain_lengths(&heap, interp.eval_str("form").unwrap());
-        assert_eq!(once, after, "{backend}: after 1 and after 100 evals");
+        interp.eval_str("(gc)").unwrap();
+        let after = heap.borrow().document_bytes();
+        assert!(
+            after <= once,
+            "{backend}: {once} bytes of entries after 1 eval, {after} after 100"
+        );
     }
     check(&TreeWalkInterpreter::new_tree_walker(), "tree-walker");
     check(&Interpreter::new(VmBackend::new()), "vm");

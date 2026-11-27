@@ -575,7 +575,9 @@ pub enum SpineEnd<V = TaggedValue> {
 #[derive(Debug)]
 pub struct Heap {
     /// Where each syntax occurrence was read or expanded, keyed by its raw
-    /// bits (`heap/source.rs`); not a root, so sweep prunes it.
+    /// bits (`heap/source.rs`); not a root, so sweep prunes it. Nothing
+    /// writes it since a list is located by its head (#792), and #793
+    /// deletes it.
     syntax_sources: std::collections::HashMap<u64, Rc<crate::SourceLocation>>,
     /// Pair storage: (car, cdr) tuples
     pairs: Vec<(TaggedValue, TaggedValue)>,
@@ -1963,11 +1965,48 @@ impl Heap {
         )
     }
 
+    /// A copy of the identifier `original` whose form span is `form`, or
+    /// none (#792): for the head of a list a template builds, when the head
+    /// is one some other context made — substituted from the use, or a
+    /// literal the macro object holds — which may not be written in place
+    /// (`heap/documents.rs`). The same name, scopes, flags, own span and
+    /// chain. `None` if `original` is no identifier.
+    pub fn alloc_identifier_formed(
+        &mut self,
+        original: TaggedValue,
+        form: Option<&crate::SourceLocation>,
+    ) -> Option<TaggedValue> {
+        let data = self.identifier(original)?;
+        let source = self.documents.formed(data.source, form);
+        Some(
+            self.alloc_object(HeapObjectData::Identifier(IdentifierData {
+                source,
+                ..data
+            })),
+        )
+    }
+
+    /// Give the identifier `value` the form span `form`, or none, in place
+    /// (#792): for the head of a list a template builds, when the head is
+    /// the identifier the template's symbol was just instantiated as, in
+    /// the calling context. A no-op for a value that is no identifier.
+    pub fn record_form(&mut self, value: TaggedValue, form: Option<&crate::SourceLocation>) {
+        let Some(data) = self.identifier(value) else {
+            return;
+        };
+        let source = self.documents.formed(data.source, form);
+        if source != data.source {
+            self.set_identifier_source(value, source);
+        }
+    }
+
     /// The span of the list the identifier `value` heads, as a location
     /// with the identifier's chain (#791): what the reader recorded when
-    /// the list closed. `None` for a value that is no identifier, for an
+    /// the list closed, or the use of the macro whose template built the
+    /// list (#792). `None` for a value that is no identifier, for an
     /// identifier that heads no list, and for one that heads more than
-    /// one, through a datum label. Raw: until #792 no diagnostic reads it.
+    /// one, through a datum label. A list's location
+    /// ([`Heap::source`]).
     pub fn form_span(&self, value: TaggedValue) -> Option<crate::SourceLocation> {
         self.documents.form_location(self.identifier(value)?.source)
     }

@@ -162,7 +162,10 @@ proposed default, except the Open rows 7a and 7b.
     (decision 19): port `eq?` ([#608], 4a, with suite rows and no divergence row, since chibi and Gauche answer as
     Patina does), a canonical `%record-type-of` (4g, with a suite row; decision 1 on [#782]), symbol-keyed `eq?` table
     order (5c), flonum `eq?` and flonum-keyed ephemerons (5f), deep-bound `parameterize` (9), and the six
-    define-after-use tests that flip under variant C (after stage 5). Embedders get `Owned` and environment handles,
+    define-after-use tests that flip under variant C (after stage 5). Diagnostics lose some locations at 4c, lost
+    and never misattributed ([#792]; decisions 11 and 12 on [#782]): a form whose head is no identifier (`((g) 1)`,
+    `('car 5)`, `("ab" 0)`), a vector or string literal, and quoted data given to `eval` have none, and an error in
+    one names an enclosing form, the call that ran its code, or nothing. Embedders get `Owned` and environment handles,
     `Interpreter::call` and mandatory teardown (stages 2–3), and the `Backend` trait migrates one step per stage under
     [#601]'s deprecation convention. From stage 2 the VM evaluates in the environment it is given, as the tree-walker
     does, so a `define` evaluated in a host environment stops landing in the global one ([#620]). At 4b [#601]'s

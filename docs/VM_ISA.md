@@ -75,7 +75,7 @@ pub struct CodeObject {
     pub constants:    Vec<TaggedValue>,     // constant pool
     pub num_regs:     u16,                  // registers needed
     pub arity:        Arity,                // fixed / variadic
-    pub source_map:   Vec<(usize, SourceLocation)>, // pc → source loc
+    pub source_map:   Vec<(usize, Option<SourceLocation>)>, // pc → source loc, or none (#792)
     pub register_roots: Option<RegisterMaps>, // pc → id of a possible-root bitset in the unit's table
     pub links:        Rc<LinkTable>,        // the unit's globals, linked at load (§3)
 }
@@ -88,6 +88,17 @@ pub enum Arity {
 
 Code objects are stored in `VmState::code_store` (a `Vec<Rc<CodeObject>>`
 indexed by the slot in a `CodeObjectId`) and looked up by ID at runtime.
+
+`source_map` is sorted by pc, and an error at a pc reports the last entry at
+or before it. Codegen adds an entry before the code of each expression that
+has a location, and again before an instruction that follows its operands'
+code and can fail (a call, an apply, a global store), where a call with no
+location of its own takes the nearest enclosing expression's in the same
+procedure (#792). With neither, it adds an entry of no location if the map
+has an entry already, so the instruction does not report an expression
+before it; the error's report stops there, as at a pc before the first
+entry. A procedure with no entry keeps an empty map, and the report skips
+its frame for its caller's.
 
 `register_roots` records completed temporary lifetimes (#423). Collection and
 continuation capture clear excluded slots; ordinary instruction dispatch
