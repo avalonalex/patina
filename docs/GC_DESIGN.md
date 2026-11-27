@@ -196,9 +196,10 @@ Raw indices escape `TaggedValue` into places a relocator cannot see or would
 have to be taught about:
 
 1. `Heap::symbol_table` maps names to bare `HeapIndex` (`heap/mod.rs:255`).
-2. Syntax provenance in `Heap` keys the locations of lists, vectors and
-   strings by `tv.raw_bits()` (`heap/source.rs`), until #792 and #793. An
-   identifier holds its location's id since #791 (`heap/documents.rs`).
+2. Syntax provenance in `Heap` keyed the locations of lists, vectors and
+   strings by `tv.raw_bits()` until #793 deleted it. An identifier holds its
+   location's id since #791 (`heap/documents.rs`), and a list is located by
+   its head since #792; neither names a raw index.
 3. `eq?`/`eqv?`/hashing compare raw bits (`heap/mod.rs:1474,1507,1593,1719`).
 4. `CodeObject.constants: Vec<TaggedValue>` in every compiled code object.
 5. Environment binding maps reachable only through `Rc` graphs.
@@ -2790,8 +2791,10 @@ the use while a reference the template introduces reports the template's
 text; the stamp writes identifier entries only. A list whose head is no
 identifier, a vector, a string and every other datum has no location: lost,
 never misattributed. Quoted data given to `eval` has none either, since
-quote stripping turns its identifiers into symbols (decision 11). Nothing
-writes the heap's `syntax_sources` table, which #793 deletes. Desugaring
+quote stripping turns its identifiers into symbols (decision 11). The table
+keyed by raw bits that located lists, vectors and strings until then went with
+#793, its prune and `TaggedValue::from_raw` with it, and syntax is `Drop`-free:
+an identifier's payload is words and ids. Desugaring
 reads locations through the identifiers, never an interned symbol as an
 occurrence key. On the VM a call whose expression has no location records
 the nearest enclosing expression's in its procedure, or an entry of no
@@ -2803,7 +2806,7 @@ quotes in one form preserves sharing across separate insertions of a macro
 argument; it lives in the form's context (`FormCx`) and is dropped with it, so
 it outlives no form and sees no collection (#704).
 
-Neither table is **a root**. Marking an identifier sets its entry's bit in the
+The document tables are not **a root**. Marking an identifier sets its entry's bit in the
 collection's mark bits; the sweep frees every entry whose bit is clear,
 drops a slot left with no entry, and numbers the entries kept again from 1,
 in their order; the heap gives each live identifier its entry's new id in the
@@ -2813,11 +2816,8 @@ the read of an id past the compacted table. The document tables charge their
 buffers as external bytes (§6), and `(gc-stats)`'s `documents` reads their
 slots. Compaction of a streaming document is another matter, and frees no
 entry (decision 17): only the marks do, so
-an old location keeps its line and column and loses its excerpt. Before
-reclaiming slots, sweep retains only the `syntax_sources` entries whose
-values are marked, then shrinks excess table capacity; nothing has filled
-the table since #792, and #793 deletes it with this prune. There is no drain
-shared between nested loaders,
+an old location keeps its line and column and loses its excerpt. There is
+no drain shared between nested loaders,
 and a later parse cannot see stale provenance. Spans retain an `Arc` to a source
 document containing text and a line-start index, but no Scheme values. Expansion
 chains travel with each expanded span, so separate uses of a template do not
@@ -2834,9 +2834,9 @@ on a symbol written in it or on an identifier an outer expansion introduced into
 it: each use introduces a copy and extends that, so a macro another macro's
 expansion defined reports `def-bad → bad` from any later form, and the
 template's own copy never accumulates.
-Syntax copies likewise share their location, which `record_source` replaces only
-when that occurrence's provenance changes. The table's entries own no Scheme values.
-IR, bytecode and errors retain a document
+A copy of an identifier shares its original's entry, which `record_source`
+replaces only when that occurrence's provenance changes. The entries own no
+Scheme values. IR, bytecode and errors retain a document
 independently of the parsed syntax's lifetime. `SourceLocation` remains `Send + Sync`.
 
 `SourceMap` holds the primary document used by streaming input and parse error

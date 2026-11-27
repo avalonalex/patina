@@ -15,7 +15,7 @@
 //! A table reached only under the heap's borrow is a plain field of `Heap`
 //! instead, which that borrow already guards and a threaded build
 //! synchronizes with the heap itself: `symbol_table`, `core_syntax_table`,
-//! `syntax_sources`, and the scope-set table (4c, #788), whose readers
+//! the document tables (4c, #791), and the scope-set table (4c, #788), whose readers
 //! borrow a set out of it in the scope-edit walks, which this wrapper's
 //! closure could not lend (decision 18 on #782).
 

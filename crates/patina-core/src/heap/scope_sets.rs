@@ -14,7 +14,7 @@
 //! **Liveness.** The table holds no value and is no root. Marking an
 //! identifier sets its id's bit in the collection's [`MarkBits`], a bitmap
 //! sized to the table when the collection starts, with id 0's bit set
-//! before anything is marked. The sweep, beside the `syntax_sources` prune,
+//! before anything is marked. The sweep, beside the document tables' pass,
 //! frees every entry whose bit is clear ([`ScopeSetTable::sweep`]): its set
 //! leaves the index and its spill is dropped, and its id is reused, the
 //! lowest first. So right after a collection the table holds exactly the

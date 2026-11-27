@@ -268,66 +268,6 @@ fn log_rows(c: &Census) -> Vec<HashMap<&str, u64>> {
         .collect()
 }
 
-const SOURCE_KINDS: [&str; 5] = [
-    "src_pairs",
-    "src_vectors",
-    "src_strings",
-    "src_identifiers",
-    "src_objects",
-];
-
-fn source_keys(row: &HashMap<&str, u64>) -> u64 {
-    SOURCE_KINDS.iter().map(|kind| row[kind]).sum()
-}
-
-/// `syntax_sources` before each collection's prune (#787): nothing writes
-/// it since a list is located by its head (#792), and an identifier holds
-/// its location in the document tables (#791). Every column reads 0 at every
-/// collection, on both backends: after the libraries a program loads, through
-/// a churn that collects every 25,000 iterations, and after ten definitions
-/// of a quoted vector holding a string, a flonum and a bytevector, each of
-/// which the reader used to record. #793 deletes the table and this scan.
-#[test]
-fn the_census_finds_the_source_table_empty() {
-    if !GC_CENSUS {
-        return;
-    }
-    let churn = "(import (scheme base) (scheme write) (patina debug))
-(define keep (make-vector 8 #f))
-(define (churn n)
-  (when (> n 0)
-    (vector-set! keep (modulo n 8) (cons n n))
-    (when (= 0 (modulo n 25000)) (gc))
-    (churn (- n 1))))
-(churn 100000)
-(display \"done\")
-";
-    let definitions: String = (0..10)
-        .map(|i| format!("(define v{i} '#(1 2 \"s{i}\" 1.5 #u8(1)))\n"))
-        .collect();
-    let constants = format!(
-        "(import (scheme base) (scheme write) (patina debug))\n{definitions}(gc)\n(gc)\n(display \"done\")\n"
-    );
-    for backend in BOTH_BACKENDS {
-        for (program, collections) in [(churn, 4), (constants.as_str(), 2)] {
-            let c = census(backend, program, &[]);
-            let rows = log_rows(&c);
-            assert!(
-                rows.len() >= collections,
-                "{backend:?}: {} collections",
-                rows.len()
-            );
-            for row in &rows {
-                assert_eq!(
-                    (source_keys(row), row["src_entries"], row["src_kept"]),
-                    (0, 0, 0),
-                    "{backend:?}: {row:?}"
-                );
-            }
-        }
-    }
-}
-
 /// How far `site`'s `key` grew from the census `from` to the census `to`.
 fn grew(from: &Census, to: &Census, site: &str, key: &str) -> i64 {
     to.site(site, key) as i64 - from.site(site, key) as i64

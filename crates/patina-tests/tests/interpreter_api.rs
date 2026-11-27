@@ -769,35 +769,6 @@ fn compiled_functions_retain_their_document_across_same_named_inputs() {
 // Expansion chains belong to one expansion (#612)
 // =============================================================================
 
-/// Nothing writes `syntax_sources` since a list is located by its head
-/// (#792): after libload's 25 libraries and a program that reads lists,
-/// vectors, strings, quote abbreviations and a macro use, on both backends,
-/// the table is empty, so #793 deletes a table nothing fills.
-#[test]
-fn nothing_writes_syntax_sources() {
-    fn check<B: Backend>(interp: &Interpreter<B>, backend: &str) {
-        let (result, _map) = interp.eval_program_with_source_name(
-            "(import (scheme base) (scheme write) (scheme time)\n\
-               (scheme list) (scheme hash-table) (scheme char) (scheme comparator) (scheme generator)\n\
-               (scheme set) (scheme sort) (scheme vector) (scheme text) (scheme ideque) (scheme ilist)\n\
-               (scheme rlist) (scheme mapping) (scheme stream) (scheme show) (scheme regex) (scheme charset)\n\
-               (scheme lseq) (scheme bytevector) (scheme flonum) (scheme fixnum) (scheme bitwise))\n\
-             (define-syntax swap (syntax-rules () ((_ a b) (list b a))))\n\
-             (define data (list '(a b) '#(1 2) \"text\" `(1 ,(+ 1 1)) (swap 1 2) #u8(1)))",
-            "tables.scm",
-        );
-        result.unwrap();
-        let heap = interp.backend().heap().clone();
-        assert_eq!(heap.borrow().syntax_source_entries(), 0, "{backend}");
-        assert!(
-            heap.borrow().document_bytes() > 0,
-            "{backend}: identifiers are located"
-        );
-    }
-    check(&TreeWalkInterpreter::new_tree_walker(), "tree-walker");
-    check(&Interpreter::new(VmBackend::new()), "vm");
-}
-
 /// The location of each pair of `value`, in a fixed order: none for a pair
 /// without one.
 fn pair_locations(heap: &patina_core::SharedHeap, value: TaggedValue) -> Vec<Option<String>> {

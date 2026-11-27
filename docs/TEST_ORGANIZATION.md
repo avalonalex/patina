@@ -2802,16 +2802,14 @@ and it records:
   judged in the actual heap and in virtual nurseries of 16 K to 4 M
   allocations, which also gives old-to-young edges and their distinct
   holders per interval.
-- **Provenance**, at each collection before the sweep prunes it:
-  `Heap.syntax_sources`'s keys by kind (pairs, vectors, strings,
-  identifiers and other objects), the keys the prune keeps, and the
-  distinct entries all the keys and the identifier keys share: an entry is
-  an `Rc<SourceLocation>`, which `inherit_source` gives a copy (#787). At
-  point C (`run_gc_census.sh --workload libload-point-c --config default`),
-  4,555,543 keys share 1,557,999 entries, the 2,184,313 identifier keys
-  635,605 of them, and the prune keeps about 2,500. GC stage 4c replaces the
-  table with per-document ones (#791), and sets its memory threshold from
-  the identifier keys and their entries.
+- **Provenance**, until #793: at each collection the keys of the heap's
+  table of locations keyed by raw bits (#787). At point C
+  (`run_gc_census.sh --workload libload-point-c --config default`, on
+  #787's branch), 4,555,543 keys shared 1,557,999 entries, the 2,184,313
+  identifier keys 635,605 of them, and the prune kept about 2,500. GC stage
+  4c replaced the table with per-document ones (#791), located a list by its
+  head (#792) and deleted the table and these columns (#793); `(gc-stats)`'s
+  `documents` and `document-bytes` read the tables that replaced it.
 - **Other counts:** identity- and `equal-hash`, continuation copies, and
   the VM's stack at each safe point.
 - **Each variant's `Drop` flag** (#931): whether the variant's payload has

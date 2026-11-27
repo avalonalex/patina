@@ -116,10 +116,8 @@ impl<'gc> Expander<'gc> {
                     if !open.enter(next.tagged()) {
                         return Ok(tv);
                     }
-                    let list = next;
                     next = elements[0];
                     lists.push(MarkedList {
-                        list,
                         elements,
                         done: 0,
                         tail,
@@ -207,7 +205,6 @@ impl<'gc> Expander<'gc> {
         for &element in list.elements.iter().rev() {
             out = cx.alloc_pair(element, out);
         }
-        cx.inherit_source(list.list, out);
         out
     }
 
@@ -242,7 +239,6 @@ enum Mark<'gc> {
 /// A list being marked: its elements, the first `done` of them replaced by
 /// their marked copies, and the tail, marked after them.
 struct MarkedList<'gc> {
-    list: Value<'gc>,
     elements: Vec<Value<'gc>>,
     done: usize,
     tail: Value<'gc>,

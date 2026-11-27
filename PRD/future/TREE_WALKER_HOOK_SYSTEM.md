@@ -455,9 +455,10 @@ Two further facts every location-driven client must design around:
   re-transformed (`cps_eval/mod.rs:367`) — so clients key by `(source, line, column)`
   and match against `expr.source`, never by node identity.
 - **Syntax provenance is held by identifiers** (an id into the heap's document tables,
-  #791), and for lists, vectors and strings keyed by raw value bits until #793
-  (`Heap::source` reads both), and sweep prunes both because the GC reuses slots. Clients store `SourceLocation` values, which are
-  self-contained, never those keys. (`SourceMap` kept a second such table, pruned at
+  #791), and a list is located by its head identifier (#792); nothing is keyed by raw
+  value bits since #793. `Heap::source` builds a `SourceLocation` from the tables, and
+  the sweep frees the entries no live identifier carries, because the GC reuses slots.
+  Clients store `SourceLocation` values, which are self-contained, never ids. (`SourceMap` kept a second such table, pruned at
   top-level-form boundaries by `prune_freed_locations`; nothing read it, and it went in
   #643.)
 

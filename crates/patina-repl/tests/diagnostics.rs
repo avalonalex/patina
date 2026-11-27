@@ -878,7 +878,7 @@ fn program_of(lines: &[&str]) -> String {
 }
 
 /// Where the VM reports a run-time error, and what the excerpt marks (#787).
-/// GC stage 4c moves provenance from `Heap.syntax_sources` onto identifiers,
+/// GC stage 4c moves provenance from a table keyed by raw bits onto identifiers,
 /// and from 4c.6 a list is located by its head identifier (#792). Each case
 /// says whether 4c keeps it or which decision on #782 loses it, and what a
 /// lost one reports: nothing, or the call that ran its procedure. The

@@ -2083,26 +2083,8 @@ impl Heap {
         // arena's sweep drops it.
         #[cfg(any(debug_assertions, feature = "gc-check"))]
         let mut measured_dead_closures = 0usize;
-        // Nothing writes the table since a list is located by its head
-        // (#792): the check that #793 deletes a table nothing fills. It goes
-        // with the table.
-        #[cfg(any(debug_assertions, feature = "gc-check"))]
-        assert!(
-            self.syntax_sources.is_empty(),
-            "syntax_sources holds {} entries at a sweep (#793)",
-            self.syntax_sources.len()
-        );
-        // Provenance is not a root. Prune it before slots can be reused,
-        // inspecting only annotated syntax rather than every freed datum.
-        self.syntax_sources
-            .retain(|&bits, _| marks.is_marked(TaggedValue::from_raw(bits)) == Some(true));
-        // HashMap::retain visits capacity, so release a large table after a
-        // source-heavy phase instead of rescanning it on every later read GC.
-        if self.syntax_sources.capacity() > self.syntax_sources.len().saturating_mul(4).max(64) {
-            self.syntax_sources.shrink_to(64);
-        }
-        // Nor are the scope sets (#788): every set no marked identifier
-        // carries is freed, and its id reused.
+        // Provenance is not a root. The scope sets (#788): every set no
+        // marked identifier carries is freed, and its id reused.
         self.scope_sets.sweep(&marks.scope_sets);
         // Nor are the document tables (#791): every entry no marked
         // identifier carries is freed, a slot left with none dropped, and

@@ -416,8 +416,7 @@ fn copies_of_an_identifier_keep_its_location_and_write_no_entry() {
         let mut addition = cx.scope_addition(ScopeId(83));
         let marked = cx.add_scope_copying(&mut addition, original).unwrap();
         let name = cx.relinked_name("x.8-1".into());
-        let alias = cx.alloc_relinked_identifier(&name, ScopeSet::new());
-        cx.inherit_source(original, alias);
+        let alias = cx.alloc_relinked_copy(original, &name, ScopeSet::new());
         for copy in [flipped, marked, alias] {
             assert_ne!(copy, original);
             assert_eq!(

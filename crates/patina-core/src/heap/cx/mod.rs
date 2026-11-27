@@ -1227,6 +1227,23 @@ impl<'gc> Cx<'gc> {
         }
     }
 
+    /// [`Self::alloc_relinked_identifier`] located where the identifier
+    /// `original` is, the reference relinking renamed: its source id, with
+    /// no write (#791, #793). Raw: it names the raw [`RelinkedName`].
+    pub fn alloc_relinked_copy(
+        &mut self,
+        original: Value<'gc>,
+        name: &RelinkedName<'gc>,
+        scopes: ScopeSet,
+    ) -> Value<'gc> {
+        let word = self.heap.borrow_mut().alloc_relinked_copy(
+            original.tagged(),
+            name.name.tagged(),
+            scopes,
+        );
+        self.brand(word)
+    }
+
     /// An identifier relinking renamed (#837): `name`'s spelling, which is
     /// bound nowhere and interned nowhere (#790), with the set `scopes`. Raw:
     /// it names the raw [`RelinkedName`].
@@ -1311,9 +1328,9 @@ impl<'gc> Cx<'gc> {
             }
             if self.is_identifier(value) {
                 if let Some(copy) = copy_of(self, value) {
-                    if self.get_symbol_name(copy).is_none() {
-                        self.inherit_source(value, copy);
-                    }
+                    self.heap
+                        .borrow_mut()
+                        .locate_copy(value.tagged(), copy.tagged());
                     replacements.insert(value, copy);
                     changed.push(value);
                 }
@@ -1347,7 +1364,6 @@ impl<'gc> Cx<'gc> {
                         let len = self.vector_len(parent);
                         self.alloc_vector(vec![Value::UNSPECIFIED; len])
                     };
-                    self.inherit_source(parent, copy);
                     replacements.insert(parent, copy);
                     containers.push((parent, copy));
                     changed.push(parent);
