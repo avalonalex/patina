@@ -256,11 +256,16 @@ which the reader records when the list closes. Every copy a scope edit, a
 substitution mark or the relinker makes takes its original's source id, so
 it is located where its original is, with no write. A template's
 `Template::Symbol` keeps its location off the heap, and each instantiation
-interns it. An expansion's stamp locates the identifiers the expansion made,
-and gives a name the reader wrote a located copy, with the same name,
-scopes and `written` flag, rather than rewriting an identifier another
-context may have made: so `nope`, written inside `(wrap (define-syntax bad
-…))`, reports `wrap → bad`. A template's literal is held as a copy whose
+interns it. The expansion's stamp is made by the output flip (#794,
+`Cx::rescope_identifiers_stamped`): given the use's location, the form's
+number and the source map, which the desugarer hands
+`expand_macro_at_sites` as an `ExpansionStamp`, the flip copies every
+identifier of the expansion, a name the reader wrote too, with the same
+name, scopes and `written` flag, and makes each copy already located, its
+chain extended by this expansion. So `nope`, written inside `(wrap
+(define-syntax bad …))`, reports `wrap → bad`, and no second walk of the
+expansion follows the flip. An expansion made without a stamp, as the body
+pre-pass and `expand_macro_with_scope` make, locates nothing. A template's literal is held as a copy whose
 chain is the template's, which every use extends. `Heap::source` and
 `Cx::source` build the `SourceLocation` from the entry.
 
@@ -948,7 +953,8 @@ pub fn expand_macro_with_hygiene(
         if let Ok(match_env) = matcher.match_pattern(pattern, &flipped_input) {
             let expanded = expander.expand(template, &match_env)?;
 
-            // Step 3: Flip scope on output
+            // Step 3: Flip scope on output, stamping each identifier with
+            // the use's location where the desugarer passed a stamp (#794)
             return Ok(flip_scope(&expanded, macro_scope));
         }
     }
