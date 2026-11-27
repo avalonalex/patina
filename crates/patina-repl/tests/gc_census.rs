@@ -254,20 +254,6 @@ fn survival_is_measured_per_collection_interval() {
     }
 }
 
-/// The census log's lines as maps from column to value, each line checked
-/// to have the header's columns.
-fn log_rows(c: &Census) -> Vec<HashMap<&str, u64>> {
-    let header: Vec<&str> = c.log[0].split(',').collect();
-    c.log[1..]
-        .iter()
-        .map(|line| {
-            let values: Vec<u64> = line.split(',').map(|v| v.parse().unwrap()).collect();
-            assert_eq!(values.len(), header.len(), "{line}");
-            header.iter().copied().zip(values).collect()
-        })
-        .collect()
-}
-
 /// How far `site`'s `key` grew from the census `from` to the census `to`.
 fn grew(from: &Census, to: &Census, site: &str, key: &str) -> i64 {
     to.site(site, key) as i64 - from.site(site, key) as i64
