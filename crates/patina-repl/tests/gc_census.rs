@@ -312,7 +312,11 @@ fn the_census_finds_the_source_table_empty() {
         for (program, collections) in [(churn, 4), (constants.as_str(), 2)] {
             let c = census(backend, program, &[]);
             let rows = log_rows(&c);
-            assert!(rows.len() >= collections, "{backend:?}: {} collections", rows.len());
+            assert!(
+                rows.len() >= collections,
+                "{backend:?}: {} collections",
+                rows.len()
+            );
             for row in &rows {
                 assert_eq!(
                     (source_keys(row), row["src_entries"], row["src_kept"]),
